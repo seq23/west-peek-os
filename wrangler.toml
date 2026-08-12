@@ -1,6 +1,18 @@
 # West Peek OS — Cloudflare Worker configuration.
-# Local development runs fully offline (miniflare). Remote/protected values are
-# PLACEHOLDERS: remote deployment is a named human gate and has NOT been proven.
+#
+# Top level = the LOCAL development/validation profile. `wrangler dev`, `npm run e2e`,
+# and `npm run migrate:local` run fully offline against miniflare and keep
+# WP_OS_ENV = "local", which is what enables the `x-wpos-dev-user` dev identity header
+# (src/worker/auth.ts). That profile must never be what gets deployed.
+#
+# Remote deployment targets the explicit `[env.production]` profile below
+# (`wrangler deploy --env production`), where WP_OS_ENV = "production" and identity is
+# `Cf-Access-Authenticated-User-Email` only. See docs/ENVIRONMENTS.md.
+#
+# Resource identifiers below are REAL provisioned Cloudflare resources (the ADR-007
+# placeholders are retired now that remote deployment is operator-gated). They are
+# non-secret. No secret value appears in this file — secrets live only in the
+# encrypted vault and in Worker secret storage.
 name = "west-peek-os"
 main = "src/worker/index.ts"
 compatibility_date = "2025-10-01"
@@ -12,13 +24,11 @@ directory = "./dist/client"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
-# D1 — relational operational truth. database_id below is a placeholder:
-# local `wrangler dev` / migrations work without a real id; remote use requires
-# operator-supplied Cloudflare account configuration (UNPROVEN — CREDENTIAL GATE).
+# D1 — relational operational truth.
 [[d1_databases]]
 binding = "WP_OS_DB"
 database_name = "west-peek-os-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "1d7c242b-fddc-41f1-843c-03dd2db6fbef"
 migrations_dir = "migrations"
 
 # R2 — governed binary documents/artifacts only. D1 holds metadata/provenance.
@@ -29,8 +39,41 @@ bucket_name = "west-peek-os-documents"
 # KV — ephemeral/config/cache ONLY. Never institutional truth.
 [[kv_namespaces]]
 binding = "WP_OS_KV"
-id = "00000000000000000000000000000000"
+id = "bf0750e8e9a648758a5de978088c97da"
 
 [vars]
 # local | preview | production
 WP_OS_ENV = "local"
+
+# ---------------------------------------------------------------------------
+# production — the deployed profile. Bindings are NOT inherited by a named
+# environment, so every binding is restated here deliberately and explicitly.
+# ---------------------------------------------------------------------------
+[env.production]
+name = "west-peek-os"
+
+[env.production.assets]
+directory = "./dist/client"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[env.production.d1_databases]]
+binding = "WP_OS_DB"
+database_name = "west-peek-os-db"
+database_id = "1d7c242b-fddc-41f1-843c-03dd2db6fbef"
+migrations_dir = "migrations"
+
+[[env.production.r2_buckets]]
+binding = "WP_OS_DOCUMENTS"
+bucket_name = "west-peek-os-documents"
+
+[[env.production.kv_namespaces]]
+binding = "WP_OS_KV"
+id = "bf0750e8e9a648758a5de978088c97da"
+
+[env.production.vars]
+# Not "local": the dev identity header is refused outside local (src/worker/auth.ts).
+WP_OS_ENV = "production"
+
+[env.production.observability]
+enabled = true
