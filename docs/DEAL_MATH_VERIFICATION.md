@@ -91,7 +91,11 @@ and one negative amount (sign-change requirement), non-finite/zero-derivative br
    implementation must land within 1e-6 and its XNPV residual must be < 1e-6
    (self-consistency).
 
-   > **CORRECTION (deployment, 2026-08-12) — requires operator acceptance.**
+   > **CORRECTION (deployment, 2026-08-12) — ACCEPTED by the operator 2026-08-12
+   > (Sequoia Taylor, Managing Partner).** Acceptance covers this corrected constant
+   > and the UTC date anchoring that produces it. It does not alter the §7.2
+   > formula-verification gate for any other formula, and makes no claim of
+   > valuation, investment, or fund-performance correctness (§12.4).
    > This entry previously recorded r = 0.2625189521680761, which is wrong by
    > 1.93e-5. That value was produced on a DST-observing host: `toTime` parsed
    > date-only strings as *local* midnight, so 2026-01-01 → 2026-07-01 measured

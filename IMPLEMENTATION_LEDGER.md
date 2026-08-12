@@ -91,7 +91,7 @@ receipt still cannot execute.
 | VDR | UNPROVEN — PROVIDER NOT SELECTED (P10 records what was shared; it never delivers it) |
 | Fund administrator export | UNPROVEN — SOURCE CONTRACT GATE (contract written: `docs/IMPORT_CONTRACTS.md` §fund-admin; every run stamped LOCAL_FIXTURE) |
 | `seq23/secondaries` source access | UNPROVEN — SOURCE ACCESS GATE |
-| Allocation formula acceptance | UNPROVEN — FORMULA-VERIFICATION ACCEPTANCE GATE (§7.2): `docs/ALLOCATION_VERIFICATION.md` and `docs/DEAL_MATH_VERIFICATION.md` are engineering verification; operator/reviewer acceptance has NOT occurred |
+| Allocation formula acceptance | UNPROVEN — FORMULA-VERIFICATION ACCEPTANCE GATE (§7.2): `docs/ALLOCATION_VERIFICATION.md` and `docs/DEAL_MATH_VERIFICATION.md` are engineering verification; operator/reviewer acceptance has NOT occurred. ONE NARROW EXCEPTION: on 2026-08-12 the operator (Sequoia Taylor, MP) accepted the corrected three-flow XIRR constant `0.2624996524742502` and the UTC date anchoring behind it (the DST correction recorded in `docs/DEAL_MATH_VERIFICATION.md` §2). That acceptance is scoped to that constant alone — it does NOT open the §7.2 gate for deal-math or allocation live use, and claims nothing about valuation, investment soundness, or fund performance (§12.4) |
 
 ## Parent authority preservation
 
