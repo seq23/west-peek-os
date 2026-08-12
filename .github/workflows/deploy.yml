@@ -1,0 +1,100 @@
+# West Peek OS — production deployment.
+#
+# Pushes to main run the repository's real validation gate and then deploy the
+# `production` wrangler profile (WP_OS_ENV = "production").
+#
+# Deliberately NOT in this workflow: `d1 migrations apply --remote`. Applying
+# schema changes to the production database is an operator-gated action
+# (docs/ENVIRONMENTS.md), not something a push should do implicitly. Migrations
+# are applied deliberately by the operator; CI only ships code and assets.
+#
+# Secrets are read from GitHub Actions encrypted secrets and are never written
+# into this file, into logs, or into wrangler.toml.
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never let two deploys race the same Worker.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Validate and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (reproducible, from package-lock)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit and integration tests
+        run: npm test
+
+      # The governance boundary scans are part of the gate, not optional extras:
+      # they are what keep authority, the AI boundary, and cross-repo isolation honest.
+      - name: Authority boundary
+        run: npm run validate:authority
+
+      - name: AI boundary
+        run: npm run validate:ai-boundary
+
+      - name: Network boundary
+        run: npm run validate:network-boundary
+
+      - name: Build client
+        run: npm run build
+
+      - name: Deploy to Cloudflare
+        run: npx wrangler deploy --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Do not trust the deploy exit code alone — prove the deployed Worker answers,
+      # is running the production profile, can reach D1, and still fails closed.
+      - name: Post-deploy smoke checks
+        run: |
+          set -euo pipefail
+          URL="https://west-peek-os.seq-taylor.workers.dev"
+
+          echo "--- /api/health ---"
+          health="$(curl -sS --retry 5 --retry-delay 5 --retry-all-errors "$URL/api/health")"
+          echo "$health"
+
+          echo "$health" | grep -q '"ok":true'                                  || { echo "FAIL: health not ok"; exit 1; }
+          echo "$health" | grep -q '"env":"production"'                         || { echo "FAIL: not the production profile"; exit 1; }
+          echo "$health" | grep -q '"reachable":true'                           || { echo "FAIL: D1 unreachable"; exit 1; }
+
+          echo "--- protected route must fail closed ---"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$URL/api/me")"
+          [ "$code" = "401" ] || { echo "FAIL: /api/me returned $code, expected 401"; exit 1; }
+
+          echo "--- dev identity header must be refused outside local ---"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H 'x-wpos-dev-user: sequoia@westpeek.ventures' "$URL/api/me")"
+          [ "$code" = "401" ] || { echo "FAIL: dev header accepted in production ($code)"; exit 1; }
+
+          echo "--- SPA root ---"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$URL/")"
+          [ "$code" = "200" ] || { echo "FAIL: SPA root returned $code"; exit 1; }
+
+          echo "All post-deploy smoke checks passed."
