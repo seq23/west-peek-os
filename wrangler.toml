@@ -1,0 +1,36 @@
+# West Peek OS — Cloudflare Worker configuration.
+# Local development runs fully offline (miniflare). Remote/protected values are
+# PLACEHOLDERS: remote deployment is a named human gate and has NOT been proven.
+name = "west-peek-os"
+main = "src/worker/index.ts"
+compatibility_date = "2025-10-01"
+
+# Static React client built by `vite build` into dist/client.
+# The worker handles /api/* itself and delegates everything else to ASSETS.
+[assets]
+directory = "./dist/client"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# D1 — relational operational truth. database_id below is a placeholder:
+# local `wrangler dev` / migrations work without a real id; remote use requires
+# operator-supplied Cloudflare account configuration (UNPROVEN — CREDENTIAL GATE).
+[[d1_databases]]
+binding = "WP_OS_DB"
+database_name = "west-peek-os-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# R2 — governed binary documents/artifacts only. D1 holds metadata/provenance.
+[[r2_buckets]]
+binding = "WP_OS_DOCUMENTS"
+bucket_name = "west-peek-os-documents"
+
+# KV — ephemeral/config/cache ONLY. Never institutional truth.
+[[kv_namespaces]]
+binding = "WP_OS_KV"
+id = "00000000000000000000000000000000"
+
+[vars]
+# local | preview | production
+WP_OS_ENV = "local"

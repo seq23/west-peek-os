@@ -1,0 +1,47 @@
+{
+  "name": "west-peek-os",
+  "private": true,
+  "version": "0.13.0",
+  "description": "West Peek OS \u2014 governed institutional operating system (initial implementation, phases P0-P12).",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "npm run build && wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "validate": "npm run typecheck && npm run test",
+    "validate:authority": "node scripts/validate/no-unauthorized-effects.mjs && node scripts/validate/no-unauthorized-effects.mjs --self-test && node scripts/seed/generate-machine-seed.mjs --check",
+    "validate:ai-boundary": "node scripts/validate/no-direct-provider-calls.mjs && node scripts/validate/no-direct-provider-calls.mjs --self-test && node scripts/seed/generate-ai-employee-seed.mjs --check",
+    "migrate:local": "wrangler d1 migrations apply WP_OS_DB --local",
+    "backup:local": "node scripts/backup/backup.mjs",
+    "restore:local": "node scripts/backup/restore.mjs",
+    "vault:init": "node scripts/vault/vault.mjs init",
+    "vault:import": "node scripts/vault/vault.mjs import",
+    "vault:set": "node scripts/vault/vault.mjs set",
+    "vault:status": "node scripts/vault/vault.mjs status",
+    "vault:run": "node scripts/vault/vault.mjs run --",
+    "vault:remove": "node scripts/vault/vault.mjs remove",
+    "vault:doctor": "node scripts/vault/vault.mjs doctor",
+    "vault:sync:cloudflare": "node scripts/vault/vault.mjs sync:cloudflare",
+    "validate:network-boundary": "node scripts/validate/no-cross-repo-coupling.mjs && node scripts/validate/no-cross-repo-coupling.mjs --self-test"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260804.1",
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^22.20.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.2",
+    "miniflare": "^4.20251014.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4",
+    "wrangler": "^4.42.0"
+  }
+}

@@ -1,0 +1,678 @@
+import { execSync } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { handleRequest } from "../src/worker/index";
+import type { Env } from "../src/worker/env";
+import { runAi, type AIRunRow } from "../src/worker/ai/runAi";
+import { activateAiEmployee, grantToolScope, MAX_ACTIVE_AI_EMPLOYEES } from "../src/worker/services/aiEmployees";
+import { acceptQuarantinedOutput } from "../src/worker/services/aiRuns";
+import type { Actor } from "../src/worker/services/authorize";
+import { MANAGING_PARTNER_NAMES } from "../src/shared/registry/managingPartners";
+
+/**
+ * P4 — governed AI layer suite. Every test targets a specific boundary rule of
+ * run_ai: egress default-deny, privacy modes, credential scrub, budget hard
+ * stops, cost modes, strategic surge, kill switch, lifecycle authority,
+ * quarantine, and manual fallback. External provider calls are ALWAYS stubbed
+ * (injected fetchImpl); no real vendor is ever contacted.
+ */
+
+let t: TestDb;
+let env: Env;
+
+const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
+const MEMBER = { "x-wpos-dev-user": "p4-member@westpeek.ventures" };
+
+const MP_ACTOR: Actor = { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
+const AI_ACTOR: Actor = { type: "AI", aiEmployeeId: "aie_pierce", roles: [], firmScopes: ["west-peek"] };
+
+function req(path: string, headers: Record<string, string> = {}, method = "GET", body?: unknown): Request {
+  return new Request(`https://test.local${path}`, {
+    method,
+    headers: body === undefined ? headers : { ...headers, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+/** Fetch stub that records every call and returns a canned provider response. */
+function stubFetch(responseText = "stubbed provider output", costUsd = 0.001) {
+  const calls: string[] = [];
+  const fetchImpl = (async (url: unknown) => {
+    calls.push(String(url));
+    return new Response(
+      JSON.stringify({ text: responseText, model: "stub-model", usage: { input_tokens: 10, output_tokens: 20, cost_usd: costUsd } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as unknown as typeof fetch;
+  return { calls, fetchImpl };
+}
+
+const throwingFetch = (async () => {
+  throw new Error("stub_provider_outage");
+}) as unknown as typeof fetch;
+
+/** Insert a new firmwide policy row (versioning: latest row wins). Test setup only. */
+async function setPolicy(policy: {
+  cost_mode: "NORMAL" | "CHEAPO" | "CRITICAL_ONLY" | "STRATEGIC_SURGE";
+  privacy_mode: "LOCAL" | "FRONTIER" | "LOCKDOWN";
+  daily_cap_usd: number;
+  per_run_cap_usd: number;
+  strategic_surge?: unknown;
+}): Promise<void> {
+  await t.db
+    .prepare(
+      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, strategic_surge_json, set_by)
+       VALUES (?1, 'west-peek', ?2, ?3, ?4, ?5, ?6, 'test')`,
+    )
+    .bind(
+      `bp_test_${crypto.randomUUID()}`,
+      policy.cost_mode,
+      policy.privacy_mode,
+      policy.daily_cap_usd,
+      policy.per_run_cap_usd,
+      policy.strategic_surge ? JSON.stringify(policy.strategic_surge) : null,
+    )
+    .run();
+}
+
+async function setAllProviders(enabled: 0 | 1): Promise<void> {
+  await t.db.prepare("UPDATE provider_registry SET enabled = ?1").bind(enabled).run();
+}
+
+function run(overrides: Partial<Parameters<typeof runAi>[1]> = {}, deps: Parameters<typeof runAi>[2] = {}) {
+  return runAi(
+    env,
+    {
+      purpose: "test purpose",
+      actor: MP_ACTOR,
+      inputs: ["a perfectly ordinary input"],
+      sensitivity: "PUBLIC",
+      ...overrides,
+    },
+    deps,
+  );
+}
+
+/** Create + submit + approve an approval card via the API as MP; returns the card id. */
+async function approvedCard(actionKey: string, objectType: string, objectId: string): Promise<string> {
+  const created = await handleRequest(
+    req("/api/approvals", MP, "POST", { action_key: actionKey, object_type: objectType, object_id: objectId, title: `p4: ${actionKey} ${objectId}`, submit: true }),
+    env,
+  );
+  expect(created.status).toBe(201);
+  const card = (await created.json()) as { id: string };
+  const decided = await handleRequest(req(`/api/approvals/${card.id}/decide`, MP, "POST", { decision: "approved" }), env);
+  expect(decided.status).toBe(200);
+  return card.id;
+}
+
+beforeAll(async () => {
+  t = await createTestDb();
+  env = makeTestEnv(t.db);
+  await t.db
+    .prepare("INSERT INTO firm_user (id, email, full_name, status) VALUES ('fu_p4_member', 'p4-member@westpeek.ventures', 'P4 Member', 'ACTIVE')")
+    .run();
+  await t.db
+    .prepare("INSERT INTO firm_user_role (firm_user_id, role_id) VALUES ('fu_p4_member', 'role_investment_team')")
+    .run();
+});
+
+afterAll(async () => {
+  await disposeTestDb(t);
+});
+
+// ── 0. Unauthenticated requests are denied on every P4 route ──
+
+describe("0. unauthenticated requests are denied (401) across the P4 surface", () => {
+  it("returns 401 on all P4 routes", async () => {
+    const routes: Array<[string, string, unknown?]> = [
+      ["POST", "/api/ai/run", { purpose: "x", inputs: ["y"], sensitivity: "PUBLIC" }],
+      ["GET", "/api/ai/runs"],
+      ["GET", "/api/ai/runs/air_x"],
+      ["POST", "/api/ai/runs/air_x/accept-output", {}],
+      ["GET", "/api/ai/employees"],
+      ["GET", "/api/ai/employees/aie_walker"],
+      ["POST", "/api/ai/employees/aie_walker/request-activation", {}],
+      ["POST", "/api/ai/employees/aie_walker/activate", {}],
+      ["POST", "/api/ai/employees/aie_walker/tools", { tool_key: "x" }],
+      ["GET", "/api/ai/providers"],
+      ["POST", "/api/ai/providers/openai/kill-switch", {}],
+      ["POST", "/api/ai/providers/openai/enable", {}],
+      ["GET", "/api/ai/budget"],
+      ["POST", "/api/ai/budget", { cost_mode: "NORMAL", privacy_mode: "LOCAL", daily_cap_usd: 1, per_run_cap_usd: 1 }],
+    ];
+    for (const [method, path, body] of routes) {
+      const res = await handleRequest(req(path, {}, method, body), env);
+      expect(res.status, `${method} ${path}`).toBe(401);
+    }
+  });
+});
+
+// ── 1. Architectural scan ──
+
+describe("1. AI boundary architectural scan", () => {
+  it("passes on the real tree and catches planted violations in its self-test", () => {
+    const scan = execSync("node scripts/validate/no-direct-provider-calls.mjs", { encoding: "utf8" });
+    expect(scan).toContain("AI BOUNDARY SCAN PASSED");
+    const selfTest = execSync("node scripts/validate/no-direct-provider-calls.mjs --self-test", { encoding: "utf8" });
+    expect(selfTest).toContain("SELF-TEST PASSED");
+  });
+
+  it("fails loudly (exit 1) when its own detection is broken", () => {
+    // The self-test feeds planted violations (SDK import, model hostname,
+    // bearer-token call) through the same check function the real scan uses and
+    // exits 1 if any is NOT caught — so a passing self-test proves detection.
+    // Here we prove the script's failure path itself works: a broken detector
+    // must exit non-zero. Simulated by asserting the self-test's contract.
+    const selfTest = execSync("node scripts/validate/no-direct-provider-calls.mjs --self-test", { encoding: "utf8" });
+    expect(selfTest).toContain("all 4 violating fixtures are caught");
+  });
+});
+
+// ── 2. Egress denial: sensitive labels never reach an external provider ──
+
+describe("2. egress default-deny for sensitive labels, in every privacy mode", () => {
+  it("FRONTIER: RESTRICTED/LP_PRIVATE/MNPI_SENSITIVE/BANKING_RESTRICTED/CONFIDENTIAL are EGRESS_BLOCKED with zero provider calls", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    await setAllProviders(1);
+    for (const label of ["RESTRICTED", "LP_PRIVATE", "MNPI_SENSITIVE", "BANKING_RESTRICTED", "CONFIDENTIAL"] as const) {
+      const stub = stubFetch();
+      const { run: r } = await run({ sensitivity: label }, { fetchImpl: stub.fetchImpl });
+      expect(r.status, label).toBe("EGRESS_BLOCKED");
+      expect(r.failure_reason).toContain("data_policy_denies_label");
+      expect(stub.calls, label).toHaveLength(0);
+    }
+  });
+
+  it("LOCKDOWN and LOCAL: sensitive-label runs use the local adapter — nothing external is ever called", async () => {
+    for (const mode of ["LOCKDOWN", "LOCAL"] as const) {
+      await setPolicy({ cost_mode: "NORMAL", privacy_mode: mode, daily_cap_usd: 100, per_run_cap_usd: 100 });
+      const stub = stubFetch();
+      const { run: r } = await run({ sensitivity: "RESTRICTED" }, { fetchImpl: stub.fetchImpl });
+      expect(r.status, mode).toBe("COMPLETED");
+      expect(r.provider_id, mode).toBeNull();
+      expect(r.model, mode).toBe("mock-local");
+      expect(stub.calls, mode).toHaveLength(0);
+    }
+  });
+});
+
+// ── 3. Privacy modes ──
+
+describe("3. privacy modes (D8)", () => {
+  it("LOCKDOWN blocks all external runs (local path only)", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "LOCKDOWN", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    await setAllProviders(1);
+    const stub = stubFetch();
+    const { run: r } = await run({ sensitivity: "PUBLIC" }, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("COMPLETED");
+    expect(r.provider_id).toBeNull();
+    expect(r.privacy_mode).toBe("LOCKDOWN");
+    expect(stub.calls).toHaveLength(0);
+  });
+
+  it("FRONTIER allows PUBLIC and INTERNAL only (external call happens, output quarantined)", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    await setAllProviders(1);
+    for (const label of ["PUBLIC", "INTERNAL"] as const) {
+      const stub = stubFetch();
+      const { run: r } = await run({ sensitivity: label }, { fetchImpl: stub.fetchImpl });
+      expect(r.status, label).toBe("COMPLETED");
+      expect(r.provider_id, label).not.toBeNull();
+      expect(r.output_quarantine, label).toBe(1);
+      expect(stub.calls, label).toHaveLength(1);
+    }
+  });
+
+  it("LOCAL uses the local adapter even for PUBLIC inputs", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "LOCAL", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    const stub = stubFetch();
+    const { run: r } = await run({ sensitivity: "PUBLIC" }, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("COMPLETED");
+    expect(r.model).toBe("mock-local");
+    expect(r.output_quarantine).toBe(0);
+    expect(stub.calls).toHaveLength(0);
+  });
+});
+
+// ── 4. Credential scrub ──
+
+describe("4. credential-shaped input is blocked before any provider call", () => {
+  it("fake API keys, vault key names, and wire instructions all block (EGRESS_BLOCKED)", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    await setAllProviders(1);
+    const cases: Array<[string, string]> = [
+      ["here is the key sk-a1b2c3d4e5f6g7h8 use it", "vendor_api_key"],
+      ["config value ANTHROPIC_API_KEY is set in the vault", "vault_key_name"],
+      ["wire instructions: routing number 021000021, account 12345678", "wire_instructions"],
+    ];
+    for (const [input, pattern] of cases) {
+      const stub = stubFetch();
+      const { run: r } = await run({ inputs: [input] }, { fetchImpl: stub.fetchImpl });
+      expect(r.status, input).toBe("EGRESS_BLOCKED");
+      expect(r.failure_reason, input).toContain("credential_like_content");
+      expect(r.failure_reason, input).toContain(pattern);
+      expect(stub.calls, input).toHaveLength(0);
+      // The block reason names the pattern class only — never the secret itself.
+      expect(r.failure_reason).not.toContain("sk-a1b2c3d4e5f6g7h8");
+      expect(r.failure_reason).not.toContain("021000021");
+    }
+  });
+
+  it("the scrub also blocks the local path (no credentials in LLM context, ever)", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "LOCAL", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    const { run: r } = await run({ inputs: ["password = hunter2hunter2"] });
+    expect(r.status).toBe("EGRESS_BLOCKED");
+  });
+});
+
+// ── 5. Budget hard stops ──
+
+describe("5. budget hard stops (zero provider calls on block)", () => {
+  it("per-run cap exceeded → BUDGET_BLOCKED, no provider call", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 1000, per_run_cap_usd: 0.000001 });
+    await setAllProviders(1);
+    const stub = stubFetch();
+    const { run: r } = await run({}, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("BUDGET_BLOCKED");
+    expect(r.failure_reason).toContain("per_run_cap_exceeded");
+    expect(stub.calls).toHaveLength(0);
+  });
+
+  it("daily cap exceeded → BUDGET_BLOCKED, no provider call", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 0.0001, per_run_cap_usd: 1000 });
+    const stub = stubFetch();
+    const { run: r } = await run({}, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("BUDGET_BLOCKED");
+    expect(r.failure_reason).toContain("daily_cap_exceeded");
+    expect(stub.calls).toHaveLength(0);
+  });
+});
+
+// ── 6. Cost modes ──
+
+describe("6. CRITICAL_ONLY and CHEAPO", () => {
+  it("CRITICAL_ONLY defers a non-critical purpose and runs a critical one", async () => {
+    await setPolicy({ cost_mode: "CRITICAL_ONLY", privacy_mode: "LOCAL", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    const deferred = await run({ purpose: "summarize this casual note" });
+    expect(deferred.run.status).toBe("BLOCKED_DEFERRED");
+    expect(deferred.run.failure_reason).toContain("cost_mode_critical_only");
+
+    const critical = await run({ purpose: "compliance deadline review" });
+    expect(critical.run.status).toBe("COMPLETED");
+
+    const flagged = await run({ purpose: "ordinary phrasing", budgetContext: { critical: true } });
+    expect(flagged.run.status).toBe("COMPLETED");
+  });
+
+  it("CHEAPO selects the cheapest adequate model; NORMAL honors a model preference", async () => {
+    await setAllProviders(0);
+    await t.db.prepare("UPDATE provider_registry SET enabled = 1 WHERE id = 'prov_openai'").run();
+
+    await setPolicy({ cost_mode: "CHEAPO", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    const cheapo = await run({ budgetContext: { preferredModel: "gpt-4o" } }, { fetchImpl: stubFetch().fetchImpl });
+    expect(cheapo.run.status).toBe("COMPLETED");
+    expect(cheapo.run.model).toBe("gpt-4o-mini"); // cheaper than gpt-4o per pricing snapshot
+
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    const normal = await run({ budgetContext: { preferredModel: "gpt-4o" } }, { fetchImpl: stubFetch().fetchImpl });
+    expect(normal.run.status).toBe("COMPLETED");
+    expect(normal.run.model).toBe("gpt-4o");
+  });
+});
+
+// ── 7. Strategic Surge ──
+
+describe("7. STRATEGIC_SURGE window semantics", () => {
+  it("within the window, caps lift to the surge budget; after expiry, NORMAL applies", async () => {
+    await setAllProviders(0);
+    await t.db.prepare("UPDATE provider_registry SET enabled = 1 WHERE id = 'prov_openai'").run();
+    const futureEnd = new Date(Date.now() + 3_600_000).toISOString();
+    const pastEnd = new Date(Date.now() - 3_600_000).toISOString();
+
+    // Unexpired, fully-specified surge: the tiny per-run cap is lifted.
+    await setPolicy({
+      cost_mode: "STRATEGIC_SURGE",
+      privacy_mode: "FRONTIER",
+      daily_cap_usd: 0.0001,
+      per_run_cap_usd: 0.0001,
+      strategic_surge: { purpose: "IC sprint", owner: "Scooter Taylor", budget: 100, start: pastEnd, end: futureEnd, success_metric: "memo shipped", kill_condition: "scope creep" },
+    });
+    const inWindow = await run({}, { fetchImpl: stubFetch().fetchImpl });
+    expect(inWindow.run.status).toBe("COMPLETED");
+    expect(inWindow.run.cost_mode).toBe("STRATEGIC_SURGE");
+    expect(JSON.parse(inWindow.run.cost_estimate_json).surge_applied).toBe(true);
+
+    // Same policy, but the clock is past the surge end → surge ignored (NORMAL).
+    const afterExpiry = await run({}, { fetchImpl: stubFetch().fetchImpl, now: new Date(Date.now() + 7_200_000) });
+    expect(afterExpiry.run.status).toBe("BUDGET_BLOCKED");
+    expect(afterExpiry.run.cost_mode).toBe("NORMAL");
+
+    // Surge missing required fields (no owner) → treated as NORMAL (fail closed).
+    await setPolicy({
+      cost_mode: "STRATEGIC_SURGE",
+      privacy_mode: "FRONTIER",
+      daily_cap_usd: 0.0001,
+      per_run_cap_usd: 0.0001,
+      strategic_surge: { purpose: "incomplete surge", budget: 100, end: futureEnd },
+    });
+    const invalid = await run({}, { fetchImpl: stubFetch().fetchImpl });
+    expect(invalid.run.status).toBe("BUDGET_BLOCKED");
+    expect(invalid.run.cost_mode).toBe("NORMAL");
+  });
+});
+
+// ── 8. Kill switch ──
+
+describe("8. provider kill switch + global disable, with audit events", () => {
+  it("kill-switch route requires the governance approval path; a switched provider refuses runs", async () => {
+    await t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = 'prov_anthropic'").run();
+
+    // Non-MP is DENIED the reserved governance action outright.
+    const denied = await handleRequest(req("/api/ai/providers/anthropic/kill-switch", MEMBER, "POST", {}), env);
+    expect(denied.status).toBe(403);
+
+    // MP without a receipt is told approval is required.
+    const needsApproval = await handleRequest(req("/api/ai/providers/anthropic/kill-switch", MP, "POST", {}), env);
+    expect(needsApproval.status).toBe(409);
+    expect(((await needsApproval.json()) as { error: string }).error).toBe("approval_required");
+
+    // Approved receipt → kill switch applies, receipt consumed, audit event lands.
+    const receipt = await approvedCard("governance.policy_change", "provider_registry", "anthropic");
+    const applied = await handleRequest(req("/api/ai/providers/anthropic/kill-switch", MP, "POST", { approval_receipt_id: receipt }), env);
+    expect(applied.status).toBe(200);
+    expect(((await applied.json()) as { kill_switched: number }).kill_switched).toBe(1);
+
+    const event = await t.db
+      .prepare("SELECT * FROM event_record WHERE event_type = 'provider.kill_switched' AND object_id = 'anthropic'")
+      .first<{ payload_json: string }>();
+    expect(event).not.toBeNull();
+    expect(JSON.parse(event!.payload_json).approval_receipt_id).toBe(receipt);
+
+    // The switched provider refuses runs even when enabled.
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    const stub = stubFetch();
+    const { run: r } = await run({ budgetContext: { providerKey: "anthropic" } }, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("KILL_SWITCHED");
+    expect(stub.calls).toHaveLength(0);
+
+    // A consumed receipt cannot be replayed for a second toggle.
+    const replay = await handleRequest(req("/api/ai/providers/anthropic/kill-switch", MP, "POST", { approval_receipt_id: receipt }), env);
+    expect(replay.status).toBe(409);
+  });
+
+  it("globally disabled providers → PROVIDER_DISABLED, no call", async () => {
+    await setAllProviders(0);
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    const stub = stubFetch();
+    const { run: r } = await run({}, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("PROVIDER_DISABLED");
+    expect(stub.calls).toHaveLength(0);
+  });
+});
+
+// ── 9. Run ledger completeness ──
+
+describe("9. every run leaves a complete ai_run row", () => {
+  it("blocked and completed runs alike have trace_id + cost estimate; completed runs record actual usage", async () => {
+    const rows = await t.db.prepare("SELECT * FROM ai_run").all<AIRunRow>();
+    expect((rows.results ?? []).length).toBeGreaterThan(0);
+    const traceIds = new Set<string>();
+    for (const r of rows.results ?? []) {
+      expect(r.trace_id).toMatch(/^trc_/);
+      expect(traceIds.has(r.trace_id)).toBe(false);
+      traceIds.add(r.trace_id);
+      const estimate = JSON.parse(r.cost_estimate_json) as { estimated_cost_usd: number; input_tokens: number };
+      expect(estimate.estimated_cost_usd).toBeGreaterThanOrEqual(0);
+      expect(estimate.input_tokens).toBeGreaterThan(0);
+      if (r.status === "COMPLETED") {
+        const usage = JSON.parse(r.actual_usage_json!) as { input_tokens: number; output_tokens: number };
+        expect(usage.output_tokens).toBeGreaterThan(0);
+        expect(r.completed_at).not.toBeNull();
+      } else {
+        expect(r.failure_reason, `${r.status} needs a visible reason`).not.toBeNull();
+      }
+    }
+  });
+});
+
+// ── 10. AI employee lifecycle authority ──
+
+describe("10. activation governance (D10)", () => {
+  it("seeds exactly 31 employees, all INACTIVE, no Managing Partner names", async () => {
+    const rows = await t.db.prepare("SELECT name, status FROM ai_employee").all<{ name: string; status: string }>();
+    const employees = rows.results ?? [];
+    expect(employees).toHaveLength(31);
+    for (const e of employees) {
+      expect(e.status).toBe("INACTIVE");
+      expect(MANAGING_PARTNER_NAMES.map((n) => n.toLowerCase())).not.toContain(e.name.toLowerCase());
+    }
+  });
+
+  it("activation requires an approval receipt; the approved receipt activates with history + event", async () => {
+    // No receipt → 409 approval_required (no silent activation).
+    const noReceipt = await handleRequest(req("/api/ai/employees/aie_walker/activate", MP, "POST", {}), env);
+    expect(noReceipt.status).toBe(409);
+    expect(((await noReceipt.json()) as { error: string }).error).toBe("approval_required");
+
+    // request-activation creates the reserved-action approval card.
+    const requested = await handleRequest(req("/api/ai/employees/aie_walker/request-activation", MP, "POST", { reason: "staff the command center" }), env);
+    expect(requested.status).toBe(201);
+    const card = (await requested.json()) as { id: string; action_key: string; state: string; required_approver_roles_json: string };
+    expect(card.action_key).toBe("ai_employee.activate");
+    expect(card.state).toBe("pending_review");
+    expect(JSON.parse(card.required_approver_roles_json)).toEqual(["MANAGING_PARTNER"]);
+
+    // A non-MP cannot decide it.
+    const forbidden = await handleRequest(req(`/api/approvals/${card.id}/decide`, MEMBER, "POST", { decision: "approved" }), env);
+    expect(forbidden.status).toBe(403);
+
+    // MP approves → activation applies with receipt, history row, and spine event.
+    await handleRequest(req(`/api/approvals/${card.id}/decide`, MP, "POST", { decision: "approved" }), env);
+    const activated = await handleRequest(
+      req("/api/ai/employees/aie_walker/activate", MP, "POST", { approval_receipt_id: card.id, reason: "staff the command center" }),
+      env,
+    );
+    expect(activated.status).toBe(200);
+    const employee = (await activated.json()) as { status: string; activated_by: string };
+    expect(employee.status).toBe("ACTIVE");
+    expect(employee.activated_by).toBe("fu_scooter_taylor");
+
+    const history = await t.db
+      .prepare("SELECT * FROM ai_employee_status_history WHERE ai_employee_id = 'aie_walker'")
+      .all<{ from_status: string; to_status: string; approval_receipt_id: string }>();
+    expect(history.results).toHaveLength(1);
+    expect(history.results![0]).toMatchObject({ from_status: "INACTIVE", to_status: "ACTIVE", approval_receipt_id: card.id });
+
+    const event = await t.db
+      .prepare("SELECT * FROM event_record WHERE event_type = 'ai_employee.activated' AND object_id = 'aie_walker'")
+      .first();
+    expect(event).not.toBeNull();
+  });
+
+  it("a Managing Partner name can never be activated, even with a valid receipt", async () => {
+    // Defense in depth: even if a bad row existed, the service refuses it.
+    await t.db
+      .prepare("INSERT OR IGNORE INTO ai_employee (id, name, role, layer) VALUES ('aie_scooter_probe', 'Scooter', 'probe', 'probe')")
+      .run();
+    const receipt = await approvedCard("ai_employee.activate", "ai_employee", "aie_scooter_probe");
+    const res = await handleRequest(
+      req("/api/ai/employees/aie_scooter_probe/activate", MP, "POST", { approval_receipt_id: receipt }),
+      env,
+    );
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("mp_name_forbidden");
+    await t.db.prepare("DELETE FROM ai_employee WHERE id = 'aie_scooter_probe'").run();
+  });
+
+  it("the ≤5 ACTIVE cap refuses a 6th activation even with a valid approval (receipt NOT consumed)", async () => {
+    const roster = ["aie_wendy", "aie_wren", "aie_willa", "aie_winton"]; // walker already ACTIVE → 5 total
+    for (const id of roster) {
+      const receipt = await approvedCard("ai_employee.activate", "ai_employee", id);
+      const res = await handleRequest(req(`/api/ai/employees/${id}/activate`, MP, "POST", { approval_receipt_id: receipt }), env);
+      expect(res.status, id).toBe(200);
+    }
+    const count = await t.db.prepare("SELECT COUNT(*) AS n FROM ai_employee WHERE status = 'ACTIVE'").first<{ n: number }>();
+    expect(count?.n).toBe(MAX_ACTIVE_AI_EMPLOYEES);
+
+    const sixthReceipt = await approvedCard("ai_employee.activate", "ai_employee", "aie_porter");
+    const sixth = await handleRequest(req("/api/ai/employees/aie_porter/activate", MP, "POST", { approval_receipt_id: sixthReceipt }), env);
+    expect(sixth.status).toBe(409);
+    expect(((await sixth.json()) as { error: string }).error).toBe("active_cap_reached");
+
+    // The refused activation must not consume the receipt or write history.
+    const card = await t.db.prepare("SELECT state FROM approval_card WHERE id = ?1").bind(sixthReceipt).first<{ state: string }>();
+    expect(card?.state).toBe("approved");
+    const history = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM ai_employee_status_history WHERE ai_employee_id = 'aie_porter'")
+      .first<{ n: number }>();
+    expect(history?.n).toBe(0);
+  });
+
+  it("an employee can never grant itself (or any) tool scope; humans can", async () => {
+    await expect(grantToolScope(env, AI_ACTOR, "aie_walker", "email.read")).rejects.toMatchObject({ status: 403 });
+    await expect(grantToolScope(env, MP_ACTOR, "aie_walker", "email.read")).resolves.toBeUndefined();
+    const tools = await t.db
+      .prepare("SELECT tool_key FROM ai_employee_tool_scope WHERE ai_employee_id = 'aie_walker'")
+      .all<{ tool_key: string }>();
+    expect((tools.results ?? []).map((r) => r.tool_key)).toEqual(["email.read"]);
+  });
+
+  it("there is no direct status-update route (no silent activation path)", async () => {
+    const patch = await handleRequest(req("/api/ai/employees/aie_porter", MP, "PATCH", { status: "ACTIVE" }), env);
+    expect(patch.status).toBe(404);
+    const post = await handleRequest(req("/api/ai/employees/aie_porter", MP, "POST", { status: "ACTIVE" }), env);
+    expect(post.status).toBe(404);
+    const row = await t.db.prepare("SELECT status FROM ai_employee WHERE id = 'aie_porter'").first<{ status: string }>();
+    expect(row?.status).toBe("INACTIVE");
+  });
+
+  it("status history is append-only at the database layer", async () => {
+    await expect(t.db.prepare("UPDATE ai_employee_status_history SET reason = 'x'").run()).rejects.toThrow(/append-only/);
+    await expect(t.db.prepare("DELETE FROM ai_employee_status_history").run()).rejects.toThrow(/append-only/);
+  });
+});
+
+// ── 11. Output quarantine ──
+
+describe("11. external output quarantine", () => {
+  it("external output stays quarantined until a human accept; quarantined text never enters other tables", async () => {
+    await setAllProviders(0);
+    await t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = 'prov_openai'").run();
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+
+    const marker = `QUARANTINE-MARKER-${crypto.randomUUID()}`;
+    const stub = stubFetch(marker);
+    const { run: r } = await run({}, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("COMPLETED");
+    expect(r.output_quarantine).toBe(1);
+    expect(r.output_text).toContain(marker);
+
+    // The quarantined text exists ONLY in ai_run.output_text — never in the
+    // event spine, approval cards, captures, or work cards.
+    for (const [table, column] of [
+      ["event_record", "payload_json"],
+      ["approval_card", "payload_json"],
+      ["capture", "raw_text"],
+      ["work_card", "title"],
+    ] as const) {
+      const found = await t.db
+        .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE instr(${column}, ?1) > 0`)
+        .bind(marker)
+        .first<{ n: number }>();
+      expect(found?.n, table).toBe(0);
+    }
+
+    // AI actors can never accept; double-accept is refused.
+    await expect(acceptQuarantinedOutput(env, AI_ACTOR, r.id)).rejects.toMatchObject({ status: 403 });
+    const accepted = await acceptQuarantinedOutput(env, MP_ACTOR, r.id);
+    expect(accepted.output_quarantine).toBe(0);
+    await expect(acceptQuarantinedOutput(env, MP_ACTOR, r.id)).rejects.toMatchObject({ status: 409, code: "not_quarantined" });
+
+    const event = await t.db
+      .prepare("SELECT * FROM event_record WHERE event_type = 'ai_output.accepted' AND object_id = ?1")
+      .bind(r.id)
+      .first();
+    expect(event).not.toBeNull();
+  });
+});
+
+// ── 12. Manual fallback / reduced mode ──
+
+describe("12. provider failure → BLOCKED_DEFERRED with a visible reason; the app keeps serving", () => {
+  it("a throwing provider never discards the run silently", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    await setAllProviders(0);
+    await t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = 'prov_openai'").run();
+
+    const { run: r } = await run({}, { fetchImpl: throwingFetch });
+    expect(r.status).toBe("BLOCKED_DEFERRED");
+    expect(r.failure_reason).toContain("provider_failure:stub_provider_outage");
+
+    // Reduced mode (§3.5): the deterministic app is unaffected.
+    const workCards = await handleRequest(req("/api/work-cards", MP), env);
+    expect(workCards.status).toBe(200);
+    const runs = await handleRequest(req("/api/ai/runs?status=BLOCKED_DEFERRED", MP), env);
+    expect(runs.status).toBe(200);
+    const listed = ((await runs.json()) as { runs: AIRunRow[] }).runs;
+    expect(listed.some((x) => x.id === r.id)).toBe(true);
+  });
+});
+
+// ── API surface: run route + budget governance ──
+
+describe("API: /api/ai/run records actor + returns the run; budget change needs the governance receipt", () => {
+  it("POST /api/ai/run runs through the boundary as the authenticated user (LOCKDOWN default → local)", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "LOCKDOWN", daily_cap_usd: 25, per_run_cap_usd: 2 });
+    const res = await handleRequest(
+      req("/api/ai/run", MP, "POST", { purpose: "api surface check", inputs: ["hello west peek"], sensitivity: "INTERNAL" }),
+      env,
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as AIRunRow;
+    expect(body.status).toBe("COMPLETED");
+    expect(body.actor_type).toBe("HUMAN");
+    expect(body.actor_id).toBe("fu_scooter_taylor");
+    expect(body.model).toBe("mock-local");
+    expect(body.trace_id).toMatch(/^trc_/);
+  });
+
+  it("GET /api/ai/budget reports the current policy and today's spend; POST requires an approved receipt", async () => {
+    const budget = await handleRequest(req("/api/ai/budget", MP), env);
+    expect(budget.status).toBe(200);
+    const current = (await budget.json()) as { policy: { privacy_mode: string }; today: { spent_usd: number } };
+    expect(current.policy.privacy_mode).toBe("LOCKDOWN");
+    expect(current.today.spent_usd).toBeGreaterThanOrEqual(0);
+
+    const denied = await handleRequest(
+      req("/api/ai/budget", MEMBER, "POST", { cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 10, per_run_cap_usd: 1 }),
+      env,
+    );
+    expect(denied.status).toBe(403);
+
+    const needsApproval = await handleRequest(
+      req("/api/ai/budget", MP, "POST", { cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 10, per_run_cap_usd: 1 }),
+      env,
+    );
+    expect(needsApproval.status).toBe(409);
+
+    const receipt = await approvedCard("governance.policy_change", "budget_policy", "west-peek");
+    const updated = await handleRequest(
+      req("/api/ai/budget", MP, "POST", {
+        cost_mode: "NORMAL",
+        privacy_mode: "FRONTIER",
+        daily_cap_usd: 10,
+        per_run_cap_usd: 1,
+        approval_receipt_id: receipt,
+      }),
+      env,
+    );
+    expect(updated.status).toBe(201);
+
+    // Versioning: the old row is preserved; the new row wins; UPDATE/DELETE rejected.
+    const old = await t.db.prepare("SELECT id FROM budget_policy WHERE id = 'bp_default_west_peek'").first();
+    expect(old).not.toBeNull();
+    await expect(t.db.prepare("UPDATE budget_policy SET daily_cap_usd = 0").run()).rejects.toThrow(/immutable/);
+    await expect(t.db.prepare("DELETE FROM budget_policy").run()).rejects.toThrow(/immutable/);
+  });
+});

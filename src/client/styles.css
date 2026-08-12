@@ -1,0 +1,150 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #101418;
+  color: #e6e9ec;
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #2a323b;
+}
+
+.shell-header h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+}
+
+.shell-body {
+  flex: 1;
+  display: flex;
+}
+
+.shell-nav {
+  width: 12rem;
+  border-right: 1px solid #2a323b;
+  padding: 1rem 0.75rem;
+}
+
+.shell-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nav-link {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #aeb8c2;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.nav-link:hover {
+  background: #1c232b;
+  color: #e6e9ec;
+}
+
+.nav-link-active {
+  background: #22303c;
+  color: #ffffff;
+}
+
+.shell-main {
+  flex: 1;
+  padding: 1.5rem;
+}
+
+code {
+  background: #1c232b;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+/* P3 governed work surface */
+.card {
+  background: #161c22;
+  border: 1px solid #2a323b;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.form-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0.5rem 0;
+}
+
+.shell-main input,
+.shell-main select,
+.shell-main textarea {
+  background: #101418;
+  color: #e6e9ec;
+  border: 1px solid #2a323b;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.9rem;
+}
+
+.shell-main button {
+  background: #22303c;
+  color: #e6e9ec;
+  border: 1px solid #2a323b;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.shell-main button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.shell-main table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.shell-main th,
+.shell-main td {
+  text-align: left;
+  border-bottom: 1px solid #2a323b;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: #7fa8c9;
+  text-decoration: underline;
+  margin-left: 0.75rem;
+  cursor: pointer;
+}

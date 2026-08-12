@@ -1,0 +1,230 @@
+import { z } from "zod";
+import type { Env } from "../env";
+import type { RouteContext } from "../router";
+import { json } from "../router";
+import { appendEvent } from "../events";
+import { actorFromIdentity, authorize, type Actor } from "./authorize";
+import { consumeApprovalCard } from "./approvals";
+import { AiRouteError } from "./aiRuns";
+import { dailySpendUsd, getLatestBudgetPolicy } from "../ai/runAi";
+
+/**
+ * AI provider + budget governance (P4, D8/D9).
+ *
+ * Provider kill-switch / enable and firmwide budget-policy changes are RESERVED
+ * governance actions: every mutation routes through authorize() with
+ * governance.policy_change and executes only behind an approved approval-card
+ * receipt (P3 mechanism). Nothing here bypasses the choke point; every change
+ * appends to the event spine (D15).
+ */
+
+interface ProviderRow {
+  id: string;
+  provider_key: string;
+  display_name: string;
+  enabled: number;
+  kill_switched: number;
+  capabilities_json: string;
+  cost_metadata_json: string;
+  base_url: string | null;
+  firm_scope: string;
+  created_at: string;
+}
+
+function errorResponse(err: unknown): Response {
+  if (err instanceof AiRouteError) return json({ error: err.code, detail: err.message }, { status: err.status });
+  throw err;
+}
+
+async function governedProviderChange(
+  env: Env,
+  actor: Actor,
+  providerKey: string,
+  change: "kill_switch" | "enable",
+  receiptId: string | undefined,
+): Promise<ProviderRow> {
+  const provider = await env.WP_OS_DB.prepare("SELECT * FROM provider_registry WHERE provider_key = ?1")
+    .bind(providerKey)
+    .first<ProviderRow>();
+  if (!provider) throw new AiRouteError(404, "not_found");
+
+  const authz = await authorize(
+    env,
+    actor,
+    "governance.policy_change",
+    { objectType: "provider_registry", objectId: provider.provider_key, firmScope: provider.firm_scope },
+    { receiptId },
+  );
+  if (authz.decision === "DENY") throw new AiRouteError(403, "forbidden", authz.reason);
+  if (authz.decision !== "ALLOW") {
+    throw new AiRouteError(409, "approval_required", `provider ${change} requires an approved governance.policy_change receipt (${authz.reason})`);
+  }
+
+  if (change === "kill_switch") {
+    if (provider.kill_switched === 1) throw new AiRouteError(409, "already_in_state", "provider is already kill-switched");
+    await env.WP_OS_DB.prepare("UPDATE provider_registry SET kill_switched = 1 WHERE id = ?1").bind(provider.id).run();
+  } else {
+    if (provider.enabled === 1 && provider.kill_switched !== 1) {
+      throw new AiRouteError(409, "already_in_state", "provider is already enabled");
+    }
+    await env.WP_OS_DB.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = ?1").bind(provider.id).run();
+  }
+
+  await consumeApprovalCard(env, receiptId!, { actorId: actor.firmUserId! });
+
+  await appendEvent(env, {
+    eventType: change === "kill_switch" ? "provider.kill_switched" : "provider.enabled",
+    actorType: "firm_user",
+    actorId: actor.firmUserId!,
+    objectType: "provider_registry",
+    objectId: provider.provider_key,
+    firmScope: provider.firm_scope,
+    payload: { provider_key: provider.provider_key, approval_receipt_id: receiptId },
+  });
+
+  return (await env.WP_OS_DB.prepare("SELECT * FROM provider_registry WHERE id = ?1").bind(provider.id).first<ProviderRow>())!;
+}
+
+const providerChangeSchema = z.object({
+  approval_receipt_id: z.string().trim().min(1).optional(),
+});
+
+export async function handleListAiProviders(ctx: RouteContext): Promise<Response> {
+  const rows = await ctx.env.WP_OS_DB.prepare("SELECT * FROM provider_registry ORDER BY provider_key").all<ProviderRow>();
+  return json({ providers: rows.results ?? [] });
+}
+
+export async function handleProviderKillSwitch(ctx: RouteContext): Promise<Response> {
+  const body = await ctx.request.json().catch(() => null);
+  const parsed = providerChangeSchema.safeParse(body ?? {});
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    const provider = await governedProviderChange(
+      ctx.env,
+      actorFromIdentity(ctx.identity!),
+      ctx.params.key!,
+      "kill_switch",
+      parsed.data.approval_receipt_id,
+    );
+    return json(provider);
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+export async function handleProviderEnable(ctx: RouteContext): Promise<Response> {
+  const body = await ctx.request.json().catch(() => null);
+  const parsed = providerChangeSchema.safeParse(body ?? {});
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    const provider = await governedProviderChange(
+      ctx.env,
+      actorFromIdentity(ctx.identity!),
+      ctx.params.key!,
+      "enable",
+      parsed.data.approval_receipt_id,
+    );
+    return json(provider);
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+// ── Budget policy ──
+
+export async function handleGetAiBudget(ctx: RouteContext): Promise<Response> {
+  const firmScope = ctx.identity!.authorityScopes.find((s) => s.scopeKey === "firm_scope")?.scopeValue ?? "west-peek";
+  const policy = await getLatestBudgetPolicy(ctx.env, firmScope);
+  const spentToday = await dailySpendUsd(ctx.env, firmScope);
+  return json({ policy, today: { spent_usd: spentToday, daily_cap_usd: policy.daily_cap_usd } });
+}
+
+const surgeSchema = z.object({
+  purpose: z.string().trim().min(1),
+  owner: z.string().trim().min(1),
+  scope: z.string().trim().min(1).optional(),
+  budget: z.number().positive(),
+  start: z.string().trim().min(1).optional(),
+  end: z.string().trim().min(1),
+  success_metric: z.string().trim().min(1).optional(),
+  kill_condition: z.string().trim().min(1).optional(),
+});
+
+const budgetUpdateSchema = z.object({
+  cost_mode: z.enum(["NORMAL", "CHEAPO", "CRITICAL_ONLY", "STRATEGIC_SURGE"]),
+  privacy_mode: z.enum(["LOCAL", "FRONTIER", "LOCKDOWN"]),
+  daily_cap_usd: z.number().min(0),
+  per_run_cap_usd: z.number().min(0),
+  strategic_surge: surgeSchema.nullable().optional(),
+  approval_receipt_id: z.string().trim().min(1).optional(),
+});
+
+/**
+ * Firmwide budget/privacy policy change: a NEW budget_policy row (versioned,
+ * immutable by trigger) behind an approved governance.policy_change receipt.
+ */
+export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response> {
+  const body = await ctx.request.json().catch(() => null);
+  const parsed = budgetUpdateSchema.safeParse(body);
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  const input = parsed.data;
+  if (input.cost_mode === "STRATEGIC_SURGE" && !input.strategic_surge) {
+    return json({ error: "invalid_input", detail: "STRATEGIC_SURGE requires a strategic_surge record (purpose/owner/budget/end)" }, { status: 400 });
+  }
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  try {
+    const authz = await authorize(
+      ctx.env,
+      actor,
+      "governance.policy_change",
+      { objectType: "budget_policy", objectId: firmScope, firmScope },
+      { receiptId: input.approval_receipt_id },
+    );
+    if (authz.decision === "DENY") throw new AiRouteError(403, "forbidden", authz.reason);
+    if (authz.decision !== "ALLOW") {
+      throw new AiRouteError(409, "approval_required", `budget policy change requires an approved governance.policy_change receipt (${authz.reason})`);
+    }
+
+    const id = `bp_${crypto.randomUUID()}`;
+    await ctx.env.WP_OS_DB.prepare(
+      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, strategic_surge_json, set_by)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+    )
+      .bind(
+        id,
+        firmScope,
+        input.cost_mode,
+        input.privacy_mode,
+        input.daily_cap_usd,
+        input.per_run_cap_usd,
+        input.strategic_surge ? JSON.stringify(input.strategic_surge) : null,
+        actor.firmUserId!,
+      )
+      .run();
+
+    await consumeApprovalCard(ctx.env, input.approval_receipt_id!, { actorId: actor.firmUserId! });
+
+    await appendEvent(ctx.env, {
+      eventType: "budget_policy.updated",
+      actorType: "firm_user",
+      actorId: actor.firmUserId!,
+      objectType: "budget_policy",
+      objectId: id,
+      firmScope,
+      payload: {
+        cost_mode: input.cost_mode,
+        privacy_mode: input.privacy_mode,
+        daily_cap_usd: input.daily_cap_usd,
+        per_run_cap_usd: input.per_run_cap_usd,
+        approval_receipt_id: input.approval_receipt_id,
+      },
+    });
+
+    const policy = await ctx.env.WP_OS_DB.prepare("SELECT * FROM budget_policy WHERE id = ?1").bind(id).first();
+    return json(policy, { status: 201 });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
