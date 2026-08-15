@@ -1,0 +1,15 @@
+{
+  "name": "West Peek OS",
+  "short_name": "West Peek",
+  "description": "Governed institutional operating system for West Peek Ventures.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f7f2ea",
+  "theme_color": "#050505",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/wp-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

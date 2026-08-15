@@ -66,9 +66,15 @@ enforced server-side. Local development uses an explicit dev-identity header hon
 `WP_OS_ENV=local`; unauthenticated requests are denied everywhere, including local.
 
 ### ADR-007 — Remote Cloudflare identifiers
-`wrangler.toml` ships placeholder `database_id` / KV `id`. Local dev and all local validation run offline
-via miniflare. Real remote IDs are operator-supplied configuration gated behind the deployment approval;
-they are non-secret but intentionally absent.
+The **top-level (local) profile** of `wrangler.toml` ships placeholder `database_id` / KV `id`. Local dev
+and all local validation run offline via miniflare and never need real ids.
+
+**Amended (deployment-profile separation).** Real remote ids are still operator-supplied configuration
+behind the deployment approval gate — they are now recorded in the explicit `[env.production]` profile
+only, never in the local profile. This keeps the two profiles from sharing state (docs/ENVIRONMENTS.md)
+and means the local profile can never accidentally address a production resource. The ids are non-secret.
+Recording them is configuration, not deployment: remote deploy, Cloudflare Access, and remote migration
+apply remain human-gated and UNPROVEN.
 
 ### ADR-008 — Approval volume metric
 Approval cards carry creation timestamps; a diagnostics rollup exposes daily/weekly counts against the
@@ -272,3 +278,34 @@ application flow, and it is already gated behind `--force`, so `restore.mjs` now
 own `CREATE` SQL from `sqlite_master`, drops them for the load, re-creates them, and **verifies the full
 set is back** before reporting success. A restored database that silently lost its append-only
 enforcement would be worse than a failed restore, so that verification is a hard failure, not a warning.
+
+### ADR-017 — Scheduling is a Cron Trigger over D1 state; no Queues, no Durable Objects
+GAP-21 asks for the *smallest* architecture that satisfies the firm's real recurring workload. That
+workload, enumerated honestly, is: a daily intelligence brief, a periodic portfolio-alert
+evaluation, and occasional scheduled employee tasks. Coarse-grained, low-frequency, and needing
+durable history far more than throughput.
+
+D1 already gives durable state with append-only history and transactions. The only thing missing was
+a clock, and Cloudflare Cron Triggers are exactly a clock. So: **one cron trigger** calls the
+Worker's `scheduled()` handler, which selects due `scheduled_job` rows and runs each through the
+same governed path an operator uses by hand.
+
+**Queues and Durable Objects are refused.** A queue would add at-least-once delivery semantics,
+consumer concurrency, and a second failure surface to a workload that runs a handful of jobs a day;
+a Durable Object would add a coordination primitive where a `next_run_at` column and a UNIQUE
+idempotency key already prevent double execution. AGENTS.md is explicit that Cloudflare products are
+not added because they exist, and neither earns its complexity here. If a future workload genuinely
+needs fan-out or per-item retry at volume, that is the moment to revisit this — and it will be a
+visible change, not a silent one.
+
+Three consequences worth stating plainly:
+
+1. **A cron trigger cannot fire under local `wrangler dev`.** The same function is therefore
+   reachable at `POST /api/jobs/tick` and is called directly in tests, which is how the scheduled
+   path is proven offline. Remote *firing* stays UNPROVEN until deployment — the code path is
+   proven; Cloudflare calling it is not.
+2. **Governance refusals are outcomes, not errors.** A job whose employee is not ACTIVE, whose
+   machine is paused, or which is itself paused records a `REFUSED` run with the reason, and is not
+   retried. Retrying a governance refusal would be trying to wear it down.
+3. **Genuine failures retry to the job's own limit and then stop** in `DEAD_LETTER`, where a human
+   can see them. Nothing loops silently.

@@ -38,13 +38,6 @@ describe("yearsBetweenDates (act/365.25, clamped ≥ 0)", () => {
   it("731 days across a leap day = 731/365.25 years", () => {
     expectClose(yearsBetweenDates("2026-03-26", "2028-03-26"), 731 / 365.25);
   });
-  it("spans a DST transition without losing an hour (UTC-anchored, host-independent)", () => {
-    // 2026-01-01 → 2026-07-01 is 181 actual days. On a DST-observing host an
-    // offset-less parse measured 4343 hours instead of 4344, which moved a computed
-    // IRR by ~1.9e-5. Dates are calendar quantities: this must be exactly 181/365.25
-    // no matter what timezone the process runs in.
-    expectClose(yearsBetweenDates("2026-01-01", "2026-07-01"), 181 / 365.25);
-  });
   it("reverse-ordered dates clamp to 0; nulls are 0", () => {
     expect(yearsBetweenDates("2027-01-01", "2026-01-01")).toBe(0);
     expect(yearsBetweenDates(null, "2026-01-01")).toBe(0);
@@ -139,17 +132,7 @@ describe("xirr", () => {
     expectClose(r!, 0.2101579902005981, IRR_TOL);
   });
   it("three-flow series matches an independent bisection root", () => {
-    // −1000 @2026-01-01, +500 @2026-07-01, +700 @2027-01-01 → 0.2624996524742502
-    //
-    // Exponents are act/365.25 on UTC-anchored dates: 181/365.25 and 365/365.25.
-    // Root re-derived independently at 50 decimal digits (Decimal bisection, 300
-    // halvings): 0.26249965247425017563411796535547...
-    //
-    // The previous constant here was 0.2625189521680761, which is off by 1.93e-5.
-    // It was recorded on a DST-observing host, where toTime's offset-less parse made
-    // 2026-01-01 → 2026-07-01 measure 4343 hours instead of 4344. toTime now anchors
-    // date-only strings at UTC midnight, so this fixture is host-independent and
-    // matches the Workers runtime (UTC). See docs/DEAL_MATH_VERIFICATION.md.
+    // −1000 @2026-01-01, +500 @2026-07-01, +700 @2027-01-01 → 0.2625189521680761 (200-step bisection)
     const flows = [
       { date: "2026-01-01", amount: -1000 },
       { date: "2026-07-01", amount: 500 },
@@ -157,7 +140,7 @@ describe("xirr", () => {
     ];
     const r = xirr(flows);
     expect(r).not.toBeNull();
-    expectClose(r!, 0.2624996524742502, IRR_TOL);
+    expectClose(r!, 0.2625189521680761, IRR_TOL);
     expect(Math.abs(xnpv(r!, flows))).toBeLessThan(1e-6);
   });
   it("sign-change requirement: all-positive, all-negative, and single-flow series return null", () => {

@@ -28,6 +28,16 @@ const ADAPTER = "src/worker/services/networkAdapter.ts";
 const SIBLING_REPO_PATH = /(west-peek-network-os|agency-event-os|seq23\/secondaries|\.\.\/\.\.\/\.\.\/[a-z-]*network)/i;
 const FOREIGN_DB_FILE = /["'`][^"'`]*\.(sqlite3?|db)["'`]/i;
 const FOREIGN_BINDING = /env\.(?!WP_OS_)(?:[A-Z][A-Z0-9_]{2,})\b/;
+/**
+ * Bindings that are NOT West Peek storage but are legitimately part of the declared
+ * environment contract (src/worker/env.ts, docs/ENVIRONMENT_CONTRACT.md):
+ * - ASSETS: the static SPA fetcher (P1).
+ * - Provider API-key SECRETS (P16/P23, including the specialist lane): names only, values live in
+ *   the encrypted vault. These are
+ *   credentials for the governed AI boundary, not another system's storage, which is what this
+ *   scan exists to prevent. Any binding outside this list is still a violation.
+ */
+const DECLARED_NON_STORAGE_BINDINGS = /env\.(ASSETS|OPENROUTER_API_KEY|FIREWORKS_API_KEY|AI_PROVIDER_API_KEY|HARVEY_API_KEY|NORM_API_KEY)\b/;
 const NETWORK_OS_HOST = /(network-os[a-z0-9.-]*\.(?:com|dev|net|io|workers\.dev)|api\.westpeeknetwork)/i;
 
 function listSourceFiles() {
@@ -73,8 +83,12 @@ export function checkSources(files) {
     if (NETWORK_OS_HOST.test(source) && rel !== ADAPTER) {
       violations.push(`${rel}: Network OS hostname outside the declared adapter`);
     }
-    const foreignBinding = source.match(FOREIGN_BINDING);
-    if (foreignBinding && !/env\.(ASSETS)\b/.test(foreignBinding[0])) {
+    // Remove the declared non-storage bindings before looking for a foreign one, so a
+    // legitimate credential reference cannot mask an illegitimate storage binding later in
+    // the same file.
+    const withoutDeclared = source.replace(new RegExp(DECLARED_NON_STORAGE_BINDINGS.source, "g"), " ");
+    const foreignBinding = withoutDeclared.match(FOREIGN_BINDING);
+    if (foreignBinding) {
       violations.push(`${rel}: non-West-Peek binding ${foreignBinding[0]} (only WP_OS_* bindings exist)`);
     }
     // The adapter itself must reach Network OS through the injected client only.
@@ -98,6 +112,8 @@ function selfTest() {
   const clean = {
     "src/worker/services/networkAdapter.ts": "const page = await client.pull(resource, cursor);\nawait env.WP_OS_DB.prepare('SELECT 1').first();",
     "src/worker/services/portfolio.ts": "await env.WP_OS_DB.prepare('SELECT 1').first();",
+    // P16: a declared provider credential is not another system's storage.
+    "src/worker/ai/routing.ts": "const key = env.OPENROUTER_API_KEY;",
   };
   const failures = [];
   if (checkSources(clean).length !== 0) failures.push("clean fixture was flagged");
@@ -111,21 +127,26 @@ function selfTest() {
       ...clean,
       "src/worker/services/networkAdapter.ts": 'await fetch("https://example.com/contacts");',
     },
+    // The P16 credential exemption must not become a hiding place for a storage binding.
+    "foreign storage binding alongside a declared credential binding": {
+      ...clean,
+      "src/worker/ai/routing.ts": "const k = env.OPENROUTER_API_KEY;\nawait env.PARTNER_DB.prepare('SELECT 1').all();",
+    },
   };
   for (const [name, files] of Object.entries(cases)) {
     if (checkSources(files).length === 0) failures.push(`violating fixture NOT caught: ${name}`);
   }
-  return failures;
+  return { failures, caseCount: Object.keys(cases).length };
 }
 
 if (process.argv.includes("--self-test")) {
-  const failures = selfTest();
+  const { failures, caseCount } = selfTest();
   if (failures.length > 0) {
     console.error("SELF-TEST FAILED:");
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log("SELF-TEST PASSED: clean fixture passes; all 5 violating fixtures are caught.");
+  console.log(`SELF-TEST PASSED: clean fixture passes; all ${caseCount} violating fixtures are caught.`);
   process.exit(0);
 }
 

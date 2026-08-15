@@ -3,24 +3,39 @@
 Tracks phase status against the approved plan (P0–P12 authorized; P13+ deferred/unauthorized).
 Status vocabulary follows approved plan §20.3. Nothing here may claim proof that did not run.
 
-## Current status (2026-08-12)
+## Current status (2026-08-13)
 
-`INITIAL SYSTEM IMPLEMENTED — NAMED EXTERNAL GATES REMAIN`
+`P0–P25 IMPLEMENTED LOCALLY + D1–D4 DESIGN OVERHAUL APPLIED AND INDEPENDENTLY REVIEWED — NAMED EXTERNAL GATES REMAIN`
 
-P0 through P12 — the entire authorized scope — are implemented to the extent local validation can
-reach. Every phase below is `LOCAL VALIDATION PASSED`. Suite-wide, on a clean local D1:
-`tsc --noEmit` green · vitest **315/315** · Playwright **16/16** · `validate:authority`,
-`validate:ai-boundary`, `validate:network-boundary` all PASSED · `migrate:local` idempotent ·
-`prove-restore.mjs` PASSED against the full 0001–0012 schema · parent authority SHA-256 unchanged.
+A separately approved task (`TASK/APPROVED_TASK.md`, 2026-08-13) authorized a **visual / interaction
+design overhaul only** (phases D1–D5) over this preserved P0–P25 baseline. It is recorded in its own
+section at the end of this file. It added no product capability, changed no API contract, no
+migration, no authority, and no worker code — every number in the P0–P25 sections below still holds,
+re-run after the overhaul.
+
+P0 through P12 built the governed substrate; the approved continuation (2026-08-12) authorized
+P13–P25, which built the operating product on top of it. Every phase in both sections below is
+`LOCAL VALIDATION PASSED`. Suite-wide, on a clean local D1: `tsc --noEmit` green ·
+vitest **506/506** · Playwright **45/45** · `validate:authority`, `validate:ai-boundary`,
+`validate:network-boundary` all PASSED · `migrate:local` idempotent · `prove-restore.mjs` PASSED
+against the full 0001–0023 schema · parent authority SHA-256 unchanged.
+
+The P0–P12 numbers recorded below (vitest 315/315, Playwright 16/16) were true at that gate and are
+left as written; the continuation's own counts are in the P13–P25 section at the end of this file.
 
 This is **not** a claim that the system is complete, production ready, compliant, or fully validated
 (§18.4). Every external and provider-dependent layer remains UNPROVEN behind a named human or
 credential gate — see the table at the end of this file. In particular: nothing has been deployed,
-no live AI provider has ever been called, no LP material has been sent, no capital has moved, no
-administrator system has been read or written, and no financial formula has been *accepted* by the
-operator (writing the verification is engineering; accepting it is the §7.2 gate).
+no live AI provider has ever been called, no specialist vendor (Harvey/Norm) has ever been called,
+no external intelligence feed has ever been read, no calendar or mailbox is connected, no LP
+material has been sent, no capital has moved, no administrator system has been read or written, no
+push notification has been delivered, no Cloudflare cron trigger has fired, and no financial formula
+has been *accepted* by the operator (writing the verification is engineering; accepting it is the
+§7.2 gate).
 
-P13+ remains deferred and unauthorized.
+**P13–P25 are now authorized** by the approved continuation task (`TASK/APPROVED_TASK.md`,
+2026-08-12) and are tracked in their own section at the end of this file. P0–P12 above are the
+preserved baseline and were not rewritten.
 
 | Phase | Scope | Status | Proof actually run | Unproven / gated |
 |---|---|---|---|---|
@@ -91,9 +106,296 @@ receipt still cannot execute.
 | VDR | UNPROVEN — PROVIDER NOT SELECTED (P10 records what was shared; it never delivers it) |
 | Fund administrator export | UNPROVEN — SOURCE CONTRACT GATE (contract written: `docs/IMPORT_CONTRACTS.md` §fund-admin; every run stamped LOCAL_FIXTURE) |
 | `seq23/secondaries` source access | UNPROVEN — SOURCE ACCESS GATE |
-| Allocation formula acceptance | UNPROVEN — FORMULA-VERIFICATION ACCEPTANCE GATE (§7.2): `docs/ALLOCATION_VERIFICATION.md` and `docs/DEAL_MATH_VERIFICATION.md` are engineering verification; operator/reviewer acceptance has NOT occurred. ONE NARROW EXCEPTION: on 2026-08-12 the operator (Sequoia Taylor, MP) accepted the corrected three-flow XIRR constant `0.2624996524742502` and the UTC date anchoring behind it (the DST correction recorded in `docs/DEAL_MATH_VERIFICATION.md` §2). That acceptance is scoped to that constant alone — it does NOT open the §7.2 gate for deal-math or allocation live use, and claims nothing about valuation, investment soundness, or fund performance (§12.4) |
+| Allocation formula acceptance | UNPROVEN — FORMULA-VERIFICATION ACCEPTANCE GATE (§7.2): `docs/ALLOCATION_VERIFICATION.md` and `docs/DEAL_MATH_VERIFICATION.md` are engineering verification; operator/reviewer acceptance has NOT occurred |
 
 ## Parent authority preservation
 
 Baseline SHA-256 recorded at P0 (see `ARTIFACT_MANIFEST.md`). Re-verified at every snapshot boundary.
 Any mismatch = stop and report.
+
+---
+
+# P13–P25 continuation
+
+Authorized by `TASK/APPROVED_TASK.md` (2026-08-12). Scope: verify the supplied gap audit, then
+build the operating product on top of the preserved P0–P12 substrate. Companion documents:
+`docs/WEST_PEEK_BLUEPRINT_COMPLIANCE_LEDGER.md` (per-requirement classification, updated every
+phase) and `docs/WEST_PEEK_COMPLETION_BLUEPRINT_v2.md` (the build contract).
+
+Nothing in this section claims proof that did not run.
+
+| Phase | Scope | Status | Proof actually run | Unproven / gated |
+|---|---|---|---|---|
+| P13 | Blueprint compliance verification + completion contract | COMPLETE (documentation phase) | Independent verification of all 24 audit claims against the real route table (`src/worker/index.ts`), the real schema (`migrations/0001`–`0012`), the real nav (`NAV_ITEMS`), and the real suites. Findings: 18 audit claims TRUE, 2 materially overstated (GAP-13 allocation math *is* implemented and verified; GAP-16 the Network OS adapter contract *is* implemented), 4 understate existing substrate (GAP-12/14/17/18). `eval_record` and `value_outcome` were found to be dead tables — no worker code reads or writes them — so GAP-11 is a true missing requirement rather than a partial one. Deliverables: `docs/WEST_PEEK_BLUEPRINT_COMPLIANCE_LEDGER.md`, `docs/WEST_PEEK_COMPLETION_BLUEPRINT_v2.md` | none — P13 is a verification phase and mutates only documentation |
+| P14 | MP Command Center + Daily Intelligence Engine (GAP-04, GAP-05, GAP-23 opened) | LOCAL VALIDATION PASSED | `migrations/0013_intelligence_command.sql` (11 tables: sources, watchlists + append-only change log, versioned home/briefing preferences, home view state, runs, items, append-only citations, append-only feedback, briefings, owner-private personal profile + append-only entries). Services `intelligence.ts`, `mpHome.ts`, `personalIntelligence.ts`; 24 new routes; client `pages/HomePage.tsx` + `pages/IntelligencePage.tsx` and shared `lib/api.ts`. `tsc --noEmit` green; **vitest 349/349** including 34 new P14 tests (relevance is a stated heuristic that names each rule it fired and scores 0 on no match; dedupe treats case/punctuation/protocol/trailing-slash/query-string as noise but keeps different stories distinct; a replayed idempotency key returns the ORIGINAL run and acquires nothing twice; the same story under a NEW key counts as duplicate, not kept; an HTTP_FEED source with no egress client fails CLOSED — source EGRESS_GATED, run PARTIAL, zero items, and the report says so; INTERNAL acquisition reads governed firm state and carries a `investment_opportunity/…` citation; **the engine never writes into `diligence_claim` or `knowledge_record`** — asserted by count; a watchlisted story outranks an unwatched one in the same run and says why; one user cannot deactivate another's watchlist entry; a non-canonical watchlist company is refused 404; synthesis through `run_ai` writes why-it-matters ONLY from an unquarantined run and **never copies a quarantined external output**; archive removes an item from the active set while preserving the record and refuses a second archive 409; feedback UPDATE is rejected by trigger; a briefing is one artifact per (date, user) and differs per user; home preferences write a new version per change and UPDATE is rejected by trigger; MP home answers ten questions, states the *rule* behind "one thing to watch", **omits rather than empties** LP/banking modules for a user without the scope, and turns "what changed" into a real diff after the visit is marked; the private personal layer starts UNPROVEN_NO_SOURCE, refuses entries until its owner enables it, records MANUAL_ENTRY only, **is invisible to the other Managing Partner**, is append-only, and leaks no content into the event spine); Playwright `e2e/p14-mp-home.spec.ts` 4/4 against local `wrangler dev` (run engine → ranked item with stated reason → provenance → governed synthesis → Home surfaces it → drill-through returns to the owning surface; configurable layout saved as a new version; private layer disclaimed and honest) | live external feeds: **UNPROVEN — EGRESS/CREDENTIAL GATE** (no outbound feed client is configured; registered feeds are stored EGRESS_GATED and never read). Astrology/ephemeris calculation: **UNPROVEN — NO SOURCE** (nothing computes planetary positions; the governed interface exists and operator entries are labelled MANUAL_ENTRY). Scheduled (rather than manual) runs land at P19. AI synthesis quality is not claimed — the offline path uses the deterministic local adapter |
+| P15 | Employee Lounge + Digital Office + Performance Management (GAP-01, GAP-10, GAP-11) | LOCAL VALIDATION PASSED | `migrations/0014_workforce.sql` (employee profile seeded from the roster layer, machine assignment, one department room per real department, append-only room messages with a DB-level CHECK that only an ANNOUNCEMENT may lack a work/run/handoff reference, handoffs, append-only memos and governance acknowledgements, immutable performance snapshots, append-only reviews). `services/workforce.ts` + 16 routes + `pages/EmployeesPage.tsx`. `tsc --noEmit` green; **vitest 31 new P15 tests** (the lounge returns all 31 employees with department/manager/machines/tool scope/current work/30-day runs and cost; every department has a room; the D10 law survives — the lifecycle route REFUSES `ACTIVE` outright, a lowering move writes to the SAME `ai_employee_status_history` spine with a null receipt, the same state twice is 409, and RETIRED is terminal on this path; an AI actor can never change a lifecycle, decide a handoff, compute a scorecard, or post an unreferenced firm announcement; a room message naming a non-existent work card is 404 and one with no reference is 400; an accepted handoff actually MOVES the work card's owner while a rejected one leaves it untouched; work cannot be handed to a non-ACTIVE employee (409 `target_not_active`); scorecards count real runs, name recurring failure causes by reason prefix, store the definition used, return null cost-per-output when nothing was accepted, and the table carries **no** `value_generated`/`value_usd` column; a RESTRICT review applies the restriction so record and state cannot disagree; room messages, memos, reviews, and snapshots all reject UPDATE/DELETE at the DB layer; one acknowledgement per actor per governance update); Playwright `e2e/p15-workforce.spec.ts` 3/3 (roster + cap + department filter; compute scorecard → lower lifecycle → history shows `INACTIVE → PAUSED`; department room announcement with members listed) | AI employees do not yet RUN on a schedule — that is P19. Live model execution per employee remains UNPROVEN — CREDENTIAL GATE. "Value generated" is deliberately not measured |
+| P16 | Provider/model router + AI Cost Command Center (GAP-02, GAP-03) | LOCAL VALIDATION PASSED | `migrations/0015_provider_cost.sql` (model catalogue with `pricing_state` provenance, append-only health checks stamped LOCAL_FIXTURE/LIVE, append-only evaluations carrying their METHOD, versioned/immutable routing policies, machine model policy, per-run routing explanation, run attribution, versioned/immutable scoped budgets, deduped cost alerts; Fireworks registered as configuration — disabled, unpriced-for-egress, default-deny). New adapters `ai/providers/openRouter.ts` + `ai/providers/fireworks.ts`; router `ai/routing.ts`; `run_ai` extended with routing, policy fallback, scoped-budget preflight, and attribution; services `providerRouter.ts` + `costCenter.ts`; 13 routes; `pages/AiOpsPage.tsx`. `tsc --noEmit` green; **vitest 403/403** including 23 new P16 tests (the catalogue reports credential presence by NAME and the payload contains no secret-shaped value; the seeded catalogue is ILLUSTRATIVE and says no vendor price has been read; a SOURCED price with no date is refused 400; a health check is LOCAL_FIXTURE and its own text says "No request was made"; a LIVE evaluation is REFUSED 409 because recording one would be false; promotion to ACTIVE requires a recorded evaluation 409→200; both new adapters throw `credential_missing:<vendor>` BEFORE any fetch, proven by asserting the injected fetch was never called; a run against a credential-less provider records the reason on `ai_run_routing` instead of failing silently; **with no policy the router behaves exactly as P4** — cheapest capable model, one attempt, `policy_id` null; a policy naming an uncatalogued model is 404; a policy orders candidates so the dearer first choice wins and the explanation names the policy and version; fallback fires ONLY when the policy allows it and both attempts stay visible with the failure first; a machine model policy outranks the task policy and the attribution records the machine; period boundaries are computed from the clock; a scope applies only to runs inside it; a budget for a non-existent target is 404; a scoped cap blocks a run with `scoped_cap_exceeded:CATEGORY:RESEARCH:DAILY` and raises exactly ONE deduped BREACH alert; budget versions are immutable; alerts acknowledge once; the cost surface breaks spend down by employee/provider/model/machine/category and ships its definitions); Playwright `e2e/p16-ai-ops.spec.ts` 3/3; `validate:authority`, `validate:ai-boundary`, `validate:network-boundary` all PASSED after two validator refinements (below) | **Every live provider call remains UNPROVEN — CREDENTIAL GATE.** No OpenRouter, Fireworks, or other vendor key exists in any environment; adapters are exercised only against injected stubs. All seeded pricing is ILLUSTRATIVE — no vendor price has ever been read. Health is LOCAL_FIXTURE only: configuration coherence, never reachability. LIVE evaluations are refused by design until a real provider call is possible |
+
+## Validator refinements made during P16
+
+Both scans kept their teeth: each refinement added a NEW self-test fixture proving the narrowed
+rule still catches the thing it exists to catch.
+
+| Validator | Why it needed narrowing | What now proves it still works |
+|---|---|---|
+| `no-direct-provider-calls.mjs` | `ai/routing.ts` imports our OWN adapter factories (`./providers/openRouter`), and the vendor-name regex could not tell that from `import OpenAI from "openai"`. Relative specifiers into `providers/` are now stripped before the SDK test. | New fixture "real SDK import alongside a legitimate adapter import" — a genuine `import OpenAI from "openai"` in the same file is still caught. Self-test now reports its own case count (5) so a silently dropped case fails the pinned assertion in `tests/ai.test.ts`. |
+| `no-cross-repo-coupling.mjs` | The scan forbade every `env.X` that was not `WP_OS_*`, which caught the P16 provider-credential secrets. Those are credentials for the governed AI boundary, not another system's storage — which is what the scan exists to prevent. A named allowlist (`ASSETS`, `OPENROUTER_API_KEY`, `FIREWORKS_API_KEY`, `AI_PROVIDER_API_KEY`) is now stripped before the foreign-binding test. | New fixture "foreign storage binding alongside a declared credential binding" — `env.PARTNER_DB` in a file that also reads `env.OPENROUTER_API_KEY` is still caught. Self-test case count now 6. |
+| P17 | Machine Control Center + Capability Intelligence (GAP-06, GAP-07) | LOCAL VALIDATION PASSED | `migrations/0016_machines_capabilities.sql` (per-machine operating state seeded ACTIVE for all 45 registry rows, append-only state-change log, dependencies with a self-dependency CHECK, append-only machine memory, capability registry keeping `maturity` and `tested_state` as separate columns, assignments, append-only after-action records, append-only build-vs-buy decisions). Services `machines.ts` + `capabilities.ts`; 12 routes; `pages/MachinesPage.tsx`. **Pause is enforced in two independent services**: `handleRouteCapture` refuses a paused machine 409 `machine_paused`, and `run_ai` blocks before any estimate with `machine_paused:<id>`. `tsc --noEmit` green; **17 new P17 tests** (all 45 machines return with state/queue/spend/failures; a configuration change appends a CONFIG_CHANGE row to the machine's own memory; machine memory rejects UPDATE and DELETE; self-dependency 400 and unknown dependency 404; pause records from/to on the change log and refuses a redundant pause 409; **a paused machine refuses capture routing AND refuses to spend any AI budget, while still recording which machine caused the blocked run**; resuming restores both paths; a capability registers to the BENCH; `PROVEN_LIVE` is refused 409 because no live provider access exists; a cost estimate with no stated basis is refused 400; an UNTESTED capability cannot be made ACTIVE 409; assignment targets must exist; the recommended stack includes only ACTIVE capabilities with recorded after-action evidence, ranks by observed success rate (66.7% over 3 uses) and states that it is arithmetic rather than a model opinion; a capability with no evidence reports a NULL success rate rather than assuming success; a BUY decision without a vendor is refused 400; after-action and build-vs-buy records reject UPDATE); Playwright `e2e/p17-machines.spec.ts` 2/2 (fleet → memory → pause → API routing refused 409 → resume → routing succeeds; capability registers UNTESTED on the bench) | Scheduled/recurring machine work arrives at P19. `PROVEN_LIVE` capability proof and live per-machine model execution remain UNPROVEN — CREDENTIAL GATE |
+| P18 | Intent-to-Execution work packets + Institutional Lens Bench (GAP-08, GAP-09) | LOCAL VALIDATION PASSED | `migrations/0017_work_packets.sql` (work packet with `original_text` made IMMUTABLE by trigger, append-only revisions, append-only lens outputs with **no column a reasoning trace could be written to**); `src/shared/registry/lenses.ts` (6 lenses: Lead, Supporting, Counter, Hostile Reviewer, Truth/Compliance Gate — blocking — and No Pedestal Law); `services/workPackets.ts`; 7 routes; `pages/IntentPage.tsx`. `tsc --noEmit` green; **18 new P18 tests** (enhancement is deterministic — identical input gives identical output; it names vagueness, a missing deadline, and an unnamed deliverable; reserved-authority words in the text surface as risks AND add the "prepares a decision; does not make one" acceptance criterion; DEEP adds hostile-review criteria while NONE derives nothing; **the operator's text is stored verbatim and a direct SQL UPDATE of `original_text` is rejected by trigger**; the default lens stack is applied and a first revision recorded; routing recommends a machine whose own declared purpose overlaps the intent and explains the match, returns null rather than guessing when nothing overlaps, and **never recommends a PAUSED machine**; the lens bench publishes its storage rule; `PRAGMA table_info(lens_output)` proves the schema has no `reasoning`/`chain_of_thought`/`scratchpad`/`trace` column; a lens outside the stack is refused 409 and a lens cannot be re-run; lens findings reject UPDATE and DELETE; **execution is refused while a blocking lens has not run — silence is not a pass**; an ADVERSE gate moves the packet to BLOCKED_BY_LENS and keeps execution refused; a passing gate executes, opening a real OPEN work card and a governed run recorded on the packet with cost attribution, and a second execution is refused; a COMPLETE packet cannot be revised; revisions accumulate append-only); Playwright `e2e/p18-intent.spec.ts` 2/2 (rough thought → verbatim text beside derived fields → execution refused by the unrun gate → gate recorded → executed) | AI-drafted lens critiques run through `run_ai`, so their quality is bounded by the offline local adapter; live model drafting remains UNPROVEN — CREDENTIAL GATE. Cost ESTIMATE per packet is recorded as a routing basis, not a quoted price |
+| P19 | Governed orchestration + scheduled AI employees (GAP-21, GAP-22) | LOCAL VALIDATION PASSED | `migrations/0018_orchestration.sql` (scheduled jobs with schedule/target/capability/budget/data-class/retry policy, runs with a UNIQUE idempotency key and a REFUSED status distinct from FAILED, append-only run artifacts; the seeded Daily Intelligence job ships **PAUSED**). `services/jobs.ts`; worker `scheduled()` handler; `[triggers] crons = ["*/15 * * * *"]` in `wrangler.toml`; **ADR-017** written; 7 routes; `pages/JobsPage.tsx`. `tsc --noEmit` green; **16 new P19 tests** (INTERVAL and DAILY_AT arithmetic including the roll to tomorrow; every trigger inside one window yields the SAME occurrence key; the seeded job and every new job are created PAUSED with the reason recorded; duplicate job key 409 and unknown employee target 404; **a PAUSED job that is run anyway records a REFUSED run instead of doing the work**; **a job targeting a non-ACTIVE employee is REFUSED with a message naming D10, and the employee is still INACTIVE afterwards** — GAP-22's exact claim; the same job runs only after activation through the reserved receipt path, and its governed run is attributed to that employee; a job whose target machine is PAUSED is REFUSED; an intelligence job run records INTELLIGENCE_RUN and INTELLIGENCE_ITEM artifacts; **a second tick inside the same window replays instead of running twice** (one row for `daily_intelligence:2026-08-12`); `runDueJobs` is the same function the cron handler calls; the operator tick route states that it does not prove Cloudflare fired anything; a repeatedly failing job retries to `max_attempts` and then lands in DEAD_LETTER, counted on the job listing; a finished run cannot be cancelled 409); Playwright `e2e/p19-jobs.spec.ts` 1/1 (paused → refused → switched on → SUCCEEDED with its outcome in the job's history) | **Remote cron firing is UNPROVEN — DEPLOYMENT GATE.** A Cloudflare Cron Trigger cannot fire under local `wrangler dev`; the handler and the job path are proven, Cloudflare invoking them is not. Job kinds are limited to the three that can run honestly offline (INTELLIGENCE, PORTFOLIO_EVALUATION, EMPLOYEE_TASK); a fund-admin reconciliation job would need the source contract gate |
+| P20 | Notifications + mobile/PWA command surface (GAP-19, GAP-20) | LOCAL VALIDATION PASSED | `migrations/0019_notifications.sql` (all ten notification kinds, severity, UNIQUE dedupe key, delivery status distinguishing DELIVERED_IN_APP / HELD_QUIET_HOURS / SUPPRESSED_BY_PREFERENCE, per-user preferences, append-only per-channel delivery log). `services/notifications.ts` + 6 routes + `pages/NotificationsPage.tsx`; emitters wired into approvals, portfolio alerts, scheduled-job dead-letters, employee lifecycle changes, and briefing assembly. PWA: `public/manifest.webmanifest`, `public/icon.svg`, `public/sw.js`, manifest/viewport/theme in `index.html`, worker registration in `main.tsx`, offline capture queue `lib/offlineQueue.ts`, and a shell status bar showing unread/critical, connection state, and any held captures. `tsc --noEmit` green; **12 new P20 tests** (quiet-hours arithmetic across midnight; in-app delivery works with no credential while **push is recorded UNAVAILABLE with the credential gate named** on every notification; the same fact dedupes to one row; the centre orders by severity and counts critical unread; a WARNING is HELD during quiet hours yet **stays readable with the reason attached**, and a CRITICAL is never held; a switched-off kind is suppressed except at CRITICAL; read and acknowledge are distinct, acknowledgement is once-only and lands on the event spine; **submitting a real approval card raises a real notification**, and **a dead-lettered scheduled job raises a CRITICAL one**; the manifest is installable; the service worker refuses to cache `/api/*` and contains no fake push handler; the HTML links the manifest and the entry registers the worker); Playwright `e2e/p20-notifications.spec.ts` 3/3 (approval → notification → acknowledge; quiet hours; manifest + service worker served and the shell usable at 390×844 — note: generation 1 asserted only that elements were *visible* at that width, which the generation-2 review found insufficient; see the P20 row correction below) | **Web push is UNPROVEN — CREDENTIAL GATE**: no push service, VAPID key, or subscription exists, so every push delivery row records UNAVAILABLE and no push handler is registered. Installability was exercised at phone viewport in a browser, **not on a physical device**. Biometrics and native-app behaviour are NOT implemented and NOT claimed. Offline support is deliberately capture-only: a held capture is labelled NOT saved, and no institutional state is ever served from cache |
+| P21 | Research / Analyst Workstation (GAP-14) | LOCAL VALIDATION PASSED | `migrations/0020_research.sql` (projects, questions, sources carrying a stated reliability AND its basis, findings with an immutable statement and a single `promoted_claim_id` link into P5, market maps, immutable packets). `services/research.ts`; 10 routes; `pages/ResearchPage.tsx`. **No second evidence store**: promotion runs the existing `createClaim` path. `tsc --noEmit` green; **13 new P21 tests** (each research source kind maps onto the existing P5 claim vocabulary; a project opens with its question already recorded OPEN; a non-canonical company is refused 404 (D3); the API states plainly that it holds no separate evidence store; a reliability judgement above UNKNOWN without a stated basis is refused 400; a DOCUMENT source must name its version; a finding citing another project's source is refused 404; **promotion creates a real UNVERIFIED `diligence_claim` with a real `claim_source` row carrying source type, location, date, and the researcher's stated reliability — and the evidence substrate holds nothing for that company before promotion**; a finding cannot be promoted twice; the finding statement is immutable so research and evidence cannot drift apart; **packet IC-readiness is COMPUTED** — it refuses readiness while a question is open or a finding is unpromoted and names which, then reports ready once both are closed and moves the project to PACKAGED; unresolved contradictions from the firm's own P5 record travel with the packet rather than being filtered; packets are immutable); Playwright `e2e/p21-research.spec.ts` 1/1 (launch → source with basis → finding labelled "research only — not evidence" → promote → governed claim → packet explains why it is not IC-ready) | Live external source retrieval remains UNPROVEN — EGRESS GATE (the same gate as the intelligence engine): sources are recorded by an operator or drawn from internal records. AI-assisted research drafting runs through `run_ai` and is bounded by the offline local adapter |
+| P22 | Live relationship + meeting integrations (GAP-16, GAP-17) | LOCAL VALIDATION PASSED | `migrations/0021_connectors.sql` (all six external systems registered as configuration — Network OS, calendar, email, transcription, VDR, fund administrator — each NOT_CONFIGURED, naming its credential, scopes, direction, ownership, and the human gate in front of it; append-only connector checks). `services/connectors.ts`; 3 routes; `pages/IntegrationsPage.tsx`. **This surface performs no external write of any kind.** Proof is in `tests/integrations.test.ts` (see P24 row for the shared count): six connectors NOT_CONFIGURED with no credential populated; transcription carries `consent_required` and names consent as a second independent gate; Network OS authority ("never overwrites it") is restated and its P9 facts — contract, cursors, conflicts, mappings — are read rather than mirrored; a LOCAL_FIXTURE check names every missing precondition (`NETWORK_OS_API_TOKEN is not populated`, `no adapter contract has been declared`) and its own detail says "Nothing was contacted"; the meeting prep queue reports needs-prep, participant count, and recording state as facts from P7 ("no recording policy activated"), and says plainly that no calendar is connected. Playwright `e2e/p22-24-integrations.spec.ts` 1/1 | **Network OS live integration: UNPROVEN — INTEGRATION APPROVAL + CREDENTIAL GATE** (unchanged from P9). **Calendar, email, transcription: UNPROVEN — CREDENTIAL/OAUTH + CONSENT GATE.** No external system has been contacted. The prep queue reflects meetings the firm entered by hand, not an external diary |
+| P23 | Specialist AI provider lane — Harvey / Norm (GAP-15) | LOCAL VALIDATION PASSED | `migrations/0022_specialist_providers.sql` (both vendors registered as configuration (D9): disabled, unpriced, **no `provider_data_policy` row at all**, so default-deny means nothing may egress; `specialist_engagement` with **no `conclusion` column**). `ai/providers/specialist.ts`; specialist lane in `ai/routing.ts`; `services/specialist.ts`; 3 routes. **Requirement-verification note recorded in the migration**: this environment has no network access, no vendor account, and no published API contract for either vendor, so the adapter implements the generic governed shape and does NOT claim to match a real vendor endpoint. Proof: both vendors report disabled / 0 allowed labels / no credential / no endpoint; the adapter throws `vendor_endpoint_unknown` and `credential_missing` **before any fetch**, proven by asserting the injected fetch was never called; an engagement runs through `run_ai` and lands BLOCKED with `provider_disabled:harvey` recorded on the engagement and the run in the ordinary `ai_run` ledger; enabling Norm still blocks with `data_policy_denies_label:CONFIDENTIAL`; `PRAGMA table_info` proves there is no `conclusion`/`legal_opinion`/`advice`/`determination` column; accepting an output that never came back is refused 409 | **UNPROVEN — VENDOR ACCESS GATE.** No Harvey or Norm account, contract, credential, endpoint, or published API contract exists. Neither vendor has ever been called. Legal and compliance conclusions remain human-reserved (`legal.final_conclusion`, `compliance.act_as_officer`) and the schema has no place to store one |
+| P24 | LP / fund-admin / VDR operating integration (GAP-18) | LOCAL VALIDATION PASSED | `migrations/0023_lp_ops.sql` (administrator/accounting/VDR sources with a three-state contract model where **LIVE is reachable only by an actual import**, reconciliation schedules, LP engagement state with an append-only change log). `services/lpOps.ts`; 4 routes; LP section of `pages/IntegrationsPage.tsx`. `tsc --noEmit` green; **16 new tests across P22–P24** (`tests/integrations.test.ts`), of which the P24 group proves: both seeded sources ship NO_CONTRACT with computed `NEVER_IMPORTED` freshness and the source-contract and VDR gates named; **a user without LP_PRIVATE scope is refused the whole surface (403) rather than shown an empty page**; `contract_state: LIVE` is refused from a caller and the response says it cannot be set by hand; FORMAT_AGREED without a named format is refused 400; a reconciliation schedule can be set and states plainly that running it still needs a source contract that does not exist; LP engagement transitions write an append-only change row (UPDATE rejected) and an AWAITING_DECISION move raises an LP_PRIVATE `LP_ISSUE` notification. Playwright `e2e/p22-24-integrations.spec.ts` 1/1 | **Fund administrator: UNPROVEN — SOURCE CONTRACT GATE** (no administrator system read, no export format agreed; every reconciliation run stays LOCAL_FIXTURE). **VDR: UNPROVEN — PROVIDER NOT SELECTED** (West Peek OS records what was shared and revoked; it has never delivered a document). LP distribution proves routing and review only |
+| P25 | Institutional UX completion + cross-system journeys (GAP-12, GAP-13, GAP-23, GAP-24) | LOCAL VALIDATION PASSED | No new migration — both new surfaces are READ-ONLY aggregations over substrate that already exists. `services/cockpit.ts` (portfolio cockpit + allocation decision view), the `employees` module added to `services/mpHome.ts` to close the tenth MP question, 2 routes, `pages/CockpitPage.tsx`. Shared UI vocabulary (module cards, status badges, muted secondary text, mobile breakpoint) applied across all eleven new pages. `tsc --noEmit` green; **11 new P25 tests** (trend arithmetic reads each metric's DECLARED direction, so a fall in a higher-is-better metric is DETERIORATING and the same fall in a lower-is-better metric is IMPROVING — the same comparison P8 alerting uses, so cockpit and alert list cannot disagree; a single snapshot yields no trend rather than a guess; a real deteriorating metric appears with its −30% and window, and a metric past its own staleness rule is reported as a finding with "never as a blank" in the definitions; runway is only shown when the firm defined and recorded it; **the allocation view returns `comparison_run: null` and says "none are invented" when no comparison has been run**, states that a scenario is not a forecast, that West Peek OS never moves capital, and that the formula-verification gate is NOT accepted; it names the human-reserved action for every option type; an unknown scenario is 404 rather than an empty shell; **MP Home answers all ten §4 questions with zero unanswered once the workforce and reconciliation modules are enabled**; the workforce module says plainly that activation is an MP decision when nothing is ACTIVE; every module links to the surface that owns its records); Playwright `e2e/p25-journeys.spec.ts` **9/9 cross-system journeys** | Journeys 7 (meeting prep → transcript) and 8 (LP reconciliation) are driven to their external boundary and the unproven step is asserted as unproven — the calendar/transcription connectors and the fund-admin source contract do not exist. Allocation figures remain behind the FORMULA-VERIFICATION ACCEPTANCE GATE (§7.2) |
+
+## P13–P25 suite-wide validation (2026-08-13)
+
+Run on a clean local D1 (`rm -rf .wrangler` before the Playwright run):
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` | green |
+| `npx vitest run` | **513/513** across 26 suites (was 315/315 across 17 at the P12 gate) |
+| `npx playwright test` | **45/45** across 21 specs (was 16/16 across 11) |
+| `npm run validate:authority` | PASSED — 45 machines / 15 domains / 53 reserved actions / **204 action types**; self-test 4/4 |
+| `npm run validate:ai-boundary` | PASSED; self-test **5/5** (one fixture added at P16); 31 employees, all seeded INACTIVE, no MP names |
+| `npm run validate:network-boundary` | PASSED; self-test **6/6** (one fixture added at P16) |
+| `wrangler d1 migrations apply --local` | idempotent — "No migrations to apply!" on re-run |
+| `node scripts/backup/prove-restore.mjs` | PASSED against the full **0001–0023** schema (`evt_backup_proof_1786591360494` readable after wipe + restore) |
+| Parent authority SHA-256 | both files byte-identical to the P0 baseline |
+
+Artifact shape after the continuation: **23 migrations**, **312 API routes**, **26 vitest suites**,
+**21 Playwright specs**, **11 new client pages**, ~30,250 lines of TypeScript under `src/`.
+
+Re-verified at the generation-2 review boundary (2026-08-13): `tsc --noEmit` green · vitest
+**513/513** · Playwright **45/45** on a clean local D1 · all three validators PASSED with their
+self-tests · parent authority SHA-256 unchanged.
+
+## Final review pass — generation 1 (implementer's own review, 2026-08-13)
+
+An independent review of the continuation against the completion gate (§15.9) probed authority
+coverage, secret handling, privacy enforcement, schema conventions, chain-of-thought storage, and
+route collisions. Findings and what was done:
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| **Privacy labels were not enforced on three new list/read surfaces.** `work_packet` carries an operator-set `privacy_label`, `specialist_engagement` carries a `data_class`, and `room_message`/`internal_memo` carry labels — but their list and read handlers returned rows without the SQL visibility clause every P3-era surface applies. A RESTRICTED work packet was readable by any authenticated user. | REAL — the exact defect class P3 exists to prevent (privacy enforced server-side, never by UI hiding) | **FIXED.** `privacyVisibilityClause` now gates `GET /api/work-packets`, `GET /api/work-packets/:id` (404, not 403 — existence is not disclosed), `GET /api/specialist/engagements`, room messages, and memos. Proof: `tests/workPackets.test.ts` "hides a RESTRICTED packet from a user without the scope, on both list and read" |
+| `connector`, `admin_source`, `reconciliation_schedule`, and `lp_engagement` lacked `firm_scope` | MINOR — convention drift (§11.7) | **FIXED.** Columns added; the rule is now written down in `AGENTS.md`: firm_scope lives on the aggregate ROOT and child rows inherit it through their foreign key rather than duplicating it |
+| Route collision: `GET /api/meetings/prep-queue` was shadowed by the P7 `GET /api/meetings/:id` | REAL (found by test, not by reading) | **FIXED** during P22 — the route is `GET /api/meeting-prep/queue`. The hand-rolled router matches in registration order and has no literal-over-parameter precedence; new literal routes under an existing `:id` prefix must avoid the collision |
+| Vitest exhausted ephemeral ports at 26 suites (EADDRNOTAVAIL) | REAL (infrastructure) | **FIXED.** `maxWorkers: 4` in `vitest.config.ts`, with the reason recorded there and in `AGENTS.md` |
+| Every new service calls `authorize()`; no provider credential is returned by any handler; no chain-of-thought column exists anywhere; no route is registered twice | — | verified, no action |
+
+## Independent final review — generation 2 (2026-08-13)
+
+The host handed the run to a fresh `claude:final_review` worker. That review deliberately probed
+differently from the implementer's own pass: mechanically, by enumerating every route and every
+privacy-labelled table, and empirically, by writing a failing test BEFORE each fix and then
+reverting the fix to confirm the test actually catches the defect.
+
+**It found that generation 1's own review had stopped one step short.** Generation 1 fixed privacy
+enforcement on three READ surfaces and concluded the class was closed. It was not: the same class
+was still open on the corresponding WRITE paths and on the briefing.
+
+| Finding | Severity | Evidence | Disposition |
+|---|---|---|---|
+| **The daily briefing ignored privacy labels entirely.** `assembleBriefing` selected `intelligence_item WHERE archived = 0` with no visibility clause, and re-read stored briefings the same way. An item at any of the four SENSITIVE labels (RESTRICTED / LP_PRIVATE / MNPI_SENSITIVE / BANKING_RESTRICTED) reached the briefing of a user with no scope for it. Reachable in one step: register a source at `data_class: RESTRICTED`, run the engine, read `/api/briefings/current` as an unscoped user. | **REAL — privacy leak** | `tests/intelligence.test.ts` "keeps a RESTRICTED item out of the briefing of a user without the scope". Verified by reverting the repair: the test fails. | **FIXED.** `assembleBriefing` now takes the identity and applies `privacyVisibilityClause` to both selection and stored-briefing re-read. The archived briefing row is immutable; the VIEW of it is filtered per reader. |
+| **A record you cannot READ was still one you could ACT ON.** Mutation paths resolved their object by id with no visibility clause: work-packet lens/revise/execute, intelligence archive/feedback/synthesize, research question/source/finding/market-map/packet/answer/promote, and specialist accept. An unscoped user could run a lens on, execute, or promote evidence from a RESTRICTED record they could not see. | **REAL — authority/privacy** | `tests/workPackets.test.ts` "a packet they cannot read is a packet they cannot act on"; `tests/research.test.ts` two cases including "refuses to promote a finding on a project the caller cannot read" (asserting nothing entered the evidence substrate). | **FIXED** uniformly, via a `getVisible*` helper per service rather than a scattering of one-off checks. |
+| **Acting on another user's notification.** `read` and `acknowledge` resolved the notification by id alone, so any authenticated user could put their own name on `read_by`/`acked_by` for a notification addressed to someone else — a false claim that the audit spine then carries permanently. Delivery rows were readable the same way. | **REAL — evidence truthfulness** | `tests/notifications.test.ts` "refuses to let one user read or acknowledge another user's targeted notification" (asserts `read_by`/`acked_by` stay null) and "hides delivery rows behind the notification's own visibility". | **FIXED** with a single `actionableNotification` helper enforcing visibility AND addressing. |
+| **The mobile claim was overstated.** Generation 1 recorded "mobile layout proven at 390×844", but the Playwright check only asserted that certain elements were visible. Measured properly, the AI Ops page **overflowed the viewport by 315px** at 390px wide — the wide institutional tables pushed the whole document sideways. | **REAL — the claim exceeded the evidence** | `e2e/p25-journeys.spec.ts` journey 10 now measures `document.documentElement.scrollWidth - window.innerWidth` on AI Ops, Machines, and Cockpit. Verified by reverting the CSS: the assertion fails with "AI Ops overflows the viewport by 315px". | **FIXED.** Wide tables scroll within themselves below 720px instead of scrolling the document. The claim is now backed by a measurement rather than a visibility check. |
+| Route shadowing across all 312 routes (the class that bit once at P22) | — | mechanical audit: every route checked against every earlier same-method route of equal segment count | none found |
+| Correction to a review finding of my own: the first draft of the briefing test used a CONFIDENTIAL item. CONFIDENTIAL is **not** one of the four SENSITIVE labels — it is visible firm-wide by the P3 model — so that test proved nothing. It was rewritten against RESTRICTED before the fix was accepted. | — | — | recorded here rather than quietly corrected |
+
+Net effect of generation 2: **six new tests**, four real defects fixed, one overstated claim in this
+ledger corrected. Suite after the review: vitest **513/513**, Playwright **45/45**, all validators
+PASSED.
+
+---
+
+# D1–D5 — Hallmark + Claude Design overhaul (2026-08-13)
+
+Authorized by `TASK/APPROVED_TASK.md` (2026-08-13). Scope: **visual / interaction design only**,
+over the preserved P0–P25 baseline. Companion documents:
+`docs/WEST_PEEK_DESIGN_REFERENCE_AUDIT.md` (D1 evidence) and `docs/WEST_PEEK_DESIGN_SYSTEM.md`
+(what was actually built).
+
+**What this phase did NOT touch**, verified by diff against a pre-overhaul mirror of the baseline:
+no migration, no `src/worker/**` file, no `src/shared/**` file, no route, no API contract, no
+`authorize()` path, no privacy clause, no test in `tests/`, and no product capability. The only
+non-client changes are two Playwright specs (mobile navigation changed, so the specs that drive it
+had to change), `package.json` (one script), `AGENTS.md`, this ledger, and three new documents.
+
+Nothing here claims proof that did not run.
+
+| Phase | Scope | Status | Proof actually run | Unproven / gated |
+|---|---|---|---|---|
+| D1 | Hallmark evidence + design audit | COMPLETE (evidence phase) | `run_hallmark_audit.sh --self-test` PASSED 5/5, then `--mode full --brand-preserve` against a read-only git mirror with browser capture — pack `~/hallmark_audits/west-peek-os_PRE_DESIGN_BASELINE`, SHA-256 `978dc35e8a7479830dabb76e4f5ead14f280b2c8509b3d14252bb12baa81ba49`, Hallmark authority SHA-256 `5fd8800b92c5df211725642306d0447a3687dd0fbab35b9ce3c9d3346cef4809`. All four reference repos inspected READ-ONLY over `gh api` GETs (`WEST_PEEK_BRAND_SYSTEM.md` — identical SHA-256 `6b8e3c0a…` in three of them — plus `app/globals.css`, `src/styles.css` ×2, `shared/assets/base.css`, `public/brand/wp-mark.svg`, and two brand validators). Baseline measured in a real browser across **29 surfaces × 3 viewports = 87 surface-states**: 6 overflow failures (worst: Activity **+287px** at 834px), **1,212** mobile targets under the 44px floor, nav **1,624px tall in a 900px viewport** and not independently scrollable, **13** accidental font sizes, browser-default `1px auto rgb(153,200,255)` focus ring, `#7fa8c9` blue and `#6b5b95` purple as product colours, canonical `#F05A1A` absent. Deliverable: `docs/WEST_PEEK_DESIGN_REFERENCE_AUDIT.md` | The Hallmark runner's own browser step reached only `/` — West Peek OS is a single-route SPA whose surfaces are client state. Per-surface evidence came from a purpose-built harness driving the real nav. **No production instance was contacted.** The runner prepares evidence; by its own truth boundary it does not perform the review |
+| D2 | Design system + shell overhaul | LOCAL VALIDATION PASSED | `src/client/styles.css` rewritten as a token system: brand / shell / surface / semantic colour, an 8-step type scale, a 4pt space scale, 5 radii, a two-level elevation policy, one focus treatment, two durations and one easing. Shell rebuilt: black `#050505` rail beside a warm-paper work surface, **29 destinations grouped into 7 labelled groups with no destination hidden**, rail scrolling independently of the work, sticky surface header carrying group eyebrow + title + identity + status. The approved West Peek mark installed **byte-identical** (`bf90a100c0e71687426763798f0ad6912bdec579dc2ae1d51b095b8bede3d78c`) from `seq23/westpeek-live`, replacing a fabricated placeholder icon; PWA manifest, theme colour, and service-worker shell updated with it. `WEST_PEEK_BRAND_SYSTEM.md` propagated into the repo root byte-identical to the family copy. Measured after: nav **900px in a 900px viewport** (was 1,624), **9** distinct font sizes (was 13), 6 radii all on scale, focus ring `2px solid rgb(240,90,26)` at every tab stop walked | Inter is named first and **not downloaded** — the platform UI face renders where Inter is absent. No webfont, no icon library, and no new dependency was added |
+| D3 | Full product-surface redesign | LOCAL VALIDATION PASSED | Applied across `App.tsx` and all 11 page modules, covering every one of the 29 materially reachable surfaces. Button hierarchy: `.btn-primary` (orange) reserved for the strongest action of a decision region, `.btn-strong` (ink) on all **39** form commits, `.btn-danger` on the refusing action, default outline for secondary — orange appears on exactly **3** actions in the whole client (Approve, Capture, Sign in) plus the focus ring, the active-nav rail, and inline drill-through links. `ApprovalCard` rebuilt — Approve / Request revision / Reject with the destructive action fenced off, state as a toned badge via one `approvalStateBadge()`, and **a disabled decision now names the authority it is missing** (`decision-blocked-<id>`) instead of being a dead button. All **6** client tables wrapped in `.table-wrap` (scrolls inside itself, with a scroll-shadow affordance); **24** numeric columns right-aligned with tabular numerals. **69** empty-state slots given an honest treatment (`.state-empty` ×69, `.state-message` ×1 on Approvals), **13** of the highest-traffic ones rewritten to say what the operator can do next. All **24** `*-message` result elements given the `.notice` treatment. Four inline `minWidth` sizings replaced by a responsive token class | Copy on the remaining 56 low-traffic empty slots keeps its baseline wording — they were re-styled, not rewritten |
+| D4 | Hostile post-build QA + repair | LOCAL VALIDATION PASSED | Post-build Hallmark pack `~/hallmark_audits/west-peek-os_POST_DESIGN_OVERHAUL` (SHA-256 `b98c491e4035a4ca4dcbbaa99b3aa9999fa044c46278628026016a404ef4a49f`) run in `regression` mode with `--brand-contract` pinned to the brand authority; browser capture succeeded. Two real findings from the hostile pass were fixed and re-measured (below). Final measurement over the same **87 surface-states**: **0** horizontal overflow · **0** text nodes below WCAG AA for their size · exactly **1** target below the 44px touch floor at 390px — the 20×20 `show read` checkbox on Notifications, whose 44px label row is the real target (bounded exception, below); every other one of the 1,212 baseline failures is gone · `2px solid rgb(240,90,26)` focus ring, offset 2px, on every stop. Suite re-run after every change: `tsc --noEmit` green · vitest **513/513** · Playwright **45/45** on a clean local D1 at the D4 gate (**48/48** after the generation-2 review added `e2e/d1-design-states.spec.ts`) · `validate:authority`, `validate:ai-boundary`, `validate:network-boundary`, and the new `validate:brand` all PASSED with their self-tests · `migrate:local` idempotent · parent authority SHA-256 both byte-identical | **No WCAG conformance is claimed.** No assistive technology, screen reader, 400% zoom, or colour-vision simulation was used. What is claimed is exactly what the browser measured. Reduced-motion and ARIA landmark behaviour are implemented but not exercised by an automated check |
+| D5 | Packaging / handoff | HOST-OWNED | The Repo Operator execution contract for this run assigns cumulative snapshot ZIP creation and structural verification to the host, after the implementation session. This session did not create the delivery ZIP | ZIP integrity, root check, and SHA-256 are the host's deterministic step |
+| D6 | Deployment | NOT AUTHORIZED | — | separate approval boundary |
+
+## Hostile post-build findings and repairs (D4)
+
+| Finding | Severity | Evidence | Disposition |
+|---|---|---|---|
+| **A clipped institutional table gave no sign it was clipped.** With tables scrolling inside `.table-wrap`, the model catalogue at 834px lost its `PRICING STATE` and `STATUS` columns off the right edge with no affordance — the fix for overflow had created a discoverability defect. | REAL — the repair introduced it | tablet AI Ops capture before/after | **FIXED.** Two tokenised scroll-shadow layers, pinned per side via `background-attachment: local/scroll`, so the shadow appears only on a side that actually has hidden columns. These are the only gradients in the system and they carry information. |
+| **An empty slot read as a disabled input.** `.state-empty` was a rounded dashed box on a tinted background; beside real inputs of the same shape (AI Ops provider panels, Machines capability columns) it looked like a form field the operator could not type into. | REAL — ambiguous affordance | tablet AI Ops capture | **FIXED.** `.state-empty` is now a dashed left rule with italic muted text and no box — unmistakably "nothing here", never a control. |
+| **Mobile navigation behaviour changed, so two specs had to change.** `p20` and `p25` journey 10 clicked nav buttons directly at 390px; below 900px the rail is now a sheet. | expected consequence, not a defect | — | **UPDATED**, not weakened: `e2e/support/nav.ts` opens the sheet, and `p20` now additionally asserts `aria-expanded` toggles, that the toggle and a nav row each clear 44px by measured bounding box, and that the sheet closes behind a choice. Net: the mobile spec proves more than it did before. |
+| Every other Playwright selector and every `data-testid` | — | 45/45 pass with no other spec touched | no action — grouping the nav changed no label and hid no destination |
+
+## Bounded exception recorded rather than reported as a pass
+
+Checkbox and radio inputs render 20×20, below the WCAG 2.5.8 24px floor. Their `<label>` is the real
+target and is 44px tall on touch, which is the standard's "enclosed target" exception. Recorded here
+and in `docs/WEST_PEEK_DESIGN_SYSTEM.md` §9 rather than counted as a clean pass.
+
+## Deliberate deviation from a Hallmark gate
+
+Hallmark slop-test gate 62 requires `html, body { overflow-x: clip }`. **Declined.** It suppresses
+horizontal scroll rather than fixing it, and it would make this repo's own overflow assertion
+(`e2e/p25-journeys.spec.ts` journey 10) pass trivially by construction. The six real overflow causes
+were fixed instead and the measurement kept meaningful. Recorded rather than silently skipped.
+
+## Design-routing receipt
+
+- **Hallmark: RAN.** The user's installed runner (`~/repo-tools/active/run_hallmark_audit.sh`
+  v1.3.0), self-tested first, then twice — pre-baseline and post-build — against read-only git
+  mirrors, never against the working tree. The bundled authority (SKILL.md, `contract.md`,
+  `anti-patterns.md`, the 69-gate `slop-test.md`, `color.md`, `typography.md`,
+  `layout-and-space.md`, `interaction-and-states.md`, `responsive.md`,
+  `genres/modern-minimal.md`, `verbs/audit.md`) was read and applied. The runner states plainly
+  that it prepares evidence and does not perform the review; the review was performed against that
+  authority and its findings are above.
+- **Claude Design / design routing: REACHABLE, NO PROJECT.** `DesignSync.list_projects` authenticated
+  and returned **zero** design-system projects, so there was no remote system to sync against and no
+  component library was pushed. Creating a cloud design-system project would publish repo material
+  to an external service and was not authorized by this task. The design-router discipline (use the
+  existing code and design system as source material) was followed against the West Peek family
+  repos. This is **not** a claim that a Claude Design generation step ran.
+- **Design source hierarchy actually used**, in the task's own order: the user-locked brand direction
+  → the family's own `WEST_PEEK_BRAND_SYSTEM.md` and the two operating apps' stylesheets → the OS's
+  existing information architecture → measured accessibility and overflow → Hallmark evidence →
+  design judgement.
+
+## Reference-repo mutation
+
+**None.** Every read was a `gh api` GET against `repos/…/contents` or `…/git/trees`. No commit,
+branch, PR, issue, tag, release, workflow, or setting was created or changed in
+`seq23/westpeek-live`, `seq23/west-peek-network-os`, `seq23/west-peek-community`, or
+`seq23/west-peek-pitch-lab`.
+
+## Design measurement — baseline vs after
+
+Both columns are browser measurements over the same 29 surfaces × 3 viewports (1440×900 / 834×1112 /
+390×844), authenticated as a Managing Partner against local `wrangler dev`.
+
+| Measure | Baseline | After | 
+|---|---|---|
+| Surfaces with horizontal document overflow | 6 (worst +287px) | **0** |
+| Text nodes below WCAG AA for their size | 0 | **0** |
+| Interactive targets below 44px at 390px | 1,212 | **1** — the 20×20 checkbox inside its 44px label row |
+| Interactive targets below the WCAG 2.5.8 24px floor at 390px | not measured | **1** — the same checkbox |
+| Focus treatment | browser default `1px auto rgb(153,200,255)` | `2px solid rgb(240,90,26)`, offset 2px, on every tab stop walked |
+| Primary nav height in a 900px viewport | 1,624px, document-scrolled | 900px, rail-scrolled |
+| Nav groups | 1 flat list of 29 | 7 labelled groups, 29 destinations, none hidden |
+| Distinct computed font sizes on a surface | 13 | 9 |
+| Colour declared outside a token block | every value | **0** (enforced by `validate:brand`) |
+| Canonical West Peek orange `#F05A1A` present | no | yes, and it is the only accent |
+| Console errors at any viewport | 0 | 0 |
+
+## Independent final review — generation 2 (2026-08-13)
+
+The host handed the run to a fresh `claude:final_review` worker. That review deliberately probed
+where the implementer's own verification could not have looked: the entire D1–D4 browser
+verification ran **as a Managing Partner**, at rest, on the data that happened to be in the local
+D1. So this pass drove a **low-authority identity**, drove **hover and disabled states** (which a
+screenshot never renders), **injected** the long labels, long IDs, and long financial values the
+task names, emulated `prefers-reduced-motion`, and cross-checked every CSS class and token against
+what the markup actually references.
+
+Evidence: `~/hallmark_audits/west-peek-os_GEN2_FINAL_REVIEW` (SHA-256
+`24bab02e14b202549eb3d3d6e158539195b19b821f75dc2d83973f9d13add0cc`), plus a live DOM walk of all
+29 surfaces × 2 identities and a driven-state contrast probe.
+
+| Finding | Severity | Evidence | Disposition |
+|---|---|---|---|
+| **A governed surface rendered nothing at all.** Read as an `INVESTMENT_TEAM` member with no governance updates issued, `Governance` produced **zero characters** in the surface body: the issue form is MP-only, the update list was empty, and there was no empty state. Playwright reports the section as `hidden`, because it had no content to give it a box. The operator could not tell "you may not do this" from "this is broken" — the exact failure the design system's own principle 5 exists to prevent. Invisible to the first pass, which only ever read as a Managing Partner. | **REAL — ambiguous blank on a governance surface** | `e2e/d1-design-states.spec.ts` "no surface renders an ambiguous blank for a reader who holds no Managing Partner role". Verified by reverting the repair: the test fails on `governance-page` being hidden. | **FIXED.** `governance-reserved` states that issuing is MP-reserved and names the roles the reader does hold; `governance-empty` says what puts an update in the list. Both are asserted, plus a floor on the surface's own rendered character count. |
+| **`Reporting` had the same shape.** `period-list` rendered zero rows with nothing to explain them. | REAL — same class | same spec: `period-list-empty` | **FIXED** with an empty state that names what opening a period does. |
+| **The one orange action failed WCAG AA on hover.** Resting, `--wp-orange-ink` on `--wp-orange` measures 5.83:1. On hover the fill darkened to `#d24a0f` and the label dropped to **4.46:1** — under the 4.5 floor for a 13px/600 label. A static capture never renders hover, so the D4 sweep could not have caught it. | **REAL — accessibility** | `e2e/d1-design-states.spec.ts` "the one orange action, the focus ring, and the hover state all clear WCAG AA". Verified by reverting the token: the test fails with `hovered primary action`. | **FIXED.** `--wp-orange-strong` is now `#d64e10`, measured **4.67:1**. |
+| **Hovering a link made it lighter, not darker.** The same token was doing double duty as link-hover *text*, where `#d24a0f` on white measures 4.44:1 — worse than the resting `--wp-orange-deep` at 5.71:1. Hover was actively degrading legibility. | **REAL — accessibility** | driven-state probe: resting 5.71:1 → hover now 7.19:1 | **FIXED.** Split into a second token, `--wp-orange-deeper` `#8f3309`, used only for hovered orange text. |
+| **The header's own links had no hover state at all.** `.shell-header button.link-button` (0,2,1) out-specified the bare `.link-button:hover` (0,2,0), so `Sign out`, the unread count, and `Send now` never responded to the pointer — a silent hole in the eight-state rule. | REAL — interaction | driven-state probe: `changedOnHover: false` before, `true` after | **FIXED** by repeating the header selector in the hover rule, with the specificity reason written next to it. |
+| **The design-system document described components that did not exist.** Twelve class rules (`.badge-accent`, `.field-help`, `.field-help-error`, `.notice-ok`, `.notice-bad`, `.state-message-error`, `.measure`, `.mono`, `.nav-count`, `.panel-actions`, `.sr-only`, and a `.btn` base alias) and two policy tokens (`--shadow-overlay`, `--dur-base`) were defined, documented, and referenced by **nothing** in the markup. The task's §9 requires the document to describe what was actually built. | **REAL — the document exceeded the implementation** | mechanical cross-check of every class selector and token against every `className` in the client | **RESOLVED both ways, deliberately.** `.btn-ghost` was wired into the four Refresh controls and `.mono` onto the Activity identifier columns, because both genuinely improve the surface. The other ten classes and both tokens were **deleted**, and the document rewritten to say what ships: elevation is one level (flat) because the product has no overlays; motion is one duration; there is no per-field helper slot; and notice tones are `.notice` + `.notice-gate` only — success/failure tints were removed rather than driven by sniffing message text, which would mis-tone silently. |
+| Long labels, long IDs, long financial values (task §6) | — | injected a 94-character entity name, a 76-character composite ID, and `$1,284,559,203,441.7788` into a live table at 1440px and 390px | none — document overflow stayed **0** at both widths; the values wrap inside their cells, which is what `overflow-wrap: anywhere` on cell content is for |
+| `prefers-reduced-motion: reduce` | — | emulated in the browser: computed `transition-duration` and `animation-duration` both `1e-05s` | none — previously implemented-but-unverified, now measured |
+| Focus ring visibility, not just presence | — | probed whether the ring is clipped by the rail's scroll container or covered by the sticky header: `insideScroller: true`, `inViewport: true`, `coveredByStickyHeader: false`, and focusing an out-of-view rail item scrolls it in (`scrollTop` 0 → 444) | none found |
+| Correction to a finding of my own: a first throwaway probe reported link contrast as 3.68:1. That was a bug in the probe — it parsed `rgba(0, 0, 0, 0)` as opaque black instead of walking to the painted ancestor. Re-measured properly: 5.71:1 resting. Recorded here rather than quietly dropped. | — | — | no product defect |
+| `.ACTIVE` / `.BREACH` reported as undefined classes by the first cross-check | — | they are the comparison literals inside `className={x === "ACTIVE" ? … }` ternaries, not emitted class names | false positive of my own extractor; no action |
+
+Net effect of generation 2: **five real defects fixed** (one ambiguous blank on a governance
+surface, one on Reporting, two hover-contrast failures, one missing hover state), **twelve dead
+class rules and two dead tokens removed**, **three new browser tests** that each fail when their fix
+is reverted, and the design-system document corrected in seven places where it described more than
+the code delivered.
+
+### Suite after the review
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` | green |
+| `npx vitest run` | **513/513** across 26 suites — unchanged, as expected: no worker, shared, migration, or test-suite file was touched |
+| `npx playwright test` | **48/48** across 22 specs on a clean local D1 (was 45/45 across 21; `e2e/d1-design-states.spec.ts` adds 3) |
+| `validate:authority` / `:ai-boundary` / `:network-boundary` / `:brand` | all PASSED with self-tests (4/4, 5/5, 6/6, 9/9) |
+| `wrangler d1 migrations apply --local` | idempotent — "No migrations to apply!" |
+| Full-surface design sweep, 29 × 3 = 87 states | 0 horizontal overflow · 0 text nodes below AA · 1 target below 44px (the documented 20×20 checkbox) · `2px solid rgb(240, 90, 26)` focus ring at every viewport |
+| Ambiguous-blank sweep, 29 surfaces × 2 identities | 0 blank surfaces · 0 unexplained empty lists (was 1 blank surface and 3 unexplained lists) |
+| Parent authority SHA-256 | both byte-identical |
+
+## Finalization-gate repair — the e2e entrypoint was not re-runnable (2026-08-13)
+
+The host finalization gate independently re-ran the repo's own documented validation commands and
+`npm run e2e` returned **1**, having passed minutes earlier in this session. That is not flakiness
+and it was not a host bookkeeping problem: it is a real, long-standing defect in this repo's
+validation surface, surfaced only because something finally ran the command twice.
+
+**Cause.** Every e2e spec drives the same local D1 and several journeys assume a firm that starts
+empty. `AGENTS.md` recorded that precondition as a *manual* instruction — "`rm -rf .wrangler` before
+a full run" — so `npm run e2e` was only correct when a human happened to remember. Reproduced
+deterministically here: with the local D1 left as a previous green run leaves it, the suite fails
+**6 of 48** specs (`p4-ai`, `p9-network`, `p25-journeys` journey 3, and three others) with assertion
+errors that read like product defects and are not. `reuseExistingServer: !process.env.CI` made it
+worse: a second runner could silently attach to a server started against a different build.
+
+**Repair.** The precondition is now part of the command instead of part of the folklore.
+
+- `scripts/e2e/prepare-local.mjs` — stops any stale listener on the e2e port (scoped to that port
+  via `lsof -sTCP:LISTEN`, nothing else is touched), then deletes `.wrangler/`, `test-results/`, and
+  `playwright-report/`. It prints what it did.
+- `package.json` — `"e2e": "node scripts/e2e/prepare-local.mjs && playwright test"`.
+- `playwright.config.ts` — `reuseExistingServer: false`, so the suite can never attach to a server
+  holding the database it just reset or serving an older build; port is `WPOS_E2E_PORT` (8787).
+
+**This weakens no test.** It enforces the precondition the specs already documented; the suite still
+has to pass against a firm that starts empty. What changed is that failing to meet that precondition
+is now impossible rather than silent.
+
+**A second defect, found in the repair itself before shipping it.** The first version of the
+prepare script killed the PID holding the port and stopped there. Tested against a deliberately
+planted stale `wrangler dev`, it did not converge: `wrangler dev` **supervises** its `workerd`
+child and respawns it the instant it dies, so the port stayed LISTENing — bound but answering
+nothing — and Playwright hung against its own 240s webServer timeout with no useful error. Five
+kill passes could not win a race against a supervisor. The fix is to stop the supervisor first,
+matched precisely to this repo's own `node_modules` so a wrangler serving a different project is
+never touched, and then to **fail loudly** with an actionable message (and `WPOS_E2E_PORT`) if the
+port still cannot be freed, rather than hand Playwright a server that can never bind.
+
+**Proof — all three scenarios measured after the repair.**
+
+| Scenario | Before repair | After repair |
+|---|---|---|
+| `npm run e2e` on a clean local D1 | 48/48, rc=0 | 48/48, rc=0 |
+| `npm run e2e` immediately again, no cleanup — *the sequence that failed the gate* | **6 failed, rc=1** | **48/48, rc=0** |
+| `npm run e2e` with a stale `wrangler dev` holding the port | Playwright silently reused it, against a possibly older build | 6 stale processes stopped, fresh server, **48/48, rc=0** |
+

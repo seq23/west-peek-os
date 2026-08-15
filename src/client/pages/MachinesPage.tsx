@@ -1,0 +1,351 @@
+import { useState } from "react";
+import { api, useApi, type MeResponse } from "../lib/api";
+
+/**
+ * Machine Control Center + Capability Intelligence (P17; GAP-06, GAP-07).
+ *
+ * The 45-machine registry as an operable fleet, and the firm's internal capability
+ * registry beside it. Pause is a real control: the server refuses work routing and AI
+ * spend for a paused machine, and this page says so rather than implying it.
+ */
+
+interface MachineRow {
+  id: number;
+  key: string;
+  name: string;
+  domain_id: string;
+  purpose: string;
+  status: string;
+  priority: string;
+  sla_target: string;
+  owner_firm_user_id: string | null;
+  evidence_expectation: string;
+  pause_reason: string | null;
+  allowed_tools_json: string;
+  data_access_json: string;
+  employees: Array<{ id: string; name: string; status: string }>;
+  queue: Array<{ id: string; title: string; state: string; priority: string }>;
+  runs_30d: number;
+  failures_30d: number;
+  spend_30d_usd: number;
+  recent_failures: Array<{ id: string; reason: string; at: string }>;
+  depends_on: Array<{ machine_id: number; kind: string }>;
+  capabilities: Array<{ capability_key: string; name: string; state: string; tested_state: string }>;
+  model_policy: { preferred_provider_key: string | null; preferred_model: string | null } | null;
+}
+
+interface CapabilityRow {
+  id: string;
+  capability_key: string;
+  name: string;
+  description: string;
+  maturity: string;
+  confidence: string;
+  state: string;
+  tested_state: string;
+  model_dependencies_json: string;
+  tool_dependencies_json: string;
+  cost_estimate_usd: number | null;
+  cost_basis: string;
+  after_action_count: number;
+  success_rate: number | null;
+  observed_cost_usd: number | null;
+  assignments: Array<{ kind: string; id: string }>;
+  build_vs_buy: { decision: string; vendor: string | null; rationale: string } | null;
+}
+
+function statusBadge(status: string): string {
+  return status === "PAUSED" ? "badge badge-gate" : "badge badge-ok";
+}
+
+function testedBadge(state: string): string {
+  if (state === "PROVEN_LIVE") return "badge badge-ok";
+  if (state === "PROVEN_LOCAL" || state === "FIXTURE_TESTED") return "badge badge-gate";
+  return "badge badge-bad";
+}
+
+function MachineDetail({ machine, onChanged }: { machine: MachineRow; onChanged: () => void }) {
+  const [message, setMessage] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [memo, setMemo] = useState("");
+  const detail = useApi<{ memory: Array<{ id: string; kind: string; body: string; created_at: string }>; state_changes: Array<{ id: string; from_status: string; to_status: string; reason: string }>; dependencies: Array<{ id: string; depends_on_name: string; kind: string }> }>(
+    `/api/machines/${machine.id}/state`,
+  );
+
+  return (
+    <section className="card" data-testid={`machine-detail-${machine.id}`}>
+      <h3>
+        #{machine.id} {machine.name} <span className={statusBadge(machine.status)}>{machine.status}</span>
+      </h3>
+      <p className="muted small">{machine.purpose}</p>
+      <p className="small">
+        {machine.domain_id} · priority {machine.priority} · {machine.runs_30d} run(s)/30d ({machine.failures_30d} failed) · $
+        {machine.spend_30d_usd.toFixed(4)}
+        {machine.sla_target ? ` · SLA: ${machine.sla_target}` : ""}
+      </p>
+      {machine.pause_reason && <p className="muted small">Paused because: {machine.pause_reason}</p>}
+      {machine.model_policy?.preferred_model && (
+        <p className="muted small">
+          model policy: {machine.model_policy.preferred_provider_key}/{machine.model_policy.preferred_model}
+        </p>
+      )}
+
+      <h4>Assigned employees</h4>
+      <p className="small">
+        {machine.employees.length > 0 ? machine.employees.map((e) => `${e.name} (${e.status})`).join(", ") : "none assigned"}
+      </p>
+
+      <h4>Queue</h4>
+      <ul className="card-list small" data-testid={`machine-queue-${machine.id}`}>
+        {machine.queue.map((q) => (
+          <li key={q.id}>
+            {q.title} — <code>{q.state}</code>
+          </li>
+        ))}
+        {machine.queue.length === 0 && <li className="state-empty">Nothing queued.</li>}
+      </ul>
+
+      {machine.recent_failures.length > 0 && (
+        <>
+          <h4>Recent failures</h4>
+          <ul className="card-list small">
+            {machine.recent_failures.map((f) => (
+              <li key={f.id}>
+                {f.reason} — {f.at}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <h4>Controls</h4>
+      <div className="form-row">
+        <input
+          data-testid={`machine-reason-${machine.id}`}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Reason (required)"
+        />
+        <button
+          type="button"
+          data-testid={`machine-pause-${machine.id}`}
+          onClick={async () => {
+            const res = await api<{ error?: string; detail?: string }>(`/api/machines/${machine.id}/pause`, {
+              method: "POST",
+              body: { status: machine.status === "PAUSED" ? "ACTIVE" : "PAUSED", reason: reason || "operator action" },
+            });
+            setMessage(
+              res.status === 200
+                ? machine.status === "PAUSED"
+                  ? "Resumed. Routing and AI spend are allowed again."
+                  : "Paused. The server now refuses work routing and AI spend for this machine."
+                : `Refused: ${res.data?.detail ?? res.data?.error ?? res.status}`,
+            );
+            onChanged();
+            detail.reload();
+          }}
+        >
+          {machine.status === "PAUSED" ? "Resume" : "Pause"}
+        </button>
+      </div>
+
+      <div className="form-row">
+        <input data-testid={`machine-memo-${machine.id}`} value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="Operating note" />
+        <button
+          type="button"
+          data-testid={`machine-memo-submit-${machine.id}`}
+          onClick={async () => {
+            const res = await api(`/api/machines/${machine.id}/memory`, { method: "POST", body: { kind: "OPERATING_NOTE", body: memo } });
+            setMessage(res.status === 201 ? "Note appended to machine memory." : `Refused (HTTP ${res.status}).`);
+            setMemo("");
+            detail.reload();
+          }}
+        >
+          Append memory
+        </button>
+      </div>
+      {message && <p data-testid={`machine-message-${machine.id}`}>{message}</p>}
+
+      <h4>Memory</h4>
+      <ul className="card-list small" data-testid={`machine-memory-${machine.id}`}>
+        {(detail.data?.memory ?? []).map((m) => (
+          <li key={m.id}>
+            <code>{m.kind}</code> {m.body} — {m.created_at}
+          </li>
+        ))}
+        {(detail.data?.memory ?? []).length === 0 && <li className="state-empty">No memory recorded.</li>}
+      </ul>
+    </section>
+  );
+}
+
+function CapabilityPanel({ me }: { me: MeResponse }) {
+  const caps = useApi<{
+    capabilities: CapabilityRow[];
+    active: CapabilityRow[];
+    bench: CapabilityRow[];
+    archive: CapabilityRow[];
+    recommended_stack: Array<{ capability_key: string; name: string; success_rate: number; sample_size: number; why: string }>;
+    definitions: Record<string, string>;
+  }>("/api/capabilities");
+  const [message, setMessage] = useState<string | null>(null);
+  const [key, setKey] = useState("");
+  const [name, setName] = useState("");
+
+  const section = (title: string, rows: CapabilityRow[], testid: string) => (
+    <section className="module-card" data-testid={testid}>
+      <h4>
+        {title} <span className="module-count">{rows.length}</span>
+      </h4>
+      <ul className="card-list small">
+        {rows.map((c) => (
+          <li key={c.id}>
+            <strong>{c.name}</strong> <span className="badge">{c.maturity}</span>{" "}
+            <span className={testedBadge(c.tested_state)}>{c.tested_state}</span>
+            <br />
+            <span className="muted">
+              confidence {c.confidence} ·{" "}
+              {c.success_rate === null ? "no recorded outcomes" : `${c.success_rate}% success over ${c.after_action_count} use(s)`}
+              {c.cost_estimate_usd !== null ? ` · est. $${c.cost_estimate_usd} (${c.cost_basis})` : ""}
+              {c.assignments.length > 0 ? ` · assigned to ${c.assignments.map((a) => `${a.kind}:${a.id}`).join(", ")}` : ""}
+              {c.build_vs_buy ? ` · ${c.build_vs_buy.decision}${c.build_vs_buy.vendor ? ` (${c.build_vs_buy.vendor})` : ""}` : ""}
+            </span>
+          </li>
+        ))}
+        {rows.length === 0 && <li className="state-empty">None.</li>}
+      </ul>
+    </section>
+  );
+
+  return (
+    <section data-testid="capabilities-panel">
+      <h3>Capabilities</h3>
+      <div className="module-grid">
+        {section("Active", caps.data?.active ?? [], "capabilities-active")}
+        {section("Bench", caps.data?.bench ?? [], "capabilities-bench")}
+        {section("Archive", caps.data?.archive ?? [], "capabilities-archive")}
+      </div>
+
+      <section className="card" data-testid="recommended-stack">
+        <h4>Recommended stack</h4>
+        <p className="muted small">{caps.data?.definitions.recommended_stack}</p>
+        <ul className="card-list small">
+          {(caps.data?.recommended_stack ?? []).map((r) => (
+            <li key={r.capability_key}>
+              {r.name} — {r.why}
+            </li>
+          ))}
+          {(caps.data?.recommended_stack ?? []).length === 0 && (
+            <li className="state-empty">Nothing recommended: no ACTIVE capability has a recorded outcome yet.</li>
+          )}
+        </ul>
+      </section>
+
+      <form
+        className="form-row"
+        data-testid="capability-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const res = await api<{ error?: string; detail?: string }>("/api/capabilities", {
+            method: "POST",
+            body: { capability_key: key, name, tested_state: "UNTESTED" },
+          });
+          setMessage(
+            res.status === 201
+              ? `Registered “${name}” on the bench, UNTESTED. It cannot be made ACTIVE until something is proven.`
+              : `Refused: ${res.data?.detail ?? res.data?.error ?? res.status}`,
+          );
+          setKey("");
+          setName("");
+          caps.reload();
+        }}
+      >
+        <input data-testid="capability-key" value={key} onChange={(e) => setKey(e.target.value)} placeholder="capability_key" />
+        <input data-testid="capability-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
+        <button type="submit" className="btn-strong" data-testid="capability-submit">
+          Register capability
+        </button>
+      </form>
+      {message && <p className="notice" data-testid="capability-message">{message}</p>}
+      <p className="muted small">
+        {caps.data?.definitions.maturity} {caps.data?.definitions.tested_state} (signed in as {me.fullName})
+      </p>
+    </section>
+  );
+}
+
+export function MachinesPage({ me }: { me: MeResponse }) {
+  const fleet = useApi<{ machines: MachineRow[]; note: string }>("/api/machines/control-center");
+  const [selected, setSelected] = useState<number | null>(null);
+  const [domain, setDomain] = useState("ALL");
+
+  if (fleet.loading && !fleet.data) return <p data-testid="machines-loading">Loading the fleet…</p>;
+  if (!fleet.data) return <p data-testid="machines-error">Could not load the machine fleet (HTTP {fleet.status ?? "?"}).</p>;
+
+  const domains = [...new Set(fleet.data.machines.map((m) => m.domain_id))].sort();
+  const shown = domain === "ALL" ? fleet.data.machines : fleet.data.machines.filter((m) => m.domain_id === domain);
+  const selectedMachine = selected === null ? null : fleet.data.machines.find((m) => m.id === selected) ?? null;
+
+  return (
+    <section data-testid="machines-page">
+      <p className="muted small" data-testid="machines-note">
+        {fleet.data.machines.length} machines · {fleet.data.machines.filter((m) => m.status === "PAUSED").length} paused. {fleet.data.note}
+      </p>
+
+      <div className="form-row">
+        <label>
+          Domain{" "}
+          <select data-testid="machines-domain" value={domain} onChange={(e) => setDomain(e.target.value)}>
+            <option value="ALL">All ({fleet.data.machines.length})</option>
+            {domains.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="table-wrap">
+        <table data-testid="machines-table">
+          <thead>
+            <tr>
+              <th className="num">#</th>
+              <th>Machine</th>
+              <th>Status</th>
+              <th className="num">Queue</th>
+              <th className="num">Runs / failures (30d)</th>
+              <th className="num">Spend (30d)</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((m) => (
+              <tr key={m.id} data-testid={`machine-row-${m.id}`}>
+                <td className="num">{m.id}</td>
+                <td>{m.name}</td>
+                <td>
+                  <span className={statusBadge(m.status)}>{m.status}</span>
+                </td>
+                <td className="num">{m.queue.length}</td>
+                <td className="num">
+                  {m.runs_30d} / {m.failures_30d}
+                </td>
+                <td className="num">${m.spend_30d_usd.toFixed(4)}</td>
+                <td>
+                  <button type="button" className="link-button" data-testid={`machine-open-${m.id}`} onClick={() => setSelected(m.id)}>
+                    Open
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {selectedMachine && <MachineDetail machine={selectedMachine} onChanged={fleet.reload} />}
+
+      <CapabilityPanel me={me} />
+    </section>
+  );
+}

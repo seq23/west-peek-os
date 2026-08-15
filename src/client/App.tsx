@@ -1,83 +1,31 @@
 import { useCallback, useEffect, useState } from "react";
+import { api, getDevUser, setDevUser, useApi, type MeResponse } from "./lib/api";
+import { HomePage } from "./pages/HomePage";
+import { IntelligencePage } from "./pages/IntelligencePage";
+import { EmployeesPage } from "./pages/EmployeesPage";
+import { AiOpsPage } from "./pages/AiOpsPage";
+import { MachinesPage } from "./pages/MachinesPage";
+import { IntentPage } from "./pages/IntentPage";
+import { JobsPage } from "./pages/JobsPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
+import { ResearchPage } from "./pages/ResearchPage";
+import { IntegrationsPage } from "./pages/IntegrationsPage";
+import { CockpitPage } from "./pages/CockpitPage";
+import { enqueueCapture, flushCaptures, isOnline, queuedCaptures } from "./lib/offlineQueue";
 
 /**
- * West Peek OS client — P3 governed work surface.
- * Plain and functional: Today, +Capture, Work Cards, Approvals, Activity,
- * Governance, Diagnostics. Identity comes from /api/me; in local mode the
- * client sends the dev identity header (x-wpos-dev-user) from localStorage.
+ * West Peek OS client shell.
+ *
+ * P3 built the governed work surface (Today, +Capture, Work Cards, Approvals, Activity,
+ * Governance, Diagnostics) and P5–P12 added the institutional surfaces. The P13–P25
+ * continuation adds the operating surfaces (Home, Intelligence, …) as their own modules
+ * under `pages/`, and leaves every existing journey where it was.
+ *
+ * Identity comes from /api/me; in local mode the client sends the dev identity header
+ * (x-wpos-dev-user) from localStorage.
  */
 
-// ── API plumbing ──
-
-const DEV_USER_KEY = "wpos.devUser";
-
-export function getDevUser(): string | null {
-  try {
-    return window.localStorage.getItem(DEV_USER_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setDevUser(email: string | null): void {
-  try {
-    if (email) window.localStorage.setItem(DEV_USER_KEY, email);
-    else window.localStorage.removeItem(DEV_USER_KEY);
-  } catch {
-    // localStorage unavailable — identity simply won't persist.
-  }
-}
-
-async function api<T = unknown>(path: string, options: { method?: string; body?: unknown } = {}): Promise<{ status: number; data: T | null }> {
-  const headers: Record<string, string> = { accept: "application/json" };
-  const devUser = getDevUser();
-  if (devUser) headers["x-wpos-dev-user"] = devUser;
-  if (options.body !== undefined) headers["content-type"] = "application/json";
-  const res = await fetch(path, {
-    method: options.method ?? "GET",
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
-  const data = (await res.json().catch(() => null)) as T | null;
-  return { status: res.status, data };
-}
-
-function useApi<T>(path: string | null, deps: unknown[] = []): { data: T | null; status: number | null; loading: boolean; reload: () => void } {
-  const [state, setState] = useState<{ data: T | null; status: number | null; loading: boolean }>({ data: null, status: null, loading: true });
-  const [nonce, setNonce] = useState(0);
-  const reload = useCallback(() => setNonce((n) => n + 1), []);
-  useEffect(() => {
-    if (!path) {
-      setState({ data: null, status: null, loading: false });
-      return;
-    }
-    let cancelled = false;
-    setState((s) => ({ ...s, loading: true }));
-    api<T>(path)
-      .then(({ status, data }) => {
-        if (!cancelled) setState({ data, status, loading: false });
-      })
-      .catch(() => {
-        if (!cancelled) setState({ data: null, status: 0, loading: false });
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, nonce, ...deps]);
-  return { ...state, reload };
-}
-
-// ── Types ──
-
-interface MeResponse {
-  id: string;
-  email: string;
-  fullName: string;
-  status: string;
-  roles: string[];
-  authorityScopes: Array<{ scopeKey: string; scopeValue: string }>;
-}
+export { getDevUser };
 
 interface HealthResponse {
   ok: boolean;
@@ -187,37 +135,115 @@ interface AiBudgetResponse {
   today: { spent_usd: number; daily_cap_usd: number };
 }
 
-const NAV_ITEMS = [
-  { key: "today", label: "Today" },
-  { key: "capture", label: "+Capture" },
-  { key: "work-cards", label: "Work Cards" },
-  { key: "approvals", label: "Approvals" },
-  { key: "companies", label: "Companies" },
-  { key: "investment", label: "Investment" },
-  { key: "meetings", label: "Meetings" },
-  { key: "portfolio", label: "Portfolio" },
-  { key: "network", label: "Network OS" },
-  { key: "lp", label: "LP" },
-  { key: "allocation", label: "Allocation" },
-  { key: "reporting", label: "Reporting" },
-  { key: "documents", label: "Documents" },
-  { key: "contradictions", label: "Contradictions" },
-  { key: "activity", label: "Activity" },
-  { key: "governance", label: "Governance" },
-  { key: "ai", label: "AI" },
-  { key: "diagnostics", label: "Diagnostics" },
+/**
+ * Navigation. Twenty-nine destinations in one flat list did not survive their own length:
+ * measured at 1440x900 the rail stood 1624px tall inside a 900px viewport, so twelve
+ * destinations sat below the fold and scrolling the work scrolled the wayfinding away
+ * (docs/WEST_PEEK_DESIGN_REFERENCE_AUDIT.md §3.2).
+ *
+ * The same twenty-nine destinations are now grouped by the job they belong to. Grouping is
+ * labelling only: every destination stays a visible, reachable button — none is hidden behind
+ * a disclosure, and no label changed, so every existing selector still resolves.
+ */
+const NAV_GROUPS = [
+  {
+    group: "Command",
+    items: [
+      { key: "home", label: "Home" },
+      { key: "today", label: "Today" },
+      { key: "cockpit", label: "Cockpit" },
+      { key: "notifications", label: "Notifications" },
+    ],
+  },
+  {
+    group: "Capture & work",
+    items: [
+      { key: "capture", label: "+Capture" },
+      { key: "intent", label: "Intent → Execution" },
+      { key: "work-cards", label: "Work Cards" },
+      { key: "approvals", label: "Approvals" },
+    ],
+  },
+  {
+    group: "Intelligence",
+    items: [
+      { key: "intelligence", label: "Intelligence" },
+      { key: "research", label: "Research" },
+      { key: "companies", label: "Companies" },
+      { key: "contradictions", label: "Contradictions" },
+      { key: "documents", label: "Documents" },
+    ],
+  },
+  {
+    group: "Investing",
+    items: [
+      { key: "investment", label: "Investment" },
+      { key: "portfolio", label: "Portfolio" },
+      { key: "allocation", label: "Allocation" },
+      { key: "meetings", label: "Meetings" },
+    ],
+  },
+  {
+    group: "Institutional",
+    items: [
+      { key: "lp", label: "LP" },
+      { key: "reporting", label: "Reporting" },
+      { key: "network", label: "Network OS" },
+      { key: "integrations", label: "Integrations" },
+    ],
+  },
+  {
+    group: "Workforce",
+    items: [
+      { key: "employees", label: "Employees" },
+      { key: "machines", label: "Machines" },
+      { key: "jobs", label: "Scheduled Work" },
+    ],
+  },
+  {
+    group: "Governance",
+    items: [
+      { key: "activity", label: "Activity" },
+      { key: "governance", label: "Governance" },
+      { key: "ai", label: "AI" },
+      { key: "ai-ops", label: "AI Ops" },
+      { key: "diagnostics", label: "Diagnostics" },
+    ],
+  },
 ] as const;
+
+const NAV_ITEMS: Array<{ key: string; label: string; group: string }> = NAV_GROUPS.flatMap((g) =>
+  g.items.map((item) => ({ key: item.key, label: item.label, group: g.group })),
+);
+
+/** Home is the shell's fallback surface; NAV_GROUPS is authored so it always exists. */
+const NAV_FALLBACK = NAV_ITEMS[0]!;
 
 const WORK_CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"];
 
 // ── Identity ──
 
+function initials(fullName: string): string {
+  return fullName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join("");
+}
+
+/**
+ * Who is asking, in the surface header — one line, always in the same place, so the operator
+ * can see their own authority without leaving the screen they are working on.
+ */
 function IdentityPanel({ me, status, loading, onLogin }: { me: MeResponse | null; status: number | null; loading: boolean; onLogin: () => void }) {
-  const [email, setEmail] = useState("");
   if (loading) return <p data-testid="identity-status">Checking identity…</p>;
   if (status === 200 && me) {
     return (
       <p data-testid="identity-status">
+        <span className="avatar" aria-hidden="true">
+          {initials(me.fullName)}
+        </span>
         Signed in as <strong>{me.fullName}</strong> ({me.email}) — {me.roles.join(", ") || "no roles"}
         {getDevUser() && (
           <button
@@ -235,7 +261,18 @@ function IdentityPanel({ me, status, loading, onLogin }: { me: MeResponse | null
     );
   }
   return (
+    <p data-testid="identity-status">
+      <span className="badge badge-gate">NOT AUTHENTICATED</span>
+    </p>
+  );
+}
+
+/** The sign-in surface itself. Local mode only — production identity comes from Cloudflare Access. */
+function DevLoginCard({ onLogin }: { onLogin: () => void }) {
+  const [email, setEmail] = useState("");
+  return (
     <form
+      className="card"
       data-testid="dev-login"
       onSubmit={(e) => {
         e.preventDefault();
@@ -245,14 +282,26 @@ function IdentityPanel({ me, status, loading, onLogin }: { me: MeResponse | null
         }
       }}
     >
-      <span data-testid="identity-status">Not authenticated. </span>
-      <label>
-        Dev identity (local mode):{" "}
-        <input data-testid="dev-login-email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@westpeek.ventures" />
-      </label>{" "}
-      <button type="submit" data-testid="dev-login-submit">
-        Sign in
-      </button>
+      <h3>Sign in</h3>
+      <p className="muted small">
+        West Peek OS shows no institutional state until it knows who is asking. In local mode the dev
+        identity header stands in for Cloudflare Access.
+      </p>
+      <div className="form-row">
+        <label>
+          Dev identity (local mode)
+          <input
+            data-testid="dev-login-email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@westpeek.ventures"
+            autoComplete="email"
+          />
+        </label>
+        <button type="submit" className="btn-primary" data-testid="dev-login-submit">
+          Sign in
+        </button>
+      </div>
     </form>
   );
 }
@@ -273,7 +322,7 @@ function TodayPage({ me }: { me: MeResponse }) {
     <section data-testid="today-page">
       <h3>My open work</h3>
       {mine.length === 0 ? (
-        <p>No open work cards assigned to you.</p>
+        <p className="state-empty">No open work cards assigned to you. Work reaches you by capture routing, an accepted handoff, or an executed work packet.</p>
       ) : (
         <ul>
           {mine.map((c) => (
@@ -318,15 +367,41 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
           setError(null);
           setResult(null);
           setRouteResult(null);
-          const { status, data } = await api<CaptureRow & { error?: string }>("/api/captures", {
-            method: "POST",
-            body: { capture_type: captureType, raw_text: rawText, source_channel: sourceChannel, privacy_label: privacyLabel },
-          });
-          if (status === 201 && data) {
-            setResult(data);
-            onChanged();
-          } else {
-            setError(data?.error ?? `HTTP ${status}`);
+          // P20: capture is the one thing that survives a bad connection — and a held capture is
+          // stated as NOT saved, never shown as recorded.
+          if (!isOnline()) {
+            const held = enqueueCapture({
+              capture_type: captureType,
+              raw_text: rawText,
+              source_channel: sourceChannel,
+              privacy_label: privacyLabel,
+            });
+            setError(
+              `Offline: held on this device as ${held.local_id}. It is NOT saved to West Peek OS yet — send it from the status bar when you are back online.`,
+            );
+            return;
+          }
+          try {
+            const { status, data } = await api<CaptureRow & { error?: string }>("/api/captures", {
+              method: "POST",
+              body: { capture_type: captureType, raw_text: rawText, source_channel: sourceChannel, privacy_label: privacyLabel },
+            });
+            if (status === 201 && data) {
+              setResult(data);
+              onChanged();
+            } else {
+              setError(data?.error ?? `HTTP ${status}`);
+            }
+          } catch {
+            const held = enqueueCapture({
+              capture_type: captureType,
+              raw_text: rawText,
+              source_channel: sourceChannel,
+              privacy_label: privacyLabel,
+            });
+            setError(
+              `Could not reach West Peek OS: held on this device as ${held.local_id}. It is NOT saved yet — send it from the status bar when the connection returns.`,
+            );
           }
         }}
       >
@@ -360,7 +435,7 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
             onChange={(e) => setRawText(e.target.value)}
           />
         </div>
-        <button type="submit" data-testid="capture-submit">
+        <button type="submit" className="btn-primary" data-testid="capture-submit">
           Capture
         </button>
         {error && <p role="alert">Capture failed: {error}</p>}
@@ -399,7 +474,7 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
                   ))}
                 </select>
               </label>{" "}
-              <button type="submit" data-testid="route-submit">
+              <button type="submit" className="btn-strong" data-testid="route-submit">
                 Route + create work card
               </button>
             </form>
@@ -431,11 +506,11 @@ function WorkCardsPage({ me, onChanged }: { me: MeResponse; onChanged: () => voi
             ))}
           </select>
         </label>
-        <button type="button" onClick={() => cards.reload()}>
+        <button type="button" className="btn-ghost" onClick={() => cards.reload()}>
           Refresh
         </button>
       </div>
-      {message && <p data-testid="work-card-message">{message}</p>}
+      {message && <p className="notice" data-testid="work-card-message">{message}</p>}
       <ul data-testid="work-card-list" className="card-list">
         {visible.map((c) => (
           <li key={c.id} className="card" data-testid={`work-card-${c.id}`}>
@@ -509,7 +584,7 @@ function WorkCardsPage({ me, onChanged }: { me: MeResponse; onChanged: () => voi
           </li>
         ))}
       </ul>
-      {visible.length === 0 && <p>No work cards match.</p>}
+      {visible.length === 0 && <p className="state-empty">No work cards match this filter. Change the state filter above, or open +Capture to route new work.</p>}
     </section>
   );
 }
@@ -535,35 +610,65 @@ function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeRe
 
   return (
     <li className="card" data-testid={`approval-card-${card.id}`}>
-      <p>
-        <strong>{card.title}</strong> — <code>{card.state}</code>
-      </p>
-      <p>
+      <div className="panel-head">
+        <h4>{card.title}</h4>
+        <span className={approvalStateBadge(card.state)}>{card.state}</span>
+      </div>
+      <p className="muted small">
         action <code>{card.action_key}</code> on {card.object_type}/{card.object_id} · requested by {card.requested_by_type}/
         {card.requested_by_id} · requires {requiredRoles.join(" or ")}
       </p>
       {card.state === "pending_review" && (
-        <div className="form-row">
-          <input
-            placeholder="decision note"
-            aria-label={`note-${card.id}`}
-            data-testid={`decision-note-${card.id}`}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
-          <button type="button" data-testid={`approve-${card.id}`} disabled={!canDecide} onClick={() => decide("approved")}>
-            Approve
-          </button>
-          <button type="button" data-testid={`reject-${card.id}`} disabled={!canDecide} onClick={() => decide("rejected")}>
-            Reject
-          </button>
-          <button type="button" data-testid={`revise-${card.id}`} disabled={!canDecide} onClick={() => decide("revise_requested")}>
-            Request revision
-          </button>
-        </div>
+        <>
+          <div className="form-row">
+            <label>
+              Decision note
+              <input
+                placeholder="decision note"
+                aria-label={`note-${card.id}`}
+                data-testid={`decision-note-${card.id}`}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn-primary"
+              data-testid={`approve-${card.id}`}
+              disabled={!canDecide}
+              onClick={() => decide("approved")}
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              data-testid={`revise-${card.id}`}
+              disabled={!canDecide}
+              onClick={() => decide("revise_requested")}
+            >
+              Request revision
+            </button>
+            <button
+              type="button"
+              className="btn-danger"
+              data-testid={`reject-${card.id}`}
+              disabled={!canDecide}
+              onClick={() => decide("rejected")}
+            >
+              Reject
+            </button>
+          </div>
+          {/* A disabled control must say why it is disabled — never a dead button. */}
+          {!canDecide && (
+            <p className="notice notice-gate small" data-testid={`decision-blocked-${card.id}`}>
+              You cannot decide this card. It is reserved for {requiredRoles.join(" or ") || "a role you do not hold"};
+              you hold {me.roles.join(", ") || "no roles"}.
+            </p>
+          )}
+        </>
       )}
       {decisions.length > 0 && (
-        <ul data-testid={`decision-history-${card.id}`}>
+        <ul className="card-list small" data-testid={`decision-history-${card.id}`}>
           {decisions.map((d) => (
             <li key={d.id}>
               <code>{d.decision}</code> by {d.decided_by}
@@ -574,6 +679,14 @@ function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeRe
       )}
     </li>
   );
+}
+
+/** Approval state is the product's core fact: it gets a tone, not just a word. */
+function approvalStateBadge(state: string): string {
+  if (state === "approved" || state === "executed") return "badge badge-ok";
+  if (state === "rejected" || state === "blocked") return "badge badge-bad";
+  if (state === "pending_review" || state === "revise_requested") return "badge badge-gate";
+  return "badge";
 }
 
 function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNonce: number }) {
@@ -593,7 +706,7 @@ function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNonce: num
             ))}
           </select>
         </label>
-        <button type="button" onClick={() => approvals.reload()}>
+        <button type="button" className="btn-ghost" onClick={() => approvals.reload()}>
           Refresh
         </button>
       </div>
@@ -602,7 +715,12 @@ function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNonce: num
           <ApprovalCard key={c.id} card={c} me={me} onDecided={() => approvals.reload()} />
         ))}
       </ul>
-      {(approvals.data?.approvals ?? []).length === 0 && <p>No approval cards in state {stateFilter}.</p>}
+      {!approvals.loading && (approvals.data?.approvals ?? []).length === 0 && (
+        <p className="state-message" data-testid="approvals-empty">
+          No approval cards in state {stateFilter}. Cards arrive here when a reserved action is requested — from a work
+          card, a transaction, an LP claim, an allocation option, or a policy change. Nothing executes without one.
+        </p>
+      )}
     </section>
   );
 }
@@ -611,32 +729,34 @@ function ActivityPage({ refreshNonce }: { me: MeResponse; refreshNonce: number }
   const activity = useApi<{ events: ActivityEvent[] }>("/api/activity?limit=100", [refreshNonce]);
   return (
     <section data-testid="activity-page">
-      <table data-testid="activity-feed">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Event</th>
-            <th>Actor</th>
-            <th>Object</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(activity.data?.events ?? []).map((e) => (
-            <tr key={e.id} data-testid={`activity-event-${e.event_type}`}>
-              <td>{e.created_at}</td>
-              <td>
-                <code>{e.event_type}</code>
-              </td>
-              <td>
-                {e.actor_type}/{e.actor_id}
-              </td>
-              <td>
-                {e.object_type}/{e.object_id}
-              </td>
+      <div className="table-wrap">
+        <table data-testid="activity-feed">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Event</th>
+              <th>Actor</th>
+              <th>Object</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {(activity.data?.events ?? []).map((e) => (
+              <tr key={e.id} data-testid={`activity-event-${e.event_type}`}>
+                <td>{e.created_at}</td>
+                <td>
+                  <code>{e.event_type}</code>
+                </td>
+                <td className="mono">
+                  {e.actor_type}/{e.actor_id}
+                </td>
+                <td className="mono">
+                  {e.object_type}/{e.object_id}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -688,11 +808,21 @@ function GovernancePage({ me }: { me: MeResponse }) {
           <div className="form-row">
             <textarea rows={3} style={{ width: "100%" }} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Body" />
           </div>
-          <button type="submit" data-testid="governance-submit">
+          <button type="submit" className="btn-strong" data-testid="governance-submit">
             Issue
           </button>
           {message && <p>{message}</p>}
         </form>
+      )}
+      {/* Without this, a reader who is not a Managing Partner and has no governance updates to
+          read sees a completely blank surface — indistinguishable from a broken one. Found by
+          walking every surface as a low-authority identity, which the first pass never did. */}
+      {!isMp && (
+        <p className="notice notice-gate" data-testid="governance-reserved">
+          Issuing a governance update is reserved for a Managing Partner. You hold{" "}
+          {me.roles.join(", ") || "no roles"}. Updates issued to the firm are listed below, and
+          acknowledging one is your own act.
+        </p>
       )}
       <ul className="card-list" data-testid="governance-list">
         {(updates.data?.governance_updates ?? []).map((u) => (
@@ -703,6 +833,13 @@ function GovernancePage({ me }: { me: MeResponse }) {
             <p>{u.body}</p>
           </li>
         ))}
+        {!updates.loading && (updates.data?.governance_updates ?? []).length === 0 && (
+          <li className="state-empty" data-testid="governance-empty">
+            No governance updates have been issued. A Managing Partner issues rules, bulletins,
+            broadcasts, context notes, and vendor updates here; each one is recorded on the event
+            spine and acknowledged per actor.
+          </li>
+        )}
       </ul>
     </section>
   );
@@ -795,11 +932,11 @@ function AiPage({ me }: { me: MeResponse }) {
             onChange={(e) => setInputText(e.target.value)}
           />
         </div>
-        <button type="submit" data-testid="ai-run-submit">
+        <button type="submit" className="btn-strong" data-testid="ai-run-submit">
           Run
         </button>
       </form>
-      {message && <p data-testid="ai-message">{message}</p>}
+      {message && <p className="notice" data-testid="ai-message">{message}</p>}
 
       <h3>
         Policy: <code>{budget.data?.policy.privacy_mode ?? "…"}</code> privacy · <code>{budget.data?.policy.cost_mode ?? "…"}</code> cost
@@ -824,7 +961,7 @@ function AiPage({ me }: { me: MeResponse }) {
       </ul>
 
       <h3>AI runs</h3>
-      <button type="button" onClick={() => runs.reload()}>
+      <button type="button" className="btn-ghost" onClick={() => runs.reload()}>
         Refresh
       </button>
       <ul data-testid="ai-run-list" className="card-list">
@@ -841,7 +978,7 @@ function AiPage({ me }: { me: MeResponse }) {
           </li>
         ))}
       </ul>
-      {(runs.data?.runs ?? []).length === 0 && <p>No AI runs yet.</p>}
+      {(runs.data?.runs ?? []).length === 0 && <p className="state-empty">No AI runs yet. Every run is governed: it needs a purpose, a sensitivity, and a privacy mode, and it is recorded here with its trace id.</p>}
     </section>
   );
 }
@@ -871,24 +1008,26 @@ function DiagnosticsPage() {
       )}
 
       <h3>Approval volume (D7 — observational; target ≤ {volume.data?.targetPerDay ?? 15}/day)</h3>
-      <table data-testid="approval-volume">
-        <thead>
-          <tr>
-            <th>Day</th>
-            <th>Cards</th>
-            <th>Flag</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(volume.data?.days ?? []).map((d) => (
-            <tr key={d.date} data-testid={d.overTarget ? `volume-day-over-${d.date}` : `volume-day-${d.date}`}>
-              <td>{d.date}</td>
-              <td>{d.count}</td>
-              <td>{d.overTarget ? "OVER TARGET" : ""}</td>
+      <div className="table-wrap">
+        <table data-testid="approval-volume">
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Cards</th>
+              <th>Flag</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {(volume.data?.days ?? []).map((d) => (
+              <tr key={d.date} data-testid={d.overTarget ? `volume-day-over-${d.date}` : `volume-day-${d.date}`}>
+                <td>{d.date}</td>
+                <td>{d.count}</td>
+                <td>{d.overTarget ? "OVER TARGET" : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <h4>Weekly rollup</h4>
       <ul>
         {(volume.data?.weekly ?? []).map((w) => (
@@ -991,7 +1130,7 @@ function ResolveContradictionForm({ contradiction, onDone }: { contradiction: Co
         value={note}
         onChange={(e) => setNote(e.target.value)}
       />
-      <button type="submit" data-testid={`resolve-submit-${contradiction.id}`}>
+      <button type="submit" className="btn-strong" data-testid={`resolve-submit-${contradiction.id}`}>
         Resolve
       </button>
       {message && <span data-testid={`resolve-message-${contradiction.id}`}>{message}</span>}
@@ -1035,7 +1174,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
                 <ResolveContradictionForm contradiction={c} onDone={reloadAll} />
               </li>
             ))}
-            {summary.data.unresolved_material_contradictions.length === 0 && <li data-testid="no-material-contradictions">None.</li>}
+            {summary.data.unresolved_material_contradictions.length === 0 && <li className="state-empty" data-testid="no-material-contradictions">None.</li>}
           </ul>
         </div>
       )}
@@ -1099,10 +1238,10 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
             Method <input data-testid="claim-source-method" value={sourceMethod} onChange={(e) => setSourceMethod(e.target.value)} />
           </label>
         </div>
-        <button type="submit" data-testid="claim-submit">
+        <button type="submit" className="btn-strong" data-testid="claim-submit">
           Add claim
         </button>
-        {message && <p data-testid="claim-message">{message}</p>}
+        {message && <p className="notice" data-testid="claim-message">{message}</p>}
       </form>
 
       <h4>Claims</h4>
@@ -1169,7 +1308,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
               </button>
             </li>
           ))}
-          {candidates.length === 0 && <li data-testid="no-candidates">No contradiction candidates.</li>}
+          {candidates.length === 0 && <li className="state-empty" data-testid="no-candidates">No contradiction candidates.</li>}
         </ul>
       )}
     </div>
@@ -1200,7 +1339,7 @@ function CompaniesPage({ me }: { me: MeResponse }) {
         <label>
           New company <input data-testid="company-create-name" value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <button type="submit" data-testid="company-create-submit">
+        <button type="submit" className="btn-strong" data-testid="company-create-submit">
           Create
         </button>
         {message && <span data-testid="company-message">{message}</span>}
@@ -1283,10 +1422,10 @@ function DocumentsPage() {
           </label>
           <input data-testid="doc-file" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </div>
-        <button type="submit" data-testid="doc-submit">
+        <button type="submit" className="btn-strong" data-testid="doc-submit">
           Upload
         </button>
-        {message && <p data-testid="doc-message">{message}</p>}
+        {message && <p className="notice" data-testid="doc-message">{message}</p>}
       </form>
       <ul data-testid="document-list" className="card-list">
         {(documents.data?.documents ?? []).map((d) => (
@@ -1297,7 +1436,7 @@ function DocumentsPage() {
             </button>
           </li>
         ))}
-        {(documents.data?.documents ?? []).length === 0 && <li>No documents yet.</li>}
+        {(documents.data?.documents ?? []).length === 0 && <li className="state-empty">No documents yet. Upload one above — it is stored in R2 with a SHA-256 that must match on download.</li>}
       </ul>
     </section>
   );
@@ -1307,7 +1446,7 @@ function ContradictionsPage() {
   const contradictions = useApi<{ contradictions: ContradictionRow[] }>("/api/contradictions");
   return (
     <section data-testid="contradictions-page">
-      <button type="button" onClick={() => contradictions.reload()}>
+      <button type="button" className="btn-ghost" onClick={() => contradictions.reload()}>
         Refresh
       </button>
       <ul data-testid="contradiction-list" className="card-list">
@@ -1321,7 +1460,7 @@ function ContradictionsPage() {
             <ResolveContradictionForm contradiction={c} onDone={() => contradictions.reload()} />
           </li>
         ))}
-        {(contradictions.data?.contradictions ?? []).length === 0 && <li>No contradictions recorded.</li>}
+        {(contradictions.data?.contradictions ?? []).length === 0 && <li className="state-empty">No contradictions recorded. They open automatically when two sourced claims disagree on a value, a period, or a definition.</li>}
       </ul>
     </section>
   );
@@ -1394,7 +1533,7 @@ function Company360Panel({ companyId }: { companyId: string }) {
             class {p.security_class_id} — qty {p.quantity} · basis {p.cost_basis} · <code>{p.status}</code>
           </li>
         ))}
-        {v.positions.length === 0 && <li data-testid="no-positions">No positions.</li>}
+        {v.positions.length === 0 && <li className="state-empty" data-testid="no-positions">No positions. A position row appears when a transaction is executed against an approved receipt.</li>}
       </ul>
     </div>
   );
@@ -1457,7 +1596,7 @@ function IcPacketPanel({ packetId, onChanged }: { packetId: string; onChanged: (
         <label>
           Approval receipt id <input data-testid="ic-receipt" value={receiptId} onChange={(e) => setReceiptId(e.target.value)} />
         </label>
-        <button type="submit" data-testid="ic-approve">
+        <button type="submit" className="btn-strong" data-testid="ic-approve">
           Record APPROVE
         </button>
       </form>
@@ -1470,7 +1609,7 @@ function IcPacketPanel({ packetId, onChanged }: { packetId: string; onChanged: (
           ))}
         </ul>
       )}
-      {message && <p data-testid="ic-message">{message}</p>}
+      {message && <p className="notice" data-testid="ic-message">{message}</p>}
     </div>
   );
 }
@@ -1530,7 +1669,7 @@ function InvestmentPage({ me }: { me: MeResponse }) {
         <label>
           Title <input data-testid="opportunity-title" value={title} onChange={(e) => setTitle(e.target.value)} />
         </label>
-        <button type="submit" data-testid="opportunity-create-submit">
+        <button type="submit" className="btn-strong" data-testid="opportunity-create-submit">
           Create opportunity
         </button>
         {message && <span data-testid="investment-message">{message}</span>}
@@ -1550,7 +1689,7 @@ function InvestmentPage({ me }: { me: MeResponse }) {
             {o.broker_name ? ` · broker ${o.broker_name}` : ""}
           </li>
         ))}
-        {(opportunities.data?.opportunities ?? []).length === 0 && <li data-testid="no-opportunities">No opportunities.</li>}
+        {(opportunities.data?.opportunities ?? []).length === 0 && <li className="state-empty" data-testid="no-opportunities">No opportunities. Create one against a canonical company to start the investment record.</li>}
       </ul>
 
       {selected && (
@@ -1721,7 +1860,7 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
           ))}
         </select>
         <input data-testid="note-body" value={noteBody} onChange={(e) => setNoteBody(e.target.value)} placeholder="meeting note" />
-        <button type="submit" data-testid="note-submit">
+        <button type="submit" className="btn-strong" data-testid="note-submit">
           Add note
         </button>
       </form>
@@ -1736,7 +1875,7 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
         }}
       >
         <input data-testid="commitment-text" value={commitmentText} onChange={(e) => setCommitmentText(e.target.value)} placeholder="commitment made in the meeting" />
-        <button type="submit" data-testid="commitment-submit">
+        <button type="submit" className="btn-strong" data-testid="commitment-submit">
           Record commitment
         </button>
       </form>
@@ -1753,7 +1892,7 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
             )}
           </li>
         ))}
-        {m.commitments.length === 0 && <li data-testid="no-commitments">No commitments.</li>}
+        {m.commitments.length === 0 && <li className="state-empty" data-testid="no-commitments">No commitments.</li>}
       </ul>
 
       <ul data-testid="note-list">
@@ -1771,10 +1910,10 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
             {tr.refusal_reason ? ` — ${tr.refusal_reason}` : ""}
           </li>
         ))}
-        {m.transcript_imports.length === 0 && <li data-testid="no-transcripts">No transcript imports.</li>}
+        {m.transcript_imports.length === 0 && <li className="state-empty" data-testid="no-transcripts">No transcript imports.</li>}
       </ul>
 
-      {message && <p data-testid="meeting-message">{message}</p>}
+      {message && <p className="notice" data-testid="meeting-message">{message}</p>}
     </div>
   );
 }
@@ -1820,7 +1959,7 @@ function MeetingsPage({ me }: { me: MeResponse }) {
             ))}
           </select>
         </label>
-        <button type="submit" data-testid="meeting-create-submit">
+        <button type="submit" className="btn-strong" data-testid="meeting-create-submit">
           Record meeting
         </button>
         {message && <span data-testid="meetings-message">{message}</span>}
@@ -1835,7 +1974,7 @@ function MeetingsPage({ me }: { me: MeResponse }) {
             — <code>{m.meeting_type}</code> <code>{m.status}</code>
           </li>
         ))}
-        {(meetings.data?.meetings ?? []).length === 0 && <li data-testid="no-meetings">No meetings.</li>}
+        {(meetings.data?.meetings ?? []).length === 0 && <li className="state-empty" data-testid="no-meetings">No meetings.</li>}
       </ul>
 
       {selected && <MeetingDetail meetingId={selected} />}
@@ -1916,7 +2055,7 @@ function PortfolioPage({ me }: { me: MeResponse }) {
         <label>
           Metric <input data-testid="metric-key" value={metricKey} onChange={(e) => setMetricKey(e.target.value)} />
         </label>
-        <button type="submit" data-testid="metric-define">
+        <button type="submit" className="btn-strong" data-testid="metric-define">
           Define metric (operator bands)
         </button>
       </form>
@@ -1940,7 +2079,7 @@ function PortfolioPage({ me }: { me: MeResponse }) {
         <label>
           Value <input data-testid="snapshot-value" value={value} onChange={(e) => setValue(e.target.value)} />
         </label>
-        <button type="submit" data-testid="snapshot-submit">
+        <button type="submit" className="btn-strong" data-testid="snapshot-submit">
           Record dated snapshot
         </button>
         <button type="button" data-testid="evaluate-alerts" onClick={() => post(`/api/portfolio/companies/${companyId}/evaluate`, {}, 201, "Evaluation")}>
@@ -1974,7 +2113,7 @@ function PortfolioPage({ me }: { me: MeResponse }) {
             </button>
           </li>
         ))}
-        {(alerts.data?.alerts ?? []).length === 0 && <li data-testid="no-alerts">No alerts.</li>}
+        {(alerts.data?.alerts ?? []).length === 0 && <li className="state-empty" data-testid="no-alerts">No alerts.</li>}
       </ul>
 
       <h4>Support requests</h4>
@@ -1987,7 +2126,7 @@ function PortfolioPage({ me }: { me: MeResponse }) {
             </button>
           </li>
         ))}
-        {(requests.data?.support_requests ?? []).length === 0 && <li data-testid="no-support-requests">No support requests.</li>}
+        {(requests.data?.support_requests ?? []).length === 0 && <li className="state-empty" data-testid="no-support-requests">No support requests.</li>}
       </ul>
 
       {selectedRequest && <SupportRequestDetail requestId={selectedRequest} onChanged={() => setNonce((n) => n + 1)} />}
@@ -2022,7 +2161,7 @@ function SupportRequestDetail({ requestId, onChanged }: { requestId: string; onC
         }}
       >
         <input data-testid="match-target" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="who could help" />
-        <button type="submit" data-testid="match-submit">
+        <button type="submit" className="btn-strong" data-testid="match-submit">
           Propose match
         </button>
       </form>
@@ -2038,7 +2177,7 @@ function SupportRequestDetail({ requestId, onChanged }: { requestId: string; onC
             )}
           </li>
         ))}
-        {(r.matches ?? []).length === 0 && <li data-testid="no-matches">No matches proposed.</li>}
+        {(r.matches ?? []).length === 0 && <li className="state-empty" data-testid="no-matches">No matches proposed.</li>}
       </ul>
       <form
         className="form-row"
@@ -2053,7 +2192,7 @@ function SupportRequestDetail({ requestId, onChanged }: { requestId: string; onC
           );
         }}
       >
-        <button type="submit" data-testid="outcome-submit">
+        <button type="submit" className="btn-strong" data-testid="outcome-submit">
           Record outcome
         </button>
       </form>
@@ -2064,7 +2203,7 @@ function SupportRequestDetail({ requestId, onChanged }: { requestId: string; onC
           </li>
         ))}
       </ul>
-      {message && <p data-testid="support-message">{message}</p>}
+      {message && <p className="notice" data-testid="support-message">{message}</p>}
     </div>
   );
 }
@@ -2169,7 +2308,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
           Network OS says relationship_owner ={" "}
           <input data-testid="fixture-owner" value={owner} onChange={(e) => setOwner(e.target.value)} />
         </label>
-        <button type="submit" data-testid="fixture-pull">
+        <button type="submit" className="btn-strong" data-testid="fixture-pull">
           Pull from fixture
         </button>
         {message && <span data-testid="network-message">{message}</span>}
@@ -2183,7 +2322,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
             {c.failure_reason ? ` — ${c.failure_reason}` : ""}
           </li>
         ))}
-        {(syncState.data?.cursors ?? []).length === 0 && <li data-testid="no-cursors">No sync has run.</li>}
+        {(syncState.data?.cursors ?? []).length === 0 && <li className="state-empty" data-testid="no-cursors">No sync has run.</li>}
       </ul>
 
       <h4>Conflict resolver</h4>
@@ -2202,7 +2341,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
             </div>
           </li>
         ))}
-        {(conflicts.data?.conflicts ?? []).length === 0 && <li data-testid="no-conflicts">No open conflicts.</li>}
+        {(conflicts.data?.conflicts ?? []).length === 0 && <li className="state-empty" data-testid="no-conflicts">No open conflicts.</li>}
       </ul>
     </section>
   );
@@ -2271,7 +2410,7 @@ function LpPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="lp-page">
-      <p data-testid="vdr-state">{artifacts.data?.vdr_state ?? "…"}</p>
+      <p className="notice notice-gate" data-testid="vdr-state">{artifacts.data?.vdr_state ?? "…"}</p>
 
       <h4>LP records (LP_PRIVATE)</h4>
       <form
@@ -2285,7 +2424,7 @@ function LpPage({ me }: { me: MeResponse }) {
         <label>
           Legal name <input data-testid="lp-record-name" value={lpName} onChange={(ev) => setLpName(ev.target.value)} />
         </label>
-        <button type="submit" data-testid="lp-record-submit">
+        <button type="submit" className="btn-strong" data-testid="lp-record-submit">
           Record LP
         </button>
       </form>
@@ -2295,7 +2434,7 @@ function LpPage({ me }: { me: MeResponse }) {
             {r.legal_name} — <code>{r.lp_type}</code> <code>{r.status}</code>
           </li>
         ))}
-        {(records.data?.lp_records ?? []).length === 0 && <li data-testid="no-lp-records">No LP records visible to you.</li>}
+        {(records.data?.lp_records ?? []).length === 0 && <li className="state-empty" data-testid="no-lp-records">No LP records visible to you.</li>}
       </ul>
 
       <h4>LP claims — evidence-backed or unpublishable</h4>
@@ -2311,7 +2450,7 @@ function LpPage({ me }: { me: MeResponse }) {
         <label>
           Claim <input data-testid="lp-claim-text" value={claimText} onChange={(ev) => setClaimText(ev.target.value)} />
         </label>
-        <button type="submit" data-testid="lp-claim-submit">
+        <button type="submit" className="btn-strong" data-testid="lp-claim-submit">
           Draft claim
         </button>
       </form>
@@ -2346,7 +2485,7 @@ function LpPage({ me }: { me: MeResponse }) {
             ))}
           </select>
         </label>
-        <button type="submit" data-testid="lp-evidence-link">
+        <button type="submit" className="btn-strong" data-testid="lp-evidence-link">
           Link evidence
         </button>
       </form>
@@ -2373,7 +2512,7 @@ function LpPage({ me }: { me: MeResponse }) {
           Publish
         </button>
       </div>
-      {message && <p data-testid="lp-message">{message}</p>}
+      {message && <p className="notice" data-testid="lp-message">{message}</p>}
 
       <ul className="card-list" data-testid="lp-claim-list">
         {(claims.data?.lp_claims ?? []).map((c) => (
@@ -2381,7 +2520,7 @@ function LpPage({ me }: { me: MeResponse }) {
             {c.claim_text} — <code data-testid={`lp-claim-status-${c.id}`}>{c.status}</code> · drafted by {c.drafted_by_type}
           </li>
         ))}
-        {(claims.data?.lp_claims ?? []).length === 0 && <li data-testid="no-lp-claims">No LP claims.</li>}
+        {(claims.data?.lp_claims ?? []).length === 0 && <li className="state-empty" data-testid="no-lp-claims">No LP claims. A claim must be drafted, evidenced by a VERIFIED diligence claim, reviewed, and receipted before it can be published.</li>}
       </ul>
 
       <h4>Data room — the room is EXTERNAL; this is the record of what was shared</h4>
@@ -2407,7 +2546,7 @@ function LpPage({ me }: { me: MeResponse }) {
         <label>
           Title <input data-testid="artifact-title" value={artifactTitle} onChange={(ev) => setArtifactTitle(ev.target.value)} />
         </label>
-        <button type="submit" data-testid="artifact-create">
+        <button type="submit" className="btn-strong" data-testid="artifact-create">
           Register artifact (attaches the selected claim)
         </button>
       </form>
@@ -2445,7 +2584,7 @@ function LpPage({ me }: { me: MeResponse }) {
             </div>
           </li>
         ))}
-        {(artifacts.data?.artifacts ?? []).length === 0 && <li data-testid="no-artifacts">No artifacts.</li>}
+        {(artifacts.data?.artifacts ?? []).length === 0 && <li className="state-empty" data-testid="no-artifacts">No artifacts.</li>}
       </ul>
 
       <h4>Access ledger (append-only; revocation is a new record)</h4>
@@ -2461,7 +2600,7 @@ function LpPage({ me }: { me: MeResponse }) {
             )}
           </li>
         ))}
-        {(access.data?.access_records ?? []).length === 0 && <li data-testid="no-access-records">Nothing has been shared.</li>}
+        {(access.data?.access_records ?? []).length === 0 && <li className="state-empty" data-testid="no-access-records">Nothing has been shared.</li>}
       </ul>
     </section>
   );
@@ -2600,7 +2739,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
         <label>
           Name <input name="name" data-testid="scenario-name" defaultValue="" />
         </label>
-        <button type="submit" data-testid="scenario-create">
+        <button type="submit" className="btn-strong" data-testid="scenario-create">
           Open scenario (pins current policy versions)
         </button>
       </form>
@@ -2631,7 +2770,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
                 <code>{a.assumption_key}</code> = {a.assumption_value} — {a.basis}
               </li>
             ))}
-            {detail.data.assumptions.length === 0 && <li data-testid="no-assumptions">No assumptions stated yet.</li>}
+            {detail.data.assumptions.length === 0 && <li className="state-empty" data-testid="no-assumptions">No assumptions stated yet. An allocation scenario cannot run until its assumptions are on the record.</li>}
           </ul>
           <button
             type="button"
@@ -2692,7 +2831,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
         <label>
           Existing cost <input data-testid="option-existing-cost" value={existingCost} onChange={(e) => setExistingCost(e.target.value)} />
         </label>
-        <button type="submit" data-testid="option-create">
+        <button type="submit" className="btn-strong" data-testid="option-create">
           Add option
         </button>
       </form>
@@ -2707,7 +2846,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
       >
         Run cross-sleeve comparison
       </button>
-      {message && <p data-testid="allocation-message">{message}</p>}
+      {message && <p className="notice" data-testid="allocation-message">{message}</p>}
 
       {run.data && (
         <div className="card" data-testid="run-detail">
@@ -2718,7 +2857,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
                 <code>{v.severity}</code> <code>{v.kind}</code> — {v.detail}
               </li>
             ))}
-            {run.data.violations.length === 0 && <li data-testid="no-violations">No constraint violations.</li>}
+            {run.data.violations.length === 0 && <li className="state-empty" data-testid="no-violations">No constraint violations.</li>}
           </ul>
         </div>
       )}
@@ -2755,7 +2894,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
             </div>
           </li>
         ))}
-        {(detail.data?.options ?? []).length === 0 && <li data-testid="no-options">No options in this scenario.</li>}
+        {(detail.data?.options ?? []).length === 0 && <li className="state-empty" data-testid="no-options">No options in this scenario.</li>}
       </ul>
     </section>
   );
@@ -2861,7 +3000,7 @@ function ReportingPage({ me }: { me: MeResponse }) {
         <label>
           Period label <input data-testid="period-label" value={periodLabel} onChange={(e) => setPeriodLabel(e.target.value)} />
         </label>
-        <button type="submit" data-testid="period-create">
+        <button type="submit" className="btn-strong" data-testid="period-create">
           Open period and draft packet
         </button>
       </form>
@@ -2871,6 +3010,12 @@ function ReportingPage({ me }: { me: MeResponse }) {
             {p.label} — <code>{p.status}</code>
           </li>
         ))}
+        {!periods.loading && (periods.data?.periods ?? []).length === 0 && (
+          <li className="state-empty" data-testid="period-list-empty">
+            No reporting periods open. Opening one drafts its packet; the packet then needs a review
+            from each required function before it can be distributed.
+          </li>
+        )}
       </ul>
 
       <label>
@@ -2944,7 +3089,7 @@ function ReportingPage({ me }: { me: MeResponse }) {
           </div>
         </div>
       )}
-      {message && <p data-testid="reporting-message">{message}</p>}
+      {message && <p className="notice" data-testid="reporting-message">{message}</p>}
 
       <h4>Fund-administration reconciliation</h4>
       <p data-testid="reconciliation-source-state">{runs.data?.source_state ?? "…"}</p>
@@ -2989,7 +3134,7 @@ function ReportingPage({ me }: { me: MeResponse }) {
         <label>
           Our NAV <input data-testid="internal-nav" value={internalNav} onChange={(e) => setInternalNav(e.target.value)} />
         </label>
-        <button type="submit" data-testid="reconciliation-run">
+        <button type="submit" className="btn-strong" data-testid="reconciliation-run">
           Import and compare
         </button>
       </form>
@@ -3017,7 +3162,7 @@ function ReportingPage({ me }: { me: MeResponse }) {
             )}
           </li>
         ))}
-        {(exceptions.data?.exceptions ?? []).length === 0 && <li data-testid="no-exceptions">No reconciliation exceptions.</li>}
+        {(exceptions.data?.exceptions ?? []).length === 0 && <li className="state-empty" data-testid="no-exceptions">No reconciliation exceptions.</li>}
       </ul>
     </section>
   );
@@ -3025,51 +3170,186 @@ function ReportingPage({ me }: { me: MeResponse }) {
 
 // ── Shell ──
 
+/**
+ * Status bar (P20, GAP-20): unread exceptions, connection state, and any captures held on this
+ * device. A queued capture is stated as NOT SAVED — the operator is never left thinking the firm
+ * has something it does not.
+ */
+function StatusBar({ onNavigate, refreshNonce }: { onNavigate: (key: string) => void; refreshNonce: number }) {
+  const notifications = useApi<{ unread_count: number; critical_unread: number }>("/api/notifications?unread=1", [refreshNonce]);
+  const [online, setOnline] = useState(isOnline());
+  const [queued, setQueued] = useState(queuedCaptures().length);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const update = () => {
+      setOnline(isOnline());
+      setQueued(queuedCaptures().length);
+    };
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    const timer = window.setInterval(update, 5000);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const unread = notifications.data?.unread_count ?? 0;
+  const critical = notifications.data?.critical_unread ?? 0;
+
+  return (
+    <p className="status-bar" data-testid="status-bar">
+      <button type="button" className="link-button" data-testid="status-notifications" onClick={() => onNavigate("notifications")}>
+        {unread} unread{critical > 0 ? ` (${critical} critical)` : ""}
+      </button>
+      <span className={online ? "badge badge-ok" : "badge badge-bad"} data-testid="status-connection">
+        {online ? "online" : "offline"}
+      </span>
+      {queued > 0 && (
+        <span data-testid="status-queued">
+          <span className="badge badge-gate">{queued} capture(s) held on this device — NOT saved to West Peek OS yet</span>{" "}
+          <button
+            type="button"
+            className="link-button"
+            data-testid="status-flush"
+            onClick={async () => {
+              const result = await flushCaptures();
+              setQueued(result.remaining);
+              setMessage(
+                result.remaining === 0
+                  ? `${result.sent} capture(s) saved.`
+                  : `${result.sent} saved, ${result.remaining} still held: ${result.failures.map((f) => f.reason).join(", ")}`,
+              );
+            }}
+          >
+            Send now
+          </button>
+        </span>
+      )}
+      {message && <span className="muted small">{message}</span>}
+    </p>
+  );
+}
+
 export function App() {
-  const [active, setActive] = useState<string>("today");
+  const [active, setActive] = useState<string>("home");
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [navOpen, setNavOpen] = useState(false);
   const me = useApi<MeResponse>("/api/me");
-  const activeItem = NAV_ITEMS.find((n) => n.key === active) ?? NAV_ITEMS[0];
+  const activeItem = NAV_ITEMS.find((n) => n.key === active) ?? NAV_FALLBACK;
 
   const refresh = useCallback(() => setRefreshNonce((n) => n + 1), []);
   const authed = me.status === 200 && me.data;
 
+  // On the phone sheet, choosing a destination is the whole interaction — close behind it.
+  const navigate = useCallback((key: string) => {
+    setActive(key);
+    setNavOpen(false);
+  }, []);
+
   return (
     <div className="shell">
-      <header className="shell-header">
-        <h1>West Peek OS</h1>
-        <IdentityPanel me={me.data} status={me.status} loading={me.loading} onLogin={me.reload} />
-      </header>
+      <a className="skip-link" href="#wp-surface">
+        Skip to content
+      </a>
+      <div className="shell-topbar">
+        <img className="rail-mark" src="/wp-mark.svg" alt="" width={30} height={30} />
+        <span className="topbar-wordmark">West Peek OS</span>
+        <button
+          type="button"
+          className="nav-toggle"
+          data-testid="nav-toggle"
+          aria-expanded={navOpen}
+          aria-controls="wp-nav"
+          onClick={() => setNavOpen((open) => !open)}
+        >
+          Menu
+        </button>
+      </div>
       <div className="shell-body">
-        <nav className="shell-nav" aria-label="Primary">
-          <ul>
-            {NAV_ITEMS.map((item) => (
-              <li key={item.key}>
-                <button
-                  type="button"
-                  className={item.key === active ? "nav-link nav-link-active" : "nav-link"}
-                  onClick={() => setActive(item.key)}
-                >
-                  {item.label}
-                </button>
-              </li>
+        <nav className="shell-nav" id="wp-nav" aria-label="Primary" data-open={navOpen ? "true" : "false"}>
+          <div className="rail-brand">
+            <img className="rail-mark" src="/wp-mark.svg" alt="" width={30} height={30} />
+            <span>
+              <h1 className="rail-wordmark">West Peek OS</h1>
+              <span className="rail-context">West Peek Ventures</span>
+            </span>
+            <button type="button" className="nav-close" data-testid="nav-close" onClick={() => setNavOpen(false)}>
+              Close
+            </button>
+          </div>
+          <div className="rail-scroll">
+            {NAV_GROUPS.map((group) => (
+              <div key={group.group}>
+                <p className="rail-group">{group.group}</p>
+                <ul>
+                  {group.items.map((item) => (
+                    <li key={item.key}>
+                      <button
+                        type="button"
+                        className={item.key === active ? "nav-link nav-link-active" : "nav-link"}
+                        aria-current={item.key === active ? "page" : undefined}
+                        onClick={() => navigate(item.key)}
+                      >
+                        {item.label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
+          <p className="rail-foot">
+            {authed ? (
+              <>
+                <strong>{me.data!.fullName}</strong>
+                <br />
+                {me.data!.roles.join(", ") || "no roles"}
+              </>
+            ) : (
+              "Not signed in"
+            )}
+          </p>
         </nav>
         <main className="shell-main">
-          <h2>{activeItem.label}</h2>
+          <header className="shell-header">
+            <p className="surface-eyebrow">{activeItem.group}</p>
+            <h2>{activeItem.label}</h2>
+            <div className="surface-identity">
+              <IdentityPanel me={me.data} status={me.status} loading={me.loading} onLogin={me.reload} />
+              {authed && <StatusBar onNavigate={navigate} refreshNonce={refreshNonce} />}
+            </div>
+          </header>
+          <div className="surface-body" id="wp-surface">
           {!authed && !me.loading && (
-            <p data-testid="auth-required">Sign in to use the governed work surface.</p>
+            <>
+              <p className="notice notice-gate" data-testid="auth-required">
+                Sign in to use the governed work surface.
+              </p>
+              <DevLoginCard onLogin={me.reload} />
+            </>
           )}
+          {authed && active === "home" && <HomePage me={me.data!} onNavigate={setActive} />}
+          {authed && active === "intelligence" && <IntelligencePage me={me.data!} />}
+          {authed && active === "employees" && <EmployeesPage me={me.data!} />}
+          {authed && active === "machines" && <MachinesPage me={me.data!} />}
+          {authed && active === "jobs" && <JobsPage me={me.data!} />}
+          {authed && active === "notifications" && <NotificationsPage me={me.data!} />}
           {authed && active === "today" && <TodayPage me={me.data!} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} />}
+          {authed && active === "intent" && <IntentPage me={me.data!} />}
           {authed && active === "work-cards" && <WorkCardsPage me={me.data!} onChanged={refresh} />}
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && <CompaniesPage me={me.data!} />}
+          {authed && active === "research" && <ResearchPage me={me.data!} />}
           {authed && active === "investment" && <InvestmentPage me={me.data!} />}
           {authed && active === "meetings" && <MeetingsPage me={me.data!} />}
           {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
+          {authed && active === "cockpit" && <CockpitPage me={me.data!} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}
+          {authed && active === "integrations" && <IntegrationsPage me={me.data!} />}
           {authed && active === "lp" && <LpPage me={me.data!} />}
           {authed && active === "allocation" && <AllocationPage me={me.data!} />}
           {authed && active === "reporting" && <ReportingPage me={me.data!} />}
@@ -3078,7 +3358,9 @@ export function App() {
           {authed && active === "activity" && <ActivityPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "governance" && <GovernancePage me={me.data!} />}
           {authed && active === "ai" && <AiPage me={me.data!} />}
+          {authed && active === "ai-ops" && <AiOpsPage me={me.data!} />}
           {authed && active === "diagnostics" && <DiagnosticsPage />}
+          </div>
         </main>
       </div>
     </div>

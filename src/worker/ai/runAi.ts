@@ -3,9 +3,18 @@ import { appendEvent } from "../events";
 import type { Actor } from "../services/authorize";
 import type { PrivacyLabel } from "../../shared/privacy";
 import { createMockLocalAdapter, MOCK_LOCAL_MODEL } from "./providers/mockLocal";
-import { createHttpExternalAdapter } from "./providers/httpExternal";
 import type { ProviderAdapter } from "./providers/types";
 import { scrubInputs } from "./scrub";
+import {
+  adapterFor,
+  checkScopedBudgets,
+  latestRoutingPolicy,
+  orderByPolicy,
+  raiseCostAlert,
+  recordAttribution,
+  recordRouting,
+  type RoutingCandidate,
+} from "./routing";
 
 /**
  * runAi — THE governed AI boundary (P4). No other module may call a provider
@@ -86,6 +95,21 @@ export interface RunAiBudgetContext {
   providerKey?: string;
 }
 
+/**
+ * P16 routing/attribution context. All optional: a call that supplies none of it behaves
+ * exactly as it did at P4 — cheapest priced capable model, one attempt, no fallback.
+ */
+export interface RunAiRoutingContext {
+  /** Names a routing policy (`routing_policy.task_class`). Absent → legacy selection. */
+  taskClass?: string;
+  /** Machine this work belongs to — drives machine model policy and machine budgets. */
+  machineId?: number;
+  /** Work card this run serves, for cost attribution. */
+  workCardId?: string;
+  /** Spend category for category budgets and the cost centre's breakdown. */
+  category?: "PROACTIVE" | "RESEARCH" | "LEGAL" | "COMPLIANCE" | "OPERATIONS" | "INTELLIGENCE" | "OTHER";
+}
+
 export interface RunAiInput {
   purpose: string;
   actor: Actor;
@@ -95,6 +119,8 @@ export interface RunAiInput {
   budgetContext?: RunAiBudgetContext;
   /** AI employee id when an AI employee is the actor (later phases). */
   aiEmployeeId?: string;
+  /** P16 routing/attribution. Optional; absence preserves P4 behaviour exactly. */
+  routing?: RunAiRoutingContext;
 }
 
 export interface RunAiDeps {
@@ -328,6 +354,8 @@ interface RunRecordInput {
   privacyMode: PrivacyMode;
   costMode: CostMode;
   providerId: string | null;
+  /** Provider key for the routing record; the run row itself stores provider_id. */
+  providerKey?: string | null;
   model: string | null;
   status: AIRunStatus;
   estimate: CostEstimate;
@@ -382,14 +410,36 @@ async function recordBlockedRun(env: Env, rec: RunRecordInput): Promise<AIRunRow
   return row;
 }
 
-/** Execute an adapter for a run already decided as executable; records the outcome. */
+/**
+ * Execute one or more candidate providers for a run already decided as executable.
+ *
+ * One `ai_run` row is written regardless of how many candidates are tried: a run is one unit of
+ * governed work, and the attempts are recorded on `ai_run_routing` instead of multiplying runs.
+ * Candidates after the first are only supplied when a routing policy explicitly allows fallback.
+ */
 async function executeRun(
   env: Env,
   rec: RunRecordInput,
   adapter: ProviderAdapter,
   quarantine: boolean,
+  fallbacks: Array<{ candidate: RoutingCandidate; adapter: ProviderAdapter }> = [],
+  attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
 ): Promise<AIRunRow> {
   const running = await insertRun(env, { ...rec, status: "RUNNING" });
+  return executeAttempt(env, rec, running.id, adapter, quarantine, fallbacks, attempts);
+}
+
+/** One provider attempt against an ai_run row that already exists. */
+async function executeAttempt(
+  env: Env,
+  rec: RunRecordInput,
+  runId: string,
+  adapter: ProviderAdapter,
+  quarantine: boolean,
+  fallbacks: Array<{ candidate: RoutingCandidate; adapter: ProviderAdapter }> = [],
+  attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
+): Promise<AIRunRow> {
+  const running = { id: runId };
   try {
     const response = await adapter.complete({
       purpose: rec.input.purpose,
@@ -411,6 +461,7 @@ async function executeRun(
     )
       .bind(running.id, JSON.stringify(actualUsage), response.text, quarantine ? 1 : 0, new Date().toISOString())
       .run();
+    attempts.push({ provider_key: rec.providerKey ?? "local", model: response.model, outcome: "COMPLETED" });
     await appendEvent(env, {
       eventType: "ai_run.completed",
       actorType: actorTypeForEvent(rec.input.actor),
@@ -430,6 +481,27 @@ async function executeRun(
   } catch (err) {
     // Manual fallback: provider failure is visible, never silently discarded (§3.5).
     const reason = err instanceof Error ? err.message : String(err);
+    attempts.push({ provider_key: rec.providerKey ?? "unknown", model: rec.model ?? "unknown", outcome: "FAILED", detail: reason });
+
+    // Policy-authorized fallback: retry the NEXT candidate against the same run row, so one unit
+    // of governed work stays one run. The failed attempt is preserved in the routing record —
+    // a fallback never hides a provider failure.
+    const next = fallbacks[0];
+    if (next) {
+      await env.WP_OS_DB.prepare("UPDATE ai_run SET provider_id = ?2, model = ?3 WHERE id = ?1")
+        .bind(running.id, next.candidate.providerId, next.candidate.model)
+        .run();
+      return executeAttempt(
+        env,
+        { ...rec, providerId: next.candidate.providerId, providerKey: next.candidate.providerKey, model: next.candidate.model },
+        running.id,
+        next.adapter,
+        quarantine,
+        fallbacks.slice(1),
+        attempts,
+      );
+    }
+
     await env.WP_OS_DB.prepare(
       "UPDATE ai_run SET status = 'BLOCKED_DEFERRED', failure_reason = ?2, completed_at = ?3 WHERE id = ?1",
     )
@@ -492,8 +564,41 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     runId,
   };
 
-  const blocked = (status: AIRunStatus, reason: string, estimate: CostEstimate = baseEstimate, providerId: string | null = null, model: string | null = null) =>
-    recordBlockedRun(env, { ...baseRec, providerId, model, status, estimate, failureReason: reason });
+  const attribution = {
+    machineId: input.routing?.machineId ?? null,
+    workCardId: input.routing?.workCardId ?? null,
+    category: input.routing?.category ?? "OTHER",
+  };
+
+  const blocked = async (
+    status: AIRunStatus,
+    reason: string,
+    estimate: CostEstimate = baseEstimate,
+    providerId: string | null = null,
+    model: string | null = null,
+  ) => {
+    const row = await recordBlockedRun(env, { ...baseRec, providerId, model, status, estimate, failureReason: reason });
+    // Attribution is recorded for BLOCKED runs too: a run that was refused still tells the cost
+    // centre which machine/category is generating refused work.
+    await recordAttribution(env, row.id, attribution);
+    return row;
+  };
+
+  // 0. Machine pause (P17): a paused machine cannot spend AI budget. Checked before anything
+  //    else so a paused machine costs nothing, not even an estimate.
+  if (attribution.machineId !== null) {
+    const machineState = await env.WP_OS_DB.prepare("SELECT status, pause_reason FROM machine_state WHERE machine_id = ?1")
+      .bind(attribution.machineId)
+      .first<{ status: string; pause_reason: string | null }>();
+    if (machineState?.status === "PAUSED") {
+      return {
+        run: await blocked(
+          "PREFLIGHT_BLOCKED",
+          `machine_paused:${attribution.machineId}:${machineState.pause_reason ?? "no reason recorded"}`,
+        ),
+      };
+    }
+  }
 
   // 1. Cost-mode gate: CRITICAL_ONLY runs only critical/risk/deadline/LP/IC/deal/
   //    compliance purposes; everything else is deferred, not discarded.
@@ -511,12 +616,25 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   if (policy.privacy_mode === "LOCKDOWN" || policy.privacy_mode === "LOCAL") {
     // Local/manual path: the deterministic local adapter always works offline.
     const adapter = createMockLocalAdapter();
+    const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [];
     const run = await executeRun(
       env,
-      { ...baseRec, providerId: null, model: MOCK_LOCAL_MODEL, status: "RUNNING", estimate: baseEstimate },
+      { ...baseRec, providerId: null, providerKey: "local", model: MOCK_LOCAL_MODEL, status: "RUNNING", estimate: baseEstimate },
       adapter,
       false,
+      [],
+      attempts,
     );
+    await recordAttribution(env, run.id, attribution);
+    await recordRouting(env, {
+      runId: run.id,
+      taskClass: input.routing?.taskClass,
+      selectedProviderKey: "local",
+      selectedModel: MOCK_LOCAL_MODEL,
+      attempts,
+      fallbackUsed: false,
+      explanation: `privacy mode ${policy.privacy_mode}: no external provider may be used, so the deterministic local adapter ran. No data left this system.`,
+    });
     return { run };
   }
 
@@ -579,15 +697,72 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   const estimateFor = (option: ModelOption): number =>
     (expectedInputTokens * option.pricing.input_per_mtok_usd + expectedOutputTokens * option.pricing.output_per_mtok_usd) / 1_000_000;
 
-  let selected: ModelOption;
-  const preferred = input.budgetContext?.preferredModel;
-  if (effectiveCostMode !== "CHEAPO" && preferred) {
-    selected = options.find((o) => o.pricing.model === preferred) ?? options.reduce((a, b) => (estimateFor(a) <= estimateFor(b) ? a : b));
+  // ── P16 routing ──
+  // Precedence, most specific first: machine model policy → task routing policy →
+  // explicit preferred model → cheapest adequate. Every step is recorded in the
+  // explanation, so "why this model?" is answerable from stored fact.
+  const routingCandidates: RoutingCandidate[] = options.map((o) => ({
+    providerId: o.provider.id,
+    providerKey: o.provider.provider_key,
+    model: o.pricing.model,
+    estimatedCostUsd: estimateFor(o),
+    baseUrl: o.provider.base_url,
+  }));
+
+  const machinePolicy = input.routing?.machineId
+    ? await env.WP_OS_DB.prepare("SELECT * FROM machine_model_policy WHERE machine_id = ?1")
+        .bind(input.routing.machineId)
+        .first<{ preferred_provider_key: string | null; preferred_model: string | null }>()
+    : null;
+  const routePolicy = await latestRoutingPolicy(env, input.routing?.taskClass);
+
+  let ordered: RoutingCandidate[] = [];
+  let explanation: string;
+  if (machinePolicy?.preferred_provider_key && machinePolicy.preferred_model) {
+    const pinned = routingCandidates.find(
+      (c) => c.providerKey === machinePolicy.preferred_provider_key && c.model === machinePolicy.preferred_model,
+    );
+    if (pinned) {
+      ordered = [pinned];
+      explanation = `machine ${input.routing!.machineId} pins ${pinned.providerKey}/${pinned.model}`;
+    } else {
+      ordered = [];
+      explanation = `machine ${input.routing!.machineId} pins ${machinePolicy.preferred_provider_key}/${machinePolicy.preferred_model}, which is not available (disabled, egress-denied, or unpriced)`;
+    }
+  } else if (routePolicy) {
+    ordered = orderByPolicy(routePolicy, routingCandidates);
+    explanation =
+      ordered.length > 0
+        ? `routing policy '${routePolicy.task_class}' v${routePolicy.version_no}: ${ordered.map((c) => `${c.providerKey}/${c.model}`).join(" → ")}${routePolicy.allow_fallback ? " (fallback allowed)" : " (no fallback)"}`
+        : `routing policy '${routePolicy.task_class}' v${routePolicy.version_no} names no available candidate`;
   } else {
-    // CHEAPO (and default): cheapest adequate model — critical work preserved by
-    // the capability filter, cost minimized otherwise.
-    selected = options.reduce((a, b) => (estimateFor(a) <= estimateFor(b) ? a : b));
+    const preferred = input.budgetContext?.preferredModel;
+    let head: RoutingCandidate;
+    if (effectiveCostMode !== "CHEAPO" && preferred) {
+      head =
+        routingCandidates.find((c) => c.model === preferred) ??
+        routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+      explanation =
+        head.model === preferred
+          ? `no routing policy for this task; caller preferred ${preferred}`
+          : `no routing policy for this task; preferred model ${preferred} unavailable, fell to cheapest adequate`;
+    } else {
+      head = routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+      explanation =
+        effectiveCostMode === "CHEAPO"
+          ? "CHEAPO cost mode: cheapest adequate priced model"
+          : "no routing policy for this task; cheapest adequate priced model";
+    }
+    // No policy → no fallback. Behaviour is exactly P4's.
+    ordered = [head];
   }
+
+  if (ordered.length === 0) {
+    return { run: await blocked("PREFLIGHT_BLOCKED", `routing_no_candidate:${explanation}`) };
+  }
+
+  const head = ordered[0]!;
+  const selected = options.find((o) => o.provider.id === head.providerId && o.pricing.model === head.model)!;
 
   const estimate: CostEstimate = {
     ...baseEstimate,
@@ -626,18 +801,76 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     };
   }
 
-  // 8. External call through the generic HTTPS adapter (fixture/stub in tests;
-  //    no live credentials exist — UNPROVEN, CREDENTIAL GATE). Output quarantined.
-  const adapter = createHttpExternalAdapter({
-    baseUrl: selected.provider.base_url ?? "",
-    model: selected.pricing.model,
-    fetchImpl: deps.fetchImpl,
-  });
+  // 7b. Scoped budgets (P16): employee / machine / provider / model / category ceilings on top
+  //     of the firmwide caps. A run must satisfy EVERY scope it falls inside; the first
+  //     violation blocks and is named exactly.
+  const scoped = await checkScopedBudgets(
+    env,
+    {
+      employeeId: input.aiEmployeeId ?? null,
+      machineId: attribution.machineId,
+      providerKey: selected.provider.provider_key,
+      model: selected.pricing.model,
+      category: attribution.category,
+    },
+    estimate.estimated_cost_usd,
+    firmScope,
+    now,
+  );
+  if (!scoped.ok && scoped.violation) {
+    const v = scoped.violation;
+    await raiseCostAlert(env, v.scope, v.would_be, "BREACH", now);
+    return {
+      run: await blocked(
+        "BUDGET_BLOCKED",
+        `scoped_cap_exceeded:${v.scope.scope_type}:${v.scope.scope_id}:${v.scope.period}:${v.would_be.toFixed(6)}>${v.scope.cap_usd}`,
+        estimate,
+        selected.provider.id,
+        selected.pricing.model,
+      ),
+    };
+  }
+  for (const warn of scoped.warnings) {
+    await raiseCostAlert(env, warn.scope, warn.would_be, "WARNING", now);
+  }
+
+  // 8. External call through the provider's adapter (OpenRouter, Fireworks, or the generic
+  //    HTTPS shape). No live credentials exist in any current environment, so a real call
+  //    fails closed with `credential_missing:<provider>` — UNPROVEN, CREDENTIAL GATE.
+  //    Output is quarantined until a human accepts it.
+  const { adapter } = adapterFor(env, head, deps.fetchImpl);
+  const allowFallback = routePolicy?.allow_fallback === 1;
+  const fallbacks = allowFallback
+    ? ordered.slice(1).map((c) => ({ candidate: c, adapter: adapterFor(env, c, deps.fetchImpl).adapter }))
+    : [];
+  const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [];
+
   const run = await executeRun(
     env,
-    { ...baseRec, providerId: selected.provider.id, model: selected.pricing.model, status: "RUNNING", estimate },
+    {
+      ...baseRec,
+      providerId: selected.provider.id,
+      providerKey: selected.provider.provider_key,
+      model: selected.pricing.model,
+      status: "RUNNING",
+      estimate,
+    },
     adapter,
     true,
+    fallbacks,
+    attempts,
   );
+
+  await recordAttribution(env, run.id, attribution);
+  await recordRouting(env, {
+    runId: run.id,
+    taskClass: input.routing?.taskClass,
+    policyId: routePolicy?.id ?? null,
+    selectedProviderKey: attempts.find((a) => a.outcome === "COMPLETED")?.provider_key ?? selected.provider.provider_key,
+    selectedModel: run.model,
+    attempts,
+    fallbackUsed: attempts.filter((a) => a.outcome === "FAILED").length > 0 && run.status === "COMPLETED",
+    explanation,
+  });
   return { run };
 }

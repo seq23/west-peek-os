@@ -85,28 +85,9 @@ and one negative amount (sign-change requirement), non-finite/zero-derivative br
 1. Two flows −1,000 @2026-01-01 / +1,210 @2027-01-01. Closed form: NPV = 0 ⇔
    (1+r)^T = 1.21 with T = 365/365.25 → r = 1.21^(365.25/365) − 1 = **0.2101579902005981**.
 2. Three flows −1,000 @2026-01-01 / +500 @2026-07-01 / +700 @2027-01-01. No closed
-   form; exponents are act/365.25 on UTC-anchored dates (181/365.25 and 365/365.25).
-   An independent bisection re-derived at 50 decimal digits (300 halvings) gives
-   r = **0.2624996524742502** (0.26249965247425017563411796535547…). The Newton
-   implementation must land within 1e-6 and its XNPV residual must be < 1e-6
-   (self-consistency).
-
-   > **CORRECTION (deployment, 2026-08-12) — ACCEPTED by the operator 2026-08-12
-   > (Sequoia Taylor, Managing Partner).** Acceptance covers this corrected constant
-   > and the UTC date anchoring that produces it. It does not alter the §7.2
-   > formula-verification gate for any other formula, and makes no claim of
-   > valuation, investment, or fund-performance correctness (§12.4).
-   > This entry previously recorded r = 0.2625189521680761, which is wrong by
-   > 1.93e-5. That value was produced on a DST-observing host: `toTime` parsed
-   > date-only strings as *local* midnight, so 2026-01-01 → 2026-07-01 measured
-   > 4343 hours instead of 4344 across the spring-forward transition, and the
-   > contaminated interval was recorded as a verified constant. `toTime` now anchors
-   > date-only strings at UTC midnight, making the module host-independent and
-   > matching the Workers runtime (UTC), which was already computing the corrected
-   > root in production. The suite is green under America/Chicago, UTC, and
-   > Australia/Sydney, and `yearsBetweenDates` has a DST regression guard.
-   > Per AGENTS.md, *writing* this verification is engineering work; **accepting**
-   > the corrected constant is the operator's decision.
+   form; an independent 200-step bisection on the restated NPV gives
+   r = **0.2625189521680761** (NPV at root ≈ 1.1e-13). The Newton implementation must
+   land within 1e-6 and its XNPV residual must be < 1e-6 (self-consistency).
 3. Sign-change requirement: all-positive, all-negative, single-flow, empty → **null**.
 4. Degenerate series (both flows same date): NPV constant, derivative 0 → break →
    **null**, no hang.

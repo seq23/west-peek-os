@@ -15,8 +15,18 @@
 ## preview / production (UNPROVEN — credential + approval gates)
 
 - Neither environment has been deployed, configured, or exercised. Remote deployment
-  is a named human approval gate; `wrangler.toml` ships placeholder `database_id` /
-  KV `id` (ADR-007), and real identifiers are operator-supplied configuration.
+  is a named human approval gate.
+- `wrangler.toml` now declares an explicit `[env.production]` profile
+  (`wrangler deploy --env production`) that sets `WP_OS_ENV = "production"` and restates
+  every binding, because named environments do not inherit bindings or vars. The
+  top-level profile remains the LOCAL one and keeps its ADR-007 placeholder
+  `database_id` / KV `id`; the real, non-secret identifiers appear only under
+  `[env.production]`.
+- **Declaring that profile is not deploying it.** No deploy, no Cloudflare Access policy,
+  and no remote migration apply has been performed. What the production profile buys is
+  that a deployment can no longer silently ship the local profile — it cannot be selected
+  by accident, and `WP_OS_ENV` can no longer arrive as `local` in a deployed Worker.
+- `preview` has no profile of its own and is still entirely unconfigured.
 - Identity in these environments is Cloudflare Access (or equivalent private ingress):
   the Access policy — MFA, device posture, allowed users — is CONFIGURATION owned by
   the operator, not application code. The worker reads the

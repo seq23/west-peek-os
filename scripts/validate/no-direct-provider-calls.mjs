@@ -27,6 +27,14 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SRC_DIR = path.join(ROOT, "src");
 const PROVIDERS_PREFIX = "src/worker/ai/providers/";
 
+/**
+ * Provider SDK import. A PACKAGE import whose specifier names a vendor is a breach; an import
+ * of one of OUR OWN adapter modules under `ai/providers/` is the sanctioned pattern and is not
+ * (P16: `ai/routing.ts` imports the OpenRouter and Fireworks adapter factories by design —
+ * that is precisely how the boundary is supposed to be crossed). Relative specifiers pointing
+ * into `providers/` are therefore excluded before the vendor-name test.
+ */
+const OWN_ADAPTER_IMPORT = /(?:from|require\()\s*["']\.{1,2}\/(?:[^"']*\/)?providers\/[^"']*["']/;
 const SDK_IMPORT = /(?:from|require\()\s*["'][^"']*(openai|anthropic|generative-ai|perplexity|openrouter)[^"']*["']/i;
 const MODEL_HOSTNAMES = /(api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.perplexity\.ai|openrouter\.ai)/;
 const BEARER = /bearer/i;
@@ -53,7 +61,11 @@ export function checkSources(files) {
 
   for (const [rel, source] of Object.entries(files)) {
     if (rel.startsWith(PROVIDERS_PREFIX)) continue; // adapters are the allowed exception
-    if (SDK_IMPORT.test(source)) {
+    // Strip imports of our own adapter modules before testing for vendor SDK imports, so
+    // `import { createOpenRouterAdapter } from "./providers/openRouter"` is not mistaken for
+    // `import OpenAI from "openai"`. Everything else in the file is still scanned.
+    const withoutOwnAdapters = source.replace(new RegExp(OWN_ADAPTER_IMPORT.source, "g"), "");
+    if (SDK_IMPORT.test(withoutOwnAdapters)) {
       violations.push(`${rel}: provider SDK import outside src/worker/ai/providers/ (run_ai boundary breach)`);
     }
     if (MODEL_HOSTNAMES.test(source)) {
@@ -81,6 +93,8 @@ function selfTest() {
     "src/worker/services/aiRuns.ts": 'import { runAi } from "../ai/runAi";\nawait runAi(env, input);',
     "src/worker/ai/providers/httpExternal.ts":
       'await fetch(`${baseUrl}/complete`, { headers: { authorization: `Bearer ${apiKey}` } });\n// api.openai.com is fine HERE',
+    // P16: importing our OWN adapter factory is the sanctioned way to reach a vendor.
+    "src/worker/ai/routing.ts": 'import { createOpenRouterAdapter } from "./providers/openRouter";\nconst a = createOpenRouterAdapter(opts);',
   };
   const failures = [];
   if (checkSources(clean).length !== 0) failures.push("clean fixture was flagged (providers dir must be the allowed exception)");
@@ -102,21 +116,30 @@ function selfTest() {
       ...clean,
       "src/client/sneaky.tsx": 'await fetch(url, { headers: { authorization: "Bearer " + key } });',
     },
+    // The P16 exemption must not become a hiding place: a real vendor SDK import in the same
+    // file as a legitimate adapter import is still a breach.
+    "real SDK import alongside a legitimate adapter import": {
+      ...clean,
+      "src/worker/ai/routing.ts":
+        'import { createOpenRouterAdapter } from "./providers/openRouter";\nimport OpenAI from "openai";',
+    },
   };
   for (const [name, files] of Object.entries(cases)) {
     if (checkSources(files).length === 0) failures.push(`violating fixture NOT caught: ${name}`);
   }
-  return failures;
+  return { failures, caseCount: Object.keys(cases).length };
 }
 
 if (process.argv.includes("--self-test")) {
-  const failures = selfTest();
+  const { failures, caseCount } = selfTest();
   if (failures.length > 0) {
     console.error("SELF-TEST FAILED:");
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log("SELF-TEST PASSED: clean fixture passes (providers dir is the only exception); all 4 violating fixtures are caught.");
+  console.log(
+    `SELF-TEST PASSED: clean fixture passes (providers dir is the only exception); all ${caseCount} violating fixtures are caught.`,
+  );
   process.exit(0);
 }
 

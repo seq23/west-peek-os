@@ -4,6 +4,7 @@ import type { FirmUserIdentity } from "../auth";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
+import { isMachinePaused } from "./machines";
 import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy";
 import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityClause } from "./authorize";
 import { createWorkCardInternal } from "./workCards";
@@ -146,6 +147,16 @@ export async function handleRouteCapture(ctx: RouteContext): Promise<Response> {
     .bind(input.machine_id)
     .first<{ id: number; domain_id: string; name: string }>();
   if (!machine) return json({ error: "invalid_input", detail: "unknown machine_id" }, { status: 400 });
+
+  // P17: a paused machine may not be given new work. Enforced here, in the service, so it holds
+  // for any caller — not only for a UI that chose to grey the option out.
+  const paused = await isMachinePaused(env, machine.id);
+  if (paused.paused) {
+    return json(
+      { error: "machine_paused", detail: `machine ${machine.id} (${machine.name}) is PAUSED: ${paused.reason ?? "no reason recorded"}` },
+      { status: 409 },
+    );
+  }
 
   await env.WP_OS_DB.prepare("UPDATE capture SET status = 'ROUTED', routed_machine_id = ?2 WHERE id = ?1")
     .bind(capture.id, machine.id)

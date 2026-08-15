@@ -1,18 +1,19 @@
 # West Peek OS — Cloudflare Worker configuration.
 #
-# Top level = the LOCAL development/validation profile. `wrangler dev`, `npm run e2e`,
-# and `npm run migrate:local` run fully offline against miniflare and keep
-# WP_OS_ENV = "local", which is what enables the `x-wpos-dev-user` dev identity header
-# (src/worker/auth.ts). That profile must never be what gets deployed.
+# Top level = the LOCAL development/validation profile. `wrangler dev`, `npm run e2e`, and
+# `npm run migrate:local` run fully offline against miniflare and keep WP_OS_ENV = "local",
+# which is what enables the `x-wpos-dev-user` dev identity header (src/worker/auth.ts).
+# That profile must never be what gets deployed. Its remote identifiers stay ADR-007
+# placeholders on purpose — local dev and local validation never need them.
 #
 # Remote deployment targets the explicit `[env.production]` profile below
 # (`wrangler deploy --env production`), where WP_OS_ENV = "production" and identity is
 # `Cf-Access-Authenticated-User-Email` only. See docs/ENVIRONMENTS.md.
 #
-# Resource identifiers below are REAL provisioned Cloudflare resources (the ADR-007
-# placeholders are retired now that remote deployment is operator-gated). They are
-# non-secret. No secret value appears in this file — secrets live only in the
-# encrypted vault and in Worker secret storage.
+# Declaring that profile is NOT a deployment and NOT a proof of one: remote deployment,
+# Cloudflare Access configuration, and remote migration apply all remain human-gated and
+# UNPROVEN. No secret value appears in this file — resource ids are non-secret; secrets
+# live only in the encrypted vault and in Worker secret storage.
 name = "west-peek-os"
 main = "src/worker/index.ts"
 compatibility_date = "2025-10-01"
@@ -24,11 +25,13 @@ directory = "./dist/client"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
-# D1 — relational operational truth.
+# D1 — relational operational truth. database_id below is a placeholder:
+# local `wrangler dev` / migrations work without a real id; remote use requires
+# operator-supplied Cloudflare account configuration (UNPROVEN — CREDENTIAL GATE).
 [[d1_databases]]
 binding = "WP_OS_DB"
 database_name = "west-peek-os-db"
-database_id = "1d7c242b-fddc-41f1-843c-03dd2db6fbef"
+database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
 # R2 — governed binary documents/artifacts only. D1 holds metadata/provenance.
@@ -39,15 +42,32 @@ bucket_name = "west-peek-os-documents"
 # KV — ephemeral/config/cache ONLY. Never institutional truth.
 [[kv_namespaces]]
 binding = "WP_OS_KV"
-id = "bf0750e8e9a648758a5de978088c97da"
+id = "00000000000000000000000000000000"
 
 [vars]
 # local | preview | production
 WP_OS_ENV = "local"
 
+# Cron Trigger — the ONLY scheduling primitive this system uses (ADR-017).
+# It calls the Worker's scheduled() handler, which runs due jobs from D1. Queues and Durable
+# Objects are deliberately not used. A trigger cannot fire in local `wrangler dev`, so the same
+# code path is exercised locally through POST /api/jobs/tick and directly in tests.
+[triggers]
+crons = ["*/15 * * * *"]
+
 # ---------------------------------------------------------------------------
-# production — the deployed profile. Bindings are NOT inherited by a named
-# environment, so every binding is restated here deliberately and explicitly.
+# production — the deployed profile (`wrangler deploy --env production`).
+#
+# Wrangler does NOT inherit bindings or vars into a named environment, so assets,
+# D1, R2, KV and vars are each restated here deliberately and explicitly. `main`,
+# `compatibility_date` and `[triggers]` ARE inherited from the top level, so the
+# entrypoint, compatibility date and the ADR-017 cron are identical to local.
+#
+# `name` is restated because a named environment would otherwise deploy to
+# "west-peek-os-production"; the proven existing Worker is "west-peek-os".
+#
+# The identifiers below are REAL provisioned Cloudflare resources. They are
+# non-secret. Declaring them here does not deploy, migrate, or configure anything.
 # ---------------------------------------------------------------------------
 [env.production]
 name = "west-peek-os"
@@ -72,7 +92,8 @@ binding = "WP_OS_KV"
 id = "bf0750e8e9a648758a5de978088c97da"
 
 [env.production.vars]
-# Not "local": the dev identity header is refused outside local (src/worker/auth.ts).
+# Not "local": the dev identity header `x-wpos-dev-user` is refused outside local,
+# and identity comes from `Cf-Access-Authenticated-User-Email` (src/worker/auth.ts).
 WP_OS_ENV = "production"
 
 [env.production.observability]

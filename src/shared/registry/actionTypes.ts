@@ -122,6 +122,83 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "reporting_review.record", name: "Record a reporting review", description: "Record a required finance/compliance/MP review decision on a packet.", isExternalEffect: false },
   { key: "reconciliation_run.import", name: "Import administrator records for reconciliation", description: "Import an administrator/accounting export and compare it against internal records (read-only import).", isExternalEffect: false },
   { key: "reconciliation_exception.resolve", name: "Resolve a reconciliation exception", description: "Record a human disposition of a discrepancy (never an overwrite of the administrator record).", isExternalEffect: false },
+  // P14 — MP command center + daily intelligence engine. Intelligence is never evidence
+  // by itself: promotion into a diligence claim still runs the P5 path.
+  { key: "intelligence_source.register", name: "Register intelligence source", description: "Register a daily-intelligence source with its kind, data class, and credential requirement.", isExternalEffect: false },
+  { key: "intelligence_source.update", name: "Update intelligence source", description: "Enable, disable, or re-describe a registered intelligence source.", isExternalEffect: false },
+  { key: "watchlist.manage", name: "Manage watchlist", description: "Add, deactivate, or reactivate a personal or firm watchlist entry.", isExternalEffect: false },
+  { key: "mp_home_preference.set", name: "Set MP home + briefing preferences", description: "Record a new version of a user's home module layout and briefing preferences.", isExternalEffect: false },
+  { key: "intelligence_run.execute", name: "Run the daily intelligence engine", description: "Acquire, dedupe, score, and archive intelligence items through the governed engine.", isExternalEffect: false },
+  { key: "intelligence_item.archive", name: "Archive intelligence item", description: "Remove an intelligence item from active briefings (the record is preserved).", isExternalEffect: false },
+  { key: "intelligence_item.synthesize", name: "Synthesize intelligence item", description: "Run the governed AI boundary over one item to draft why-it-matters (quarantine rules apply).", isExternalEffect: false },
+  { key: "intelligence_feedback.record", name: "Record intelligence feedback", description: "Record an operator relevance signal on an intelligence item.", isExternalEffect: false },
+  { key: "personal_intelligence.configure", name: "Configure personal intelligence", description: "Configure the private, non-institutional personal-intelligence layer for the acting user only.", isExternalEffect: false },
+  { key: "personal_intelligence.record", name: "Record personal intelligence entry", description: "Record a private personal-intelligence entry for the acting user only.", isExternalEffect: false },
+  // P15 — employee lounge / digital office / performance. Raising an employee to ACTIVE stays on
+  // the reserved ai_employee.activate receipt path; only the LOWERING moves live here.
+  { key: "ai_employee.profile.update", name: "Update AI employee profile", description: "Set an employee's department, manager, avatar, or brief (human only).", isExternalEffect: false },
+  { key: "ai_employee.assign_machine", name: "Assign machine to AI employee", description: "Assign or unassign an operating machine for an AI employee (human only).", isExternalEffect: false },
+  { key: "ai_employee.lifecycle_change", name: "Lower AI employee lifecycle state", description: "Pause, restrict, or retire an AI employee. Raising to ACTIVE stays on the reserved ai_employee.activate receipt path.", isExternalEffect: false },
+  { key: "employee_room.post", name: "Post to a department room", description: "Post a governed message that references work, a run, or a firm announcement.", isExternalEffect: false },
+  { key: "employee_handoff.propose", name: "Propose a work handoff", description: "Propose moving a work card from one employee to another.", isExternalEffect: false },
+  { key: "employee_handoff.decide", name: "Decide a work handoff", description: "Accept or reject a proposed handoff (human only).", isExternalEffect: false },
+  { key: "internal_memo.create", name: "Write an internal memo", description: "Publish an internal memo to a department or the firm.", isExternalEffect: false },
+  { key: "governance_update.acknowledge", name: "Acknowledge a governance update", description: "Record that an actor has read and acknowledged an MP governance update.", isExternalEffect: false },
+  { key: "employee_performance.compute", name: "Compute an employee scorecard", description: "Compute a deterministic performance snapshot from run and approval history.", isExternalEffect: false },
+  { key: "employee_review.record", name: "Record a manager review", description: "Record a manager review, improvement plan, or retraining decision for an employee.", isExternalEffect: false },
+  // P16 — provider/model router + cost command center. These CONFIGURE the governed AI
+  // boundary; they never become a second path to a provider.
+  { key: "provider_model.register", name: "Register a provider model", description: "Add or update a model in the provider catalogue with its capability, context, latency, and pricing provenance.", isExternalEffect: false },
+  { key: "provider_model.promote", name: "Promote or demote a model", description: "Move a model between ACTIVE, BENCH, and DEPRECATED.", isExternalEffect: false },
+  { key: "provider_health.check", name: "Run a provider health check", description: "Record a provider reachability check, stamped LOCAL_FIXTURE or LIVE.", isExternalEffect: false },
+  { key: "model_evaluation.record", name: "Record a model evaluation", description: "Record a benchmark or evaluation result with the method that produced it.", isExternalEffect: false },
+  { key: "routing_policy.set", name: "Set a task routing policy", description: "Publish a new version of the ordered provider/model routing policy for a task class.", isExternalEffect: false },
+  { key: "machine_model_policy.set", name: "Set a machine model policy", description: "Set the preferred provider/model and maximum data class for one machine.", isExternalEffect: false },
+  { key: "budget_scope.set", name: "Set a scoped AI budget", description: "Publish a new version of a per-employee/machine/provider/model/category budget.", isExternalEffect: false },
+  { key: "cost_alert.decide", name: "Acknowledge a cost alert", description: "Acknowledge or resolve a budget-threshold alert.", isExternalEffect: false },
+  // P17 — machine control center + capability intelligence.
+  { key: "machine_state.configure", name: "Configure a machine", description: "Set a machine's owner, SLA, priority, allowed tools, data access, or evidence expectation.", isExternalEffect: false },
+  { key: "machine_state.pause", name: "Pause or resume a machine", description: "Stop or restart work routing and AI spend for one machine.", isExternalEffect: false },
+  { key: "machine_dependency.declare", name: "Declare a machine dependency", description: "Record that one machine depends on another.", isExternalEffect: false },
+  { key: "machine_memory.append", name: "Append machine memory", description: "Append a durable operating note to a machine's memory.", isExternalEffect: false },
+  { key: "capability.register", name: "Register a capability", description: "Register an internal firm capability with its maturity, dependencies, and tested state.", isExternalEffect: false },
+  { key: "capability.transition", name: "Move a capability between Active, Bench, and Archive", description: "Change a capability's operating state.", isExternalEffect: false },
+  { key: "capability.assign", name: "Assign a capability", description: "Assign a capability to an AI employee or a machine.", isExternalEffect: false },
+  { key: "capability_after_action.record", name: "Record capability after-action", description: "Record what actually happened when a capability was used.", isExternalEffect: false },
+  { key: "build_vs_buy.decide", name: "Record a build-vs-buy decision", description: "Record a build, buy, or defer decision for a capability with its rationale.", isExternalEffect: false },
+  // P18 — intent-to-execution work packets + the institutional lens bench.
+  { key: "work_packet.create", name: "Create a work packet", description: "Capture a rough intent and open a governed work packet around it.", isExternalEffect: false },
+  { key: "work_packet.enhance", name: "Enhance a work packet", description: "Derive interpretation, ambiguities, assumptions, risks, and acceptance criteria without replacing the original text.", isExternalEffect: false },
+  { key: "work_packet.update", name: "Revise a work packet", description: "Change packet fields; every change appends a revision.", isExternalEffect: false },
+  { key: "work_packet.execute", name: "Execute a work packet", description: "Run an accepted work packet through the governed AI boundary and open its work card.", isExternalEffect: false },
+  { key: "lens.run", name: "Run an institutional lens", description: "Record a lens verdict, critique, evidence references, and summary for a work packet.", isExternalEffect: false },
+  // P19 — governed orchestration + scheduled AI employees.
+  { key: "scheduled_job.create", name: "Create a scheduled job", description: "Define a recurring governed job with its schedule, target, budget, and data policy.", isExternalEffect: false },
+  { key: "scheduled_job.pause", name: "Pause or resume a scheduled job", description: "Stop or restart a recurring job.", isExternalEffect: false },
+  { key: "job_run.execute", name: "Run a scheduled job", description: "Execute one occurrence of a scheduled job (scheduled trigger or manual operator run).", isExternalEffect: false },
+  { key: "job_run.cancel", name: "Cancel a job run", description: "Cancel a queued or running job occurrence.", isExternalEffect: false },
+  // P20 — notifications. In-app delivery is the floor; push is an optional, unproven channel.
+  { key: "notification.read", name: "Read a notification", description: "Mark a notification read for the acting user.", isExternalEffect: false },
+  { key: "notification.acknowledge", name: "Acknowledge a notification", description: "Acknowledge a notification, recording that a human saw and accepted it.", isExternalEffect: false },
+  { key: "notification_preference.set", name: "Set notification preferences", description: "Set quiet hours and per-kind notification preferences for the acting user.", isExternalEffect: false },
+  // P21 — research workstation. Findings become evidence only through the P5 claim substrate.
+  { key: "research_project.create", name: "Open a research project", description: "Open a governed research project around a question.", isExternalEffect: false },
+  { key: "research_question.add", name: "Add a research question", description: "Add a question the project must answer.", isExternalEffect: false },
+  { key: "research_source.add", name: "Record a research source", description: "Record a source consulted, with its reliability stated.", isExternalEffect: false },
+  { key: "research_finding.record", name: "Record a research finding", description: "Record a finding against a question and the source that supports it.", isExternalEffect: false },
+  { key: "research_finding.promote", name: "Promote a finding into evidence", description: "Promote a research finding into the governed diligence-claim substrate.", isExternalEffect: false },
+  { key: "market_map.create", name: "Create a market map", description: "Record a segmented market map produced by a research project.", isExternalEffect: false },
+  { key: "research_packet.assemble", name: "Assemble a research packet", description: "Assemble findings, sources, and open contradictions into an IC-ready packet.", isExternalEffect: false },
+  // P22 — external connector status. Registering a connector is configuration, not integration.
+  { key: "connector.check", name: "Check a connector", description: "Run a configuration check on an external connector and record the result.", isExternalEffect: false },
+  { key: "meeting_prep.queue", name: "Read the meeting prep queue", description: "List upcoming meetings with their prep and consent state.", isExternalEffect: false },
+  // P23 — specialist provider lane. A vendor is a provider behind run_ai(), never a bypass.
+  { key: "specialist_engagement.open", name: "Open a specialist engagement", description: "Open a bounded engagement with a specialist AI provider through the governed AI boundary.", isExternalEffect: false },
+  { key: "specialist_engagement.accept", name: "Accept specialist output", description: "Human accept of a quarantined specialist output. Never a legal or compliance conclusion.", isExternalEffect: false },
+  // P24 — LP / fund-admin / VDR operating layer. The administrator stays authoritative.
+  { key: "admin_source.register", name: "Register an administrator source", description: "Record an administrator, accounting, or VDR source with its contract state and freshness expectation.", isExternalEffect: false },
+  { key: "reconciliation_schedule.set", name: "Schedule reconciliation", description: "Set the cadence on which a fund is reconciled against its administrator.", isExternalEffect: false },
+  { key: "lp_engagement.update", name: "Update LP engagement state", description: "Record the current state of an LP relationship and its next step.", isExternalEffect: false },
 ] as const;
 
 /**

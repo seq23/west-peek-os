@@ -236,6 +236,131 @@ import {
   handleRecordIcDecision,
   handleSubmitIcPacket,
 } from "./services/ic";
+import {
+  handleAddWatchlist,
+  handleArchiveItem,
+  handleGetBriefing,
+  handleGetItem,
+  handleGetPreferences,
+  handleItemFeedback,
+  handleListBriefings,
+  handleListItems,
+  handleListRuns,
+  handleListSources,
+  handleListWatchlist,
+  handleRegisterSource,
+  handleRunIntelligence,
+  handleSetPreferences,
+  handleSetWatchlistActive,
+  handleSynthesizeItem,
+  handleUpdateSource,
+} from "./services/intelligence";
+import { handleMarkHomeSeen, handleMpHome } from "./services/mpHome";
+import {
+  handleAcknowledgeGovernance,
+  handleAssignMachine,
+  handleChangeLifecycle,
+  handleComputeScorecard,
+  handleCreateMemo,
+  handleDecideHandoff,
+  handleEmployeeDetail,
+  handleGetRoom,
+  handleListHandoffs,
+  handleListMemos,
+  handleListRooms,
+  handleLounge,
+  handlePostRoomMessage,
+  handleProposeHandoff,
+  handleRecordReview as handleRecordEmployeeReview,
+  handleUpdateProfile,
+} from "./services/workforce";
+import {
+  handleGetRunRouting,
+  handleListRoutingPolicies,
+  handlePromoteModel,
+  handleProviderCatalog,
+  handleProviderHealthCheck,
+  handleRecordEvaluation,
+  handleRegisterModel,
+  handleSetMachineModelPolicy,
+  handleSetRoutingPolicy,
+} from "./services/providerRouter";
+import {
+  handleAppendMemory,
+  handleConfigureMachine,
+  handleDeclareDependency,
+  handleGetMachine,
+  handleMachineControlCenter,
+  handlePauseMachine,
+} from "./services/machines";
+import { handleAllocationStrategyView, handlePortfolioCockpit } from "./services/cockpit";
+import { handleCheckConnector, handleListConnectors, handleMeetingPrepQueue } from "./services/connectors";
+import { handleAcceptEngagement, handleListEngagements, handleOpenEngagement } from "./services/specialist";
+import {
+  handleLpOpsOverview,
+  handleRegisterAdminSource,
+  handleSetReconciliationSchedule,
+  handleUpdateLpEngagement,
+} from "./services/lpOps";
+import {
+  handleAddQuestion,
+  handleAddSource,
+  handleAnswerQuestion,
+  handleAssemblePacket,
+  handleCreateMarketMap,
+  handleCreateProject,
+  handleGetProject,
+  handleListProjects,
+  handlePromoteFinding,
+  handleRecordFinding,
+} from "./services/research";
+import {
+  handleAckNotification,
+  handleGetNotificationPreferences,
+  handleListNotifications,
+  handleNotificationDeliveries,
+  handleReadNotification,
+  handleSetNotificationPreferences,
+} from "./services/notifications";
+import {
+  handleCancelJobRun,
+  handleCreateJob,
+  handleGetJobRun,
+  handleListJobs,
+  handlePauseJob,
+  handleRunDueJobs,
+  handleRunJob,
+  runDueJobs,
+} from "./services/jobs";
+import {
+  handleCreatePacket as handleCreateWorkPacket,
+  handleExecutePacket,
+  handleGetPacket as handleGetWorkPacket,
+  handleLensBench,
+  handleListPackets as handleListWorkPackets,
+  handleRunLens,
+  handleUpdatePacket,
+} from "./services/workPackets";
+import {
+  handleAssignCapability,
+  handleBuildVsBuy,
+  handleListCapabilities,
+  handleRecordAfterAction,
+  handleRegisterCapability,
+  handleTransitionCapability,
+} from "./services/capabilities";
+import {
+  handleAcknowledgeCostAlert,
+  handleCostOverview,
+  handleListBudgetScopes,
+  handleSetBudgetScope,
+} from "./services/costCenter";
+import {
+  handleCreatePersonalEntry,
+  handleGetPersonalProfile,
+  handleListPersonalEntries,
+  handleSetPersonalProfile,
+} from "./services/personalIntelligence";
 
 /**
  * West Peek OS Worker API — P1 runtime/persistence/auth/delivery.
@@ -531,7 +656,131 @@ const router = new Router()
   .post("/api/reconciliation/runs", handleRunReconciliation)
   .get("/api/reconciliation/runs", handleListReconciliationRuns)
   .get("/api/reconciliation/exceptions", handleListExceptions)
-  .post("/api/reconciliation/exceptions/:id/resolve", handleResolveException);
+  .post("/api/reconciliation/exceptions/:id/resolve", handleResolveException)
+  // P14 — MP command center. One read-only aggregation; it owns no records.
+  .get("/api/mp-home", handleMpHome)
+  .post("/api/mp-home/seen", handleMarkHomeSeen)
+  .get("/api/mp-home/preferences", handleGetPreferences)
+  .post("/api/mp-home/preferences", handleSetPreferences)
+  // P14 — daily intelligence engine. An item is never evidence by itself.
+  .post("/api/intelligence/sources", handleRegisterSource)
+  .get("/api/intelligence/sources", handleListSources)
+  .patch("/api/intelligence/sources/:id", handleUpdateSource)
+  .post("/api/intelligence/runs", handleRunIntelligence)
+  .get("/api/intelligence/runs", handleListRuns)
+  .get("/api/intelligence/items", handleListItems)
+  .get("/api/intelligence/items/:id", handleGetItem)
+  .post("/api/intelligence/items/:id/archive", handleArchiveItem)
+  .post("/api/intelligence/items/:id/feedback", handleItemFeedback)
+  .post("/api/intelligence/items/:id/synthesize", handleSynthesizeItem)
+  .post("/api/intelligence/watchlist", handleAddWatchlist)
+  .get("/api/intelligence/watchlist", handleListWatchlist)
+  .post("/api/intelligence/watchlist/:id/active", handleSetWatchlistActive)
+  .get("/api/briefings", handleListBriefings)
+  .get("/api/briefings/current", handleGetBriefing)
+  // P14 — private personal intelligence. Owner-only: no route reads another user's layer.
+  .get("/api/personal-intelligence/profile", handleGetPersonalProfile)
+  .post("/api/personal-intelligence/profile", handleSetPersonalProfile)
+  .get("/api/personal-intelligence/entries", handleListPersonalEntries)
+  .post("/api/personal-intelligence/entries", handleCreatePersonalEntry)
+  // P15 — employee lounge / digital office / performance. Activation stays reserved (P4);
+  // only the LOWERING lifecycle moves live here.
+  .get("/api/workforce/lounge", handleLounge)
+  .get("/api/workforce/employees/:id", handleEmployeeDetail)
+  .patch("/api/workforce/employees/:id/profile", handleUpdateProfile)
+  .post("/api/workforce/employees/:id/machines", handleAssignMachine)
+  .post("/api/workforce/employees/:id/lifecycle", handleChangeLifecycle)
+  .post("/api/workforce/employees/:id/scorecard", handleComputeScorecard)
+  .post("/api/workforce/employees/:id/reviews", handleRecordEmployeeReview)
+  .get("/api/workforce/rooms", handleListRooms)
+  .get("/api/workforce/rooms/:id", handleGetRoom)
+  .post("/api/workforce/rooms/:id/messages", handlePostRoomMessage)
+  .get("/api/workforce/handoffs", handleListHandoffs)
+  .post("/api/workforce/handoffs", handleProposeHandoff)
+  .post("/api/workforce/handoffs/:id/decide", handleDecideHandoff)
+  .get("/api/workforce/memos", handleListMemos)
+  .post("/api/workforce/memos", handleCreateMemo)
+  .post("/api/governance/updates/:id/acknowledge", handleAcknowledgeGovernance)
+  // P16 — provider/model router. Every AI call still goes through run_ai(); this configures it.
+  .get("/api/ai/catalog", handleProviderCatalog)
+  .post("/api/ai/models", handleRegisterModel)
+  .post("/api/ai/models/:id/status", handlePromoteModel)
+  .post("/api/ai/models/:id/evaluations", handleRecordEvaluation)
+  .post("/api/ai/providers/:key/health-check", handleProviderHealthCheck)
+  .get("/api/ai/routing-policies", handleListRoutingPolicies)
+  .post("/api/ai/routing-policies", handleSetRoutingPolicy)
+  .post("/api/machines/:id/model-policy", handleSetMachineModelPolicy)
+  .get("/api/ai/runs/:id/routing", handleGetRunRouting)
+  // P16 — AI cost command center.
+  .get("/api/ai/cost", handleCostOverview)
+  .get("/api/ai/budgets", handleListBudgetScopes)
+  .post("/api/ai/budgets", handleSetBudgetScope)
+  .post("/api/ai/cost-alerts/:id/acknowledge", handleAcknowledgeCostAlert)
+  // P17 — machine control center. Pause is enforced in the services, not by UI hiding.
+  .get("/api/machines/control-center", handleMachineControlCenter)
+  .get("/api/machines/:id/state", handleGetMachine)
+  .patch("/api/machines/:id/state", handleConfigureMachine)
+  .post("/api/machines/:id/pause", handlePauseMachine)
+  .post("/api/machines/:id/dependencies", handleDeclareDependency)
+  .post("/api/machines/:id/memory", handleAppendMemory)
+  // P17 — capability intelligence (internal firm registry, not a marketplace).
+  .get("/api/capabilities", handleListCapabilities)
+  .post("/api/capabilities", handleRegisterCapability)
+  .post("/api/capabilities/:id/state", handleTransitionCapability)
+  .post("/api/capabilities/:id/assignments", handleAssignCapability)
+  .post("/api/capabilities/:id/after-actions", handleRecordAfterAction)
+  .post("/api/capabilities/:id/build-vs-buy", handleBuildVsBuy)
+  // P18 — intent-to-execution work packets + lens bench. Literal routes before :id routes.
+  .get("/api/work-packets/lens-bench", handleLensBench)
+  .post("/api/work-packets", handleCreateWorkPacket)
+  .get("/api/work-packets", handleListWorkPackets)
+  .get("/api/work-packets/:id", handleGetWorkPacket)
+  .patch("/api/work-packets/:id", handleUpdatePacket)
+  .post("/api/work-packets/:id/lenses", handleRunLens)
+  .post("/api/work-packets/:id/execute", handleExecutePacket)
+  // P19 — governed orchestration. Literal routes before :key routes.
+  .get("/api/jobs", handleListJobs)
+  .post("/api/jobs", handleCreateJob)
+  .post("/api/jobs/tick", handleRunDueJobs)
+  .get("/api/jobs/runs/:id", handleGetJobRun)
+  .post("/api/jobs/runs/:id/cancel", handleCancelJobRun)
+  .post("/api/jobs/:key/run", handleRunJob)
+  .post("/api/jobs/:key/status", handlePauseJob)
+  // P20 — notifications. Literal routes before :id routes.
+  .get("/api/notifications/preferences", handleGetNotificationPreferences)
+  .post("/api/notifications/preferences", handleSetNotificationPreferences)
+  .get("/api/notifications", handleListNotifications)
+  .get("/api/notifications/:id/deliveries", handleNotificationDeliveries)
+  .post("/api/notifications/:id/read", handleReadNotification)
+  .post("/api/notifications/:id/acknowledge", handleAckNotification)
+  // P21 — research workstation. Findings reach truth only through the P5 claim substrate.
+  .post("/api/research/projects", handleCreateProject)
+  .get("/api/research/projects", handleListProjects)
+  .get("/api/research/projects/:id", handleGetProject)
+  .post("/api/research/projects/:id/questions", handleAddQuestion)
+  .post("/api/research/projects/:id/sources", handleAddSource)
+  .post("/api/research/projects/:id/findings", handleRecordFinding)
+  .post("/api/research/projects/:id/market-maps", handleCreateMarketMap)
+  .post("/api/research/projects/:id/packets", handleAssemblePacket)
+  .post("/api/research/questions/:id/answer", handleAnswerQuestion)
+  .post("/api/research/findings/:id/promote", handlePromoteFinding)
+  // P22 — external connector status + meeting prep queue. Read-only: this surface writes nothing
+  // to any external system.
+  .get("/api/connectors", handleListConnectors)
+  .post("/api/connectors/:key/check", handleCheckConnector)
+  .get("/api/meeting-prep/queue", handleMeetingPrepQueue)
+  // P23 — specialist provider lane. A vendor is a provider behind run_ai(), never a bypass.
+  .get("/api/specialist/engagements", handleListEngagements)
+  .post("/api/specialist/engagements", handleOpenEngagement)
+  .post("/api/specialist/engagements/:id/accept", handleAcceptEngagement)
+  // P24 — LP / fund-admin / VDR operating surface. The administrator stays authoritative.
+  .get("/api/lp-ops/overview", handleLpOpsOverview)
+  .post("/api/lp-ops/sources", handleRegisterAdminSource)
+  .post("/api/lp-ops/reconciliation-schedules", handleSetReconciliationSchedule)
+  .post("/api/lp-ops/engagements/:id", handleUpdateLpEngagement)
+  // P25 — MP cockpit views. Read-only aggregations; nothing is recomputed for display.
+  .get("/api/portfolio/cockpit", handlePortfolioCockpit)
+  .get("/api/allocation/scenarios/:id/strategy-view", handleAllocationStrategyView);
 
 /**
  * Pure request handler — exported so tests can exercise it directly with a
@@ -573,5 +822,24 @@ export default {
       console.error("worker error", err);
       return json({ error: "internal_error" }, { status: 500 });
     }
+  },
+
+  /**
+   * P19 — the ONE scheduling entry point (ADR-017). The Cron Trigger in wrangler.toml calls this;
+   * it selects due ACTIVE jobs from D1 and runs each one through the same governed path an
+   * operator uses manually. A cron trigger cannot fire under local `wrangler dev`, so this exact
+   * function is also reachable via POST /api/jobs/tick and is called directly in tests — remote
+   * firing itself remains UNPROVEN until deployment.
+   */
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      runDueJobs(env, new Date())
+        .then((results) => {
+          if (results.length > 0) console.log("scheduled tick", JSON.stringify(results));
+        })
+        .catch((err) => {
+          console.error("scheduled tick failed", err);
+        }),
+    );
   },
 } satisfies ExportedHandler<Env>;

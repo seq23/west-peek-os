@@ -165,7 +165,7 @@ describe("1. AI boundary architectural scan", () => {
     // Here we prove the script's failure path itself works: a broken detector
     // must exit non-zero. Simulated by asserting the self-test's contract.
     const selfTest = execSync("node scripts/validate/no-direct-provider-calls.mjs --self-test", { encoding: "utf8" });
-    expect(selfTest).toContain("all 4 violating fixtures are caught");
+    expect(selfTest).toContain("all 5 violating fixtures are caught");
   });
 });
 

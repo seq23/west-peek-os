@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
+import { notifyQuietly } from "./notifications";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { requestApproval } from "./approvals";
 import { privacyLabelSchema } from "../../shared/privacy";
@@ -342,6 +343,20 @@ export async function raiseAlert(
     firmScope,
     payload: { company_id: input.company_id, alert_type: input.alert_type, metric_key: input.metric_key ?? null, severity: input.severity, escalated_from: open?.id ?? null },
   });
+  // P20: an OPEN alert is an exception a human should see. A suppressed one is not.
+  if (!suppressing) {
+    await notifyQuietly(env, {
+      kind: "PORTFOLIO_RISK",
+      severity: input.severity === "CRITICAL" ? "CRITICAL" : input.severity === "HIGH" ? "WARNING" : "INFO",
+      title: `${input.severity} portfolio alert: ${input.alert_type}`,
+      body: `company ${input.company_id}${input.metric_key ? ` · ${input.metric_key}` : ""}`,
+      objectType: "portfolio_alert",
+      objectId: id,
+      privacyLabel: "CONFIDENTIAL",
+      dedupeKey: `portfolio_alert:${id}`,
+      firmScope,
+    });
+  }
   return { alert: (await getAlert(env, id))!, disposition: open ? "ESCALATED" : suppressing ? "SUPPRESSED" : "CREATED" };
 }
 

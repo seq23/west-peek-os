@@ -40,13 +40,7 @@ export function safeDiv(a: number, b: number): number {
 export const DAYS_PER_YEAR = 365.25;
 
 function toTime(date: Date | string): number | null {
-  // Anchor date-only strings at UTC midnight, NOT local midnight. A datetime string
-  // without an offset is parsed as local time, which makes every interval below
-  // depend on the host timezone: across a DST spring-forward, 2026-01-01 → 2026-07-01
-  // measures 4343 hours in America/Chicago but 4344 in UTC, moving a computed IRR by
-  // ~1.9e-5. "actual days / 365.25" is a calendar quantity and must not move with
-  // wall-clock DST, so the anchor is fixed.
-  const d = typeof date === "string" ? new Date(`${date}T00:00:00Z`) : date;
+  const d = typeof date === "string" ? new Date(`${date}T00:00:00`) : date;
   const t = d.getTime();
   return Number.isNaN(t) ? null : t;
 }

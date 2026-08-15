@@ -23,6 +23,21 @@ PRESENT / MISSING / UNPROVEN (UNPROVEN = cannot be confirmed without credentials
 | `NETWORK_OS_ADAPTER_TOKEN` | yes (vault) | P9 live writeback | Network OS adapter | MISSING — APPROVAL GATE |
 | `VDR_API_KEY` | yes (vault) | P10 live data room | VDR adapter | MISSING — PROVIDER NOT SELECTED |
 | `FUND_ADMIN_EXPORT_CREDENTIAL` | yes (vault) | P12 live reconciliation | fund-admin import | MISSING — SOURCE CONTRACT GATE |
+| `FIREWORKS_API_KEY` | yes (vault) | P16 live proof (optional provider) | `ai/providers/fireworks.ts` via the router | MISSING — CREDENTIAL GATE |
+| `AI_PROVIDER_API_KEY` | yes (vault) | P16 live proof (generic HTTPS adapter) | `ai/providers/httpExternal.ts` | MISSING — CREDENTIAL GATE |
+| `HARVEY_API_KEY` | yes (vault) | P23 specialist lane | `ai/providers/specialist.ts` | MISSING — VENDOR ACCESS GATE (no account or endpoint) |
+| `NORM_API_KEY` | yes (vault) | P23 specialist lane | `ai/providers/specialist.ts` | MISSING — VENDOR ACCESS GATE (no account or endpoint) |
+| `NETWORK_OS_API_TOKEN` | yes (vault) | P22 connector status | `connector` registry (presence only) | MISSING — INTEGRATION APPROVAL GATE |
+| `CALENDAR_OAUTH_TOKEN` | yes (vault) | P22 meeting prep from a real diary | `connector` registry (presence only) | MISSING — OAUTH CONSENT GATE |
+| `EMAIL_OAUTH_TOKEN` | yes (vault) | P22 mailbox connector | `connector` registry (presence only) | MISSING — OAUTH CONSENT GATE |
+| `TRANSCRIPTION_API_KEY` | yes (vault) | P22 transcription connector | `connector` registry (presence only) | MISSING — CREDENTIAL + CONSENT GATE |
+| `FUND_ADMIN_SFTP_KEY` | yes (vault) | P22/P24 administrator import | `connector` registry (presence only) | MISSING — SOURCE CONTRACT GATE |
+
+**P16/P22/P23 presence semantics.** The provider catalogue, connector list, and specialist lane
+report whether a NAME above is populated in the running environment — a boolean derived from
+`env`. No value is read for display, returned in a response, or written to a log. The
+credential-scrub in `ai/scrub.ts` additionally blocks any credential-shaped string from entering
+an LLM context, including a bare variable NAME.
 
 Rules: no plaintext `.env` during ordinary operation; `vault:run -- <cmd>` injects values into child
 process memory only; temporary files (if a tool forces one) are 0600, minimal-lifetime, deleted on exit,

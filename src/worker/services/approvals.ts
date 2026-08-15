@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
+import { notifyQuietly } from "./notifications";
 import {
   actorFromIdentity,
   authorize,
@@ -155,6 +156,18 @@ export async function submitApproval(env: Env, actor: Actor, cardId: string): Pr
     objectId: cardId,
     firmScope: card.firm_scope,
     payload: { action_key: card.action_key },
+  });
+  // P20: the people who can decide this need to know it is waiting. Failure to notify never
+  // rolls back the submission.
+  await notifyQuietly(env, {
+    kind: "APPROVAL",
+    severity: "WARNING",
+    title: `Approval waiting: ${card.title}`,
+    body: `${card.action_key} on ${card.object_type}/${card.object_id}`,
+    objectType: "approval_card",
+    objectId: cardId,
+    dedupeKey: `approval:${cardId}`,
+    firmScope: card.firm_scope,
   });
   return (await getApprovalCard(env, cardId))!;
 }
