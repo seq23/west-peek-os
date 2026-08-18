@@ -1702,3 +1702,87 @@ hr {
   margin-bottom: 2px;
 }
 .thesis-grid dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HOME AS A DELIVERY WINDOW
+   Every value below is a token. The masthead is the only place on the work
+   surface that goes above --text-xl, because it is the one line that has to
+   read as an arrival rather than a heading.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.home-masthead {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: var(--space-lg);
+  padding-bottom: var(--space-lg);
+  margin-bottom: var(--space-xl);
+  border-bottom: 1px solid var(--wp-line-strong);
+}
+.home-date {
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--wp-muted);
+  font-weight: 600;
+  margin-bottom: var(--space-xs);
+}
+.home-masthead h1 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  font-weight: 700;
+}
+.home-signed { text-align: right; font-size: var(--text-sm); color: var(--wp-ink-2); }
+.home-signed .muted { color: var(--wp-muted); }
+
+.home-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin: var(--space-xl) 0 var(--space-md);
+}
+.home-section-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+}
+/* Orange earns its place here and almost nowhere else on the page: this count is the one
+   number on Home that means somebody is waiting on you. */
+.count-pill {
+  display: inline-block;
+  background: var(--wp-orange);
+  color: var(--wp-orange-ink);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  padding: var(--space-3xs) var(--space-sm);
+  border-radius: var(--radius-pill);
+}
+
+.waiting-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
+}
+
+/* A delivery keeps its byline whether or not it has anything to report — silence from a
+   named colleague is information; an unattributed empty box is just a gap. */
+.delivery-card { display: flex; flex-direction: column; }
+.delivery-by {
+  margin: auto 0 0;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--wp-line);
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+}
+.delivery-by strong { color: var(--wp-ink); font-weight: 600; }
+
+@media (max-width: 40rem) {
+  .home-masthead { flex-direction: column; align-items: flex-start; }
+  .home-signed { text-align: left; }
+}

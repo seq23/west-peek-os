@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { DELIVERIES, deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
 import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 
@@ -32,6 +33,17 @@ describe("morning deliveries", () => {
   it("never gives one module two authors", () => {
     const modules = DELIVERIES.map((d) => d.module);
     expect(new Set(modules).size).toBe(modules.length);
+  });
+
+  it("has an author for every module the home surface can emit", () => {
+    // The drift that matters: mpHome grows a module, nobody adds a byline, and one card on Home
+    // silently goes back to being anonymous. Read the real service rather than a copy of its list.
+    const source = readFileSync(new URL("../src/worker/services/mpHome.ts", import.meta.url), "utf8");
+    const emitted = [...source.matchAll(/^\s*key: "([a-z_]+)",$/gm)].map((m) => m[1]!);
+    expect(emitted.length).toBeGreaterThan(5);
+    const authored = new Set(DELIVERIES.map((d) => d.module));
+    const orphaned = emitted.filter((k) => !authored.has(k));
+    expect(orphaned, `modules with no author: ${orphaned.join(", ")}`).toEqual([]);
   });
 
   it("looks up by module and misses cleanly", () => {
