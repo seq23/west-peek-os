@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useApi, type MeResponse } from "../lib/api";
 
 /**
- * Deal modelling — a doorway to the team's own tool, not a second copy of it.
+ * Deal modeling — a doorway to the team's own tool, not a second copy of it.
  *
  * WHY THERE IS NO CALCULATOR HERE. There already is one. `seq23/secondaries` is a dashboard suite
  * the team built and deployed at venturedeals.joinwestpeek.com, covering secondary deals, primary
@@ -12,7 +12,7 @@ import { useApi, type MeResponse } from "../lib/api";
  * believe.
  *
  * THE ARITHMETIC IS ALREADY SHARED, which is what makes linking safe rather than lazy. That
- * dashboard's maths was ported into `shared/dealmath` with a line-by-line source map and worked
+ * dashboard's math was ported into `shared/dealmath` with a line-by-line source map and worked
  * examples hand-verified in docs/DEAL_MATH_VERIFICATION.md, and it is what deal packets, follow-on
  * reviews and allocation all run on. Checked again on 18 Aug 2026 against partner commit a350ad6:
  * still faithful, with the one documented deviation — this port returns null from xirr when Newton
@@ -78,7 +78,7 @@ export function ModelingPage({ me }: { me: MeResponse }) {
   return (
     <section data-testid="modeling-page">
       <p className="muted small">
-        The firm's deal maths lives in the dashboards the team built, {me.fullName} — secondary
+        The firm's deal math lives in the dashboards the team built, {me.fullName} — secondary
         deals, primary rounds and fund construction. This page does not repeat them. It hands you
         the numbers to open them with.
       </p>
@@ -126,7 +126,7 @@ export function ModelingPage({ me }: { me: MeResponse }) {
                 <dd>{mandate.management_fee_pct ?? "—"}%</dd>
               </div>
               <div>
-                <dt>Initial cheque</dt>
+                <dt>Initial check</dt>
                 <dd>
                   {usd(mandate.check_size_usd?.min)} – {usd(mandate.check_size_usd?.max)}
                 </dd>

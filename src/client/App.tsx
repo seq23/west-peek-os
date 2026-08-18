@@ -231,7 +231,7 @@ const NAV_GROUPS = [
       { key: "follow-on", label: "Follow-on" },
       { key: "allocation", label: "Allocation" },
       { key: "cockpit", label: "Fund strategy" },
-      { key: "modeling", label: "Deal maths" },
+      { key: "modeling", label: "Deal Math" },
     ],
   },
   {

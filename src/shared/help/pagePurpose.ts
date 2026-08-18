@@ -97,8 +97,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Compare allocation options", "See what a change requires before approving it"],
   },
   modeling: {
-    purpose: "The team's venture deal dashboards — secondary deals, primary rounds and fund construction — with the firm's own numbers ready to carry across. The maths there and the maths on a deal here are the same code.",
-    youCan: ["Open the dashboards to model a deal or a fund", "Copy the fund's current cheque, ownership and reserve figures", "See why a number modelled there matches one on a real deal"],
+    purpose: "The team's venture deal dashboards — secondary deals, primary rounds and fund construction — with the firm's own numbers ready to carry across. The math there and the math on a deal here are the same code.",
+    youCan: ["Open the dashboards to model a deal or a fund", "Copy the fund's current check, ownership and reserve figures", "See why a number modelled there matches one on a real deal"],
   },
   cockpit: {
     purpose: "Fund strategy — construction scenarios and the assumptions behind them, stated so they can be argued with.",
