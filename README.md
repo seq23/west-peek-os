@@ -200,6 +200,23 @@ not discipline.
 Secrets are set with `wrangler secret put` and are **write-only** — Cloudflare cannot show you a
 stored value, so a lost secret is rotated, not recovered.
 
+### Governed deploys
+
+This repository is a Repo Operator project: slug `west-peek-os`, `target_type: git`, linked to
+`seq23/west-peek-os` on branch `main` in `GIT_NATIVE` mode.
+
+`repo deploy west-peek-os` is the governed deploy. It requires a verified run artifact, so
+until one exists it refuses with `BLOCKED_ARTIFACT` and the direct path below is the one to use. Under `GIT_NATIVE` it checks D1 first: any pending
+migration **blocks** before anything is mutated. Once the schema is current, one Git push is the
+deploy, and Cloudflare Workers Builds builds from `main`.
+
+`npm run deploy:production` remains the direct path. It still applies migrations before deploying,
+as described above.
+
+A hand `git push` does neither — it deploys with **no** migration check, which is exactly how code
+ships against tables that do not exist. Anything touching `migrations/` goes through
+`repo deploy west-peek-os` or `npm run deploy:production`, never a bare push.
+
 ---
 
 ## What is not finished
