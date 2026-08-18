@@ -456,6 +456,9 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
   const [department, setDepartment] = useState<string>("ALL");
   const [selected, setSelected] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "NOT_ACTIVE">("ALL");
+  /** Refusals from the on/off toggle. Only ever set on failure — a working toggle speaks by
+      changing the button, not by announcing itself. */
+  const [message, setMessage] = useState<string | null>(null);
   // The opened record is rendered BELOW a grid that can be a full screen tall, so without this the
   // Open button appears to do nothing at all.
   const detailRef = useRef<HTMLDivElement | null>(null);
@@ -492,8 +495,12 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
   return (
     <section data-testid="employees-page">
       <p data-testid="lounge-activation-law" className="muted small">
-        {lounge.data.active_count} of {lounge.data.max_active} activation slots in use. {lounge.data.activation_law}
+        {lounge.data.active_count} of {lounge.data.max_active} employed. {lounge.data.activation_law}
       </p>
+
+      <OnDutyPanel />
+
+      {message && <p className="notice" data-testid="lounge-message">{message}</p>}
 
       <div className="form-row">
         <label>
@@ -564,6 +571,37 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
               </h4>
               <span className={statusBadge(e.status)}>{e.status}</span>
             </header>
+            {/* The on/off switch. Only shown once an employee has been employed at least once —
+                before that, ACTIVE is a governed step and a toggle here would be a lie about what
+                the button does. Pausing needs no approval; resuming an already-approved employee
+                needs no second one. */}
+            {(e.status === "ACTIVE" || e.status === "PAUSED") && (
+              <button
+                type="button"
+                className={e.status === "ACTIVE" ? "btn-strong" : ""}
+                data-testid={`employee-toggle-${e.id}`}
+                aria-pressed={e.status === "ACTIVE"}
+                onClick={async () => {
+                  const turningOn = e.status !== "ACTIVE";
+                  const res = await api<{ error?: string; detail?: string }>(
+                    `/api/ai/employees/${e.id}/running`,
+                    {
+                      method: "POST",
+                      body: {
+                        running: turningOn,
+                        reason: `${turningOn ? "resumed" : "paused"} by ${me.fullName}`,
+                      },
+                    },
+                  );
+                  if (res.status !== 200) {
+                    setMessage(`Could not change ${e.name}: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+                  }
+                  lounge.reload();
+                }}
+              >
+                {e.status === "ACTIVE" ? "Working — turn off" : "Paused — turn on"}
+              </button>
+            )}
             <p className="module-answers">{e.role}</p>
             {/* P32: the lounge should show who someone IS. Title + brief described a job slot;
                 expertise and voice describe a colleague you might choose to confer with. */}
@@ -614,6 +652,89 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
 
       <HandoffsPanel onChanged={lounge.reload} />
       <RoomsPanel me={me} />
+    </section>
+  );
+}
+
+/**
+ * Who is on duty right now.
+ *
+ * Everyone employed stays available all day; this is the short list the firm is leaning on at this
+ * hour. It exists because the cap coming off made the roster screen worse in one specific way —
+ * thirty names, all equally present, none of them the one you need. Availability is not attention.
+ *
+ * The hour is sent from the browser rather than read on the server: a Worker runs in UTC and the
+ * partner does not, and a rota that is silently three hours out is worse than no rota.
+ */
+function OnDutyPanel() {
+  const [hour] = useState(() => new Date().getHours());
+  const [pinned, setPinned] = useState<string[]>([]);
+  const query = `/api/ai/employees/on-duty?hour=${hour}${pinned.length ? `&pinned=${pinned.join(",")}` : ""}`;
+  const duty = useApi<{
+    label: string;
+    intent: string;
+    onDuty: Array<{ name: string; role: string; because: string }>;
+    benched: string[];
+    active_count: number;
+    how_it_works: string;
+  }>(query, [query]);
+
+  if (duty.loading && !duty.data) return null;
+  const d = duty.data;
+  if (!d) return null;
+
+  return (
+    <section className="card" data-testid="on-duty">
+      <header className="module-card-head">
+        <h3>
+          On duty now <span className="module-count">{d.label}</span>
+        </h3>
+        {pinned.length > 0 && (
+          <button type="button" className="link-button" data-testid="on-duty-clear-pins" onClick={() => setPinned([])}>
+            Clear pins
+          </button>
+        )}
+      </header>
+      <p className="muted small">{d.intent}</p>
+
+      {d.onDuty.length === 0 ? (
+        <p className="state-empty" data-testid="on-duty-empty">
+          Nobody is on duty this hour. Everyone rostered for this shift is switched off — turn
+          someone on below and they will appear here.
+        </p>
+      ) : (
+        <ul className="card-list" data-testid="on-duty-list">
+          {d.onDuty.map((x) => (
+            <li key={x.name} data-testid={`on-duty-${x.name}`}>
+              <strong>{x.name}</strong> — {x.role}
+              <br />
+              <span className="muted small">{x.because}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {d.benched.length > 0 && (
+        <p className="muted small" data-testid="on-duty-benched">
+          Also rostered for this shift, not on point:{" "}
+          {d.benched.map((n, i) => (
+            <span key={n}>
+              {i > 0 && " · "}
+              <button
+                type="button"
+                className="link-button"
+                data-testid={`on-duty-pin-${n}`}
+                onClick={() => setPinned((p) => (p.includes(n) ? p : [...p, n]))}
+              >
+                {n}
+              </button>
+            </span>
+          ))}
+          . Click a name to put them on point.
+        </p>
+      )}
+
+      <p className="muted small">{d.how_it_works}</p>
     </section>
   );
 }
