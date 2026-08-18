@@ -4,7 +4,8 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
 import { runAi, type AIRunRow } from "../src/worker/ai/runAi";
-import { activateAiEmployee, grantToolScope, MAX_ACTIVE_AI_EMPLOYEES } from "../src/worker/services/aiEmployees";
+import {
+  setEmployeeRunning, activateAiEmployee, grantToolScope, MAX_ACTIVE_AI_EMPLOYEES } from "../src/worker/services/aiEmployees";
 import { acceptQuarantinedOutput } from "../src/worker/services/aiRuns";
 import type { Actor } from "../src/worker/services/authorize";
 import { MANAGING_PARTNER_NAMES } from "../src/shared/registry/managingPartners";
@@ -505,28 +506,45 @@ describe("10. activation governance (D10)", () => {
     await t.db.prepare("DELETE FROM ai_employee WHERE id = 'aie_scooter_probe'").run();
   });
 
-  it("the ≤5 ACTIVE cap refuses a 6th activation even with a valid approval (receipt NOT consumed)", async () => {
-    const roster = ["aie_wendy", "aie_wren", "aie_willa", "aie_winton"]; // walker already ACTIVE → 5 total
-    for (const id of roster) {
-      const receipt = await approvedCard("ai_employee.activate", "ai_employee", id);
-      const res = await handleRequest(req(`/api/ai/employees/${id}/activate`, MP, "POST", { approval_receipt_id: receipt }), env);
-      expect(res.status, id).toBe(200);
-    }
+  it("an activation refused by the cap is atomic — no receipt consumed, no history written", async () => {
+    // The cap used to be five, and this test used to prove a sixth activation was refused. The cap
+    // is now the whole roster, so in normal operation it cannot be reached at all — every employee
+    // may be employed at once. The guard stays as a backstop against a row arriving from outside
+    // the registry, and the guarantee worth keeping is not the number: it is that a REFUSED
+    // activation changes nothing. A half-applied refusal would burn an approval the operator would
+    // then have to notice was missing.
+    //
+    // The other employees are set ACTIVE directly. They are the fixture, not the thing under test,
+    // and driving thirty-one approval flows to reach the same state would test the approval flow
+    // again rather than the cap.
+    await t.db.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE firm_scope = 'west-peek'").run();
+    await t.db
+      .prepare(
+        `INSERT INTO ai_employee (id, name, role, layer, status)
+         VALUES ('aie_cap_probe', 'CapProbe', 'probe', 'probe', 'INACTIVE')`,
+      )
+      .run();
+
     const count = await t.db.prepare("SELECT COUNT(*) AS n FROM ai_employee WHERE status = 'ACTIVE'").first<{ n: number }>();
-    expect(count?.n).toBe(MAX_ACTIVE_AI_EMPLOYEES);
+    expect(count!.n).toBeGreaterThanOrEqual(MAX_ACTIVE_AI_EMPLOYEES);
 
-    const sixthReceipt = await approvedCard("ai_employee.activate", "ai_employee", "aie_porter");
-    const sixth = await handleRequest(req("/api/ai/employees/aie_porter/activate", MP, "POST", { approval_receipt_id: sixthReceipt }), env);
-    expect(sixth.status).toBe(409);
-    expect(((await sixth.json()) as { error: string }).error).toBe("active_cap_reached");
+    const receipt = await approvedCard("ai_employee.activate", "ai_employee", "aie_cap_probe");
+    const refused = await handleRequest(
+      req("/api/ai/employees/aie_cap_probe/activate", MP, "POST", { approval_receipt_id: receipt }),
+      env,
+    );
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error: string }).error).toBe("active_cap_reached");
 
-    // The refused activation must not consume the receipt or write history.
-    const card = await t.db.prepare("SELECT state FROM approval_card WHERE id = ?1").bind(sixthReceipt).first<{ state: string }>();
+    const card = await t.db.prepare("SELECT state FROM approval_card WHERE id = ?1").bind(receipt).first<{ state: string }>();
     expect(card?.state).toBe("approved");
     const history = await t.db
-      .prepare("SELECT COUNT(*) AS n FROM ai_employee_status_history WHERE ai_employee_id = 'aie_porter'")
+      .prepare("SELECT COUNT(*) AS n FROM ai_employee_status_history WHERE ai_employee_id = 'aie_cap_probe'")
       .first<{ n: number }>();
     expect(history?.n).toBe(0);
+
+    await t.db.prepare("DELETE FROM ai_employee WHERE id = 'aie_cap_probe'").run();
+    await t.db.prepare("UPDATE ai_employee SET status = 'INACTIVE' WHERE activated_at IS NULL").run();
   });
 
   it("an employee can never grant itself (or any) tool scope; humans can", async () => {
@@ -674,5 +692,128 @@ describe("API: /api/ai/run records actor + returns the run; budget change needs 
     expect(old).not.toBeNull();
     await expect(t.db.prepare("UPDATE budget_policy SET daily_cap_usd = 0").run()).rejects.toThrow(/immutable/);
     await expect(t.db.prepare("DELETE FROM budget_policy").run()).rejects.toThrow(/immutable/);
+  });
+});
+
+/**
+ * Turning employees on and off (the cap split).
+ *
+ * The activation cap used to be five, and because only an ACTIVE employee can be seated or do
+ * work, it capped the reachable workforce rather than the work being done. Employment and
+ * attention are now separate: everyone may be employed, and a short duty roster decides who the
+ * firm leans on at a given hour.
+ *
+ * The guarantee that must survive is the one D10 was really protecting: no employee ever acts
+ * without a human having approved it at least once. These assert exactly where that line now sits.
+ */
+describe("pausing and resuming an employee", () => {
+  /** Walk an employee through the governed first activation. */
+  async function employ(id: string): Promise<void> {
+    const requested = await handleRequest(
+      req(`/api/ai/employees/${id}/request-activation`, MP, "POST", { reason: "staffing for the test" }),
+      env,
+    );
+    const card = (await requested.json()) as { id: string };
+    await handleRequest(req(`/api/approvals/${card.id}/decide`, MP, "POST", { decision: "approved" }), env);
+    const done = await handleRequest(
+      req(`/api/ai/employees/${id}/activate`, MP, "POST", { approval_receipt_id: card.id, reason: "staffing for the test" }),
+      env,
+    );
+    expect(done.status).toBe(200);
+  }
+
+  it("pauses without any approval at all — stopping a machine is always safe", async () => {
+    await employ("aie_wells");
+    const paused = await handleRequest(
+      req("/api/ai/employees/aie_wells/running", MP, "POST", { running: false, reason: "not needed today" }),
+      env,
+    );
+    expect(paused.status).toBe(200);
+    expect(((await paused.json()) as { status: string }).status).toBe("PAUSED");
+  });
+
+  it("resumes an already-approved employee without a second approval", async () => {
+    await employ("aie_winnie");
+    await handleRequest(req("/api/ai/employees/aie_winnie/running", MP, "POST", { running: false }), env);
+    const resumed = await handleRequest(
+      req("/api/ai/employees/aie_winnie/running", MP, "POST", { running: true }),
+      env,
+    );
+    expect(resumed.status).toBe(200);
+    expect(((await resumed.json()) as { status: string }).status).toBe("ACTIVE");
+  });
+
+  it("refuses to resume an employee no human ever approved", async () => {
+    // The line that must not move: this is a first activation wearing a different name.
+    const res = await handleRequest(
+      req("/api/ai/employees/aie_pippa/running", MP, "POST", { running: true }),
+      env,
+    );
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("never_activated");
+  });
+
+  it("lets far more than five be employed at once", async () => {
+    for (const id of ["aie_percy", "aie_prue", "aie_pax", "aie_preston", "aie_perrin", "aie_winter"]) {
+      await employ(id);
+    }
+    const row = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM ai_employee WHERE status = 'ACTIVE'")
+      .first<{ n: number }>();
+    expect(row!.n).toBeGreaterThan(5);
+  });
+
+  it("records every toggle in the status history, with no receipt", async () => {
+    await employ("aie_porter");
+    await handleRequest(
+      req("/api/ai/employees/aie_porter/running", MP, "POST", { running: false, reason: "quiet week" }),
+      env,
+    );
+    const history = await t.db
+      .prepare("SELECT * FROM ai_employee_status_history WHERE ai_employee_id = 'aie_porter' AND to_status = 'PAUSED'")
+      .all<{ reason: string; approval_receipt_id: string | null }>();
+    expect(history.results).toHaveLength(1);
+    expect(history.results![0]!.reason).toBe("quiet week");
+    // A pause is not an approved action, so it must not claim a receipt it never had.
+    expect(history.results![0]!.approval_receipt_id).toBeNull();
+  });
+
+  it("never lets an AI employee pause or resume anyone", async () => {
+    await employ("aie_wilson");
+    // Called at the service level deliberately: an AI actor cannot reach the HTTP route at all, so
+    // testing through it would prove only that the front door is locked. The guard that matters is
+    // the one inside, which is what would still be standing if a future caller arrived some other way.
+    await expect(
+      setEmployeeRunning(
+        env,
+        { type: "AI", aiEmployeeId: "aie_paige", roles: [], firmScopes: ["west-peek"] },
+        "aie_wilson",
+        false,
+        "an employee trying to bench a colleague",
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rosters a focused few on duty, and rotates them through the day", async () => {
+    await employ("aie_walter");
+    const morning = await handleRequest(req("/api/ai/employees/on-duty?hour=8", MP), env);
+    expect(morning.status).toBe(200);
+    const m = (await morning.json()) as { onDuty: Array<{ name: string; because: string }>; shift: string; active_count: number };
+    expect(m.shift).toBe("MORNING");
+    expect(m.onDuty.length).toBeLessThanOrEqual(5);
+    for (const d of m.onDuty) expect(d.because.length).toBeGreaterThan(10);
+
+    const evening = await handleRequest(req("/api/ai/employees/on-duty?hour=19", MP), env);
+    const e = (await evening.json()) as { shift: string };
+    expect(e.shift).toBe("EVENING");
+
+    // Only employed people are ever rostered — a rota that names someone switched off is
+    // promising help that will not arrive.
+    const names = m.onDuty.map((d) => d.name);
+    const active = await t.db
+      .prepare("SELECT name FROM ai_employee WHERE status = 'ACTIVE'")
+      .all<{ name: string }>();
+    const activeNames = new Set((active.results ?? []).map((r) => r.name));
+    for (const n of names) expect(activeNames.has(n)).toBe(true);
   });
 });

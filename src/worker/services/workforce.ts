@@ -163,7 +163,11 @@ export async function handleLounge(ctx: RouteContext): Promise<Response> {
   return json({
     ...lounge,
     activation_law:
-      `At most ${MAX_ACTIVE_AI_EMPLOYEES} employees may be ACTIVE at once (D10). Activation requires an approved ai_employee.activate receipt; nothing on this surface can bypass it.`,
+      `Every employee on the roster may be ACTIVE at once — all ${MAX_ACTIVE_AI_EMPLOYEES} of them. ` +
+      "Employing one for the first time still requires an approved ai_employee.activate receipt, and " +
+      "nothing on this surface can bypass it. After that, pausing and resuming is a toggle: turning " +
+      "someone off never needs permission, and turning them back on does not need a second approval. " +
+      "Who is ON DUTY at a given hour is a separate, deliberately short list.",
   });
 }
 

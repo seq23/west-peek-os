@@ -134,6 +134,8 @@ import {
   handleGetAiEmployee,
   handleGrantToolScope,
   handleListAiEmployees,
+  handleSetEmployeeRunning,
+  handleDutyRoster,
   handleRequestActivation,
 } from "./services/aiEmployees";
 import {
@@ -548,10 +550,12 @@ const router = new Router()
   .get("/api/ai/runs/:id", handleGetAiRun)
   .post("/api/ai/runs/:id/accept-output", handleAcceptAiOutput)
   // P4 — AI employee lifecycle (no direct status route; activation via approval receipt only).
+  .get("/api/ai/employees/on-duty", handleDutyRoster)
   .get("/api/ai/employees", handleListAiEmployees)
   .get("/api/ai/employees/:id", handleGetAiEmployee)
   .post("/api/ai/employees/:id/request-activation", handleRequestActivation)
   .post("/api/ai/employees/:id/activate", handleActivateAiEmployee)
+  .post("/api/ai/employees/:id/running", handleSetEmployeeRunning)
   .post("/api/ai/employees/:id/tools", handleGrantToolScope)
   // P4 — provider registry governance (reserved governance.policy_change + receipt).
   .get("/api/ai/providers", handleListAiProviders)
