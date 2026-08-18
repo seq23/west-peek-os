@@ -159,6 +159,28 @@ existed in no database — found by querying production by hand, not by any test
 and a real constraint violation still fails the migration. `tests/seededJobs.test.ts` now enforces
 this and asserts a row exists for every job the dispatcher handles. Second time this idiom has bitten.
 
+### There is exactly ONE deploy path, on purpose
+`npm run deploy:production`. Nothing else.
+
+Cloudflare Workers Builds was connected to this repository on 14 Aug 2026 and **the GitHub build
+trigger was switched off on 18 Aug 2026**. That was a decision, not an oversight — do not reconnect
+it without reading this.
+
+Two paths deployed into the same Worker and they did not do the same thing:
+
+| | applies D1 migrations | refuses if any pending | probes the Worker after |
+|---|---|---|---|
+| `npm run deploy:production` | yes | yes | yes |
+| Workers Builds on push | no | no | no |
+
+A push containing a new migration would therefore have shipped code against an un-migrated
+database — the exact failure that happened twice on 17 Aug. The alternative, teaching CI to run the
+safe sequence, needs a Cloudflare API token with D1 write access living in the build environment;
+that is a long-lived secret with real blast radius bought to save one command, for a firm that
+deploys from one laptop.
+
+GitHub is source history and backup. It is not the deploy mechanism.
+
 ### The action-type generator
 Fixed, but worth understanding. `scripts/seed/generate-machine-seed.mjs` writes the registry into
 migration `0003`, which every existing database applied long ago. Adding a key used to reach new

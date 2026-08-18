@@ -89,6 +89,13 @@ than quietly downgraded.
 
 ### 6 · Verify production after deploying
 
+> **One deploy path.** `npm run deploy:production` — it applies migrations, refuses to continue if
+> any are still pending, builds, deploys, then probes the Worker. Do not deploy with bare
+> `wrangler deploy`, and do not reconnect the GitHub build trigger: Workers Builds does not run
+> migrations, and shipping code against an un-migrated database has already broken production
+> twice. See BACKLOG.md, "There is exactly ONE deploy path".
+
+
 `wrangler deploy` succeeding does not mean your migration applied. This has caused two incidents in
 one day — code deployed against tables that did not exist yet. After any deploy touching schema:
 
