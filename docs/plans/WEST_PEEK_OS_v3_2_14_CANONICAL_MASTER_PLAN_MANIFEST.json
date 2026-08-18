@@ -1,0 +1,31 @@
+{
+  "artifact": "WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN",
+  "version": "3.2.14",
+  "date": "2026-08-01",
+  "source_baseline": "WEST_PEEK_OS_v3_2_13_CANONICAL_MASTER_PLAN.md",
+  "status": "STRUCTURALLY CHECKED \u2014 LOCAL VALIDATION REQUIRED",
+  "line_count": 26843,
+  "sha256": "01d94450fa9689f51be445cf4ed13b4ac2284ae0cab9fbeda875ca125b211121",
+  "implemented_scope": [
+    "Fund AI Operating Model",
+    "AI prepares / humans decide law",
+    "Human Reserved Authority Register",
+    "Hybrid sleeve architecture",
+    "One Company / Many Transactions",
+    "Diligence reconciliation",
+    "Portfolio monitoring and support outcomes",
+    "Cross-sleeve capital allocation",
+    "Secondary normalization and pricing history",
+    "LP reporting and fund-admin reconciliation",
+    "Fund AI standing duties"
+  ],
+  "not_implemented": [
+    "software",
+    "runtime",
+    "financial-model validation",
+    "legal/compliance validation",
+    "provider integrations",
+    "fund-admin integration",
+    "production deployment"
+  ]
+}

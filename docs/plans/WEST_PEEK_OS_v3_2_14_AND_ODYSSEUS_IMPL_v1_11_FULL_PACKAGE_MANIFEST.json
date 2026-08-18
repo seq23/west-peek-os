@@ -1,0 +1,64 @@
+{
+  "package": "WEST_PEEK_OS_v3_2_14_AND_ODYSSEUS_IMPL_v1_11_FULL_ARTIFACT_PACKAGE",
+  "date": "2026-08-01",
+  "canonical_version": "3.2.14",
+  "implementation_version": "1.11",
+  "status": "STRUCTURALLY CHECKED \u2014 LOCAL VALIDATION REQUIRED",
+  "files": [
+    {
+      "name": "WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN.md",
+      "bytes": 769325,
+      "sha256": "01d94450fa9689f51be445cf4ed13b4ac2284ae0cab9fbeda875ca125b211121"
+    },
+    {
+      "name": "WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN_COMPLETENESS_LEDGER.md",
+      "bytes": 1993,
+      "sha256": "6e5c7b73375f76b29cc362a7b67c6e64612281e4daedd44a27688eca54fc2470"
+    },
+    {
+      "name": "WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN_MANIFEST.json",
+      "bytes": 1031,
+      "sha256": "e66a1e919be86e80431b76502c751125f64b173aaf7661642a01a06ca79724ec"
+    },
+    {
+      "name": "WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN_STRUCTURAL_VALIDATION_SUMMARY.md",
+      "bytes": 782,
+      "sha256": "f636584618ae350fda303f395ab62cef8d8a6757d4d1dc77c8e8f2e7ed5020be"
+    },
+    {
+      "name": "WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN_PACKAGE.zip",
+      "bytes": 230994,
+      "sha256": "92b4fad6a9b62ed2f741c07a67332a1eaebccd248f0a95081063f10dec44e243"
+    },
+    {
+      "name": "WEST_PEEK_OS_ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11.md",
+      "bytes": 206535,
+      "sha256": "a7681dc0b28ef86bae30f42d7fe6f1f61a36b405a20756ff1c4a64d9bbaa9179"
+    },
+    {
+      "name": "WEST_PEEK_OS_ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11_COMPLETENESS_LEDGER.md",
+      "bytes": 1515,
+      "sha256": "5ceb9ee438945d4cc9c791da51673be12881cf7c278c2a53fb4f24ad8bca11b3"
+    },
+    {
+      "name": "WEST_PEEK_OS_ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11_MANIFEST.json",
+      "bytes": 855,
+      "sha256": "7c54f9a676baa7cb9045b3f8c7f5d95254e150fa3f7e7925bd3aa1785816d31a"
+    },
+    {
+      "name": "WEST_PEEK_OS_ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11_STRUCTURAL_VALIDATION_SUMMARY.md",
+      "bytes": 770,
+      "sha256": "c5393e612c34b490c617b99719b5537220be7b84d5486367939136727b9276d1"
+    },
+    {
+      "name": "WEST_PEEK_OS_ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11_PACKAGE.zip",
+      "bytes": 67967,
+      "sha256": "df328ec859c55e8706ca9dcf7495279f5a7eff4ee535da223d81ac4813506a53"
+    },
+    {
+      "name": "WEST_PEEK_OS_v3_2_14_AND_ODYSSEUS_IMPL_v1_11_SCOPE_RECEIPT.md",
+      "bytes": 1338,
+      "sha256": "2eb3b2fb81bbbca4b90e58a9b9ae4dcf74d727220eaa533c123edc9f33b52ac1"
+    }
+  ]
+}

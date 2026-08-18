@@ -1,0 +1,32 @@
+{
+  "artifact": "WEST_PEEK_OS_ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11",
+  "version": "1.11",
+  "date": "2026-08-01",
+  "source_baseline": "WEST_PEEK_OS_ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_10.md",
+  "canonical_target": "WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN.md",
+  "status": "STRUCTURALLY CHECKED \u2014 LOCAL VALIDATION REQUIRED",
+  "line_count": 6440,
+  "sha256": "a7681dc0b28ef86bae30f42d7fe6f1f61a36b405a20756ff1c4a64d9bbaa9179",
+  "implemented_scope": [
+    "data models",
+    "services",
+    "workflows",
+    "authority matrix",
+    "UI requirements",
+    "route candidates",
+    "observability",
+    "security boundaries",
+    "migration plan",
+    "tests"
+  ],
+  "not_implemented": [
+    "repo changes",
+    "database migrations",
+    "APIs",
+    "UI",
+    "integrations",
+    "calculations",
+    "tests run",
+    "deployment"
+  ]
+}
