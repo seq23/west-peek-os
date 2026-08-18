@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P5 browser journey against local `wrangler dev`:
@@ -71,13 +72,16 @@ test("P5 evidence journey: document upload → conflicting claims → contradict
   await expect(page.getByTestId("no-material-contradictions")).toBeVisible();
 
   // The contradictions register shows the disposition.
+  // Both live in the Admin tier, which is collapsed by default — administration is not
+  // everyday work. Open it the way an operator has to.
+  await page.getByTestId("nav-system-toggle").click();
   await page.getByRole("button", { name: "Contradictions", exact: true }).click();
   const resolved = page.locator('li[data-testid^="contradiction-"]', { hasText: "arr" }).first();
   await expect(resolved).toContainText("RESOLVED");
   await expect(resolved).toContainText("fu_scooter_taylor");
 
   // The Activity spine shows the typed P5 events.
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await gotoSurface(page, "Activity");
   await expect(page.getByTestId("activity-event-document.uploaded").first()).toBeVisible();
   await expect(page.getByTestId("activity-event-claim.created").first()).toBeVisible();
   await expect(page.getByTestId("activity-event-contradiction.created").first()).toBeVisible();

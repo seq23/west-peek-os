@@ -1,6 +1,6 @@
-import { execSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { provisionLocalD1 } from "./support/provision";
 
 /**
  * D1–D5 design overhaul — surface-state coverage.
@@ -19,9 +19,8 @@ const MEMBER_EMAIL = "d1-design-member@westpeek.ventures";
 test.beforeAll(() => {
   // A second identity WITHOUT the Managing Partner role, in the same local D1 the dev server
   // serves — the same provisioning pattern p3-governed-work.spec.ts uses.
-  execSync(
-    `npx wrangler d1 execute WP_OS_DB --local --command "INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES ('fu_d1_design_member', '${MEMBER_EMAIL}', 'D1 Design Member', 'ACTIVE'); INSERT OR IGNORE INTO firm_user_role (firm_user_id, role_id) VALUES ('fu_d1_design_member', 'role_investment_team');"`,
-    { stdio: "pipe" },
+  provisionLocalD1(
+    `INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES ('fu_d1_design_member', '${MEMBER_EMAIL}', 'D1 Design Member', 'ACTIVE'); INSERT OR IGNORE INTO firm_user_role (firm_user_id, role_id) VALUES ('fu_d1_design_member', 'role_investment_team');`,
   );
 });
 

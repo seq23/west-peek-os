@@ -83,7 +83,7 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   await page.locator('button[data-testid^="commitment-convert-"]').first().click();
   await expect(page.getByTestId("commitment-list")).toContainText("CONVERTED");
 
-  await page.getByRole("button", { name: "Work Cards", exact: true }).click();
+  await page.getByRole("button", { name: "Work cards", exact: true }).click();
   await expect(page.getByTestId("work-card-list")).toContainText(`${marker}: send the diligence question list`);
 
   // Revoking consent re-closes the gate for any further import.

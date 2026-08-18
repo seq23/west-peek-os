@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assessRisk, expiryHours, recommendApprover } from "../../shared/approvals/risk";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -102,11 +103,18 @@ export async function requestApproval(env: Env, actor: Actor, input: RequestAppr
   const requiredRoles = await requiredApproverRolesFor(env, input.action_key);
   const requestedById = actor.type === "HUMAN" ? actor.firmUserId! : (actor.aiEmployeeId ?? "system");
 
+  // Risk is DERIVED from the action, never supplied by the requester (P47, canon §24.2). The
+  // requester is frequently an AI employee with an interest in a fast approval; a self-declared
+  // risk field would be worse than none.
+  const risk = assessRisk(input.action_key);
+  const expiresAt = new Date(Date.now() + expiryHours(risk.level) * 3_600_000).toISOString();
+
   await env.WP_OS_DB.prepare(
     `INSERT INTO approval_card
        (id, action_key, object_type, object_id, title, summary, payload_json,
-        requested_by_type, requested_by_id, required_approver_roles_json, state, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'drafted', ?11)`,
+        requested_by_type, requested_by_id, required_approver_roles_json, state, firm_scope,
+        risk_level, impact_note, recommended_approver, expires_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'drafted', ?11, ?12, ?13, ?14, ?15)`,
   )
     .bind(
       id,
@@ -120,6 +128,10 @@ export async function requestApproval(env: Env, actor: Actor, input: RequestAppr
       requestedById,
       JSON.stringify(requiredRoles),
       firmScope,
+      risk.level,
+      risk.reason,
+      recommendApprover(input.action_key, requiredRoles),
+      expiresAt,
     )
     .run();
 
@@ -354,4 +366,77 @@ export async function handleDecideApproval(ctx: RouteContext): Promise<Response>
   } catch (err) {
     return errorResponse(err);
   }
+}
+
+// ── Approval Centre: evidence and comments (P47, canon §24.2) ────────────────
+//
+// An approval queue whose items cannot be evaluated in place trains the approver to click approve.
+// These two additions are what let a decision be made on the card rather than after a hunt through
+// four other pages.
+
+/** GET /api/approvals/:id/context — evidence, comments, and whether the card has gone stale. */
+export async function handleApprovalContext(ctx: RouteContext): Promise<Response> {
+  const id = ctx.params.id;
+  if (!id) return json({ error: "invalid_input" }, { status: 400 });
+
+  const card = await ctx.env.WP_OS_DB.prepare(
+    "SELECT id, action_key, title, summary, risk_level, impact_note, recommended_approver, expires_at, state, required_approver_roles_json FROM approval_card WHERE id = ?1",
+  )
+    .bind(id)
+    .first<Record<string, unknown>>();
+  if (!card) return json({ error: "not_found" }, { status: 404 });
+
+  const evidence = await ctx.env.WP_OS_DB.prepare(
+    "SELECT id, kind, ref_id, label, detail, created_at FROM approval_evidence WHERE approval_card_id = ?1 ORDER BY created_at",
+  ).bind(id).all();
+  const comments = await ctx.env.WP_OS_DB.prepare(
+    "SELECT id, author_type, author_id, body, created_at FROM approval_comment WHERE approval_card_id = ?1 ORDER BY created_at",
+  ).bind(id).all();
+
+  const { isStale } = await import("../../shared/approvals/risk");
+  return json({
+    card,
+    evidence: evidence.results ?? [],
+    comments: comments.results ?? [],
+    // Advisory. A stale card is flagged for attention; it is never auto-decided, because silence
+    // approving an external send is the system deciding something it has no authority to decide.
+    stale: isStale(card.expires_at as string | null, new Date()),
+  });
+}
+
+const evidenceSchema = z.object({
+  kind: z.enum(["CLAIM", "DOCUMENT", "INTELLIGENCE_ITEM", "MEETING", "CONTRADICTION", "OTHER"]),
+  label: z.string().min(1).max(300),
+  ref_id: z.string().max(80).nullish(),
+  detail: z.string().max(2000).nullish(),
+});
+
+/** POST /api/approvals/:id/evidence — attach what the decision should rest on. */
+export async function handleAddApprovalEvidence(ctx: RouteContext): Promise<Response> {
+  const id = ctx.params.id;
+  const parsed = evidenceSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!id || !parsed.success) return json({ error: "invalid_input" }, { status: 400 });
+  const actor = actorFromIdentity(ctx.identity!);
+  await ctx.env.WP_OS_DB.prepare(
+    "INSERT INTO approval_evidence (id, approval_card_id, kind, ref_id, label, detail, added_by) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+  )
+    .bind(`ape_${crypto.randomUUID()}`, id, parsed.data.kind, parsed.data.ref_id ?? null,
+          parsed.data.label, parsed.data.detail ?? null, actor.firmUserId ?? "system")
+    .run();
+  return json({ added: true }, { status: 201 });
+}
+
+/** POST /api/approvals/:id/comments — ask before deciding, rather than rejecting for want of an answer. */
+export async function handleAddApprovalComment(ctx: RouteContext): Promise<Response> {
+  const id = ctx.params.id;
+  const body = (await ctx.request.json().catch(() => null)) as { body?: string } | null;
+  if (!id || !body?.body?.trim()) return json({ error: "invalid_input" }, { status: 400 });
+  const actor = actorFromIdentity(ctx.identity!);
+  await ctx.env.WP_OS_DB.prepare(
+    "INSERT INTO approval_comment (id, approval_card_id, author_type, author_id, body) VALUES (?1,?2,?3,?4,?5)",
+  )
+    .bind(`apm_${crypto.randomUUID()}`, id, actor.type === "HUMAN" ? "HUMAN" : "AI",
+          actor.firmUserId ?? actor.aiEmployeeId ?? "system", body.body.trim())
+    .run();
+  return json({ added: true }, { status: 201 });
 }

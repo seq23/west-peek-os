@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { personaFor } from "@shared/registry/aiEmployeePersonas";
+import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
 /**
  * Employee Lounge + Digital Office (P15; GAP-01, GAP-10, GAP-11).
@@ -38,6 +40,21 @@ interface LoungeResponse {
   activation_law: string;
 }
 
+/**
+ * The approved-activation card, if one exists.
+ *
+ * Activation needs an approved `ai_employee.activate` receipt. The card is created by
+ * `request-activation` and approved on Approvals — but nothing was ever completing the final step,
+ * so an approved request sat there and the employee stayed INACTIVE forever. This is that step.
+ */
+interface ActivationCard {
+  id: string;
+  action_key: string;
+  object_type: string;
+  object_id: string;
+  state: string;
+}
+
 interface EmployeeDetail {
   employee: { id: string; name: string; role: string; status: string; prompt_version: string };
   profile: { department: string; brief: string; manager_employee_id: string | null } | null;
@@ -71,6 +88,9 @@ function statusBadge(status: string): string {
 
 function EmployeeDetailPanel({ id, me, onChanged }: { id: string; me: MeResponse; onChanged: () => void }) {
   const detail = useApi<EmployeeDetail>(`/api/workforce/employees/${id}`);
+  // Approved activation receipts for THIS employee. `approved` is the state the receipt must be
+  // in; an executed card has already been consumed.
+  const approvedCards = useApi<{ approvals: ActivationCard[] }>("/api/approvals?state=approved");
   const [message, setMessage] = useState<string | null>(null);
   const [finding, setFinding] = useState("");
   const [disposition, setDisposition] = useState("CONTINUE");
@@ -178,6 +198,48 @@ function EmployeeDetailPanel({ id, me, onChanged }: { id: string; me: MeResponse
             {s}
           </button>
         ))}
+        {/* THE COMPLETION STEP. An approved receipt exists but nothing was consuming it, so the
+            request→approve→activate chain stopped one link short and the employee never activated.
+            This button is the only thing that calls the activate endpoint; it cannot invent a
+            receipt, so the cap and the approval remain enforced server-side. */}
+        {(() => {
+          const receipt = (approvedCards.data?.approvals ?? []).find(
+            (c) =>
+              c.action_key === "ai_employee.activate" &&
+              c.object_type === "ai_employee" &&
+              c.object_id === id &&
+              c.state === "approved",
+          );
+          if (!receipt || d.employee.status === "ACTIVE" || d.employee.status === "RETIRED") return null;
+          return (
+            <button
+              type="button"
+              data-testid={`employee-activate-${id}`}
+              onClick={async () => {
+                const res = await api<{ status?: string; error?: string; detail?: string }>(
+                  `/api/ai/employees/${id}/activate`,
+                  {
+                    method: "POST",
+                    body: {
+                      approval_receipt_id: receipt.id,
+                      reason: `activation completed by ${me.fullName} against approved receipt ${receipt.id}`,
+                    },
+                  },
+                );
+                setMessage(
+                  res.status === 200
+                    ? `${d.employee.name} is now ACTIVE.`
+                    : `Refused: ${res.data?.detail ?? res.data?.error ?? res.status}`,
+                );
+                refresh();
+                approvedCards.reload();
+              }}
+            >
+              Activate (approved)
+            </button>
+          );
+        })()}
+
         {d.employee.status !== "ACTIVE" && d.employee.status !== "RETIRED" && (
           <button
             type="button"
@@ -393,12 +455,39 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
   const lounge = useApi<LoungeResponse>("/api/workforce/lounge");
   const [department, setDepartment] = useState<string>("ALL");
   const [selected, setSelected] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "NOT_ACTIVE">("ALL");
+  // The opened record is rendered BELOW a grid that can be a full screen tall, so without this the
+  // Open button appears to do nothing at all.
+  const detailRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!selected) return;
+    detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Move focus too: a sighted operator gets the scroll, a keyboard or screen-reader user gets
+    // nothing from scrolling alone.
+    detailRef.current?.focus({ preventScroll: true });
+  }, [selected]);
 
   if (lounge.loading && !lounge.data) return <p data-testid="lounge-loading">Loading the workforce…</p>;
   if (!lounge.data) return <p data-testid="lounge-error">Could not load the workforce (HTTP {lounge.status ?? "?"}).</p>;
 
-  const shown =
+  const byDepartment =
     department === "ALL" ? lounge.data.employees : lounge.data.employees.filter((e) => e.department === department);
+  const shown = byDepartment
+    .filter((e) =>
+      statusFilter === "ALL"
+        ? true
+        : statusFilter === "ACTIVE"
+          ? e.status === "ACTIVE"
+          : e.status !== "ACTIVE",
+    )
+    // Active first: who is working is the question this page is opened to answer.
+    .slice()
+    .sort((a, b) => {
+      if (a.status === "ACTIVE" && b.status !== "ACTIVE") return -1;
+      if (b.status === "ACTIVE" && a.status !== "ACTIVE") return 1;
+      return a.name.localeCompare(b.name);
+    });
+  const activeCount = byDepartment.filter((e) => e.status === "ACTIVE").length;
 
   return (
     <section data-testid="employees-page">
@@ -418,33 +507,110 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
             ))}
           </select>
         </label>
+        <label>
+          Show{" "}
+          <select
+            data-testid="lounge-status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as "ALL" | "ACTIVE" | "NOT_ACTIVE")}
+          >
+            <option value="ALL">Everyone ({byDepartment.length})</option>
+            <option value="ACTIVE">Active only ({activeCount})</option>
+            <option value="NOT_ACTIVE">Not active ({byDepartment.length - activeCount})</option>
+          </select>
+        </label>
       </div>
+
+      <p className="muted small" data-testid="lounge-status-summary">
+        <strong>{activeCount} active</strong> · {byDepartment.length - activeCount} not active
+        {statusFilter !== "ALL" && " · filtered"} · active shown first
+      </p>
 
       <div className="module-grid" data-testid="lounge-grid">
         {shown.map((e) => (
-          <section key={e.id} className="module-card" data-testid={`employee-card-${e.id}`}>
+          <section
+            key={e.id}
+            className={
+              e.id === selected
+                ? "module-card employee-card-open"
+                : e.status === "ACTIVE"
+                  ? "module-card employee-card-active"
+                  : "module-card"
+            }
+            data-testid={`employee-card-${e.id}`}
+            data-status={e.status}
+            data-open={e.id === selected ? "true" : "false"}
+          >
             <header className="module-card-head">
               <h4>
-                <span className="avatar">{e.avatar_initials}</span> {e.name}
+                {portraitFor(e.name) ? (
+                  <img
+                    className="employee-portrait"
+                    src={portraitFor(e.name)!}
+                    alt={portraitAlt(e.name, e.role)}
+                    width={44}
+                    height={44}
+                    loading="lazy"
+                    /* A missing or failed portrait falls back to initials rather than a broken
+                       image icon — the lounge should degrade quietly. */
+                    onError={(ev) => {
+                      (ev.currentTarget as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                ) : (
+                  <span className="avatar">{e.avatar_initials}</span>
+                )}{" "}
+                {e.name}
               </h4>
               <span className={statusBadge(e.status)}>{e.status}</span>
             </header>
             <p className="module-answers">{e.role}</p>
+            {/* P32: the lounge should show who someone IS. Title + brief described a job slot;
+                expertise and voice describe a colleague you might choose to confer with. */}
+            {personaFor(e.name) && (
+              <>
+                <p className="small employee-expertise">{personaFor(e.name)!.expertise}</p>
+                <p className="muted small employee-voice">{personaFor(e.name)!.voice}</p>
+              </>
+            )}
             <p className="small">{e.brief}</p>
             <p className="muted small">
               {e.department} · {e.current_work.length} open card(s) · {e.runs_30d} run(s)/30d ({e.blocked_runs_30d} blocked) · $
               {e.cost_30d_usd.toFixed(4)}
             </p>
             {e.tool_scopes.length > 0 && <p className="muted small">tools: {e.tool_scopes.join(", ")}</p>}
-            <button type="button" className="link-button" data-testid={`employee-open-${e.id}`} onClick={() => setSelected(e.id)}>
-              Open
+            <button
+              type="button"
+              className="link-button"
+              data-testid={`employee-open-${e.id}`}
+              aria-expanded={e.id === selected}
+              aria-controls="employee-detail-anchor"
+              onClick={() => setSelected(e.id)}
+            >
+              {e.id === selected ? "Open below ↓" : "Open"}
             </button>
           </section>
         ))}
       </div>
       {shown.length === 0 && <p className="state-empty">No employees in this department.</p>}
 
-      {selected && <EmployeeDetailPanel id={selected} me={me} onChanged={lounge.reload} />}
+      {selected && (
+        <div id="employee-detail-anchor" ref={detailRef} tabIndex={-1} data-testid="employee-detail-anchor">
+          <div className="detail-lead">
+            <h3>
+              Editing {lounge.data.employees.find((x) => x.id === selected)?.name ?? "employee"}
+            </h3>
+            <p className="muted small">
+              This is the record you opened — lifecycle, activation, tools and manager review are
+              changed here.
+            </p>
+            <button type="button" className="link-button" data-testid="employee-detail-close" onClick={() => setSelected(null)}>
+              Close
+            </button>
+          </div>
+          <EmployeeDetailPanel id={selected} me={me} onChanged={lounge.reload} />
+        </div>
+      )}
 
       <HandoffsPanel onChanged={lounge.reload} />
       <RoomsPanel me={me} />

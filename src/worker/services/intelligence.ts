@@ -8,6 +8,8 @@ import type { FirmUserIdentity } from "../auth";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { privacyLabelSchema } from "../../shared/privacy";
+import { fetchFeed } from "../effects/feedClient";
+import { synthesiseBriefing } from "./briefingSynthesis";
 
 /**
  * Daily Intelligence Engine (P14, GAP-05).
@@ -798,6 +800,10 @@ export interface BriefingRow {
   generated_at: string;
   viewed_at: string | null;
   firm_scope: string;
+  /** P30 — the written brief. NULL until synthesised; the item list renders regardless. */
+  synthesis_md?: string | null;
+  synthesis_ai_run_id?: string | null;
+  synthesis_state?: string;
 }
 
 const SELECTION_RULE =
@@ -839,13 +845,27 @@ export async function assembleBriefing(
     }
   }
 
+  // PER-GP TAILORING. `preferredCategoriesFor` and the per-user `briefing_json.categories`
+  // preference both already existed, but this query ignored them — so every briefing was the same
+  // firm-wide top-N and the preference had no effect. Categories the operator chose are surfaced
+  // FIRST, then everything else fills the remainder.
+  //
+  // Deliberately a WEIGHTING, not a filter: a hard filter would silently hide a high-relevance item
+  // in an unchosen category, which on a daily briefing means the operator never learns it existed.
+  const preferred = await preferredCategoriesFor(env, actor.firmUserId);
+  const placeholders = preferred.map((_, i) => `?${i + 2}`).join(",");
+  // The term is OMITTED when there is no preference. A literal `0` here would be read by SQLite as
+  // an ORDER BY column ORDINAL, not as a constant, and column 0 does not exist.
+  const preferenceRank =
+    preferred.length > 0 ? `CASE WHEN category IN (${placeholders}) THEN 0 ELSE 1 END, ` : "";
+
   const rows = await env.WP_OS_DB.prepare(
     `SELECT * FROM intelligence_item
       WHERE archived = 0 AND ${visibility}
-      ORDER BY relevance_score DESC, created_at DESC, id
+      ORDER BY ${preferenceRank}relevance_score DESC, created_at DESC, id
       LIMIT ?1`,
   )
-    .bind(maxItems)
+    .bind(maxItems, ...preferred)
     .all<IntelligenceItemRow>();
   const items = rows.results ?? [];
 
@@ -887,6 +907,28 @@ export async function assembleBriefing(
     dedupeKey: `briefing:${id}`,
     firmScope: actor.firmScopes[0] ?? "west-peek",
   });
+
+  const fresh = (await env.WP_OS_DB.prepare("SELECT * FROM briefing WHERE id = ?1").bind(id).first<BriefingRow>())!;
+
+  // P30 — write the brief ONCE, on first assembly. A dated artifact must read the same to both
+  // partners and the same tomorrow, so this is stored rather than regenerated per page view.
+  // Failure is recorded, never thrown: an unsynthesised brief still shows its items.
+  const who = await env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1")
+    .bind(actor.firmUserId)
+    .first<{ full_name: string }>();
+  const outcome = await synthesiseBriefing(
+    env,
+    { type: "HUMAN", firmUserId: actor.firmUserId ?? undefined, roles: [], firmScopes: actor.firmScopes },
+    who?.full_name ?? "Managing Partner",
+    preferred,
+    fresh,
+    items,
+  );
+  await env.WP_OS_DB.prepare(
+    "UPDATE briefing SET synthesis_md = ?2, synthesis_ai_run_id = ?3, synthesis_state = ?4 WHERE id = ?1",
+  )
+    .bind(id, outcome.markdown, outcome.aiRunId, outcome.state)
+    .run();
 
   const briefing = (await env.WP_OS_DB.prepare("SELECT * FROM briefing WHERE id = ?1").bind(id).first<BriefingRow>())!;
   return { briefing, items };
@@ -1016,6 +1058,11 @@ export async function handleRunIntelligence(ctx: RouteContext): Promise<Response
       actorFromIdentity(ctx.identity!),
       { idempotencyKey: parsed.data.idempotency_key, triggerKind: "MANUAL", sourceKeys: parsed.data.source_keys },
       {
+        // P29: the outbound feed client. Previously absent, so every HTTP_FEED source failed
+        // closed with EGRESS_GATED. Authorised by the Managing Partner with no allowlist; the
+        // client still refuses loopback/private/link-local hosts, which no feed can live on.
+        feedFetch: (source) =>
+          fetchFeed({ source_key: source.source_key, url: source.url, category: source.category }),
         manualItems: (parsed.data.manual_items ?? []).map((m) => ({
           title: m.title,
           url: m.url,

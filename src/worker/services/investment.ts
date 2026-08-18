@@ -164,6 +164,10 @@ export interface OpportunityRow {
   carry: number | null;
   terms_json: string;
   privacy_label: string;
+  /** Where the relationship that produced this deal started (P51). */
+  relationship_origin: string;
+  origin_event_id: string | null;
+  relationship_started_at: string | null;
   firm_scope: string;
   created_by: string;
   created_at: string;
@@ -184,6 +188,9 @@ export interface CreateOpportunityInput {
   carry?: number;
   terms?: Record<string, unknown>;
   privacy_label?: string;
+  relationship_origin?: string;
+  origin_event_id?: string;
+  relationship_started_at?: string;
 }
 
 export async function getOpportunity(env: Env, id: string): Promise<OpportunityRow | null> {
@@ -203,8 +210,9 @@ export async function createOpportunity(env: Env, actor: Actor, input: CreateOpp
   await env.WP_OS_DB.prepare(
     `INSERT INTO investment_opportunity
        (id, company_id, opportunity_type, title, status, source_channel, security_class_id, price_per_share,
-        discount_premium, quantity, seller_name, broker_name, fees, carry, terms_json, privacy_label, firm_scope, created_by)
-     VALUES (?1, ?2, ?3, ?4, 'NEW', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)`,
+        discount_premium, quantity, seller_name, broker_name, fees, carry, terms_json, privacy_label,
+        relationship_origin, origin_event_id, relationship_started_at, firm_scope, created_by)
+     VALUES (?1, ?2, ?3, ?4, 'NEW', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
   )
     .bind(
       id,
@@ -222,6 +230,11 @@ export async function createOpportunity(env: Env, actor: Actor, input: CreateOpp
       input.carry ?? null,
       JSON.stringify(input.terms ?? {}),
       input.privacy_label ?? "INTERNAL",
+      // UNRECORDED rather than OTHER or INBOUND: a default that asserts something nobody checked
+      // is worse than an honest gap, and it makes "we never captured this" countable.
+      input.relationship_origin ?? "UNRECORDED",
+      input.origin_event_id ?? null,
+      input.relationship_started_at ?? null,
       actor.firmScopes[0] ?? "west-peek",
       actor.firmUserId ?? actor.aiEmployeeId ?? "system",
     )
@@ -240,6 +253,12 @@ export async function createOpportunity(env: Env, actor: Actor, input: CreateOpp
 }
 
 const OPPORTUNITY_UPDATABLE_FIELDS = [
+  // Provenance is updatable because it is almost always recorded shortly AFTER creation — a deal
+  // is entered in a hurry and the "where did we meet them" answer arrives a day later. Making it
+  // create-only would guarantee it stayed UNRECORDED.
+  "relationship_origin",
+  "origin_event_id",
+  "relationship_started_at",
   "title",
   "source_channel",
   "security_class_id",
@@ -1397,6 +1416,12 @@ export async function handleListSecurityClasses(ctx: RouteContext): Promise<Resp
   return json({ security_classes: rows.results ?? [] });
 }
 
+/** Must stay in step with the relationship_origin CHECK in migration 0044. */
+export const RELATIONSHIP_ORIGINS = [
+  "UNRECORDED", "ROOM", "MASTERMIND", "OFFICE", "COUNCIL", "COMMUNITY_INTRO",
+  "PORTFOLIO_REFERRAL", "LP_REFERRAL", "INBOUND", "OUTBOUND", "NETWORK", "OTHER",
+] as const;
+
 const createOpportunitySchema = z.object({
   company_id: z.string().trim().min(1),
   opportunity_type: z.enum(OPPORTUNITY_TYPES),
@@ -1412,6 +1437,11 @@ const createOpportunitySchema = z.object({
   carry: z.number().optional(),
   terms: z.record(z.unknown()).optional(),
   privacy_label: privacyLabelSchema.optional(),
+  // P51 — "the output is early inclusion". The gap between when the relationship started and when
+  // the deal appeared is the only measurement that tests whether the community model works.
+  relationship_origin: z.enum(RELATIONSHIP_ORIGINS).optional(),
+  origin_event_id: z.string().trim().max(80).optional(),
+  relationship_started_at: z.string().trim().max(40).optional(),
 });
 
 export async function handleCreateOpportunity(ctx: RouteContext): Promise<Response> {
@@ -1825,4 +1855,59 @@ export async function handleCompany360(ctx: RouteContext): Promise<Response> {
   const view = await getCompany360(ctx.env, ctx.params.id!);
   if (!view) return json({ error: "not_found" }, { status: 404 });
   return json(view);
+}
+
+/**
+ * Where deals come from (P51, docs/COMMUNITY.md).
+ *
+ * "The output is not engagement. The output is early inclusion." That sentence rules out the
+ * dashboard this would otherwise be — members, attendance, engagement rate — and points at the one
+ * measurement that actually tests the community thesis: for each deal, where the relationship
+ * started, and how long BEFORE the deal existed.
+ *
+ * `leadDays` is the whole point. A deal sourced from a Room eleven months before the company
+ * incorporated is the community working. The same deal recorded the week it appeared is a
+ * coincidence. Averaging them would hide the difference, so both the count and the lead time are
+ * reported per origin.
+ *
+ * `unrecorded` is deliberately prominent. If most deals have no provenance, every number here is
+ * unreliable and a reader should know that before drawing a conclusion from the rest.
+ */
+export async function handleDealProvenance(ctx: RouteContext): Promise<Response> {
+  const byOrigin = await ctx.env.WP_OS_DB.prepare(
+    `SELECT relationship_origin AS origin,
+            COUNT(*) AS deals,
+            SUM(CASE WHEN relationship_started_at IS NOT NULL THEN 1 ELSE 0 END) AS dated,
+            AVG(CASE WHEN relationship_started_at IS NOT NULL
+                     THEN julianday(created_at) - julianday(relationship_started_at) END) AS avg_lead_days
+     FROM investment_opportunity
+     GROUP BY relationship_origin
+     ORDER BY deals DESC`,
+  ).all<{ origin: string; deals: number; dated: number; avg_lead_days: number | null }>();
+
+  // The backfill queue: deals a person can still remember the answer for. Newest first, because
+  // provenance is recoverable for a week and guesswork after a month.
+  const unrecorded = await ctx.env.WP_OS_DB.prepare(
+    `SELECT o.id, o.title, o.created_at, c.canonical_name AS company
+     FROM investment_opportunity o
+     LEFT JOIN canonical_company c ON c.id = o.company_id
+     WHERE o.relationship_origin = 'UNRECORDED'
+     ORDER BY o.created_at DESC LIMIT 50`,
+  ).all();
+
+  const rows = byOrigin.results ?? [];
+  const total = rows.reduce((sum, r) => sum + Number(r.deals), 0);
+  const unrecordedCount = Number(rows.find((r) => r.origin === "UNRECORDED")?.deals ?? 0);
+
+  return json({
+    byOrigin: rows.map((r) => ({
+      origin: r.origin,
+      deals: Number(r.deals),
+      dated: Number(r.dated),
+      avgLeadDays: r.avg_lead_days === null ? null : Math.round(r.avg_lead_days),
+    })),
+    total,
+    unrecordedCount,
+    unrecorded: unrecorded.results ?? [],
+  });
 }

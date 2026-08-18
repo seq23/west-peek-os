@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { HowThisWorks } from "./HowThisWorks";
 
 /**
  * Governed orchestration (P19; GAP-21, GAP-22).
@@ -59,6 +60,32 @@ export function JobsPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="jobs-page">
+      <HowThisWorks
+        testId="jobs"
+        title="Scheduled Work"
+        what="Recurring work that runs on a cadence instead of waiting for someone to remember it — the Daily Brief, sweeps, monitoring, meeting preparation."
+        when="When something should happen every day or every week without being asked, and when you want to know why a recurring job is not running."
+        operatorDoes={[
+          "Review what each job does and how often it runs.",
+          "Enable a job that should be running, or pause one that should not.",
+          "Read the reason a job is blocked and clear it.",
+        ]}
+        aiDoes={[
+          "Runs the job on its cadence once it is enabled.",
+          "Records each run, refusal, failure and retry.",
+        ]}
+        requiresOperator={[
+          "Enabling a job. New jobs are created paused; nothing starts running on its own.",
+          "Anything the job would do that is itself a reserved action.",
+        ]}
+        next="An enabled job runs on its cadence and its results appear in its run history. A paused job does nothing until you enable it."
+        blocked={[
+          "No active AI employee for the work, or the activation cap is reached.",
+          "A required capability, integration or provider is not configured.",
+          "A credential is missing, or two credentials conflict.",
+          "The job's action is reserved and has no approval.",
+        ]}
+      />
       <p className="muted small" data-testid="jobs-architecture">
         {jobs.data?.architecture}
       </p>

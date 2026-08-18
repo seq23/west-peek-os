@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P16 browser journey — provider router + AI cost command center (GAP-02, GAP-03).
@@ -20,7 +21,7 @@ async function signIn(page: import("@playwright/test").Page): Promise<void> {
 
 test("the provider surface reports credential presence and an honest health check", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "AI Ops", exact: true }).click();
+  await gotoSurface(page, "Cockpit");
   await expect(page.getByTestId("ai-ops-page")).toBeVisible();
 
   // Credential presence by NAME, and it is NOT configured in this environment.
@@ -34,7 +35,7 @@ test("the provider surface reports credential presence and an honest health chec
 
 test("the model catalogue prints pricing provenance beside the price", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "AI Ops", exact: true }).click();
+  await gotoSurface(page, "Cockpit");
 
   const row = page.getByTestId("model-row-gpt-4o-mini");
   await expect(row).toContainText("ILLUSTRATIVE");
@@ -44,7 +45,7 @@ test("the model catalogue prints pricing provenance beside the price", async ({ 
 
 test("a Managing Partner sets a scoped budget and the cost centre shows its definitions", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "AI Ops", exact: true }).click();
+  await gotoSurface(page, "Cockpit");
 
   await page.getByTestId("budget-scope-type").selectOption("CATEGORY");
   await page.getByTestId("budget-scope-id").fill("RESEARCH");

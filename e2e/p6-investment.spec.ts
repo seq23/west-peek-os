@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P6 browser journey against local `wrangler dev`:
@@ -100,7 +101,7 @@ test("P6 investment journey: opportunity → deal math → IC packet → receipt
   expect(replay.status()).toBe(409);
 
   // Activity spine carries the typed IC events.
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await gotoSurface(page, "Activity");
   await expect(page.getByTestId("activity-event-ic.packet_assembled").first()).toBeVisible();
   await expect(page.getByTestId("activity-event-ic.packet_submitted").first()).toBeVisible();
   await expect(page.getByTestId("activity-event-ic.decision_recorded").first()).toBeVisible();

@@ -60,8 +60,12 @@ The `seq23/secondaries` repo is a read-only integration partner; if it is not lo
 the port is recorded as `UNPROVEN — SOURCE ACCESS GATE` and manual entry remains the path.
 
 ### ADR-006 — Authentication
-Private ingress is Cloudflare Access (or equivalent) in deployed environments — configuration, not code
-(UNPROVEN until operator configures). App-level `FirmUser` + `Role` + `AuthorityScope` records are always
+Private ingress is Cloudflare Access (or equivalent) in deployed environments — configuration, not code.
+The operator has since configured it: Access is recorded as active on the production hostname
+`west-peek-os.seq-taylor.workers.dev`, established and verified entirely outside this repository, so no
+check here proves it and none ever will (docs/ENVIRONMENTS.md). The decision is unchanged either way —
+the application never implements ingress, and it never trusts Access alone.
+App-level `FirmUser` + `Role` + `AuthorityScope` records are always
 enforced server-side. Local development uses an explicit dev-identity header honored only when
 `WP_OS_ENV=local`; unauthenticated requests are denied everywhere, including local.
 

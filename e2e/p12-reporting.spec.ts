@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P12 browser journey against local `wrangler dev`:
@@ -75,7 +76,9 @@ test("P12 reporting journey: review gates → receipted distribution → reconci
   await page.getByRole("button", { name: "Approvals", exact: true }).click();
   const approvalCard = page.locator(`li[data-testid="approval-card-${card.id}"]`);
   await expect(approvalCard).toContainText("pending_review");
-  await approvalCard.getByRole("textbox").fill("reviewed by finance, compliance, and the MP — E2E");
+  // Targeted by testid, not by role: an approval card now also carries evidence and comment
+  // inputs (canon §24.2 context), so "the textbox" is ambiguous.
+  await approvalCard.locator('[data-testid^="decision-note-"]').fill("reviewed by finance, compliance, and the MP — E2E");
   await approvalCard.getByRole("button", { name: "Approve" }).click();
   await expect
     .poll(async () => (await (await request.get(`/api/approvals/${card.id}`, { headers: MP })).json()).state)
@@ -115,7 +118,7 @@ test("P12 reporting journey: review gates → receipted distribution → reconci
   expect(stored.administrator_value).toBe("31500000");
   expect(stored.internal_value).toBe("31000000");
 
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await gotoSurface(page, "Activity");
   await expect(page.locator('[data-testid="activity-event-reporting.packet_distributed"]').first()).toBeVisible();
   await expect(page.locator('[data-testid="activity-event-reconciliation.exception_resolved"]').first()).toBeVisible();
 });

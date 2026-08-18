@@ -10,6 +10,7 @@ import { runIntelligence } from "./intelligence";
 import { evaluateCompanyAlerts } from "./portfolio";
 import { runAi } from "../ai/runAi";
 import { privacyLabelSchema } from "../../shared/privacy";
+import { fetchFeed } from "../effects/feedClient";
 
 /**
  * Governed orchestration + scheduled AI employees (P19; GAP-21, GAP-22).
@@ -139,20 +140,81 @@ async function checkPreconditions(env: Env, job: ScheduledJobRow): Promise<strin
 async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runId: string, now: Date): Promise<RunOutcome> {
   const artifacts: RunOutcome["artifacts"] = [];
 
+  // job_key is checked BEFORE kind. `kind` is a CHECK constraint that cannot be widened in D1:
+  // SQLite cannot alter a CHECK in place, job_run holds foreign keys into scheduled_job, and
+  // `PRAGMA foreign_keys=OFF` is a no-op inside the transaction D1 wraps a migration in — tried and
+  // confirmed, not assumed. Dropping the CHECK would remove what stops a typo becoming a job that
+  // silently never runs, so one documented special case is the better trade. See migration 0043.
+  if (job.job_key === "weekly_mp_review") {
+    const { generateReview } = await import("./weeklyReview");
+    const out = await generateReview(env, actor, now);
+    artifacts.push({ kind: "WEEKLY_REVIEW", ref_type: "weekly_review", ref_id: String(out.review.id) });
+    return {
+      status: "SUCCEEDED",
+      summary: `Weekly review assembled: ${(out.items ?? []).length} agenda item(s) across sixteen headings.`,
+      artifacts,
+    };
+  }
+
+  // Parker's monthly Room proposal. Same job_key-before-kind reasoning as above, and the same
+  // shape as weekly_mp_review: it fires daily and generates only when the current month has no
+  // proposal yet. schedule_kind has no MONTHLY value and adding one would mean rebuilding
+  // scheduled_job's CHECK; a month check in SQL costs one query and no migration risk.
+  if (job.job_key === "monthly_room_proposal") {
+    const { runMonthlyRoomProposal } = await import("./roomPacket");
+    const out = await runMonthlyRoomProposal(env, actor, now.toISOString());
+    if (out.packetId) {
+      artifacts.push({ kind: "ROOM_PACKET", ref_type: "room_packet", ref_id: out.packetId });
+    }
+    return {
+      status: "SUCCEEDED",
+      // A skipped month is a success, not a no-op worth alerting on — the shelf is already stocked.
+      summary: out.generated ? `Room proposed: ${out.detail}` : out.detail,
+      artifacts,
+    };
+  }
+
   if (job.kind === "INTELLIGENCE") {
     const result = await runIntelligence(
       env,
       actor,
       { idempotencyKey: `job:${runId}`, triggerKind: "SCHEDULED" },
-      { now },
+      {
+        now,
+        // The SECOND call site. P29 wired the feed client into the manual sweep only, so a
+        // SCHEDULED sweep silently kept the old behaviour and reported every HTTP_FEED source as
+        // "no outbound feed client is configured" — which read like an egress policy, not a bug.
+        // Both entry points must inject the same client or the two paths disagree.
+        feedFetch: (source) =>
+          fetchFeed({ source_key: source.source_key, url: source.url, category: source.category }),
+      },
     );
     artifacts.push({ kind: "INTELLIGENCE_RUN", ref_type: "intelligence_run", ref_id: result.run.id });
     for (const item of result.items.slice(0, 20)) {
       artifacts.push({ kind: "INTELLIGENCE_ITEM", ref_type: "intelligence_item", ref_id: item.id, note: item.title });
     }
+    // The briefing is chained here rather than given its own job, because it READS what the sweep
+    // just gathered. Two independent jobs could fire in either order, and a brief that ran first
+    // would brief on yesterday's items while reporting today's date.
+    //
+    // A failed brief does NOT fail the sweep. The sweep genuinely succeeded and its items are
+    // stored; marking the whole run failed would hide that and invite someone to re-run the
+    // gathering unnecessarily.
+    let briefingNote = "";
+    if (result.run.status !== "FAILED") {
+      try {
+        const { runDailyForAll } = await import("./dailyIntelligence");
+        const brief = await runDailyForAll(env, actor, now);
+        briefingNote = ` Briefings: ${brief.generated} generated${brief.failed ? `, ${brief.failed} failed` : ""}.`;
+        artifacts.push({ kind: "DAILY_BRIEFING", note: `${brief.generated} partner briefing(s)` });
+      } catch (err) {
+        briefingNote = ` Briefing step failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+
     return {
       status: result.run.status === "FAILED" ? "FAILED" : "SUCCEEDED",
-      summary: `${result.run.status}: ${result.run.items_kept} item(s) kept, ${result.run.items_duplicate} duplicate, ${result.run.sources_failed} source failure(s)`,
+      summary: `${result.run.status}: ${result.run.items_kept} item(s) kept, ${result.run.items_duplicate} duplicate, ${result.run.sources_failed} source failure(s).${briefingNote}`,
       error: result.run.failure_reason ?? undefined,
       artifacts,
     };

@@ -314,17 +314,65 @@ hr {
   padding: var(--space-md) var(--space-sm) var(--space-lg);
 }
 
+/* — Group header (P53).
+ *
+ * QUIETER than the destinations beneath it. The old rule was smaller AND bolder, which reads as
+ * ambiguous rather than hierarchical — a signpost competing with the things it points at. Weight
+ * drops to 500 and colour to the dim ink; the uppercase and letterspacing carry the "this is a
+ * label, not a link" signal on their own.
+ *
+ * Case is deliberately split and stays that way: caps for headers, sentence case for destinations.
+ * That is what tells the eye which things are clickable before it reads any of them. */
 .rail-group {
-  margin: var(--space-md) 0 var(--space-2xs);
-  padding: 0 var(--space-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2xs);
+  width: 100%;
+  margin: var(--space-md) 0 var(--space-3xs);
+  padding: var(--space-3xs) var(--space-sm);
+  border: 0;
+  background: transparent;
   color: var(--wp-shell-ink-2);
+  font: inherit;
   font-size: var(--text-2xs);
-  font-weight: 600;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
+  opacity: 0.72;
 }
 
 .rail-group:first-child { margin-top: 0; }
+
+.rail-group-toggle {
+  cursor: pointer;
+  text-align: left;
+  /* Full 44px is not wanted here — a header is not a primary target and a tall one pushes the
+     destinations down. 28px stays comfortably hittable while keeping the rail dense. */
+  min-height: 28px;
+  transition: opacity var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.rail-group-toggle:hover { opacity: 1; color: var(--wp-shell-ink); }
+.rail-group-toggle:focus-visible { outline: 2px solid var(--wp-orange); outline-offset: -2px; opacity: 1; }
+.rail-group-mark { font-size: var(--text-xs); opacity: 0.7; }
+
+/* — Dividers only where the KIND of thing changes: above Admin, and above the footer. A line
+     between every group would turn a forty-item rail into a spreadsheet, and the spacing already
+     separates them — drawing both is saying it twice. */
+.rail-secondary,
+.rail-footer {
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--wp-shell-line);
+}
+
+/* — Icons, on the three destinations reached by muscle memory rather than by reading. */
+.nav-icon {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+.nav-link-active .nav-icon { opacity: 1; }
 
 .shell-nav ul {
   list-style: none;
@@ -334,6 +382,11 @@ hr {
   flex-direction: column;
   gap: 1px;
 }
+
+/* An explicit `display` beats the [hidden] attribute's UA `display: none`, so a collapsed group
+   would keep its aria-expanded="false" while staying fully visible — the state and the screen
+   disagreeing, which is the worst version of this bug because it looks fine in code review. */
+.shell-nav ul[hidden] { display: none; }
 
 .nav-link {
   position: relative;
@@ -1217,3 +1270,417 @@ hr {
     scroll-behavior: auto !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   P26 · OPERATOR EXPERIENCE — secondary navigation, contextual help, Help Center
+   Colour is referenced only through tokens; nothing here invents a value.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* — The More / System disclosure. Reads as a lid on the rail, not as another destination. */
+.rail-secondary {
+  margin-top: var(--space-md);
+  border-top: 1px solid var(--wp-shell-line);
+  padding-top: var(--space-xs);
+}
+.rail-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  background: transparent;
+  color: var(--wp-shell-ink-2);
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.rail-disclosure:hover { color: var(--wp-shell-ink); }
+.rail-disclosure-mark {
+  font-size: var(--text-sm);
+  line-height: 1;
+  color: var(--wp-shell-ink-2);
+}
+.rail-secondary-note {
+  margin: 0 0 var(--space-2xs);
+  padding: 0 var(--space-sm);
+  color: var(--wp-shell-ink-2);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
+/* — "How this works": present on every operational page, quiet until asked. */
+.hint {
+  margin: 0 0 var(--space-md);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface-2);
+}
+.hint-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border: 0;
+  background: transparent;
+  color: var(--wp-ink-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.hint-toggle:hover { color: var(--wp-ink); }
+.hint-mark { font-size: var(--text-md); line-height: 1; }
+.hint-body {
+  padding: 0 var(--space-md) var(--space-md);
+  border-top: 1px solid var(--wp-line);
+}
+.hint-list { margin: var(--space-sm) 0 0; }
+.hint-list dt {
+  margin-top: var(--space-sm);
+  color: var(--wp-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+.hint-list dd {
+  margin: var(--space-2xs) 0 0;
+  color: var(--wp-ink-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.hint-list ul { margin: 0; padding-left: var(--space-md); }
+.hint-none { color: var(--wp-muted); font-style: italic; }
+
+/* — Help Center. */
+.surface-lede {
+  max-width: 62ch;
+  margin: 0 0 var(--space-md);
+  color: var(--wp-ink-2);
+  font-size: var(--text-md);
+  line-height: 1.55;
+}
+.help-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  margin-bottom: var(--space-md);
+}
+.help-tag {
+  display: inline-block;
+  padding: 2px var(--space-2xs);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-xs);
+  background: var(--wp-surface);
+  color: var(--wp-ink-2);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.help-tag-good { background: var(--wp-good-tint); border-color: var(--wp-good-line); color: var(--wp-good); }
+.help-tag-warn { background: var(--wp-warn-tint); border-color: var(--wp-warn-line); color: var(--wp-warn); }
+.help-tag-muted { background: var(--wp-surface-3); color: var(--wp-muted); }
+.help-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  max-width: 34ch;
+  margin-bottom: var(--space-md);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--wp-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+.help-search input {
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--wp-line-control);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface);
+  color: var(--wp-ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-transform: none;
+  letter-spacing: normal;
+}
+.help-toc {
+  margin: 0 0 var(--space-lg);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface-2);
+}
+.help-toc ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs) var(--space-md);
+  margin: 0;
+  padding: 0;
+}
+.help-toc a { color: var(--wp-orange-deep); font-size: var(--text-sm); }
+.help-toc a:hover { color: var(--wp-orange-deeper); }
+.help-topic {
+  max-width: 72ch;
+  margin: 0 0 var(--space-lg);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--wp-line);
+}
+.help-topic h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  margin: 0 0 var(--space-xs);
+}
+.help-topic p, .help-topic li { color: var(--wp-ink-2); line-height: 1.55; }
+.help-glossary dt { margin-top: var(--space-xs); font-weight: 700; color: var(--wp-ink); }
+.help-glossary dd { margin: 0 0 0 var(--space-md); color: var(--wp-ink-2); }
+
+/* — Employees: state at a glance. Active is the question the page is opened to answer, so it
+     gets the accent edge; the open record gets a filled edge so "where am I" is unambiguous. */
+.employee-card-active { border-left: 3px solid var(--wp-good); }
+.employee-card-open {
+  border-left: 3px solid var(--wp-orange);
+  background: var(--wp-tint);
+}
+.detail-lead {
+  margin: var(--space-lg) 0 var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 3px solid var(--wp-orange);
+  background: var(--wp-tint);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.detail-lead h3 { margin: 0 0 var(--space-2xs); }
+.detail-lead p { margin: 0 0 var(--space-2xs); }
+#employee-detail-anchor:focus { outline: none; }
+#employee-detail-anchor:focus-visible {
+  outline: var(--focus-width) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+
+/* — The Daily Brief: prose is the product. Measured line length, generous leading. */
+.brief-prose { max-width: 68ch; margin: var(--space-sm) 0; }
+.brief-prose p { margin: 0 0 var(--space-sm); color: var(--wp-ink); line-height: 1.6; }
+.brief-prose h5 {
+  margin: var(--space-md) 0 var(--space-2xs);
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--wp-muted);
+}
+.brief-prose ul { margin: 0 0 var(--space-sm); padding-left: var(--space-md); }
+.brief-prose li { margin-bottom: var(--space-2xs); color: var(--wp-ink); line-height: 1.55; }
+.brief-sources { margin: var(--space-sm) 0; }
+.brief-sources summary {
+  cursor: pointer;
+  color: var(--wp-muted);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+.brief-sources a { color: var(--wp-orange-deep); }
+.brief-sources a:hover { color: var(--wp-orange-deeper); }
+
+/* — Live Help: a chat you glance at mid-meeting. Dense, quiet, scannable. */
+.live-help { margin: var(--space-md) 0; padding-top: var(--space-sm); border-top: 1px solid var(--wp-line); }
+.live-help-seats { display: flex; flex-wrap: wrap; gap: var(--space-2xs); margin-bottom: var(--space-xs); }
+.live-help-thread { list-style: none; margin: var(--space-sm) 0; padding: 0; max-height: 340px; overflow-y: auto; }
+.live-help-thread .turn {
+  display: grid;
+  grid-template-columns: minmax(64px, 96px) 1fr;
+  gap: var(--space-sm);
+  padding: var(--space-2xs) 0;
+  border-bottom: 1px solid var(--wp-line);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.turn-who { color: var(--wp-muted); font-weight: 600; font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-label); }
+.turn-mp .turn-body { color: var(--wp-ink); font-weight: 500; }
+.turn-ai .turn-body { color: var(--wp-ink-2); }
+.turn-blocked { background: var(--wp-warn-tint); }
+.turn-blocked .turn-body { color: var(--wp-warn); }
+.turn-detail { grid-column: 2; color: var(--wp-warn); font-size: var(--text-2xs); }
+.live-help-quick { display: flex; flex-wrap: wrap; gap: var(--space-2xs); margin-bottom: var(--space-xs); }
+.live-help-quick button {
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--wp-line-control);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface-2);
+  color: var(--wp-ink-2);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.live-help-quick button:hover:not(:disabled) { background: var(--wp-tint); border-color: var(--wp-tint-line); color: var(--wp-ink); }
+.live-help-quick button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* — Ask: the answer reads first; the framing is available, not imposed. */
+.ask-answer { max-width: 66ch; margin: 0 0 var(--space-sm); color: var(--wp-ink); font-size: var(--text-md); line-height: 1.55; }
+.ask-facts { list-style: none; margin: 0 0 var(--space-md); padding: 0; }
+.ask-facts li { margin-bottom: var(--space-2xs); color: var(--wp-ink-2); font-size: var(--text-sm); }
+.ask-machinery { margin: 0 0 var(--space-md); }
+.ask-machinery summary {
+  cursor: pointer;
+  color: var(--wp-muted);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+.ask-machinery[open] summary { margin-bottom: var(--space-sm); }
+
+/* — Rail tiers. Weight follows how often a Managing Partner actually goes there. */
+
+/* A group header is a label. No hover, no pointer, not a tab stop — it must never look like a
+   destination you could try. */
+.rail-group { cursor: default; user-select: none; }
+.rail-group::after {
+  content: "";
+  display: block;
+  margin-top: var(--space-2xs);
+  border-bottom: 1px solid var(--wp-shell-line);
+}
+
+/* Pinned: the daily three. Heavier ink, taller target, no header above them. */
+.rail-pinned { margin-bottom: var(--space-sm); }
+.rail-pinned .nav-link {
+  /* 44px, not 38px: this rule has higher specificity than the mobile touch-target floor and would
+     otherwise shrink the most-tapped links below it on a phone. The primary tier should be the
+     LARGEST target, never the exception that undercuts the minimum. */
+  min-height: 44px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--wp-shell-ink);
+}
+.rail-pinned .nav-link:hover { color: var(--wp-shell-ink-max); }
+
+/* Footer: occasional. Quieter than everyday work, still plainly reachable. */
+.rail-footer { margin-top: var(--space-md); padding-top: var(--space-xs); border-top: 1px solid var(--wp-shell-line); }
+.rail-footer .nav-link { font-size: var(--text-2xs); color: var(--wp-shell-ink-2); }
+
+/* — Employee lounge: a colleague, not a job slot. */
+.employee-expertise { color: var(--wp-ink); }
+.employee-voice { font-style: italic; }
+
+/* — Employee portraits. Round, small, quiet: a face, not a hero image. */
+.employee-portrait {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: middle;
+  border: 1px solid var(--wp-line);
+  background: var(--wp-surface-3);
+}
+.live-help-seats .employee-portrait { width: 22px; height: 22px; margin-right: var(--space-2xs); }
+
+/* — Meeting close-out. The source quote is indented and quiet: it is evidence for the line above
+     it, not a second thing to read. */
+.closeout h5 { margin: var(--space-sm) 0 var(--space-2xs); font-size: 0.9rem; }
+.closeout-quote { border-left: 2px solid var(--wp-line); padding-left: var(--space-xs); margin-top: 2px; font-style: italic; }
+
+/* — IC Decision Portal. Tabs are a horizontal scroller on narrow screens rather than wrapping into
+     a block that pushes the content off-screen. */
+.ic-tabs { display: flex; gap: var(--space-2xs); overflow-x: auto; border-bottom: 1px solid var(--wp-line); margin-bottom: var(--space-sm); }
+.ic-tab { flex: 0 0 auto; min-height: 44px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--wp-muted); }
+.ic-tab-active { color: var(--wp-ink); border-bottom-color: var(--wp-orange); font-weight: 600; }
+.ic-section textarea { width: 100%; }
+.ic-questions { columns: 2; column-gap: var(--space-md); }
+@media (max-width: 700px) { .ic-questions { columns: 1; } }
+.ic-killer { border-left: 3px solid var(--wp-orange); padding-left: var(--space-xs); }
+
+/* — Ask band on Home. Tinted and rule-marked so it reads as an offer rather than another module
+     card; the module grid below is a list of destinations, this is an invitation. */
+.ask-band {
+  background: var(--wp-tint);
+  border-color: var(--wp-tint-line);
+  border-left: 3px solid var(--wp-orange);
+}
+.ask-band h3 { margin-top: 0; }
+.ask-examples { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; }
+
+/* — Sweeps page reference panels. Native <details> so they stay keyboard-operable and findable by
+     in-page search without any JS; they were consuming the screen above the items you came to read. */
+.intel-panel > summary {
+  cursor: pointer;
+  font-weight: 600;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+.intel-panel[open] > summary { margin-bottom: var(--space-xs); }
+.intel-manual-add > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--wp-muted); }
+
+/* — Page purpose block. Quiet by design: it orients a first-time reader and should be skimmable
+     past in a second by everyone else, so it is tinted rather than boxed and sets no heading. */
+.page-purpose {
+  border-left: 2px solid var(--wp-line-strong);
+  padding: 0 0 0 var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+.page-purpose-what { margin: 0 0 var(--space-2xs); color: var(--wp-ink-2); }
+.page-purpose-can {
+  display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-sm);
+  list-style: none; padding: 0; margin: 0 0 var(--space-2xs);
+  font-size: 0.9rem; color: var(--wp-muted);
+}
+.page-purpose-can li::before { content: "· "; }
+.page-purpose-can li:first-child::before { content: ""; }
+
+/* — Signed-out surfaces. Centred and narrow: these are the only screens with a single job, so
+     nothing competes with it. */
+.auth-shell { display: flex; justify-content: center; padding: var(--space-lg) 0; }
+.auth-card { max-width: 30rem; width: 100%; }
+.auth-brand {
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding-bottom: var(--space-sm); margin-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--wp-line);
+}
+.auth-wordmark { margin: 0; font-weight: 700; letter-spacing: -0.02em; font-size: 1.15rem; }
+.auth-tagline { margin: 0; color: var(--wp-muted); font-size: 0.85rem; }
+.auth-foot { border-top: 1px solid var(--wp-line); padding-top: var(--space-xs); margin-top: var(--space-sm); }
+
+/* — Daily brief. Reading width, because this is the one thing on the page meant to be read
+     start to finish rather than scanned. */
+.daily-brief .brief-section { margin-top: var(--space-md); max-width: 44rem; }
+.daily-brief .brief-section h4 { margin-bottom: var(--space-2xs); }
+.brief-sources { border-top: 1px solid var(--wp-line); padding-top: var(--space-2xs); margin-top: var(--space-2xs); }
+
+/* — University. Modes as chips so all six are visible at once; a dropdown hides five of them and
+     the mode is the most consequential choice on the page. */
+.university-modes { border: none; padding: 0; margin: var(--space-sm) 0; display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
+.mode-chip {
+  display: flex; flex-direction: column; gap: 2px; cursor: pointer;
+  border: 1px solid var(--wp-line); border-radius: 4px;
+  padding: var(--space-2xs) var(--space-xs); min-height: 44px; justify-content: center;
+  flex: 1 1 13rem;
+}
+.mode-chip-on { border-color: var(--wp-orange); background: var(--wp-tint); }
+.mode-chip input { position: absolute; opacity: 0; width: 0; height: 0; }
+.mode-chip:focus-within { outline: 2px solid var(--wp-orange); outline-offset: 2px; }
+.university-thread { list-style: none; padding: 0; margin: var(--space-sm) 0; display: flex; flex-direction: column; gap: var(--space-sm); }
+.university-thread .turn-body { white-space: pre-wrap; display: block; max-width: 44rem; }
+
+/* — Market map. Panels side by side so the shape of a sector reads at a glance; the table view is
+     for sorting, which a landscape is bad at. */
+.mkt-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--space-sm); }
+.mkt-panel { border: 1px solid var(--wp-line); padding: var(--space-xs); background: var(--wp-surface-2); }
+.mkt-panel h4 { margin: 0 0 var(--space-2xs); font-size: 0.95rem; }
+.mkt-tiles { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2xs); }
+.mkt-tile { background: var(--wp-surface); border: 1px solid var(--wp-line); padding: var(--space-2xs); display: flex; flex-direction: column; gap: 1px; }
+.mkt-tile-ours { border-left: 3px solid var(--wp-orange); }
+
+/* — Approval context. Indented under the card head so the decision controls stay the focus and the
+     supporting material reads as supporting. */
+.approval-context { border-left: 2px solid var(--wp-line); padding-left: var(--space-sm); margin: var(--space-xs) 0; }
+.approval-context h5 { margin: var(--space-xs) 0 var(--space-2xs); font-size: 0.85rem; }

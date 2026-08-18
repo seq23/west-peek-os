@@ -1,6 +1,7 @@
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { gotoSurface, openSystemAreaIfCollapsed } from "./support/nav";
 
 /** Latest migration filename (without .sql) — derived so the pin cannot rot. */
 function latestMigrationName(): string {
@@ -52,7 +53,17 @@ test("/api/health answers unauthenticated with schema version and bindings", asy
 test("UI shell loads at / with nav, dev login, and the diagnostics health panel", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "West Peek OS" })).toBeVisible();
-  for (const label of ["Today", "+Capture", "Work Cards", "Approvals", "Activity", "Governance", "Diagnostics"]) {
+  // Two tiers since P26. Everyday work is on show without asking for it...
+  for (const label of ["Today", "Capture", "Work cards", "Approvals", "Help"]) {
+    await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
+  }
+  // ...and administration is one disclosure away, not gone. Asserting both halves is the point:
+  // the reorganisation is only correct if the advanced surfaces are still reachable.
+  for (const label of ["Activity", "Governance", "Diagnostics"]) {
+    await expect(page.getByRole("button", { name: label, exact: true })).toBeHidden();
+  }
+  await openSystemAreaIfCollapsed(page);
+  for (const label of ["Activity", "Governance", "Diagnostics"]) {
     await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
   }
 
@@ -62,6 +73,6 @@ test("UI shell loads at / with nav, dev login, and the diagnostics health panel"
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
 
   // Diagnostics exposes the live health panel with the applied schema version.
-  await page.getByRole("button", { name: "Diagnostics", exact: true }).click();
+  await gotoSurface(page, "Diagnostics");
   await expect(page.getByTestId("health-panel")).toContainText(latestMigrationName());
 });

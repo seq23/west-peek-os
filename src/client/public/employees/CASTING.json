@@ -1,0 +1,130 @@
+{
+  "_note": "Casting sheet for the 31 AI employee portraits. Direction: everyone reads 28-40, attractive and modelesque, deliberately diverse. Expertise is veteran-level regardless of apparent age \u2014 depth is in the persona text, not the face. Priya is South Asian to match her name; Wesley (LP relations) is white and blonde per direction.",
+  "_style": "Editorial fashion-portrait quality headshot. Strikingly attractive, model-like features: excellent bone structure, high cheekbones, symmetrical face, flawless clear complexion, expressive eyes, groomed and polished. Youthful and vibrant. Natural window light from the left, soft neutral grey-warm backdrop, shoulders-up framing, shallow depth of field, 85mm lens look, direct confident eye contact, subtle natural smile, impeccably styled modern business-casual, photorealistic, high-end magazine quality, no text, no logos, no watermark.",
+  "cast": [
+    {
+      "name": "Walker",
+      "look": "man, 34, Black British, close-cropped hair, sharp cheekbones, charcoal crew-neck"
+    },
+    {
+      "name": "Wendy",
+      "look": "woman, 29, East Asian, sleek shoulder-length black hair, cream silk blouse"
+    },
+    {
+      "name": "Wren",
+      "look": "woman, 36, mixed Black and white heritage, natural curls pulled back, deep navy blazer"
+    },
+    {
+      "name": "Willa",
+      "look": "woman, 28, Filipina, long dark hair, warm smile, soft rust knit top"
+    },
+    {
+      "name": "Winton",
+      "look": "man, 31, Latino, dark wavy hair, light stubble, olive henley"
+    },
+    {
+      "name": "Porter",
+      "look": "man, 38, Black American, neat short beard, steady gaze, slate grey shirt"
+    },
+    {
+      "name": "Winnie",
+      "look": "woman, 30, Korean, chin-length bob, bright engaged expression, blush pink blouse"
+    },
+    {
+      "name": "Waverly",
+      "look": "woman, 33, African American, long braids, radiant smile, emerald top"
+    },
+    {
+      "name": "Wells",
+      "look": "man, 35, South Asian, dark-framed glasses, trimmed beard, oatmeal sweater"
+    },
+    {
+      "name": "Willow",
+      "look": "woman, 37, Black American, short natural afro, composed steady expression, deep green blazer"
+    },
+    {
+      "name": "Wilson",
+      "look": "man, 32, East Asian, tousled dark hair, calm focused expression, dark grey zip knit"
+    },
+    {
+      "name": "Pierce",
+      "look": "man, 39, white with Mediterranean colouring, dark hair greying slightly at temples, confident, navy jacket over tee"
+    },
+    {
+      "name": "Priya",
+      "look": "woman, 31, South Asian, long dark hair swept over one shoulder, poised, jewel-tone teal top"
+    },
+    {
+      "name": "Paige",
+      "look": "woman, 29, Japanese, dark hair tied back, focused analytical expression, slate blue knit"
+    },
+    {
+      "name": "Wyatt",
+      "look": "man, 33, Black American, short locs, alert attentive expression, black crew-neck"
+    },
+    {
+      "name": "Poppy",
+      "look": "woman, 35, white, auburn hair in a low bun, assured expression, burgundy blazer"
+    },
+    {
+      "name": "Walter",
+      "look": "man, 36, Chinese, side-parted dark hair, attentive thoughtful expression, soft charcoal crew-neck"
+    },
+    {
+      "name": "Piper",
+      "look": "woman, 30, Latina, dark hair with subtle highlights, warm open expression, ivory blouse"
+    },
+    {
+      "name": "Perry",
+      "look": "man, 34, Indian, clean-shaven, precise expression, light blue oxford shirt"
+    },
+    {
+      "name": "Wesley",
+      "look": "man, 35, white, blonde hair swept back, blue eyes, warm approachable smile, open-collar white oxford"
+    },
+    {
+      "name": "Penn",
+      "look": "woman, 28, Vietnamese, long straight dark hair, thoughtful expression, soft grey turtleneck"
+    },
+    {
+      "name": "Winter",
+      "look": "woman, 34, Black American, shoulder-length twists, attentive caring expression, camel knit"
+    },
+    {
+      "name": "Parker",
+      "look": "man, 30, Middle Eastern, dark curly hair, energetic expression, forest green shirt"
+    },
+    {
+      "name": "Wynn",
+      "look": "woman, 32, Thai, sleek dark hair, commercial confident expression, mustard blouse"
+    },
+    {
+      "name": "Percy",
+      "look": "man, 29, mixed Black and Latino heritage, fade haircut, sharp stylish, plum tee under jacket"
+    },
+    {
+      "name": "Prue",
+      "look": "woman, 38, white, platinum blonde pixie cut, poised guarded expression, black blazer"
+    },
+    {
+      "name": "Pippa",
+      "look": "woman, 27, Nigerian, short natural hair, expressive creative energy, terracotta top"
+    },
+    {
+      "name": "Pax",
+      "look": "man, 37, Pacific Islander, broad build, pragmatic steady expression, denim shirt"
+    },
+    {
+      "name": "Preston",
+      "look": "man, 33, white, neat dark hair, exact precise expression, crisp white shirt"
+    },
+    {
+      "name": "Perrin",
+      "look": "woman, 36, North African, dark hair in a low ponytail, procedural composed, taupe blouse"
+    },
+    {
+      "name": "Whitney",
+      "look": "woman, 31, Black American, long straight hair, explanatory engaging expression, cobalt blue top"
+    }
+  ]
+}

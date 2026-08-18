@@ -240,7 +240,13 @@ describe("the engine acquires, dedupes, cites, and refuses to invent", () => {
     expect(run.body.items).toHaveLength(0);
     const report = JSON.parse(run.body.run.source_report_json) as Array<{ ok: boolean; detail: string }>;
     expect(report[0]!.ok).toBe(false);
-    expect(report[0]!.detail).toContain("EGRESS_GATED");
+    // P29 CHANGED WHY THIS FAILS, NOT THAT IT FAILS. Outbound retrieval is now authorised, so the
+    // client genuinely attempts the fetch instead of refusing up front. In this hermetic runtime
+    // there is no network, so it fails — and the guarantees that matter are unchanged and asserted
+    // above: PARTIAL run, zero items, source marked failed, nothing invented to fill the gap.
+    expect(report[0]!.detail).toMatch(/source failure|EGRESS_GATED|refused/);
+    // Whatever the reason, it must be a REPORTED reason and not silent success.
+    expect(report[0]!.detail.length).toBeGreaterThan(10);
 
     const after = (await call<{ sources: any[] }>("/api/intelligence/sources", SCOOTER)).body.sources.find(
       (s: any) => s.id === created.body.id,
@@ -436,6 +442,59 @@ describe("briefing is one archived artifact per day per user", () => {
     const mine = await call<{ briefing: any }>("/api/briefings/current?date=2026-08-13", SCOOTER);
     const theirs = await call<{ briefing: any }>("/api/briefings/current?date=2026-08-13", SEQUOIA);
     expect(mine.body.briefing.id).not.toBe(theirs.body.briefing.id);
+  });
+
+  it("surfaces the categories a GP actually chose, ahead of higher-scoring items", async () => {
+    // REGRESSION: `preferredCategoriesFor` and `briefing_json.categories` both existed, but the
+    // briefing query ignored them — every GP got the same firm-wide top-N and the preference was
+    // inert. This asserts the preference now changes what appears.
+    const runRow = await t.db.prepare("SELECT id FROM intelligence_run ORDER BY started_at DESC LIMIT 1").first<{ id: string }>();
+    const srcRow = await t.db.prepare("SELECT id FROM intelligence_source LIMIT 1").first<{ id: string }>();
+    if (!runRow || !srcRow) return;
+
+    // A LOW-scoring AI_TECH item, and a HIGH-scoring item in another category.
+    await t.db
+      .prepare(
+        `INSERT OR IGNORE INTO intelligence_item
+           (id, run_id, source_id, title, body, dedupe_hash, category, relevance_score, privacy_label)
+         VALUES ('ii_pref_ai', ?1, ?2, 'AI tech item', '', 'dh_pref_ai', 'AI_TECH', 0.10, 'INTERNAL')`,
+      )
+      .bind(runRow.id, srcRow.id)
+      .run();
+    await t.db
+      .prepare(
+        `INSERT OR IGNORE INTO intelligence_item
+           (id, run_id, source_id, title, body, dedupe_hash, category, relevance_score, privacy_label)
+         VALUES ('ii_pref_other', ?1, ?2, 'Regulatory item', '', 'dh_pref_other', 'REGULATORY', 0.99, 'INTERNAL')`,
+      )
+      .bind(runRow.id, srcRow.id)
+      .run();
+
+    // A DEDICATED reader. Setting a preference on Scooter would leak into the versioning and
+    // privacy tests, which assert against his preference history — shared fixtures make a passing
+    // suite depend on execution order.
+    await t.db
+      .prepare(
+        "INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES ('fu_pref_reader', 'pref-reader@westpeek.ventures', 'Pref Reader', 'ACTIVE')",
+      )
+      .run();
+    await t.db
+      .prepare("INSERT OR IGNORE INTO firm_user_role (firm_user_id, role_id) VALUES ('fu_pref_reader', 'role_investment_team')")
+      .run();
+    const READER = { "x-wpos-dev-user": "pref-reader@westpeek.ventures" };
+
+    await call("/api/mp-home/preferences", READER, "POST", {
+      modules: [],
+      briefing: { max_items: 1, categories: ["AI_TECH"] },
+    });
+
+    const res = await call<{ items: Array<{ id: string; category: string }> }>(
+      "/api/briefings/current?date=2026-08-19",
+      READER,
+    );
+    expect(res.body.items).toHaveLength(1);
+    // The preferred category wins despite the other item scoring 0.99 against 0.10.
+    expect(res.body.items[0]!.category).toBe("AI_TECH");
   });
 });
 

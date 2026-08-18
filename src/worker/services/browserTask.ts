@@ -1,0 +1,238 @@
+import { z } from "zod";
+import type { Env } from "../env";
+import { appendEvent } from "../events";
+import { json } from "../router";
+import type { RouteContext } from "../router";
+import { actorFromIdentity, authorize, type Actor } from "./authorize";
+import { browsePage, browserConfigured } from "../effects/browserClient";
+import { checkExecutable, checkRequest, type PaymentMode } from "../../shared/browser/taskPolicy";
+
+/**
+ * Browser task lifecycle (P50) — the runner the scaffold was missing.
+ *
+ * REQUEST → APPROVE → RUN → RECORD. Four steps and three of them are gates, because a browser task
+ * is the only capability here that egresses to a runtime-chosen URL AND returns untrusted content
+ * as model input.
+ *
+ * WHY REQUESTING AND RUNNING ARE SEPARATE CALLS. An employee may raise a task; only an approved task
+ * executes. If creating a task also ran it, the approval would be advisory — and an advisory
+ * approval on "fetch this arbitrary URL and feed it back to an AI employee" is no approval at all.
+ *
+ * WHAT COMES BACK IS FENCED, NOT TRUSTED. browsePage() wraps page text before it can reach a model.
+ * The fence and the SSRF re-check after redirect are the two things standing between "read a page"
+ * and "an attacker chose our prompt".
+ */
+
+export class BrowserTaskError extends Error {
+  constructor(public status: number, public code: string, detail?: string) {
+    super(detail ?? code);
+  }
+}
+
+interface TaskRow {
+  id: string;
+  objective: string;
+  start_url: string;
+  status: string;
+  approval_card_id: string | null;
+  payment_mode: PaymentMode;
+  max_price_usd: number;
+  spent_usd: number;
+  ai_employee_id: string | null;
+  refusal_reason: string | null;
+  result_text: string | null;
+  result_url: string | null;
+  firm_scope: string;
+}
+
+async function requireTask(env: Env, id: string): Promise<TaskRow> {
+  const row = await env.WP_OS_DB.prepare("SELECT * FROM browser_task WHERE id = ?1").bind(id).first<TaskRow>();
+  if (!row) throw new BrowserTaskError(404, "not_found", "no such browser task");
+  return row;
+}
+
+const requestSchema = z.object({
+  objective: z.string().min(8).max(500),
+  start_url: z.string().min(8).max(2000),
+  ai_employee_id: z.string().max(80).nullish(),
+  payment_mode: z.enum(["NONE", "X402_AUTO"]).default("NONE"),
+  max_price_usd: z.number().min(0).max(500).default(0),
+});
+
+/** Raise a task. Policy is checked here so an impossible task is refused before it is recorded. */
+export async function requestTask(
+  env: Env,
+  actor: Actor,
+  input: z.infer<typeof requestSchema>,
+): Promise<TaskRow> {
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const authz = await authorize(env, actor, "ai.run", { objectType: "browser_task", firmScope });
+  if (authz.decision !== "ALLOW") throw new BrowserTaskError(403, "forbidden", authz.reason);
+
+  const refusal = checkRequest({
+    objective: input.objective,
+    start_url: input.start_url,
+    payment_mode: input.payment_mode,
+    max_price_usd: input.max_price_usd,
+    requested_by_type: actor.type === "HUMAN" ? "HUMAN" : "AI",
+  });
+  if (refusal) throw new BrowserTaskError(400, refusal.code, refusal.detail);
+
+  const id = `bwt_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.prepare(
+    `INSERT INTO browser_task (id, objective, start_url, requested_by_type, requested_by_id,
+                               ai_employee_id, payment_mode, max_price_usd, firm_scope)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)`,
+  )
+    .bind(id, input.objective, input.start_url, actor.type === "HUMAN" ? "HUMAN" : "AI",
+          actor.firmUserId ?? actor.aiEmployeeId ?? "system", input.ai_employee_id ?? null,
+          input.payment_mode, input.max_price_usd, firmScope)
+    .run();
+
+  await appendEvent(env, {
+    eventType: "browser_task.requested",
+    actorType: actor.type === "HUMAN" ? "firm_user" : "ai_employee",
+    actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+    objectType: "browser_task", objectId: id, firmScope,
+    payload: { start_url: input.start_url, payment_mode: input.payment_mode },
+  });
+
+  return await requireTask(env, id);
+}
+
+/**
+ * Approve a task. HUMAN ONLY.
+ *
+ * An AI employee approving another employee's browser task would let the workforce authorise its
+ * own egress, which is the loop canon §22A.7 exists to break.
+ */
+export async function approveTask(env: Env, actor: Actor, id: string): Promise<TaskRow> {
+  const task = await requireTask(env, id);
+  if (actor.type !== "HUMAN") throw new BrowserTaskError(403, "human_required", "A browser task is approved by a person.");
+  const authz = await authorize(env, actor, "approval.decide", {
+    objectType: "browser_task", objectId: id, firmScope: task.firm_scope,
+  });
+  if (authz.decision !== "ALLOW") throw new BrowserTaskError(403, "forbidden", authz.reason);
+  if (task.status !== "REQUESTED") throw new BrowserTaskError(409, "illegal_state", `task is ${task.status}`);
+
+  await env.WP_OS_DB.prepare("UPDATE browser_task SET status = 'APPROVED' WHERE id = ?1").bind(id).run();
+  await appendEvent(env, {
+    eventType: "browser_task.approved",
+    actorType: "firm_user", actorId: actor.firmUserId ?? "system",
+    objectType: "browser_task", objectId: id, firmScope: task.firm_scope,
+    payload: {},
+  });
+  return await requireTask(env, id);
+}
+
+export interface RunResult {
+  task: TaskRow;
+  ok: boolean;
+  detail: string;
+}
+
+/** Execute an approved task. Every refusal is recorded on the row rather than thrown away. */
+export async function runTask(
+  env: Env,
+  id: string,
+  browse: typeof browsePage = browsePage,
+): Promise<RunResult> {
+  const task = await requireTask(env, id);
+
+  const provider = await env.WP_OS_DB.prepare(
+    "SELECT enabled, kill_switched FROM provider_registry WHERE provider_key = 'cloudflare_browser'",
+  ).first<{ enabled: number; kill_switched: number }>();
+
+  const refusal = checkExecutable({
+    status: task.status,
+    // The approval is the status transition; a task APPROVED by approveTask() carries the authority
+    // even when no separate approval_card was minted for it.
+    approvalCardId: task.status === "APPROVED" ? (task.approval_card_id ?? "approved") : task.approval_card_id,
+    providerEnabled: Number(provider?.enabled ?? 0) === 1,
+    providerKillSwitched: Number(provider?.kill_switched ?? 0) === 1,
+    transportConfigured: browserConfigured(env),
+  });
+  if (refusal) {
+    await env.WP_OS_DB.prepare(
+      "UPDATE browser_task SET status = 'REFUSED', refusal_reason = ?2, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+    ).bind(id, refusal.detail).run();
+    await appendEvent(env, {
+      eventType: "browser_task.refused",
+      actorType: "system", actorId: "system",
+      objectType: "browser_task", objectId: id, firmScope: task.firm_scope,
+      payload: { code: refusal.code },
+    });
+    return { task: await requireTask(env, id), ok: false, detail: refusal.detail };
+  }
+
+  await env.WP_OS_DB.prepare("UPDATE browser_task SET status = 'RUNNING' WHERE id = ?1").bind(id).run();
+  const result = await browse(env, task.start_url);
+
+  if (!result.ok) {
+    await env.WP_OS_DB.prepare(
+      "UPDATE browser_task SET status = 'FAILED', refusal_reason = ?2, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+    ).bind(id, result.detail).run();
+    return { task: await requireTask(env, id), ok: false, detail: result.detail };
+  }
+
+  await env.WP_OS_DB.prepare(
+    `UPDATE browser_task SET status = 'SUCCEEDED', result_text = ?2, result_url = ?3,
+            completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
+  )
+    // Already fenced by browsePage. Stored fenced so anything reading it later inherits the warning
+    // rather than having to remember to add one.
+    .bind(id, result.text, result.finalUrl)
+    .run();
+
+  await appendEvent(env, {
+    eventType: "browser_task.succeeded",
+    actorType: "system", actorId: "system",
+    objectType: "browser_task", objectId: id, firmScope: task.firm_scope,
+    payload: { final_url: result.finalUrl, chars: result.text?.length ?? 0 },
+  });
+
+  return { task: await requireTask(env, id), ok: true, detail: "ok" };
+}
+
+// ── Routes ───────────────────────────────────────────────────────────────────
+
+function fail(err: unknown): Response {
+  if (err instanceof BrowserTaskError) return json({ error: err.code, detail: err.message }, { status: err.status });
+  throw err;
+}
+
+export async function handleRequestBrowserTask(ctx: RouteContext): Promise<Response> {
+  const parsed = requestSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    return json(await requestTask(ctx.env, actorFromIdentity(ctx.identity!), parsed.data), { status: 201 });
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function handleApproveBrowserTask(ctx: RouteContext): Promise<Response> {
+  if (!ctx.params.id) return json({ error: "invalid_input" }, { status: 400 });
+  try {
+    return json(await approveTask(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id));
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function handleRunBrowserTask(ctx: RouteContext): Promise<Response> {
+  if (!ctx.params.id) return json({ error: "invalid_input" }, { status: 400 });
+  try {
+    const out = await runTask(ctx.env, ctx.params.id);
+    return json(out, { status: out.ok ? 200 : 409 });
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function handleListBrowserTasks(ctx: RouteContext): Promise<Response> {
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    "SELECT id, objective, start_url, status, refusal_reason, result_url, created_at FROM browser_task ORDER BY created_at DESC LIMIT 100",
+  ).all();
+  return json({ tasks: rows.results ?? [] });
+}

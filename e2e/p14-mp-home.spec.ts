@@ -24,14 +24,19 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   await signIn(page);
 
   // ── Intelligence: watch a topic, then run the engine on a manual item ──
-  await page.getByRole("button", { name: "Intelligence", exact: true }).click();
+  await page.getByRole("button", { name: "Sweeps", exact: true }).click();
   await expect(page.getByTestId("intelligence-page")).toBeVisible();
 
+  // The watchlist FORM lives inside the panel too, so it opens before anything is typed.
+  await page.getByTestId("intel-watchlist-panel").locator("summary").click();
   await page.getByTestId("intel-watch-label").fill("continuation-probe");
   await page.getByTestId("intel-watch-submit").click();
   await expect(page.getByTestId("intel-watchlist")).toContainText("continuation-probe");
 
   const headline = `A continuation-probe headline ${Date.now()}`;
+  // Adding an item by hand now sits behind its own disclosure: the sweep button and the manual
+  // fields were one undifferentiated form, which is why "Run a sweep" read as ambiguous.
+  await page.getByTestId("intel-manual-add").locator("summary").click();
   await page.getByTestId("intel-manual-title").fill(headline);
   await page.getByTestId("intel-manual-locator").fill("Playwright journey, operator desk");
   await page.getByTestId("intel-manual-body").fill("Context recorded by the operator during the P14 journey.");
@@ -55,6 +60,7 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   await expect(card.locator('[data-testid^="intel-message-"]')).toContainText("governed AI boundary");
 
   // ── A gated external source is shown as gated, never as working ──
+  await page.getByTestId("intel-sources-panel").locator("summary").click();
   await expect(page.getByTestId("intel-sources")).toContainText("West Peek firm state");
 
   // ── Home: the item is surfaced, the ten questions are mapped, links work ──
@@ -64,11 +70,19 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   await expect(page.getByTestId("home-questions")).toContainText("What needs my decision?");
   await expect(page.getByTestId("home-questions")).toContainText("What is costing money?");
 
-  // "One thing to watch" states the rule that produced it rather than asserting judgement.
-  const watch = page.getByTestId("one-thing-to-watch");
-  if (await watch.isVisible().catch(() => false)) {
-    await expect(watch).toContainText("rule:");
-  }
+  // "One thing to watch" was removed from Home on operator direction (17 Aug 2026) — it restated
+  // what the modules below already said. Asserted absent in BOTH states, because the old block had
+  // an empty variant too and removing only the populated one would leave Home showing a headed
+  // card that says "nothing is flagged".
+  await expect(page.getByTestId("one-thing-to-watch")).toHaveCount(0);
+  await expect(page.getByTestId("one-thing-to-watch-empty")).toHaveCount(0);
+
+  // Ask has its own highlighted band on Home (operator direction, 17 Aug 2026) AND stays in the
+  // nav. Home is where you are reminded it exists; the nav is where you reach for it once you know.
+  await expect(page.getByTestId("home-ask")).toBeVisible();
+  await page.getByTestId("home-ask-open").click();
+  await expect(page.getByTestId("intent-page")).toBeVisible();
+  await page.getByRole("button", { name: "Home", exact: true }).click();
 
   // Drilling from a module lands on the surface that owns the records.
   await page.getByTestId("home-module-intelligence").getByRole("button", { name: "Open" }).click();

@@ -28,6 +28,32 @@ const EXECUTOR = path.join("src", "worker", "effects", "executor.ts");
 
 const OUTBOUND_FETCH = /fetch\s*\(\s*["'`]https?:\/\/(?!localhost\b|127\.0\.0\.1\b)/;
 
+/**
+ * Files permitted to reach the network, each with the reason it is allowed.
+ *
+ * WHY THIS LIST EXISTS: the regex above only catches fetch() called with a LITERAL url. Both real
+ * egress clients take an injected `fetchImpl` and pass a constant, so neither was ever caught —
+ * they were passing by accident, not by decision. Naming them makes the allowance a choice someone
+ * made, and gives a reviewer one place to see everything that can leave the building.
+ *
+ * Adding a file here should be a conscious act. Egress from anywhere else stays a violation.
+ */
+const EGRESS_ALLOWED = new Map([
+  ["src/worker/effects/feedClient.ts", "RSS/Atom acquisition; https-only, blocks loopback/RFC1918/metadata, size and time capped"],
+  ["src/worker/effects/resendClient.ts", "Resend email transport; reachable only after executeExternalEffect() has an approved receipt, and inert unless RESEND_API_KEY and WP_OS_EMAIL_SEND are both set"],
+  ["src/worker/effects/secEdgarClient.ts", "SEC EDGAR full-text search; public, read-only, https-only, one request per market map, sends the User-Agent the SEC's fair-access policy requires"],
+  ["src/worker/effects/networkOsClient.ts", "Network OS snapshot pull (§12A); READ-ONLY by construction — no POST in the file — and inert unless base URL, session secret and approved email are all set"],
+]);
+
+/**
+ * Any CALL to bare fetch — literal URL or not. Used to police the allowlist above.
+ *
+ * Excludes two things that are not egress and would otherwise be false positives:
+ *   `env.ASSETS.fetch(...)`  — a binding method call, hence the `.` in the lookbehind;
+ *   `async fetch(request…)`  — the Worker's own entrypoint DECLARATION, hence `async`/`function`.
+ */
+const ANY_FETCH = /(?<![A-Za-z0-9_$.])(?<!async\s)(?<!function\s)fetch\s*\(/;
+
 function listWorkerFiles() {
   const out = [];
   const walk = (dir) => {
@@ -53,13 +79,38 @@ function functionBody(source, name) {
  * Run all checks over a map of { relativePath: source }. Returns violation strings.
  * Pure — the same function scans the real tree and the self-test fixtures.
  */
+/**
+ * Strip COMMENTS before scanning. String literals are deliberately left in place.
+ *
+ * Added after this scanner flagged a file whose only mention of fetch() was a comment saying the
+ * file does not call fetch(). A scan that reads prose produces false positives and, worse, teaches
+ * people that the way past it is to reword a comment.
+ *
+ * Strings stay because they ARE code here: the EXECUTED check below looks for a SQL literal, and
+ * stripping quotes broke it — caught immediately by the self-test, which is the whole reason this
+ * scanner has one.
+ */
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")   // block comments
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1 "); // line comments, leaving http:// intact
+}
+
 export function checkSources(files) {
   const violations = [];
 
-  for (const [rel, source] of Object.entries(files)) {
-    // (a2) No outbound network fetch anywhere in worker code.
-    if (OUTBOUND_FETCH.test(source)) {
+  for (const [rel, raw] of Object.entries(files)) {
+    const source = stripComments(raw);
+    // (a2) No outbound network fetch anywhere in worker code, except the named egress clients.
+    const egressAllowed = EGRESS_ALLOWED.has(rel);
+    if (OUTBOUND_FETCH.test(source) && !egressAllowed) {
       violations.push(`${rel}: outbound fetch() to a non-localhost URL (external effects must be local simulations in effects/executor.ts adapters)`);
+    }
+    // (a2b) A file that calls fetch() at all — including through an injected fetchImpl with a
+    // constant URL — must be on the allowlist. Without this, egress hides from (a2) simply by
+    // storing the URL in a variable, which is exactly how both real clients slipped past it.
+    if (!egressAllowed && ANY_FETCH.test(source) && !/\bfetchImpl\s*[,)=:]/.test(source)) {
+      violations.push(`${rel}: calls fetch() but is not in EGRESS_ALLOWED — add it there with a reason, or route the call through effects/`);
     }
     // (a1) Only the executor may mark external_effect_request EXECUTED.
     if (rel !== EXECUTOR.split(path.sep).join("/") && source.includes("external_effect_request") && source.includes("EXECUTED")) {

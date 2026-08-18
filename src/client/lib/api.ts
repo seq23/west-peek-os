@@ -26,6 +26,37 @@ export function setDevUser(email: string | null): void {
   }
 }
 
+/**
+ * End the session properly (P42).
+ *
+ * THE DEFECT THIS FIXES: sign-out was rendered only when a dev identity was present, so in
+ * production — behind Cloudflare Access, which is the only real deployment — there was no way to
+ * sign out at all. Clearing local state there would also have been theatre: identity comes from an
+ * Access cookie this app does not own, so a "signed out" screen with a live Access session is a
+ * lie the next page load exposes.
+ *
+ * So there are two genuinely different exits:
+ *   · local — drop the dev identity; that IS the whole session.
+ *   · production — drop local state, then hand off to Access's own logout endpoint, which is the
+ *     only thing that can actually invalidate the session.
+ *
+ * Returns where the caller should send the browser, or null when the sign-out is complete locally.
+ */
+export function signOut(): string | null {
+  const wasDev = Boolean(getDevUser());
+  setDevUser(null);
+  try {
+    // Anything cached about the previous identity goes too. A stale nav position or home layout
+    // belonging to someone else is a small leak, but it is still a leak.
+    window.sessionStorage.clear();
+  } catch {
+    // Storage unavailable; nothing was cached, so nothing to clear.
+  }
+  if (wasDev) return null;
+  // Cloudflare Access owns the production session. This is its documented logout path.
+  return "/cdn-cgi/access/logout";
+}
+
 export async function api<T = unknown>(
   path: string,
   options: { method?: string; body?: unknown } = {},

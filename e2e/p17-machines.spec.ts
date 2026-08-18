@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P17 browser journey — Machine Control Center + Capability Intelligence (GAP-06, GAP-07).
@@ -20,7 +21,7 @@ async function signIn(page: import("@playwright/test").Page): Promise<void> {
 
 test("the fleet is operable and a pause actually stops work reaching the machine", async ({ page, request }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Machines", exact: true }).click();
+  await gotoSurface(page, "Machines");
   await expect(page.getByTestId("machines-page")).toBeVisible();
   await expect(page.getByTestId("machines-note")).toContainText("45 machines");
 
@@ -57,7 +58,7 @@ test("the fleet is operable and a pause actually stops work reaching the machine
 
 test("a capability registers on the bench as untested and the stack stays evidence-based", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Machines", exact: true }).click();
+  await gotoSurface(page, "Machines");
 
   const key = `journey_capability_${Date.now()}`;
   await page.getByTestId("capability-key").fill(key);

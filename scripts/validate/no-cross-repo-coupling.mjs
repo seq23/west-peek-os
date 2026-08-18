@@ -36,8 +36,12 @@ const FOREIGN_BINDING = /env\.(?!WP_OS_)(?:[A-Z][A-Z0-9_]{2,})\b/;
  *   the encrypted vault. These are
  *   credentials for the governed AI boundary, not another system's storage, which is what this
  *   scan exists to prevent. Any binding outside this list is still a violation.
+ * - RESEND_API_KEY (P33): the outbound email transport credential. Same category as the provider
+ *   keys — a credential for an effect this system performs itself, NOT a handle on another
+ *   repository's database. The two switches that gate its use (WP_OS_EMAIL_SEND, WP_OS_EMAIL_FROM)
+ *   already carry the WP_OS_ prefix and need no exemption.
  */
-const DECLARED_NON_STORAGE_BINDINGS = /env\.(ASSETS|OPENROUTER_API_KEY|FIREWORKS_API_KEY|AI_PROVIDER_API_KEY|HARVEY_API_KEY|NORM_API_KEY)\b/;
+const DECLARED_NON_STORAGE_BINDINGS = /env\.(ASSETS|OPENROUTER_API_KEY|FIREWORKS_API_KEY|AI_PROVIDER_API_KEY|HARVEY_API_KEY|NORM_API_KEY|RESEND_API_KEY)\b/;
 const NETWORK_OS_HOST = /(network-os[a-z0-9.-]*\.(?:com|dev|net|io|workers\.dev)|api\.westpeeknetwork)/i;
 
 function listSourceFiles() {

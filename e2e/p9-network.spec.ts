@@ -19,6 +19,9 @@ test("P9 Network OS journey: contract → live pull fails closed → fixture con
   await page.getByTestId("dev-login-submit").click();
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
 
+  // Both live in the Admin tier, which is collapsed by default — administration is not
+  // everyday work. Open it the way an operator has to.
+  await page.getByTestId("nav-system-toggle").click();
   await page.getByRole("button", { name: "Network OS", exact: true }).click();
   await expect(page.getByTestId("integration-state")).toContainText("UNPROVEN");
 

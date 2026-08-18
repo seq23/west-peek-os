@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P11 browser journey against local `wrangler dev`:
@@ -82,7 +83,9 @@ test("P11 allocation journey: pinned policy versions → visible breach → rece
   await page.getByRole("button", { name: "Approvals", exact: true }).click();
   const card = page.locator(`li[data-testid="approval-card-${cardId}"]`);
   await expect(card).toContainText("pending_review");
-  await card.getByRole("textbox").fill("pro-rata only; concentration breach accepted knowingly — E2E");
+  // Targeted by testid, not by role: an approval card now also carries evidence and comment
+  // inputs (canon §24.2 context), so "the textbox" is ambiguous.
+  await card.locator('[data-testid^="decision-note-"]').fill("pro-rata only; concentration breach accepted knowingly — E2E");
   await card.getByRole("button", { name: "Approve" }).click();
   await expect
     .poll(async () => (await (await request.get(`/api/approvals/${cardId}`, { headers: MP })).json()).state)
@@ -100,7 +103,7 @@ test("P11 allocation journey: pinned policy versions → visible breach → rece
   const effects = await (await request.get("/api/effects/requests", { headers: MP })).json();
   expect((effects.effect_requests ?? []).filter((r: { state: string }) => r.state === "EXECUTED")).toHaveLength(0);
 
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await gotoSurface(page, "Activity");
   await expect(page.locator('[data-testid="activity-event-allocation.option_decided"]').first()).toBeVisible();
   await expect(page.locator('[data-testid="activity-event-allocation.comparison_run"]').first()).toBeVisible();
 });

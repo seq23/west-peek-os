@@ -26,8 +26,11 @@ test("journey 1 — MP Home → intelligence item → its source → follow-up r
   await signIn(page);
 
   // Intelligence: run the engine on an operator-supplied item with a real citation.
-  await page.getByRole("button", { name: "Intelligence", exact: true }).click();
+  await page.getByRole("button", { name: "Sweeps", exact: true }).click();
   const headline = `Journey-1 secondaries pricing signal ${Date.now()}`;
+  // Adding an item by hand now sits behind its own disclosure: the sweep button and the manual
+  // fields were one undifferentiated form, which is why "Run a sweep" read as ambiguous.
+  await page.getByTestId("intel-manual-add").locator("summary").click();
   await page.getByTestId("intel-manual-title").fill(headline);
   await page.getByTestId("intel-manual-locator").fill("Broker call, journey 1");
   await page.getByTestId("intel-run-submit").click();
@@ -54,10 +57,10 @@ test("journey 1 — MP Home → intelligence item → its source → follow-up r
 
 test("journey 2 — capture → work packet → lens gate → governed execution", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Intent → Execution", exact: true }).click();
+  await page.getByRole("button", { name: "Ask", exact: true }).click();
   await page.getByTestId("intent-text").fill("Summarise open portfolio alerts for the partner meeting");
   await page.getByTestId("intent-submit").click();
-  await expect(page.getByTestId("intent-message")).toContainText("Packet opened");
+  await expect(page.getByTestId("intent-message")).toContainText("Here is what");
 
   // Execution refused until the blocking lens runs.
   await page.getByTestId("packet-execute").click();
@@ -85,7 +88,7 @@ test("journey 4 — machine → scheduled run → artifact → notification → 
   await signIn(page);
 
   // Switch the daily intelligence job on and run it.
-  await page.getByRole("button", { name: "Scheduled Work", exact: true }).click();
+  await page.getByRole("button", { name: "Scheduled work", exact: true }).click();
   await page.getByTestId("job-reason").fill("journey 4");
   // The toggle's own label is the reliable signal: the card body also carries run history, which
   // may legitimately mention an earlier PAUSED refusal from another spec.
@@ -143,7 +146,7 @@ test("journey 5 — company → research finding → governed evidence", async (
 
 test("journey 6 — portfolio cockpit → allocation view → human decision boundary", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Cockpit", exact: true }).click();
+  await gotoSurface(page, "Fund strategy");
   await expect(page.getByTestId("cockpit-page")).toBeVisible();
   await expect(page.getByTestId("cockpit-definitions")).toContainText("never as a blank");
   await expect(page.getByTestId("cockpit-risks")).toBeVisible();
@@ -151,7 +154,7 @@ test("journey 6 — portfolio cockpit → allocation view → human decision bou
 
 test("journey 9 — AI cost centre → provider/model spend → policy action", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "AI Ops", exact: true }).click();
+  await gotoSurface(page, "Cockpit");
   await expect(page.getByTestId("cost-totals")).toContainText("committed this");
   await expect(page.getByTestId("spend-by-provider")).toBeVisible();
 
@@ -166,7 +169,7 @@ test("journey 10 — mobile: capture, approvals, and notifications one-handed", 
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
 
-  await gotoSurface(page, "+Capture");
+  await gotoSurface(page, "Capture");
   await page.getByTestId("capture-text").fill("Mobile journey capture");
   await page.getByTestId("capture-submit").click();
   await expect(page.getByTestId("capture-result")).toBeVisible();
@@ -179,7 +182,7 @@ test("journey 10 — mobile: capture, approvals, and notifications one-handed", 
 
   // The wide institutional tables must not push the whole page sideways: a phone user should
   // never have to scroll the document horizontally to reach the nav (final-review check).
-  for (const surface of ["AI Ops", "Machines", "Cockpit"]) {
+  for (const surface of ["Cockpit", "Machines", "Fund strategy"]) {
     await gotoSurface(page, surface);
     await page.waitForTimeout(150);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -191,7 +194,7 @@ test("journeys 7 and 8 are driven to their external boundary and stop there, hon
   await signIn(page);
 
   // Journey 7 — meeting prep: the queue is real; the calendar and transcription connectors are not.
-  await page.getByRole("button", { name: "Integrations", exact: true }).click();
+  await gotoSurface(page, "Integrations");
   await expect(page.getByTestId("prep-note")).toContainText("No calendar is connected");
   await expect(page.getByTestId("connector-transcription")).toContainText("NOT_CONFIGURED");
 

@@ -17,6 +17,9 @@
 name = "west-peek-os"
 main = "src/worker/index.ts"
 compatibility_date = "2025-10-01"
+# Required by @cloudflare/puppeteer, which pulls in node:buffer. Without it the Worker does not
+# start at all — caught by E2E, invisible to unit tests because they never boot the runtime.
+compatibility_flags = ["nodejs_compat"]
 
 # Static React client built by `vite build` into dist/client.
 # The worker handles /api/* itself and delegates everything else to ASSETS.
@@ -43,6 +46,12 @@ bucket_name = "west-peek-os-documents"
 [[kv_namespaces]]
 binding = "WP_OS_KV"
 id = "00000000000000000000000000000000"
+
+# Browser Rendering (P44). A BINDING, not an HTTP client — which is why browser tasks need no
+# egress exemption: nothing here calls fetch(). Native to the platform this Worker already runs on,
+# so there is no second vendor, no second credential, and no x402 autonomous-payment surface.
+[browser]
+binding = "BROWSER"
 
 [vars]
 # local | preview | production
@@ -91,10 +100,22 @@ bucket_name = "west-peek-os-documents"
 binding = "WP_OS_KV"
 id = "bf0750e8e9a648758a5de978088c97da"
 
+# Browser Rendering (P44). A BINDING, not an HTTP client — which is why browser tasks need no
+# egress exemption: nothing here calls fetch(). Native to the platform this Worker already runs on,
+# so there is no second vendor, no second credential, and no x402 autonomous-payment surface.
+[env.production.browser]
+binding = "BROWSER"
+
 [env.production.vars]
 # Not "local": the dev identity header `x-wpos-dev-user` is refused outside local,
 # and identity comes from `Cf-Access-Authenticated-User-Email` (src/worker/auth.ts).
 WP_OS_ENV = "production"
+
+# Network OS live pull (P35, canon §12A). Non-secret: an origin and an identity, both of which
+# are useless without WP_OS_NETWORK_OS_SESSION_SECRET, which is a Worker secret and never in this
+# file. The pull stays 503 until all three are present.
+WP_OS_NETWORK_OS_BASE_URL = "https://network.joinwestpeek.com"
+WP_OS_NETWORK_OS_USER_EMAIL = "sequoia@westpeek.ventures"
 
 [env.production.observability]
 enabled = true

@@ -399,3 +399,3262 @@ port still cannot be freed, rather than hand Playwright a server that can never 
 | `npm run e2e` immediately again, no cleanup — *the sequence that failed the gate* | **6 failed, rc=1** | **48/48, rc=0** |
 | `npm run e2e` with a stale `wrangler dev` holding the port | Playwright silently reused it, against a possibly older build | 6 stale processes stopped, fresh server, **48/48, rc=0** |
 
+
+# Production deployment profile admitted through Repo Operator (2026-08-14)
+
+Approved task: `TASK/APPROVED_TASK.md` — *WEST PEEK OS — PRODUCTION ARTIFACT ADMISSION*, run
+`20260814T230132Z-42955` (CONTINUATION over the preserved P0–P25 + D1–D5 baseline). Scope was
+deployment configuration and its documentation only. **Nothing was deployed.**
+
+## What was wrong
+
+The artifact declared only a top-level deployment profile carrying `vars.WP_OS_ENV = "local"`.
+`src/worker/auth.ts` selects the `x-wpos-dev-user` dev identity header exactly when
+`WP_OS_ENV === "local"`, so deploying the only deployable profile would have run the production
+Worker on the dev-header identity path. The same profile also carried the ADR-007 placeholder D1
+`database_id` and KV `id`, so it could not address the real provisioned resources either.
+`wrangler deploy --dry-run` did not catch this: dry-run validates configuration and bundling, not
+environment safety, and it succeeded against the unsafe profile.
+
+## What changed — 3 files, no application code
+
+| File | Change |
+|---|---|
+| `wrangler.toml` | Added an explicit `[env.production]` profile — `name`, `assets`, D1, R2, KV, `vars`, `observability` — plus header comments stating which profile is which. Top-level (local) profile values are unchanged. |
+| `docs/ENVIRONMENTS.md` | preview/production section amended: it no longer claims the config ships only placeholders and no production profile. Still states production is UNPROVEN and undeployed; `preview` still has no profile. |
+| `ARCHITECTURAL_DECISIONS.md` | ADR-007 amended: placeholders remain the **local** profile's contract; real non-secret ids live only under `[env.production]`. |
+
+`src/`, `migrations/`, and `tests/` are byte-identical to the pre-change baseline; `src/worker/auth.ts`
+verified unchanged by SHA-256. No secret, key, token, `.dev.vars`, or credential value was added — the
+D1/KV/R2 identifiers are non-secret resource ids. No Cloudflare resource was created, and Cloudflare
+Access was not touched.
+
+Named environments do **not** inherit bindings or vars from the top level, so `assets`,
+`d1_databases`, `r2_buckets`, `kv_namespaces`, `vars`, and `name` are each restated under
+`[env.production]` deliberately. `main`, `compatibility_date`, and the ADR-017 `[triggers]` cron *are*
+inherited. `name` is restated because a named environment would otherwise target
+`west-peek-os-production` rather than the existing `west-peek-os` Worker.
+
+## Proof actually run (2026-08-14, this machine — node v26.4.0 / npm 11.17.0)
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen install | `npm ci --ignore-scripts --no-audit --no-fund` | rc=0, 144 packages |
+| Typecheck | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **513/513** across 26 suites |
+| Build | `rm -rf dist && npm run build` | rc=0 |
+| Build output | `dist/client` | present, `index.html` + assets |
+| Authority scan | `npm run validate:authority` | PASS + self-test 4/4 + seeds fresh |
+| AI boundary | `npm run validate:ai-boundary` | PASS + self-test 5/5 + seeds fresh |
+| Network boundary | `npm run validate:network-boundary` | PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | PASS + self-test 9/9 |
+| E2E | `npm run e2e` | rc=0 — **48/48** on a clean local D1 |
+| Production profile | `wrangler deploy --dry-run --env production` (wrangler 4.120.1) | rc=0, **not deployed**. Bindings reported: `WP_OS_KV (bf0750e8…)`, `WP_OS_DB (west-peek-os-db)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS`, `WP_OS_ENV ("production")` |
+| Local profile preserved | `wrangler deploy --dry-run` (top level) | rc=0, reports `WP_OS_ENV ("local")` and the placeholder KV id — unchanged |
+| Secret scan | credential-shaped scan over the tree | only the pre-existing credential-scrub test fixtures (`tests/ai.test.ts`, `tests/workforce.test.ts`, `e2e/p4-ai.spec.ts`) |
+
+The two dry-runs together are the security proof: production resolves `WP_OS_ENV` to `"production"`,
+so the dev-header branch in `auth.ts` is unreachable under `--env production`, and the local profile
+is still local, so local validation never addresses a production resource.
+
+## Independent re-validation — worker generation 2, same run `20260814T230132Z-42955`
+
+A second implementation worker in the same run inspected the tree before mutating, found the three
+approved changes above already applied, added no further change to `wrangler.toml`,
+`docs/ENVIRONMENTS.md`, or `ARCHITECTURAL_DECISIONS.md`, and re-ran the whole proof set itself rather
+than inheriting the table above. Same machine, node v26.4.0 / npm 11.17.0, wrangler 4.120.1.
+
+| Check | Result (re-run) |
+|---|---|
+| `npm ci --ignore-scripts --no-audit --no-fund` | rc=0, 144 packages |
+| `npm run typecheck` | rc=0 |
+| `npm run test` | rc=0 — **513/513**, 26 suites |
+| `rm -rf dist && npm run build` | rc=0; `dist/client` regenerated (`index.html`, `assets/`, `sw.js`, manifest, marks) |
+| `npm run validate:authority` | PASS + self-test 4/4 + seeds fresh |
+| `npm run validate:ai-boundary` | PASS + self-test 5/5 + seeds fresh |
+| `npm run validate:network-boundary` | PASS + self-test 6/6 |
+| `npm run validate:brand` | PASS + self-test 9/9 |
+| `npm run e2e` | rc=0 — **48/48** |
+| `wrangler deploy --dry-run --env production` | rc=0, **not deployed** — `WP_OS_ENV ("production")`, `WP_OS_KV (bf0750e8…)`, `WP_OS_DB (west-peek-os-db)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` |
+| `wrangler deploy --dry-run` (top level) | rc=0 — still `WP_OS_ENV ("local")` and the placeholder KV id |
+| Credential-shaped scan | only the same three pre-existing scrub fixtures; no `.dev.vars`, `.env`, `*.key`, or `*.pem` anywhere in the tree |
+| Scope containment | only `wrangler.toml`, `docs/ENVIRONMENTS.md`, `ARCHITECTURAL_DECISIONS.md` carry the 2026-08-14 change timestamp; every file under `src/` predates it and is untouched by this task |
+
+Nothing was deployed, migrated, or configured remotely during this re-validation either.
+
+## Still UNPROVEN — do not read this section as deployment readiness
+
+- **Nothing has been deployed.** Declaring a profile is configuration, not a deploy.
+- Cloudflare Access policy behaviour is operator configuration and is not exercised here; the
+  production identity path depends on Access injecting `Cf-Access-Authenticated-User-Email`.
+- Remote D1 migration apply against production — never run.
+- The deployed Worker name binding is config-proven (`name = "west-peek-os"`), not deploy-proven.
+- `preview` still has no profile and remains entirely unconfigured.
+- Every other external/provider gate in the table above this section is unchanged and still UNPROVEN.
+
+Deployment remains a separate, already-authorized human-gated Phase D action.
+
+## P5 — mandatory final senior review, worker generation 3 (2026-08-14)
+
+Run `20260814T230132Z-42955`, role `claude:final_review`. This pass did not inherit either table
+above: it re-ran the whole proof set and, more usefully, checked the thing neither earlier generation
+could check about itself — whether the tree actually *reproduces* the externally validated
+production-ready snapshot the approved task names as the source of scope, rather than merely
+resembling it.
+
+**Reproduction proof (the decisive check).** `ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip`
+(SHA-256 `1195e25c…`) was extracted and diffed recursively against this tree:
+
+| Comparison | Result |
+|---|---|
+| `wrangler.toml` vs the approved reference | **byte-identical** |
+| `docs/ENVIRONMENTS.md`, `ARCHITECTURAL_DECISIONS.md` vs the reference | **byte-identical** |
+| Whole `west-peek-os/` tree (excl. `node_modules`, `dist`, `.wrangler`, `test-results`) | identical except `IMPLEMENTATION_LEDGER.md` (this run's own record) and `.env.example` |
+| `.env.example` | pre-existing unrelated user work dated 2026-08-12, *before* this task; names-only, every value empty. Deliberately **not** reverted — the task forbids reverting unrelated user work |
+
+So the approved scope is reproduced exactly, not approximated. No repair was required and none was
+invented; no file was changed by this pass except this ledger section.
+
+**A claim checked rather than trusted.** Both earlier sections assert that `[triggers]` is inherited
+into `[env.production]`, which matters because ADR-017 makes the cron the only scheduling primitive —
+if it were not inherited, production would silently never run a scheduled job, and neither dry-run
+prints trigger information, so the claim was unfalsified. Verified against the resolved config
+parser in the pinned wrangler 4.120.1 itself (`triggers: inheritable(diagnostics, topLevelEnv,
+rawEnv, "triggers", …)`): `triggers` is an inheritable key, so the named environment takes the
+top-level `*/15 * * * *` cron. The claim holds.
+
+**Resource-id provenance.** The D1 and KV identifiers under `[env.production]` are not asserted from
+nowhere: they match the ids recorded in this project's own prior deployment receipts
+(`DEPLOYMENTS/20260814T121242Z`, `…T130050Z`) and in `ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1_RECEIPT.json`.
+They are real, non-secret, already-provisioned resources — not fabricated placeholders dressed up as
+real ones.
+
+**Proof re-run independently by this pass** (same machine, wrangler 4.120.1):
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen install | `npm ci --ignore-scripts --no-audit --no-fund` | rc=0, 144 packages |
+| Typecheck | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **513/513**, 26 suites |
+| Clean build | `npm run build` after `rm -rf dist` | rc=0 |
+| Build output | `dist/client` | present — `index.html`, `assets/`, `sw.js`, manifest, marks |
+| Authority / AI / network / brand validators | the four `validate:*` scripts | all rc=0, PASS + self-tests 4/4, 5/5, 6/6, 9/9 |
+| E2E | `npm run e2e` | rc=0 — **48/48** |
+| Production profile resolves as production | `wrangler deploy --dry-run --env production` | rc=0, **not deployed** — `WP_OS_ENV ("production")`, `WP_OS_KV (bf0750e8…)`, `WP_OS_DB (west-peek-os-db)`, `WP_OS_DOCUMENTS`, `ASSETS` |
+| Local profile preserved | `wrangler deploy --dry-run` | rc=0 — still `WP_OS_ENV ("local")` and the placeholder KV id |
+| No secrets packaged | credential-shaped scan over the tree | one hit: `tests/workforce.test.ts:323`, the pre-existing fixture that asserts secrets get **scrubbed**. No `.dev.vars`, `.env`, `*.key`, `*.pem` anywhere |
+| Scope containment | mtime sweep for 2026-08-14 changes | only `wrangler.toml`, `docs/ENVIRONMENTS.md`, `ARCHITECTURAL_DECISIONS.md`, and this ledger. All of `src/`, `migrations/`, `tests/` untouched |
+
+**Accepted residual, recorded so it is not mistaken for an oversight.** The top-level profile is
+still deployable, and a bare `wrangler deploy` (no `--env production`) would ship `WP_OS_ENV = "local"`.
+No guard was added, deliberately: the approved task requires the top-level profile be *preserved
+unchanged* and confines this run to three files, and the externally validated reference artifact
+makes the same choice. The risk is bounded by documentation (`wrangler.toml` header, ADR-007,
+docs/ENVIRONMENTS.md all state the top-level profile must never be deployed) and by the fact that
+deployment is a separate human-gated Phase D action. If a mechanical guard is wanted, it is new
+scope and needs its own approval.
+
+Nothing was deployed, migrated, or configured remotely by this pass. Every UNPROVEN item listed in
+the section above remains UNPROVEN and unchanged.
+
+---
+
+## Re-admission pass, worker generation 1 (2026-08-16)
+
+Run `20260816T223337Z-508`, role `claude:opening`, CONTINUATION over the same preserved baseline,
+against the same approved task (`TASK/APPROVED_TASK.md`, SHA-256 `e323bce3…`). This pass exists
+because a *new* Repo Operator snapshot is being produced: the proof tables above belong to run
+`20260814T230132Z-42955`, and a snapshot may not be packaged on validation that another run
+performed. Nothing here is inherited — every row below was executed in this session.
+
+**P1–P2 — state established, contract compared.** The tree is unchanged since the 2026-08-14 final
+review: a full mtime sweep of `west-peek-os/` (excluding `node_modules/`, `dist/`, `.wrangler/`,
+`test-results/`) returned **no file modified after 2026-08-14 23:30**, so this run began on exactly
+the tree the previous pass proved byte-identical to `ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip`.
+Each clause of approved scope §2 was re-read against the file rather than against the ledger:
+
+| Approved requirement | State found |
+|---|---|
+| Top-level/local Wrangler profile preserved unchanged | present, `WP_OS_ENV = "local"`, ADR-007 placeholder D1/KV ids intact |
+| Explicit `[env.production]` for the existing `west-peek-os` Worker | present, `name = "west-peek-os"` restated so the named env does not become `west-peek-os-production` |
+| `WP_OS_ENV = "production"` | present under `[env.production.vars]` |
+| D1 binding/name/id | `WP_OS_DB` / `west-peek-os-db` / `1d7c242b-…` |
+| KV namespace | `WP_OS_KV` / `bf0750e8…` |
+| R2 bucket | `WP_OS_DOCUMENTS` / `west-peek-os-documents` |
+| `./dist/client`, `ASSETS`, SPA behavior | all three present under `[env.production.assets]` |
+| Observability enabled | `[env.production.observability] enabled = true` |
+| Production/ADR documentation | `docs/ENVIRONMENTS.md` preview/production section and ADR-007 amendment both present and accurate |
+
+**P3 — no repair required, and none was invented.** Every approved clause was already satisfied, so
+this pass changed no file except this ledger section. Producing a change merely to have produced one
+would have moved the artifact away from the externally validated reference it is required to
+reproduce.
+
+**Proof actually run (2026-08-16, this machine — node v26.4.0 / npm 11.17.0 / wrangler 4.120.1):**
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen install | `npm ci --ignore-scripts --no-audit --no-fund` | rc=0, 144 packages |
+| Typecheck | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **513/513**, 26 suites |
+| Clean build | `rm -rf dist && npm run build` | rc=0 |
+| Build output | `dist/client` | present — `index.html`, `assets/`, `sw.js`, `manifest.webmanifest`, `icon.svg`, `wp-mark.svg` |
+| Authority scan | `npm run validate:authority` | PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE, no MP names) |
+| Network boundary | `npm run validate:network-boundary` | PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | PASS + self-test 9/9 |
+| E2E | `npm run e2e` | rc=0 — **48/48** on a clean local D1 |
+| Migration idempotency | `npm run migrate:local` after the e2e reset applied 0001–0023 | "No migrations to apply!" |
+| Production profile resolves as production | `wrangler deploy --dry-run --env production` | rc=0, **not deployed** — `WP_OS_ENV ("production")`, `WP_OS_KV (bf0750e8…)`, `WP_OS_DB (west-peek-os-db)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` |
+| Local profile preserved | `wrangler deploy --dry-run` (top level) | rc=0 — still `WP_OS_ENV ("local")` and the placeholder KV id `0000…0000` |
+| No application/auth source changed | mtime sweep over `src/`, `migrations/`, `tests/`, `e2e/`, `scripts/` | nothing modified since before 2026-08-14; no file anywhere in the tree modified after this run started except this ledger |
+| Parent authority preserved | SHA-256 re-hash | `WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN.md` = `01d94450…`, `…ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11.md` = `a7681dc0…` — both match the P0 baseline in `ARTIFACT_MANIFEST.md` |
+| Brand authority preserved | SHA-256 re-hash | `WEST_PEEK_BRAND_SYSTEM.md` = `6b8e3c0a…`, `src/client/public/wp-mark.svg` = `bf90a100…` — both match |
+| No secrets packaged | credential-shaped file + content scan | no `.dev.vars`, `.env`, `*.key`, `*.pem`, `*.p12`, `id_rsa*` anywhere; one content hit, `tests/workforce.test.ts:323`, the pre-existing fixture that asserts secrets get **scrubbed**; `.env.example` is names-only with every value empty |
+
+**P5 — the load-bearing inheritance claim re-checked against the freshly installed wrangler.** The
+sections above depend on `[triggers]` being inherited into `[env.production]`; if it were not, the
+ADR-017 cron — the only scheduling primitive this system has — would silently never fire in
+production, and no dry-run prints trigger information, so the claim cannot falsify itself. Re-checked
+against the config parser inside the wrangler that *this run's* `npm ci` installed
+(`node_modules/wrangler/wrangler-dist/cli.js:35789`): `triggers: inheritable(`. The named environment
+therefore takes the top-level `*/15 * * * *` cron. The claim holds on the pinned toolchain as
+installed today, not merely as recorded earlier.
+
+**One environmental failure, diagnosed rather than papered over.** The first `npm run e2e` of this
+session failed 42 of 48 specs with `browserType.launch: Executable doesn't exist … chrome-headless-shell`.
+The cause is the frozen install itself: `npm ci` reinstalls `@playwright/test`, and the machine's
+browser cache (`~/Library/Caches/ms-playwright/`) held no build for the reinstalled version. It is a
+toolchain-provisioning gap, not a product defect — no application code, config, or test was touched
+to resolve it. `npx playwright install chromium` fetched the matching build and the suite then passed
+**48/48**. Recorded because the failure is real and will recur on any machine that runs `npm ci`
+without a matching browser cache.
+
+**Accepted residual, restated deliberately.** The top-level profile remains deployable and a bare
+`wrangler deploy` would still ship `WP_OS_ENV = "local"`. The reasoning in the section above stands
+unchanged and this pass did not quietly revise it: adding a mechanical guard is new scope requiring
+its own approval, and inventing it here would break the reproduction the approved task depends on.
+
+Nothing was deployed, migrated, or configured remotely by this pass. No Cloudflare resource was
+created or mutated; the only wrangler commands run were `--dry-run` and `--local`. Every UNPROVEN
+item in every table above remains UNPROVEN and unchanged, including remote deployment, Cloudflare
+Access behavior, and remote migration apply.
+
+---
+
+## Re-admission pass, worker generation 2 (2026-08-16)
+
+Run `20260816T232103Z-91568`, role `claude:opening/primary implementation`, CONTINUATION over the
+same preserved baseline and the same approved task (`TASK/APPROVED_TASK.md`, SHA-256 `e323bce3…`).
+
+**Why this section exists rather than an inheritance of the one above it.** The generation-1 pass in
+run `20260816T223337Z-508` completed P1–P5 and recorded them, but that run then ended
+`FAILED_TERMINAL` — its implementation-role session could not be resumed (`No conversation found
+with session ID: d0cbbe1c-…`, engine rc=1) — and it never reached host packaging. Its proof
+therefore belongs to a run that produced no snapshot. The rule that section itself invoked applies
+to it in turn: a snapshot may not be packaged on validation another run performed. Every row below
+was executed in *this* session. Nothing is inherited.
+
+**P1 — state established.** The mtime sweep over `west-peek-os/` (excluding `node_modules/`,
+`dist/`, `.wrangler/`, `test-results/`) for anything newer than 2026-08-14 23:30 returned exactly
+one path: `IMPLEMENTATION_LEDGER.md`. Every other file is the tree the 2026-08-14 final review
+proved byte-identical to the approved reference artifact. Nothing was lost when the previous run
+died.
+
+**P2 — reproduction re-proven against the reference, not against the ledger.**
+`ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip` re-hashed to SHA-256
+`1195e25c03e887ff21ad290770600a3ae37cc54f56b9ee82b06a831e2e7b002d`, was extracted fresh and diffed
+recursively against this tree:
+
+| Comparison | Result |
+|---|---|
+| `wrangler.toml` | **byte-identical** to the approved reference |
+| `docs/ENVIRONMENTS.md` | **byte-identical** |
+| `ARCHITECTURAL_DECISIONS.md` | **byte-identical** |
+| Whole `west-peek-os/` tree (excl. `node_modules`, `dist`, `.wrangler`, `test-results`, `.DS_Store`) | identical except `IMPLEMENTATION_LEDGER.md` (this run's own record) and `.env.example` |
+
+`.env.example` is present here and absent from the reference. It is dated 2026-08-12 22:47 —
+pre-existing unrelated user work from *before* this task — and was deliberately not reverted, as the
+approved task forbids reverting unrelated user work. Re-read in full this pass rather than assumed
+from the earlier ledger entry: it is a names-only contract, every credential name has an empty
+value, and its one assigned value is `WP_OS_ENV=local`, a runtime-mode name, not a credential. The
+earlier ledger's phrasing "every value empty" was very slightly loose; the accurate statement is
+"no credential name carries a value."
+
+**P3 — no repair required, and none was invented.** Each clause of approved scope §2 was checked
+against `wrangler.toml` directly: top-level profile preserved with `WP_OS_ENV = "local"` and the
+ADR-007 placeholder ids intact; `[env.production]` present with `name = "west-peek-os"` restated so
+the named environment does not become `west-peek-os-production`; `WP_OS_ENV = "production"`;
+`WP_OS_DB` / `west-peek-os-db` / `1d7c242b-…`; `WP_OS_KV` / `bf0750e8…`; `WP_OS_DOCUMENTS` /
+`west-peek-os-documents`; `./dist/client` + `ASSETS` + `single-page-application`;
+`[env.production.observability] enabled = true`. All already satisfied, so this pass changed no file
+except this ledger section. Manufacturing a change would move the artifact away from the reference
+it is required to reproduce.
+
+**P4 — proof actually run in this session** (node v26.4.0 / npm 11.17.0 / wrangler 4.120.1):
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen install | `npm ci --ignore-scripts --no-audit --no-fund` | rc=0, 144 packages |
+| Typecheck | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **513/513**, 26 suites |
+| Clean build | `rm -rf dist && npm run build` | rc=0, 44 modules |
+| Build output | `dist/client` | present — `index.html`, `assets/`, `sw.js`, `manifest.webmanifest`, `icon.svg`, `wp-mark.svg` |
+| Authority scan | `npm run validate:authority` | PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE, no MP names) |
+| Network boundary | `npm run validate:network-boundary` | PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | PASS + self-test 9/9 |
+| E2E | `npm run e2e` | rc=0 — **48/48** |
+| Migration idempotency | `npm run migrate:local` after the e2e reset | "No migrations to apply!" |
+| Production profile resolves as production | `wrangler deploy --dry-run --env production` | rc=0, **not deployed** — `WP_OS_ENV ("production")`, `WP_OS_KV (bf0750e8…)`, `WP_OS_DB (west-peek-os-db)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` |
+| Local profile preserved | `wrangler deploy --dry-run` (top level) | rc=0 — still `WP_OS_ENV ("local")` and the placeholder KV id `0000…0000` |
+| Parent authority preserved | SHA-256 re-hash | `…CANONICAL_MASTER_PLAN.md` = `01d94450…`, `…ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11.md` = `a7681dc0…` — both match `ARTIFACT_MANIFEST.md` |
+| Brand authority preserved | SHA-256 re-hash | `WEST_PEEK_BRAND_SYSTEM.md` = `6b8e3c0a…`, `src/client/public/wp-mark.svg` = `bf90a100…` — both match |
+| No application/auth source changed | mtime sweep over the whole tree | nothing modified since this run started except this ledger; `src/`, `migrations/`, `tests/`, `e2e/`, `scripts/` all untouched |
+| No secrets packaged | credential-shaped file scan + content scan | no `.dev.vars`, `.env`, `*.key`, `*.pem`, `*.p12`, `id_rsa*` anywhere; the content scan for assigned credential-shaped values across `src`, `scripts`, `tests`, `e2e`, `migrations`, `wrangler.toml`, `package.json` returned **nothing** |
+
+The playwright browser-cache failure the generation-1 pass diagnosed did **not** recur: the machine's
+`~/Library/Caches/ms-playwright/` already held the build matching the version `npm ci` reinstalled,
+so the suite passed 48/48 on the first attempt. The underlying gap it recorded is unchanged and will
+still recur on a machine without a matching browser cache.
+
+**P5 — the load-bearing inheritance claim re-checked on the wrangler this run installed.** Every
+section of this ledger depends on `[triggers]` being inherited into `[env.production]`; if it were
+not, the ADR-017 cron — this system's only scheduling primitive — would silently never fire in
+production, and no dry-run prints trigger information, so the claim cannot falsify itself. Confirmed
+again in `node_modules/wrangler/wrangler-dist/cli.js` as installed by this session's `npm ci`:
+`triggers: inheritable`. The named environment takes the top-level `*/15 * * * *` cron.
+
+**Accepted residual, restated without quiet revision.** The top-level profile remains deployable and
+a bare `wrangler deploy` would still ship `WP_OS_ENV = "local"`. Wrangler 4.120.1 does now warn when
+multiple environments are defined and none is selected, which narrows the failure mode but does not
+close it. No guard was added: the approved task requires the top-level profile be preserved
+unchanged, and adding a mechanical guard is new scope needing its own approval.
+
+**Still UNPROVEN, unchanged by this pass.** Nothing has been deployed — declaring a profile is
+configuration, not a deploy. Cloudflare Access policy behaviour is operator configuration and is not
+exercised here. Remote D1 migration apply has never been run. The deployed Worker name is
+config-proven, not deploy-proven. `preview` still has no profile. Nothing was deployed, migrated, or
+configured remotely by this pass; no Cloudflare resource was created or mutated; the only wrangler
+commands run were `--dry-run` and `--local`.
+
+Approved scope is complete and re-proven in this run. Host packaging and `LOCAL_ARTIFACT_VERIFIED`
+finalization (P6) remain the host's, as the execution contract requires.
+
+---
+
+## Implementation-role pass (2026-08-16)
+
+Run `20260816T232103Z-91568`, role `claude:implementation`, CONTINUATION over the same preserved
+baseline and the same approved task (`TASK/APPROVED_TASK.md`, SHA-256 `e323bce3…`).
+
+**Why this section exists rather than an inheritance of the one above it.** The section above was
+written by this run's *opening* session (`d6f2f29f-…`). This is a distinct session in the
+implementation role, and the execution contract binds this role to "run the repo-authorized
+validation you actually rely on" and to never claim validation that did not run. Reading a proof
+table is not running it. Every row below was executed in *this* session; nothing is inherited, and
+nothing above was rewritten or quietly revised.
+
+**P1 — state established before any mutation.** An mtime sweep over `src/`, `migrations/`, `tests/`,
+`e2e/`, `scripts/`, `docs/`, `wrangler.toml`, `package.json` and `ARCHITECTURAL_DECISIONS.md` for
+anything newer than 2026-08-14 returned **nothing**. The tree is the one the 2026-08-14 final review
+proved byte-identical to the approved reference. No work from any prior pass was lost.
+
+**P2 — reproduction re-proven against the reference artifact, not against this ledger.**
+`ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip` re-hashed to SHA-256
+`1195e25c03e887ff21ad290770600a3ae37cc54f56b9ee82b06a831e2e7b002d`, was extracted fresh to a
+scratch directory and diffed recursively against this tree:
+
+| Comparison | Result |
+|---|---|
+| `wrangler.toml` | **byte-identical** to the approved reference (`cmp`) |
+| `docs/ENVIRONMENTS.md` | **byte-identical** (`cmp`) |
+| `ARCHITECTURAL_DECISIONS.md` | **byte-identical** (`cmp`) |
+| Whole `west-peek-os/` tree (excl. `node_modules`, `dist`, `.wrangler`, `test-results`, `.DS_Store`) | identical except `IMPLEMENTATION_LEDGER.md` (this run's own record) and `.env.example` |
+
+`.env.example` is present here and absent from the reference. It is dated 2026-08-12 22:47 —
+pre-existing unrelated user work from before this task — and was deliberately **not** reverted, as
+the approved task forbids reverting unrelated user work. Re-read in full this pass: it is a
+names-only contract; the only assigned value is `WP_OS_ENV=local`, a runtime-mode name, and every
+credential name (`OPENROUTER_API_KEY`, `HARVEY_API_KEY`, `FUND_ADMIN_SFTP_KEY`, and the rest) carries
+an empty value.
+
+**P3 — no repair required, and none was invented.** Each clause of approved scope §2 was checked
+against `wrangler.toml` directly rather than against the ledger: top-level profile preserved with
+`WP_OS_ENV = "local"` and the ADR-007 placeholder D1/KV ids intact; `[env.production]` present with
+`name = "west-peek-os"` restated so the named environment does not deploy to
+`west-peek-os-production`; `WP_OS_ENV = "production"`; `WP_OS_DB` / `west-peek-os-db` /
+`1d7c242b-…`; `WP_OS_KV` / `bf0750e8…`; `WP_OS_DOCUMENTS` / `west-peek-os-documents`;
+`./dist/client` + `ASSETS` + `single-page-application`; `[env.production.observability] enabled =
+true`. All eight clauses already satisfied, so this pass changed no file except this ledger section.
+Manufacturing a change would move the artifact away from the reference it is required to reproduce.
+
+**P4 — proof actually run in this session** (node v26.4.0 / npm 11.17.0 / wrangler 4.120.1):
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen install | `npm ci --ignore-scripts --no-audit --no-fund` | rc=0, 144 packages |
+| Typecheck | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **513/513**, 26 suites, 76.3s |
+| Clean build | `rm -rf dist && npm run build` | rc=0 |
+| Build output | `dist/client` | present — `index.html`, `assets/`, `sw.js`, `manifest.webmanifest`, `icon.svg`, `wp-mark.svg` |
+| Authority scan | `npm run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE, no MP names) |
+| Network boundary | `npm run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| E2E | `npm run e2e` | rc=0 — **48/48** chromium, 36.3s, first attempt |
+| Migration idempotency | `npm run migrate:local` after the e2e reset applied 0001–0023 | "No migrations to apply!" |
+| Production profile resolves as production | `wrangler deploy --dry-run --env production` | rc=0, **not deployed** — `WP_OS_ENV ("production")`, `WP_OS_KV (bf0750e8e9a648758a5de978088c97da)`, `WP_OS_DB (west-peek-os-db)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` |
+| Local profile preserved | `wrangler deploy --dry-run` (top level) | rc=0 — still `WP_OS_ENV ("local")` and the placeholder KV id `0000…0000` |
+| Parent authority preserved | SHA-256 re-hash | `…CANONICAL_MASTER_PLAN.md` = `01d94450…`, `…ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11.md` = `a7681dc0…` — both match `ARTIFACT_MANIFEST.md` |
+| Brand authority preserved | SHA-256 re-hash | `WEST_PEEK_BRAND_SYSTEM.md` = `6b8e3c0a…`, `src/client/public/wp-mark.svg` = `bf90a100…` — both match |
+| No application/auth source changed | mtime sweep | `src/`, `migrations/`, `tests/`, `e2e/`, `scripts/`, `docs/`, `wrangler.toml`, `package.json`, `ARCHITECTURAL_DECISIONS.md` — nothing newer than 2026-08-14 |
+| No secrets packaged | credential-shaped file scan + assigned-value content scan | no `.dev.vars`, `.env`, `*.key`, `*.pem`, `*.p12`, `*.pfx`, `id_rsa*` anywhere; the content scan for assigned credential-shaped values across `src`, `scripts`, `tests`, `e2e`, `migrations`, `wrangler.toml`, `package.json`, `.env.example` returned **nothing** |
+
+The playwright browser-cache failure the generation-1 pass diagnosed did not recur: the machine's
+`~/Library/Caches/ms-playwright/` already held the build matching the version `npm ci` reinstalled.
+The gap that entry recorded is unchanged and will still recur on a machine without a matching cache.
+
+**P5 — the load-bearing inheritance claim re-checked on the wrangler this session installed.** Every
+pass of this ledger depends on `[triggers]` being inherited into `[env.production]`; if it were not,
+the ADR-017 cron — this system's only scheduling primitive — would silently never fire in
+production, and no dry-run prints trigger information, so the claim cannot falsify itself. Confirmed
+again in `node_modules/wrangler/wrangler-dist/cli.js` as installed by *this* session's `npm ci`:
+`triggers: inheritable`. The named environment takes the top-level `*/15 * * * *` cron.
+
+**Accepted residual, restated without quiet revision.** The top-level profile remains deployable and
+a bare `wrangler deploy` would still ship `WP_OS_ENV = "local"`. Wrangler 4.120.1 emits a warning
+when multiple environments are defined and none is selected — observed again in this session's
+top-level dry-run — which narrows the failure mode but does not close it. No guard was added: the
+approved task requires the top-level profile be preserved unchanged, and adding a mechanical guard
+is new scope needing its own approval.
+
+**Still UNPROVEN, unchanged by this pass.** Nothing has been deployed — declaring a profile is
+configuration, not a deploy. Cloudflare Access policy behaviour is operator configuration and is not
+exercised here. Remote D1 migration apply has never been run. The deployed Worker name is
+config-proven, not deploy-proven. `preview` still has no profile. No Cloudflare resource was created
+or mutated; the only wrangler commands run were `--dry-run` and `--local`.
+
+Approved scope P1–P4 is complete and independently re-proven by the implementation role. P5 (final
+senior review) and P6 (host packaging / `LOCAL_ARTIFACT_VERIFIED` finalization) remain outside this
+role, as the execution contract requires.
+
+---
+
+## P5 — final senior review pass (2026-08-16)
+
+Run `20260816T232103Z-91568`, role `claude:final-review`, worker generation 2, over the same approved
+task (`TASK/APPROVED_TASK.md`, SHA-256 `e323bce3…`) and handoff checkpoint
+(`HANDOFF_CHECKPOINT.json`, SHA-256 `7c9a7aae…`). This is the mandatory P5 gate the section above
+correctly declined to perform on itself.
+
+**Method.** Nothing below is inherited. Every clause of approved scope §2 was checked against
+`wrangler.toml` and against wrangler's own resolved binding output, not against any ledger prose, and
+every validator was executed in *this* session. Reading a proof table is not running it.
+
+**Scope conformance — all eight clauses of §2, verified directly.**
+
+| Approved clause | Verified how | Result |
+|---|---|---|
+| §2.1 top-level/local profile preserved unchanged | `wrangler deploy --dry-run` (no `--env`) + byte-compare to the approved reference | `WP_OS_ENV ("local")`, placeholder KV id `0000…0000`, ADR-007 placeholder `database_id` intact; file byte-identical to reference |
+| §2.2 explicit `[env.production]` for the existing `west-peek-os` Worker | `wrangler.toml` read directly | present; `name = "west-peek-os"` restated so the named env does not become `west-peek-os-production` |
+| §2.3 `WP_OS_ENV="production"` | production dry-run resolved bindings | `env.WP_OS_ENV ("production")` |
+| §2.4 D1 | production dry-run | `env.WP_OS_DB (west-peek-os-db)`, id `1d7c242b-fddc-41f1-843c-03dd2db6fbef` |
+| §2.4 KV | production dry-run | `env.WP_OS_KV (bf0750e8e9a648758a5de978088c97da)` |
+| §2.4 R2 | production dry-run | `env.WP_OS_DOCUMENTS (west-peek-os-documents)` |
+| §2.4 `./dist/client` + `ASSETS` + SPA | production dry-run + `wrangler.toml` | `env.ASSETS` bound; "Read 8 files from the assets directory …/dist/client"; `not_found_handling = "single-page-application"` |
+| §2.4 observability enabled | `wrangler.toml` | `[env.production.observability] enabled = true` |
+| §2.5 production/ADR documentation | `docs/ENVIRONMENTS.md` preview/production section + ADR-007 read in full | both present, accurate, and still label production UNPROVEN/undeployed |
+
+**Reproduction re-proven independently, whole-tree.** `ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip`
+re-hashed to SHA-256 `1195e25c03e887ff21ad290770600a3ae37cc54f56b9ee82b06a831e2e7b002d`. Every
+member file was streamed from the archive and SHA-256-compared against this tree (excluding
+`node_modules/`, `dist/`, `.wrangler/`, `test-results/`, `backups/`, `.DS_Store` per the
+`ARTIFACT_MANIFEST.md` snapshot rules). Result: **zero files present only in the reference, one file
+present only here (`.env.example`), and exactly one content difference (`IMPLEMENTATION_LEDGER.md`,
+this run's own record)**. `wrangler.toml`, `docs/ENVIRONMENTS.md`, `ARCHITECTURAL_DECISIONS.md`,
+`src/worker/auth.ts`, `src/worker/env.ts`, `src/worker/index.ts`, `package.json` and
+`package-lock.json` are each byte-identical to the approved reference. The two exceptions the
+implementation pass declared are the only two that exist — that claim is true, not merely asserted.
+
+**Security law re-checked at the source, not at the config.** `src/worker/auth.ts` selects the
+identity header on `env.WP_OS_ENV === "local"` — strict equality — so every non-`local` value,
+production included, reads `Cf-Access-Authenticated-User-Email` and the `x-wpos-dev-user` dev header
+is unreachable. Combined with the production dry-run resolving `WP_OS_ENV` to `"production"`, the
+§3 law "production must never run under `WP_OS_ENV=local`" holds at both the configuration and the
+code layer. `auth.ts` is byte-identical to the reference: no authentication code was changed.
+
+**Proof actually run in this session** (node v26.4.0 / npm 11.17.0 / wrangler 4.120.1):
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen install | `npm ci --ignore-scripts --no-audit --no-fund` | rc=0, 144 packages |
+| Typecheck | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **513/513**, 26 suites, 74.0s |
+| Clean build | `rm -rf dist && npm run build` | rc=0, 44 modules |
+| Build output | `dist/client` | present — `index.html`, `assets/`, `sw.js`, `manifest.webmanifest`, `icon.svg`, `wp-mark.svg` |
+| Authority scan | `npm run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE, no MP names) |
+| Network boundary | `npm run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| E2E | `npm run e2e` | rc=0 — **48/48** chromium, 35.6s, first attempt |
+| Migration idempotency | `npm run migrate:local` after the e2e reset | "No migrations to apply!" |
+| Production profile resolves as production | `npx wrangler deploy --dry-run --env production` | rc=0, **not deployed** — bindings as tabled above |
+| Local profile preserved | `npx wrangler deploy --dry-run` | rc=0 — `WP_OS_ENV ("local")`, KV id `0000…0000` |
+| Parent authority preserved | SHA-256 re-hash vs `ARTIFACT_MANIFEST.md` | `…CANONICAL_MASTER_PLAN.md` = `01d94450…` ✓, `…ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11.md` = `a7681dc0…` ✓ |
+| Brand authority preserved | SHA-256 re-hash vs `ARTIFACT_MANIFEST.md` | `WEST_PEEK_BRAND_SYSTEM.md` = `6b8e3c0a…` ✓, `src/client/public/wp-mark.svg` = `bf90a100…` ✓ |
+| No secrets packaged | credential-shaped file scan + assigned-value content scan | no `.dev.vars`, `.env`, `*.key`, `*.pem`, `*.p12`, `*.pfx`, `id_rsa*` anywhere in the tree; the assigned-value scan across `src`, `scripts`, `tests`, `e2e`, `migrations`, `wrangler.toml`, `package.json`, `.env.example` returned nothing |
+| Validation itself mutated nothing | whole-tree reference diff re-run *after* all of the above | still exactly the two declared exceptions |
+
+**`.env.example` re-adjudicated rather than accepted on report.** Read in full: 998 bytes, mtime
+2026-08-12 22:47 — pre-existing user work predating this task. The only assigned value in the entire
+file is `WP_OS_ENV=local`, a runtime-mode name; every credential name
+(`OPENROUTER_API_KEY`, `HARVEY_API_KEY`, `FUND_ADMIN_SFTP_KEY`, …) carries an empty value. It is not a
+secret and §6 forbids reverting unrelated user work, so it stays. `.gitignore` ignores `.env` and
+`.env.*` while explicitly re-including `!.env.example`, so the names-only file is the intended
+artifact and no real env file can follow it in.
+
+**Documentation re-checked for false or stale claims.** A scan across `docs/` and the root markdown
+for now-false statements ("no production profile", "placeholders only", "profile does not exist")
+found none outside the ledger's own change table, where they appear as descriptions of what was
+amended. `docs/ENVIRONMENT_CONTRACT.md` remains names-only and lists `WP_OS_ENV` as PRESENT, which is
+true of both profiles. `AGENTS.md` still lists remote Cloudflare deployment as UNPROVEN — consistent,
+because declaring a profile is not deploying one.
+
+**The load-bearing inheritance claim re-verified once more.** Every pass depends on `[triggers]` being
+inherited into `[env.production]`; if it were not, the ADR-017 cron — this system's only scheduling
+primitive — would silently never fire in production, and no dry-run prints trigger information, so
+the claim cannot falsify itself. Re-confirmed in `node_modules/wrangler/wrangler-dist/cli.js` as
+installed by this session's own `npm ci`: `triggers: inheritable`.
+
+**Repairs applied by this pass: none, and none were manufactured.** The full approved scope was
+inspected and no material omission, stub, drift, regression, auth/security gap, failure-path gap, or
+false completion claim was found. Every quantitative claim the implementation pass made was
+re-executed here and reproduced. Changing a file merely to demonstrate activity would move the
+artifact away from the reference §2 requires it to reproduce.
+
+**Accepted residual, restated without quiet revision.** The top-level profile remains deployable and a
+bare `wrangler deploy` would still ship `WP_OS_ENV = "local"`. Wrangler 4.120.1 emits a warning when
+multiple environments are defined and none is selected — observed again in this session's top-level
+dry-run — which narrows the failure mode without closing it. This is deliberately NOT repaired: §2.1
+requires the top-level profile be preserved unchanged and §5 excludes work beyond the enumerated
+changes, so a mechanical guard is new scope needing its own approval. Separately observed, and offered
+as configuration fact rather than proof: that profile still carries the ADR-007 placeholder D1
+`database_id` and KV `id`, which do not name real provisioned resources.
+
+**Still UNPROVEN, unchanged by this pass.** Nothing has been deployed — declaring a profile is
+configuration, not a deploy. Cloudflare Access policy behaviour is operator configuration and was not
+exercised; the production identity path depends on Access injecting
+`Cf-Access-Authenticated-User-Email`. Remote D1 migration apply has never been run. The deployed
+Worker name is config-proven, not deploy-proven. `preview` still has no profile. No Cloudflare,
+GitHub, Boss OS, or partner repository was mutated; no Cloudflare resource was created; the only
+wrangler commands run in this session were `--dry-run` and `--local`.
+
+Approved scope P1–P5 is complete and independently verified. P6 (host packaging and
+`LOCAL_ARTIFACT_VERIFIED` finalization) remains the host's, as the execution contract requires.
+
+### P5 addendum — host finalization gate rejection and the substituted production proof
+
+The host gate rejected this pass's first evidence record on two procedural grounds: more than eight
+validation commands were declared, and `wrangler deploy --dry-run --env production` carries a
+forbidden proof token (`wrangler deploy`) regardless of `--dry-run`. Neither finding concerned the
+artifact. The dry-runs recorded in the table above **did run in this session and their results stand**;
+they simply may not be declared as commands the host re-executes.
+
+Replacing them required a production-profile proof that needs no wrangler subcommand. The first
+attempt was a whole-file substring check over `wrangler.toml`, and self-testing it against planted
+violations exposed a defect serious enough to record: **it passed a `wrangler.toml` whose production
+profile had been flipped to `WP_OS_ENV = "local"`.** The header comment on line 10 contains the
+literal text `WP_OS_ENV = "production"` while documenting the profile, so a whole-file substring match
+was satisfied by prose rather than by configuration. The same contamination made the top-level-profile
+and profile-header checks false-pass. Had that check been declared, it would have certified the exact
+§3 security-law breach this run exists to prevent.
+
+The declared check is therefore section-scoped: it strips comment lines, folds `wrangler.toml` into
+its TOML sections, and asserts 17 clauses **within their own sections** — the top-level `[vars]`
+staying `local` with both ADR-007 placeholder ids intact and never containing `production`, and
+`[env.production]` carrying the restated worker name, `WP_OS_ENV = "production"`, the assets
+directory/binding/SPA handling, the real D1/KV/R2 bindings and identifiers, and observability enabled.
+
+Self-test of the replacement, harness corrected after an initial `$OLDPWD` reuse bug made the first
+matrix read the wrong file:
+
+| Planted violation | Caught |
+|---|---|
+| production profile forced to `WP_OS_ENV = "local"` (§3 security law) | yes |
+| top-level local profile mutated to `production` | yes |
+| `[env.production.observability]` removed | yes |
+| `name = "west-peek-os"` restatement removed | yes |
+| SPA asset handling removed | yes |
+| production D1 id downgraded to the placeholder | yes |
+| production KV id altered | yes |
+| assets directory repointed away from `./dist/client` | yes |
+| local profile repointed at the production D1 | yes |
+| production R2 binding removed | yes |
+| *negative control:* comment text changed, configuration untouched | correctly passes |
+
+10/10 violations caught, positive control passes, no false failure on comment-only edits. All eight
+declared commands were then re-run in order from the locked target root: typecheck, `test`
+(513/513), `build`, the four boundary/brand validators, and this contract assertion — every one rc=0.
+
+This addendum changed no configuration or application file; the artifact is unchanged from the state
+proven in the table above.
+
+### P5 addendum 2 — second gate rejection, and why the production proof stays in-session
+
+The host gate then rejected the replacement command itself. Its scanner accepts only simple declared
+commands; an inline `node -e` program is refused regardless of what it asserts (the rejection quoted
+the command and named no other fault). Every command it has accepted is of the form
+`npm --prefix west-peek-os run <script>`.
+
+That leaves two ways to declare a host-rerunnable production-profile check, and **both are refused by
+approved scope**: adding a `scripts/validate/*.mjs` validator plus a `package.json` entry would breach
+§2, which limits target changes to the wrangler production profile and the documentation describing
+it, and §6, which directs this run to "use the repository's existing validation surfaces appropriate
+to this narrow change." Manufacturing a new validation surface to satisfy a gate's command-format
+preference would also break the byte-level reproduction of the approved reference artifact that §2
+exists to preserve — the artifact would no longer match `WEST_PEEK_OS_PRODUCTION_READY_v1.zip`.
+
+So the declared command set is the seven existing repo scripts, and the production-profile proof
+remains what it has always been in this pass: **evidence actually executed in this session and
+recorded above** — the wrangler production dry-run resolving `WP_OS_ENV ("production")` with the real
+D1/KV/R2 bindings and not publishing, the top-level dry-run still resolving `"local"` with both
+placeholder ids, the byte-identical comparison of `wrangler.toml` against the approved reference, and
+the section-scoped contract assertion self-tested against 10 planted violations. None of that is
+withdrawn or weakened; it simply is not expressible in the format the host will re-execute.
+
+Recorded plainly so no later reader mistakes the declared command list for the whole proof: the seven
+declared scripts prove the repository is healthy (typecheck, 513/513 unit/integration, clean build,
+authority/AI/network/brand boundary validators). They do **not** themselves re-verify the production
+profile. That verification is in this ledger, and the host's own packaging re-hashes the artifact it
+describes.
+
+## P26 phase 1 — operator experience: navigation, contextual help, Help Center
+
+Scope delivered in this pass is **phase 1 of the P26 upgrade**, not the whole of it. What follows is
+what was actually built and actually validated; §§4–9 of the P26 brief (guided setup, employee→work
+connection, recurring-work guidance, provider/credential wiring, Home command surface) are **not
+started**, and nothing in this entry should be read as covering them.
+
+### Implemented
+
+| Change | File |
+|---|---|
+| Two-tier navigation: 6 everyday groups + Help; 8 admin destinations behind one disclosure | `src/client/App.tsx` |
+| Disclosure auto-opens when a system destination becomes current; never auto-collapses | `src/client/App.tsx` |
+| `HowThisWorks` — the reusable 7-question contextual-help primitive | `src/client/pages/HowThisWorks.tsx` |
+| Help Center: 18 topics, maturity-tagged, searchable, reachable signed-out | `src/client/pages/HelpCenterPage.tsx` |
+| Help facts derived from the registry, activation cap pinned by test | `src/client/lib/helpFacts.ts`, `tests/help-facts.test.ts` |
+| Contextual help on Scheduled Work | `src/client/pages/JobsPage.tsx` |
+| Nav helper extended to both tiers at any viewport | `e2e/support/nav.ts` |
+| P26 browser journey: tiering, keyboard, deep-link, phone, Help | `e2e/p26-operator-experience.spec.ts` |
+
+**All 29 original destinations kept their key and their exact label.** Twelve moved tier; none was
+removed or renamed, so existing deep links and selectors still resolve.
+
+### Honesty constraints observed
+
+The Help Center **refuses to state whether any integration is working**. Integration, intelligence,
+investing, LP and portfolio topics are tagged `AUDIT_PENDING` and defer to the readiness surface,
+because their true configured/connected status has not been audited. A help page that guesses is
+worse than one that admits the gap, since the operator acts on it.
+
+### Locally validated — full matrix, no test weakened
+
+```
+typecheck                  PASS
+unit/integration           515/515 PASS  (513 before; +2 help-facts pins)
+validate:authority         rc=0
+validate:ai-boundary       rc=0
+validate:network-boundary  rc=0
+validate:brand             PASS (9/9 planted violations caught)
+build                      PASS (335.70 kB js / 24.91 kB css)
+e2e (Playwright)           55/55 PASS
+```
+
+Three E2E specs failed on the first run and were **fixed at the source, not silenced**:
+`p1-shell` encoded the old flat-nav contract and now asserts both halves of the new one (everyday
+visible, admin hidden-then-reachable); `d1-design-states` and `p25-journeys` broke because a
+pre-existing `e2e/support/nav.ts` helper — which this pass had duplicated by mistake — did not know
+about the second tier. The duplicate was deleted and the existing helper extended, so there is one
+navigation helper, not two.
+
+### Not deployed
+
+`repo deploy` selects the latest **verified artifact** from run/state authority and never the
+mutable WORK tree. The current selection is `06040f94…` from run `20260816T232103Z-91568`, which
+predates this work. Deploying now would ship the pre-P26 build. A governed run must package WORK
+into a new verified artifact before phase 1 can reach production.
+
+## P26 phase 2 — provider & credential truth audit; OpenRouter enabled
+
+**Audit.** `docs/PROVIDER_READINESS_AUDIT.md` maps West Peek's five credential demands against both
+vaults and the live Worker. Finding at audit time: the production Worker secret list was empty, so
+no AI path could work at all.
+
+**Decision and change (Managing Partner, 2026-08-17).** All AI work flows through OpenRouter; West
+Peek may share Repo Operator credentials.
+
+- `migrations/0024_enable_openrouter.sql` — `enabled = 1` for `openrouter`, nothing else. `base_url`
+  and the data-class policy were already correct from `0004` and were left untouched.
+- `OPENROUTER_API_KEY` bound as a production Worker secret (Keychain → pipe → `wrangler` stdin;
+  never echoed, never on disk, never in argv).
+- **Egress not widened.** `CONFIDENTIAL` / `RESTRICTED` / `LP_PRIVATE` / `MNPI_SENSITIVE` /
+  `BANKING_RESTRICTED` still cannot reach OpenRouter. Only `PUBLIC` and `INTERNAL`.
+- Status is **configured, not externally verified** — no model call has been made.
+
+## P26 phase 3 (partial) — guided setup and the recommended team
+
+### Implemented
+
+| Change | File |
+|---|---|
+| Pure, testable recommendation engine derived from the live 31-role roster | `src/shared/setup/recommendedTeam.ts` |
+| "Set Up West Peek OS" surface — derives slots and status from the workforce API | `src/client/pages/SetupPage.tsx` |
+| Nav entry under Home; contextual help on the page | `src/client/App.tsx` |
+| 6 unit tests incl. cap, roster drift, purity, visible trade-off | `tests/recommended-team.test.ts` |
+
+The engine holds **no roster of its own** — it reads `AI_EMPLOYEE_ROSTER` and returns a reason per
+person, so it cannot drift from the registry. It has no database or network access, so it
+*structurally cannot* activate anyone. Activation stays on Employees behind the
+`ai_employee.activate` receipt and the server-side cap of five.
+
+Six stated priorities, five slots: the uncovered priority and the person who would cover it are
+both rendered, so the cap's cost is visible rather than silently dropped.
+
+### Not done in this phase
+
+§5 (connect employees to capabilities, integrations, dependencies and recurring assignments) is
+**not started**. The Setup page recommends and explains; it does not yet show per-employee
+capability or dependency status. There is also **no E2E coverage for the Setup page** — it is
+covered by unit tests and typecheck only.
+
+### Validated
+
+```
+typecheck 0 · tests 521/521 (28 files) · build 0
+authority 0 · ai-boundary 0 · network-boundary 0 · brand 0 · e2e 55/55
+```
+
+### P26 phase 3 completion — §5 employee→work dependencies, and the missing E2E
+
+| Change | File |
+|---|---|
+| Readiness engine: employee status → assigned machines → configured provider | `src/shared/setup/employeeReadiness.ts` |
+| Per-role dependency + blocker rendering on the setup surface | `src/client/pages/SetupPage.tsx` |
+| 8 unit tests incl. the partially-paused case | `tests/employee-readiness.test.ts` |
+| 5 browser tests incl. "setup cannot activate anyone" | `e2e/p27-guided-setup.spec.ts` |
+
+**The dependency that matters.** An employee may be `ACTIVE` while their only machine is `PAUSED`,
+and the server refuses to route work to a paused machine (`p17-machines.spec.ts` proves the API
+returns a refusal). Reporting that employee as ready would assert something the server rejects, so
+all-machines-paused is fatal while some-machines-paused is not — the role is narrowed, not stopped.
+
+**Every blocker carries the one action that clears it.** A bare "blocked" with no next step is the
+failure mode this replaces, and the E2E asserts blockers are non-empty whenever a role is not ready.
+
+**Governance pinned by test.** `p27` asserts the setup surface has zero controls matching
+`/activate/i`, names the approval-receipt requirement, and repeats the law in its contextual help.
+A setup wizard able to activate would be a route around both the cap and the receipt.
+
+**Deliberately the weaker claim.** The client can see a provider is `enabled` and not
+`kill_switched`, but cannot see whether its credential is bound — that is Worker-side. So
+`aiProviderConfigured` asserts only what the client can actually know, and says so in a comment.
+
+**Not done in §5:** recommended recurring assignments per employee. That overlaps §6 and is better
+built once against the real job architecture than twice.
+
+```
+typecheck 0 · tests 529/529 (29 files) · build 0
+authority 0 · ai-boundary 0 · network-boundary 0 · brand 0 · e2e 60/60
+```
+
+## P26 phase 4 (partial) — §6 recurring work guidance
+
+### Implemented
+
+| Change | File |
+|---|---|
+| Recurring-work proposals shaped to the real `scheduled_job` contract | `src/shared/setup/recommendedJobs.ts` |
+| "Recommended recurring work" section with per-job blockers | `src/client/pages/SetupPage.tsx` |
+| 10 unit tests that read the migration and assert schema conformance | `tests/recommended-jobs.test.ts` |
+| Browser test: proposals are PAUSED and cannot be created here | `e2e/p27-guided-setup.spec.ts` |
+
+**Not a second scheduler.** This produces *proposals* shaped to `scheduled_job` and nothing else. No
+job is created, enabled or run from the setup surface; the E2E asserts zero controls matching
+`/switch on|enable|create job/i`.
+
+**The tests read the schema rather than restating it.** `allowedFromSchema()` parses the `CHECK`
+constraints out of `migrations/0018_orchestration.sql`, so the allowed `kind`, `schedule_kind`,
+`target_kind` and `status` values are derived. A proposal the database would reject fails in CI
+instead of in the operator's hands, and adding a job kind to the schema without updating the
+proposals breaks the test.
+
+**Honest about what the product supports.** The brief lists ten desirable recurring jobs; seven are
+proposed. The table has three job kinds, not ten — inventing an `LP_PIPELINE` kind to appear
+complete would produce a row the database refuses. The three not proposed are the ones with no
+honest home in the current schema.
+
+**Egress stays inside the policy.** Every proposal is `PUBLIC` or `INTERNAL`, asserted by test,
+because the one enabled provider lane may receive nothing above `INTERNAL`. A `CONFIDENTIAL`
+proposal would be proposing work the egress policy refuses.
+
+### Not done
+
+§8 — Home as an operator command surface — is **not started**. Phase 4 is half complete.
+
+```
+typecheck 0 · tests 539/539 (30 files) · build 0
+authority 0 · ai-boundary 0 · network-boundary 0 · brand 0 · e2e 61/61
+```
+
+### P26 phase 4 completion — §8 Home as an operator command surface
+
+Home was **not** rebuilt. It already answers most of the brief's questions through twelve
+server-driven modules (approvals, what changed, my work, LP signals, meetings, IC priorities,
+portfolio risk, allocation, reconciliation, AI spend, employees, intelligence). Replacing that with
+a fresh surface would have destroyed working behaviour to re-earn it.
+
+Four of the brief's questions had no answer anywhere, and those are what was added:
+
+| Question | Answer added |
+|---|---|
+| What is blocked? | `home-attention` strip, above the fold |
+| Is scheduled work healthy? | dead-letter, refusal/failure and paused-job detection |
+| Is AI failing? | provider-unconfigured detection |
+| Is setup incomplete? | unactivated recommendation count |
+
+| Change | File |
+|---|---|
+| Attention engine — pure, derives from live state only | `src/shared/setup/operatorAttention.ts` |
+| "Needs your attention" strip rendered above *one thing to watch* | `src/client/pages/HomePage.tsx` |
+| 7 unit tests | `tests/operator-attention.test.ts` |
+| Browser test: answers, or is honestly silent | `e2e/p27-guided-setup.spec.ts` |
+
+**It invents nothing.** Every input is passed in; the module has no data source of its own. An
+absent source yields `undefined`, and only an explicit `false` is treated as a finding — so a
+provider endpoint that did not answer produces silence, not a false alarm. Asserted by test.
+
+**Silence is a valid answer, and the test proves it is earned.** When the strip is absent the E2E
+opens Scheduled Work and fails if any dead letter exists — so "nothing to report" cannot be a bug
+masquerading as calm.
+
+**Ordered by consequence, not category.** A dead-lettered job (`BLOCKING` — that work stopped and
+will not retry) outranks an unactivated recommendation (`INFO` — a gap, not a fault). Every item
+carries its next action and the surface that resolves it.
+
+```
+typecheck 0 · tests 546/546 (31 files) · build 0
+authority 0 · ai-boundary 0 · network-boundary 0 · brand 0 · e2e 62/62
+```
+
+## Production artifact admission — re-verification over the post-P26 WORK tree
+
+Run `20260817T013912Z-11185`, CONTINUATION, against the same approved task
+(`TASK/APPROVED_TASK.md`, SHA-256 `e323bce3…`) as the four passes recorded above.
+
+**Why this pass exists.** The previous pass (`20260816T232103Z-91568`) reached
+`LOCAL_ARTIFACT_VERIFIED` and produced artifact `06040f94…`. WORK then legitimately advanced —
+P26 phases 1–4 landed after that artifact was sealed. So the approved production-readiness
+contract needed re-proving against the tree as it now stands, not as it stood then.
+
+### P3 — no change was required, and none was invented
+
+All five clauses of approved scope §2 were already satisfied. `wrangler.toml` was not edited by
+this pass; it is **byte-identical to the approved reference**
+(`ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip`), as are `docs/ENVIRONMENTS.md`,
+`ARCHITECTURAL_DECISIONS.md`, and `src/worker/auth.ts`:
+
+| File | SHA-256 (first 16) | vs approved reference |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae9` | identical |
+| `docs/ENVIRONMENTS.md` | `d78dbbaa3988022c` | identical |
+| `ARCHITECTURAL_DECISIONS.md` | `21a723721624b95c` | identical |
+| `src/worker/auth.ts` | `13bc20a1207654f1` | identical |
+
+### P4 — validation actually executed in this session
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen dependency install | `npm ci` | rc=0 |
+| Typecheck | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm test` | **546/546** (31 files), rc=0 |
+| Build | `npm run build` | rc=0; `dist/client` present (8 files, 357.24 kB js / 24.91 kB css) |
+| Authority boundary | `npm run validate:authority` | rc=0, self-test 4/4, seeds fresh |
+| AI boundary | `npm run validate:ai-boundary` | rc=0, self-test 5/5, seeds fresh |
+| Network boundary | `npm run validate:network-boundary` | rc=0, self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0, self-test 9/9 |
+| Browser journeys | `npm run e2e` | **62/62** passed, rc=0 |
+| Migrations | `npm run migrate:local` | idempotent — "No migrations to apply" |
+| **Production profile resolves as production** | `npx wrangler deploy --dry-run --env production` (4.120.1) | rc=0, **not deployed** — `WP_OS_ENV ("production")`, `WP_OS_KV (bf0750e8e9a648758a5de978088c97da)`, `WP_OS_DB (west-peek-os-db)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` |
+| **Top-level profile stays local** | `npx wrangler deploy --dry-run` | rc=0, **not deployed** — `WP_OS_ENV ("local")`, placeholder KV `0000…0000` |
+
+Both dry-runs exited at `--dry-run: exiting now.` Nothing was published, migrated, or configured
+remotely. No Cloudflare resource was created or altered by this run.
+
+### The tree really did move, and this states exactly how
+
+Whole-tree diff against the approved reference (excluding `node_modules`, `dist`, `.wrangler`,
+`test-results`, `playwright-report`, `backups`):
+
+- **`src/worker/` is byte-identical in full** — zero differences. No application or authentication
+  source file changed, which is approved scope §6's requirement and §3's security law at source.
+  `auth.ts` still gates the dev identity header on strict `env.WP_OS_ENV === "local"`, so that
+  branch is unreachable under `--env production`.
+- **Changed:** `src/client/App.tsx`, `HomePage.tsx`, `JobsPage.tsx`, `styles.css`, 13 `e2e/` specs
+  and `e2e/support/nav.ts`, `scripts/vault/cloudflare-mapping.json`, this ledger.
+- **Added:** `docs/PROVIDER_READINESS_AUDIT.md`, `migrations/0024_enable_openrouter.sql`,
+  `src/client/lib/helpFacts.ts`, three client pages, `src/shared/setup/`, five test files, two e2e
+  specs, `.env.example`.
+
+Every one of those is **pre-existing unrelated user work** (P26 phases 1–4, and `.env.example`
+dated 2026-08-12). Approved scope §6 forbids reverting unrelated user work, so none was reverted.
+`migrations/0024` adds a migration; it rewrites none, which keeps the additive-first rule.
+
+**Secrets: none packaged.** The scan for key/token/private-key material across the tree is clean.
+`scripts/vault/cloudflare-mapping.json` gained `"OPENROUTER_API_KEY"` — a secret **name**, not a
+value — which is exactly what the names-only contract permits. `.env.example` is names-only with
+every value empty. No `.dev.vars`, `.env`, key, or certificate file exists in the tree.
+
+### Stated plainly rather than left for a reader to discover
+
+**This snapshot will contain more than the approved scope.** The approved scope is the production
+profile and its documentation, and that part is unchanged and re-proven above. But the artifact the
+host packages from this WORK also carries P26 phases 1–4, because that is what WORK now contains.
+Those changes were not reviewed against *this* task — they were validated by the repository's own
+full suite, which this pass re-ran green in its entirety. A reader must not read
+`LOCAL_ARTIFACT_VERIFIED` on this run as an approval of the P26 work's design.
+
+**A Cloudflare mutation happened outside this run.** P26 phase 2 records OpenRouter being enabled
+and `OPENROUTER_API_KEY` bound as a production Worker secret. This run did not perform, repeat, or
+verify any of that, and made no provider call of any kind. Whether `0024` has been applied to
+remote D1 is not observable from here and is not claimed.
+
+### Unchanged residuals, carried forward not silently dropped
+
+- A bare `wrangler deploy` with no `--env production` still selects the top-level profile and would
+  ship `WP_OS_ENV = "local"`. Approved scope §2.1 requires that profile be preserved unchanged, so
+  this is not repairable here. Deployment must specify `--env production`.
+- Remote publish, Cloudflare Access behaviour, and remote D1 migration apply remain **UNPROVEN** —
+  declaring `[env.production]` is configuration, never a deployment.
+- `preview` still has no profile.
+
+```
+npm ci 0 · typecheck 0 · tests 546/546 (31 files) · build 0 · dist/client present
+authority 0 · ai-boundary 0 · network-boundary 0 · brand 0 · e2e 62/62 · migrate:local idempotent
+--env production → WP_OS_ENV "production" (not deployed) · top-level → WP_OS_ENV "local" (not deployed)
+```
+
+## P5 — final senior review pass, worker generation 3 (2026-08-17)
+
+Run `20260817T013912Z-11185`, role `claude:final-review`, over the same approved task
+(`TASK/APPROVED_TASK.md`, SHA-256 `e323bce3…`) and handoff checkpoint (`HANDOFF_CHECKPOINT.json`,
+SHA-256 `d4fe37f9…`). This is the mandatory P5 gate for the implementation pass recorded directly
+above, which correctly declined to perform it on itself.
+
+**Method.** Nothing was inherited from the section above. Every clause of approved scope §2 was
+re-checked against `wrangler.toml` and wrangler's own resolved binding output, the "byte-identical
+to the approved reference" claims were re-hashed against the reference archive rather than read,
+and every validator was executed in *this* session.
+
+### Scope conformance — re-verified, not accepted
+
+| Approved clause | Verified how | Result |
+|---|---|---|
+| §2.1 top-level/local profile preserved | `npx wrangler deploy --dry-run` (no `--env`) | rc=0, not deployed — `WP_OS_ENV ("local")`, placeholder KV `0000…0000`, ADR-007 placeholder `database_id` intact |
+| §2.2 explicit `[env.production]` for the existing Worker | `wrangler.toml:72` | present; `name = "west-peek-os"` restated so the named env is not deployed as `west-peek-os-production` |
+| §2.3 `WP_OS_ENV="production"` | production dry-run | `env.WP_OS_ENV ("production")` |
+| §2.4 D1 / KV / R2 / assets / SPA / observability | production dry-run + `wrangler.toml` | `WP_OS_DB (west-peek-os-db)` id `1d7c242b…`, `WP_OS_KV (bf0750e8…)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` over 8 files from `./dist/client`, `not_found_handling = "single-page-application"`, `[env.production.observability] enabled = true` |
+| §2.5 production/ADR documentation | `docs/ENVIRONMENTS.md` + ADR-007 read in full | both describe the contract and both still label production UNPROVEN/undeployed |
+
+**The "identical to the approved reference" claims are true.** Re-hashed in this session:
+`wrangler.toml` `8d66dcee0d6d1ae9…`, `docs/ENVIRONMENTS.md` `d78dbbaa3988022c…`,
+`ARCHITECTURAL_DECISIONS.md` `21a723721624b95c…`, `src/worker/auth.ts` `13bc20a1207654f1…` — and
+`wrangler.toml` streamed out of `ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip` hashes to the same
+`8d66dcee…`. `diff -r` of the whole `src/worker/` tree against the reference archive reports **zero
+differences**, so §3's "do not change application authentication code" holds at the source, not
+merely in prose. `auth.ts:28` selects the identity header on strict `env.WP_OS_ENV === "local"`, so
+under `--env production` the `x-wpos-dev-user` branch is unreachable.
+
+**No secrets packaged.** No `.dev.vars`, `.env`, `*.pem`, `*.key` or `*.p12` file exists anywhere in
+the tree. A value-shaped scan (`sk-…`, `sk-or-v1-…`, `AKIA…`, `ghp_…`, `xox…`, JWT, PEM headers)
+across the tree returns four hits, all of them deliberate test fixtures that prove credential-shaped
+input is *blocked* (`tests/ai.test.ts`, `tests/workforce.test.ts`, `e2e/p4-ai.spec.ts`). `.wrangler/`
+and `backups/` are clean too. `scripts/vault/cloudflare-mapping.json` holds a secret **name** only.
+
+### Repair applied — the e2e suite's D1 provisioning was racy
+
+**Found by running it, not by reading about it.** `npm run e2e` failed: rc=1, 59 passed, **1 failed,
+2 did not run**. `e2e/d1-design-states.spec.ts` died in `beforeAll` with
+`✘ [ERROR] internal error; reference = dkdae7obnj73j826o0q9r58c` after 8.4s, while
+`e2e/p3-governed-work.spec.ts` — the identical statement through the identical pattern — succeeded
+in the same run. The section above records this same command as `62/62 passed`; that was true when
+it ran, but the entrypoint was not reliably re-runnable.
+
+**Cause.** Both specs provision their extra identity with `wrangler d1 execute --local`, which opens
+the miniflare SQLite in a SECOND workerd process while `wrangler dev` still holds it. The two
+contend. Nothing in West Peek OS ran and no assertion was reached — the failure is in the CLI's
+access to the file.
+
+**Fix.** New `e2e/support/provision.ts` exposes `provisionLocalD1(sql)`: the same write, passed as an
+argv array (so the SQL is never re-parsed by a shell), retried up to 5 times with linear back-off.
+Both specs now call it. **Retrying weakens nothing** — a genuinely bad statement fails every attempt
+and still fails the spec with wrangler's own output attached, verified directly:
+`wrangler d1 execute --local --command "INSERT INTO no_such_table (a) VALUES (1);"` → rc=1,
+`no such table: no_such_table: SQLITE_ERROR`. No application, worker, or product file was touched.
+
+**A second, environmental cause was found and removed rather than papered over.** The rerun failed
+worse — the dev server's esbuild child died mid-suite (`fatal error: all goroutines are asleep -
+deadlock!`) and everything after `p10-lp` failed. The machine was carrying **four orphaned `vitest`
+worker processes** (pids 13216/13221/13228/13274, parent 1, ~780 MB RSS, ~9% CPU each) left behind
+by this session's first `npm test`; load average was 17.6 with 55 MB of free pages. Those orphans —
+not the suite — are also the best explanation for that first `npm test` reporting one failure
+(`tests/meetings.test.ts`, `TypeError: fetch failed … other side closed`) that passed on its own
+immediately afterwards. After killing the orphans, the same commands ran clean and fast: vitest
+546/546 in **64s** (it had taken 308–428s under load) and e2e 62/62 in **39.9s** (7.5m and a crash
+under load). Recorded here because a reader deserves to know the difference between a flaky suite
+and a saturated machine.
+
+### Validation actually executed in this session (node v26.4.0 / npm 11.17.0 / wrangler 4.120.1)
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen dependency install | `npm ci` | rc=0 |
+| Typecheck (covers `src`, `tests`, `e2e`) | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| Unit/integration | `npm --prefix west-peek-os run test` | rc=0 — **546/546**, 31 files, 64.1s |
+| Build | `npm --prefix west-peek-os run build` | rc=0; `dist/client` present (index.html, assets/, sw.js, manifest.webmanifest, icon.svg, wp-mark.svg) |
+| Authority boundary | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE) |
+| Network boundary | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm --prefix west-peek-os run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| Browser journeys | `npm run e2e` | rc=0 — **62/62** chromium, 39.9s, after the repair above |
+| Migrations | `npm run migrate:local` | rc=0 — "No migrations to apply!" (idempotent) |
+| **Production profile resolves as production** | `npx wrangler deploy --dry-run --env production` | rc=0, **not deployed** — `WP_OS_ENV ("production")`, `WP_OS_KV (bf0750e8…)`, `WP_OS_DB`, `WP_OS_DOCUMENTS`, `ASSETS` |
+| **Top-level profile stays local** | `npx wrangler deploy --dry-run` | rc=0, **not deployed** — `WP_OS_ENV ("local")`, placeholder KV |
+
+Both dry-runs ended at `--dry-run: exiting now.` Nothing was published, migrated, or configured
+remotely; no Cloudflare resource was created or altered; no provider was called.
+
+### Files this pass changed
+
+`e2e/support/provision.ts` (new), `e2e/d1-design-states.spec.ts`, `e2e/p3-governed-work.spec.ts`,
+and this ledger. Nothing else. No application, worker, migration, or configuration file was touched,
+and no unrelated user work was reverted.
+
+### Still UNPROVEN — this section is not deployment readiness
+
+- Remote publish, Cloudflare Access behaviour, and remote D1 migration apply remain **UNPROVEN**.
+  Declaring `[env.production]` is configuration; a dry-run is not a deployment.
+- A bare `wrangler deploy` with no `--env production` still selects the top-level profile and would
+  ship `WP_OS_ENV = "local"`. Approved scope §2.1 requires that profile be preserved unchanged, so
+  this is not repairable here: **deployment must specify `--env production`**.
+- `preview` still has no profile.
+- Every provider/vendor/integration gate listed in the tables above is unchanged and still closed.
+- **The snapshot carries more than the approved scope.** P26 phases 1–4 landed in WORK after the
+  previous artifact was sealed. They pass the repository's own full suite, which this pass re-ran
+  green in its entirety, but they were not reviewed against *this* task. `LOCAL_ARTIFACT_VERIFIED`
+  on this run must not be read as approval of the P26 work's design. A Cloudflare mutation recorded
+  by P26 phase 2 (OpenRouter enabled, `OPENROUTER_API_KEY` bound as a Worker secret) happened
+  **outside** this run; this run neither performed, repeated, nor verified it, and whether
+  `migrations/0024` has been applied to remote D1 is not observable from here and is not claimed.
+
+## Production artifact admission — re-verification over the post-P28 WORK tree (2026-08-17)
+
+Run `20260817T025459Z-23440`, role `claude:opening`, worker generation 1, `RUN SEMANTICS:
+CONTINUATION`, over the same approved task (`TASK/APPROVED_TASK.md`, SHA-256 `e323bce3…`). The
+previous run `20260817T013912Z-11185` reached `LOCAL_ARTIFACT_VERIFIED` at 02:38:59Z and sealed
+`ARTIFACTS/west-peek-os-odysseus_FULL_SNAPSHOT_20260817T023859Z_aebf5e1c9bee.zip`
+(SHA-256 `1b963fa0…`). This run opened 16 minutes later against the same preserved WORK.
+
+**WORK did not stand still in between, so this is not a rerun of an unchanged tree.** Four source
+files were written between that seal (21:38:59 local) and this run's start (21:54:59 local). They
+are enumerated below rather than absorbed silently, because the snapshot this run produces carries
+them.
+
+### Approved scope — already satisfied, and re-proven rather than assumed
+
+Nothing in approved scope §2 was missing, so **P3 applied no change to the production contract**.
+That is a verified finding, not an inherited one:
+
+| Approved clause | Verified how | Result |
+|---|---|---|
+| §2.1 top-level/local profile preserved | `npx wrangler deploy --dry-run` (no `--env`) | rc=0, not deployed — `WP_OS_ENV ("local")`, placeholder KV `0000…0000` |
+| §2.2 explicit `[env.production]` for the existing Worker | `wrangler.toml:72` | present; `name = "west-peek-os"` restated so the named env does not deploy as `west-peek-os-production` |
+| §2.3 `WP_OS_ENV="production"` | production dry-run | `env.WP_OS_ENV ("production")` |
+| §2.4 D1 / KV / R2 / assets / SPA / observability | production dry-run + `wrangler.toml` | `WP_OS_DB (west-peek-os-db)`, `WP_OS_KV (bf0750e8…)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` over 8 files from `./dist/client`, `not_found_handling = "single-page-application"`, `[env.production.observability] enabled = true` |
+| §2.5 production/ADR documentation | hashes below | unchanged |
+
+Re-hashed in **this** session: `wrangler.toml` `8d66dcee0d6d1ae9…`, `docs/ENVIRONMENTS.md`
+`d78dbbaa3988022c…`, `ARCHITECTURAL_DECISIONS.md` `21a72372…`, `src/worker/auth.ts` `13bc20a1…` —
+each identical to the approved reference. `wrangler.toml` extracted from
+`ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip` hashes to the same `8d66dcee…`, and `diff -r` of
+the entire `src/worker/` tree against that reference archive reports **zero differences**. §3's "do
+not change application authentication code" therefore holds at the source, not merely in prose.
+Both dry-runs ended at `--dry-run: exiting now.` — nothing was published, migrated, or configured,
+and no Cloudflare API call was made in this run.
+
+### The post-seal delta — unrelated user work, preserved not reverted
+
+`diff -rq` of the whole tree against the sealed snapshot (excluding `node_modules`, `.wrangler`,
+`dist`, `test-results`, `backups`) returns exactly four differences:
+
+- `src/client/pages/EmployeesPage.tsx` — adds an "Activate (approved)" button that consumes an
+  already-approved `ai_employee.activate` receipt. It closes a chain that previously stopped one
+  link short: a request could be approved and the employee still stayed INACTIVE.
+- `e2e/p28-activation-chain.spec.ts` (new, 117 lines) — browser proof of that chain.
+- `src/client/pages/HelpCenterPage.tsx` — four Help topics move from `AUDIT_PENDING` to
+  `IMPLEMENTED_LOCAL_ONLY` with specific claims replacing the placeholder prose.
+- `e2e/p26-operator-experience.spec.ts` — asserts no topic is left `AUDIT_PENDING` and that each of
+  the four now states falsifiable evidence.
+
+`.env.example` shows as "only in WORK" because host packaging excludes `.env*`; it is not a change.
+
+**This is pre-existing unrelated user work from this run's perspective**, written after the previous
+artifact was sealed and before this run began. Approved scope §6 forbids reverting unrelated user
+work, so none was reverted, and §2 gave no authority to extend it. **This run neither designed nor
+reviewed that work against this task** — it validated it, and it passes the repository's own full
+suite, re-run green here in its entirety. `LOCAL_ARTIFACT_VERIFIED` on this run must not be read as
+design approval of the P26/P28 work. Notably, no worker/API change accompanies the activation
+button: `src/worker/` is byte-identical to the approved reference, so the receipt and cap remain
+enforced server-side and the button cannot invent authorization.
+
+The e2e count moved **62 → 66** for this reason: the new specs, not a change in what was already
+proven.
+
+### Validation actually executed in this session (node v26.4.0 / npm 11.17.0 / wrangler 4.120.1)
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen dependency install | `npm ci` | rc=0 |
+| Typecheck (`src`, `tests`, `e2e`) | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **546/546**, 31 files, 66.9s |
+| Build | `npm run build` | rc=0; `dist/client` present (index.html, assets/, sw.js, manifest.webmanifest, icon.svg, wp-mark.svg) |
+| Authority boundary | `npm run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE) |
+| Network boundary | `npm run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| Browser journeys | `npm run e2e` | rc=0 — **66/66** chromium, 38.9s |
+| Migrations | `npm run migrate:local` | rc=0 — "No migrations to apply!" (idempotent) |
+| **Production profile resolves as production** | `npx wrangler deploy --dry-run --env production` | rc=0, **not deployed** |
+| **Top-level profile stays local** | `npx wrangler deploy --dry-run` | rc=0, **not deployed** |
+
+The e2e entrypoint ran clean on the first attempt this session — the D1 provisioning repair from the
+previous run (`e2e/support/provision.ts`) held, and no orphaned `vitest` worker was present before
+or after `npm run test` (checked explicitly, since machine saturation was the previous run's second
+failure cause). Load average at start: 2.47.
+
+**No secrets packaged.** No `.dev.vars`, `.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx` or `id_rsa*`
+file exists anywhere in the package, including `backups/` and `.wrangler/`. A value-shaped scan
+(`sk-…`, `sk-or-v1-…`, `AKIA…`, `ghp_…`, `xox…`, JWT, PEM headers) returns four hits, all deliberate
+test fixtures proving credential-shaped input is *blocked* (`tests/workforce.test.ts`,
+`tests/ai.test.ts` ×2, `e2e/p4-ai.spec.ts`). `scripts/vault/cloudflare-mapping.json` holds a secret
+**name** only (`OPENROUTER_API_KEY`) with no value. `.env.example` is names-only apart from
+`WP_OS_ENV=local`, which is not a secret.
+
+### Files this pass changed
+
+This ledger, and nothing else. No application, worker, client, test, migration, or configuration
+file was touched, and no unrelated user work was reverted.
+
+### P5 not performed here
+
+This worker implemented and validated; it does not review itself. The mandatory final senior review
+gate (`final_review_satisfied`) is owed by a separate worker before host packaging.
+
+### Still UNPROVEN — this section is not deployment readiness
+
+- Remote publish, Cloudflare Access behaviour, and remote D1 migration apply remain **UNPROVEN**.
+  Declaring `[env.production]` is configuration; a dry-run is not a deployment.
+- A bare `wrangler deploy` with no `--env production` still selects the top-level profile and would
+  ship `WP_OS_ENV = "local"`. Approved scope §2.1 requires that profile be preserved unchanged, so
+  this is not repairable here: **deployment must specify `--env production`**. Wrangler itself now
+  warns about the unspecified environment on every bare invocation.
+- `preview` still has no profile.
+- No AI/vendor provider was called; every provider credential is absent and adapters fail closed.
+- The P26 phase 2 Cloudflare mutation (OpenRouter enabled, `OPENROUTER_API_KEY` bound as a Worker
+  secret) happened **outside** this run and was neither performed nor verified here. Whether
+  `migrations/0024` is applied to remote D1 is not observable locally and is not claimed.
+- **The snapshot carries more than the approved scope** — the four post-seal files above.
+
+## Production artifact admission — implementation worker, generation 2 (2026-08-17)
+
+Same run `20260817T025459Z-23440`, same approved task (`TASK/APPROVED_TASK.md`, SHA-256
+`e323bce3…`), `RUN SEMANTICS: CONTINUATION`. The section immediately above was written by this run's
+**opening** role (worker generation 1, session `7d2c7355…`). This section is written by the
+**implementation** role (worker generation 2) that the handoff checkpoint routed to at 03:01:47Z.
+
+The preceding pass had already carried P1–P4 to green. That is a record, not a proof this worker may
+sign. So **no validation result below is inherited** — every command in the table was re-executed in
+this session, and the scope findings were re-derived from the tree rather than read out of the
+section above.
+
+### WORK was unchanged between the two passes
+
+`IMPLEMENTATION_LEDGER.md` (written 22:01 local by the previous role) is the only file modified
+between generation 1's validation and this session's start. `src/client/pages/EmployeesPage.tsx` and
+`e2e/p28-activation-chain.spec.ts` carry ~21:50 mtimes — before this run opened at 21:54:59 — and
+are the pre-existing unrelated user work already enumerated above. Nothing else in `src`, `tests`,
+`e2e`, `migrations`, `scripts`, `docs`, or the configuration files moved.
+
+### Approved scope — re-verified independently, still requiring no change
+
+**P3 applied no change to the production contract in this pass either**, because nothing in approved
+scope §2 was missing. Verified in this session:
+
+| Approved clause | Verified how | Result |
+|---|---|---|
+| §2.1 top-level/local profile preserved | `npx wrangler deploy --dry-run` (no `--env`) | rc=0, not deployed — `env.WP_OS_ENV ("local")`, placeholder KV `0000…0000` |
+| §2.2 explicit `[env.production]` for the existing Worker | `wrangler.toml:72–73` | present; `name = "west-peek-os"` restated, so the named env does not deploy as `west-peek-os-production` |
+| §2.3 `WP_OS_ENV="production"` | production dry-run | `env.WP_OS_ENV ("production")` |
+| §2.4 D1 / KV / R2 / assets / SPA / observability | production dry-run + `wrangler.toml:75–100` | `WP_OS_DB (west-peek-os-db)` id `1d7c242b…`, `WP_OS_KV (bf0750e8e9a648758a5de978088c97da)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` from `./dist/client`, `not_found_handling = "single-page-application"`, `[env.production.observability] enabled = true` |
+| §2.5 production/ADR documentation | byte diff vs approved reference | `docs/ENVIRONMENTS.md` and `ARCHITECTURAL_DECISIONS.md` identical |
+
+Re-hashed in **this** session: `wrangler.toml` `8d66dcee0d6d1ae9…`, `docs/ENVIRONMENTS.md`
+`d78dbbaa3988022c…`, `ARCHITECTURAL_DECISIONS.md` `21a72372…`, `src/worker/auth.ts` `13bc20a1…`.
+`wrangler.toml` extracted from `ARTIFACTS/WEST_PEEK_OS_PRODUCTION_READY_v1.zip` hashes to the same
+`8d66dcee…`, and `diff -r` of the entire `src/worker/` tree against that reference archive reports
+**zero differences** — re-run here, not quoted. §3's "do not change application authentication code"
+therefore holds at the source. §4's "do not change auth code" and §6's "no application/auth source
+files changed" are satisfied by the same diff.
+
+### Validation actually executed in this session (node v26.4.0 / npm 11.17.0 / wrangler 4.120.1)
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen dependency install | `npm ci` | rc=0 |
+| Typecheck (`src`, `tests`, `e2e`) | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **546/546**, 31 files, 69.17s |
+| Build | `npm run build` | rc=0; `dist/client` present (index.html, assets/, sw.js, manifest.webmanifest, icon.svg, wp-mark.svg) |
+| Authority boundary | `npm run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE) |
+| Network boundary | `npm run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| Browser journeys | `npm run e2e` | rc=0 — **66/66** chromium, 38.8s, clean on first attempt |
+| Migrations | `npm run migrate:local` | rc=0 — "No migrations to apply!" (idempotent) |
+| **Production profile resolves as production** | `npx wrangler deploy --dry-run --env production` | rc=0, **not deployed** |
+| **Top-level profile stays local** | `npx wrangler deploy --dry-run` | rc=0, **not deployed** |
+
+Both dry-runs ended at `--dry-run: exiting now.`, and neither log contains an `Uploaded`,
+`Deployed`, or `Published` line (checked, not assumed). Nothing was published, migrated, or
+configured remotely; no Cloudflare resource was created or altered; **no Cloudflare API call was
+made in this session**. Load average at start: 4.36 — higher than the previous pass's 2.47, which is
+why `test` took 69.17s against 66.9s. Both suites were green regardless.
+
+**No secrets packaged.** No `.dev.vars`, `.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx` or `id_rsa*`
+file exists anywhere in the package, including `backups/` and `.wrangler/`. A value-shaped scan
+(`sk-…`, `sk-or-v1-…`, `AKIA…`, `ghp_…`, `xox…`, JWT, PEM headers) returns four hits, each a
+deliberate fixture proving credential-shaped input is *blocked* or *redacted*:
+`tests/workforce.test.ts:323`, `tests/ai.test.ts:245` and `:257`, `e2e/p4-ai.spec.ts:43`.
+`scripts/vault/cloudflare-mapping.json` holds a secret **name** only (`OPENROUTER_API_KEY`) with no
+value. `.env.example` is names-only apart from `WP_OS_ENV=local`, which is not a secret.
+
+### Files this pass changed
+
+This ledger, and nothing else. A `find` for files modified since this session began — excluding
+`node_modules`, `.wrangler`, `dist`, `test-results`, `backups` — returns empty. No application,
+worker, client, test, migration, or configuration file was touched, and **no unrelated user work was
+reverted**.
+
+### P5 not performed here
+
+This worker implemented and validated; it does not review itself. The mandatory final senior review
+gate (`final_review_satisfied`) is owed by a separate worker before host packaging. This worker did
+not create the snapshot ZIP, did not commit, push, deploy, or migrate remotely, and did not edit
+`STATE.json`, `EXECUTION_IDENTITY.json`, or any artifact-eligibility metadata.
+
+### Still UNPROVEN — this section is not deployment readiness
+
+- Remote publish, Cloudflare Access behaviour, and remote D1 migration apply remain **UNPROVEN**.
+  Declaring `[env.production]` is configuration; a dry-run is not a deployment.
+- A bare `wrangler deploy` with no `--env production` still selects the top-level profile and would
+  ship `WP_OS_ENV = "local"`. Approved scope §2.1 requires that profile be preserved unchanged, so
+  this is not repairable here: **deployment must specify `--env production`**.
+- `preview` still has no profile.
+- No AI/vendor provider was called; every provider credential is absent and adapters fail closed.
+- The P26 phase 2 Cloudflare mutation (OpenRouter enabled, `OPENROUTER_API_KEY` bound as a Worker
+  secret) happened **outside** this run and was neither performed nor verified here. Whether
+  `migrations/0024` is applied to remote D1 is not observable locally and is not claimed.
+- **The snapshot carries more than the approved scope** — the four post-seal files enumerated in the
+  section above are in the tree this run packages. They pass the repository's own full suite, re-run
+  green here in its entirety, but they were not designed or reviewed against *this* task.
+  `LOCAL_ARTIFACT_VERIFIED` on this run must not be read as design approval of that work.
+
+## P5 — mandatory final senior review, worker generation 3 (2026-08-17)
+
+Same run `20260817T025459Z-23440`, same approved task (SHA-256 `e323bce3…`), handoff checkpoint
+SHA-256 `fc109f32…`, `previous_worker: claude`, `reason: claude_implementation_complete`. This is the
+P5 gate the implementation worker (generation 2) correctly declined to sign for itself.
+
+**No result was inherited.** Every command below was re-executed in this session, and every approved
+clause was re-derived from the tree rather than read out of the section above. Toolchain: node
+v26.4.0 / npm 11.17.0 / wrangler 4.120.1 — same as generation 2.
+
+### WORK was unchanged between generation 2 and this review
+
+`wrangler.toml` `8d66dcee…`, `docs/ENVIRONMENTS.md` `d78dbbaa…` (pre-repair),
+`ARCHITECTURAL_DECISIONS.md` `21a72372…` and `src/worker/auth.ts` `13bc20a1…` all re-hashed in this
+session to the values generation 2 recorded. A `find` for non-generated files modified since the run
+opened (21:54:59) returned `IMPLEMENTATION_LEDGER.md` and nothing else — confirming generation 2's
+"this ledger, and nothing else" claim rather than accepting it.
+
+### Approved scope §2 — re-verified independently, and by a self-tested assertion
+
+Read clause by clause out of `wrangler.toml`, then re-checked mechanically by a **section-scoped**
+contract assertion (comments stripped, file folded into TOML sections, 21 clauses asserted inside
+their own sections). Section scoping matters: generation 1 recorded that a whole-file substring check
+false-passed a `wrangler.toml` whose production profile had been flipped to `WP_OS_ENV = "local"`,
+because the header comment contains that literal text in prose. This assertion was run from `/tmp`
+against copies, added no file to the artifact, and was self-tested against planted violations:
+
+| Planted violation | Caught |
+|---|---|
+| production profile flipped to `WP_OS_ENV = "local"` (§3 security law) | yes |
+| top-level local profile flipped to `production` | yes |
+| `[env.production.observability]` removed | yes |
+| production SPA `not_found_handling` removed | yes |
+| production D1 id downgraded to the ADR-007 placeholder | yes |
+| production KV id altered | yes |
+| assets directory repointed off `./dist/client` | yes |
+| local profile repointed at the production D1 | yes |
+| production R2 binding removed | yes |
+| `name = "west-peek-os"` restatement removed from `[env.production]` | yes |
+| secret-shaped value planted in the file | yes |
+| *negative control:* comment text changed, configuration untouched | correctly passes |
+
+11/11 caught, negative control passes, then 21/21 clauses PASS against the real file.
+
+| Approved clause | Verified how | Result |
+|---|---|---|
+| §2.1 top-level/local profile preserved | `npx wrangler deploy --dry-run` (no `--env`) | rc=0, not deployed — `env.WP_OS_ENV ("local")`, placeholder KV `0000…0000` |
+| §2.2 explicit `[env.production]` for the existing Worker | `wrangler.toml:72–73` | present; `name = "west-peek-os"` restated |
+| §2.3 `WP_OS_ENV="production"` | production dry-run | `env.WP_OS_ENV ("production")` |
+| §2.4 D1 / KV / R2 / assets / SPA / observability | production dry-run + `wrangler.toml:75–100` | `WP_OS_DB (west-peek-os-db)` id `1d7c242b…`, `WP_OS_KV (bf0750e8e9a648758a5de978088c97da)`, `WP_OS_DOCUMENTS (west-peek-os-documents)`, `ASSETS` over 8 files from `./dist/client`, SPA handling, observability enabled |
+| §2.5 production/ADR documentation | read in full; one defect found and repaired (below) | ADR-007 accurate as written; `docs/ENVIRONMENTS.md` repaired |
+
+### The one defect this review found and repaired
+
+`docs/ENVIRONMENTS.md` claimed of the production profile that **"it cannot be selected by accident,
+and `WP_OS_ENV` can no longer arrive as `local` in a deployed Worker."** That is false, and it is
+false on the exact axis §3 exists to protect. Measured in this session: `npx wrangler deploy
+--dry-run` with no `--env` resolves `env.WP_OS_ENV ("local")` against the top-level `name =
+"west-peek-os"` — the same Worker. Wrangler 4.120.1 emits a WARNING that environments are defined
+and none was specified; it does **not** refuse. So a bare `wrangler deploy` would publish the local
+profile to the production Worker, and the operator-facing environment document said that was
+impossible.
+
+Both prior sections of this ledger record the accurate fact in their "still UNPROVEN" lists, so the
+run knew it — but a deployer reads `docs/ENVIRONMENTS.md`, not this ledger's footnotes. A false
+safety claim in the production environment document is a false-completion claim, which the
+finalization protocol requires repairing rather than reporting.
+
+**Repair (documentation only, within approved scope §2.5):** the overstatement is replaced with what
+the profile actually buys, followed by an explicit statement that `--env production` is a *required
+part of the deploy procedure, not a convenience*, that a bare deploy still ships `WP_OS_ENV =
+"local"`, and that wrangler's warning is the only guard. Both dry-run resolutions are quoted as the
+evidence. `docs/ENVIRONMENTS.md` `d78dbbaa…` → `a24dc13b528214f250c9da2dab5917f8781e23f2a889d924bd9fcfb75e458a4c`.
+
+**Deliberately NOT repaired in `wrangler.toml`.** The clean fix — making the top-level profile
+unusable for deployment — would mutate the local profile, which approved scope §2.1 requires be
+preserved unchanged. The defect is therefore corrected where scope allows: in the documentation that
+describes the contract. Deployment remains procedurally gated on `--env production`.
+
+### Validation actually executed in this session
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen dependency install | `npm ci` | rc=0 |
+| Typecheck (`src`, `tests`, `e2e`) | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **546/546**, 31 files |
+| Build | `npm run build` | rc=0; `dist/client` present (index.html, assets/, sw.js, manifest.webmanifest, icon.svg, wp-mark.svg) |
+| Authority boundary | `npm run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE) |
+| Network boundary | `npm run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| Browser journeys | `npm run e2e` | rc=0 — **66/66** chromium, 38.9s, clean on first attempt |
+| Migrations | `npm run migrate:local` | rc=0 — "No migrations to apply!" (idempotent) |
+| **Production profile resolves as production** | `npx wrangler deploy --dry-run --env production` | rc=0, **not deployed** |
+| **Top-level profile stays local** | `npx wrangler deploy --dry-run` | rc=0, **not deployed** |
+| Production contract clauses | section-scoped assertion, self-tested 11/11 | 21/21 PASS |
+
+After the documentation repair, the seven declared scripts (typecheck, test, build, and the four
+boundary/brand validators) were **re-run from the locked target root** as
+`npm --prefix west-peek-os run <script>` — all seven rc=0, 546/546 again. Both dry-runs used
+`--outdir /tmp/...` so no bundle output entered the artifact; both ended at `--dry-run: exiting now.`
+and neither log contains an `Uploaded`, `Deployed`, `Published`, or `Current Version ID` line
+(grepped, not assumed). **No Cloudflare API call was made in this session**; nothing was published,
+migrated, or configured remotely, and no Cloudflare resource was created or altered.
+
+**No secrets packaged** (re-scanned here, not inherited). No `.dev.vars`, `.env`, `*.pem`, `*.key`,
+`*.p12`, `*.pfx`, `*.jks`, `id_rsa*`, or `credentials.json` exists anywhere in the package outside
+`node_modules`. A value-shaped scan (`sk-…`, `AKIA…`, `ghp_…`, `xox…`, JWT, PEM headers) over `src`,
+`tests`, `e2e`, `scripts`, `docs`, `migrations` and the config files returns four hits, each a
+deliberate fixture proving credential-shaped input is *blocked* or *redacted*
+(`tests/workforce.test.ts:323`, `tests/ai.test.ts:245` and `:257`, `e2e/p4-ai.spec.ts:43`). The same
+scan over `backups/`, `.wrangler/`, `dist/` and `test-results/` returns nothing.
+`scripts/vault/cloudflare-mapping.json` holds a secret **name** only; `.env.example` is names-only
+apart from `WP_OS_ENV=local`, which is not a secret. `wrangler.toml` carries no secret value — only
+the non-secret D1/KV/R2 identifiers.
+
+**No application or auth source file changed.** Every file under `src/worker/` carries an Aug 10–12
+mtime, well before this run opened, and `src/worker/auth.ts` re-hashes to `13bc20a1…`. The dev
+identity header is still gated on `env.WP_OS_ENV === "local"` (`src/worker/auth.ts:28`), so under
+`--env production` that branch is unreachable. No unrelated user work was reverted.
+
+### Files this pass changed
+
+`docs/ENVIRONMENTS.md` (the repair above) and this ledger. Nothing else — no application, worker,
+client, test, migration, or configuration file was touched. `wrangler.toml` is byte-unchanged at
+`8d66dcee…`. This worker did not commit, push, deploy, migrate remotely, create the snapshot ZIP, or
+edit `STATE.json`, `EXECUTION_IDENTITY.json`, or any artifact-eligibility metadata.
+
+### Still UNPROVEN after this review
+
+- Remote publish, Cloudflare Access behaviour, and remote D1 migration apply remain **UNPROVEN**.
+  Declaring `[env.production]` is configuration; a dry-run is not a deployment. Nothing in this run
+  touched the live Worker, and `west-peek-os.seq-taylor.workers.dev` was never contacted.
+- **Deployment must specify `--env production`.** A bare `wrangler deploy` still ships the local
+  profile; §2.1 forbids repairing that in the top-level profile, so it stays a procedural gate,
+  now stated plainly in `docs/ENVIRONMENTS.md`.
+- `preview` still has no profile.
+- No AI/vendor provider was called; every provider credential is absent and adapters fail closed.
+  Whether `migrations/0024` is applied to remote D1 is not observable locally and is not claimed.
+- The P26 phase 2 Cloudflare mutation (OpenRouter enabled, `OPENROUTER_API_KEY` bound as a Worker
+  secret) happened **outside** this run and was neither performed nor verified here.
+- **The snapshot carries more than the approved scope** — the post-seal P26 files are in the tree
+  this run packages. They pass the repository's own full suite, re-run green here in its entirety,
+  but they were not designed or reviewed against *this* task. `LOCAL_ARTIFACT_VERIFIED` must not be
+  read as design approval of that work.
+
+Approved scope §2.1–§2.5 is satisfied, §3's security law holds at the configuration and at the
+source, §6's validation surfaces all pass, and the one material defect found was repaired and
+re-validated. **This artifact is ready for host packaging.**
+
+## Run `20260817T120811Z-32641` — CONTINUATION, opening worker, generation 1 (2026-08-17)
+
+Same approved task, SHA-256 `e323bce3…`. `RUN SEMANTICS: CONTINUATION`, continuation reason
+`prior_implementation_run_exists_for_same_preserved_target;progress_ledger_present`. The prior run
+`20260817T025459Z-23440` already reached `LOCAL_ARTIFACT_VERIFIED`
+(artifact `…_FULL_SNAPSHOT_20260817T031654Z_a4de7b6fcb6f.zip`, sha256 `bafe3729…`). Per the execution
+contract, completed phases were preserved and nothing was restarted from phase zero.
+Toolchain: node v26.4.0 / npm 11.17.0 / wrangler 4.120.1.
+
+### Why this run still had real work to do
+
+**The tree changed after the prior run sealed it.** The prior artifact was packaged at 22:16 local;
+a `find` for non-generated files modified since that moment returns five files, all written between
+22:30 and 22:36 — *after* the seal:
+
+| File | mtime |
+|---|---|
+| `src/client/styles.css` | Aug 16 22:30 |
+| `src/client/pages/EmployeesPage.tsx` | Aug 16 22:30 |
+| `e2e/p28-activation-chain.spec.ts` | Aug 16 22:30 |
+| `src/worker/services/intelligence.ts` | Aug 16 22:33 |
+| `tests/intelligence.test.ts` | Aug 16 22:36 |
+
+This is unrelated user work (P28), not this task's scope. Approved scope §6 forbids reverting it, so
+it is preserved — but it means **the tree this run packages is not the tree the prior run
+validated**, and a `LOCAL_ARTIFACT_VERIFIED` inherited from that run would be a false-completion
+claim. Re-running §6 against the current tree was therefore the substantive work of this run, and
+every command below was executed in this session. No result was inherited.
+
+### The approved-scope surface is byte-unchanged
+
+Re-hashed in this session, not read out of the prior section:
+
+- `wrangler.toml` → `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` (unchanged)
+- `docs/ENVIRONMENTS.md` → `a24dc13b528214f250c9da2dab5917f8781e23f2a889d924bd9fcfb75e458a4c` (prior run's repair intact)
+- `ARCHITECTURAL_DECISIONS.md` → `21a723721624b95c8da896a53f3af7ba67375bead64a74b8c88d61ba573e47f8` (unchanged)
+- `src/worker/auth.ts` → `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` (unchanged, mtime Aug 10)
+
+**No approved-scope change was needed or made in this run.** §2.1–§2.5 were already satisfied by the
+prior run; this generation verified them rather than reapplying them.
+
+### The post-seal work does not touch the auth or environment contract
+
+Checked rather than assumed. Of the five changed files, only one (`src/worker/services/intelligence.ts`)
+is under `src/worker/`, and it is application code, not auth code: it *consumes* the authorization
+boundary (`authorize(...)` gates every mutation path, `decision !== "ALLOW"` → 403) and imports the
+identity type, but defines no identity behavior. Grepping all five for `WP_OS_ENV`, `Cf-Access`, and
+`x-wpos-dev-user` returns no hit in any source file; the only `x-wpos-dev-user` occurrence is in the
+e2e spec, which is local-profile-only and where the header is refused outside `WP_OS_ENV=local`
+anyway. `src/worker/auth.ts` is byte-unchanged with an Aug 10 mtime, and the dev-identity branch is
+still gated at `src/worker/auth.ts:28`. The authority validator — which independently proves the new
+code routes through `authorize()` and adds no outbound fetch — passes over the changed tree.
+
+### §2/§3 contract assertion — independently rebuilt and self-tested
+
+A section-scoped assertion was written fresh in this session (in `/tmp`, run against a copy, adding
+no file to the artifact). Section scoping is required: a whole-file substring check false-passes,
+because the header comment contains `WP_OS_ENV = "local"` in prose.
+
+The self-test found a genuine gap in the assertion's own clause set and it was fixed rather than
+waved through. A "production R2 binding removed" mutation went **undetected** on the first pass: the
+mutation used an unanchored `replace()`, which hit the *first* `[[r2_buckets]]` — the top-level one —
+and no clause asserted that the **local** profile's bindings survive, even though §2.1 requires that
+profile preserved. Fix: anchor the mutation to the production section, and add six §2.1 clauses
+covering the local D1/KV/R2/assets bindings. Result: **13/13 planted violations caught** (including
+production-flipped-to-local, local-flipped-to-production, observability removed, SPA handling
+removed, D1 id downgraded to placeholder, KV id altered, assets repointed, both R2 removals, local
+assets binding removed, `name` restatement removed, planted secret value, local D1 repointed at the
+production database), negative control (comments rewritten, configuration untouched) correctly
+passes, then **25/25 clauses PASS** against the real file.
+
+### Validation actually executed in this session
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen dependency install | `npm ci` | rc=0 (platform binaries for esbuild/workerd present despite npm's allow-scripts warning) |
+| Typecheck (`src`, `tests`, `e2e`) | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **547/547**, 31 files |
+| Build | `npm run build` | rc=0; `dist/client` present (index.html, assets/, sw.js, manifest.webmanifest, icon.svg, wp-mark.svg) |
+| Authority boundary | `npm run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE) |
+| Network boundary | `npm run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| Browser journeys | `npm run e2e` | rc=0 — **67/67** chromium, 43.2s, clean on first attempt |
+| Migrations | `npm run migrate:local` | rc=0 — "No migrations to apply!" (idempotent) |
+| **Production profile resolves as production** | `npx wrangler deploy --dry-run --env production` | rc=0, **not deployed** |
+| **Top-level profile stays local** | `npx wrangler deploy --dry-run` | rc=0, **not deployed** |
+| Production contract clauses | section-scoped assertion, self-tested 13/13 | 25/25 PASS |
+
+Counts moved with the post-seal work exactly as expected: unit 546 → **547**, e2e 66 → **67**. Both
+increases come from the user's P28 files, and both suites are green.
+
+Production dry-run resolved `env.WP_OS_ENV ("production")`, `env.WP_OS_DB (west-peek-os-db)` id
+`1d7c242b…`, `env.WP_OS_KV (bf0750e8e9a648758a5de978088c97da)`,
+`env.WP_OS_DOCUMENTS (west-peek-os-documents)`, and `env.ASSETS` over 8 files from `./dist/client`.
+The top-level dry-run resolved `env.WP_OS_ENV ("local")` with the placeholder KV `0000…0000`,
+confirming §2.1 preservation.
+
+**Nothing was deployed and no Cloudflare API call was made.** Both dry-runs used
+`--outdir /tmp/...` so no bundle entered the artifact, both ended at `--dry-run: exiting now.`, and
+a grep of both logs for `Uploaded`, `Deployed`, `Published`, `Current Version ID`, and the production
+hostname returns **no hit** (grepped, not assumed). `west-peek-os.seq-taylor.workers.dev` was never
+contacted. No Cloudflare resource was created, altered, or configured; no remote migration was
+applied; Cloudflare Access was not touched.
+
+### No secrets packaged (re-scanned here, not inherited)
+
+No `.dev.vars`, `.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `id_rsa*`, or `credentials.json`
+exists anywhere in the package outside `node_modules`. A value-shaped scan (`sk-…`, `AKIA…`, `ghp_…`,
+`xox…`, JWT, PEM headers) over `src`, `tests`, `e2e`, `scripts`, `docs`, `migrations` and the config
+files returns the same four hits as the prior run, each re-read in this session and each a deliberate
+fixture proving credential-shaped input is *blocked or redacted* — `tests/workforce.test.ts:323`,
+`tests/ai.test.ts:245` and `:257` (asserts `EGRESS_BLOCKED`, `credential_like_content`, and that the
+failure reason never contains the secret itself), `e2e/p4-ai.spec.ts:43`. The same scan over
+`backups/`, `.wrangler/`, `dist/` and `test-results/` returns nothing. `.env.example` is names-only
+apart from `WP_OS_ENV=local`, which is not a secret; `scripts/vault/cloudflare-mapping.json` holds a
+secret **name** only; `wrangler.toml` carries only the non-secret D1/KV/R2 identifiers.
+
+### §2.5 documentation re-checked for accuracy, not just presence
+
+`docs/ENVIRONMENTS.md` claims a bare `wrangler deploy` still publishes `WP_OS_ENV = "local"` to the
+`west-peek-os` Worker, that wrangler warns but does **not** refuse, and that `--env production` is a
+required part of the deploy procedure rather than a convenience. Both dry-runs executed in *this*
+session reproduce exactly that, so the document is accurate as written. ADR-007's placeholder
+rationale still matches the top-level profile.
+
+### Files this pass changed
+
+**This ledger, and nothing else.** No application, worker, client, test, migration, configuration, or
+documentation file was touched in this run — `wrangler.toml` remains `8d66dcee…` and
+`docs/ENVIRONMENTS.md` remains `a24dc13b…`. This worker did not commit, push, deploy, migrate
+remotely, create the snapshot ZIP, or edit `STATE.json`, `EXECUTION_IDENTITY.json`, deployment
+history, or artifact-eligibility metadata.
+
+### Review independence — stated plainly
+
+This generation both ran the verification and wrote this record. Because **no approved-scope mutation
+was made in this run**, there is no new implementation change for an independent P5 reviewer to
+review; the substantive claim here is a validation result, and every command backing it is named
+above so it can be re-executed. The prior run's independent P5 (generation 3) remains the last review
+of an actual change. Whether to run a separate final-review worker is the host's gate, not this
+worker's to sign — `final_review_satisfied` is left as the host set it.
+
+### Still UNPROVEN after this run
+
+- Remote publish, Cloudflare Access behaviour, and remote D1 migration apply remain **UNPROVEN**.
+  Declaring `[env.production]` is configuration; a dry-run is not a deployment.
+- **Deployment must specify `--env production`.** A bare `wrangler deploy` still ships the local
+  profile; §2.1 forbids repairing that in the top-level profile, so it stays a procedural gate.
+- `preview` still has no profile.
+- No AI/vendor provider was called; every provider credential is absent and adapters fail closed.
+  Whether `migrations/0024` is applied to remote D1 is not observable locally and is not claimed.
+- The P26 phase 2 Cloudflare mutation (OpenRouter enabled, `OPENROUTER_API_KEY` bound as a Worker
+  secret) happened **outside** this run and was neither performed nor verified here.
+- **The snapshot carries more than the approved scope.** Beyond the earlier post-seal P26 files, this
+  run's tree also carries the five P28 files listed at the top of this section. They pass the
+  repository's full suite, re-run green here in its entirety, but they were not designed or reviewed
+  against *this* task. `LOCAL_ARTIFACT_VERIFIED` on this run must not be read as design approval of
+  that work.
+
+Approved scope §2.1–§2.5 is satisfied and byte-unchanged, §3's security law holds at the
+configuration and at the source, and §6's validation surfaces all pass against the **current** tree
+including the post-seal user work. **This artifact is ready for host packaging.**
+
+## Run `20260817T120811Z-32641` — CONTINUATION, implementation worker, generation 2 (2026-08-17)
+
+Same approved task, SHA-256 `e323bce3…`, same run as the generation-1 section above. Handoff
+checkpoint `previous_role: opening`, `reason: claude_planning_complete`, `next_worker:
+capacity_routed_implementation`, `open_gaps: []`. Per the execution contract, intake and planning
+were not redone and no completed phase was restarted.
+Toolchain confirmed in this session: node v26.4.0 / npm 11.17.0 / wrangler 4.120.1.
+
+### Remaining approved implementation scope: none — verified, not assumed
+
+`wrangler.toml` already carries the full §2 contract. Re-hashed at the start of this session, before
+any command was run:
+
+| File | sha256 | State |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | unchanged |
+| `docs/ENVIRONMENTS.md` | `a24dc13b528214f250c9da2dab5917f8781e23f2a889d924bd9fcfb75e458a4c` | unchanged |
+| `ARCHITECTURAL_DECISIONS.md` | `21a723721624b95c8da896a53f3af7ba67375bead64a74b8c88d61ba573e47f8` | unchanged |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | unchanged, mtime Aug 10 |
+
+A `find` for non-generated files modified since the generation-1 seal (12:16:50Z) returns
+`IMPLEMENTATION_LEDGER.md` and nothing else. **No approved-scope mutation was required and none was
+made.** §2.1–§2.5 were satisfied before this generation started.
+
+### Why the generation-1 validation was re-run rather than inherited
+
+The contract forbids claiming validation that did not run, and generation 1 was a different worker.
+The tree was materially unchanged between the two generations, so inheriting would have been
+defensible — but the claim would then have been generation 1's, not this worker's. Every command
+below was executed in this session, and all counts are read from this session's output.
+
+### Validation actually executed in this session
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen dependency install | `npm ci` | rc=0 (npm's `allow-scripts` warning is informational; `@esbuild/darwin-arm64` and `@cloudflare/workerd-darwin-arm64` are present and every downstream step that needs them succeeded) |
+| Typecheck (`src`, `tests`, `e2e`) | `npm run typecheck` | rc=0 |
+| Unit/integration | `npm run test` | rc=0 — **547/547**, 31 files, 70.1s |
+| Build | `npm run build` | rc=0 — 53 modules; `dist/client` rebuilt with all 6 artifacts (`index.html`, `assets/`, `sw.js`, `manifest.webmanifest`, `icon.svg`, `wp-mark.svg`) |
+| Authority boundary | `npm run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + seeds fresh (31 employees, all INACTIVE) |
+| Network boundary | `npm run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| Migrations | `npm run migrate:local` | rc=0 — "No migrations to apply!" (idempotent) |
+| Browser journeys | `npm run e2e` | rc=0 — **67/67** chromium, 44.2s, clean on first attempt |
+| **Production profile resolves as production** | `npx wrangler deploy --dry-run --env production` | rc=0, **not deployed** |
+| **Top-level profile stays local** | `npx wrangler deploy --dry-run` | rc=0, **not deployed** |
+| §2/§3 contract clauses | independent section-scoped assertion, self-tested 16/16 | **29/29 PASS** |
+
+Counts match generation 1 exactly (547 unit, 67 e2e), which is the expected result for an unchanged
+tree and is stated here as a this-session measurement, not as agreement inherited from that section.
+
+### Dry-run resolution — the two facts §6 actually requires
+
+- `--env production` resolved `env.WP_OS_ENV ("production")`, `env.WP_OS_DB (west-peek-os-db)`,
+  `env.WP_OS_KV (bf0750e8e9a648758a5de978088c97da)`,
+  `env.WP_OS_DOCUMENTS (west-peek-os-documents)` and `env.ASSETS` over 8 files from `./dist/client`.
+- Bare `wrangler deploy --dry-run` resolved `env.WP_OS_ENV ("local")` with the placeholder KV
+  `00000000000000000000000000000000`, confirming §2.1 preservation. Wrangler emitted its
+  multiple-environments warning and proceeded — it warns, it does not refuse.
+
+**Nothing was deployed and no Cloudflare API call was made.** Both dry-runs wrote their bundle to
+`/tmp/wpos-dryrun-{prod,local}-g2` so no build output entered the artifact, both ended at
+`--dry-run: exiting now.`, and a grep of both logs for `Uploaded`, `Deployed`, `Published`,
+`Current Version ID` and `west-peek-os.seq-taylor.workers.dev` returns **no hit** (grepped, exit 1).
+No Cloudflare resource was created or altered, no remote migration was applied, Cloudflare Access was
+not touched.
+
+### §2/§3 contract assertion — rebuilt independently, and its self-test caught a harness bug
+
+A section-scoped assertion (29 clauses) was written fresh in this session at
+`/tmp/wpos-contract-g2.mjs` — in `/tmp`, run against copies, adding no file to the artifact. Section
+scoping plus comment-stripping is required: the file's header comment quotes both
+`WP_OS_ENV = "local"` and `WP_OS_ENV = "production"` in prose, so a whole-file substring check
+false-passes in both directions.
+
+The first self-test reported only **8/13** caught, and the failure was in the *test harness*, not in
+the assertion. The harness split the file with `src.indexOf("[env.production]")`, which matched the
+backticked mention inside the header comment at byte ~700 rather than the real section header at byte
+3387. Consequences: `head` was 12 comment lines, so three local-profile mutations silently no-oped,
+and the two `WP_OS_ENV` flips rewrote comment prose that the assertion correctly ignores. A "MISSED"
+line there meant "the mutation never reached any configuration", not "a real violation would ship".
+
+Fixed by anchoring the split to `/^\[env\.production\]$/m`, and the mutation set was widened from 13
+to 16 while re-running. Result: **16/16 planted violations caught** — production flipped to local,
+local flipped to production, production observability removed, production SPA handling removed,
+production D1 id downgraded to the placeholder, production KV id altered, production assets
+repointed, production R2 removed, local R2 removed, local assets binding removed, local SPA handling
+removed, local D1 repointed at the production database, local KV repointed at the production KV,
+local cron trigger removed, production `name` restatement removed, and a planted secret value. The
+negative control (every comment rewritten, configuration untouched) correctly still passes, proving
+the clauses bind to configuration rather than to prose. Against the real file: **29/29 PASS**.
+
+### §2.5 documentation checked for accuracy, not just presence
+
+`docs/ENVIRONMENTS.md:29–37` asserts that a bare `wrangler deploy` still selects the top-level LOCAL
+profile and would publish `WP_OS_ENV = "local"` to the `west-peek-os` Worker, that wrangler warns but
+does not refuse, and that `--env production` is therefore a required part of the deploy procedure
+rather than a convenience. Both dry-runs executed in *this* session reproduce that behaviour exactly,
+including the warning text, so the document is accurate as written. `ARCHITECTURAL_DECISIONS.md`
+ADR-007 (amended) records the placeholder/real-id separation and ADR-006 records the
+`WP_OS_ENV=local`-gated dev header; both match the file and the code. §2.5 needs no update.
+
+### No secrets packaged (re-scanned here, not inherited)
+
+No `.dev.vars*`, `.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `id_rsa*` or `credentials.json`
+exists anywhere in the package outside `node_modules`. A value-shaped scan (`sk-…`, `AKIA…`, `ghp_…`,
+`xox…`, JWT, PEM headers) over `src`, `tests`, `e2e`, `scripts`, `docs`, `migrations`, `wrangler.toml`,
+`package.json` and `.env.example` returns four hits, each re-read in this session and each a
+deliberate synthetic fixture proving credential-shaped input is blocked or redacted:
+`tests/workforce.test.ts:323`, `tests/ai.test.ts:245` and `:257` (which asserts the failure reason
+never contains the secret), `e2e/p4-ai.spec.ts:43`. The assertion's own no-secret clause passes over
+`wrangler.toml`, which carries only the non-secret D1/KV/R2 identifiers.
+
+### Files this pass changed
+
+**This ledger, and nothing else.** No application, worker, client, test, migration, configuration or
+documentation file was touched — the four approved-scope hashes above re-hash identically *after* the
+full validation run. Regenerated-only paths (`node_modules/`, `dist/client/`, `.wrangler/`,
+`test-results/`) were rebuilt by the validation itself. This worker did not commit, push, deploy,
+migrate remotely, create the snapshot ZIP, or edit `STATE.json`, `EXECUTION_IDENTITY.json`,
+deployment history, or artifact-eligibility metadata.
+
+### Review independence — stated plainly
+
+This generation independently re-executed the validation that generation 1 recorded, which is a real
+second observation of the same tree. It is **not** a substitute for P5: no approved-scope change was
+made in this run, so there is no new implementation change for an independent senior reviewer to
+review, and the last review of an actual change remains the prior run's generation-3 P5.
+`final_review_satisfied` is left exactly as the host set it — that gate is the host's to sign.
+
+### Still UNPROVEN after this run
+
+- Remote publish, Cloudflare Access behaviour, and remote D1 migration apply remain **UNPROVEN**.
+  Declaring `[env.production]` is configuration; a dry-run is not a deployment.
+- **Deployment must specify `--env production`.** A bare `wrangler deploy` still ships the local
+  profile — reconfirmed by dry-run here. §2.1 forbids repairing that in the top-level profile, so it
+  stays a procedural gate.
+- `preview` still has no profile.
+- No AI/vendor provider was called; provider credentials are absent and adapters fail closed.
+  Whether `migrations/0024` is applied to remote D1 is not observable locally and is not claimed.
+- The P26 phase 2 Cloudflare mutation (OpenRouter enabled, `OPENROUTER_API_KEY` bound as a Worker
+  secret) happened **outside** this run and was neither performed nor verified here.
+- **The snapshot carries more than the approved scope** — the post-seal P26 and P28 user files
+  described in the generation-1 section above. They re-run green across the entire suite here, but
+  they were not designed or reviewed against *this* task. `LOCAL_ARTIFACT_VERIFIED` on this run must
+  not be read as design approval of that work.
+
+Approved scope §2.1–§2.5 is satisfied and byte-unchanged, §3's security law holds at the
+configuration and at the source, and every §6 validation surface passes against the current tree as
+executed by this worker. **This artifact is ready for host packaging (P6).**
+
+## Run `20260817T120811Z-32641` — P5 mandatory final senior review, generation 3 (2026-08-17)
+
+Same approved task, SHA-256 `e323bce3…`, same run as the two sections above. Handoff checkpoint
+`previous_role: implementation`, `reason: claude_implementation_complete`, `next_worker: claude`,
+`open_gaps: []`, checkpoint sha256 `18845e2c…`. Repair-capable finalization pass: nothing was
+restarted and no completed phase was rebuilt. Toolchain confirmed in this session: node v26.4.0 /
+npm 11.17.0 / wrangler 4.120.1.
+
+### Scope surface re-hashed before any command ran
+
+| File | sha256 | State |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | matches generations 1–2 |
+| `docs/ENVIRONMENTS.md` | `a24dc13b528214f250c9da2dab5917f8781e23f2a889d924bd9fcfb75e458a4c` | matches |
+| `ARCHITECTURAL_DECISIONS.md` | `21a723721624b95c8da896a53f3af7ba67375bead64a74b8c88d61ba573e47f8` | matches |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | matches, mtime Aug 10 |
+
+A `find` for non-generated files modified since the generation-2 seal returns
+`IMPLEMENTATION_LEDGER.md` and nothing else.
+
+### §2 read clause by clause against the file, not against the prior record
+
+`wrangler.toml` was read in full in this session and each approved-scope requirement was checked
+directly rather than inherited:
+
+- **§2.1** top level is the LOCAL profile — `WP_OS_ENV = "local"` (`[vars]`), D1 `database_id`
+  `00000000-0000-0000-0000-000000000000`, KV `id` `0000…0000`, its own assets/R2 bindings and the
+  ADR-017 cron all intact. Unchanged.
+- **§2.2** `[env.production]` exists and restates `name = "west-peek-os"`, so the named environment
+  targets the existing proven Worker rather than `west-peek-os-production`.
+- **§2.3** `[env.production.vars] WP_OS_ENV = "production"`.
+- **§2.4** `[[env.production.d1_databases]]` `west-peek-os-db` / `1d7c242b-fddc-41f1-843c-03dd2db6fbef`
+  with `migrations_dir`; `[[env.production.kv_namespaces]]` `bf0750e8e9a648758a5de978088c97da`;
+  `[[env.production.r2_buckets]]` `west-peek-os-documents`; `[env.production.assets]`
+  `directory = "./dist/client"`, `binding = "ASSETS"`,
+  `not_found_handling = "single-page-application"`; `[env.production.observability] enabled = true`.
+- **§2.5** `docs/ENVIRONMENTS.md` and `ARCHITECTURAL_DECISIONS.md` (ADR-006, ADR-007 amended) were
+  read and checked for *accuracy*, not presence — see below.
+
+### §3 security law checked at the source, not only at the config
+
+`src/worker/auth.ts` selects the identity header by environment at line 28: `x-wpos-dev-user` only
+when `WP_OS_ENV === "local"`, otherwise `Cf-Access-Authenticated-User-Email`. Outside local the dev
+header is never read at all, so there is no dev-identity path to bypass. Both branches then require a
+known, `ACTIVE` `firm_user` or resolve to null → 401; unauthenticated is denied in every environment.
+The file is byte-unchanged from the approved baseline, and no application/auth source file was
+modified by this pass.
+
+### Validation actually executed in this session
+
+Every command below was run by this worker; no result is inherited. All commands were additionally
+re-run in the form recorded in the finalization evidence — invoked **from the locked target root**
+(`npm --prefix west-peek-os …`, `npx … --config west-peek-os/wrangler.toml`) — so the host can rerun
+them verbatim from the target it locked.
+
+| Check | Command | Result |
+|---|---|---|
+| Frozen dependency install | `npm ci` | rc=0 (npm's `allow-scripts` warning is informational; `@esbuild/darwin-arm64` and `@cloudflare/workerd-darwin-arm64` present, every downstream step needing them succeeded) |
+| Typecheck (`src`, `tests`, `e2e`) | `npm run typecheck` | rc=0 |
+| Build | `npm run build` | rc=0; `dist/client` present with all 6 artifacts |
+| Unit/integration | `npm run test` | rc=0 — **547/547**, 31 files, 67.4s |
+| Authority boundary | `npm run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| AI boundary | `npm run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 + 31 employees, all INACTIVE |
+| Network boundary | `npm run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+| Brand | `npm run validate:brand` | rc=0 — PASS + self-test 9/9 |
+| Migrations | `npm run migrate:local` | rc=0 — "No migrations to apply!" (idempotent) |
+| Browser journeys | `npm run e2e` | rc=0 — **67/67** chromium, 42.7s, clean first attempt |
+| **Production profile resolves as production** | `wrangler deploy --dry-run --env production` | rc=0, **not deployed** |
+| **Top-level profile stays local** | `wrangler deploy --dry-run` | rc=0, **not deployed** |
+
+Counts match generations 1 and 2 exactly (547 unit, 67 e2e) on an unchanged tree, stated here as this
+session's own measurement.
+
+### The two dry-run facts §6 requires
+
+- `--env production` resolved `env.WP_OS_ENV ("production")`, `env.WP_OS_DB (west-peek-os-db)`,
+  `env.WP_OS_KV (bf0750e8e9a648758a5de978088c97da)`,
+  `env.WP_OS_DOCUMENTS (west-peek-os-documents)` and `env.ASSETS`.
+- Bare `wrangler deploy --dry-run` resolved `env.WP_OS_ENV ("local")` with the placeholder KV
+  `00000000000000000000000000000000` — §2.1 preservation confirmed behaviourally, not just textually.
+
+**Nothing was deployed and no Cloudflare API call was made.** Every dry-run wrote its bundle to a
+`/tmp` outdir so no build output entered the artifact, each ended at `--dry-run: exiting now.`, and a
+grep of all four dry-run logs for `Uploaded`, `Deployed`, `Published`, `Current Version ID` and
+`seq-taylor.workers.dev` returns no hit (grepped, exit 1). `west-peek-os.seq-taylor.workers.dev` was
+never contacted. No Cloudflare resource was created or altered, no remote migration was applied,
+Cloudflare Access was not touched.
+
+### §2.5 documentation checked for accuracy
+
+`docs/ENVIRONMENTS.md:29–37` claims a bare `wrangler deploy` still selects the top-level LOCAL profile
+and would publish `WP_OS_ENV = "local"`, that wrangler warns but does not refuse, and that
+`--env production` is therefore a required part of the deploy procedure rather than a convenience.
+The dry-runs executed in *this* session reproduce exactly that. ADR-006 matches `auth.ts:28`; ADR-007
+(amended) matches the placeholder/real-id split actually present in the file. §2.5 needs no update.
+
+### No secrets packaged (re-scanned here)
+
+No `.dev.vars*`, `.env`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `id_rsa*` or `credentials.json`
+exists anywhere in the package outside `node_modules`. A value-shaped scan (`sk-…`, `AKIA…`, `ghp_…`,
+`xox…`, JWT, PEM headers) over `src`, `tests`, `e2e`, `scripts`, `docs`, `migrations`,
+`wrangler.toml`, `package.json` and `.env.example` returns four hits, each re-read in this session and
+each a synthetic fixture asserting that credential-shaped input is blocked or redacted:
+`tests/workforce.test.ts:323`, `tests/ai.test.ts:245` and `:257` (which asserts the failure reason
+never contains the secret), `e2e/p4-ai.spec.ts:43`. The same scan over `backups/`, `.wrangler/`,
+`dist/` and `test-results/` returns nothing. `wrangler.toml` carries only the non-secret D1/KV/R2
+identifiers.
+
+### Defects found by this review: none requiring repair
+
+The full approved scope was inspected, not a coherent subset. No omission, stub, TODO, architectural
+drift, regression, auth/security gap, failure-path gap, broken migration, invalid validator, or
+false-completion claim was found within approved scope. `repairs_applied: false` is therefore a
+finding, not an omission — the two prior generations' records were checked against the files and the
+re-executed commands and every claim in them held.
+
+One item was considered for repair and deliberately not repaired: a bare `wrangler deploy` would ship
+the LOCAL profile to the `west-peek-os` Worker, which §3 forbids. Fixing that in the top-level profile
+is prohibited by §2.1 (preserve it unchanged) and fixing it in application code is prohibited by §3
+and §5. It is correctly carried as a documented procedural gate in `docs/ENVIRONMENTS.md` rather than
+silently repaired outside approved scope.
+
+### Files this pass changed
+
+**This ledger, and nothing else.** The four approved-scope hashes re-hash identically *after* the full
+validation run. Regenerated-only paths (`node_modules/`, `dist/client/`, `.wrangler/`,
+`test-results/`) were rebuilt by the validation itself. This worker did not commit, push, deploy,
+migrate remotely, move or rename WORK, create the snapshot ZIP, or edit `STATE.json`,
+`EXECUTION_IDENTITY.json`, deployment history, or artifact-eligibility metadata.
+
+### Still UNPROVEN after this run — external only
+
+- Remote publish, Cloudflare Access behaviour, and remote D1 migration apply remain **UNPROVEN**.
+  Declaring `[env.production]` is configuration; a dry-run is not a deployment.
+- **Deployment must specify `--env production`.** Procedural gate, per the paragraph above.
+- `preview` still has no profile.
+- No AI/vendor provider was called; provider credentials are absent and adapters fail closed. Whether
+  `migrations/0024` is applied to remote D1 is not observable locally and is not claimed.
+- The P26 phase 2 Cloudflare mutation (OpenRouter enabled, `OPENROUTER_API_KEY` bound as a Worker
+  secret) happened **outside** this run and was neither performed nor verified here.
+- **The snapshot carries more than the approved scope** — the post-seal P26 and P28 user files
+  described in the generation-1 section. §6 forbids reverting unrelated user work, so they are
+  preserved. They re-run green across the entire suite here, but they were not designed or reviewed
+  against *this* task, and `LOCAL_ARTIFACT_VERIFIED` must not be read as design approval of them.
+
+Approved scope §2.1–§2.5 is satisfied, §3's security law holds at the configuration and at the
+source, and every §6 validation surface passes against the current tree as executed by this reviewer.
+**P5 complete — ACCEPT. Ready for host packaging (P6).**
+
+### Host gate rejection and correction (evidence declaration only)
+
+The first finalization evidence record for this pass was rejected by the host gate with a single
+error: `at most eight validation commands may be declared`. Twelve were declared. **No validation
+failed and no defect was found** — the rejection was a declaration-format violation, so no file in
+the artifact changed and nothing was re-run in response.
+
+The declaration was trimmed to the eight commands that decide the approved scope: frozen install,
+typecheck, build (which is what puts `dist/client` in place), the unit/integration suite, the browser
+suite, the authority-boundary validator (the §3-relevant one), and the two dry-runs that prove the
+production profile resolves as production while the top-level profile stays local.
+
+`validate:ai-boundary`, `validate:network-boundary`, `validate:brand` and `migrate:local` are **not**
+dropped from the review — all four were executed in this session from the locked target root and all
+four returned rc=0, as recorded in the validation table above. They are omitted from the declared
+eight only because of the host cap, and the table remains the record that they ran.
+
+### Second host gate rejection — `wrangler deploy` is not an allowed proof token
+
+The host gate rejected the trimmed evidence for a second, different reason: both declared dry-run
+commands carry the forbidden proof token `wrangler deploy`, even with `--dry-run`. The host will not
+rerun a deploy-shaped command at all. **No validation failed here either** — this is a constraint on
+what may be *declared* for host re-execution, not a finding against the artifact.
+
+`npx wrangler check startup --env production` was evaluated as a non-deploy substitute and rejected
+on the merits: it returns rc=0 but prints only bundle/CPU-profile data, never the resolved
+environment vars or bindings, so it does not prove either §6 fact. It also wrote
+`worker-startup.cpuprofile` into the package; that file was deleted immediately and a `find` for
+`*.cpuprofile` outside `node_modules` now returns nothing.
+
+**What replaced them.** Two standalone, read-only `node -e` assertions that prove the same two §6
+facts directly from `wrangler.toml`, and which the host can safely rerun from the locked target:
+
+- *production profile resolves as production* — asserts, scoped to the `[env.production]` section
+  only: `name` restated as `west-peek-os`, `WP_OS_ENV = "production"` with no `local` anywhere in the
+  section, D1 `west-peek-os-db` / `1d7c242b…` (explicitly not the placeholder), KV `bf0750e8…`, R2
+  `west-peek-os-documents`, assets `./dist/client` bound as `ASSETS` with
+  `not_found_handling = "single-page-application"`, and `observability enabled = true`; plus a
+  whole-file secret-shaped-value scan.
+- *top-level local profile remains preserved* — asserts, scoped to everything **before**
+  `[env.production]`: `WP_OS_ENV = "local"` and never `production`, the ADR-007 placeholder D1 and KV
+  ids, that neither production identifier appears in the local profile at all, and that the local R2
+  and `ASSETS` bindings, SPA handling and the ADR-017 cron all survive.
+
+Both strip comment lines before matching and anchor the section split to `/^\[env\.production\]$/m`.
+Both precautions are load-bearing: `wrangler.toml` quotes `WP_OS_ENV = "local"` in prose at line 4 and
+mentions `[env.production]` in the header comment, so an unscoped check false-passes.
+
+**Self-tested, and the self-test caught a harness bug before it could flatter the result.** The first
+run reported 16/17, with `local flipped to production` MISSED. The assertion was not at fault: the
+mutation used an unanchored `replace()`, which hit the line-4 *comment* rather than the real `[vars]`
+line 49, so the mutated file's configuration was never actually changed — the same harness-bug class
+generation 2 hit. Anchoring the mutation to `/^WP_OS_ENV = "local"$/m` and adding two further
+mutations gives **19/19 planted violations caught**: production flipped to local, production
+observability / SPA handling / R2 / `ASSETS` binding / `name` restatement removed, production D1 id
+downgraded to the placeholder, production KV id altered, production assets repointed, a planted
+secret value, the whole `[env.production]` section deleted, local flipped to production, local
+`WP_OS_ENV` deleted, local D1 and KV repointed at the production resources, and local R2 / `ASSETS` /
+SPA handling / cron removed. The negative control — every comment rewritten, configuration untouched —
+correctly still passes, proving the clauses bind to configuration rather than prose. The harness lives
+in `/tmp` and runs against copies; **no file was added to the artifact**.
+
+**The behavioural dry-run evidence is not withdrawn.** `wrangler deploy --dry-run --env production`
+and the bare equivalent were both executed in this session (rc=0, bundles written to `/tmp` outdirs,
+each ending at `--dry-run: exiting now.`, no `Uploaded`/`Deployed`/`Published`/`Current Version ID`
+and no contact with `west-peek-os.seq-taylor.workers.dev`), and they resolved
+`env.WP_OS_ENV ("production")` with the real bindings and `env.WP_OS_ENV ("local")` with the
+placeholder KV respectively. That remains this reviewer's strongest proof of §6 and is recorded in
+the validation table above; it is simply not declarable for host re-execution.
+
+### Third host gate rejection — inline `node -e` proofs are not accepted either
+
+The host rejected both replacement assertions as proof commands. Combined with the second rejection,
+the host accepts neither `wrangler deploy --dry-run` (forbidden token) nor an inline `node -e`
+program. Across all three rejections the host has never objected to the
+`npm --prefix west-peek-os …` shape, so that is the only demonstrably accepted command form and the
+declaration is now confined to it.
+
+**There is no existing repo surface that validates `wrangler.toml`.** Checked, not assumed: grepping
+`scripts/validate/` and `tests/` for `wrangler.toml` returns nothing, and none of the 21 npm scripts
+inspects the deployment profiles. Approved scope §2 limits target changes to the wrangler profile and
+the §2.5 documentation, and §6 directs the run to "the repository's **existing** validation
+surfaces" — so adding a profile validator to the repo to make this declarable would itself be an
+out-of-scope target change. It was therefore not added, matching the precedent set by generations 1
+and 2, which also kept their assertions in `/tmp`.
+
+**Consequence, stated plainly rather than papered over.** The two §6 profile facts — *production
+profile resolves as production* and *top-level local profile remains preserved* — are **proven, but
+not host-declarable**. They were each established twice in this session:
+
+1. **Behaviourally**, by `wrangler deploy --dry-run --env production` resolving
+   `env.WP_OS_ENV ("production")` with D1 `west-peek-os-db`/`1d7c242b…`, KV `bf0750e8…`, R2
+   `west-peek-os-documents` and `ASSETS`, and by the bare dry-run resolving `env.WP_OS_ENV ("local")`
+   with the placeholder KV `0000…0000`. Both rc=0, bundles written to `/tmp` outdirs, both ending at
+   `--dry-run: exiting now.`, with no `Uploaded`/`Deployed`/`Published`/`Current Version ID` in either
+   log and no contact with `west-peek-os.seq-taylor.workers.dev`.
+2. **Statically**, by the two section-scoped assertions described in the previous section, self-tested
+   to **19/19** planted violations caught with a passing comments-only negative control.
+
+Neither can be handed to the host for re-execution. That is a limitation of what may be *declared*,
+not a gap in what was *verified*, and it is recorded here and in the evidence record rather than
+being allowed to read as an unproven scope item.
+
+### Final declared validation — all re-run from the locked target root after the last `npm ci`
+
+| # | Declared command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present with all 6 artifacts |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — 547/547, 31 files |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — 67/67 chromium |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+
+`npm --prefix west-peek-os run validate:brand` (rc=0, self-test 9/9) and
+`npm --prefix west-peek-os run migrate:local` (rc=0, "No migrations to apply!") also passed in this
+session and are omitted only because of the host's eight-command cap.
+
+The approved-scope files are byte-unchanged after all of the above: `wrangler.toml`
+`8d66dcee…`, `docs/ENVIRONMENTS.md` `a24dc13b…`, `ARCHITECTURAL_DECISIONS.md` `21a72372…`,
+`src/worker/auth.ts` `13bc20a1…`. Across all three gate rejections **no artifact file was changed in
+response to any of them** — every rejection concerned the form of the evidence declaration, not the
+state of the work. This ledger remains the only file this reviewer touched.
+
+## Run `20260817T152307Z-47114` — CONTINUATION, opening worker, generation 1 (2026-08-17)
+
+**Run semantics:** CONTINUATION. Task SHA256 `e323bce362ec868e20f229bb8c2501b962916b9dbab580072bea5e27ac266964`
+— byte-identical to the task the immediately prior run `20260817T120811Z-32641` executed. That run
+sealed at `LOCAL_ARTIFACT_VERIFIED` with P5 ACCEPT. Per the execution contract's continuation clause,
+this pass treats the existing WORK and this ledger as authoritative, preserves completed phases, and
+does not restart from intake zero.
+
+### P1–P2 — current state established, then compared against the approved contract
+
+The four approved-scope files were hashed **before** any command was run and match the hashes the
+prior run recorded at its seal, byte for byte:
+
+| File | SHA256 | vs. prior seal |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | identical |
+| `docs/ENVIRONMENTS.md` | `a24dc13b528214f250c9da2dab5917f8781e23f2a889d924bd9fcfb75e458a4c` | identical |
+| `ARCHITECTURAL_DECISIONS.md` | `21a723721624b95c8da896a53f3af7ba67375bead64a74b8c88d61ba573e47f8` | identical |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | identical |
+
+Approved scope §2.1–§2.5 was re-read clause-by-clause against `wrangler.toml` rather than inferred
+from the prior ledger:
+
+- §2.1 top-level/local profile preserved — `name = "west-peek-os"`, `WP_OS_ENV = "local"`, ADR-007
+  placeholder D1 `0000…0000` and KV `0000…0000`, R2 `WP_OS_DOCUMENTS`, `ASSETS` with
+  `not_found_handling = "single-page-application"`, ADR-017 cron `*/15 * * * *` — all present.
+- §2.2 explicit `[env.production]` for the existing `west-peek-os` Worker — present at line 72, with
+  `name` restated at line 73 so a named environment does not create `west-peek-os-production`.
+- §2.3 `WP_OS_ENV = "production"` — line 97.
+- §2.4 authorized existing resources — D1 `west-peek-os-db` / `1d7c242b-fddc-41f1-843c-03dd2db6fbef`,
+  KV `bf0750e8e9a648758a5de978088c97da`, R2 `west-peek-os-documents`, assets `./dist/client` bound as
+  `ASSETS` with single-page-application handling, `[env.production.observability] enabled = true`.
+- §2.5 documentation — `docs/ENVIRONMENTS.md` and `ARCHITECTURAL_DECISIONS.md` both unchanged and
+  already describing this contract.
+
+**§3 security law verified at the source, not just the configuration.** `src/worker/auth.ts:28`
+selects `x-wpos-dev-user` only when `env.WP_OS_ENV === "local"` and `Cf-Access-Authenticated-User-Email`
+otherwise; the file is byte-unchanged from the approved baseline. Production therefore cannot run
+under `WP_OS_ENV=local` via this profile, and no dev identity behaviour reaches production.
+
+### P3 — no missing approved change to apply
+
+Every §2 requirement was already satisfied. **This worker changed no target file except this ledger.**
+Writing a change merely to demonstrate activity would have been out-of-scope mutation, so none was made.
+
+### Post-seal unrelated user work — preserved, not reverted
+
+Ten source/test files carry mtimes **after** the prior run's seal and are outside this task's approved
+scope: `src/client/App.tsx`, `src/client/pages/{HomePage,IntelligencePage,JobsPage}.tsx`,
+`src/worker/effects/feedClient.ts`, `src/worker/services/intelligence.ts`,
+`tests/{intelligence,feed-client}.test.ts`, `e2e/{p14-mp-home,p25-journeys}.spec.ts`. This is why the
+unit suite reports **559 tests across 32 files** here versus 547 across 31 at the prior seal.
+
+§6 forbids reverting unrelated user work, so all of it is preserved untouched. It passes the entire
+suite as executed below. It was **not** designed or reviewed against *this* task, and
+`LOCAL_ARTIFACT_VERIFIED` must not be read as design approval of it.
+
+### P4 — validation, all executed in this session from the locked target root
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present with all 6 artifacts |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **559/559**, 32 files |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** chromium |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+
+`npm --prefix west-peek-os run validate:brand` (rc=0, self-test 9/9) and
+`npm --prefix west-peek-os run migrate:local` (rc=0, "No migrations to apply!") also passed and are
+omitted from the declared eight only because of the host's eight-command cap.
+
+**§6 profile facts — proven behaviourally in this session, and still not host-declarable.**
+
+- `npx wrangler deploy --dry-run --env production --outdir /tmp/wp_dryrun_prod` → rc=0, resolving
+  `env.WP_OS_ENV ("production")`, KV `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`,
+  R2 `west-peek-os-documents`, `env.ASSETS`; ended at `--dry-run: exiting now.`
+- `npx wrangler deploy --dry-run --outdir /tmp/wp_dryrun_local` → rc=0, resolving
+  `env.WP_OS_ENV ("local")` with the placeholder KV `00000000000000000000000000000000`.
+
+A grep for `Uploaded|Deployed|Published|Current Version ID|workers.dev` across **both** logs returns
+**0 matches in each** — nothing was published and `west-peek-os.seq-taylor.workers.dev` was never
+contacted. Bundles went to `/tmp` outdirs; no build output was added to the package.
+
+These two commands prove §6's "production profile resolves as production" and "top-level local
+profile remains preserved" directly. As established across three gate rejections in the prior run,
+they cannot be *declared* for host re-execution (`wrangler deploy` is a forbidden proof token even
+with `--dry-run`), and no existing repo surface reads `wrangler.toml` while approved scope forbids
+adding one. Recorded here as **proven but undeclarable**, which is a limit on declaration, not a gap
+in verification.
+
+**No secrets packaged.** `find` for `.dev.vars*` outside `node_modules` returns nothing; a repo-wide
+scan for `sk-`, `AKIA`, `ghp_` and PEM private-key shapes hits only three files — `tests/ai.test.ts`,
+`tests/workforce.test.ts`, `e2e/p4-ai.spec.ts` — each a synthetic fixture whose purpose is to assert
+that secret-shaped input is *redacted*; `tests/ai.test.ts:257` explicitly asserts the value does not
+survive into a failure reason. `wrangler.toml` carries only non-secret Cloudflare resource
+identifiers. A `find` for `*.cpuprofile` outside `node_modules` returns nothing.
+
+**Approved-scope files re-hashed after the entire validation run: all four byte-identical to the
+pre-run table above.** Regenerated-only paths (`node_modules/`, `dist/client/`, `.wrangler/`,
+`test-results/`) were rebuilt by the validation itself.
+
+### Boundaries honoured
+
+No deployment, no Cloudflare API call, no Cloudflare resource creation, no Access change, no
+application/auth source change, no GitHub or Boss OS mutation, no secret added, no mutation outside
+the authorized root, no snapshot ZIP created, and no edit to `STATE.json`, `EXECUTION_IDENTITY.json`,
+deployment history, or artifact-eligibility metadata. WORK was not moved or renamed.
+
+### Still UNPROVEN after this run — external only, unchanged from the prior seal
+
+Remote publish to `west-peek-os.seq-taylor.workers.dev`, Cloudflare Access policy behaviour, remote
+D1 migration apply (including `migrations/0024`), and live AI/vendor provider calls all remain
+**UNPROVEN** — each is a credential or approval gate, and a dry-run is not a deployment. `preview`
+still has no wrangler profile. The P26 phase 2 Cloudflare mutation occurred outside this run and was
+not verified here. A bare `wrangler deploy` would still ship the LOCAL profile to the `west-peek-os`
+Worker; repairing that is forbidden by §2.1/§3/§5, so it remains a documented procedural gate in
+`docs/ENVIRONMENTS.md` — **deployment must specify `--env production`**.
+
+**P1–P4 complete. Approved scope §2.1–§2.5 satisfied, §3 holds at configuration and source, every §6
+surface passes. Ready for P5 final senior review and P6 host packaging.**
+
+## Run `20260817T152307Z-47114` — CONTINUATION, implementation worker, generation 2 (2026-08-17)
+
+Same run, same approved task SHA256 `e323bce362ec868e20f229bb8c2501b962916b9dbab580072bea5e27ac266964`.
+Handoff checkpoint `2026-08-17T15:28:33Z`, `previous_role: opening`, `next_worker:
+capacity_routed_implementation`, `open_gaps: []`. Per the contract's IMPLEMENTATION role clause this
+pass did not redo intake, did not re-plan, and did not restart the phases generation 1 completed. It
+re-established current state, confirmed there was no remaining approved change to apply, and then
+**re-executed the validation itself** rather than inheriting generation 1's results.
+
+### P1–P3 — state re-established; nothing left to implement
+
+Approved-scope files hashed **before** any command ran, and again **after** the entire validation run.
+Both readings are byte-identical to each other and to the generation-1 table above:
+
+| File | SHA256 | vs. generation 1 |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | identical |
+| `docs/ENVIRONMENTS.md` | `a24dc13b528214f250c9da2dab5917f8781e23f2a889d924bd9fcfb75e458a4c` | identical |
+| `ARCHITECTURAL_DECISIONS.md` | `21a723721624b95c8da896a53f3af7ba67375bead64a74b8c88d61ba573e47f8` | identical |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | identical |
+
+§2.1–§2.5 were re-read against `wrangler.toml` directly: top-level local profile intact with
+`WP_OS_ENV = "local"` and the ADR-007 placeholder D1/KV ids (lines 17–56); `[env.production]` at
+line 72 with `name = "west-peek-os"` restated at 73; `WP_OS_ENV = "production"` at 97; D1
+`west-peek-os-db` / `1d7c242b-fddc-41f1-843c-03dd2db6fbef`, KV `bf0750e8e9a648758a5de978088c97da`,
+R2 `west-peek-os-documents`, assets `./dist/client` bound as `ASSETS` with
+`not_found_handling = "single-page-application"`, and `[env.production.observability] enabled = true`.
+§3 checked at the source: `src/worker/auth.ts:28` selects `x-wpos-dev-user` only when
+`env.WP_OS_ENV === "local"`, otherwise `Cf-Access-Authenticated-User-Email`.
+
+A `find` for files under `src/`, `tests/`, `e2e/`, `scripts/`, `migrations/` modified after this run's
+start timestamp returned **nothing** — no drift between generations.
+
+**No missing approved change existed, so this worker changed no target file except this ledger.** The
+ten post-seal unrelated user files generation 1 recorded are still preserved untouched and are not
+reverted (§6).
+
+### P4 — validation re-executed in this session from the locked target root
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present with all 6 artifacts |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **559/559**, 32 files |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** chromium |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+
+`validate:brand` (rc=0, self-test 9/9) and `migrate:local` (rc=0, "No migrations to apply!") also
+passed and are omitted from the declared eight only because of the host's eight-command cap.
+`dist/client` after build: `index.html`, `assets/index-CU2qrqey.css`, `assets/index-CZcfj14D.js`,
+`icon.svg`, `wp-mark.svg`, `manifest.webmanifest`, `sw.js`.
+
+**§6 profile facts — re-proven behaviourally in this session, still not host-declarable.**
+
+- `npx wrangler deploy --dry-run --env production --outdir /tmp/wp_dryrun_prod_g2` → rc=0, resolving
+  `env.WP_OS_ENV ("production")`, KV `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`,
+  R2 `west-peek-os-documents`, `env.ASSETS`; ended at `--dry-run: exiting now.`
+- `npx wrangler deploy --dry-run --outdir /tmp/wp_dryrun_local_g2` → rc=0, resolving
+  `env.WP_OS_ENV ("local")` with the placeholder KV `00000000000000000000000000000000`.
+
+`grep -cE "Uploaded|Deployed|Published|Current Version ID|workers\.dev"` over both logs returns
+**0 and 0**. Nothing was published; `west-peek-os.seq-taylor.workers.dev` was never contacted; both
+bundles went to `/tmp` outdirs and no build output was added to the package. As established across
+three gate rejections in the prior run, these remain **proven but undeclarable** — `wrangler deploy`
+is a forbidden proof token even with `--dry-run`, and approved scope forbids adding a repo surface
+that reads `wrangler.toml`.
+
+**No secrets packaged.** `find` for `.dev.vars*` outside `node_modules` returns nothing. The
+secret-shape scan (`sk-`, `AKIA`, `ghp_`, PEM private-key headers) hits the same three files as
+before — `e2e/p4-ai.spec.ts:43`, `tests/workforce.test.ts:323`, `tests/ai.test.ts:245` — each a
+synthetic fixture asserting redaction, with `tests/ai.test.ts:257` asserting the value does not
+survive into a failure reason. No `*.cpuprofile` outside `node_modules`.
+
+### Boundaries honoured
+
+No deployment, no Cloudflare API call, no Cloudflare resource creation, no Access change, no
+application/auth source change, no GitHub or Boss OS mutation, no secret added, no mutation outside
+the authorized root, no commit/push/merge, no snapshot ZIP created, and no edit to `STATE.json`,
+`EXECUTION_IDENTITY.json`, deployment history, or artifact-eligibility metadata. WORK was not moved
+or renamed.
+
+### Still UNPROVEN after this run — external only, unchanged
+
+Remote publish to `west-peek-os.seq-taylor.workers.dev`, Cloudflare Access policy behaviour, remote
+D1 migration apply (including `migrations/0024`), and live AI/vendor provider calls remain
+**UNPROVEN** behind credential/approval gates; a dry-run is not a deployment. `preview` still has no
+wrangler profile. **Deployment must specify `--env production`** — a bare `wrangler deploy` would
+still ship the LOCAL profile, which §2.1/§3/§5 forbid repairing here, so it stays a documented
+procedural gate in `docs/ENVIRONMENTS.md`.
+
+**Generation 2 complete. Remaining approved implementation scope is materially complete: §2.1–§2.5
+satisfied, §3 holds at configuration and source, every §6 surface re-run and passing. Ready for P5
+mandatory independent final senior review and P6 host packaging.**
+
+## Run `20260817T152307Z-47114` — P5 final senior review / repair, generation 3 (2026-08-17)
+
+Same run, same approved task SHA256 `e323bce362ec868e20f229bb8c2501b962916b9dbab580072bea5e27ac266964`.
+Handoff checkpoint `2026-08-17T15:33:49Z`, `previous_role: implementation`, `next_worker: claude`,
+`open_gaps: []`, `worker_generation: 2`. This is the repair-capable finalization pass, not a passive
+read: the configuration, the source, the documentation and every §6 surface were re-examined against
+the whole approved task, and the validation was re-executed here rather than inherited.
+
+### P5.1 — approved scope §2 re-verified at the file, and behaviourally
+
+`wrangler.toml` is byte-unchanged from both prior generations
+(`8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82`). Read directly rather than
+trusted from the table above: §2.1 top-level LOCAL profile intact with `WP_OS_ENV = "local"` and the
+ADR-007 placeholder D1/KV ids; §2.2 `[env.production]` present with `name = "west-peek-os"` restated;
+§2.3 `WP_OS_ENV = "production"`; §2.4 D1 `west-peek-os-db` / `1d7c242b-fddc-41f1-843c-03dd2db6fbef`,
+KV `bf0750e8e9a648758a5de978088c97da`, R2 `west-peek-os-documents`, assets `./dist/client` bound as
+`ASSETS` with `not_found_handling = "single-page-application"`, `[env.production.observability]
+enabled = true`.
+
+Both profiles were then resolved behaviourally in this session:
+
+- `npx wrangler deploy --dry-run --env production --outdir /tmp/wp_g3_prod` → rc=0, resolving
+  `env.WP_OS_ENV ("production")`, KV `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`,
+  R2 `west-peek-os-documents`, `env.ASSETS`; ended at `--dry-run: exiting now.`
+- `npx wrangler deploy --dry-run --outdir /tmp/wp_g3_local` → rc=0, resolving
+  `env.WP_OS_ENV ("local")` with the placeholder KV `00000000000000000000000000000000`.
+
+Re-run once more after this pass's edits with identical results. `grep -cE
+"Uploaded|Deployed|Published|Current Version ID|workers\.dev"` over all four logs returns **0 every
+time**; both bundles went to `/tmp` outdirs and no build output entered the package. As established
+across the prior run's gate rejections these stay **proven but undeclarable** — `wrangler deploy` is
+a forbidden proof token even with `--dry-run`.
+
+§3 re-checked at the source, not inferred: `src/worker/auth.ts:28` selects `x-wpos-dev-user` only on
+`env.WP_OS_ENV === "local"` and `Cf-Access-Authenticated-User-Email` otherwise, and
+`src/worker/services/networkAdapter.ts:623` refuses its local fixture path the same way. A repo-wide
+grep found no third consumer of `WP_OS_ENV` in worker code. `tests/api.test.ts:47` asserts the dev
+header is refused for a non-local env; because the branch is a strict equality on `"local"`, a
+second fixture value would add no coverage, so none was added. `package.json` defines **no** deploy
+script, so nothing in the repo can trigger a publish. `src/worker/auth.ts` is byte-unchanged
+(`13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6`).
+
+### P5.2 — one material defect found and repaired: the production docs asserted a falsehood
+
+`docs/ENVIRONMENTS.md` still opened its preview/production section with **"Neither environment has
+been deployed, configured, or exercised"** and **"No deploy, no Cloudflare Access policy, and no
+remote migration apply has been performed."** Both statements are false, and they were contradicted
+twice over inside this same artifact:
+
+- The approved admission task §1 records, as operator fact, that **Cloudflare Access is already
+  configured and independently proven active** for `west-peek-os.seq-taylor.workers.dev`.
+- `docs/PROVIDER_READINESS_AUDIT.md` §1/§4 records a **real production deploy** against account
+  `8d147e2420…` with all three bindings verified, Access verified live on the custom domain, and
+  `OPENROUTER_API_KEY` **bound as a production Worker secret** on 2026-08-17.
+
+An operator reading `ENVIRONMENTS.md` would have concluded there is no live Worker and no ingress
+control — a wrong and safety-relevant conclusion about the exact environment this artifact exists to
+describe. That is squarely §2.5's surface (production-environment documentation describing the
+contract), so it was repaired rather than reported.
+
+The repair states the remote facts **and their provenance**, and does not launder them into local
+proof: the section is retitled "nothing here is proven by this repo's validation", the externally
+recorded facts are attributed to the operator record and to `PROVIDER_READINESS_AUDIT.md`, and the
+boundary is restated explicitly — no Repo Operator run of this admission task deployed, migrated
+remotely, created a Cloudflare resource, or configured or mutated Access, and the P26 phase-2
+operator actions were never reproduced or checked by one. The pre-existing UNPROVEN labels for
+remote migration apply, remote backup and `preview` are unchanged; only Access's live behaviour moved
+from "unproven" to "externally recorded, never proven here". `ARCHITECTURAL_DECISIONS.md` ADR-006
+carried the same stale parenthetical `(UNPROVEN until operator configures)` and got the matching
+minimal amendment; the decision itself — ingress is configuration, the app never trusts Access alone
+— is unchanged.
+
+Nothing else was rewritten. The `--env production` procedural gate, the "declaring is not deploying"
+paragraph and the separation rules survive intact.
+
+### P5.3 — validation re-executed in this session, then re-run again after the repair
+
+Every command below ran twice: once over the inherited tree, once after the P5.2 edits. Both passes
+returned the same results.
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present with all 6 artifacts |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **559/559**, 32 files |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** chromium |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+
+`validate:brand` (rc=0, self-test 9/9) and `migrate:local` (rc=0, "No migrations to apply!") also
+passed in both passes and are omitted from the declared eight only because of the host's cap.
+`dist/client` after build: `index.html`, `assets/index-CU2qrqey.css`, `assets/index-CZcfj14D.js`,
+`icon.svg`, `wp-mark.svg`, `manifest.webmanifest`, `sw.js`.
+
+**No secrets packaged**, re-scanned here rather than inherited. `find` for `.dev.vars*` outside
+`node_modules`: nothing. Secret-shape scan (`sk-`, `AKIA`, `ghp_`, PEM private-key headers) outside
+`node_modules`/`dist`/`.wrangler`: three hits, all synthetic redaction fixtures —
+`tests/workforce.test.ts:323`, `tests/ai.test.ts:245`, `e2e/p4-ai.spec.ts:43` — with
+`tests/ai.test.ts:257` asserting the value does not survive into a failure reason. No `*.cpuprofile`
+outside `node_modules`. `wrangler.toml` carries only non-secret resource identifiers.
+
+### Files this pass changed
+
+Verified by `find -newer` against the execution contract, excluding regenerated paths — **exactly
+three, all documentation**:
+
+| File | SHA256 after repair |
+|---|---|
+| `docs/ENVIRONMENTS.md` | `b63426d031c3bef3ffc2cf6c326ada40dce08220ad62c9674e5cb2b7a01b3292` |
+| `ARCHITECTURAL_DECISIONS.md` | `22edfef27516bf08de8075e50561406a1fc72b9955a0047ee3b4ce92eed2d254` |
+| `IMPLEMENTATION_LEDGER.md` | this entry |
+
+No source, schema, test, config or `wrangler.toml` change. No commit, push, deploy, remote migration,
+Cloudflare API call, resource creation, Access change, GitHub or Boss OS mutation, secret addition,
+mutation outside the authorized root, or snapshot ZIP. `STATE.json`, `EXECUTION_IDENTITY.json`,
+deployment history and artifact-eligibility metadata were read only. WORK was not moved or renamed.
+
+### Observed but deliberately NOT changed — out of approved scope
+
+Both are drift left by post-seal user work that §6 forbids reverting and the operating contract
+forbids tidying:
+
+- `AGENTS.md` describes `migrations/` as `0001_… 0023_…`; `0024_enable_openrouter.sql` exists. A
+  stale range in a layout note, not a contract or a security statement.
+- `REPO_VALIDATION_MATRIX.md` still cites the P13–P25 continuation's own counts (506 unit / 45 e2e)
+  where the current tree runs 559 / 67. That table is explicitly phase-scoped historical evidence,
+  not a claim about today's tree, so it is stale framing rather than a false claim.
+
+Neither is production-environment or architectural-decision documentation, so §2.5 does not reach
+them and neither was touched.
+
+### Still UNPROVEN after this run — external only
+
+Remote publish from this repo, remote D1 migration apply (including `0024`), remote backup, and live
+AI/vendor provider calls remain **UNPROVEN** behind credential/approval gates; a dry-run is not a
+deployment. Cloudflare Access's live behaviour on the production hostname is **externally recorded by
+the operator, never proven here** — the distinction now stated correctly in `docs/ENVIRONMENTS.md`.
+`preview` still has no profile. **Deployment must specify `--env production`**; a bare
+`wrangler deploy` would ship the LOCAL profile, and repairing that is forbidden by §2.1/§3/§5, so it
+stays a documented procedural gate.
+
+**P5 complete — ACCEPT.** One material documentation defect found and repaired, full §6 validation
+re-run green afterwards, approved scope §2.1–§2.5 satisfied and §3 holding at configuration, source
+and documentation. Ready for P6 host packaging.
+
+## Run `20260817T164320Z-59986` — CONTINUATION, opening worker, generation 1 (2026-08-17)
+
+**Run semantics:** CONTINUATION. Task SHA256 `e323bce362ec868e20f229bb8c2501b962916b9dbab580072bea5e27ac266964`
+— byte-identical to the task the prior run `20260817T152307Z-47114` executed and sealed with P5
+ACCEPT. Per the contract's continuation clause this pass treats the current WORK and this ledger as
+authoritative, preserves the completed phases, and does not restart from intake zero.
+
+The materially new fact in this run is **not** the approved configuration — that is untouched — but
+the tree it now has to hold: twelve source/test/migration files landed from unrelated user work in
+the ~55 minutes between the prior seal and this run's start. This pass exists to establish that the
+approved production contract still holds over *that* tree, proven by re-execution rather than
+inheritance.
+
+### P1–P2 — state established, then compared clause-by-clause against the approved contract
+
+Approved-scope files hashed **before** any command ran. All four are byte-identical to the prior
+run's post-repair seal:
+
+| File | SHA256 | vs. prior seal |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | identical |
+| `docs/ENVIRONMENTS.md` | `b63426d031c3bef3ffc2cf6c326ada40dce08220ad62c9674e5cb2b7a01b3292` | identical (P5 repair) |
+| `ARCHITECTURAL_DECISIONS.md` | `22edfef27516bf08de8075e50561406a1fc72b9955a0047ee3b4ce92eed2d254` | identical (P5 repair) |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | identical |
+
+§2 was re-read against `wrangler.toml` directly, not inferred from the table:
+
+- §2.1 top-level/local profile preserved — `name = "west-peek-os"` (17), `WP_OS_ENV = "local"` (49),
+  ADR-007 placeholder D1 `00000000-0000-0000-0000-000000000000` (34) and KV `0000…0000` (45), R2
+  `WP_OS_DOCUMENTS` (39), `ASSETS` with `not_found_handling = "single-page-application"` (23–26),
+  ADR-017 cron `*/15 * * * *` (56).
+- §2.2 explicit `[env.production]` for the existing Worker — line 72, `name = "west-peek-os"`
+  restated at 73 so a named environment does not create `west-peek-os-production`.
+- §2.3 `WP_OS_ENV = "production"` — line 97.
+- §2.4 authorized existing resources — D1 `west-peek-os-db` / `1d7c242b-fddc-41f1-843c-03dd2db6fbef`
+  (80–84), KV `bf0750e8e9a648758a5de978088c97da` (90–92), R2 `west-peek-os-documents` (86–88),
+  assets `./dist/client` bound as `ASSETS` with single-page-application handling (75–78),
+  `[env.production.observability] enabled = true` (99–100).
+- §2.5 documentation — `docs/ENVIRONMENTS.md` and `ARCHITECTURAL_DECISIONS.md` both carry the prior
+  run's repair and were re-read this pass. `ENVIRONMENTS.md` still states the contract correctly:
+  Access/deploy/secret facts attributed to the operator record and `PROVIDER_READINESS_AUDIT.md`
+  rather than laundered into local proof, remote migration apply and remote backup still UNPROVEN,
+  and the `--env production` procedural gate intact. The two new migrations below are covered by the
+  existing generic "remote migration apply is UNPROVEN" clause, so no amendment was warranted; none
+  was made.
+
+**§3 verified at the source over the *current* tree, not the sealed one.** A repo-wide grep for
+`WP_OS_ENV` in `src/` returns exactly three executable consumers — `src/worker/auth.ts:28`
+(`x-wpos-dev-user` only when `env.WP_OS_ENV === "local"`, otherwise
+`Cf-Access-Authenticated-User-Email`), `src/worker/services/networkAdapter.ts:623` (local fixture
+path refused when not `"local"`), and `src/worker/index.ts:395` (health response echoing the env
+name and binding presence booleans — no value, no secret). The user's new services introduce **no**
+new `WP_OS_ENV` consumer and no new identity path. `package.json` still defines no deploy script.
+
+### P3 — no missing approved change to apply
+
+Every §2 requirement was already satisfied, so **this worker changed no target file except this
+ledger**. Writing a change to demonstrate activity would be out-of-scope mutation.
+
+### Post-seal unrelated user work — preserved, validated, not reverted, not endorsed
+
+Twelve files carry mtimes between 11:18 and 11:41 local, i.e. after the prior run's seal (~10:44)
+and before this run's start (11:43):
+
+`migrations/0025_briefing_synthesis.sql`, `migrations/0026_meeting_live_help.sql`,
+`src/worker/index.ts`, `src/worker/services/{briefingSynthesis,liveHelp,intelligence,jobs}.ts`,
+`src/client/App.tsx`, `src/client/pages/{HomePage,LiveHelpPanel}.tsx`, `src/client/styles.css`,
+`tests/feed-client.test.ts`.
+
+§6 forbids reverting unrelated user work, so all twelve are preserved untouched, and the entire §6
+surface below was run over the tree *including* them. Two bounded checks were made because §3 is a
+law about the artifact being admitted, not only about files this run authored: the new
+`/api/meetings/:id/live-help` and `/api/briefings*` routes (`src/worker/index.ts:578–579, 689–690`)
+register on the same router whose handlers resolve `ctx.identity`, and neither new service contains
+a direct `fetch`/provider call — independently enforced by `validate:authority` and
+`validate:ai-boundary`, both green. That is a boundary check, **not** a design review: this work was
+never designed or reviewed against this task, and `LOCAL_ARTIFACT_VERIFIED` must not be read as
+approval of it.
+
+The unit suite is **560 tests / 32 files** here versus 559 / 32 at the prior seal.
+
+### P4 — validation, all executed in this session from the locked target root
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **560/560**, 32 files |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** chromium |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+
+`validate:brand` (rc=0, self-test 9/9) and `migrate:local` (rc=0, "No migrations to apply!" — local
+D1 already at `0026`) also passed and are omitted from the declared eight only because of the host's
+eight-command cap. `dist/client` after build: `index.html`, `assets/index-joIqWy_X.css`,
+`assets/index-CyFTUaLO.js`, `icon.svg`, `wp-mark.svg`, `manifest.webmanifest`, `sw.js`. The two
+asset hashes differ from the prior seal because the user's client changes are in this build — the
+expected consequence of preserving their work, not drift in approved scope.
+
+**§6 profile facts — proven behaviourally in this session, still not host-declarable.**
+
+- `npx wrangler deploy --dry-run --env production --outdir /tmp/wp_g1_prod_59986` → rc=0, resolving
+  `env.WP_OS_ENV ("production")`, KV `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`,
+  R2 `west-peek-os-documents`, `env.ASSETS`; ended at `--dry-run: exiting now.`
+- `npx wrangler deploy --dry-run --outdir /tmp/wp_g1_local_59986` → rc=0, resolving
+  `env.WP_OS_ENV ("local")` with the placeholder KV `00000000000000000000000000000000`.
+
+`grep -cE "Uploaded|Deployed|Published|Current Version ID|workers\.dev"` over both logs returns
+**0 and 0**. Nothing was published, `west-peek-os.seq-taylor.workers.dev` was never contacted, both
+bundles went to `/tmp` outdirs, and no build output entered the package. As established across the
+earlier run's gate rejections these remain **proven but undeclarable** — `wrangler deploy` is a
+forbidden proof token even with `--dry-run`, and approved scope forbids adding a repo surface that
+reads `wrangler.toml`. A limit on declaration, not a gap in verification.
+
+**No secrets packaged**, rescanned here rather than inherited. `find` for `.dev.vars*` outside
+`node_modules`: nothing. `*.cpuprofile` outside `node_modules`: nothing. Secret-shape scan (`sk-`,
+`AKIA`, `ghp_`, PEM private-key headers) across the tree excluding `node_modules`/`dist`/`.wrangler`
+hits the same three synthetic redaction fixtures as before — `tests/workforce.test.ts:323`,
+`tests/ai.test.ts:245`, `e2e/p4-ai.spec.ts:43` — with `tests/ai.test.ts:257` asserting the value does
+not survive into a failure reason. The user's twelve new files add no secret-shaped literal.
+`wrangler.toml` carries only non-secret resource identifiers.
+
+**Approved-scope files re-hashed after the entire validation run: all four byte-identical to the
+pre-run table.** A `find -newer` against this run's execution contract, excluding the regenerated
+`node_modules/`, `dist/`, `.wrangler/`, `test-results/`, returns **nothing** — this pass mutated no
+target file up to this ledger entry.
+
+### Boundaries honoured
+
+No deployment, no Cloudflare API call, no Cloudflare resource creation, no Access change, no
+application/auth source change, no GitHub or Boss OS mutation, no secret added, no mutation outside
+the authorized root, no snapshot ZIP created, and no edit to `STATE.json`,
+`EXECUTION_IDENTITY.json`, deployment history, or artifact-eligibility metadata. WORK was not moved
+or renamed.
+
+### Still UNPROVEN after this run — external only
+
+Remote publish to `west-peek-os.seq-taylor.workers.dev`, remote D1 migration apply (now including
+the user's `0025` and `0026` as well as `0024`), remote backup, and live AI/vendor provider calls
+remain **UNPROVEN** behind credential/approval gates; a dry-run is not a deployment. Cloudflare
+Access's live behaviour on the production hostname is **externally recorded by the operator, never
+proven here**. `preview` still has no profile. **Deployment must specify `--env production`** — a
+bare `wrangler deploy` would ship the LOCAL profile, and repairing that is forbidden by §2.1/§3/§5,
+so it stays a documented procedural gate in `docs/ENVIRONMENTS.md`.
+
+**P1–P4 complete over the post-drift tree. Approved scope §2.1–§2.5 satisfied, §3 holds at
+configuration, source and documentation, every §6 surface re-executed and green. Ready for P5
+mandatory final senior review and P6 host packaging.**
+
+---
+
+## Run `20260817T164320Z-59986` — CONTINUATION, implementation worker, generation 2 (2026-08-17)
+
+**Role separation.** Generation 1 of this run held the `opening` role and recorded P1–P4 above at
+16:50:08Z. I am generation 2, the `implementation` worker admitted at 16:50:22Z under
+`P2_CLAUDE_IMPLEMENTATION`. Per the implementation contract's "never claim validation that did not
+run", I did **not** inherit generation 1's P4 table. Every command below was executed in *this*
+session against the locked target root. Where the two generations agree, that is two independent
+executions minutes apart, not one result restated.
+
+**Target verified, not substituted.** Locked WORK root, `west-peek-os` package, task SHA256
+`e323bce3…266964`, target fingerprint `f132604e…2af8e` from the handoff checkpoint. Continuation
+semantics honoured: no intake redone, no completed phase restarted, no prior work reverted.
+
+### P1–P3 — state inspected before mutation; nothing approved was missing
+
+The four approved-scope files hashed **before** any command in this session ran:
+
+| File | SHA256 | vs. generation 1 |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | identical |
+| `docs/ENVIRONMENTS.md` | `b63426d031c3bef3ffc2cf6c326ada40dce08220ad62c9674e5cb2b7a01b3292` | identical |
+| `ARCHITECTURAL_DECISIONS.md` | `22edfef27516bf08de8075e50561406a1fc72b9955a0047ee3b4ce92eed2d254` | identical |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | identical |
+
+A `find -newermt '2026-08-17 11:50'` over the target excluding `node_modules/`, `dist/`,
+`.wrangler/`, `test-results/` returns **nothing** — no drift landed between generation 1's ledger
+edit and this generation's inspection, so the twelve unrelated user files generation 1 documented
+are the complete post-seal delta and remain preserved untouched.
+
+§2.1–§2.5 re-read against `wrangler.toml` directly rather than taken from the prior entry: local
+profile intact at the top with its ADR-007 placeholder D1/KV ids (:34, :45); `[env.production]` at
+:72 with `name = "west-peek-os"` restated so the named environment does not become
+`west-peek-os-production`; `WP_OS_ENV = "production"` at :97; real D1 `1d7c242b-…-03dd2db6fbef`,
+KV `bf0750e8e9a648758a5de978088c97da`, R2 `west-peek-os-documents`, assets `./dist/client` +
+`ASSETS` + single-page-application, `[env.production.observability] enabled = true` at :99–100.
+§2.5 confirmed at `docs/ENVIRONMENTS.md:34–52` and `ARCHITECTURAL_DECISIONS.md:77` (ADR-007).
+
+**P3 applied no approved change, because none was missing.** The only target file this generation
+wrote is this ledger entry.
+
+### P4 — validation, every row executed in this session
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **560/560**, 32 files, 67.94s |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** chromium, 44.7s |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+
+`validate:brand` (rc=0, self-test 9/9) and `migrate:local` (rc=0, "No migrations to apply!") also
+passed here and are outside the declared eight only because of the host's eight-command cap.
+`dist/client` after build: `index.html`, `assets/index-joIqWy_X.css`, `assets/index-CyFTUaLO.js`,
+`icon.svg`, `wp-mark.svg`, `manifest.webmanifest`, `sw.js` — asset hashes identical to generation
+1's build, confirming a reproducible client bundle over the same tree.
+
+**§6 profile facts — re-proven behaviourally in this session, still not host-declarable.**
+
+- `npx wrangler deploy --dry-run --env production --outdir /tmp/wp_g2_prod` → rc=0, resolving
+  `env.WP_OS_ENV ("production")`, KV `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`,
+  R2 `west-peek-os-documents`, `env.ASSETS`; Total Upload 894.88 KiB; ended
+  `--dry-run: exiting now.`
+- `npx wrangler deploy --dry-run --outdir /tmp/wp_g2_local` → rc=0, resolving
+  `env.WP_OS_ENV ("local")` with the placeholder KV `00000000000000000000000000000000` — the
+  top-level local profile is provably preserved and provably distinct.
+
+`grep -cE "Uploaded|Deployed|Published|Current Version ID|workers\.dev"` over both logs returns
+**0 and 0**. Nothing was published, `west-peek-os.seq-taylor.workers.dev` was never contacted, both
+bundles went to `/tmp` outdirs outside the artifact, and no build output entered the package. As in
+every prior generation these stay **proven but undeclarable** in the host summary — `wrangler
+deploy` is a forbidden proof token even with `--dry-run`, and adding a repo surface that reads
+`wrangler.toml` is outside approved scope. A limit on declaration, not a gap in verification.
+
+**No secrets packaged**, rescanned here rather than inherited. No `.dev.vars*` and no `*.cpuprofile`
+outside `node_modules`. The secret-shape scan (`sk-`, `AKIA`, `ghp_`, PEM private-key headers)
+across the tree excluding `node_modules`/`dist`/`.wrangler` hits only the same three synthetic
+redaction fixtures — `tests/workforce.test.ts:323`, `tests/ai.test.ts:245`, `e2e/p4-ai.spec.ts:43`,
+plus the `tests/ai.test.ts:257` assertion that the value does not survive into a failure reason.
+`wrangler.toml` carries only non-secret resource identifiers.
+
+**Approved-scope files re-hashed after the full validation run: all four byte-identical to the
+pre-run table above.** A `find -newer` against this run's implementation contract, excluding the
+regenerated `node_modules/`, `dist/`, `.wrangler/`, `test-results/`, returns **nothing** up to this
+ledger entry.
+
+### Boundaries honoured
+
+No deployment, no Cloudflare API call, no Cloudflare resource creation, no Access change, no
+application/auth source change, no GitHub or Boss OS mutation, no secret added, no mutation outside
+the authorized root, no snapshot ZIP created, and no edit to `STATE.json`,
+`EXECUTION_IDENTITY.json`, deployment history, or artifact-eligibility metadata. WORK was not moved
+or renamed. The unrelated user work in the tree was preserved, not reverted (§6).
+
+### Still UNPROVEN after this generation — external only
+
+Remote publish to `west-peek-os.seq-taylor.workers.dev`, remote D1 migration apply (`0024`–`0026`),
+remote backup, and live AI/vendor provider calls remain **UNPROVEN** behind credential/approval
+gates; a dry-run is not a deployment. Cloudflare Access's live behaviour on the production hostname
+is **externally recorded by the operator, never proven here**. `preview` still has no profile.
+**Deployment must specify `--env production`** — a bare `wrangler deploy` would ship the LOCAL
+profile, and repairing that is forbidden by §2.1/§3/§5, so it stays a documented procedural gate in
+`docs/ENVIRONMENTS.md`. This entry is not a design review of the unrelated user work, which was
+never scoped to this task; `LOCAL_ARTIFACT_VERIFIED` must not be read as approval of it.
+
+**Remaining approved implementation scope is materially complete and independently re-validated at
+generation 2. Ready for P5 mandatory final senior review and P6 host packaging.**
+
+---
+
+## Run `20260817T164320Z-59986` — P5 MANDATORY FINAL SENIOR REVIEW, generation 3 (2026-08-17)
+
+**Role.** Final review / repair. Generation 1 (`opening`) recorded P1–P4 and generation 2
+(`implementation`) re-executed them independently. I am generation 3 under
+`EXECUTION_CONTRACT_FINAL_REVIEW.md`, checkpoint SHA256
+`ba93510cb64e19b9928587c179211848b075e3d0d649ac58708f53c430c3219e`, task SHA256
+`e323bce362ec868e20f229bb8c2501b962916b9dbab580072bea5e27ac266964`. Nothing was rebuilt, reset, or
+reverted. **No prior generation's validation table was inherited** — every command below ran in this
+session from the locked target root.
+
+### Pre-repair state — approved-scope files hashed before any command
+
+| File | SHA256 | vs. generation 2 |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | identical |
+| `docs/ENVIRONMENTS.md` | `b63426d031c3bef3ffc2cf6c326ada40dce08220ad62c9674e5cb2b7a01b3292` | identical |
+| `ARCHITECTURAL_DECISIONS.md` | `22edfef27516bf08de8075e50561406a1fc72b9955a0047ee3b4ce92eed2d254` | identical |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | identical |
+
+### §2 re-read against `wrangler.toml` itself, not against the prior entries
+
+- §2.1 local profile preserved — `name = "west-peek-os"` (:17), `WP_OS_ENV = "local"` (:49), ADR-007
+  placeholder D1 `00000000-0000-0000-0000-000000000000` (:34) and KV `0000…0000` (:45), R2
+  `WP_OS_DOCUMENTS` (:39), `ASSETS` + `not_found_handling = "single-page-application"` (:23–26),
+  ADR-017 cron (:56).
+- §2.2 `[env.production]` at :72 with `name = "west-peek-os"` restated at :73 — a named environment
+  would otherwise target `west-peek-os-production`, not the proven Worker.
+- §2.3 `WP_OS_ENV = "production"` at :97.
+- §2.4 D1 `west-peek-os-db` / `1d7c242b-fddc-41f1-843c-03dd2db6fbef` (:80–84), KV
+  `bf0750e8e9a648758a5de978088c97da` (:90–92), R2 `west-peek-os-documents` (:86–88), assets
+  `./dist/client` bound `ASSETS` single-page-application (:75–78), observability enabled (:99–100).
+- §2.5 documentation — both files read in full, not sampled. One defect found and repaired (below).
+
+### §3 verified at the source over the current tree
+
+`grep -rn WP_OS_ENV src/` returns three executable consumers and no others: `auth.ts:28`
+(`x-wpos-dev-user` **only** when `env.WP_OS_ENV === "local"`, otherwise
+`Cf-Access-Authenticated-User-Email`), `services/networkAdapter.ts:623` (local fixture path refused
+when not `"local"`), `index.ts:395` (health echoes the env name and binding-presence booleans — no
+value, no secret). `resolveFirmUser` fails closed: missing header, unknown email and non-`ACTIVE`
+status all resolve `null` → 401.
+
+Router auth default independently confirmed: `router.ts:32` is `auth: opts.auth ?? true`, and
+`/api/health` (`index.ts:419`) is the **only** route in the tree declaring `auth: false`. Unmatched
+`/api/*` paths resolve identity before answering 404 (`index.ts:811–814`), so an unauthenticated
+probe cannot enumerate routes. The unrelated user work's new routes — `/api/meetings/:id/live-help`
+(:578–579) and `/api/briefings*` (:689–690) — carry no `auth: false` and are therefore authenticated
+by that default. A boundary check, **not** a design review of work this task never scoped.
+
+### Material defect found and repaired — `docs/ENVIRONMENTS.md`
+
+The heading at :5 still read **"local (the only environment that exists)"**. That was true when it
+was written and is now false, and it is contradicted twice inside the same file: :21–28 records an
+externally verified prior production deploy of the `west-peek-os` Worker plus a bound production
+Worker secret, and :34–39 describes the `[env.production]` profile this task admits. A production
+environment demonstrably exists; what is true is that this repository never exercises it.
+
+Repaired to **"local (the only environment this repository exercises)"** — one heading, no body
+change, preserving every UNPROVEN label and the `--env production` procedural gate verbatim. This is
+§2.5 production-environment documentation, so the repair is inside approved scope, and it removes a
+false claim rather than adding one. Post-repair hash: `docs/ENVIRONMENTS.md`
+`211c3ecd04901a41a4c8451f2d871e4021cab92151b1b4b000bde6d38bc7c50d`.
+
+### P4/§6 validation — every row executed in this session, all rc=0; rows 2–4 re-run after the repair
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **560/560**, 32 files |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** chromium, 43.9s |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+
+`validate:brand` (rc=0, self-test 9/9) and `migrate:local` (rc=0, "No migrations to apply!") also
+passed here; they sit outside the declared eight only because of the host's eight-command cap.
+`dist/client` after build: `index.html`, `assets/`, `icon.svg`, `wp-mark.svg`,
+`manifest.webmanifest`, `sw.js`.
+
+**§6 profile facts — proven behaviourally in this session, still not host-declarable.**
+
+- `npx wrangler deploy --dry-run --env production --outdir /tmp/wp_g3/prod` → rc=0, resolving
+  `env.WP_OS_ENV ("production")`, KV `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`, R2
+  `west-peek-os-documents`, `env.ASSETS`; Total Upload 894.88 KiB; ended `--dry-run: exiting now.`
+- `npx wrangler deploy --dry-run --outdir /tmp/wp_g3/local` → rc=0, resolving
+  `env.WP_OS_ENV ("local")` with placeholder KV `00000000000000000000000000000000` — the local
+  profile is provably preserved **and** provably distinct from production.
+
+`grep -cE "Uploaded|Deployed|Published|Current Version ID|workers\.dev"` over both logs returns
+**0 and 0**. Nothing was published, `west-peek-os.seq-taylor.workers.dev` was never contacted, both
+bundles went to `/tmp` outdirs outside the artifact. These stay **proven but undeclarable** in the
+host evidence record — `wrangler deploy` is a forbidden proof token even with `--dry-run`, and
+adding a repo surface that reads `wrangler.toml` is outside §2. A limit on declaration, not a gap in
+verification.
+
+**No secrets packaged**, rescanned here rather than inherited. No `.dev.vars*`, `.env`, `*.pem`,
+`*.key` or `*.cpuprofile` outside `node_modules`. The secret-shape scan (`sk-`, `AKIA`, `ghp_`, PEM
+private-key headers) across the tree excluding `node_modules`/`dist`/`.wrangler`/`test-results`
+returns exactly **4** hits, all the known synthetic redaction fixtures —
+`tests/workforce.test.ts:323`, `tests/ai.test.ts:245`, `e2e/p4-ai.spec.ts:43`, and the
+`tests/ai.test.ts:257` assertion that the value does not survive into a failure reason. `backups/`
+and `.wrangler/` were scanned separately and hold no secret-shaped value. `wrangler.toml` carries
+only non-secret resource identifiers; the vault lives at `~/.west-peek-os/vault`, outside the
+artifact. `docs/PROVIDER_READINESS_AUDIT.md` was re-read in full — names, counts and readiness
+metadata only, no credential value.
+
+**Post-run containment.** `find -newer EXECUTION_CONTRACT_FINAL_REVIEW.md`, excluding regenerated
+`node_modules/`, `dist/`, `.wrangler/`, `test-results/`, returns exactly one file:
+`docs/ENVIRONMENTS.md`. `wrangler.toml`, `ARCHITECTURAL_DECISIONS.md` and `src/worker/auth.ts` are
+byte-identical to the pre-repair table. This generation mutated one documentation file and this
+ledger, nothing else.
+
+### Observed, deliberately NOT changed — outside approved scope
+
+- **Production identity has no positive test.** `tests/api.test.ts:47` proves the dev header is
+  *refused* when `WP_OS_ENV` is not `local`, and that is the security-critical direction. There is no
+  test proving `Cf-Access-Authenticated-User-Email` *resolves* a `firm_user` under
+  `WP_OS_ENV="production"`. The branch is two lines and is covered negatively; the positive path is
+  unexercised. This is a pre-existing property of the approved baseline `auth.ts`, not a defect this
+  run's change introduced, and §2 states required target changes are **limited to** the
+  configuration and documentation items — so adding a test surface here would be scope expansion,
+  not repair. Recorded rather than silently fixed or silently omitted.
+- `AGENTS.md:46` still describes `migrations/` as `0001_… 0023_…` while `0024`–`0026` exist. The
+  staleness is caused by unrelated user work §6 forbids reverting; the line is a layout note, not a
+  contract or security statement, and is not §2.5 documentation.
+- `REPO_VALIDATION_MATRIX.md:46–47,71` cites the P13–P25 continuation's own counts under the heading
+  "What the continuation's own checks add". Explicitly phase-scoped historical evidence, not a claim
+  about today's tree.
+
+### Boundaries honoured
+
+No deployment, no Cloudflare API call, no Cloudflare resource creation, no Access change, no
+application/auth source change, no schema change, no GitHub or Boss OS mutation, no secret added, no
+mutation outside the authorized root, no commit/push/merge, no snapshot ZIP, and no edit to
+`STATE.json`, `EXECUTION_IDENTITY.json`, deployment history or artifact-eligibility metadata. WORK
+was not moved or renamed. The unrelated user work in the tree was preserved, not reverted (§6).
+
+### Still UNPROVEN after this run — external only
+
+Remote publish to `west-peek-os.seq-taylor.workers.dev`, remote D1 migration apply (`0024`–`0026`),
+remote backup, and live AI/vendor provider calls remain **UNPROVEN** behind credential/approval
+gates; a dry-run is not a deployment. Cloudflare Access's live behaviour on the production hostname
+is **externally recorded by the operator, never proven here**. `preview` still has no profile.
+**Deployment must specify `--env production`** — a bare `wrangler deploy` would ship the LOCAL
+profile; repairing that is forbidden by §2.1/§3/§5, so it stays a documented procedural gate.
+
+**P5 complete — ACCEPT.** Full approved scope §2.1–§2.5 reviewed clause by clause against the files
+themselves, one material documentation defect found and repaired, §3 verified at the source, the
+entire §6 surface re-executed green in this session after the repair, no secrets packaged, no
+out-of-scope mutation. Ready for P6 host packaging. `LOCAL_ARTIFACT_VERIFIED` attests the approved
+production-readiness contract and this repository's local proof surface — it is not approval of the
+unrelated user work carried in the tree, which this task never scoped.
+
+## Run `20260817T172455Z-70422` — CONTINUATION, opening worker, generation 1 (2026-08-17)
+
+**Run semantics:** CONTINUATION under `EXECUTION_CONTRACT_OPENING.md`. Task SHA256
+`e323bce362ec868e20f229bb8c2501b962916b9dbab580072bea5e27ac266964` — byte-identical to the task the
+prior run `20260817T164320Z-59986` executed, verified by hashing `TASK/APPROVED_TASK.md` in this
+session. Prior phases were preserved, not restarted: nothing was rebuilt from intake, reset, or
+reverted. **No prior generation's validation table was inherited** — every command below ran in this
+session from the locked target root.
+
+### P1 — current state established by hashing, before any command ran
+
+| File | SHA256 | vs. prior run's post-repair seal |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | identical |
+| `docs/ENVIRONMENTS.md` | `211c3ecd04901a41a4c8451f2d871e4021cab92151b1b4b000bde6d38bc7c50d` | identical |
+| `ARCHITECTURAL_DECISIONS.md` | `22edfef27516bf08de8075e50561406a1fc72b9955a0047ee3b4ce92eed2d254` | identical |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | identical |
+
+### P2 — §2 compared against `wrangler.toml` itself, not against the prior entries
+
+- §2.1 local profile preserved — `name = "west-peek-os"` (:17), `WP_OS_ENV = "local"` (:49), ADR-007
+  placeholder D1 `00000000-0000-0000-0000-000000000000` (:34) and KV `0000…0000` (:45), R2
+  `WP_OS_DOCUMENTS` (:38–40), `[assets]` `./dist/client` bound `ASSETS` with
+  `not_found_handling = "single-page-application"` (:23–26), ADR-017 cron `*/15 * * * *` (:55–56).
+- §2.2 `[env.production]` at :72, with `name = "west-peek-os"` restated at :73 — without that
+  restatement a named environment resolves `west-peek-os-production`, not the proven Worker.
+- §2.3 `WP_OS_ENV = "production"` at :97 under `[env.production.vars]`.
+- §2.4 authorized resources only — D1 `west-peek-os-db` / `1d7c242b-fddc-41f1-843c-03dd2db6fbef`
+  (:80–84), KV `bf0750e8e9a648758a5de978088c97da` (:90–92), R2 `west-peek-os-documents` (:86–88),
+  assets `./dist/client` bound `ASSETS` single-page-application (:75–78), observability
+  `enabled = true` (:99–100).
+- §2.5 both documentation files read in full, not sampled. `docs/ENVIRONMENTS.md` still carries the
+  prior generation's repaired heading ("the only environment this repository exercises"), every
+  UNPROVEN label, and the `--env production` procedural gate. `ARCHITECTURAL_DECISIONS.md:77` still
+  records the profile behind the deployment approval gate. Both accurate against the current file —
+  no defect found, so nothing was rewritten to manufacture a repair.
+
+### P3 — no missing approved change to apply
+
+Every §2.1–§2.5 clause was already satisfied by the preserved WORK. §2 states required target changes
+are **limited to** those items, so there was nothing to add and nothing was invented. This generation
+mutated no artifact file except this ledger.
+
+### Post-seal unrelated user work — preserved, validated, not reverted, not endorsed
+
+`find -newer` against the prior run's contracts shows five files changed **after** that run sealed
+(12:00–12:20, outside any Repo Operator generation): `src/client/pages/IntentPage.tsx`,
+`src/client/App.tsx`, `src/client/styles.css`, `e2e/p18-intent.spec.ts`, `e2e/p25-journeys.spec.ts`.
+§6 forbids reverting unrelated user work, so it was preserved untouched and the full validation
+surface below was re-run **over the tree containing it** rather than over the prior seal's tree.
+
+Boundary-checked, not design-reviewed: the change set is client + e2e only — no `src/worker/` file,
+no `migrations/` file, no `wrangler.toml`, no `auth.ts`. `App.tsx:1411` sends `x-wpos-dev-user` from
+localStorage, which is pre-existing client behaviour the worker refuses whenever `WP_OS_ENV` is not
+`"local"`; it adds no server-side identity path. No external host, credential, or token literal
+appears in any of the five files.
+
+### §3 security law verified at the source over the current tree
+
+`grep -rn WP_OS_ENV src/` returns three executable consumers and no others: `auth.ts:28` (dev header
+**only** when `env.WP_OS_ENV === "local"`, otherwise `Cf-Access-Authenticated-User-Email`),
+`services/networkAdapter.ts:623` (local fixture path refused when not `"local"`), and `index.ts:395`
+(health echoes the env name only — no value, no secret). `router.ts:32` is `auth: opts.auth ?? true`,
+and `/api/health` (`index.ts:419`) remains the **only** route in the entire tree declaring
+`auth: false` — the post-seal user work introduced none. No auth code changed, no Access weakening,
+no development identity behaviour added, no Cloudflare resource created, no secret added.
+
+### P4 / §6 — validation, every row executed in this session from the locked target root
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **560/560**, 32 files |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** chromium, 44.6s |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS + self-test 4/4 + seeds fresh |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS + self-test 5/5 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS + self-test 6/6 |
+
+`validate:brand` (rc=0, self-test 9/9) and `migrate:local` (rc=0, "No migrations to apply!") also
+passed here; they sit outside the declared eight only because of the host's eight-command cap, and
+this table is the record that they ran. `dist/client` after build: `index.html`, `assets/`,
+`icon.svg`, `wp-mark.svg`, `manifest.webmanifest`, `sw.js`.
+
+**§6 profile facts — proven behaviourally in this session, still not host-declarable.**
+
+- `npx wrangler deploy --dry-run --env production --outdir /tmp/wp_g1_70422/prod` → rc=0, resolving
+  `env.WP_OS_ENV ("production")`, KV `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`, R2
+  `west-peek-os-documents`, `env.ASSETS`; Total Upload 894.88 KiB; ended `--dry-run: exiting now.`
+- `npx wrangler deploy --dry-run --outdir /tmp/wp_g1_70422/local` → rc=0, resolving
+  `env.WP_OS_ENV ("local")` with the placeholder KV `00000000000000000000000000000000` — the local
+  profile is provably preserved **and** provably distinct from production.
+
+`grep -cE "Uploaded|Deployed|Published|Current Version ID|workers\.dev"` over both logs returns
+**0 and 0**. Nothing was published, `west-peek-os.seq-taylor.workers.dev` was never contacted, and
+both bundles were written to `/tmp` outdirs outside the artifact. As in every prior generation these
+two facts stay **proven but undeclarable**: `wrangler deploy` is a forbidden proof token even with
+`--dry-run`, inline `node -e` proofs were rejected, and no existing repo surface reads `wrangler.toml`
+— adding one would be an out-of-scope §2 target change. A limit on declaration, not a gap in
+verification.
+
+**No secrets packaged**, rescanned here rather than inherited. No `.dev.vars*`, `.env`, `*.pem`,
+`*.key` or `*.cpuprofile` outside `node_modules`. The secret-shape scan (`sk-`, `AKIA`, `ghp_`, PEM
+private-key headers) across the tree excluding `node_modules`/`dist`/`.wrangler`/`test-results`
+returns exactly **4** hits, all the known synthetic redaction fixtures —
+`tests/workforce.test.ts:323`, `tests/ai.test.ts:245`, `e2e/p4-ai.spec.ts:43`, and the
+`tests/ai.test.ts:257` assertion that the value does not survive into a failure reason. The post-seal
+user work introduced no new hit. `wrangler.toml` carries only non-secret resource identifiers; the
+vault lives at `~/.west-peek-os/vault`, outside the artifact.
+
+**Post-run containment.** `find -newer EXECUTION_CONTRACT_OPENING.md`, excluding regenerated
+`node_modules/`, `dist/`, `.wrangler/`, `test-results/`, `backups/`, returns **no artifact file**.
+All four approved-scope files re-hash byte-identical to the P1 table after the entire validation
+surface ran. This generation changed only this ledger.
+
+### Boundaries honoured
+
+No deployment, no Cloudflare API call, no Cloudflare resource creation, no Access change, no
+application/auth source change, no schema change, no GitHub or Boss OS mutation, no secret added, no
+mutation outside the authorized root, no commit/push/merge, no snapshot ZIP, and no edit to
+`STATE.json`, `EXECUTION_IDENTITY.json`, deployment history or artifact-eligibility metadata. WORK
+was not moved or renamed.
+
+### Still UNPROVEN after this run — external only, unchanged
+
+Remote publish to `west-peek-os.seq-taylor.workers.dev`, remote D1 migration apply (`0024`–`0026`),
+remote backup, and live AI/vendor provider calls remain **UNPROVEN** behind credential/approval
+gates; a dry-run is not a deployment. Cloudflare Access's live behaviour on the production hostname is
+**externally recorded by the operator, never proven here**. `preview` still has no profile.
+**Deployment must specify `--env production`** — a bare `wrangler deploy` would ship the LOCAL
+profile; repairing that is forbidden by §2.1/§3/§5, so it remains a documented procedural gate.
+
+Approved scope §2.1–§2.5 is complete and re-verified against the files themselves; §3 holds at the
+source; the whole §6 surface is green in this session over the tree that includes the post-seal user
+work. Ready for P5 final senior review and P6 host packaging. `LOCAL_ARTIFACT_VERIFIED` attests the
+approved production-readiness contract and this repository's local proof surface — it is not approval
+of the unrelated user work carried in the tree, which this task never scoped.
+
+## Run `20260817T172455Z-70422` — CONTINUATION, implementation worker, generation 2 (2026-08-17)
+
+**Role:** IMPLEMENTATION under `EXECUTION_CONTRACT_IMPLEMENTATION.md`, handoff at 2026-08-17T17:31:08Z
+from the opening worker (`reason: claude_planning_complete`, `open_gaps: []`, no locked plan text
+recorded). Continuation semantics honoured: the opening worker's generation-1 section above was
+treated as authoritative prior progress, nothing was restarted from intake, no completed phase was
+reset, and no file was reverted. Task SHA256 rehashed in this session —
+`e323bce362ec868e20f229bb8c2501b962916b9dbab580072bea5e27ac266964`, matching the contract.
+
+**Inherited nothing.** Generation 1's validation table was read for context but not carried forward.
+Every command in the P4 table below was executed in this session from the locked target root.
+
+### P1 — current state, hashed before any command ran
+
+| File | SHA256 | vs. generation 1's P1 table |
+|---|---|---|
+| `wrangler.toml` | `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82` | identical |
+| `docs/ENVIRONMENTS.md` | `211c3ecd04901a41a4c8451f2d871e4021cab92151b1b4b000bde6d38bc7c50d` | identical |
+| `ARCHITECTURAL_DECISIONS.md` | `22edfef27516bf08de8075e50561406a1fc72b9955a0047ee3b4ce92eed2d254` | identical |
+| `src/worker/auth.ts` | `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6` | identical |
+
+`find -newer EXECUTION_CONTRACT_IMPLEMENTATION.md`, excluding `node_modules/`, `dist/`, `.wrangler/`,
+`test-results/`, `backups/`, returned **no artifact file** at session start: nothing moved between the
+opening worker sealing and this generation beginning, so the tree this generation validated is the
+same tree generation 1 described — including the five post-seal user-work files it recorded.
+
+### P2 — §2 re-compared against `wrangler.toml` read in full in this session
+
+Not accepted from the prior entry; re-read line by line.
+
+- §2.1 local profile preserved — top level still `name = "west-peek-os"` (:17), `main` (:18),
+  `compatibility_date = "2025-10-01"` (:19), `[assets] ./dist/client` / `ASSETS` /
+  `single-page-application` (:23–26), ADR-007 placeholder D1 `00000000-0000-0000-0000-000000000000`
+  (:34), R2 `west-peek-os-documents` (:38–40), placeholder KV `00000000000000000000000000000000`
+  (:45), `WP_OS_ENV = "local"` (:49), ADR-017 cron `*/15 * * * *` (:55–56).
+- §2.2 `[env.production]` present (:72) with `name = "west-peek-os"` restated (:73) — required, since
+  a named environment would otherwise resolve `west-peek-os-production` rather than the proven Worker.
+- §2.3 `WP_OS_ENV = "production"` (:97) under `[env.production.vars]`.
+- §2.4 authorized existing resources only — D1 `west-peek-os-db` /
+  `1d7c242b-fddc-41f1-843c-03dd2db6fbef` (:80–84), R2 `west-peek-os-documents` (:86–88), KV
+  `bf0750e8e9a648758a5de978088c97da` (:90–92), assets `./dist/client` bound `ASSETS` with
+  `not_found_handling = "single-page-application"` (:75–78), `[env.production.observability] enabled
+  = true` (:99–100). No new binding, resource, or identifier was introduced.
+- §2.5 documentation re-read, not sampled. `docs/ENVIRONMENTS.md` carries the `[env.production]`
+  contract (:34–52), the explicit statement that declaring a profile is not deploying it (:40–43),
+  the hard `--env production` procedural gate with its dry-run evidence (:44–52), and the
+  externally-recorded-not-proven framing for Access and the prior deploy (:21–33).
+  `ARCHITECTURAL_DECISIONS.md` ADR-007 (:72–81) records the amendment: real ids live only in the
+  production profile, remain non-secret operator configuration behind the deployment approval gate,
+  and remote deploy / Access / remote migration apply stay UNPROVEN. Both accurate against the
+  current `wrangler.toml`.
+
+### P3 — no remaining approved change to apply
+
+All of §2.1–§2.5 were already satisfied by the preserved WORK. §2 limits required target changes to
+those clauses, so the correct implementation action was to add nothing. No documentation was rewritten
+to manufacture a repair, and no defect was invented to justify a mutation. This generation mutated no
+artifact file except this ledger.
+
+### §3 security law re-verified at the source over the current tree
+
+`grep -rn WP_OS_ENV src/` returns two executable gates and one echo, and no others: `auth.ts:28`
+selects `x-wpos-dev-user` **only** when `env.WP_OS_ENV === "local"` and otherwise
+`Cf-Access-Authenticated-User-Email`; `services/networkAdapter.ts:623` returns `null` — refusing the
+local fixture path — whenever the env is not `"local"`; `index.ts:395` echoes the env *name* on
+health, no value. `grep -rn "auth: *false" src/` returns exactly one route, `/api/health`
+(`index.ts:419`). `auth.ts` re-hashes byte-identical to its pre-run value. No auth code changed, no
+Access weakening, no development identity behaviour added, no Cloudflare resource created, no secret
+added. Production can never run `WP_OS_ENV=local` through the production profile, which pins
+`"production"` — while a *bare* deploy would still ship the local profile, which is why the
+`--env production` gate below stays documented rather than "fixed" (fixing it would be an
+out-of-scope §2 target change).
+
+### P4 / §6 — validation, every row executed in this session
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — built in 408ms, `dist/client` present |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **560/560** passed, 32 files, 69.3s |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** passed, chromium, 44.8s |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 — PASS, self-test 4/4, seeds fresh (45 machines / 15 domains / 53 reserved actions / 204 action types) |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 — PASS, self-test 5/5, 31 employees all INACTIVE |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 — PASS, self-test 6/6 |
+
+`validate:brand` (rc=0, self-test 9/9) and `migrate:local` (rc=0, "No migrations to apply!") also ran
+green in this session; they sit outside the declared eight only because of the host's eight-command
+cap, and this line is the record that they executed. `dist/client` after build:
+`index.html`, `assets/` (`index-DCvpkPLp.css`, `index-DmGL_tOx.js`), `icon.svg`, `wp-mark.svg`,
+`manifest.webmanifest`, `sw.js`.
+
+**Observation, not a failure:** `npm ci` emitted `allow-scripts` warnings — `workerd`, `esbuild` and
+`fsevents` postinstall scripts are pending approval under this npm's script policy. rc was still 0 and
+the toolchain is provably functional afterwards: `vite build`, `vitest`, the Playwright suite (which
+boots `wrangler dev`/miniflare, so `workerd` resolved) and both profile resolutions all succeeded. No
+approval was granted and no install policy was changed — out of scope.
+
+**§6 profile facts — proven behaviourally here, still not host-declarable.**
+
+- Production profile, bundle-only resolution with `--outdir /tmp/wp_g2_70422/prod`: rc=0, resolving
+  `env.WP_OS_ENV ("production")`, KV `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`, R2
+  `west-peek-os-documents`, `env.ASSETS`; Total Upload 894.88 KiB / gzip 165.44 KiB; terminated
+  `--dry-run: exiting now.`
+- Local profile, same form with no `--env`, `--outdir /tmp/wp_g2_70422/local`: rc=0, resolving
+  `env.WP_OS_ENV ("local")` with placeholder KV `00000000000000000000000000000000`, plus wrangler's
+  warning that environments exist and none was targeted. The local profile is provably **preserved**
+  and provably **distinct** from production.
+- `grep -cE "Uploaded|Deployed|Published|Current Version ID|workers\.dev"` over both logs returns
+  **0 and 0**. Nothing was published, `west-peek-os.seq-taylor.workers.dev` was never contacted, and
+  both bundles were written to `/tmp` outdirs outside the artifact.
+
+As in every prior generation these two rows stay **proven but undeclarable** in the host's structured
+command list: the wrangler subcommand involved is a forbidden proof token even under `--dry-run`,
+inline `node -e` proofs were rejected, and no existing repo script reads `wrangler.toml` — adding one
+would itself be an out-of-scope §2 target change. That is a limit on declaration, not a gap in
+verification.
+
+**No secrets packaged**, rescanned in this session rather than inherited. No `.dev.vars*`, `.env`,
+`*.pem`, `*.key` or `*.cpuprofile` anywhere outside `node_modules`. The secret-shape scan (`sk-`,
+`AKIA`, `ghp_`, PEM private-key headers) across the tree excluding
+`node_modules`/`dist`/`.wrangler`/`test-results`/`backups` returns exactly **4** hits, all the known
+synthetic redaction fixtures: `tests/workforce.test.ts:323`, `tests/ai.test.ts:245`,
+`e2e/p4-ai.spec.ts:43`, and the `tests/ai.test.ts:257` assertion that the value does *not* survive
+into a failure reason. `wrangler.toml` carries only non-secret resource identifiers; the vault stays
+at `~/.west-peek-os/vault`, outside the artifact.
+
+### Post-run containment
+
+`find -newer EXECUTION_CONTRACT_IMPLEMENTATION.md`, excluding regenerated `node_modules/`, `dist/`,
+`.wrangler/`, `test-results/`, `backups/`, returned **no artifact file** after the entire validation
+surface had run, and all four approved-scope files re-hash byte-identical to the P1 table above. This
+generation changed only this ledger.
+
+### Boundaries honoured
+
+No deployment, no Cloudflare API call, no Cloudflare resource creation, no Access change, no
+application/auth source change, no schema change, no unrelated cleanup, no GitHub or Boss OS or
+partner/reference-repo mutation, no secret added, no mutation outside the authorized root, no
+commit/push/merge, no snapshot ZIP, and no edit to `STATE.json`, `EXECUTION_IDENTITY.json`, deployment
+history or artifact-eligibility metadata. WORK was not moved or renamed. The five post-seal user-work
+files (`src/client/pages/IntentPage.tsx`, `src/client/App.tsx`, `src/client/styles.css`,
+`e2e/p18-intent.spec.ts`, `e2e/p25-journeys.spec.ts`) were preserved untouched and validated in place,
+per §6's prohibition on reverting unrelated user work.
+
+### Still UNPROVEN after this generation — external only, unchanged
+
+Remote publish to `west-peek-os.seq-taylor.workers.dev`, remote D1 migration apply, remote backup, and
+live AI/vendor provider calls remain **UNPROVEN** behind credential/approval gates — a dry-run is not
+a deployment. Cloudflare Access's live behaviour on the production hostname is **externally recorded
+by the operator, never proven here**. `preview` still has no profile. **Deployment must specify
+`--env production`**; a bare `wrangler deploy` would ship the LOCAL profile, and repairing that is
+forbidden by §2.1/§3/§5, so it remains a documented procedural gate.
+
+Approved scope §2.1–§2.5 is complete and independently re-verified against the files themselves; §3
+holds at the source; the full §6 validation surface is green in this session over the tree that
+carries the post-seal user work. Remaining approved implementation scope is materially complete —
+ready for P5 mandatory independent final senior review, then P6 host packaging.
+`LOCAL_ARTIFACT_VERIFIED` would attest the approved production-readiness contract and this
+repository's local proof surface; it is not an endorsement of the unrelated user work carried in the
+tree, which this task never scoped.
+
+## Run `20260817T172455Z-70422` — CONTINUATION, final review / repair worker, generation 3 (2026-08-17)
+
+**Role:** FINAL REVIEW under `EXECUTION_CONTRACT_FINAL_REVIEW.md`, handoff at 2026-08-17T17:37:36Z
+(`reason: claude_implementation_complete`, `open_gaps: []`, `previous_role: implementation`,
+`worker_generation: 2`). This is P5. Continuation honoured: generation 1 and generation 2 above were
+treated as authoritative prior progress; no phase was reset, nothing was rebuilt, nothing was reverted.
+Nothing in generation 2's entry was accepted on its word — every load-bearing claim below was
+re-derived in this session from the files and from commands run here.
+
+### Findings — approved scope §2, re-verified independently against `wrangler.toml`
+
+- §2.1 local profile preserved. Top level: `name = "west-peek-os"` (:17), `main` (:18),
+  `compatibility_date = "2025-10-01"` (:19), `[assets] ./dist/client` / `ASSETS` /
+  `single-page-application` (:23–26), ADR-007 placeholder D1 `00000000-0000-0000-0000-000000000000`
+  (:34), R2 `west-peek-os-documents` (:38–40), placeholder KV `00000000000000000000000000000000`
+  (:45), `WP_OS_ENV = "local"` (:49), ADR-017 cron `*/15 * * * *` (:55–56). Untouched.
+- §2.2 `[env.production]` present (:72), `name = "west-peek-os"` restated (:73).
+- §2.3 `WP_OS_ENV = "production"` (:97).
+- §2.4 authorized existing resources only — D1 `west-peek-os-db` / `1d7c242b-fddc-41f1-843c-03dd2db6fbef`
+  (:80–84), R2 `west-peek-os-documents` (:86–88), KV `bf0750e8e9a648758a5de978088c97da` (:90–92),
+  assets `./dist/client` bound `ASSETS` with `not_found_handling = "single-page-application"` (:75–78),
+  `[env.production.observability] enabled = true` (:99–100). Nothing new introduced.
+- §2.5 documentation accurate. `docs/ENVIRONMENTS.md:34–52` states the `[env.production]` contract,
+  that declaring a profile is not deploying it, and the hard `--env production` procedural gate;
+  `:21–33` keeps Access and the prior deploy framed as externally recorded, never proven here.
+  `ARCHITECTURAL_DECISIONS.md` ADR-007 (:72–81) records the deployment-profile separation, the ids as
+  non-secret operator configuration behind the approval gate, and remote deploy / Access / remote
+  migration apply as UNPROVEN. Both read true against the current `wrangler.toml`.
+
+**No material defect was found inside the approved scope, so no repair was applied.** §2 limits
+required target changes to §2.1–§2.5; all five already held. Nothing was rewritten to manufacture a
+repair, and no defect was invented to justify a mutation. This generation mutated only this ledger.
+
+### Worker-name resolution — settled empirically this session, not assumed
+
+Generation 2 asserted that restating `name` under `[env.production]` prevents wrangler from deploying
+to `west-peek-os-production`. That claim is load-bearing (a wrong Worker name would miss the proven
+target), so it was tested rather than trusted, in a throwaway `/tmp` project touching nothing here:
+a config whose `[env.production]` sets `name = "Bad Name!"` fails validation with
+`"env.production" environment configuration - Expected "name" ... but got "Bad Name!"` — the raw
+string, with no `-production` suffix appended. An explicit environment-level `name` is therefore the
+environment's name verbatim, so this repository's `[env.production]` resolves to the Worker
+`west-peek-os`. The temp project was deleted.
+
+### §3 security law re-verified at the source
+
+`grep -rn WP_OS_ENV src/` returns exactly three call sites and no others: `auth.ts:28` selects
+`x-wpos-dev-user` **only** when `env.WP_OS_ENV === "local"` and otherwise
+`Cf-Access-Authenticated-User-Email`; `services/networkAdapter.ts:623` refuses the local fixture path
+whenever the env is not `"local"`; `index.ts:395` echoes the env *name* on health. `auth.ts` re-hashes
+`13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6`, byte-identical to the pre-run
+value in both prior generations' tables — no auth code changed. Production cannot run
+`WP_OS_ENV=local` through the production profile, which pins `"production"`. No Access weakening, no
+development identity behaviour added, no Cloudflare resource created, no secret added.
+
+### §6 validation — every row executed in this final-review session
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `npm --prefix west-peek-os ci` | rc=0 — frozen install from `package-lock.json` |
+| 2 | `npm --prefix west-peek-os run typecheck` | rc=0 |
+| 3 | `npm --prefix west-peek-os run build` | rc=0 — `dist/client` present after build |
+| 4 | `npm --prefix west-peek-os run test` | rc=0 — **560/560** passed, 32 files, 75.5s |
+| 5 | `npm --prefix west-peek-os run e2e` | rc=0 — **67/67** passed, chromium, 44.8s |
+| 6 | `npm --prefix west-peek-os run validate:authority` | rc=0 |
+| 7 | `npm --prefix west-peek-os run validate:ai-boundary` | rc=0 |
+| 8 | `npm --prefix west-peek-os run validate:network-boundary` | rc=0 |
+
+`validate:brand` (rc=0) and `migrate:local` (rc=0, "No migrations to apply!") also ran green here; they
+sit outside the declared eight only because of the host's eight-command cap, and this line is the
+record that they executed. `dist/client` after build: `index.html`, `assets/` (`index-DCvpkPLp.css`,
+`index-DmGL_tOx.js`), `icon.svg`, `wp-mark.svg`, `manifest.webmanifest`, `sw.js`.
+
+`npm ci` again emitted `allow-scripts` warnings (`workerd`, `esbuild`, `fsevents` postinstall pending
+approval). rc was 0 and the toolchain is provably functional afterwards — `vite build`, `vitest`, and
+the Playwright suite, which boots `wrangler dev`/miniflare and so resolved `workerd`, all succeeded.
+No approval was granted and no install policy was changed; that would be out of scope.
+
+**Profile dry-runs re-executed in this session** (bundle-only, `--outdir` under `/tmp`, nothing
+written into the artifact):
+
+- `--env production`: rc=0, resolving `env.WP_OS_ENV ("production")`, KV
+  `bf0750e8e9a648758a5de978088c97da`, D1 `west-peek-os-db`, R2 `west-peek-os-documents`, `env.ASSETS`;
+  Total Upload 894.88 KiB / gzip 165.44 KiB; terminated `--dry-run: exiting now.`
+- no `--env`: rc=0, resolving `env.WP_OS_ENV ("local")` with placeholder KV
+  `00000000000000000000000000000000`, plus wrangler's warning that environments exist and none was
+  targeted. The local profile is provably preserved and provably distinct from production.
+- `grep -cE "Uploaded|Deployed|Published|Current Version ID|workers\.dev"` over both logs returns
+  **0 and 0**. Nothing was published and `west-peek-os.seq-taylor.workers.dev` was never contacted.
+
+These two rows remain **proven here but undeclarable** in the host's structured command list: the
+wrangler subcommand is a forbidden proof token even under `--dry-run`, and no existing repo script
+reads `wrangler.toml` — adding one would itself be an out-of-scope §2 target change. That is a limit
+on declaration, not on verification.
+
+**No secrets packaged**, rescanned in this session. No `.dev.vars*`, `.env`, `*.pem` or `*.key`
+anywhere outside `node_modules`; `.env.example` is names-only with every value blank. The secret-shape
+scan (`sk-`, `AKIA`, `ghp_`, PEM private-key headers) over the tree excluding
+`node_modules`/`dist`/`.wrangler`/`test-results`/`backups` returns exactly **4** hits, all known
+synthetic redaction fixtures: `tests/workforce.test.ts:323`, `tests/ai.test.ts:245`,
+`e2e/p4-ai.spec.ts:43`, and the `tests/ai.test.ts:257` assertion that the value does *not* survive into
+a failure reason. `wrangler.toml` carries only non-secret resource identifiers.
+
+`grep -rIn "TODO|FIXME|not implemented"` over `src/` and `scripts/` returns **nothing** — no stub or
+deferred-work marker anywhere in the implementation surface.
+
+### Out-of-scope observation, deliberately not "repaired"
+
+`REPO_VALIDATION_MATRIX.md` still states "26 suites, 506 tests" and "21 specs, 45 tests" against the
+current actual 32 files / 560 tests and 67 e2e tests. The counts drifted low because of unrelated
+post-seal user work, so the document understates coverage rather than overstating it. It is not
+production-environment or architectural-decision documentation, so §2.5 does not reach it and §5
+forbids the unrelated cleanup. Recorded here rather than silently changed.
+
+### Post-run containment
+
+`find -newer EXECUTION_CONTRACT_FINAL_REVIEW.md`, excluding regenerated `node_modules/`, `dist/`,
+`.wrangler/`, `test-results/`, `backups/`, returned **no artifact file** after the entire validation
+surface had run, and all four scope files re-hash byte-identical to both prior generations' tables:
+`wrangler.toml` `8d66dcee0d6d1ae94cee991a9790746e847209b043119af0ffd7472ca396ae82`,
+`docs/ENVIRONMENTS.md` `211c3ecd04901a41a4c8451f2d871e4021cab92151b1b4b000bde6d38bc7c50d`,
+`ARCHITECTURAL_DECISIONS.md` `22edfef27516bf08de8075e50561406a1fc72b9955a0047ee3b4ce92eed2d254`,
+`src/worker/auth.ts` `13bc20a1207654f15a026b52466535582aca2a01f416d19e2c3feb86fdfcffc6`. This
+generation changed only this ledger.
+
+### Boundaries honoured
+
+No deployment, no Cloudflare API call, no Cloudflare resource creation, no Access change, no
+application/auth source change, no schema change, no unrelated cleanup, no GitHub or Boss OS or
+partner/reference-repo mutation, no secret added, no mutation outside the authorized root, no
+commit/push/merge, no snapshot ZIP, and no edit to `STATE.json`, `EXECUTION_IDENTITY.json`, deployment
+history or artifact-eligibility metadata. WORK was not moved or renamed. The post-seal user-work
+client/e2e files were preserved untouched and validated in place, per §6.
+
+### Still UNPROVEN after this generation — external only, unchanged
+
+Remote publish to `west-peek-os.seq-taylor.workers.dev`, remote D1 migration apply, remote backup, and
+live AI/vendor provider calls remain **UNPROVEN** behind credential/approval gates — a dry-run is not
+a deployment. Cloudflare Access's live behaviour on the production hostname is **externally recorded by
+the operator, never proven here**. `preview` still has no profile. **Deployment must specify
+`--env production`**; a bare `wrangler deploy` would ship the LOCAL profile, and repairing that is
+forbidden by §2.1/§3/§5, so it remains a documented procedural gate.
+
+**P5 verdict: ACCEPT.** Approved scope §2.1–§2.5 is complete and independently re-verified against the
+files themselves; §3 holds at the source; the full §6 validation surface is green in this session. No
+locally implementable gap remains open. Ready for P6 host packaging. `LOCAL_ARTIFACT_VERIFIED` attests
+the approved production-readiness contract and this repository's local proof surface — it is not
+approval of the unrelated user work carried in the tree, which this task never scoped, and it is not a
+deployment.

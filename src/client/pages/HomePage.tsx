@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttention";
 
 /**
  * MP Home / Executive Command Center (P14, GAP-04 + GAP-23).
@@ -54,7 +55,7 @@ interface PersonalEntry {
 
 const MODULE_LABELS: Record<string, string> = {
   approvals: "Waiting on your decision",
-  intelligence: "Daily intelligence",
+  intelligence: "Daily Brief",
   portfolio_risk: "Portfolio risk",
   allocation_constraints: "Allocation constraints",
   meetings: "Upcoming meetings",
@@ -66,6 +67,39 @@ const MODULE_LABELS: Record<string, string> = {
   my_work: "My open work",
   employees: "AI workforce",
 };
+
+
+/**
+ * The brief is model-authored Markdown. Rendered with a deliberately tiny formatter rather than a
+ * Markdown library or `dangerouslySetInnerHTML`: model output is untrusted text, and the only
+ * formatting a brief needs is headings, bold and bullets. Anything else renders as plain text,
+ * which is the safe failure.
+ */
+function BriefProse({ markdown }: { markdown: string }): JSX.Element {
+  const blocks = markdown.split(/\n{2,}/);
+  const inline = (s: string) =>
+    s.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+      part.startsWith("**") && part.endsWith("**") ? <strong key={i}>{part.slice(2, -2)}</strong> : <span key={i}>{part}</span>,
+    );
+  return (
+    <div className="brief-prose" data-testid="home-brief-prose">
+      {blocks.map((b, i) => {
+        const lines = b.split("\n");
+        if (lines.every((l) => /^\s*[-*]\s+/.test(l))) {
+          return (
+            <ul key={i}>
+              {lines.map((l, j) => (
+                <li key={j}>{inline(l.replace(/^\s*[-*]\s+/, ""))}</li>
+              ))}
+            </ul>
+          );
+        }
+        if (/^#{1,6}\s/.test(b)) return <h5 key={i}>{inline(b.replace(/^#{1,6}\s/, ""))}</h5>;
+        return <p key={i}>{inline(b)}</p>;
+      })}
+    </div>
+  );
+}
 
 function ModuleCard({ module, onNavigate }: { module: HomeModule; onNavigate: (key: string) => void }) {
   return (
@@ -294,9 +328,13 @@ function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => 
 
 export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
   const home = useApi<HomeResponse>("/api/mp-home");
-  const briefing = useApi<{ briefing: { one_thing_to_watch: string | null; selection_rule: string; briefing_date: string }; items: Array<{ id: string; title: string }> }>(
+  const briefing = useApi<{ briefing: { one_thing_to_watch: string | null; selection_rule: string; briefing_date: string; synthesis_md: string | null; synthesis_state: string }; items: Array<{ id: string; title: string; url?: string | null }> }>(
     "/api/briefings/current",
   );
+  // §8 — the four operator questions Home's modules do not answer: what is blocked, is scheduled
+  // work healthy, is AI failing, is setup incomplete. Derived from live endpoints only.
+  const jobs = useApi<{ jobs: JobHealth[] }>("/api/jobs");
+  const providers = useApi<{ providers: Array<{ enabled: number; kill_switched: number }> }>("/api/ai/providers");
 
   // Mark the visit AFTER the first read, so "what changed" is a diff against the
   // previous visit rather than against this one.
@@ -314,25 +352,84 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
 
   const data = home.data;
 
+  // `undefined` where a source has not answered, so the strip stays silent rather than guessing.
+  const attention = operatorAttention({
+    ...(jobs.data ? { jobs: jobs.data.jobs } : {}),
+    ...(providers.data
+      ? {
+          aiProviderConfigured: providers.data.providers.some(
+            (x) => x.enabled === 1 && x.kill_switched === 0,
+          ),
+        }
+      : {}),
+  });
+
   return (
     <section data-testid="home-page">
       <p className="muted small">
         Good day, {me.fullName}. Assembled {new Date(data.generated_at).toLocaleString()} from live firm state.
       </p>
 
-      {data.one_thing_to_watch ? (
-        <section className="card watch-banner" data-testid="one-thing-to-watch">
-          <h3>One thing to watch</h3>
-          <p className="watch-headline">{data.one_thing_to_watch.headline}</p>
-          <p className="muted small">{data.one_thing_to_watch.because}</p>
-          <button type="button" onClick={() => onNavigate(data.one_thing_to_watch!.link)}>
-            Go there
+      {/* ASK — its own highlighted band on Home, added on operator direction (17 Aug 2026): "it can
+          be on the home page in its own section that is highlighted so users know its there for
+          them when they need."
+
+          Deliberately NOT a module card. The module grid is a list of places to go; this is an
+          offer, and making it look like the other cards is how it becomes invisible again. It also
+          stays in the nav — Home is where you are reminded it exists, the nav is where you reach
+          for it once you already know.
+
+          The examples are real capabilities, not placeholder prompts: showing something Ask cannot
+          do would teach the operator to distrust it on the first try. */}
+      <section className="card ask-band" data-testid="home-ask">
+        <h3>Ask</h3>
+        <p>
+          Describe what you need in your own words. Ask works out which part of the firm owns it,
+          shows you the plan, and does nothing consequential without your approval.
+        </p>
+        <div className="ask-examples">
+          <button type="button" className="btn-strong" data-testid="home-ask-open" onClick={() => onNavigate("intent")}>
+            Ask for something
           </button>
-        </section>
-      ) : (
-        <section className="card" data-testid="one-thing-to-watch-empty">
-          <h3>One thing to watch</h3>
-          <p className="state-empty">Nothing is flagged: no open portfolio alert, no card waiting on you, no ranked intelligence.</p>
+          <span className="muted small">
+            e.g. “what changed in the portfolio this week?” · “prep me for the Acme call” ·
+            “who should introduce me to a design partner?”
+          </span>
+        </div>
+      </section>
+
+      {/* §8 — what is blocked, first: a dead-lettered job or an unconfigured provider makes
+          everything below it unreliable. Absent when there is genuinely nothing wrong — an empty
+          command surface is a correct answer.
+
+          "One thing to watch" used to sit below this and was removed on operator direction
+          (17 Aug 2026): it restated what the modules already showed, so it cost a screenful of
+          Home to tell the operator something they were about to read anyway. The derivation
+          survives on the API as one_thing_to_watch for anything that still wants it. */}
+      {attention.length > 0 && (
+        <section className="card" data-testid="home-attention">
+          <h3>Needs your attention</h3>
+          <ul className="card-list small">
+            {attention.map((a) => (
+              <li key={a.key} data-testid={`home-attention-${a.key}`}>
+                <span
+                  className={
+                    a.severity === "BLOCKING"
+                      ? "help-tag help-tag-warn"
+                      : a.severity === "DEGRADED"
+                        ? "help-tag help-tag-warn"
+                        : "help-tag help-tag-muted"
+                  }
+                >
+                  {a.severity === "BLOCKING" ? "Blocked" : a.severity === "DEGRADED" ? "Degraded" : "Setup"}
+                </span>{" "}
+                <strong>{a.headline}</strong> {a.action}{" "}
+                <button type="button" className="link-button" onClick={() => onNavigate(a.link)}>
+                  Open
+                </button>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 
@@ -360,16 +457,55 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
 
       {briefing.data?.briefing && (
         <section className="card" data-testid="home-briefing">
-          <h4>Today&apos;s briefing ({briefing.data.briefing.briefing_date})</h4>
-          <p className="muted small">Selection rule: {briefing.data.briefing.selection_rule}</p>
-          <ul className="card-list">
-            {briefing.data.items.slice(0, 5).map((i) => (
-              <li key={i.id}>{i.title}</li>
-            ))}
-            {briefing.data.items.length === 0 && <li className="state-empty">No items ranked for today yet.</li>}
-          </ul>
+          <h4>Daily Brief — {briefing.data.briefing.briefing_date}</h4>
+
+          {/* P30: the written read. Prose is the product here; the item list is the evidence
+              behind it, not the thing to scan. When there is no synthesis the brief degrades to
+              the list rather than showing an empty card. */}
+          {briefing.data.briefing.synthesis_state === "READY" && briefing.data.briefing.synthesis_md ? (
+            <>
+              <BriefProse markdown={briefing.data.briefing.synthesis_md} />
+              <details className="brief-sources">
+                <summary>{briefing.data.items.length} source item(s)</summary>
+                <ul className="card-list small">
+                  {briefing.data.items.map((i, n) => (
+                    <li key={i.id}>
+                      [{n + 1}]{" "}
+                      {i.url ? (
+                        <a href={i.url} target="_blank" rel="noreferrer">{i.title}</a>
+                      ) : (
+                        i.title
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+              <p className="muted small">
+                Written by AI from the sources above. It states nothing that is not in them.
+              </p>
+            </>
+          ) : (
+            <>
+              <ul className="card-list">
+                {briefing.data.items.slice(0, 5).map((i) => (
+                  <li key={i.id}>{i.title}</li>
+                ))}
+                {briefing.data.items.length === 0 && (
+                  <li className="state-empty" data-testid="home-briefing-empty">
+                    Nothing in today&apos;s brief yet. Items arrive from a sweep — open Sweeps &amp; sources.
+                  </li>
+                )}
+              </ul>
+              {briefing.data.items.length > 0 && (
+                <p className="muted small" data-testid="home-briefing-unsynthesised">
+                  No written brief for today — showing the raw items instead.
+                </p>
+              )}
+            </>
+          )}
+
           <button type="button" className="link-button" onClick={() => onNavigate("intelligence")}>
-            Open Intelligence
+            Open Sweeps &amp; sources
           </button>
         </section>
       )}

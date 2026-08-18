@@ -46,6 +46,9 @@ import {
   handleGetApproval,
   handleListApprovals,
   handleSubmitApproval,
+  handleAddApprovalComment,
+  handleAddApprovalEvidence,
+  handleApprovalContext,
 } from "./services/approvals";
 import { handleListActivity } from "./services/activity";
 import { handleCreateGovernanceUpdate, handleListGovernanceUpdates } from "./services/governance";
@@ -57,6 +60,75 @@ import {
   handleListEffectRequests,
 } from "./services/effects";
 import { handleAcceptAiOutput, handleGetAiRun, handleListAiRuns, handleRunAi } from "./services/aiRuns";
+import {
+  handleAskLiveHelp,
+  handleGetLiveHelp,
+  handleReleaseEmployee,
+  handleSeatEmployee,
+  handleRestoreAiAccess,
+  handleRevokeAiAccess,
+} from "./services/liveHelp";
+import { handleGetCloseout, handleRunCloseout } from "./services/meetingDelegation";
+import {
+  handleAddAttendee,
+  handleCreateEvent,
+  handleGetEvent,
+  handleListEvents,
+  handleSetEventStatus,
+} from "./services/eventOs";
+import {
+  handleDecidePacket, handleGeneratePacket,
+  handleGetPacket as handleGetRoomPacket,
+  handleListPackets as handleListRoomPackets,
+  handleScheduleRoom, handleVerifyVenue,
+} from "./services/roomPacket";
+import {
+  handleAdvanceSponsor, handleCreateSponsor, handleListSponsors, handleSponsorAttendeeExport,
+  handleSponsorRecap,
+} from "./services/sponsors";
+import {
+  handleDecideCouncil,
+  handleListMembers as handleListCommunityMembers,
+  handleMemberEvidence, handleRecordAct, handleRetractAct,
+} from "./services/communityActs";
+import {
+  handleDecideMatch, handleListMatches, handleListPeople, handleListSignals, handleMatchConnected,
+  handleMatchConsent, handleRecordSignal, handleRetireSignal, handleRunMatching,
+} from "./services/matching";
+import { handleGetRoomCloseout, handleRunRoomCloseout } from "./services/roomCloseout";
+import { handleUpsertMember } from "./services/communityOs";
+import {
+  handleAddFollowup,
+  handleGetDiligence,
+  handleGetIcAudit,
+  handleListFollowups,
+  handleSaveDiligence,
+  handleSetupPacket,
+  handleGetIcRecords,
+} from "./services/icPortal";
+import { handleEvidenceLedger, handleListDecisions, handleWorkQueues } from "./services/ledgers";
+import { handleCompanyIntelligence, handleFollowOnCentre, handleSecondaries } from "./services/companyIntel";
+import { handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
+import { handleIngestTranscript } from "./services/captureAdapter";
+import { handleGenerateDailyReport, handleGetDailyReport } from "./services/dailyIntelligence";
+import { handleBuildPacket, handleExportPacket } from "./services/researchPacket";
+import { handleBuildMap, handleGetMap, handleListMaps } from "./services/marketMap";
+import {
+  handleApproveBrowserTask, handleListBrowserTasks, handleRequestBrowserTask, handleRunBrowserTask,
+} from "./services/browserTask";
+import {
+  handleGetSession as handleGetUniversitySession,
+  handleListDiary,
+  handleListSessions as handleListUniversitySessions,
+  handleReply as handleUniversityReply,
+  handleSaveDiary,
+  handleStartSession as handleStartUniversitySession,
+} from "./services/university";
+import {
+  handleDetect as handleCrossOfficeDetect,
+  handleListConflicts as handleListCrossOfficeConflicts,
+  handleResolveConflict as handleResolveCrossOfficeConflict,
+} from "./services/crossOffice";
 import {
   handleActivateAiEmployee,
   handleGetAiEmployee,
@@ -134,6 +206,7 @@ import {
   handleUpdateDealMathPacket,
   handleUpdateOpportunity,
   handleVoidTransaction,
+  handleDealProvenance,
 } from "./services/investment";
 import {
   handleAccessLedger,
@@ -527,6 +600,8 @@ const router = new Router()
   // P6 — investment opportunities (secondaries keep seller/broker/class provenance).
   .post("/api/opportunities", handleCreateOpportunity)
   .get("/api/opportunities", handleListOpportunities)
+  // P51 — where deals come from, and which ones nobody recorded.
+  .get("/api/opportunities/provenance", handleDealProvenance)
   .get("/api/opportunities/:id", handleGetOpportunity)
   .patch("/api/opportunities/:id", handleUpdateOpportunity)
   .post("/api/opportunities/:id/transition", handleTransitionOpportunity)
@@ -569,12 +644,108 @@ const router = new Router()
   .get("/api/meetings", handleListMeetings)
   .get("/api/meetings/:id", handleGetMeeting)
   .post("/api/meetings/:id/transition", handleTransitionMeeting)
+  .get("/api/meetings/:id/live-help", handleGetLiveHelp)
+  .post("/api/meetings/:id/live-help", handleAskLiveHelp)
+  .post("/api/meetings/:id/employees", handleSeatEmployee)
+  .post("/api/meetings/:id/employees/release", handleReleaseEmployee)
+  .post("/api/meetings/:id/ai-access/revoke", handleRevokeAiAccess)
+  .post("/api/meetings/:id/ai-access/restore", handleRestoreAiAccess)
   .post("/api/meetings/:id/participants", handleAddParticipant)
   // P7 — consent (append-only) and the MP/compliance-reserved recording gate.
   .post("/api/meetings/:id/consent", handleRecordConsent)
   .post("/api/meetings/:id/recording-policy", handleActivateRecordingPolicy)
   .post("/api/meetings/:id/prep", handleAssemblePrepPacket)
+  .get("/api/meetings/:id/closeout", handleGetCloseout)
+  .post("/api/meetings/:id/closeout", handleRunCloseout)
+  // P33 — Event OS / Community OS scaffolding.
+  .get("/api/events", handleListEvents)
+  .post("/api/events", handleCreateEvent)
+  .get("/api/events/:id", handleGetEvent)
+  .post("/api/events/:id/status", handleSetEventStatus)
+  .post("/api/events/:id/attendees", handleAddAttendee)
+  // P51 — what came out of a Room: West Peek's follow-ups, and who was there.
+  .post("/api/events/:id/closeout", handleRunRoomCloseout)
+  .get("/api/events/:id/closeout", handleGetRoomCloseout)
+  // P51 — Rooms, sponsors and the community model. docs/COMMUNITY.md is the source of truth.
+  .get("/api/rooms/packets", handleListRoomPackets)
+  .post("/api/rooms/packets", handleGeneratePacket)
+  .get("/api/rooms/packets/:id", handleGetRoomPacket)
+  .post("/api/rooms/packets/:id/decide", handleDecidePacket)
+  .post("/api/rooms/packets/:id/schedule", handleScheduleRoom)
+  .post("/api/rooms/venues/:id/verify", handleVerifyVenue)
+  .get("/api/sponsors", handleListSponsors)
+  .post("/api/sponsors", handleCreateSponsor)
+  .post("/api/sponsors/:id/stage", handleAdvanceSponsor)
+  .get("/api/events/:id/sponsor-recap", handleSponsorRecap)
+  // Present so the refusal is discoverable. Someone will look for this; better they find the
+  // policy and the recap than assume its absence was an oversight and write one.
+  .get("/api/events/:id/attendee-export", handleSponsorAttendeeExport)
+  .post("/api/community/acts", handleRecordAct)
+  .post("/api/community/acts/:id/retract", handleRetractAct)
+  .get("/api/community/members/:id/evidence", handleMemberEvidence)
+  .post("/api/community/council", handleDecideCouncil)
+  .get("/api/people", handleListPeople)
+  .get("/api/introductions", handleListMatches)
+  .post("/api/introductions/run", handleRunMatching)
+  .get("/api/introductions/signals", handleListSignals)
+  .post("/api/introductions/signals", handleRecordSignal)
+  .post("/api/introductions/signals/:id/retire", handleRetireSignal)
+  .post("/api/introductions/:id", handleDecideMatch)
+  .post("/api/introductions/:id/consent", handleMatchConsent)
+  .post("/api/introductions/:id/connected", handleMatchConnected)
+  // Serves the acts-aware handler rather than the scaffold's raw row list: same shape plus each
+  // member's unranked one-line evidence summary. Ordered by recency, never by contribution.
+  .get("/api/community/members", handleListCommunityMembers)
+  .post("/api/community/members", handleUpsertMember)
+  // P34 — IC Decision Portal (§28.6).
+  .get("/api/ic/packets/:id/diligence", handleGetDiligence)
+  .post("/api/ic/packets/:id/diligence", handleSaveDiligence)
+  .post("/api/ic/packets/:id/setup", handleSetupPacket)
+  .get("/api/ic/packets/:id/followups", handleListFollowups)
+  .post("/api/ic/packets/:id/followups", handleAddFollowup)
+  .get("/api/ic/packets/:id/audit", handleGetIcAudit)
+  .get("/api/ic/packets/:id/records", handleGetIcRecords)
+  // P35 — read surfaces over data that already existed (V1 #10, #34, #35).
+  .get("/api/decisions", handleListDecisions)
+  .get("/api/evidence-ledger", handleEvidenceLedger)
+  .get("/api/work-queues", handleWorkQueues)
+  .get("/api/companies/:id/intelligence", handleCompanyIntelligence)
+  .get("/api/follow-on", handleFollowOnCentre)
+  .get("/api/secondaries", handleSecondaries)
+  .get("/api/daily-intelligence", handleGetDailyReport)
+  .post("/api/daily-intelligence/generate", handleGenerateDailyReport)
+  .post("/api/research/packets", handleBuildPacket)
+  .get("/api/research/packets/:id/export", handleExportPacket)
+  // P45 — West Peek University. Diary routes are declared BEFORE /:id so "diary" is never
+  // swallowed as a session id.
+  .get("/api/university/diary", handleListDiary)
+  .post("/api/university/diary", handleSaveDiary)
+  .get("/api/university", handleListUniversitySessions)
+  .post("/api/university", handleStartUniversitySession)
+  .get("/api/university/:id", handleGetUniversitySession)
+  .post("/api/university/:id/reply", handleUniversityReply)
+  // P46 — Market Mapping Room.
+  .get("/api/market-maps", handleListMaps)
+  .post("/api/market-maps", handleBuildMap)
+  .get("/api/market-maps/:id", handleGetMap)
+  // P50 — browser tasks. Request and run are separate calls: an advisory approval on "fetch an
+  // arbitrary URL and feed it to an AI employee" is no approval at all.
+  .get("/api/browser-tasks", handleListBrowserTasks)
+  .post("/api/browser-tasks", handleRequestBrowserTask)
+  .post("/api/browser-tasks/:id/approve", handleApproveBrowserTask)
+  .post("/api/browser-tasks/:id/run", handleRunBrowserTask)
+  // P47 — Approval Centre context (canon §24.2).
+  .get("/api/approvals/:id/context", handleApprovalContext)
+  .post("/api/approvals/:id/evidence", handleAddApprovalEvidence)
+  .post("/api/approvals/:id/comments", handleAddApprovalComment)
+  .get("/api/weekly-review", handleGetWeeklyReview)
+  .post("/api/weekly-review/generate", handleGenerateWeeklyReview)
+  .post("/api/weekly-review/items/:id/exit", handleSetItemExit)
+  .get("/api/cross-office", handleListCrossOfficeConflicts)
+  .post("/api/cross-office/detect", handleCrossOfficeDetect)
+  .post("/api/cross-office/:id/resolve", handleResolveCrossOfficeConflict)
   .post("/api/meetings/:id/transcript", handleImportTranscript)
+  .post("/api/meetings/:id/transcript/ingest", handleIngestTranscript)
   .post("/api/meetings/:id/notes", handleAddNote)
   .post("/api/meetings/:id/commitments", handleCreateCommitment)
   .post("/api/meeting-commitments/:id/convert", handleConvertCommitment)

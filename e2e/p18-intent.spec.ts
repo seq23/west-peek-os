@@ -20,18 +20,19 @@ async function signIn(page: import("@playwright/test").Page): Promise<void> {
 
 test("a rough thought becomes a governed packet the lens bench can stop", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Intent → Execution", exact: true }).click();
+  await page.getByRole("button", { name: "Ask", exact: true }).click();
   await expect(page.getByTestId("intent-page")).toBeVisible();
 
   const thought = "Look into the Acme secondary soon and tell me if we should take the block";
   await page.getByTestId("intent-text").fill(thought);
   await page.getByTestId("intent-strength").selectOption("DEEP");
   await page.getByTestId("intent-submit").click();
-  await expect(page.getByTestId("intent-message")).toContainText("Packet opened");
+  await expect(page.getByTestId("intent-message")).toContainText("Here is what");
 
   // The operator's own words survive verbatim, beside the derived fields.
   await expect(page.getByTestId("packet-original")).toContainText(thought);
   await expect(page.getByTestId("packet-original")).toContainText("never rewrites this");
+  await page.getByTestId("ask-machinery").locator("summary").click();
   await expect(page.getByTestId("packet-ambiguities")).toContainText("soon");
   await expect(page.getByTestId("packet-acceptance")).toContainText("counter-case");
 
@@ -56,7 +57,7 @@ test("a rough thought becomes a governed packet the lens bench can stop", async 
 
 test("the lens bench publishes its storage rule", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Intent → Execution", exact: true }).click();
+  await page.getByRole("button", { name: "Ask", exact: true }).click();
   await expect(page.getByTestId("lens-storage-rule")).toContainText("Private model reasoning is never stored");
   await expect(page.getByTestId("lens-bench")).toContainText("No Pedestal Law");
 });

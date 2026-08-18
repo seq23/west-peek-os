@@ -199,6 +199,24 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "admin_source.register", name: "Register an administrator source", description: "Record an administrator, accounting, or VDR source with its contract state and freshness expectation.", isExternalEffect: false },
   { key: "reconciliation_schedule.set", name: "Schedule reconciliation", description: "Set the cadence on which a fund is reconciled against its administrator.", isExternalEffect: false },
   { key: "lp_engagement.update", name: "Update LP engagement state", description: "Record the current state of an LP relationship and its next step.", isExternalEffect: false },
+  // P33 — Event OS and Community OS scaffolding. Ordinary internal actions: creating an event or
+  // a member record changes nothing outside the firm. Inviting anyone is a separate external
+  // effect and is NOT covered by these keys.
+  // P37 — the weekly MP operating review (canon §8). Internal: it derives an agenda from records
+  // that already exist and records how each item was resolved. Nothing leaves the firm.
+  { key: "weekly_review.manage", name: "Manage weekly review", description: "Generate the weekly MP operating review from live firm state, and record how each agenda item exited.", isExternalEffect: false },
+  { key: "event.manage", name: "Manage event", description: "Create or update an Event OS event and its attendee list. Internal record only; sending invitations is an external effect.", isExternalEffect: false },
+  { key: "community.manage", name: "Manage community member", description: "Create or update a Community OS member record. Internal record only.", isExternalEffect: false },
+  // P51 — Rooms and the community model (docs/COMMUNITY.md). All internal: a Room packet is a
+  // proposal, a sponsor prospect is a record, and an act is something West Peek witnessed. The
+  // external effects these lead to — emailing a sponsor, inviting a member — are already covered
+  // by the email keys below, and deliberately are not granted by any key here.
+  { key: "room_packet.manage", name: "Manage Room packet", description: "Generate or edit a Room proposal: theme, agenda, venue options, guest ideas and economics. Internal record only.", isExternalEffect: false },
+  { key: "room_packet.decide", name: "Decide on a Room packet", description: "Approve or decline a proposed Room. Human only in code — a Room commits the firm to spend and to approaching sponsors.", isExternalEffect: false },
+  { key: "sponsor.manage", name: "Manage sponsor prospect", description: "Create or advance a sponsor prospect in the Room sponsorship pipeline. Internal record only; contacting the sponsor is an external effect.", isExternalEffect: false },
+  { key: "community.act", name: "Record a community act", description: "Record something West Peek witnessed a member do — attended, hosted, answered, referred. Append-only evidence.", isExternalEffect: false },
+  { key: "council.decide", name: "Decide Council membership", description: "Record a Council decision with a reason. Human only in code — the Council is a judgement, never a computed threshold.", isExternalEffect: false },
+  { key: "match.manage", name: "Manage introduction suggestions", description: "Propose or dismiss a suggested introduction between two people. Proposing is internal; making the introduction is a human act.", isExternalEffect: false },
 ] as const;
 
 /**

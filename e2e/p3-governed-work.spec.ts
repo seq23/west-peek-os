@@ -1,5 +1,6 @@
-import { execSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
+import { provisionLocalD1 } from "./support/provision";
 
 /**
  * P3 browser journey against local `wrangler dev`:
@@ -15,9 +16,8 @@ const MEMBER = { "x-wpos-dev-user": "e2e-member@westpeek.ventures" };
 test.beforeAll(() => {
   // A second identity WITHOUT the Managing Partner role or privacy scopes,
   // inserted into the same local D1 the dev server serves.
-  execSync(
-    `npx wrangler d1 execute WP_OS_DB --local --command "INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES ('fu_e2e_member', 'e2e-member@westpeek.ventures', 'E2E Member', 'ACTIVE'); INSERT OR IGNORE INTO firm_user_role (firm_user_id, role_id) VALUES ('fu_e2e_member', 'role_investment_team');"`,
-    { stdio: "pipe" },
+  provisionLocalD1(
+    `INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES ('fu_e2e_member', 'e2e-member@westpeek.ventures', 'E2E Member', 'ACTIVE'); INSERT OR IGNORE INTO firm_user_role (firm_user_id, role_id) VALUES ('fu_e2e_member', 'role_investment_team');`,
   );
 });
 
@@ -31,7 +31,7 @@ test("governed work journey: capture → work card → approval → activity spi
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
 
   // +Capture creates a capture.
-  await page.getByRole("button", { name: "+Capture", exact: true }).click();
+  await page.getByRole("button", { name: "Capture", exact: true }).click();
   await page.getByTestId("capture-text").fill(marker);
   await page.getByTestId("capture-submit").click();
   const captureResult = page.getByTestId("capture-result");
@@ -45,7 +45,7 @@ test("governed work journey: capture → work card → approval → activity spi
   await expect(page.getByTestId("route-result")).toContainText("work card wc_");
 
   // Work Cards: the new card is listed OPEN; request an approval-requiring action.
-  await page.getByRole("button", { name: "Work Cards", exact: true }).click();
+  await page.getByRole("button", { name: "Work cards", exact: true }).click();
   const workCard = page.locator('li[data-testid^="work-card-"]').filter({ hasText: marker }).first();
   await expect(workCard).toBeVisible();
   await expect(workCard).toContainText("OPEN");
@@ -58,7 +58,9 @@ test("governed work journey: capture → work card → approval → activity spi
   await expect(approvalCard).toBeVisible();
   await expect(approvalCard).toContainText("pending_review");
   const cardId = (await approvalCard.getAttribute("data-testid"))!.replace("approval-card-", "");
-  await approvalCard.getByRole("textbox").fill("looks good — E2E");
+  // Targeted by testid, not by role: an approval card now also carries evidence and comment
+  // inputs (canon §24.2 context), so "the textbox" is ambiguous.
+  await approvalCard.locator('[data-testid^="decision-note-"]').fill("looks good — E2E");
   await approvalCard.getByRole("button", { name: "Approve" }).click();
 
   // The decision landed: card is approved, decision history recorded.
@@ -74,7 +76,7 @@ test("governed work journey: capture → work card → approval → activity spi
   expect(detail.decisions[0].note).toBe("looks good — E2E");
 
   // Activity shows the typed events, newest first, including the approval decision.
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await gotoSurface(page, "Activity");
   await expect(page.locator('[data-testid="activity-event-approval.decided"]', { hasText: cardId })).toBeVisible();
   await expect(page.locator('[data-testid="activity-event-approval.requested"]', { hasText: cardId })).toBeVisible();
   await expect(page.locator('[data-testid="activity-event-work_card.created"]').first()).toBeVisible();

@@ -19,7 +19,7 @@ async function signIn(page: import("@playwright/test").Page): Promise<void> {
 
 test("recurring work starts paused, refuses to run, then runs once switched on", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Scheduled Work", exact: true }).click();
+  await page.getByRole("button", { name: "Scheduled work", exact: true }).click();
   await expect(page.getByTestId("jobs-page")).toBeVisible();
   await expect(page.getByTestId("jobs-architecture")).toContainText("No Queues, no Durable Objects");
 

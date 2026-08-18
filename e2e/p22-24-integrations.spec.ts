@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P22–P24 browser journey — connectors, specialist lane, LP operations
@@ -21,7 +22,7 @@ async function signIn(page: import("@playwright/test").Page): Promise<void> {
 
 test("integrations state what is connected, what is gated, and what has never run", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Integrations", exact: true }).click();
+  await gotoSurface(page, "Integrations");
   await expect(page.getByTestId("integrations-page")).toBeVisible();
 
   // Every connector is unconfigured and names its gate.

@@ -1,4 +1,6 @@
 {
   "worker_name": "west-peek-os",
-  "secret_names": []
+  "secret_names": [
+    "OPENROUTER_API_KEY"
+  ]
 }

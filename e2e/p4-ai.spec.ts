@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P4 browser journey against local `wrangler dev`:
@@ -23,7 +24,7 @@ test("P4 AI journey: governed run, blocked run reason, provider kill switch", as
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
 
   // AI page: run a mock-local task (LOCKDOWN default → local adapter).
-  await page.getByRole("button", { name: "AI", exact: true }).click();
+  await gotoSurface(page, "AI");
   await page.getByTestId("ai-purpose").fill(marker);
   await page.getByTestId("ai-input").fill("Summarize the weekly portfolio notes for the command center.");
   await page.getByTestId("ai-run-submit").click();

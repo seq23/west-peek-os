@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { DailyBriefPanel } from "./DailyBriefPanel";
 
 /**
  * Daily Intelligence surface (P14, GAP-05).
@@ -191,7 +192,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
       </p>
 
       <section className="card">
-        <h3>Run the engine</h3>
+        <h3>Run a sweep</h3>
         <p className="muted small">
           A run acquires from enabled sources, drops duplicates firm-wide, scores against your watchlists, and stores a
           citation for every item kept. Running twice with the same key replays the first run instead of acquiring again.
@@ -240,9 +241,24 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
             }
           }}
         >
-          <div className="form-row">
+          {/* The form does TWO things and used to look like one, which is why nobody could tell what
+              "Run a sweep" would do. The button checks your sources; the fields below add a single
+              item you found yourself. They are now labelled and separated. */}
+          <p className="muted small" data-testid="intel-sweep-explainer">
+            <strong>Run a sweep</strong> checks every enabled source below for anything published
+            since the last sweep, drops duplicates, ranks what is left against your watchlist, and
+            adds it to Items. It sends nothing and changes nothing outside this page.
+          </p>
+
+          <details className="intel-manual-add" data-testid="intel-manual-add">
+            <summary>Also add something I found myself (optional)</summary>
+            <p className="muted small">
+              Use this when you read something the sources will not pick up — a conversation, a
+              paywalled article, a document. It is added to this sweep as one item.
+            </p>
+            <div className="form-row">
             <label>
-              Headline (optional manual item){" "}
+              Headline{" "}
               <input data-testid="intel-manual-title" value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} />
             </label>
             <label>
@@ -280,8 +296,10 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
               placeholder="Context"
             />
           </div>
+          </details>
+
           <button type="submit" className="btn-strong" data-testid="intel-run-submit" disabled={busy}>
-            {busy ? "Running…" : "Run intelligence"}
+            {busy ? "Sweeping…" : "Run a sweep"}
           </button>
         </form>
         {message && <p className="notice" data-testid="intel-run-message">{message}</p>}
@@ -293,9 +311,17 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
         )}
       </section>
 
-      <h3>Sources</h3>
-      {sources.loading && <p>Loading sources…</p>}
-      <ul className="card-list" data-testid="intel-sources">
+      <DailyBriefPanel />
+
+      {/* Sources, watchlist and history are REFERENCE, not the point of the page — they were
+          taking most of the screen above the items you actually came to read. Collapsed by
+          default using native <details> so they stay keyboard-operable and findable. */}
+      <details className="card intel-panel" data-testid="intel-sources-panel">
+        <summary>
+          Sources <span className="muted small">{(sources.data?.sources ?? []).length}</span>
+        </summary>
+        {sources.loading && <p>Loading sources…</p>}
+        <ul className="card-list" data-testid="intel-sources">
         {(sources.data?.sources ?? []).map((s) => (
           <li key={s.id} className="card" data-testid={`intel-source-${s.source_key}`}>
             <p>
@@ -310,9 +336,16 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
           </li>
         ))}
       </ul>
-      {sources.data?.note && <p className="muted small">{sources.data.note}</p>}
+        {sources.data?.note && <p className="muted small">{sources.data.note}</p>}
+      </details>
 
-      <h3>Watchlist</h3>
+      <details className="card intel-panel" data-testid="intel-watchlist-panel">
+        <summary>
+          Watchlist <span className="muted small">{(watchlist.data?.watchlist ?? []).length}</span>
+        </summary>
+        <p className="muted small">
+          Anything on this list scores higher when a sweep ranks new items.
+        </p>
       <form
         className="form-row"
         data-testid="intel-watch-form"
@@ -360,6 +393,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
           <li className="state-empty">Nothing on your watchlist. Watchlist matches are the strongest ranking signal.</li>
         )}
       </ul>
+      </details>
 
       <h3>Items</h3>
       {items.loading && <p>Loading items…</p>}
@@ -375,7 +409,8 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
         ))}
       </ul>
 
-      <h3>Run history</h3>
+      <details className="card intel-panel" data-testid="intel-history-panel">
+        <summary>Sweep history</summary>
       <ul className="card-list small" data-testid="intel-runs">
         {(runs.data?.runs ?? []).map((r) => (
           <li key={r.id}>
@@ -383,8 +418,9 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
             {r.sources_failed} source failure(s)
           </li>
         ))}
-        {!runs.loading && (runs.data?.runs ?? []).length === 0 && <li className="state-empty">No runs yet.</li>}
+        {!runs.loading && (runs.data?.runs ?? []).length === 0 && <li className="state-empty">No sweeps yet. A sweep gathers items from your sources; the Daily Brief is what you read.</li>}
       </ul>
+      </details>
     </section>
   );
 }

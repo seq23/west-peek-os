@@ -95,21 +95,48 @@ function PacketDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
 
   return (
     <section className="card" data-testid={`packet-detail-${p.id}`}>
+      {/* THE ANSWER, IN OPERATOR LANGUAGE.
+          Canon §67.4 is explicit that ordinary work needs "no machinery displayed unless
+          requested". This page previously led with ambiguities, assumptions, lens benches and
+          routing — the system's reasoning about the request, rendered as the product. That asks a
+          Managing Partner to read like a systems designer, which is the exact thing the law
+          forbids. The machinery is all still here, one disclosure down, unchanged and auditable. */}
       <h3>
-        Work packet <span className={statusBadge(p.status)}>{p.status}</span>
+        What happens next <span className={statusBadge(p.status)}>{p.status}</span>
       </h3>
 
-      <section className="card" data-testid="packet-original">
-        <h4>What you wrote</h4>
-        <p>{p.original_text}</p>
-        <p className="muted small">
-          Preserved verbatim. Enhancement ({p.enhancement_strength}, {p.enhancement_origin}) adds the fields below and never
-          rewrites this.
-        </p>
-      </section>
+      <p className="ask-answer" data-testid="ask-plan">
+        {p.interpretation || p.original_text}
+      </p>
 
-      <h4>Interpretation</h4>
-      <p className="small">{p.interpretation || "—"}</p>
+      <ul className="ask-facts" data-testid="ask-facts">
+        <li>
+          <strong>Who:</strong>{" "}
+          {p.recommended_employee_id ?? "no employee assigned yet"}
+          {p.machine_id ? ` · machine ${p.machine_id}` : ""}
+        </li>
+        <li>
+          <strong>You&apos;ll get:</strong> {p.output_definition || "not yet defined"}
+        </li>
+        <li>
+          <strong>Approval:</strong> nothing external is sent without you.
+        </li>
+      </ul>
+
+      <details className="ask-machinery" data-testid="ask-machinery">
+        <summary>Show how this was framed</summary>
+
+        <section className="card" data-testid="packet-original">
+          <h4>What you wrote</h4>
+          <p>{p.original_text}</p>
+          <p className="muted small">
+            Preserved verbatim. Enhancement ({p.enhancement_strength}, {p.enhancement_origin}) adds the fields below and never
+            rewrites this.
+          </p>
+        </section>
+
+        <h4>Interpretation</h4>
+        <p className="small">{p.interpretation || "—"}</p>
 
       <div className="module-grid">
         <section className="module-card" data-testid="packet-ambiguities">
@@ -156,7 +183,9 @@ function PacketDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
       </p>
       <p className="muted small">{p.cost_basis}</p>
 
-      <h4>Lens bench</h4>
+      </details>
+
+      <h4>Checks</h4>
       <p className="muted small">{detail.data.note}</p>
       <ul className="card-list small" data-testid="packet-lenses">
         {stack.map((key) => {
@@ -265,9 +294,9 @@ export function IntentPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="intent-page">
-      <p className="muted small">
-        {me.fullName}: describe the work in your own words. West Peek OS derives the interpretation, ambiguities,
-        assumptions, risks, and acceptance criteria beside your text — it never replaces it.
+      <p className="surface-lede">
+        {me.fullName.split(" ")[0]}, what do you need? Write it however you think about it — you do not
+        need to know how the system is organised.
       </p>
 
       <form
@@ -280,7 +309,7 @@ export function IntentPage({ me }: { me: MeResponse }) {
             body: { text, enhancement_strength: strength },
           });
           if (res.status === 201 && res.data) {
-            setMessage("Packet opened. Review the derived fields, run the lenses, then execute.");
+            setMessage("Here is what I'd do. Run it, or change it first.");
             setSelected(res.data.packet.id);
             setText("");
             packets.reload();
@@ -296,13 +325,13 @@ export function IntentPage({ me }: { me: MeResponse }) {
             style={{ width: "100%" }}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="What needs doing? Write it however you think about it."
+            placeholder="e.g. prep me for the Acme founder call on Thursday"
           />
         </div>
         <div className="form-row">
           <label>
             Enhancement{" "}
-            <select data-testid="intent-strength" value={strength} onChange={(e) => setStrength(e.target.value)}>
+            <select data-testid="intent-strength" title="How much framing to add before work starts" value={strength} onChange={(e) => setStrength(e.target.value)}>
               {["NONE", "LIGHT", "STANDARD", "DEEP"].map((s) => (
                 <option key={s} value={s}>
                   {s}

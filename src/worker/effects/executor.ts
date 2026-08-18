@@ -3,6 +3,7 @@ import { appendEvent } from "../events";
 import { EFFECT_TYPE_ACTION_KEYS } from "../../shared/registry/actionTypes";
 import { authorize, type Actor } from "../services/authorize";
 import { consumeApprovalCard } from "../services/approvals";
+import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
 
 /**
  * External-effect executor — the ONLY module in the system allowed to execute an
@@ -45,11 +46,15 @@ export class EffectError extends Error {
 }
 
 export interface SimulatedDelivery {
-  simulated: true;
+  /** false once a real transport carried it. Named `simulated` for compatibility with existing
+      receipts and events, which already record this field. */
+  simulated: boolean;
   channel: string;
   destination: string;
   summary: string;
   delivered_at: string;
+  /** Provider message id when a real send happened. Null for a simulation. */
+  provider_message_id?: string | null;
 }
 
 /**
@@ -88,6 +93,47 @@ export interface EffectExecutionResult {
   request: ExternalEffectRequestRow;
   delivery: SimulatedDelivery;
   receipt_id: string;
+}
+
+/**
+ * Perform the effect itself, AFTER authorization has already passed.
+ *
+ * Only `email.send` has a real transport (Resend, P33). It is used only when BOTH a key and an
+ * explicit enable flag are present; otherwise the effect still succeeds as a recorded simulation,
+ * because the approval was genuinely granted and swallowing it would lose the receipt. The summary
+ * says which of the two happened, so no one has to guess whether a message actually went out.
+ */
+async function performEffect(env: Env, request: ExternalEffectRequestRow): Promise<SimulatedDelivery> {
+  if (request.effect_type === "email.send" && isEmailSendEnabled(env)) {
+    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string };
+    const result = await sendViaResend(env, {
+      to: request.destination,
+      subject: payload.subject ?? "(no subject)",
+      text: payload.text ?? payload.body ?? "",
+    });
+    return {
+      simulated: !result.sent,
+      channel: "email",
+      destination: request.destination,
+      summary: result.detail,
+      delivered_at: new Date().toISOString(),
+      provider_message_id: result.provider_message_id,
+    };
+  }
+
+  if (request.effect_type === "email.send") {
+    const why = emailSendBlockedReason(env) ?? "email sending is not enabled";
+    return {
+      simulated: true,
+      channel: "email",
+      destination: request.destination,
+      summary: `Approved and recorded, NOT sent — ${why}`,
+      delivered_at: new Date().toISOString(),
+      provider_message_id: null,
+    };
+  }
+
+  return ADAPTERS[request.effect_type]!(request);
 }
 
 /**
@@ -130,10 +176,9 @@ export async function executeExternalEffect(
     );
   }
 
-  const adapter = ADAPTERS[request.effect_type]!;
   let delivery: SimulatedDelivery;
   try {
-    delivery = adapter(request);
+    delivery = await performEffect(env, request);
   } catch (err) {
     await env.WP_OS_DB.prepare("UPDATE external_effect_request SET state = 'FAILED' WHERE id = ?1").bind(request.id).run();
     await appendEvent(env, {

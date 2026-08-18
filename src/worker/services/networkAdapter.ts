@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Env } from "../env";
+import { networkOsConfigured, pullSnapshot, type NetworkSnapshot } from "../effects/networkOsClient";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import type { FirmUserIdentity } from "../auth";
@@ -607,9 +608,77 @@ function errorResponse(err: unknown): Response {
   throw err;
 }
 
-/** Resolved from configuration; no client exists until the integration is approved. */
-export function configuredClient(_env: Env): NetworkOsClient | null {
-  return null;
+/**
+ * Resolved from configuration (P35).
+ *
+ * Until this was written it returned null unconditionally, so every live call answered 503
+ * "adapter_unconfigured" by construction — which read like a credential gate and was actually an
+ * unwritten client. It now returns a real read-only client once the three Network OS settings are
+ * present, and still null (hence still 503, with a precise reason) when they are not.
+ *
+ * PULL ONLY. push() throws. Writeback to the firm's system of record is governed separately by
+ * canon §12A.5 and must not ride in on a read integration.
+ */
+export function configuredClient(env: Env): NetworkOsClient | null {
+  if (!networkOsConfigured(env)) return null;
+  return {
+    async pull(resource: NetworkResource) {
+      const result = await pullSnapshot(env);
+      if (!result.ok || !result.snapshot) throw new Error(result.detail);
+      const rows = resourceRows(result.snapshot, resource);
+      return {
+        // Network OS returns a whole snapshot rather than a paged feed, so a cursor would be
+        // fiction. One page, no next_cursor — honest about what the source actually offers.
+        records: rows.map((row) => toNetworkRecord(resource, row)),
+        next_cursor: null,
+        provider_version: result.source ?? "network_os_snapshot",
+      };
+    },
+    async push() {
+      throw new Error("Network OS writeback is not enabled (canon §12A.5 governs it separately).");
+    },
+  };
+}
+
+/** Which snapshot tab backs each resource. */
+function resourceRows(snapshot: NetworkSnapshot, resource: NetworkResource): Array<Record<string, unknown>> {
+  switch (resource) {
+    case "contact": return snapshot.contacts;
+    case "relationship": return snapshot.relationship_touches;
+    case "touch": return snapshot.relationship_touches;
+    // gmail_thread has no tab in the snapshot; an empty page is honest, an error would imply the
+    // resource is broken rather than simply not carried by this endpoint.
+    default: return [];
+  }
+}
+
+const ID_FIELD: Record<string, string> = {
+  contact: "contact_id",
+  relationship: "touch_id",
+  touch: "touch_id",
+};
+
+/**
+ * Flatten a Sheets row into the adapter's record shape. Every value is stringified because a
+ * spreadsheet has no types — pretending otherwise here would push the ambiguity downstream into
+ * identity resolution, where a number-shaped id and a string-shaped id stop matching.
+ */
+function toNetworkRecord(resource: NetworkResource, row: Record<string, unknown>): NetworkRecord {
+  const idField = ID_FIELD[resource] ?? "contact_id";
+  const externalId = String(row[idField] ?? "").trim();
+  const fields: Record<string, string | null> = {};
+  for (const [k, v] of Object.entries(row)) {
+    fields[k] = v === null || v === undefined || v === "" ? null : String(v);
+  }
+  return {
+    external_id: externalId,
+    // Email is the identity key where there is one: it is the field the firm actually dedupes
+    // people on. Falling back to the row id keeps a record without an email syncable rather than
+    // dropping it silently.
+    identity_key: String(row.email ?? row.primary_email ?? externalId).trim().toLowerCase(),
+    fields,
+    delivery_id: `${externalId}:${String(row.updated_at ?? row.created_at ?? "")}`,
+  };
 }
 
 /**

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P10 browser journey against local `wrangler dev`:
@@ -71,7 +72,9 @@ test("P10 LP journey: evidence gate → compliance receipt → publish → recor
   await page.getByRole("button", { name: "Approvals", exact: true }).click();
   const approvalCard = page.locator(`li[data-testid="approval-card-${cardId}"]`);
   await expect(approvalCard).toContainText("pending_review");
-  await approvalCard.getByRole("textbox").fill("reviewed against the administrator statement — E2E");
+  // Targeted by testid, not by role: an approval card now also carries evidence and comment
+  // inputs (canon §24.2 context), so "the textbox" is ambiguous.
+  await approvalCard.locator('[data-testid^="decision-note-"]').fill("reviewed against the administrator statement — E2E");
   await approvalCard.getByRole("button", { name: "Approve" }).click();
   await expect
     .poll(async () => (await (await request.get(`/api/approvals/${cardId}`, { headers: MP })).json()).state)
@@ -130,7 +133,7 @@ test("P10 LP journey: evidence gate → compliance receipt → publish → recor
   expect((effects.effect_requests ?? []).filter((r: { state: string }) => r.state === "EXECUTED")).toHaveLength(0);
 
   // The one spine carries the typed LP events.
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await gotoSurface(page, "Activity");
   await expect(page.locator('[data-testid="activity-event-lp.claim_published"]').first()).toBeVisible();
   await expect(page.locator('[data-testid="activity-event-lp.data_room_access_revoked"]').first()).toBeVisible();
 });

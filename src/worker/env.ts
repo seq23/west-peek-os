@@ -21,4 +21,25 @@ export interface Env {
   /** Specialist lane (P23). No vendor account exists; these are names only. */
   HARVEY_API_KEY?: string;
   NORM_API_KEY?: string;
+
+  // ── Outbound email (P33) ──
+  // Both are required before a single message can leave. A key alone does nothing: arriving in the
+  // environment is not a decision to start emailing people.
+  RESEND_API_KEY?: string;
+  /** Literal "enabled" switches sending on. Anything else — unset included — keeps it recorded-only. */
+  WP_OS_EMAIL_SEND?: string;
+  /** Verified sender address. Without it a send is refused rather than guessed. */
+  WP_OS_EMAIL_FROM?: string;
+
+  // ── Network OS live pull (P35) ──
+  // All three are required. Network OS authenticates a `wpn_session` cookie signed with its own
+  // APP_SESSION_SECRET, and only accepts emails on its approved-users list.
+  WP_OS_NETWORK_OS_BASE_URL?: string;
+  WP_OS_NETWORK_OS_SESSION_SECRET?: string;
+  WP_OS_NETWORK_OS_USER_EMAIL?: string;
+
+  // ── Browser Rendering (P44) ──
+  // Cloudflare's own headless browser, as a binding rather than an HTTP client — so browser tasks
+  // need no egress exemption and no third-party credential.
+  BROWSER?: Fetcher;
 }

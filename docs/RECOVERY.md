@@ -19,8 +19,7 @@ commands fail against the local store.
   1. `npm run migrate:local` — re-applies `migrations/*.sql` in order (schema + seeds).
   2. `node scripts/backup/restore.mjs --file backups/<latest>.json` — restores data
      from the most recent backup, if one exists.
-- Remote D1 (preview/production): UNPROVEN — CREDENTIAL/APPROVAL GATE. Remote recovery
-  runbook is a deployment-phase deliverable, not written yet.
+- Remote D1 (production): **PROVEN 17 Aug 2026** — see §6.
 
 ## 2. Corrupted local migration / broken local store
 
@@ -77,3 +76,62 @@ UNPROVEN until remote credentials exist.
 - R2 document/artifact restore and provenance re-linking (needs document pipelines).
 - Remote/preview/production backup scheduling and offsite copies (deployment gate).
 - Cross-environment restore drills (requires a second environment to exist).
+
+
+## 6. Remote production restore — PROVEN
+
+Run on 17 Aug 2026 against live production, on operator authorisation. Production was never
+written to: the drill restores INTO A THROWAWAY DATABASE and compares. Restoring over production
+to prove restore works would be the most expensive possible way to find a bug in the dump.
+
+```bash
+# 1 · Baseline what production holds, so there is something to verify against.
+npx wrangler d1 execute WP_OS_DB --env production --remote --json --command \
+  "SELECT (SELECT COUNT(*) FROM firm_user) AS firm_user, (SELECT COUNT(*) FROM action_type) AS action_type, \
+          (SELECT COUNT(*) FROM event_record) AS event_record, (SELECT COUNT(*) FROM intelligence_item) AS intelligence_item"
+
+# 2 · Export. Read-only.
+npx wrangler d1 export WP_OS_DB --env production --remote --output /tmp/prod-export.sql
+
+# 3 · Throwaway target.
+npx wrangler d1 create wp-os-restore-drill
+
+# 4 · Restore into it.
+npx wrangler d1 execute wp-os-restore-drill --remote --file /tmp/prod-export.sql
+
+# 5 · Verify (see the four checks below).
+
+# 6 · Tear down. The dump is a full copy of production data — delete it too.
+npx wrangler d1 delete wp-os-restore-drill
+rm -f /tmp/prod-export.sql
+```
+
+### The four checks, and why each one is there
+
+1. **Row counts match the baseline.** Necessary, and on its own worthless — empty rows count too.
+2. **Known records carry real content.** `fu_sequoia_taylor` has the right email; Walter is present
+   by name. This is what separates a restore from a schema import.
+3. **Triggers and indexes came back.** 95 triggers, 387 indexes. A dump that restores rows and
+   loses constraints looks perfect until the first write.
+4. **Append-only triggers still REFUSE.** An `UPDATE` on `event_record` must fail with
+   `event_record is append-only: UPDATE rejected (D15)`. This is the one that matters: it proves the
+   restore preserved the firm's GOVERNANCE, not merely its data. A restored database that accepts a
+   silent edit to the audit log is not a restored database.
+
+### Result, 17 Aug 2026
+
+| Check | Outcome |
+|---|---|
+| Export | 688 KB · 186 tables · 1,091 inserts |
+| Restore | 1,527 queries · 4,330 rows written · 305 ms |
+| Row counts | 7/7 tables match baseline exactly |
+| Content | `sequoia@westpeek.ventures`, Walter, 4 active employees |
+| Structure | 95 triggers · 387 indexes · schema at `0035` |
+| Append-only enforcement | UPDATE **refused** — 0 rows tampered |
+| Production after | unchanged at baseline |
+
+### Not yet proven
+
+- **R2 document restore.** The dump covers D1 only. Documents in `WP_OS_DOCUMENTS` are not
+  included, so a full disaster recovery is not yet proven end to end.
+- **Point-in-time.** `wrangler d1 time-travel` exists and is untested here.

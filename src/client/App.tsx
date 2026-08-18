@@ -1,8 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, getDevUser, setDevUser, useApi, type MeResponse } from "./lib/api";
+import { api, getDevUser, signOut, useApi, type MeResponse } from "./lib/api";
 import { HomePage } from "./pages/HomePage";
 import { IntelligencePage } from "./pages/IntelligencePage";
 import { EmployeesPage } from "./pages/EmployeesPage";
+import { EventsPage } from "./pages/EventsPage";
+import { RoomsPage } from "./pages/RoomsPage";
+import { IntroductionsPage } from "./pages/IntroductionsPage";
+import { DealProvenance } from "./pages/DealProvenance";
+import { CommunityPage } from "./pages/CommunityPage";
+import { IcPortalPage } from "./pages/IcPortalPage";
+import { LedgersPage } from "./pages/LedgersPage";
+import { FollowOnPage } from "./pages/FollowOnPage";
+import { WeeklyReviewPage } from "./pages/WeeklyReviewPage";
+import { CrossOfficePage } from "./pages/CrossOfficePage";
+import { SecondariesPage } from "./pages/SecondariesPage";
+import { PagePurposeBlock } from "./pages/PagePurposeBlock";
+import { SignInCard, SignedOutPage } from "./pages/AuthSurfaces";
+import { UniversityPage } from "./pages/UniversityPage";
+import { MarketMapPage } from "./pages/MarketMapPage";
+import { ApprovalContextPanel } from "./pages/ApprovalContextPanel";
 import { AiOpsPage } from "./pages/AiOpsPage";
 import { MachinesPage } from "./pages/MachinesPage";
 import { IntentPage } from "./pages/IntentPage";
@@ -11,6 +27,10 @@ import { NotificationsPage } from "./pages/NotificationsPage";
 import { ResearchPage } from "./pages/ResearchPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { CockpitPage } from "./pages/CockpitPage";
+import { HelpCenterPage } from "./pages/HelpCenterPage";
+import { LiveHelpPanel } from "./pages/LiveHelpPanel";
+import { CloseoutPanel } from "./pages/CloseoutPanel";
+import { SetupPage } from "./pages/SetupPage";
 import { enqueueCapture, flushCaptures, isOnline, queuedCaptures } from "./lib/offlineQueue";
 
 /**
@@ -145,75 +165,165 @@ interface AiBudgetResponse {
  * labelling only: every destination stays a visible, reachable button — none is hidden behind
  * a disclosure, and no label changed, so every existing selector still resolves.
  */
+/**
+ * Two tiers, not one flat list of twenty-nine.
+ *
+ * The rail previously gave every destination the same weight, which asks a Managing Partner to
+ * know what a Machine or an AI Op is before they can find Approvals. Everyday work is now six
+ * groups plus Help; the operator surfaces that only matter when something is wrong or being
+ * administered live behind one disclosure.
+ *
+ * NOTHING WAS REMOVED. All twenty-nine original destinations keep their key AND their exact
+ * label, so every existing deep link and selector still resolves; the twelve that moved are one
+ * keystroke away rather than one scroll away. `secondary` is the only new axis.
+ */
+/**
+ * The rail, grouped by WHEN you use something rather than what it is (P53).
+ *
+ * The previous shape grouped by subject — eight groups, forty destinations, and a "Team" group with
+ * one item in it. A one-item group is not a group, it is an orphan wearing a header, and that
+ * unevenness is what the eye reads as untidy before any styling detail.
+ *
+ * Grouping by the rhythm of a day means an operator asks "am I doing today's work, deal work, firm
+ * work, or looking something up" — which is a question they can answer — rather than "is Follow-on
+ * an Investing thing or a Portfolio thing", which they cannot.
+ *
+ * HOME AND ASK STAY UNGROUPED at the top, with icons. They are reached by muscle memory rather than
+ * by reading, and an icon is what makes that possible. Icons stop there deliberately: forty icons
+ * would mean inventing metaphors for things like "Contradictions", and a bad icon is worse than
+ * none because it has to be read AND decoded.
+ */
 const NAV_GROUPS = [
   {
-    group: "Command",
+    group: "",
+    pinned: true,
     items: [
-      { key: "home", label: "Home" },
+      { key: "home", label: "Home", icon: "home" },
+      { key: "intent", label: "Ask", icon: "ask" },
+    ],
+  },
+  {
+    // What is in front of you today. Approvals leads because it is the only group where something
+    // is waiting on YOU rather than the other way round.
+    group: "Now",
+    items: [
+      { key: "approvals", label: "Approvals", icon: "approvals" },
       { key: "today", label: "Today" },
-      { key: "cockpit", label: "Cockpit" },
       { key: "notifications", label: "Notifications" },
+      { key: "introductions", label: "Introductions" },
+      { key: "weekly-review", label: "Weekly review" },
+      { key: "capture", label: "Capture" },
+      { key: "work-cards", label: "Work cards" },
+      { key: "jobs", label: "Scheduled work" },
     ],
   },
   {
-    group: "Capture & work",
+    group: "Deals",
     items: [
-      { key: "capture", label: "+Capture" },
-      { key: "intent", label: "Intent → Execution" },
-      { key: "work-cards", label: "Work Cards" },
-      { key: "approvals", label: "Approvals" },
-    ],
-  },
-  {
-    group: "Intelligence",
-    items: [
-      { key: "intelligence", label: "Intelligence" },
-      { key: "research", label: "Research" },
+      { key: "investment", label: "Investment" },
       { key: "companies", label: "Companies" },
-      { key: "contradictions", label: "Contradictions" },
+      { key: "meetings", label: "Meetings" },
+      { key: "secondaries", label: "Secondaries" },
+      { key: "portfolio", label: "Portfolio" },
+      { key: "follow-on", label: "Follow-on" },
+      { key: "allocation", label: "Allocation" },
+      { key: "cockpit", label: "Fund strategy" },
+    ],
+  },
+  {
+    // The firm as an institution: the people around it and what it owes them. Employees sits here
+    // rather than in a group of its own — the AI workforce is part of the firm, not a category.
+    group: "Firm",
+    items: [
+      { key: "lp", label: "LP" },
+      { key: "rooms", label: "Rooms" },
+      { key: "events", label: "Events" },
+      { key: "community", label: "Community" },
+      { key: "employees", label: "Employees" },
+      { key: "reporting", label: "Reporting" },
+      { key: "record", label: "Record" },
+    ],
+  },
+  {
+    // Looking something up, or being taught it.
+    group: "Learn",
+    items: [
+      { key: "intelligence", label: "Sweeps" },
+      { key: "research", label: "Research" },
+      { key: "market-map", label: "Market mapping" },
+      { key: "university", label: "University" },
       { key: "documents", label: "Documents" },
     ],
   },
   {
-    group: "Investing",
+    group: "Admin",
+    secondary: true,
     items: [
-      { key: "investment", label: "Investment" },
-      { key: "portfolio", label: "Portfolio" },
-      { key: "allocation", label: "Allocation" },
-      { key: "meetings", label: "Meetings" },
-    ],
-  },
-  {
-    group: "Institutional",
-    items: [
-      { key: "lp", label: "LP" },
-      { key: "reporting", label: "Reporting" },
-      { key: "network", label: "Network OS" },
-      { key: "integrations", label: "Integrations" },
-    ],
-  },
-  {
-    group: "Workforce",
-    items: [
-      { key: "employees", label: "Employees" },
-      { key: "machines", label: "Machines" },
-      { key: "jobs", label: "Scheduled Work" },
-    ],
-  },
-  {
-    group: "Governance",
-    items: [
-      { key: "activity", label: "Activity" },
-      { key: "governance", label: "Governance" },
+      { key: "ai-ops", label: "Cockpit" },
       { key: "ai", label: "AI" },
-      { key: "ai-ops", label: "AI Ops" },
+      { key: "machines", label: "Machines" },
+      { key: "governance", label: "Governance" },
+      { key: "contradictions", label: "Contradictions" },
+      { key: "cross-office", label: "Cross-office" },
+      { key: "activity", label: "Activity" },
+      { key: "integrations", label: "Integrations" },
+      { key: "network", label: "Network OS" },
       { key: "diagnostics", label: "Diagnostics" },
+    ],
+  },
+  {
+    group: "",
+    footer: true,
+    items: [
+      { key: "setup", label: "Set up" },
+      { key: "help", label: "Help" },
     ],
   },
 ] as const;
 
-const NAV_ITEMS: Array<{ key: string; label: string; group: string }> = NAV_GROUPS.flatMap((g) =>
-  g.items.map((item) => ({ key: item.key, label: item.label, group: g.group })),
+/**
+ * The three icons. Inline SVG rather than a font or a sprite: the artifact CSP blocks external
+ * requests, and three paths do not justify a dependency.
+ */
+function NavIcon({ name }: { name: string }): JSX.Element | null {
+  const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true as const };
+  if (name === "home") {
+    return (
+      <svg {...common} className="nav-icon">
+        <path d="M2 6.5 8 2l6 4.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (name === "ask") {
+    return (
+      <svg {...common} className="nav-icon">
+        <path d="M14 9.5A2.5 2.5 0 0 1 11.5 12H6l-3 2.5V4.5A2.5 2.5 0 0 1 5.5 2h6A2.5 2.5 0 0 1 14 4.5v5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (name === "approvals") {
+    return (
+      <svg {...common} className="nav-icon">
+        <path d="m3 8.5 3.2 3.2L13 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  return null;
+}
+
+const NAV_ITEMS: Array<{ key: string; label: string; group: string; secondary: boolean }> =
+  NAV_GROUPS.flatMap((g) =>
+    g.items.map((item) => ({
+      key: item.key,
+      label: item.label,
+      group: g.group,
+      secondary: "secondary" in g && g.secondary === true,
+    })),
+  );
+
+/** Keys that live behind the More / System disclosure. */
+const SECONDARY_KEYS: ReadonlySet<string> = new Set(
+  NAV_ITEMS.filter((n) => n.secondary).map((n) => n.key),
 );
 
 /** Home is the shell's fallback surface; NAV_GROUPS is authored so it always exists. */
@@ -236,7 +346,7 @@ function initials(fullName: string): string {
  * Who is asking, in the surface header — one line, always in the same place, so the operator
  * can see their own authority without leaving the screen they are working on.
  */
-function IdentityPanel({ me, status, loading, onLogin }: { me: MeResponse | null; status: number | null; loading: boolean; onLogin: () => void }) {
+function IdentityPanel({ me, status, loading, onSignOut }: { me: MeResponse | null; status: number | null; loading: boolean; onSignOut: () => void }) {
   if (loading) return <p data-testid="identity-status">Checking identity…</p>;
   if (status === 200 && me) {
     return (
@@ -245,18 +355,9 @@ function IdentityPanel({ me, status, loading, onLogin }: { me: MeResponse | null
           {initials(me.fullName)}
         </span>
         Signed in as <strong>{me.fullName}</strong> ({me.email}) — {me.roles.join(", ") || "no roles"}
-        {getDevUser() && (
-          <button
-            type="button"
-            className="link-button"
-            onClick={() => {
-              setDevUser(null);
-              onLogin();
-            }}
-          >
-            Sign out
-          </button>
-        )}
+        <button type="button" className="link-button" data-testid="sign-out" onClick={onSignOut}>
+          Sign out
+        </button>
       </p>
     );
   }
@@ -264,45 +365,6 @@ function IdentityPanel({ me, status, loading, onLogin }: { me: MeResponse | null
     <p data-testid="identity-status">
       <span className="badge badge-gate">NOT AUTHENTICATED</span>
     </p>
-  );
-}
-
-/** The sign-in surface itself. Local mode only — production identity comes from Cloudflare Access. */
-function DevLoginCard({ onLogin }: { onLogin: () => void }) {
-  const [email, setEmail] = useState("");
-  return (
-    <form
-      className="card"
-      data-testid="dev-login"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (email.trim()) {
-          setDevUser(email.trim());
-          onLogin();
-        }
-      }}
-    >
-      <h3>Sign in</h3>
-      <p className="muted small">
-        West Peek OS shows no institutional state until it knows who is asking. In local mode the dev
-        identity header stands in for Cloudflare Access.
-      </p>
-      <div className="form-row">
-        <label>
-          Dev identity (local mode)
-          <input
-            data-testid="dev-login-email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@westpeek.ventures"
-            autoComplete="email"
-          />
-        </label>
-        <button type="submit" className="btn-primary" data-testid="dev-login-submit">
-          Sign in
-        </button>
-      </div>
-    </form>
   );
 }
 
@@ -614,6 +676,10 @@ function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeRe
         <h4>{card.title}</h4>
         <span className={approvalStateBadge(card.state)}>{card.state}</span>
       </div>
+
+      {/* Risk, evidence and questions, on the card. Canon §24.2 asks for these because an approval
+          you have to leave the page to evaluate is one you end up rubber-stamping. */}
+      <ApprovalContextPanel cardId={card.id} />
       <p className="muted small">
         action <code>{card.action_key}</code> on {card.object_type}/{card.object_id} · requested by {card.requested_by_type}/
         {card.requested_by_id} · requires {requiredRoles.join(" or ")}
@@ -1620,6 +1686,10 @@ function InvestmentPage({ me }: { me: MeResponse }) {
   const opportunities = useApi<{ opportunities: OpportunityRow[] }>(companyId ? `/api/opportunities?company_id=${companyId}` : null, [companyId]);
   const [title, setTitle] = useState("");
   const [dealType, setDealType] = useState("EARLY_STAGE_PRIMARY");
+  // Provenance is captured HERE rather than on a later screen. "Where did we meet them" is
+  // recoverable from memory for about a week; make it a separate errand and it never gets recorded.
+  const [origin, setOrigin] = useState("UNRECORDED");
+  const [relStartedAt, setRelStartedAt] = useState("");
   const [selected, setSelected] = useState<OpportunityRow | null>(null);
   const [packet, setPacket] = useState<DealMathPacketRow | null>(null);
   const [icPacketId, setIcPacketId] = useState<string | null>(null);
@@ -1636,11 +1706,18 @@ function InvestmentPage({ me }: { me: MeResponse }) {
           e.preventDefault();
           const { status, data } = await api<OpportunityRow & { error?: string }>("/api/opportunities", {
             method: "POST",
-            body: { company_id: companyId, opportunity_type: dealType, title },
+            body: {
+              company_id: companyId,
+              opportunity_type: dealType,
+              title,
+              relationship_origin: origin,
+              ...(relStartedAt ? { relationship_started_at: relStartedAt } : {}),
+            },
           });
           setMessage(status === 201 ? `Opportunity ${data!.id} created (${data!.status}).` : `Create refused: ${data?.error ?? status}`);
           if (status === 201) {
             setTitle("");
+            setRelStartedAt("");
             opportunities.reload();
           }
         }}
@@ -1668,6 +1745,27 @@ function InvestmentPage({ me }: { me: MeResponse }) {
         </label>
         <label>
           Title <input data-testid="opportunity-title" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <label>
+          Met them via{" "}
+          <select data-testid="opportunity-origin" value={origin} onChange={(e) => setOrigin(e.target.value)}>
+            {/* UNRECORDED stays selectable and is the default: forcing a choice would get a wrong
+                one, and a wrong origin is worse than a visible gap. */}
+            <option value="UNRECORDED">— not recorded —</option>
+            {["ROOM", "MASTERMIND", "OFFICE", "COUNCIL", "COMMUNITY_INTRO", "PORTFOLIO_REFERRAL",
+              "LP_REFERRAL", "INBOUND", "OUTBOUND", "NETWORK", "OTHER"].map((o) => (
+              <option key={o} value={o}>{o.charAt(0) + o.slice(1).toLowerCase().replace(/_/g, " ")}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Known since{" "}
+          <input
+            type="date"
+            data-testid="opportunity-known-since"
+            value={relStartedAt}
+            onChange={(e) => setRelStartedAt(e.target.value)}
+          />
         </label>
         <button type="submit" className="btn-strong" data-testid="opportunity-create-submit">
           Create opportunity
@@ -1760,8 +1858,10 @@ function InvestmentPage({ me }: { me: MeResponse }) {
             </p>
           )}
           {icPacketId && <IcPacketPanel packetId={icPacketId} onChanged={() => setNonce((n) => n + 1)} />}
+          {icPacketId && <IcPortalPage packetId={icPacketId} />}
         </div>
       )}
+      <DealProvenance />
     </section>
   );
 }
@@ -1912,6 +2012,9 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
         ))}
         {m.transcript_imports.length === 0 && <li className="state-empty" data-testid="no-transcripts">No transcript imports.</li>}
       </ul>
+
+      <LiveHelpPanel meetingId={m.id} />
+      <CloseoutPanel meetingId={m.id} />
 
       {message && <p className="notice" data-testid="meeting-message">{message}</p>}
     </div>
@@ -2229,14 +2332,27 @@ interface ContractView {
   integration_state: string;
 }
 
-const FIXTURE_CONTRACT = {
+/**
+ * The declared Network OS adapter contract (canon §12A).
+ *
+ * Renamed from FIXTURE_CONTRACT (P35): the name was wrong and dangerously so. Its content was
+ * always a genuine description of the integration, and it is now declared against a LIVE client —
+ * a governance record labelled "fixture" while real data moves is exactly the false record this
+ * system exists to prevent.
+ *
+ * `freshness` was corrected at the same time. It claimed "cursor per resource", which was true of
+ * the intended design and is not true of the built one: Network OS exposes a whole-snapshot
+ * endpoint, so every pull reads current state and there is no cursor to advance. Declaring
+ * cursoring we do not do would misstate the firm's own integration in its audit trail.
+ */
+const NETWORK_OS_CONTRACT = {
   source_of_truth: {
     network_os: ["contact", "relationship", "touch", "gmail_thread"],
     west_peek_os: ["work_card", "approval", "investment_record", "canonical_company_mapping", "audit"],
   },
   direction: "INBOUND read-only by default; OUTBOUND only behind network_os.writeback",
   identity_keys: { contact: "email_lower", relationship: "contact_external_id", touch: "touch_external_id", gmail_thread: "thread_id" },
-  freshness: "cursor per resource; last_sync_at recorded on every pull",
+  freshness: "full snapshot per pull (Network OS exposes current state, not a paged feed); last_sync_at recorded on every pull; fresh=1 bypasses its 45s cache",
   conflict_behavior: "divergence opens a conflict plus a resolver work card; never a silent overwrite",
   idempotency: "delivery_id keyed receipt; duplicates recorded as DUPLICATE_IGNORED",
   retry_behavior: "bounded retries; the approval receipt survives a failed writeback",
@@ -2265,7 +2381,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
       <p data-testid="integration-state">{contract.data?.integration_state ?? "loading…"}</p>
 
       <div className="form-row">
-        <button type="button" data-testid="contract-declare" onClick={() => post("/api/network/contract", FIXTURE_CONTRACT, 201, "Contract declared")}>
+        <button type="button" data-testid="contract-declare" onClick={() => post("/api/network/contract", NETWORK_OS_CONTRACT, 201, "Contract declared")}>
           Declare adapter contract
         </button>
         {/* No client is configured, so a LIVE pull must fail closed. */}
@@ -3237,7 +3353,53 @@ export function App() {
   const [active, setActive] = useState<string>("home");
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [navOpen, setNavOpen] = useState(false);
+  // Open if the current destination lives there, so arriving at a system page by deep link or by
+  // an in-app jump never leaves the operator looking at a collapsed region with no active item.
+  const [systemOpen, setSystemOpen] = useState<boolean>(() => SECONDARY_KEYS.has("home"));
   const me = useApi<MeResponse>("/api/me");
+  // Distinguishes "signed out deliberately" from "never signed in". Without it the two states
+  // render the same screen and the operator cannot tell whether sign-out worked.
+  const [signedOut, setSignedOut] = useState(false);
+
+  /**
+   * Which nav groups are collapsed, remembered across sessions.
+   *
+   * Stores what is CLOSED rather than what is open, so a group added later appears expanded by
+   * default — a new destination that arrives already hidden is one nobody discovers.
+   */
+  const [closedGroups, setClosedGroups] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem("wp-nav-closed");
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+
+  function toggleGroup(name: string) {
+    setClosedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      try {
+        window.localStorage.setItem("wp-nav-closed", JSON.stringify([...next]));
+      } catch {
+        // Storage unavailable; the rail still works, it just forgets between sessions.
+      }
+      return next;
+    });
+  }
+
+  function handleSignOut() {
+    const redirect = signOut();
+    if (redirect) {
+      // Production: Cloudflare Access owns the session, so only its logout endpoint can end it.
+      window.location.href = redirect;
+      return;
+    }
+    setSignedOut(true);
+    me.reload();
+  }
   const activeItem = NAV_ITEMS.find((n) => n.key === active) ?? NAV_FALLBACK;
 
   const refresh = useCallback(() => setRefreshNonce((n) => n + 1), []);
@@ -3247,6 +3409,9 @@ export function App() {
   const navigate = useCallback((key: string) => {
     setActive(key);
     setNavOpen(false);
+    // Reveal the secondary tier when something inside it becomes current. Never auto-COLLAPSE:
+    // closing the region under an operator who just opened it is the annoying half of this.
+    if (SECONDARY_KEYS.has(key)) setSystemOpen(true);
   }, []);
 
   return (
@@ -3281,25 +3446,99 @@ export function App() {
             </button>
           </div>
           <div className="rail-scroll">
-            {NAV_GROUPS.map((group) => (
-              <div key={group.group}>
-                <p className="rail-group">{group.group}</p>
-                <ul>
-                  {group.items.map((item) => (
-                    <li key={item.key}>
+            {NAV_GROUPS.map((group) => {
+              const isSecondary = "secondary" in group && group.secondary === true;
+              if (!isSecondary) {
+                const pinned = "pinned" in group && group.pinned === true;
+                const footer = "footer" in group && group.footer === true;
+                return (
+                  <div
+                    key={group.group || (pinned ? "__pinned" : "__footer")}
+                    className={pinned ? "rail-pinned" : footer ? "rail-footer" : undefined}
+                  >
+                    {/* A group header is a LABEL, never a target. Rendered as a non-interactive
+                        <p> with no hover and no pointer, so the eye can tell a heading from a
+                        destination without trying one to find out. Pinned and footer tiers carry
+                        no header at all — three items need no category name. */}
+                    {/* The header is now a disclosure rather than a dead label. It is still
+                        visually quieter than the destinations under it — a signpost should not
+                        compete with the things it points at — but it is operable, because a rail
+                        with forty items needs to be foldable down to the part you are working in. */}
+                    {group.group ? (
                       <button
                         type="button"
-                        className={item.key === active ? "nav-link nav-link-active" : "nav-link"}
-                        aria-current={item.key === active ? "page" : undefined}
-                        onClick={() => navigate(item.key)}
+                        className="rail-group rail-group-toggle"
+                        data-testid={`nav-group-${group.group.toLowerCase()}`}
+                        aria-expanded={!closedGroups.has(group.group)}
+                        onClick={() => toggleGroup(group.group)}
                       >
-                        {item.label}
+                        <span>{group.group}</span>
+                        <span className="rail-group-mark" aria-hidden="true">
+                          {closedGroups.has(group.group) ? "+" : "−"}
+                        </span>
                       </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+                    ) : null}
+                    <ul
+                      aria-label={group.group || (pinned ? "Primary" : "Secondary")}
+                      hidden={Boolean(group.group) && closedGroups.has(group.group)}
+                    >
+                      {group.items.map((item) => (
+                        <li key={item.key}>
+                          <button
+                            type="button"
+                            className={item.key === active ? "nav-link nav-link-active" : "nav-link"}
+                            aria-current={item.key === active ? "page" : undefined}
+                            onClick={() => navigate(item.key)}
+                          >
+                            {"icon" in item && item.icon ? <NavIcon name={item.icon} /> : null}
+                            {item.label}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              }
+              // The secondary tier. `hidden` (not display:none in CSS) so that assistive tech and
+              // Playwright agree with what a sighted operator sees — a collapsed region is really
+              // collapsed, not merely painted out of view.
+              return (
+                <div key={group.group} className="rail-secondary">
+                  <button
+                    type="button"
+                    className="rail-disclosure"
+                    data-testid="nav-system-toggle"
+                    aria-expanded={systemOpen}
+                    aria-controls="wp-nav-system"
+                    onClick={() => setSystemOpen((open) => !open)}
+                  >
+                    <span>{group.group}</span>
+                    <span className="rail-disclosure-mark" aria-hidden="true">
+                      {systemOpen ? "−" : "+"}
+                    </span>
+                  </button>
+                  <div id="wp-nav-system" hidden={!systemOpen}>
+                    <p className="rail-secondary-note">
+                      Administration and diagnostics. You do not need these for everyday work.
+                    </p>
+                    <ul>
+                      {group.items.map((item) => (
+                        <li key={item.key}>
+                          <button
+                            type="button"
+                            className={item.key === active ? "nav-link nav-link-active" : "nav-link"}
+                            aria-current={item.key === active ? "page" : undefined}
+                            onClick={() => navigate(item.key)}
+                          >
+                            {item.label}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <p className="rail-foot">
             {authed ? (
@@ -3318,22 +3557,40 @@ export function App() {
             <p className="surface-eyebrow">{activeItem.group}</p>
             <h2>{activeItem.label}</h2>
             <div className="surface-identity">
-              <IdentityPanel me={me.data} status={me.status} loading={me.loading} onLogin={me.reload} />
+              <IdentityPanel me={me.data} status={me.status} loading={me.loading} onSignOut={handleSignOut} />
               {authed && <StatusBar onNavigate={navigate} refreshNonce={refreshNonce} />}
             </div>
           </header>
           <div className="surface-body" id="wp-surface">
-          {!authed && !me.loading && (
-            <>
-              <p className="notice notice-gate" data-testid="auth-required">
-                Sign in to use the governed work surface.
-              </p>
-              <DevLoginCard onLogin={me.reload} />
-            </>
+          {/* Plain-English orientation, rendered once for every route (P40). Only when signed in:
+              an anonymous visitor sees the login prompt, and explaining a page they cannot open
+              would be noise. */}
+          {authed && <PagePurposeBlock navKey={active} label={activeItem.label} onNavigate={navigate} />}
+          {!authed && !me.loading && active !== "help" && (
+            signedOut ? (
+              <SignedOutPage onSignIn={() => setSignedOut(false)} />
+            ) : (
+              <SignInCard onLogin={() => { setSignedOut(false); me.reload(); }} />
+            )
           )}
-          {authed && active === "home" && <HomePage me={me.data!} onNavigate={setActive} />}
+          {/* Help is reachable signed-out too: an operator who cannot get in still deserves to
+              learn what this is and how to get started. */}
+          {active === "help" && <HelpCenterPage />}
+          {authed && active === "home" && <HomePage me={me.data!} onNavigate={navigate} />}
+          {authed && active === "setup" && <SetupPage me={me.data!} />}
           {authed && active === "intelligence" && <IntelligencePage me={me.data!} />}
           {authed && active === "employees" && <EmployeesPage me={me.data!} />}
+          {authed && active === "rooms" && <RoomsPage />}
+          {authed && active === "introductions" && <IntroductionsPage />}
+          {authed && active === "events" && <EventsPage />}
+          {authed && active === "community" && <CommunityPage />}
+          {authed && active === "record" && <LedgersPage />}
+          {authed && active === "follow-on" && <FollowOnPage />}
+          {authed && active === "weekly-review" && <WeeklyReviewPage />}
+          {authed && active === "cross-office" && <CrossOfficePage />}
+          {authed && active === "secondaries" && <SecondariesPage />}
+          {authed && active === "university" && <UniversityPage />}
+          {authed && active === "market-map" && <MarketMapPage />}
           {authed && active === "machines" && <MachinesPage me={me.data!} />}
           {authed && active === "jobs" && <JobsPage me={me.data!} />}
           {authed && active === "notifications" && <NotificationsPage me={me.data!} />}
