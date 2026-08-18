@@ -195,6 +195,7 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('opportunity.create', 'Create opportunity', 'Record an investment opportunity on a canonical company (secondaries keep seller/block provenance).', 0, 0),
   ('opportunity.update', 'Update opportunity', 'Update opportunity fields (price, quantity, fees, terms, provenance).', 0, 0),
   ('opportunity.transition', 'Transition opportunity', 'Move an opportunity through its lifecycle (NEW→SCREENING→DILIGENCE→IC_READY→IC_DECIDED→CLOSED, or PASS/WITHDRAWN).', 0, 0),
+  ('opportunity.backfill', 'Backfill opportunity', 'Record a holding that predates the system by placing its status directly, permanently marked as backfilled with a reason. Separate from transition so authority over history is grantable on its own.', 0, 0),
   ('opportunity_block_link.propose', 'Propose block link', 'Link two opportunities as duplicate candidates or related blocks. Linking never merges.', 0, 0),
   ('opportunity_block_link.decide', 'Decide block link', 'Human confirm/reject of a proposed duplicate/related block link (human only).', 0, 0),
   ('transaction.create', 'Create transaction', 'Draft a transaction (PURCHASE/SALE/PRIMARY_INVESTMENT/FOLLOW_ON/EXIT_*); approval via the type-specific reserved action.', 0, 0),

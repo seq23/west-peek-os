@@ -168,6 +168,14 @@ export interface OpportunityRow {
   relationship_origin: string;
   origin_event_id: string | null;
   relationship_started_at: string | null;
+  /**
+   * Set only on a holding entered as history rather than decided here (migration 0050). Non-null
+   * means the status was placed, not walked — read it before treating the stage as a decision the
+   * firm made. `as_of_date` is when the thing actually happened; `backfilled_at` is when it was typed in.
+   */
+  backfilled_at: string | null;
+  backfill_reason: string | null;
+  as_of_date: string | null;
   firm_scope: string;
   created_by: string;
   created_at: string;
@@ -334,6 +342,83 @@ export async function transitionOpportunity(env: Env, actor: Actor, id: string, 
     objectId: id,
     firmScope: row.firm_scope,
     payload: { from: row.status, to },
+  });
+  return (await getOpportunity(env, id))!;
+}
+
+/**
+ * Record a holding that predates the system — the backfill lane (migration 0050).
+ *
+ * The lifecycle machine above is correct for every deal the firm decides from here on, and
+ * deliberately offers no shortcut to CLOSED. History does not fit it. Sensori closed as a $10K SPV
+ * before Fund I existed and never went to IC; the only options were to walk it up the ladder,
+ * minting an ic_decision that never happened, or to leave a closed holding parked at NEW. Both put
+ * something false on the board.
+ *
+ * This sets the status directly AND MARKS THE ROW AS BACKFILLED, permanently, with a reason and
+ * the date the thing actually happened. The distinction the product must never lose is between
+ * *a decision this firm made* and *a fact somebody typed in later*; a status alone cannot carry it,
+ * so the flag carries it instead.
+ *
+ * Constraints that make this a lane rather than a hole in the machine:
+ *   · a reason is required, and an empty one is refused — an unexplained backfill is the thing
+ *     this is meant to prevent;
+ *   · only a row still at NEW may be backfilled, so it can never overwrite a real lifecycle;
+ *   · it is a distinct action key, so authority to backfill history is grantable separately from
+ *     authority to move a live deal;
+ *   · the event carries `backfill: true`, so the trail shows how the status was reached.
+ */
+export async function backfillOpportunity(
+  env: Env,
+  actor: Actor,
+  id: string,
+  input: { to: OpportunityStatus; reason: string; as_of_date?: string },
+): Promise<OpportunityRow> {
+  const row = await getOpportunity(env, id);
+  if (!row) throw new InvestmentError(404, "not_found");
+  await mustAuthorize(env, actor, "opportunity.backfill", "investment_opportunity", id, row.firm_scope);
+
+  // Order matters. A backfilled row is no longer NEW, so testing the status first would answer
+  // every second attempt with "not_backfillable" — technically true, and misleading: it reads as
+  // "this deal is in flight" when the real answer is "history was already entered here". The
+  // specific check goes first so the caller is told which of the two it actually hit.
+  if (row.backfilled_at) {
+    throw new InvestmentError(
+      409,
+      "already_backfilled",
+      `this opportunity was backfilled on ${row.backfilled_at}; correct it with a compensating record, not a second backfill`,
+    );
+  }
+  if (row.status !== "NEW") {
+    throw new InvestmentError(
+      409,
+      "not_backfillable",
+      `only an opportunity still at NEW may be backfilled; this one is ${row.status}`,
+    );
+  }
+  const reason = input.reason.trim();
+  if (!reason) {
+    throw new InvestmentError(400, "reason_required", "a backfill must say why it is being entered as history");
+  }
+
+  const backfilledAt = new Date().toISOString();
+  await env.WP_OS_DB.prepare(
+    `UPDATE investment_opportunity
+        SET status = ?2, backfilled_at = ?3, backfill_reason = ?4, as_of_date = ?5
+      WHERE id = ?1`,
+  )
+    .bind(id, input.to, backfilledAt, reason, input.as_of_date ?? null)
+    .run();
+
+  const { actorType, actorId } = eventActor(actor);
+  await appendEvent(env, {
+    eventType: "investment.opportunity_backfilled",
+    actorType,
+    actorId,
+    objectType: "investment_opportunity",
+    objectId: id,
+    firmScope: row.firm_scope,
+    payload: { from: row.status, to: input.to, backfill: true, reason, as_of_date: input.as_of_date ?? null },
   });
   return (await getOpportunity(env, id))!;
 }
@@ -1513,6 +1598,28 @@ export async function handleTransitionOpportunity(ctx: RouteContext): Promise<Re
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   try {
     return json(await transitionOpportunity(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data.to));
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/**
+ * `reason` has a real minimum length on purpose. "backfill" or "old" would satisfy a
+ * non-empty check and tell a future reader nothing, which is the entire failure this lane exists
+ * to avoid.
+ */
+const backfillOpportunitySchema = z.object({
+  to: z.enum(OPPORTUNITY_STATUSES),
+  reason: z.string().trim().min(12),
+  as_of_date: z.string().trim().min(1).optional(),
+});
+
+export async function handleBackfillOpportunity(ctx: RouteContext): Promise<Response> {
+  const body = await parseJsonBody(ctx.request);
+  const parsed = backfillOpportunitySchema.safeParse(body);
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    return json(await backfillOpportunity(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data));
   } catch (err) {
     return errorResponse(err);
   }

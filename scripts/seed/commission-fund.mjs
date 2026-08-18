@@ -335,14 +335,6 @@ async function main() {
   // event behind it, not a column written at insert time.
   console.log("\nStages");
   const current = (await api("GET", "/api/opportunities")).data?.opportunities ?? [];
-  //
-  // SENSORI IS DELIBERATELY NOT WALKED TO CLOSED. The only route there is
-  // NEW → SCREENING → DILIGENCE → IC_READY → IC_DECIDED → CLOSED, and Sensori went through none
-  // of it: it is a $10K SPV that predates the fund and never saw an IC. Driving it up the ladder
-  // would mint an ic_decision that did not happen, in a system whose premise is that the trail is
-  // true. It stays at NEW with the facts in `terms` until it can be recorded where a closed
-  // holding actually belongs — a transaction and a position — which needs entry terms nobody has
-  // supplied yet. Absent is recoverable; fabricated is not.
   for (const [title, to] of [
     ["Psyflo — pre-seed, screening", "SCREENING"],
     ["Synthient.ai — cold", "PASS"],
@@ -371,14 +363,37 @@ async function main() {
     console.log(`  →  ${title} — ${opp.status} -> ${to}`);
   }
 
+  // Sensori predates the fund and never went to IC, so it takes the backfill lane (migration
+  // 0050) rather than the lifecycle: the status is placed and the row is permanently marked as
+  // history, with the reason attached. Walking it up through IC_DECIDED would have minted a
+  // decision that never happened.
+  console.log("\nPre-dated holdings");
+  const sensori = ((await api("GET", "/api/opportunities")).data?.opportunities ?? [])
+    .find((o) => o.title === "Sensori — SPV, closed");
+  if (!sensori) {
+    console.log("  !  Sensori — not found");
+  } else if (sensori.backfilled_at) {
+    existed += 1;
+    console.log(`  ·  Sensori — already backfilled (${sensori.status})`);
+  } else if (DRY_RUN) {
+    console.log("  →  Sensori — WOULD BACKFILL to CLOSED");
+  } else {
+    const r = await api("POST", `/api/opportunities/${sensori.id}/backfill`, {
+      to: "CLOSED",
+      reason: "$10K SPV that closed before Fund I existed; never went through West Peek's IC",
+      as_of_date: "2025-08-06",
+    });
+    if (r.status >= 400) {
+      console.log(`  !  Sensori — backfill REFUSED (HTTP ${r.status}): ${JSON.stringify(r.data)?.slice(0, 160)}`);
+    } else {
+      created += 1;
+      console.log("  →  Sensori — backfilled to CLOSED, marked as history");
+    }
+  }
+
   notes.push(
-    "Sensori sits at NEW, not CLOSED, on purpose. It needs a transaction + position, which require " +
-    "an entry price and share count nobody has supplied. Ask for the SPV terms; do not walk it " +
-    "through IC to make the board look tidy.",
-  );
-  notes.push(
-    "There is no way to record a pre-fund or already-closed holding without either inventing " +
-    "process history or leaving it mis-staged. Worth a deliberate backfill path.",
+    "Sensori is CLOSED but has no transaction or position: both need an entry price and share " +
+    "count nobody has supplied, so ownership, mark and return cannot be computed. Ask for the SPV terms.",
   );
   notes.push("relationship_origin has no PITCH_COMPETITION value; Psyflo is recorded as COMMUNITY_INTRO with the detail in terms.");
 

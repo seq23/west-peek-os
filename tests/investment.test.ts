@@ -1001,3 +1001,96 @@ describe("8. no legal, compliance, or brokerage conclusion is stored anywhere in
     expect(JSON.parse(res.body.dilution_assumptions_json).option_pool_pct).toBe(10);
   });
 });
+
+/**
+ * Pre-dated holdings (migration 0050).
+ *
+ * The lifecycle machine deliberately offers no shortcut to CLOSED, which is right for anything
+ * decided from here on and wrong for history: the firm's first investment was a $10K SPV that
+ * closed before the fund existed and never saw an IC. The lane exists so that fact can be recorded
+ * without either minting an ic_decision that never happened or parking a closed holding at NEW.
+ *
+ * What these assert is the thing that makes the lane safe rather than a hole in the machine: a
+ * backfilled row is permanently distinguishable from a decision this firm made.
+ */
+describe("backfilling a holding that predates the system", () => {
+  async function newOpportunity(title: string): Promise<string> {
+    const company = await createCompany();
+    const res = await call<{ id: string }>("/api/opportunities", MP, "POST", {
+      company_id: company,
+      opportunity_type: "EARLY_STAGE_PRIMARY",
+      title,
+    });
+    expect(res.status).toBe(201);
+    return res.body.id;
+  }
+
+  it("reaches CLOSED directly, which the lifecycle machine refuses", async () => {
+    const id = await newOpportunity(`backfill closed ${crypto.randomUUID().slice(0, 8)}`);
+
+    // The ordinary path cannot get there — that is the whole reason this lane exists.
+    const walked = await call(`/api/opportunities/${id}/transition`, MP, "POST", { to: "CLOSED" });
+    expect(walked.status).toBe(409);
+
+    const res = await call<{ status: string; backfilled_at: string | null; as_of_date: string | null }>(
+      `/api/opportunities/${id}/backfill`, MP, "POST",
+      { to: "CLOSED", reason: "SPV closed before the fund existed; never went to IC", as_of_date: "2025-08-06" },
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("CLOSED");
+    expect(res.body.as_of_date).toBe("2025-08-06");
+    // The mark is the point: a reader can tell this was entered, not decided.
+    expect(res.body.backfilled_at).toBeTruthy();
+  });
+
+  it("records WHY, and refuses a reason too thin to inform anyone", async () => {
+    const id = await newOpportunity(`backfill reason ${crypto.randomUUID().slice(0, 8)}`);
+    const thin = await call(`/api/opportunities/${id}/backfill`, MP, "POST", { to: "CLOSED", reason: "old" });
+    expect(thin.status).toBe(400);
+
+    const ok = await call<{ backfill_reason: string }>(
+      `/api/opportunities/${id}/backfill`, MP, "POST",
+      { to: "CLOSED", reason: "angel cheque predating the fund, entered as history" },
+    );
+    expect(ok.status).toBe(200);
+    expect(ok.body.backfill_reason).toContain("predating the fund");
+  });
+
+  it("never overwrites a real lifecycle, and never runs twice", async () => {
+    const id = await newOpportunity(`backfill guard ${crypto.randomUUID().slice(0, 8)}`);
+
+    // A deal the firm has actually started working is not history and may not be rewritten as it.
+    expect((await call(`/api/opportunities/${id}/transition`, MP, "POST", { to: "SCREENING" })).status).toBe(200);
+    const live = await call(`/api/opportunities/${id}/backfill`, MP, "POST", {
+      to: "CLOSED", reason: "trying to rewrite a deal that is genuinely in flight",
+    });
+    expect(live.status).toBe(409);
+    expect(live.body.error).toBe("not_backfillable");
+
+    const other = await newOpportunity(`backfill once ${crypto.randomUUID().slice(0, 8)}`);
+    const first = await call(`/api/opportunities/${other}/backfill`, MP, "POST", {
+      to: "CLOSED", reason: "first and only entry of this historical holding",
+    });
+    expect(first.status).toBe(200);
+    const second = await call(`/api/opportunities/${other}/backfill`, MP, "POST", {
+      to: "PASS", reason: "second attempt that must not be allowed to land",
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toBe("already_backfilled");
+  });
+
+  it("leaves a trail that says the status was placed rather than walked", async () => {
+    const id = await newOpportunity(`backfill trail ${crypto.randomUUID().slice(0, 8)}`);
+    await call(`/api/opportunities/${id}/backfill`, MP, "POST", {
+      to: "CLOSED", reason: "historical holding entered during commissioning",
+    });
+    const events = await t.db
+      .prepare("SELECT event_type, payload_json FROM event_record WHERE object_id = ?1 ORDER BY created_at")
+      .bind(id)
+      .all<{ event_type: string; payload_json: string }>();
+    const backfill = (events.results ?? []).find((e) => e.event_type === "investment.opportunity_backfilled");
+    expect(backfill).toBeTruthy();
+    // Anything reading the trail can distinguish the two without knowing this endpoint exists.
+    expect(JSON.parse(backfill!.payload_json).backfill).toBe(true);
+  });
+});

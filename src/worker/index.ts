@@ -203,6 +203,7 @@ import {
   handleScanBlockLinks,
   handleSubmitTransaction,
   handleTransitionOpportunity,
+  handleBackfillOpportunity,
   handleUpdateDealMathPacket,
   handleUpdateOpportunity,
   handleVoidTransaction,
@@ -605,6 +606,7 @@ const router = new Router()
   .get("/api/opportunities/:id", handleGetOpportunity)
   .patch("/api/opportunities/:id", handleUpdateOpportunity)
   .post("/api/opportunities/:id/transition", handleTransitionOpportunity)
+  .post("/api/opportunities/:id/backfill", handleBackfillOpportunity)
   // P6 — duplicate/related blocks are LINKED, never merged.
   .post("/api/opportunities/:id/block-links/scan", handleScanBlockLinks)
   .post("/api/opportunities/:id/block-links", handleCreateBlockLink)
