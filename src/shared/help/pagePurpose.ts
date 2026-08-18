@@ -113,12 +113,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Note what someone needs or can help with", "Approve or dismiss a suggestion", "Record that both sides said yes"],
   },
   rooms: {
-    purpose: "Rooms are West Peek's curated gatherings for 25-35 people, built around one real question, and the part of the community that earns money through sponsors.",
+    purpose: "How West Peek gathers: the stance behind it, the rhythm at full speed, the Room being planned this month, the sponsors paying for it, and every gathering the firm has on record.",
     youCan: ["Read and approve the Room proposed this month", "Call a venue and confirm it", "Work the sponsor pipeline"],
-  },
-  events: {
-    purpose: "Events as firm records: who came, when, and what came out of it. West Peek Live runs the room itself.",
-    youCan: ["Record an event", "Track attendance", "Link the room in West Peek Live"],
   },
   community: {
     purpose: "The firm's read on the community as a population — segments, engagement, and what that suggests. Network OS owns who is a member.",

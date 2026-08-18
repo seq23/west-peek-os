@@ -238,8 +238,9 @@ const NAV_GROUPS = [
     group: "Firm",
     items: [
       { key: "lp", label: "LP" },
-      { key: "rooms", label: "Rooms" },
-      { key: "events", label: "Events" },
+      // Events used to be its own tab. A Room IS an event, and two tabs for one idea made the
+      // operator pick between them every time; the events surface now renders inside Rooms.
+      { key: "rooms", label: "Events & Rooms" },
       { key: "community", label: "Community" },
       { key: "employees", label: "Employees" },
       { key: "reporting", label: "Reporting" },
@@ -3849,7 +3850,6 @@ export function App() {
           {authed && active === "employees" && <EmployeesPage me={me.data!} />}
           {authed && active === "rooms" && <RoomsPage />}
           {authed && active === "introductions" && <IntroductionsPage />}
-          {authed && active === "events" && <EventsPage />}
           {authed && active === "community" && <CommunityPage />}
           {authed && active === "record" && <LedgersPage />}
           {authed && active === "follow-on" && <FollowOnPage />}

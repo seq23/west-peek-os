@@ -58,7 +58,7 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
   E("Penn", "Outreach Composer", "LP/Fundraising", ["lp_fundraising", "marketing_pr_content"]),
   // Portfolio / Event / Brand / Ops
   E("Winter", "Portfolio Support Manager", "Portfolio/Event/Brand/Ops", ["portfolio_support"]),
-  E("Parker", "Event Planner", "Portfolio/Event/Brand/Ops", ["west_peek_live_events"]),
+  E("Parker", "Event Marketing Coordinator", "Portfolio/Event/Brand/Ops", ["west_peek_live_events"]),
   E("Wynn", "Sponsorship Scout", "Portfolio/Event/Brand/Ops", ["brand_sponsorship_revenue"]),
   E("Percy", "Marketing Lead", "Portfolio/Event/Brand/Ops", ["marketing_pr_content"]),
   E("Prue", "PR Lead", "Portfolio/Event/Brand/Ops", ["marketing_pr_content"]),
