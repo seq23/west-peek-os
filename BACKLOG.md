@@ -150,6 +150,19 @@ that secret. About an hour, and it removes a shared secret between two deployed 
 
 ## Known sharp edges
 
+### The suite is flaky under parallel execution
+Observed repeatedly on 18 Aug 2026: `npx vitest run` intermittently reports one to six failed
+FILES with zero or a handful of failed tests and a pile of skips, and a re-run passes. The same
+command with `--no-file-parallelism` passes every time — 67 files, 1004 tests, no failures.
+
+So it is miniflare contention between concurrent workers, not product code. It still matters: a
+suite that fails randomly is a suite people stop reading, and the next real regression arrives
+looking exactly like the noise. Worth pinning down the contended resource — most likely each
+file's D1 instance — and either isolating it or capping worker concurrency in `vitest.config.ts`.
+
+**Until then, `--no-file-parallelism` is the trustworthy run.** It takes about six minutes instead
+of ninety seconds, which is the actual cost of the bug.
+
 ### INSERT OR IGNORE hides constraint failures
 Migration 0046 seeded a scheduled job, omitted a NOT NULL column, and `INSERT OR IGNORE` turned the
 violation into a no-op. The migration reported success, `schema_version` advanced, and the job

@@ -6,7 +6,17 @@ hand-verified with the worked examples below, and encoded as fixtures in
 `tests/dealMath.test.ts` (41 tests). Anything that could not be independently
 verified is listed under **UNVERIFIED / NOT PORTED** and stays manual-entry only.
 
-Source: read-only clone of `seq23/secondaries` at `/tmp/wpos_partner_secondaries`
+Source: `seq23/secondaries`, **verified against commit `a350ad6`** (8 Aug 2026), deployed at
+venturedeals.joinwestpeek.com. Re-checked 18 Aug 2026: the line numbers in the port map still land
+on the same functions, and `computeCarry`, `xnpv`, `xirr` and `premiumDiscount` were compared
+body-for-body and are unchanged. Record the commit on every future re-check — the original port
+noted it as unknown, which made drift impossible to detect.
+
+The dashboards are linked from the Deal maths page rather than rebuilt inside this app. A second
+calculator was started and deleted: it covered fewer cases than the original, and two tools that
+can disagree about the same deal is a worse outcome than one extra click.
+
+Original source clone path
 (`app.js`, 865 lines; the two Playwright specs in `tests/` document intended
 behavior). Line numbers below refer to that file. Only pure calculation logic was
 ported — no DOM, storage, or UI code.

@@ -64,6 +64,10 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "What the system has told you, and how it reached you.",
     youCan: ["Read and acknowledge notifications", "Set quiet hours and what you want to hear about"],
   },
+  thesis: {
+    purpose: "What the firm is looking for, and the check and ownership it is looking for it at. Editing writes a new version rather than replacing the old one.",
+    youCan: ["Change the sectors, stage and filters that define a fit", "Set the check size and the ownership to hold out for", "Read every version the firm has held"],
+  },
   investment: {
     purpose: "The early-stage pipeline — opportunities from first look through to an IC decision.",
     youCan: ["Move an opportunity through its stages", "Open the diligence behind it", "Take it to the Investment Committee"],
@@ -92,6 +96,10 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "How capital is split across the fund's sleeves, and what moving it would mean.",
     youCan: ["Compare allocation options", "See what a change requires before approving it"],
   },
+  modeling: {
+    purpose: "The team's venture deal dashboards — secondary deals, primary rounds and fund construction — with the firm's own numbers ready to carry across. The math there and the math on a deal here are the same code.",
+    youCan: ["Open the dashboards to model a deal or a fund", "Copy the fund's current check, ownership and reserve figures", "See why a number modelled there matches one on a real deal"],
+  },
   cockpit: {
     purpose: "Fund strategy — construction scenarios and the assumptions behind them, stated so they can be argued with.",
     youCan: ["Work through a scenario", "See which assumptions a finding rests on"],
@@ -109,12 +117,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Note what someone needs or can help with", "Approve or dismiss a suggestion", "Record that both sides said yes"],
   },
   rooms: {
-    purpose: "Rooms are West Peek's curated gatherings for 25-35 people, built around one real question, and the part of the community that earns money through sponsors.",
+    purpose: "How West Peek gathers: the stance behind it, the rhythm at full speed, the Room being planned this month, the sponsors paying for it, and every gathering the firm has on record.",
     youCan: ["Read and approve the Room proposed this month", "Call a venue and confirm it", "Work the sponsor pipeline"],
-  },
-  events: {
-    purpose: "Events as firm records: who came, when, and what came out of it. West Peek Live runs the room itself.",
-    youCan: ["Record an event", "Track attendance", "Link the room in West Peek Live"],
   },
   community: {
     purpose: "The firm's read on the community as a population — segments, engagement, and what that suggests. Network OS owns who is a member.",

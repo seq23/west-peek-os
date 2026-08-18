@@ -27,6 +27,8 @@ import { NotificationsPage } from "./pages/NotificationsPage";
 import { ResearchPage } from "./pages/ResearchPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { CockpitPage } from "./pages/CockpitPage";
+import { ThesisPage } from "./pages/ThesisPage";
+import { ModelingPage } from "./pages/ModelingPage";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
@@ -200,6 +202,7 @@ const NAV_GROUPS = [
     items: [
       { key: "home", label: "Home", icon: "home" },
       { key: "intent", label: "Ask", icon: "ask" },
+      { key: "capture", label: "Capture", icon: "capture" },
     ],
   },
   {
@@ -212,7 +215,6 @@ const NAV_GROUPS = [
       { key: "notifications", label: "Notifications" },
       { key: "introductions", label: "Introductions" },
       { key: "weekly-review", label: "Weekly review" },
-      { key: "capture", label: "Capture" },
       { key: "work-cards", label: "Work cards" },
       { key: "jobs", label: "Scheduled work" },
     ],
@@ -220,7 +222,8 @@ const NAV_GROUPS = [
   {
     group: "Deals",
     items: [
-      { key: "investment", label: "Investment" },
+      { key: "thesis", label: "Thesis" },
+      { key: "investment", label: "Dealflow" },
       { key: "companies", label: "Companies" },
       { key: "meetings", label: "Meetings" },
       { key: "secondaries", label: "Secondaries" },
@@ -228,6 +231,7 @@ const NAV_GROUPS = [
       { key: "follow-on", label: "Follow-on" },
       { key: "allocation", label: "Allocation" },
       { key: "cockpit", label: "Fund strategy" },
+      { key: "modeling", label: "Deal Math" },
     ],
   },
   {
@@ -236,8 +240,9 @@ const NAV_GROUPS = [
     group: "Firm",
     items: [
       { key: "lp", label: "LP" },
-      { key: "rooms", label: "Rooms" },
-      { key: "events", label: "Events" },
+      // Events used to be its own tab. A Room IS an event, and two tabs for one idea made the
+      // operator pick between them every time; the events surface now renders inside Rooms.
+      { key: "rooms", label: "Events & Rooms" },
       { key: "community", label: "Community" },
       { key: "employees", label: "Employees" },
       { key: "reporting", label: "Reporting" },
@@ -248,7 +253,7 @@ const NAV_GROUPS = [
     // Looking something up, or being taught it.
     group: "Learn",
     items: [
-      { key: "intelligence", label: "Sweeps" },
+      { key: "intelligence", label: "Sources" },
       { key: "research", label: "Research" },
       { key: "market-map", label: "Market mapping" },
       { key: "university", label: "University" },
@@ -282,8 +287,8 @@ const NAV_GROUPS = [
 ] as const;
 
 /**
- * The three icons. Inline SVG rather than a font or a sprite: the artifact CSP blocks external
- * requests, and three paths do not justify a dependency.
+ * The four icons. Inline SVG rather than a font or a sprite: the artifact CSP blocks external
+ * requests, and four paths do not justify a dependency.
  */
 function NavIcon({ name }: { name: string }): JSX.Element | null {
   const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true as const };
@@ -298,6 +303,13 @@ function NavIcon({ name }: { name: string }): JSX.Element | null {
     return (
       <svg {...common} className="nav-icon">
         <path d="M14 9.5A2.5 2.5 0 0 1 11.5 12H6l-3 2.5V4.5A2.5 2.5 0 0 1 5.5 2h6A2.5 2.5 0 0 1 14 4.5v5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (name === "capture") {
+    return (
+      <svg {...common} className="nav-icon">
+        <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
       </svg>
     );
   }
@@ -409,6 +421,97 @@ function TodayPage({ me }: { me: MeResponse }) {
   );
 }
 
+/**
+ * Say what a capture is about.
+ *
+ * Capture is a holding pen — it owns nothing, and until this existed the only thing you could do
+ * with a note was hand it to a processing machine. Meanwhile the two systems of record were fed by
+ * hand: companies here, people in Network OS.
+ *
+ * The person branch is the one worth reading. Network OS owns people and this system cannot write
+ * to it, so somebody it has never heard of has nowhere to go. Rather than pretend, they are
+ * recorded locally, marked, and queued — and the response says which of those two happened in
+ * words rather than a status code, because "we filed this under a system that does not know them"
+ * is exactly the kind of thing an interface usually hides.
+ */
+function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolved: () => void }): JSX.Element {
+  const [kind, setKind] = useState<"COMPANY" | "PERSON" | "NEITHER">("COMPANY");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [organization, setOrganization] = useState("");
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [queued, setQueued] = useState(false);
+
+  return (
+    <div data-testid={`resolve-capture-${captureId}`}>
+      <p className="muted small">
+        What is this about? Companies are matched against the register before a new one is created.
+        People are checked against Network OS, which owns them.
+      </p>
+      <form
+        className="form-row"
+        data-testid="resolve-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const res = await api<{ what_this_means?: string; person_source?: string; error?: string; detail?: string }>(
+            `/api/captures/${captureId}/resolve`,
+            {
+              method: "POST",
+              body: {
+                kind,
+                ...(kind === "NEITHER" ? {} : { name }),
+                ...(kind === "PERSON" && email ? { email } : {}),
+                ...(kind === "PERSON" && organization ? { organization } : {}),
+              },
+            },
+          );
+          if (res.status !== 200) {
+            setOutcome(`Not resolved: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+            return;
+          }
+          setQueued(res.data?.person_source === "LOCAL_UNRESOLVED");
+          setOutcome(res.data?.what_this_means ?? "Resolved.");
+          onResolved();
+        }}
+      >
+        <label>
+          This is a{" "}
+          <select data-testid="resolve-kind" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+            <option value="COMPANY">Company</option>
+            <option value="PERSON">Person</option>
+            <option value="NEITHER">Neither</option>
+          </select>
+        </label>
+        {kind !== "NEITHER" && (
+          <label>
+            Name{" "}
+            <input data-testid="resolve-name" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+        )}
+        {kind === "PERSON" && (
+          <>
+            <label>
+              Email <input data-testid="resolve-email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </label>
+            <label>
+              Organisation{" "}
+              <input data-testid="resolve-org" value={organization} onChange={(e) => setOrganization(e.target.value)} />
+            </label>
+          </>
+        )}
+        <button type="submit" data-testid="resolve-submit">
+          Resolve
+        </button>
+      </form>
+      {outcome && (
+        <p className={queued ? "notice" : "muted small"} data-testid="resolve-outcome">
+          {outcome}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
   const [captureType, setCaptureType] = useState("note");
   const [sourceChannel, setSourceChannel] = useState("web");
@@ -508,6 +611,7 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
           <p>
             Captured <code>{result.id}</code> — status <strong>{result.status}</strong> · privacy {result.privacy_label}
           </p>
+          <ResolveCapture captureId={result.id} onResolved={onChanged} />
           {result.status === "NEW" && (
             <form
               data-testid="route-form"
@@ -1544,6 +1648,10 @@ interface OpportunityRow {
   broker_name: string | null;
   price_per_share: number | null;
   quantity: number | null;
+  /** JSON array of fields whose value is a stand-in rather than a fact (migration 0052). */
+  placeholder_fields?: string;
+  placeholder_note?: string | null;
+  backfilled_at?: string | null;
 }
 
 interface DealMathPacketRow {
@@ -1680,6 +1788,117 @@ function IcPacketPanel({ packetId, onChanged }: { packetId: string; onChanged: (
   );
 }
 
+/**
+ * Values that are stand-ins, and the form that replaces them.
+ *
+ * A placeholder is only safe while it is loud. The whole reason stand-in economics are allowed at
+ * all — the operator wanted editable numbers rather than empty fields on a deal whose paperwork is
+ * not to hand — is that every surface showing one has to say so. An unmarked stand-in gets charted
+ * and eventually reported to an LP, and by then nobody can tell which figures were ever true.
+ *
+ * So this renders nothing at all when a record is solid, and is impossible to miss when it is not.
+ * It posts to the placeholder door rather than the ordinary update route, which is what lets it
+ * work on a CLOSED holding: correcting a stand-in is not editing a decision.
+ */
+function PlaceholderPanel({
+  opportunity,
+  onConfirmed,
+}: {
+  opportunity: OpportunityRow;
+  onConfirmed: () => void;
+}): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<string | null>(null);
+
+  let provisional: string[] = [];
+  try {
+    provisional = JSON.parse(opportunity.placeholder_fields ?? "[]") as string[];
+  } catch {
+    provisional = [];
+  }
+  if (provisional.length === 0) return null;
+
+  const label: Record<string, string> = {
+    price_per_share: "Price per share",
+    quantity: "Shares",
+    fees: "Fees",
+    carry: "Carry",
+    discount_premium: "Discount / premium",
+    seller_name: "Seller",
+    broker_name: "Broker",
+  };
+
+  return (
+    <div className="notice" data-testid={`placeholder-panel-${opportunity.id}`}>
+      <strong>Needs editing.</strong>{" "}
+      {provisional.length} value{provisional.length === 1 ? " is a placeholder" : "s are placeholders"}:{" "}
+      {provisional.map((f) => label[f] ?? f).join(", ")}.
+      {opportunity.placeholder_note && <div className="muted small">{opportunity.placeholder_note}</div>}
+      <button
+        type="button"
+        className="link-button"
+        data-testid={`placeholder-edit-${opportunity.id}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? "Cancel" : "Enter the real numbers"}
+      </button>
+      {message && <div className="small" data-testid={`placeholder-message-${opportunity.id}`}>{message}</div>}
+      {open && (
+        <form
+          className="form-row"
+          data-testid={`placeholder-form-${opportunity.id}`}
+          onSubmit={async (e) => {
+            e.preventDefault();
+            // Only send what was actually filled in. Confirming one field and leaving another
+            // provisional is a normal outcome of a meeting, not an error.
+            const payload: Record<string, number | string> = {};
+            for (const f of provisional) {
+              const raw = (values[f] ?? "").trim();
+              if (!raw) continue;
+              payload[f] = f.endsWith("_name") ? raw : Number(raw);
+            }
+            if (Object.keys(payload).length === 0) {
+              setMessage("Nothing entered yet.");
+              return;
+            }
+            const res = await api<{ placeholder_fields?: string; error?: string; detail?: string }>(
+              `/api/opportunities/${opportunity.id}/placeholders`,
+              { method: "POST", body: { values: payload } },
+            );
+            if (res.status !== 200) {
+              setMessage(`Not saved: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+              return;
+            }
+            const left = JSON.parse(res.data?.placeholder_fields ?? "[]") as string[];
+            setMessage(
+              left.length === 0
+                ? "Recorded. Nothing on this deal is a placeholder any more."
+                : `Recorded. Still to confirm: ${left.map((f) => label[f] ?? f).join(", ")}.`,
+            );
+            setOpen(false);
+            onConfirmed();
+          }}
+        >
+          {provisional.map((f) => (
+            <label key={f}>
+              {label[f] ?? f}{" "}
+              <input
+                data-testid={`placeholder-input-${f}-${opportunity.id}`}
+                value={values[f] ?? ""}
+                onChange={(ev) => setValues((v) => ({ ...v, [f]: ev.target.value }))}
+              />
+            </label>
+          ))}
+          <button type="submit" className="btn-strong" data-testid={`placeholder-save-${opportunity.id}`}>
+            Save
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 function InvestmentPage({ me }: { me: MeResponse }) {
   const companies = useApi<{ companies: CompanyRow[] }>("/api/companies");
   const [companyId, setCompanyId] = useState("");
@@ -1785,6 +2004,12 @@ function InvestmentPage({ me }: { me: MeResponse }) {
             — <code>{o.opportunity_type}</code> <code>{o.status}</code>
             {o.seller_name ? ` · seller ${o.seller_name}` : ""}
             {o.broker_name ? ` · broker ${o.broker_name}` : ""}
+            {o.backfilled_at && (
+              <span className="badge" title="Status was entered as history, not decided here">
+                backfilled
+              </span>
+            )}
+            <PlaceholderPanel opportunity={o} onConfirmed={() => opportunities.reload()} />
           </li>
         ))}
         {(opportunities.data?.opportunities ?? []).length === 0 && <li className="state-empty" data-testid="no-opportunities">No opportunities. Create one against a canonical company to start the investment record.</li>}
@@ -2360,6 +2585,49 @@ const NETWORK_OS_CONTRACT = {
   failure_state: "DEGRADED_READ_ONLY / FAILED on the cursor; WP OS keeps working",
 };
 
+/**
+ * People the firm has met who are not in the system of record.
+ *
+ * This belongs on the Network OS page rather than on Capture, because it is not a capture problem —
+ * it is the visible edge of a deliberate constraint. Network OS owns people and West Peek OS reads
+ * it without writing to it, so anyone it has never heard of is recorded here and waits.
+ *
+ * It is a plain list on purpose. Its job is to be visible, short enough to act on, and to turn
+ * "we should probably build writeback" into a countable set of real people — so that decision,
+ * when it is taken, rests on evidence rather than a hunch.
+ */
+function UnresolvedPeople(): JSX.Element | null {
+  const queue = useApi<{
+    people: Array<{ capture_id: string; person_id: string; full_name: string; email: string | null; organization: string | null; resolved_at: string }>;
+    count: number;
+    why: string;
+    next_step: string;
+  }>("/api/captures/unresolved-people");
+
+  const d = queue.data;
+  if (!d || d.count === 0) return null;
+
+  return (
+    <section className="card" data-testid="unresolved-people">
+      <h3>
+        Not in Network OS <span className="module-count">{d.count}</span>
+      </h3>
+      <p className="muted small">{d.why}</p>
+      <ul className="card-list small">
+        {d.people.map((p) => (
+          <li key={p.capture_id} data-testid={`unresolved-${p.person_id}`}>
+            <strong>{p.full_name}</strong>
+            {p.organization ? ` — ${p.organization}` : ""}
+            {p.email ? ` · ${p.email}` : ""}
+            <span className="muted small"> · met {p.resolved_at.slice(0, 10)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="muted small">{d.next_step}</p>
+    </section>
+  );
+}
+
 function NetworkPage({ me }: { me: MeResponse }) {
   const contract = useApi<ContractView>("/api/network/contract");
   const [nonce, setNonce] = useState(0);
@@ -2379,6 +2647,8 @@ function NetworkPage({ me }: { me: MeResponse }) {
   return (
     <section data-testid="network-page">
       <p data-testid="integration-state">{contract.data?.integration_state ?? "loading…"}</p>
+
+      <UnresolvedPeople />
 
       <div className="form-row">
         <button type="button" data-testid="contract-declare" onClick={() => post("/api/network/contract", NETWORK_OS_CONTRACT, 201, "Contract declared")}>
@@ -3582,7 +3852,6 @@ export function App() {
           {authed && active === "employees" && <EmployeesPage me={me.data!} />}
           {authed && active === "rooms" && <RoomsPage />}
           {authed && active === "introductions" && <IntroductionsPage />}
-          {authed && active === "events" && <EventsPage />}
           {authed && active === "community" && <CommunityPage />}
           {authed && active === "record" && <LedgersPage />}
           {authed && active === "follow-on" && <FollowOnPage />}
@@ -3601,6 +3870,8 @@ export function App() {
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && <CompaniesPage me={me.data!} />}
           {authed && active === "research" && <ResearchPage me={me.data!} />}
+          {authed && active === "thesis" && <ThesisPage me={me.data!} />}
+          {authed && active === "modeling" && <ModelingPage me={me.data!} />}
           {authed && active === "investment" && <InvestmentPage me={me.data!} />}
           {authed && active === "meetings" && <MeetingsPage me={me.data!} />}
           {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}

@@ -33,6 +33,8 @@ import {
   handleGetCapture,
   handleListCaptures,
   handleRouteCapture,
+  handleResolveCapture,
+  handleUnresolvedPeople,
 } from "./services/captures";
 import {
   handleCreateWorkCard,
@@ -134,6 +136,8 @@ import {
   handleGetAiEmployee,
   handleGrantToolScope,
   handleListAiEmployees,
+  handleSetEmployeeRunning,
+  handleDutyRoster,
   handleRequestActivation,
 } from "./services/aiEmployees";
 import {
@@ -203,6 +207,8 @@ import {
   handleScanBlockLinks,
   handleSubmitTransaction,
   handleTransitionOpportunity,
+  handleBackfillOpportunity,
+  handleConfirmPlaceholders,
   handleUpdateDealMathPacket,
   handleUpdateOpportunity,
   handleVoidTransaction,
@@ -513,8 +519,12 @@ const router = new Router()
   // P3 — capture intake (+Capture) → routing.
   .post("/api/captures", handleCreateCapture)
   .get("/api/captures", handleListCaptures)
+  // Literal before the :param that would otherwise swallow it — "unresolved-people" is a
+  // perfectly good capture id as far as the router is concerned (README, "Adding a feature" §4).
+  .get("/api/captures/unresolved-people", handleUnresolvedPeople)
   .get("/api/captures/:id", handleGetCapture)
   .post("/api/captures/:id/route", handleRouteCapture)
+  .post("/api/captures/:id/resolve", handleResolveCapture)
   .post("/api/captures/:id/archive", handleArchiveCapture)
   // P3 — work spine.
   .post("/api/work-cards", handleCreateWorkCard)
@@ -547,10 +557,12 @@ const router = new Router()
   .get("/api/ai/runs/:id", handleGetAiRun)
   .post("/api/ai/runs/:id/accept-output", handleAcceptAiOutput)
   // P4 — AI employee lifecycle (no direct status route; activation via approval receipt only).
+  .get("/api/ai/employees/on-duty", handleDutyRoster)
   .get("/api/ai/employees", handleListAiEmployees)
   .get("/api/ai/employees/:id", handleGetAiEmployee)
   .post("/api/ai/employees/:id/request-activation", handleRequestActivation)
   .post("/api/ai/employees/:id/activate", handleActivateAiEmployee)
+  .post("/api/ai/employees/:id/running", handleSetEmployeeRunning)
   .post("/api/ai/employees/:id/tools", handleGrantToolScope)
   // P4 — provider registry governance (reserved governance.policy_change + receipt).
   .get("/api/ai/providers", handleListAiProviders)
@@ -605,6 +617,8 @@ const router = new Router()
   .get("/api/opportunities/:id", handleGetOpportunity)
   .patch("/api/opportunities/:id", handleUpdateOpportunity)
   .post("/api/opportunities/:id/transition", handleTransitionOpportunity)
+  .post("/api/opportunities/:id/backfill", handleBackfillOpportunity)
+  .post("/api/opportunities/:id/placeholders", handleConfirmPlaceholders)
   // P6 — duplicate/related blocks are LINKED, never merged.
   .post("/api/opportunities/:id/block-links/scan", handleScanBlockLinks)
   .post("/api/opportunities/:id/block-links", handleCreateBlockLink)

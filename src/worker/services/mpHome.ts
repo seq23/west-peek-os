@@ -354,6 +354,15 @@ async function myWorkModule(env: Env, identity: FirmUserIdentity): Promise<HomeM
  * "One thing to watch" — a stated, inspectable rule, not a model opinion:
  * the highest-severity open portfolio alert, else the oldest pending approval the user
  * can actually decide, else the top-ranked intelligence item, else nothing.
+ *
+ * Every `because` opens with "Shown because " and then says, in plain English, what put this
+ * item ahead of the others. The prefix is load-bearing rather than decorative: it is the
+ * machine-checkable promise that this panel EXPLAINS ITS SELECTION instead of pronouncing on
+ * importance, and `tests/intelligence.test.ts` enforces it. Reword the sentences freely; keep
+ * the prefix, and never let the sentence read as a judgement the system did not make.
+ *
+ * The wording is deliberately free of internal vocabulary — no scores, no rule identifiers, no
+ * `relevance_reason` values. The operator is owed the reason, not the plumbing.
  */
 function oneThingToWatch(modules: HomeModule[]): { headline: string; because: string; link: string } | null {
   const risk = modules.find((m) => m.key === "portfolio_risk");
@@ -361,7 +370,7 @@ function oneThingToWatch(modules: HomeModule[]): { headline: string; because: st
     const top = risk.items[0] as { severity?: string; canonical_name?: string; alert_type?: string };
     return {
       headline: `${top.severity ?? "OPEN"} alert — ${top.canonical_name ?? "portfolio company"} (${top.alert_type ?? "alert"})`,
-      because: "rule: highest-severity open portfolio alert outranks everything else",
+      because: "Shown because an open alert on a company you own outranks everything else.",
       link: "portfolio",
     };
   }
@@ -370,7 +379,7 @@ function oneThingToWatch(modules: HomeModule[]): { headline: string; because: st
     const top = approvals.items[0] as { title?: string };
     return {
       headline: `Approval waiting: ${top.title ?? "pending card"}`,
-      because: "rule: with no portfolio alert open, the oldest card you can decide comes next",
+      because: "Shown because nothing is flagged in the portfolio, and this is the oldest decision waiting on you.",
       link: "approvals",
     };
   }
@@ -379,7 +388,7 @@ function oneThingToWatch(modules: HomeModule[]): { headline: string; because: st
     const top = intel.items[0] as { title?: string; relevance_reason?: string };
     return {
       headline: top.title ?? "top intelligence item",
-      because: `rule: top-ranked intelligence item (${top.relevance_reason ?? "heuristic"})`,
+      because: "Shown because nothing needs your decision today, and this is the closest match to what the firm is watching.",
       link: "intelligence",
     };
   }

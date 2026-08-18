@@ -319,7 +319,7 @@ Tuesday with a problem" is, for now, Tap In Tuesday on westpeek.live.
 
 | Employee | Role | Owns |
 |---|---|---|
-| **Parker** | Event Planner | Rooms, the monthly proposal, the packet, event marketing |
+| **Parker** | Event Marketing Coordinator | Rooms, the monthly proposal, the packet, event marketing |
 | **Wynn** | Sponsorship Scout | Sponsor prospects and the pipeline |
 | **Waverly** | Community Manager | Members, acts, Council evidence, introductions |
 

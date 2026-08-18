@@ -89,7 +89,9 @@ describe("the lounge turns the roster into an operating surface", () => {
     );
     expect(res.status).toBe(200);
     expect(res.body.employees).toHaveLength(31);
-    expect(res.body.max_active).toBe(5);
+    // max_active is now the whole roster: employment and attention were one number and are not
+    // any more. Everyone may be employed; who is ON DUTY is the short list, and that rotates.
+    expect(res.body.max_active).toBe(res.body.employees.length);
     expect(res.body.departments.length).toBeGreaterThan(3);
     expect(res.body.activation_law).toContain("ai_employee.activate");
 

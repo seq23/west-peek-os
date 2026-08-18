@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
+import { EventsPage } from "./EventsPage";
+import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
 import { HowThisWorks } from "./HowThisWorks";
 
 /**
@@ -86,6 +88,64 @@ const range = (low: number | null, high: number | null): string => {
 const STAGES = ["IDENTIFIED", "RESEARCHING", "DRAFTED", "SENT", "IN_CONVERSATION", "COMMITTED", "DECLINED", "PARKED"] as const;
 const CATEGORIES = ["CLOUD", "FINTECH_SPEND", "EQUITY_CAPTABLE", "LEGAL", "PAYROLL_HR", "BANKING", "HOSPITALITY", "RECRUITING", "OTHER"] as const;
 
+/**
+ * What West Peek is for, and how often it gathers.
+ *
+ * Sits above the Rooms machinery on purpose. The stance is a constraint on what gets scheduled —
+ * "we are curators and conveners, not event organizers" is why the recommendations below are one
+ * per interval rather than a calendar to fill — so showing the cadence without it invites exactly
+ * the programming-for-its-own-sake the firm has decided against.
+ *
+ * Every word comes from `shared/events/programme.ts`, which mirrors docs/COMMUNITY.md and is
+ * pinned by a test. Nothing here is restated, so nothing here can drift.
+ */
+function Programme(): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="card" data-testid="programme">
+      <header className="module-card-head">
+        <h3>How West Peek gathers</h3>
+        <button type="button" className="link-button" data-testid="programme-toggle" onClick={() => setOpen((o) => !o)}>
+          {open ? "Hide the rhythm" : "Show the rhythm"}
+        </button>
+      </header>
+
+      <p data-testid="programme-stance">
+        <strong>{EVENT_ETHOS.stance}</strong> {EVENT_ETHOS.notThis.join(" ")}
+      </p>
+      <p className="small">{EVENT_ETHOS.job}</p>
+      <p className="muted small">
+        {EVENT_ETHOS.posture} {EVENT_ETHOS.product}
+      </p>
+
+      {open && (
+        <>
+          <p className="muted small" data-testid="programme-money">{EVENT_ETHOS.money}</p>
+          <h4>At full speed</h4>
+          <p className="muted small">
+            The cadence when the community is running properly — not a promise about this month.
+            Being earlier in the sequence is not being behind.
+          </p>
+          <ul className="card-list" data-testid="programme-rhythm">
+            {OPERATING_RHYTHM.map((i) => (
+              <li key={i.key} data-testid={`rhythm-${i.key}`}>
+                <strong>{i.label}</strong> — {i.runs.join(" · ")}
+                <br />
+                <span className="muted small">{i.purpose}</span>
+                <br />
+                <span className="small">
+                  <em>Parker suggests:</em> {i.recommendation}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="muted small" data-testid="programme-why">{WHY_THE_RHYTHM}</p>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function RoomsPage(): JSX.Element {
   const packets = useApi<{ packets: PacketRow[] }>("/api/rooms/packets");
   const sponsors = useApi<{ sponsors: SponsorRow[]; committedUsd: number }>("/api/sponsors");
@@ -123,6 +183,8 @@ export function RoomsPage(): JSX.Element {
 
   return (
     <div className="stack">
+      <Programme />
+
       <HowThisWorks
         title="Rooms"
         what="Rooms are West Peek's curated gatherings — a dinner, salon or workshop for 25–35 people built around one real question. They are how members build deeper relationships, and they are the part of the community that earns money through sponsors."
@@ -205,6 +267,19 @@ export function RoomsPage(): JSX.Element {
         committedUsd={sponsors.data?.committedUsd ?? 0}
         onChanged={() => sponsors.reload()}
       />
+      {/* Events fold in here rather than living on their own tab. A Room IS an event, and two
+          tabs for one idea made the operator choose between them every time. The distinction that
+          matters is not Rooms-versus-Events but proposed-versus-happened: above is the Room being
+          planned, below is the firm's record of what actually took place. */}
+      <section data-testid="events-section">
+        <h3>Every gathering on the record</h3>
+        <p className="muted small">
+          Rooms, dinners, workshops, masterminds and the summit, as firm records: who came, when,
+          and what came out of it. West Peek Live runs the room itself; this is the record of it.
+        </p>
+        <EventsPage />
+      </section>
+
     </div>
   );
 }

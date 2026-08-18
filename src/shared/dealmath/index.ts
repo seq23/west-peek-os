@@ -6,8 +6,14 @@
  * tests/dealMath.test.ts. Anything not independently verified is NOT here — it
  * stays manual-entry only.
  *
- * Source-to-port map (partner app.js line numbers, partner commit unknown —
- * read-only clone at /tmp/wpos_partner_secondaries):
+ * Source-to-port map (partner app.js line numbers).
+ *
+ * RE-VERIFIED 18 Aug 2026 against partner commit a350ad6 ("chore: add repo agent bootstrap",
+ * 8 Aug 2026), deployed at venturedeals.joinwestpeek.com. Every mapped line number below still
+ * lands on the same function, and the primitives were compared body-for-body: computeCarry, xnpv,
+ * xirr and premiumDiscount are unchanged. The one deviation noted at the bottom of this comment is
+ * still the only difference. The commit is recorded because the original port said "partner commit
+ * unknown", which made drift undetectable — a future check starts by diffing against a350ad6.
  *   yearsBetween (L185-188)            → yearsBetweenDates
  *   safeDiv (L194)                     → safeDiv
  *   computeCarry (L296-302)            → computeCarry

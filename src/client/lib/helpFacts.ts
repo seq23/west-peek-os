@@ -16,7 +16,12 @@ import { AI_EMPLOYEE_ROSTER as ROSTER } from "@shared/registry/aiEmployees";
 export const AI_EMPLOYEE_ROSTER = ROSTER.length;
 
 /**
- * Documentation mirror of `MAX_ACTIVE_AI_EMPLOYEES` (D10).
- * Pinned by `tests/help-facts.test.ts`; do not edit one without the other.
+ * Documentation mirrors of the two workforce limits, which used to be one number.
+ * Both are pinned by `tests/help-facts.test.ts`; do not edit one without the other.
+ *
+ * The cap is now the whole roster — every employee may be employed at once. What stayed small is
+ * the DUTY window: who the firm leans on at a given hour. Availability and attention are different
+ * scarcities, and conflating them capped the workforce at four reachable people.
  */
-export const MAX_ACTIVE_AI_EMPLOYEES_DOC = 5;
+export const MAX_ACTIVE_AI_EMPLOYEES_DOC = ROSTER.length;
+export const FOCUS_TEAM_SIZE_DOC = 5;

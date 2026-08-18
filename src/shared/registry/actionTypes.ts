@@ -24,6 +24,7 @@ export interface OrdinaryActionTypeDef {
 export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "capture.create", name: "Create capture", description: "Record unstructured input into the capture intake.", isExternalEffect: false },
   { key: "capture.route", name: "Route capture", description: "Route a capture to a machine.", isExternalEffect: false },
+  { key: "capture.resolve", name: "Resolve capture", description: "Say what a capture is about — a company, a person, or neither — and reconcile it against the register or Network OS.", isExternalEffect: false },
   { key: "capture.archive", name: "Archive capture", description: "Archive a capture without routing.", isExternalEffect: false },
   { key: "work_card.create", name: "Create work card", description: "Create a unit of governed work, optionally from a capture.", isExternalEffect: false },
   { key: "work_card.update", name: "Update work card", description: "Change work-card state, owner, priority, or next action.", isExternalEffect: false },
@@ -51,6 +52,8 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "opportunity.create", name: "Create opportunity", description: "Record an investment opportunity on a canonical company (secondaries keep seller/block provenance).", isExternalEffect: false },
   { key: "opportunity.update", name: "Update opportunity", description: "Update opportunity fields (price, quantity, fees, terms, provenance).", isExternalEffect: false },
   { key: "opportunity.transition", name: "Transition opportunity", description: "Move an opportunity through its lifecycle (NEW→SCREENING→DILIGENCE→IC_READY→IC_DECIDED→CLOSED, or PASS/WITHDRAWN).", isExternalEffect: false },
+  { key: "opportunity.confirm_placeholder", name: "Confirm placeholder value", description: "Replace a value recorded as a provisional stand-in with the real one. Works on terminal records, but only for fields already marked provisional.", isExternalEffect: false },
+  { key: "opportunity.backfill", name: "Backfill opportunity", description: "Record a holding that predates the system by placing its status directly, permanently marked as backfilled with a reason. Separate from transition so authority over history is grantable on its own.", isExternalEffect: false },
   { key: "opportunity_block_link.propose", name: "Propose block link", description: "Link two opportunities as duplicate candidates or related blocks. Linking never merges.", isExternalEffect: false },
   { key: "opportunity_block_link.decide", name: "Decide block link", description: "Human confirm/reject of a proposed duplicate/related block link (human only).", isExternalEffect: false },
   { key: "transaction.create", name: "Create transaction", description: "Draft a transaction (PURCHASE/SALE/PRIMARY_INVESTMENT/FOLLOW_ON/EXIT_*); approval via the type-specific reserved action.", isExternalEffect: false },
