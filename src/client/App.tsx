@@ -27,6 +27,7 @@ import { NotificationsPage } from "./pages/NotificationsPage";
 import { ResearchPage } from "./pages/ResearchPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { CockpitPage } from "./pages/CockpitPage";
+import { ThesisPage } from "./pages/ThesisPage";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
@@ -220,6 +221,7 @@ const NAV_GROUPS = [
   {
     group: "Deals",
     items: [
+      { key: "thesis", label: "Thesis" },
       { key: "investment", label: "Dealflow" },
       { key: "companies", label: "Companies" },
       { key: "meetings", label: "Meetings" },
@@ -3608,6 +3610,7 @@ export function App() {
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && <CompaniesPage me={me.data!} />}
           {authed && active === "research" && <ResearchPage me={me.data!} />}
+          {authed && active === "thesis" && <ThesisPage me={me.data!} />}
           {authed && active === "investment" && <InvestmentPage me={me.data!} />}
           {authed && active === "meetings" && <MeetingsPage me={me.data!} />}
           {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}

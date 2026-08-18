@@ -64,6 +64,10 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "What the system has told you, and how it reached you.",
     youCan: ["Read and acknowledge notifications", "Set quiet hours and what you want to hear about"],
   },
+  thesis: {
+    purpose: "What the firm is looking for, and the check and ownership it is looking for it at. Editing writes a new version rather than replacing the old one.",
+    youCan: ["Change the sectors, stage and filters that define a fit", "Set the check size and the ownership to hold out for", "Read every version the firm has held"],
+  },
   investment: {
     purpose: "The early-stage pipeline — opportunities from first look through to an IC decision.",
     youCan: ["Move an opportunity through its stages", "Open the diligence behind it", "Take it to the Investment Committee"],
