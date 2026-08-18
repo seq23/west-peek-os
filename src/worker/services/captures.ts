@@ -211,3 +211,223 @@ export async function handleArchiveCapture(ctx: RouteContext): Promise<Response>
   const updated = await env.WP_OS_DB.prepare("SELECT * FROM capture WHERE id = ?1").bind(capture.id).first<CaptureRow>();
   return json(updated);
 }
+
+/**
+ * Resolve a capture to what it is actually about.
+ *
+ * Capture is a holding pen: it owns nothing, and until now it could only be routed to a processing
+ * machine. That left both systems of record — companies here, people in Network OS — to be fed by
+ * hand while the inbox filled up beside them. This is the missing step.
+ *
+ * COMPANY resolves against the register alias-first, so "Psyflo Inc" finds Psyflo instead of
+ * creating a second row. A new company is only created when the register genuinely has no match,
+ * and it goes through createCompany so every duplicate guard still applies.
+ *
+ * PERSON is the interesting one, and where the honesty lives. Network OS is the system of record
+ * for people and is READ-ONLY from here (D5) — writeback is governed separately (§12A.5). So when
+ * a capture surfaces somebody Network OS has never heard of, there is nowhere to put them. That is
+ * not a missing screen, it is a missing destination.
+ *
+ * Rather than pretend otherwise, the person is written to the local `person` reference table and
+ * marked LOCAL_UNRESOLVED — the same word com_member already uses for this exact state. They join
+ * a queue. The queue does not claim they are in the system of record; it says the opposite,
+ * loudly, and turns "we should probably build writeback" into a countable list of real people who
+ * are actually waiting. When that list is long enough to justify a write integration, the decision
+ * will have evidence behind it instead of a guess.
+ */
+
+const resolveCaptureSchema = z
+  .object({
+    kind: z.enum(["COMPANY", "PERSON", "NEITHER"]),
+    /** Company or person name. Required unless NEITHER. */
+    name: z.string().trim().min(1).optional(),
+    email: z.string().trim().min(1).optional(),
+    organization: z.string().trim().min(1).optional(),
+    note: z.string().trim().min(1).optional(),
+  })
+  .refine((v) => v.kind === "NEITHER" || Boolean(v.name), {
+    message: "name is required when resolving to a company or a person",
+  });
+
+/**
+ * Ask Network OS whether it knows this person.
+ *
+ * Returns null when the integration is not configured or the snapshot has nothing matching, and
+ * the caller treats null as LOCAL_UNRESOLVED. Deliberately fail-soft: an unreachable Network OS
+ * must not block the operator from recording who they met, and a person queued when they were
+ * really already known is a duplicate to merge later — recoverable, unlike a lost record.
+ */
+async function findInNetworkOs(env: Env, name: string, email?: string): Promise<{ id: string } | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT p.id AS id
+       FROM person p
+       JOIN network_external_mapping m
+         ON m.internal_id = p.id AND m.internal_type = 'person' AND m.resource = 'contact'
+      WHERE (?2 IS NOT NULL AND lower(p.email) = lower(?2))
+         OR lower(p.full_name) = lower(?1)
+      LIMIT 1`,
+  )
+    .bind(name, email ?? null)
+    .first<{ id: string }>();
+  return row ?? null;
+}
+
+export async function handleResolveCapture(ctx: RouteContext): Promise<Response> {
+  const { env, identity } = ctx;
+  const body = await parseJsonBody(ctx.request);
+  const parsed = resolveCaptureSchema.safeParse(body);
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  const input = parsed.data;
+
+  const capture = await env.WP_OS_DB.prepare("SELECT * FROM capture WHERE id = ?1")
+    .bind(ctx.params.id!)
+    .first<CaptureRow & { resolved_kind: string | null }>();
+  if (!capture) return json({ error: "not_found" }, { status: 404 });
+  if (capture.status === "ARCHIVED") {
+    return json({ error: "conflict", detail: "archived captures cannot be resolved" }, { status: 409 });
+  }
+  if (capture.resolved_kind) {
+    return json(
+      { error: "already_resolved", detail: `this capture was already resolved to ${capture.resolved_kind}` },
+      { status: 409 },
+    );
+  }
+
+  const actor = actorFromIdentity(identity!);
+  const authz = await authorize(env, actor, "capture.resolve", {
+    objectType: "capture",
+    objectId: capture.id,
+    firmScope: capture.firm_scope,
+  });
+  if (authz.decision !== "ALLOW") {
+    return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+  }
+
+  const now = new Date().toISOString();
+  let companyId: string | null = null;
+  let personId: string | null = null;
+  let personSource: "NETWORK_OS" | "LOCAL_UNRESOLVED" | null = null;
+  let matchedVia = "created";
+
+  if (input.kind === "COMPANY") {
+    // Alias-first: the register already knows how to say "that name is this company", and a second
+    // row for a company we already track is the one thing D3 exists to prevent.
+    const existing = await env.WP_OS_DB.prepare(
+      `SELECT c.id AS id FROM canonical_company c WHERE lower(trim(c.canonical_name)) = lower(trim(?1))
+       UNION
+       SELECT a.company_id AS id FROM company_alias a WHERE lower(trim(a.alias)) = lower(trim(?1))
+       LIMIT 1`,
+    )
+      .bind(input.name!)
+      .first<{ id: string }>();
+
+    if (existing) {
+      companyId = existing.id;
+      matchedVia = "existing register entry";
+    } else {
+      companyId = `cc_${crypto.randomUUID()}`;
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO canonical_company (id, canonical_name, privacy_label, firm_scope, created_by)
+         VALUES (?1, ?2, ?3, ?4, ?5)`,
+      )
+        .bind(companyId, input.name!, capture.privacy_label, capture.firm_scope, actor.firmUserId ?? "system")
+        .run();
+    }
+  } else if (input.kind === "PERSON") {
+    const known = await findInNetworkOs(env, input.name!, input.email);
+    if (known) {
+      personId = known.id;
+      personSource = "NETWORK_OS";
+      matchedVia = "Network OS";
+    } else {
+      // Nowhere to put them in the system of record, so they are written here and QUEUED.
+      personId = `per_${crypto.randomUUID()}`;
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO person (id, full_name, email, organization, source, privacy_label, firm_scope)
+         VALUES (?1, ?2, ?3, ?4, 'capture', ?5, ?6)`,
+      )
+        .bind(
+          personId,
+          input.name!,
+          input.email ?? null,
+          input.organization ?? null,
+          capture.privacy_label,
+          capture.firm_scope,
+        )
+        .run();
+      personSource = "LOCAL_UNRESOLVED";
+      matchedVia = "not in Network OS — queued";
+    }
+  }
+
+  await env.WP_OS_DB.prepare(
+    `UPDATE capture
+        SET resolved_kind = ?2, resolved_company_id = ?3, resolved_person_id = ?4,
+            person_source = ?5, resolved_at = ?6, resolution_note = ?7
+      WHERE id = ?1`,
+  )
+    .bind(capture.id, input.kind, companyId, personId, personSource, now, input.note ?? null)
+    .run();
+
+  await appendEvent(env, {
+    eventType: "capture.resolved",
+    actorType: "firm_user",
+    actorId: identity!.id,
+    objectType: "capture",
+    objectId: capture.id,
+    firmScope: capture.firm_scope,
+    payload: { kind: input.kind, company_id: companyId, person_id: personId, person_source: personSource, matched_via: matchedVia },
+  });
+
+  return json({
+    capture_id: capture.id,
+    kind: input.kind,
+    company_id: companyId,
+    person_id: personId,
+    person_source: personSource,
+    matched_via: matchedVia,
+    /** Stated so the screen never has to explain the model in its own words. */
+    what_this_means:
+      personSource === "LOCAL_UNRESOLVED"
+        ? "Network OS does not know this person, and West Peek OS cannot write to it. They are recorded here and added to the unresolved queue — this system is not claiming they are in the system of record."
+        : input.kind === "PERSON"
+          ? "Matched to the person Network OS already holds. Network OS stays the system of record."
+          : matchedVia === "existing register entry"
+            ? "Matched an existing company rather than creating a second record for it."
+            : "A new company record was created; it is now the canonical identity for this name.",
+  });
+}
+
+/**
+ * People this firm has met who are not in the system of record.
+ *
+ * The queue exists because Network OS is read-only from here. It is deliberately a plain list with
+ * nothing clever about it: its job is to be visible, to be short enough to act on, and to make the
+ * case for writeback out of real people rather than a hunch.
+ */
+export async function handleUnresolvedPeople(ctx: RouteContext): Promise<Response> {
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    `SELECT c.id AS capture_id, c.resolved_at, c.resolution_note, c.raw_text,
+            p.id AS person_id, p.full_name, p.email, p.organization
+       FROM capture c
+       JOIN person p ON p.id = c.resolved_person_id
+      WHERE c.person_source = 'LOCAL_UNRESOLVED' AND c.firm_scope = ?1
+      ORDER BY c.resolved_at DESC
+      LIMIT 200`,
+  )
+    .bind("west-peek")
+    .all();
+
+  const people = rows.results ?? [];
+  return json({
+    people,
+    count: people.length,
+    why:
+      "Network OS is the system of record for people, and West Peek OS reads it without writing to " +
+      "it. These are people the firm has met who are not in it yet. Nothing here claims otherwise.",
+    next_step:
+      people.length === 0
+        ? "Nothing waiting."
+        : `Add these ${people.length} to Network OS, or use this list as the case for building a write path.`,
+  });
+}

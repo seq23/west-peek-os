@@ -170,6 +170,7 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('network_os.writeback', 'network_os.writeback', 'Write a West Peek OS record back into Network OS (live integration is a named human gate).', 0, 1),
   ('capture.create', 'Create capture', 'Record unstructured input into the capture intake.', 0, 0),
   ('capture.route', 'Route capture', 'Route a capture to a machine.', 0, 0),
+  ('capture.resolve', 'Resolve capture', 'Say what a capture is about — a company, a person, or neither — and reconcile it against the register or Network OS.', 0, 0),
   ('capture.archive', 'Archive capture', 'Archive a capture without routing.', 0, 0),
   ('work_card.create', 'Create work card', 'Create a unit of governed work, optionally from a capture.', 0, 0),
   ('work_card.update', 'Update work card', 'Change work-card state, owner, priority, or next action.', 0, 0),

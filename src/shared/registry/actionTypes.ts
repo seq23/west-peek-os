@@ -24,6 +24,7 @@ export interface OrdinaryActionTypeDef {
 export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "capture.create", name: "Create capture", description: "Record unstructured input into the capture intake.", isExternalEffect: false },
   { key: "capture.route", name: "Route capture", description: "Route a capture to a machine.", isExternalEffect: false },
+  { key: "capture.resolve", name: "Resolve capture", description: "Say what a capture is about — a company, a person, or neither — and reconcile it against the register or Network OS.", isExternalEffect: false },
   { key: "capture.archive", name: "Archive capture", description: "Archive a capture without routing.", isExternalEffect: false },
   { key: "work_card.create", name: "Create work card", description: "Create a unit of governed work, optionally from a capture.", isExternalEffect: false },
   { key: "work_card.update", name: "Update work card", description: "Change work-card state, owner, priority, or next action.", isExternalEffect: false },

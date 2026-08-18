@@ -33,6 +33,8 @@ import {
   handleGetCapture,
   handleListCaptures,
   handleRouteCapture,
+  handleResolveCapture,
+  handleUnresolvedPeople,
 } from "./services/captures";
 import {
   handleCreateWorkCard,
@@ -517,8 +519,12 @@ const router = new Router()
   // P3 — capture intake (+Capture) → routing.
   .post("/api/captures", handleCreateCapture)
   .get("/api/captures", handleListCaptures)
+  // Literal before the :param that would otherwise swallow it — "unresolved-people" is a
+  // perfectly good capture id as far as the router is concerned (README, "Adding a feature" §4).
+  .get("/api/captures/unresolved-people", handleUnresolvedPeople)
   .get("/api/captures/:id", handleGetCapture)
   .post("/api/captures/:id/route", handleRouteCapture)
+  .post("/api/captures/:id/resolve", handleResolveCapture)
   .post("/api/captures/:id/archive", handleArchiveCapture)
   // P3 — work spine.
   .post("/api/work-cards", handleCreateWorkCard)

@@ -418,6 +418,97 @@ function TodayPage({ me }: { me: MeResponse }) {
   );
 }
 
+/**
+ * Say what a capture is about.
+ *
+ * Capture is a holding pen — it owns nothing, and until this existed the only thing you could do
+ * with a note was hand it to a processing machine. Meanwhile the two systems of record were fed by
+ * hand: companies here, people in Network OS.
+ *
+ * The person branch is the one worth reading. Network OS owns people and this system cannot write
+ * to it, so somebody it has never heard of has nowhere to go. Rather than pretend, they are
+ * recorded locally, marked, and queued — and the response says which of those two happened in
+ * words rather than a status code, because "we filed this under a system that does not know them"
+ * is exactly the kind of thing an interface usually hides.
+ */
+function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolved: () => void }): JSX.Element {
+  const [kind, setKind] = useState<"COMPANY" | "PERSON" | "NEITHER">("COMPANY");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [organization, setOrganization] = useState("");
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [queued, setQueued] = useState(false);
+
+  return (
+    <div data-testid={`resolve-capture-${captureId}`}>
+      <p className="muted small">
+        What is this about? Companies are matched against the register before a new one is created.
+        People are checked against Network OS, which owns them.
+      </p>
+      <form
+        className="form-row"
+        data-testid="resolve-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const res = await api<{ what_this_means?: string; person_source?: string; error?: string; detail?: string }>(
+            `/api/captures/${captureId}/resolve`,
+            {
+              method: "POST",
+              body: {
+                kind,
+                ...(kind === "NEITHER" ? {} : { name }),
+                ...(kind === "PERSON" && email ? { email } : {}),
+                ...(kind === "PERSON" && organization ? { organization } : {}),
+              },
+            },
+          );
+          if (res.status !== 200) {
+            setOutcome(`Not resolved: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+            return;
+          }
+          setQueued(res.data?.person_source === "LOCAL_UNRESOLVED");
+          setOutcome(res.data?.what_this_means ?? "Resolved.");
+          onResolved();
+        }}
+      >
+        <label>
+          This is a{" "}
+          <select data-testid="resolve-kind" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+            <option value="COMPANY">Company</option>
+            <option value="PERSON">Person</option>
+            <option value="NEITHER">Neither</option>
+          </select>
+        </label>
+        {kind !== "NEITHER" && (
+          <label>
+            Name{" "}
+            <input data-testid="resolve-name" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+        )}
+        {kind === "PERSON" && (
+          <>
+            <label>
+              Email <input data-testid="resolve-email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </label>
+            <label>
+              Organisation{" "}
+              <input data-testid="resolve-org" value={organization} onChange={(e) => setOrganization(e.target.value)} />
+            </label>
+          </>
+        )}
+        <button type="submit" data-testid="resolve-submit">
+          Resolve
+        </button>
+      </form>
+      {outcome && (
+        <p className={queued ? "notice" : "muted small"} data-testid="resolve-outcome">
+          {outcome}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
   const [captureType, setCaptureType] = useState("note");
   const [sourceChannel, setSourceChannel] = useState("web");
@@ -517,6 +608,7 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
           <p>
             Captured <code>{result.id}</code> — status <strong>{result.status}</strong> · privacy {result.privacy_label}
           </p>
+          <ResolveCapture captureId={result.id} onResolved={onChanged} />
           {result.status === "NEW" && (
             <form
               data-testid="route-form"
@@ -2490,6 +2582,49 @@ const NETWORK_OS_CONTRACT = {
   failure_state: "DEGRADED_READ_ONLY / FAILED on the cursor; WP OS keeps working",
 };
 
+/**
+ * People the firm has met who are not in the system of record.
+ *
+ * This belongs on the Network OS page rather than on Capture, because it is not a capture problem —
+ * it is the visible edge of a deliberate constraint. Network OS owns people and West Peek OS reads
+ * it without writing to it, so anyone it has never heard of is recorded here and waits.
+ *
+ * It is a plain list on purpose. Its job is to be visible, short enough to act on, and to turn
+ * "we should probably build writeback" into a countable set of real people — so that decision,
+ * when it is taken, rests on evidence rather than a hunch.
+ */
+function UnresolvedPeople(): JSX.Element | null {
+  const queue = useApi<{
+    people: Array<{ capture_id: string; person_id: string; full_name: string; email: string | null; organization: string | null; resolved_at: string }>;
+    count: number;
+    why: string;
+    next_step: string;
+  }>("/api/captures/unresolved-people");
+
+  const d = queue.data;
+  if (!d || d.count === 0) return null;
+
+  return (
+    <section className="card" data-testid="unresolved-people">
+      <h3>
+        Not in Network OS <span className="module-count">{d.count}</span>
+      </h3>
+      <p className="muted small">{d.why}</p>
+      <ul className="card-list small">
+        {d.people.map((p) => (
+          <li key={p.capture_id} data-testid={`unresolved-${p.person_id}`}>
+            <strong>{p.full_name}</strong>
+            {p.organization ? ` — ${p.organization}` : ""}
+            {p.email ? ` · ${p.email}` : ""}
+            <span className="muted small"> · met {p.resolved_at.slice(0, 10)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="muted small">{d.next_step}</p>
+    </section>
+  );
+}
+
 function NetworkPage({ me }: { me: MeResponse }) {
   const contract = useApi<ContractView>("/api/network/contract");
   const [nonce, setNonce] = useState(0);
@@ -2509,6 +2644,8 @@ function NetworkPage({ me }: { me: MeResponse }) {
   return (
     <section data-testid="network-page">
       <p data-testid="integration-state">{contract.data?.integration_state ?? "loading…"}</p>
+
+      <UnresolvedPeople />
 
       <div className="form-row">
         <button type="button" data-testid="contract-declare" onClick={() => post("/api/network/contract", NETWORK_OS_CONTRACT, 201, "Contract declared")}>
