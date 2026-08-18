@@ -29,6 +29,7 @@ import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { CockpitPage } from "./pages/CockpitPage";
 import { ThesisPage } from "./pages/ThesisPage";
 import { ModelingPage } from "./pages/ModelingPage";
+import { DealflowPage } from "./pages/DealflowPage";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
@@ -3872,7 +3873,22 @@ export function App() {
           {authed && active === "research" && <ResearchPage me={me.data!} />}
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
           {authed && active === "modeling" && <ModelingPage me={me.data!} />}
-          {authed && active === "investment" && <InvestmentPage me={me.data!} />}
+          {authed && active === "investment" && (
+            <>
+              <DealflowPage me={me.data!} onNavigate={setActive} />
+              {/* The old surface keeps its deal-math packets, IC assembly and company 360 — real
+                  tooling that belongs to a single deal rather than to the board. Folded away
+                  rather than deleted or left as a second page competing with the pipeline. */}
+              <details className="card" data-testid="deal-records">
+                <summary>Deal records and tooling</summary>
+                <p className="muted small">
+                  Deal math, IC packets and the full record behind one company. Everything here acts
+                  on a deal you pick, not on the pipeline above.
+                </p>
+                <InvestmentPage me={me.data!} />
+              </details>
+            </>
+          )}
           {authed && active === "meetings" && <MeetingsPage me={me.data!} />}
           {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
           {authed && active === "cockpit" && <CockpitPage me={me.data!} />}

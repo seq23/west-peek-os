@@ -1,0 +1,243 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    a { color: #b4400f; text-decoration: none; }
+    a:hover { color: #8f3309; }
+    .lbl { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #6b635b; font-weight: 600; }
+    .card { background: #ffffff; border: 1px solid #e4ddd2; border-radius: 6px; }
+    .chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  </style>
+</helmet>
+
+<div style="width: 1440px; height: 1160px; background: #f7f2ea; color: #15120f; padding: 32px 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px;">
+
+  <div>
+    <div class="lbl" style="margin-bottom: 6px;">Deals</div>
+    <h1 style="margin: 0 0 6px; font-size: 28px; font-weight: 700; letter-spacing: -0.011em;">Dealflow</h1>
+    <div style="font-size: 14px; color: #4a443e;">Where every company stands, and what is stopping the next decision.</div>
+  </div>
+
+  <!-- THE SPINE. A deal only ever moves left to right or drops out, so the shape is a line, not a
+       grid. Counts sit on the stages; the two exits hang below, because a pass is an outcome the
+       pipeline produces rather than a stage anything waits in. -->
+  <section class="card" style="padding: 28px 32px 24px;">
+    <div style="display: flex; align-items: flex-start; gap: 0;">
+
+      <!-- 1 -->
+      <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; width: 100%;">
+          <div style="height: 2px; background: transparent; flex-grow: 1;"></div>
+          <div style="width: 40px; height: 40px; border-radius: 999px; background: #15120f; color: #ffffff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0;">3</div>
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+        </div>
+        <div style="font-size: 13px; font-weight: 600;">New</div>
+        <div style="font-size: 11px; color: #6b635b; text-align: center; line-height: 1.4;">Heard about them</div>
+      </div>
+
+      <!-- 2 -->
+      <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; width: 100%;">
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+          <div style="width: 40px; height: 40px; border-radius: 999px; background: #f05a1a; color: #0a0a0a; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0;">1</div>
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+        </div>
+        <div style="font-size: 13px; font-weight: 600;">Screening</div>
+        <div style="font-size: 11px; color: #6b635b; text-align: center; line-height: 1.4;">Does it fit the thesis?</div>
+      </div>
+
+      <!-- 3 -->
+      <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; width: 100%;">
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+          <div style="width: 40px; height: 40px; border-radius: 999px; background: #ffffff; border: 2px solid #cdc4b7; color: #6b635b; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0;">0</div>
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+        </div>
+        <div style="font-size: 13px; font-weight: 600;">Diligence</div>
+        <div style="font-size: 11px; color: #6b635b; text-align: center; line-height: 1.4;">What would have to be true?</div>
+      </div>
+
+      <!-- 4 -->
+      <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; width: 100%;">
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+          <div style="width: 40px; height: 40px; border-radius: 999px; background: #ffffff; border: 2px solid #cdc4b7; color: #6b635b; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0;">0</div>
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+        </div>
+        <div style="font-size: 13px; font-weight: 600;">Ready to decide</div>
+        <div style="font-size: 11px; color: #6b635b; text-align: center; line-height: 1.4;">Everything is in</div>
+      </div>
+
+      <!-- 5 -->
+      <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; width: 100%;">
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+          <div style="width: 40px; height: 40px; border-radius: 999px; background: #ffffff; border: 2px solid #cdc4b7; color: #6b635b; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0;">0</div>
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+        </div>
+        <div style="font-size: 13px; font-weight: 600;">Decided</div>
+        <div style="font-size: 11px; color: #6b635b; text-align: center; line-height: 1.4;">Committee has ruled</div>
+      </div>
+
+      <!-- 6 -->
+      <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; width: 100%;">
+          <div style="height: 2px; background: #cdc4b7; flex-grow: 1;"></div>
+          <div style="width: 40px; height: 40px; border-radius: 999px; background: #1f6b45; color: #ffffff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0;">1</div>
+          <div style="height: 2px; background: transparent; flex-grow: 1;"></div>
+        </div>
+        <div style="font-size: 13px; font-weight: 600;">Invested</div>
+        <div style="font-size: 11px; color: #6b635b; text-align: center; line-height: 1.4;">Money is in</div>
+      </div>
+    </div>
+
+    <!-- Exits hang below the line: a pass is something the pipeline produces, not a place to sit. -->
+    <div style="display: flex; gap: 24px; justify-content: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e4ddd2;">
+      <div style="font-size: 12px; color: #6b635b;">Left the pipeline &nbsp;·&nbsp; <strong style="color: #15120f;">1 passed</strong> &nbsp;·&nbsp; <strong style="color: #15120f;">0 withdrawn</strong></div>
+    </div>
+  </section>
+
+  <!-- What a partner actually needs before the list: what is rotting. -->
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;">
+    <div class="card" style="padding: 16px 20px; border-left: 3px solid #97231b;">
+      <div class="lbl" style="margin-bottom: 4px;">Stalled</div>
+      <div style="font-size: 22px; font-weight: 700; line-height: 1.2;">1</div>
+      <div style="font-size: 12px; color: #4a443e;">No movement past this stage's clock</div>
+    </div>
+    <div class="card" style="padding: 16px 20px; border-left: 3px solid #f05a1a;">
+      <div class="lbl" style="margin-bottom: 4px;">Waiting on you</div>
+      <div style="font-size: 22px; font-weight: 700; line-height: 1.2;">0</div>
+      <div style="font-size: 12px; color: #4a443e;">Everything is in; only a decision is missing</div>
+    </div>
+    <div class="card" style="padding: 16px 20px; border-left: 3px solid #cdc4b7;">
+      <div class="lbl" style="margin-bottom: 4px;">Added this month</div>
+      <div style="font-size: 22px; font-weight: 700; line-height: 1.2;">3</div>
+      <div style="font-size: 12px; color: #4a443e;">2 from community, 1 from network</div>
+    </div>
+  </div>
+
+  <!-- The deals. Every card answers the same four questions in the same places:
+       where it is, how long it has been there, who owns it, what is blocking it. -->
+  <section>
+    <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px;">
+      <h2 style="margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.011em;">Every deal</h2>
+      <span style="font-size: 12px; color: #6b635b;">sorted by what needs you soonest</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 12px;">
+
+      <div class="card" style="padding: 18px 20px; display: flex; align-items: center; gap: 20px;">
+        <div style="width: 200px; flex-shrink: 0;">
+          <div style="font-size: 16px; font-weight: 700;">Psyflo</div>
+          <div style="font-size: 12px; color: #6b635b;">Deana Oliver</div>
+        </div>
+        <div style="width: 150px; flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 4px;">
+          <span class="chip" style="background: #f1ece4; color: #4a443e;">Ed tech</span>
+          <span class="chip" style="background: #f1ece4; color: #4a443e;">Health tech</span>
+        </div>
+        <div style="width: 170px; flex-shrink: 0;">
+          <span class="chip" style="background: #f05a1a; color: #0a0a0a;">Screening</span>
+          <div style="font-size: 11px; color: #97231b; margin-top: 4px; font-weight: 600;">9 days — stalled</div>
+        </div>
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #6b635b; font-weight: 600;">Blocked by</div>
+          <div style="font-size: 14px;">No founder call booked</div>
+        </div>
+        <div style="width: 130px; flex-shrink: 0; text-align: right;">
+          <div style="font-size: 12px; color: #6b635b;">Won our pitch competition</div>
+        </div>
+        <div style="flex-shrink: 0;">
+          <span style="display: inline-block; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 4px; background: #15120f; color: #ffffff;">Move on &rarr;</span>
+        </div>
+      </div>
+
+      <div class="card" style="padding: 18px 20px; display: flex; align-items: center; gap: 20px;">
+        <div style="width: 200px; flex-shrink: 0;">
+          <div style="font-size: 16px; font-weight: 700;">Sensori</div>
+          <div style="font-size: 12px; color: #6b635b;">Shanna Pearre</div>
+        </div>
+        <div style="width: 150px; flex-shrink: 0;">
+          <span class="chip" style="background: #f1ece4; color: #4a443e;">Consumer</span>
+        </div>
+        <div style="width: 170px; flex-shrink: 0;">
+          <span class="chip" style="background: #1f6b45; color: #ffffff;">Invested</span>
+          <div style="font-size: 11px; color: #6b635b; margin-top: 4px;">$10K &middot; SPV</div>
+        </div>
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #6b635b; font-weight: 600;">Needs from you</div>
+          <div style="font-size: 14px; color: #8a5200;">Entry price and share count are placeholders</div>
+        </div>
+        <div style="width: 130px; flex-shrink: 0; text-align: right;">
+          <div style="font-size: 12px; color: #6b635b;">Predates the fund</div>
+        </div>
+        <div style="flex-shrink: 0;">
+          <span style="display: inline-block; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 4px; border: 1px solid #9a9086; color: #15120f;">Enter terms</span>
+        </div>
+      </div>
+
+      <div class="card" style="padding: 18px 20px; display: flex; align-items: center; gap: 20px; opacity: 0.72;">
+        <div style="width: 200px; flex-shrink: 0;">
+          <div style="font-size: 16px; font-weight: 700;">Synthient.ai</div>
+          <div style="font-size: 12px; color: #6b635b;">Marcell Hilliard</div>
+        </div>
+        <div style="width: 150px; flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 4px;">
+          <span class="chip" style="background: #f1ece4; color: #4a443e;">AI</span>
+          <span class="chip" style="background: #f1ece4; color: #4a443e;">Future of work</span>
+        </div>
+        <div style="width: 170px; flex-shrink: 0;">
+          <span class="chip" style="background: #f1ece4; color: #4a443e;">Passed</span>
+          <div style="font-size: 11px; color: #6b635b; margin-top: 4px;">11 days ago</div>
+        </div>
+        <div style="flex-grow: 1; min-width: 0;">
+          <div style="font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #6b635b; font-weight: 600;">Why we passed</div>
+          <div style="font-size: 14px;">Went cold &mdash; no reason recorded</div>
+        </div>
+        <div style="width: 130px; flex-shrink: 0; text-align: right;">
+          <div style="font-size: 12px; color: #6b635b;">Partner network</div>
+        </div>
+        <div style="flex-shrink: 0;">
+          <span style="display: inline-block; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 4px; border: 1px solid #9a9086; color: #15120f;">Add reason</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Adding a deal starts by saying where it already is. Everything arriving at "New" is how a
+       pipeline fills with deals that were really already in diligence. -->
+  <section class="card" style="padding: 20px 24px;">
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 12px;">Add a company to the pipeline</div>
+    <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+      <div style="flex-grow: 1; min-width: 180px;">
+        <div class="lbl" style="margin-bottom: 4px;">Company</div>
+        <div style="border: 1px solid #9a9086; border-radius: 4px; padding: 8px 10px; font-size: 14px; background: #ffffff;">Northwind Robotics</div>
+      </div>
+      <div style="width: 190px;">
+        <div class="lbl" style="margin-bottom: 4px;">Starts at</div>
+        <div style="border: 1px solid #f05a1a; border-radius: 4px; padding: 8px 10px; font-size: 14px; background: #fff1e9; font-weight: 600;">Diligence &#9662;</div>
+      </div>
+      <div style="width: 200px;">
+        <div class="lbl" style="margin-bottom: 4px;">How we met them</div>
+        <div style="border: 1px solid #9a9086; border-radius: 4px; padding: 8px 10px; font-size: 14px; background: #ffffff;">A Room &#9662;</div>
+      </div>
+      <span style="display: inline-block; font-size: 14px; font-weight: 600; padding: 9px 18px; border-radius: 4px; background: #15120f; color: #ffffff;">Add</span>
+    </div>
+  </section>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -2140,3 +2140,66 @@ export async function handleDealProvenance(ctx: RouteContext): Promise<Response>
     unrecorded: unrecorded.results ?? [],
   });
 }
+
+/**
+ * The dealflow board: every live deal, where it is, and how long it has been there.
+ *
+ * WHY IT IS ITS OWN ENDPOINT rather than a richer /api/opportunities. The list endpoint answers
+ * "what opportunities exist"; the board answers "what needs me". Those want different data — the
+ * board needs the LAST TIME EACH DEAL MOVED, which lives in the event spine, and joining that onto
+ * every opportunity list would make the cheap query expensive for callers that never look at it.
+ *
+ * MOVEMENT COMES FROM THE EVENT RECORD, not from created_at. A company that reached diligence
+ * yesterday after two months of screening is fresh; dating staleness from creation would paint
+ * every hard-won deal red and teach the operator to ignore the colour. Where a deal has never
+ * moved — still sitting at NEW — creation IS the last movement, which is the correct reading.
+ */
+export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> {
+  const visibility = privacyVisibilityClause(ctx.identity!, "o.privacy_label");
+
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    `SELECT o.id, o.title, o.status, o.opportunity_type, o.relationship_origin, o.created_at,
+            o.backfilled_at, o.as_of_date, o.placeholder_fields, o.placeholder_note,
+            o.price_per_share, o.quantity,
+            c.canonical_name AS company_name, c.id AS company_id,
+            (SELECT MAX(e.created_at)
+               FROM event_record e
+              WHERE e.object_id = o.id
+                AND e.event_type IN ('investment.opportunity_transitioned', 'investment.opportunity_backfilled')
+            ) AS last_moved_at
+       FROM investment_opportunity o
+       JOIN canonical_company c ON c.id = o.company_id
+      WHERE ${visibility}
+      ORDER BY o.created_at DESC
+      LIMIT 500`,
+  ).all<Record<string, unknown>>();
+
+  const deals: Array<Record<string, unknown>> = (rows.results ?? []).map((r) => {
+    let provisional: string[] = [];
+    try {
+      provisional = JSON.parse(String(r.placeholder_fields ?? "[]")) as string[];
+    } catch {
+      provisional = [];
+    }
+    return {
+      ...r,
+      // Never moved means it is still where it started, and creation is when that began.
+      in_stage_since: (r.last_moved_at as string | null) ?? (r.created_at as string),
+      placeholder_fields: provisional,
+      backfilled: Boolean(r.backfilled_at),
+    };
+  });
+
+  const counts: Record<string, number> = {};
+  for (const d of deals) counts[String(d.status)] = (counts[String(d.status)] ?? 0) + 1;
+
+  return json({
+    deals,
+    counts,
+    /** Stated so the board never has to explain its own colour in prose. */
+    how_staleness_works:
+      "A deal is stalled when it has sat in one stage longer than that stage allows. Each stage has " +
+      "its own clock, because a week unscreened and a week in diligence are not the same problem. " +
+      "The clock starts when the deal last MOVED, not when it was created.",
+  });
+}
