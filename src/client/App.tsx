@@ -28,6 +28,7 @@ import { ResearchPage } from "./pages/ResearchPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { CockpitPage } from "./pages/CockpitPage";
 import { ThesisPage } from "./pages/ThesisPage";
+import { ModelingPage } from "./pages/ModelingPage";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
@@ -230,6 +231,7 @@ const NAV_GROUPS = [
       { key: "follow-on", label: "Follow-on" },
       { key: "allocation", label: "Allocation" },
       { key: "cockpit", label: "Fund strategy" },
+      { key: "modeling", label: "Deal maths" },
     ],
   },
   {
@@ -3869,6 +3871,7 @@ export function App() {
           {authed && active === "companies" && <CompaniesPage me={me.data!} />}
           {authed && active === "research" && <ResearchPage me={me.data!} />}
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
+          {authed && active === "modeling" && <ModelingPage me={me.data!} />}
           {authed && active === "investment" && <InvestmentPage me={me.data!} />}
           {authed && active === "meetings" && <MeetingsPage me={me.data!} />}
           {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
