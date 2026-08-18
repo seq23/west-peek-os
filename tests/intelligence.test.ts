@@ -585,7 +585,14 @@ describe("MP home aggregates without widening access", () => {
   it("states the rule behind 'one thing to watch' rather than asserting judgement", async () => {
     const home = await call<{ one_thing_to_watch: { because: string } | null }>("/api/mp-home", SCOOTER);
     if (home.body.one_thing_to_watch) {
-      expect(home.body.one_thing_to_watch.because).toContain("rule:");
+      const because = home.body.one_thing_to_watch.because;
+      // The panel must EXPLAIN its selection. The prefix is the machine-checkable form of that
+      // promise; the sentence after it is free to be reworded.
+      expect(because).toMatch(/^Shown because /);
+      expect(because.length).toBeGreaterThan("Shown because ".length + 20);
+      // …and must not leak the plumbing behind the choice. The operator is owed the reason, not
+      // the field names: these are the exact terms that were reaching the UI before.
+      expect(because).not.toMatch(/heuristic|relevance_reason|relevance_score|\brule:|score \d/i);
     }
   });
 

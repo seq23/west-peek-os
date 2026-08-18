@@ -200,6 +200,7 @@ const NAV_GROUPS = [
     items: [
       { key: "home", label: "Home", icon: "home" },
       { key: "intent", label: "Ask", icon: "ask" },
+      { key: "capture", label: "Capture", icon: "capture" },
     ],
   },
   {
@@ -212,7 +213,6 @@ const NAV_GROUPS = [
       { key: "notifications", label: "Notifications" },
       { key: "introductions", label: "Introductions" },
       { key: "weekly-review", label: "Weekly review" },
-      { key: "capture", label: "Capture" },
       { key: "work-cards", label: "Work cards" },
       { key: "jobs", label: "Scheduled work" },
     ],
@@ -220,7 +220,7 @@ const NAV_GROUPS = [
   {
     group: "Deals",
     items: [
-      { key: "investment", label: "Investment" },
+      { key: "investment", label: "Dealflow" },
       { key: "companies", label: "Companies" },
       { key: "meetings", label: "Meetings" },
       { key: "secondaries", label: "Secondaries" },
@@ -248,7 +248,7 @@ const NAV_GROUPS = [
     // Looking something up, or being taught it.
     group: "Learn",
     items: [
-      { key: "intelligence", label: "Sweeps" },
+      { key: "intelligence", label: "Sources" },
       { key: "research", label: "Research" },
       { key: "market-map", label: "Market mapping" },
       { key: "university", label: "University" },
@@ -282,8 +282,8 @@ const NAV_GROUPS = [
 ] as const;
 
 /**
- * The three icons. Inline SVG rather than a font or a sprite: the artifact CSP blocks external
- * requests, and three paths do not justify a dependency.
+ * The four icons. Inline SVG rather than a font or a sprite: the artifact CSP blocks external
+ * requests, and four paths do not justify a dependency.
  */
 function NavIcon({ name }: { name: string }): JSX.Element | null {
   const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true as const };
@@ -298,6 +298,13 @@ function NavIcon({ name }: { name: string }): JSX.Element | null {
     return (
       <svg {...common} className="nav-icon">
         <path d="M14 9.5A2.5 2.5 0 0 1 11.5 12H6l-3 2.5V4.5A2.5 2.5 0 0 1 5.5 2h6A2.5 2.5 0 0 1 14 4.5v5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (name === "capture") {
+    return (
+      <svg {...common} className="nav-icon">
+        <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
       </svg>
     );
   }

@@ -55,7 +55,7 @@ interface PersonalEntry {
 
 const MODULE_LABELS: Record<string, string> = {
   approvals: "Waiting on your decision",
-  intelligence: "Daily Brief",
+  intelligence: "Market signals",
   portfolio_risk: "Portfolio risk",
   allocation_constraints: "Allocation constraints",
   meetings: "Upcoming meetings",
@@ -138,7 +138,7 @@ function summarize(moduleKey: string, item: Record<string, unknown>): string {
     case "approvals":
       return `${s("title")} — ${s("action_key")}`;
     case "intelligence":
-      return `${s("title")} · score ${s("relevance_score")} (${s("relevance_reason")})`;
+      return s("title");
     case "portfolio_risk":
       return `${s("severity")} · ${s("canonical_name") || s("company_id")} — ${s("alert_type")}${s("metric_key") ? ` (${s("metric_key")})` : ""}`;
     case "allocation_constraints":

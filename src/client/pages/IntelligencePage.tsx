@@ -188,7 +188,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
   return (
     <section data-testid="intelligence-page">
       <p className="muted small">
-        Signed in as {me.fullName}. Ranking is a deterministic heuristic — every item states which rules fired.
+        Signed in as {me.fullName}. Items are ordered by how closely they match what the firm is watching.
       </p>
 
       <section className="card">
