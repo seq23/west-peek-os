@@ -200,24 +200,22 @@ not discipline.
 Secrets are set with `wrangler secret put` and are **write-only** — Cloudflare cannot show you a
 stored value, so a lost secret is rotated, not recovered.
 
-### Governed deploys
+### Deploying
 
-This repository is a Repo Operator project: slug `west-peek-os`, `target_type: git`, linked to
-`seq23/west-peek-os` on branch `main` in `GIT_NATIVE` mode.
+`npm run deploy:production` is the only thing that changes production. It applies D1 migrations,
+refuses to continue if any are still pending, builds, deploys, then probes the Worker.
 
-`repo deploy west-peek-os` is the governed deploy. It requires a verified run artifact, so
-until one exists it refuses with `BLOCKED_ARTIFACT` and the direct path below is the one to use. Under `GIT_NATIVE` it checks D1 first: any pending
-migration **blocks** before anything is mutated. Once the schema is current, one Git push is the
-deploy, and Cloudflare Workers Builds builds from `main`.
+**Cloudflare is not connected to this repository.** The GitHub build trigger was disconnected on
+18 Aug 2026, deliberately: Workers Builds deploys code but does not apply migrations, so a push
+carrying a migration would ship code against tables that do not exist — which broke production
+twice on 17 Aug. Pushing here is saving work, never deploying.
 
-`npm run deploy:production` remains the direct path. It still applies migrations before deploying,
-as described above.
+Habit that keeps the two honest: **push, then deploy**, from the same tree. Then the commit on
+`main` always matches what is live.
 
-A hand `git push` does neither — it deploys with **no** migration check, which is exactly how code
-ships against tables that do not exist. Anything touching `migrations/` goes through
-`repo deploy west-peek-os` or `npm run deploy:production`, never a bare push.
-
----
+Finished work is admitted into Repo Operator through the DIRECT artifact lane
+(`repo artifact-admit <zip> --direct --commit … --attested-by …`), which proves every file in the
+artifact byte-for-byte against the commit it claims to come from.
 
 ## What is not finished
 
