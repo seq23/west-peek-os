@@ -176,6 +176,12 @@ export interface OpportunityRow {
   backfilled_at: string | null;
   backfill_reason: string | null;
   as_of_date: string | null;
+  /**
+   * JSON array of field names whose current value is a stand-in, not a fact (migration 0052).
+   * Non-empty means any arithmetic resting on those fields is provisional and must be shown as such.
+   */
+  placeholder_fields: string;
+  placeholder_note: string | null;
   firm_scope: string;
   created_by: string;
   created_at: string;
@@ -199,6 +205,9 @@ export interface CreateOpportunityInput {
   relationship_origin?: string;
   origin_event_id?: string;
   relationship_started_at?: string;
+  /** Fields whose supplied value is a stand-in rather than a fact (migration 0052). */
+  placeholder_fields?: string[];
+  placeholder_note?: string;
 }
 
 export async function getOpportunity(env: Env, id: string): Promise<OpportunityRow | null> {
@@ -219,8 +228,9 @@ export async function createOpportunity(env: Env, actor: Actor, input: CreateOpp
     `INSERT INTO investment_opportunity
        (id, company_id, opportunity_type, title, status, source_channel, security_class_id, price_per_share,
         discount_premium, quantity, seller_name, broker_name, fees, carry, terms_json, privacy_label,
-        relationship_origin, origin_event_id, relationship_started_at, firm_scope, created_by)
-     VALUES (?1, ?2, ?3, ?4, 'NEW', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
+        relationship_origin, origin_event_id, relationship_started_at, firm_scope, created_by,
+        placeholder_fields, placeholder_note)
+     VALUES (?1, ?2, ?3, ?4, 'NEW', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)`,
   )
     .bind(
       id,
@@ -245,6 +255,8 @@ export async function createOpportunity(env: Env, actor: Actor, input: CreateOpp
       input.relationship_started_at ?? null,
       actor.firmScopes[0] ?? "west-peek",
       actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+      JSON.stringify(input.placeholder_fields ?? []),
+      input.placeholder_note ?? null,
     )
     .run();
   const { actorType, actorId } = eventActor(actor);
@@ -421,6 +433,112 @@ export async function backfillOpportunity(
     payload: { from: row.status, to: input.to, backfill: true, reason, as_of_date: input.as_of_date ?? null },
   });
   return (await getOpportunity(env, id))!;
+}
+
+/**
+ * Fill in a value that was recorded as a placeholder.
+ *
+ * WHY THIS IS NOT updateOpportunity. That refuses to touch a CLOSED, PASS or WITHDRAWN record, and
+ * rightly — a terminal opportunity is a decision, and decisions are not edited. But Sensori is
+ * CLOSED and carries placeholder economics, so the ordinary door is shut on exactly the record
+ * that most needs correcting. A placeholder was never a decision; it was a gap wearing a number's
+ * clothes, and admitted as one at the moment it was written.
+ *
+ * So this door opens on terminal records, and is narrow in the way that makes that safe:
+ *
+ *   · it will only set a field that is CURRENTLY LISTED as a placeholder. Anything else is refused,
+ *     so this cannot become a general edit path for closed deals by accident;
+ *   · each field it sets is removed from the list, so the record heals as it is corrected and
+ *     nobody has to remember to clear a flag;
+ *   · it is its own action key, so the authority to correct provisional data is grantable apart
+ *     from the authority to change a live deal.
+ *
+ * The result is that a placeholder is loud until it is true, and then it stops being anything at
+ * all — which is the only honest lifecycle for a number that was invented to be replaced.
+ */
+export async function confirmPlaceholders(
+  env: Env,
+  actor: Actor,
+  id: string,
+  values: Record<string, number | string | null>,
+): Promise<OpportunityRow> {
+  const row = await getOpportunity(env, id);
+  if (!row) throw new InvestmentError(404, "not_found");
+  await mustAuthorize(env, actor, "opportunity.confirm_placeholder", "investment_opportunity", id, row.firm_scope);
+
+  let outstanding: string[] = [];
+  try {
+    outstanding = JSON.parse(row.placeholder_fields || "[]") as string[];
+  } catch {
+    outstanding = [];
+  }
+  if (outstanding.length === 0) {
+    throw new InvestmentError(409, "nothing_provisional", "this record has no placeholder values to confirm");
+  }
+
+  const fields = Object.keys(values);
+  if (fields.length === 0) {
+    throw new InvestmentError(400, "no_values", "supply at least one value to confirm");
+  }
+  const notProvisional = fields.filter((f) => !outstanding.includes(f));
+  if (notProvisional.length > 0) {
+    throw new InvestmentError(
+      409,
+      "not_a_placeholder",
+      `${notProvisional.join(", ")} ${notProvisional.length === 1 ? "is" : "are"} not marked as provisional here; this door only corrects placeholders`,
+    );
+  }
+  // Only ever the economics. A placeholder list is data, and data must not be able to name a
+  // column and have it written — that would turn this into arbitrary SQL with extra steps.
+  const settable = new Set(["price_per_share", "quantity", "fees", "carry", "discount_premium", "seller_name", "broker_name"]);
+  const illegal = fields.filter((f) => !settable.has(f));
+  if (illegal.length > 0) {
+    throw new InvestmentError(400, "not_settable", `${illegal.join(", ")} cannot be set through this route`);
+  }
+
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  for (const f of fields) {
+    sets.push(`${f} = ?${binds.length + 2}`);
+    binds.push(values[f] ?? null);
+  }
+  const remaining = outstanding.filter((f) => !fields.includes(f));
+  sets.push(`placeholder_fields = ?${binds.length + 2}`);
+  binds.push(JSON.stringify(remaining));
+  if (remaining.length === 0) {
+    sets.push(`placeholder_note = NULL`);
+  }
+
+  await env.WP_OS_DB.prepare(`UPDATE investment_opportunity SET ${sets.join(", ")} WHERE id = ?1`)
+    .bind(id, ...binds)
+    .run();
+
+  const { actorType, actorId } = eventActor(actor);
+  await appendEvent(env, {
+    eventType: "investment.placeholders_confirmed",
+    actorType,
+    actorId,
+    objectType: "investment_opportunity",
+    objectId: id,
+    firmScope: row.firm_scope,
+    payload: { confirmed: fields, values, still_provisional: remaining },
+  });
+  return (await getOpportunity(env, id))!;
+}
+
+const confirmPlaceholderSchema = z.object({
+  values: z.record(z.union([z.number(), z.string(), z.null()])),
+});
+
+export async function handleConfirmPlaceholders(ctx: RouteContext): Promise<Response> {
+  const body = await parseJsonBody(ctx.request);
+  const parsed = confirmPlaceholderSchema.safeParse(body);
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    return json(await confirmPlaceholders(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data.values));
+  } catch (err) {
+    return errorResponse(err);
+  }
 }
 
 // ── Block links (dedup by LINK, never merge) ──
@@ -1526,6 +1644,10 @@ const createOpportunitySchema = z.object({
   // the deal appeared is the only measurement that tests whether the community model works.
   relationship_origin: z.enum(RELATIONSHIP_ORIGINS).optional(),
   origin_event_id: z.string().trim().max(80).optional(),
+  // A record can be born provisional (migration 0052). Stand-in economics are legitimate when the
+  // paperwork is not to hand — they are only dangerous when nothing says they are stand-ins.
+  placeholder_fields: z.array(z.string().trim().min(1)).optional(),
+  placeholder_note: z.string().trim().min(1).optional(),
   relationship_started_at: z.string().trim().max(40).optional(),
 });
 

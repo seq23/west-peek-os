@@ -1553,6 +1553,10 @@ interface OpportunityRow {
   broker_name: string | null;
   price_per_share: number | null;
   quantity: number | null;
+  /** JSON array of fields whose value is a stand-in rather than a fact (migration 0052). */
+  placeholder_fields?: string;
+  placeholder_note?: string | null;
+  backfilled_at?: string | null;
 }
 
 interface DealMathPacketRow {
@@ -1689,6 +1693,117 @@ function IcPacketPanel({ packetId, onChanged }: { packetId: string; onChanged: (
   );
 }
 
+/**
+ * Values that are stand-ins, and the form that replaces them.
+ *
+ * A placeholder is only safe while it is loud. The whole reason stand-in economics are allowed at
+ * all — the operator wanted editable numbers rather than empty fields on a deal whose paperwork is
+ * not to hand — is that every surface showing one has to say so. An unmarked stand-in gets charted
+ * and eventually reported to an LP, and by then nobody can tell which figures were ever true.
+ *
+ * So this renders nothing at all when a record is solid, and is impossible to miss when it is not.
+ * It posts to the placeholder door rather than the ordinary update route, which is what lets it
+ * work on a CLOSED holding: correcting a stand-in is not editing a decision.
+ */
+function PlaceholderPanel({
+  opportunity,
+  onConfirmed,
+}: {
+  opportunity: OpportunityRow;
+  onConfirmed: () => void;
+}): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<string | null>(null);
+
+  let provisional: string[] = [];
+  try {
+    provisional = JSON.parse(opportunity.placeholder_fields ?? "[]") as string[];
+  } catch {
+    provisional = [];
+  }
+  if (provisional.length === 0) return null;
+
+  const label: Record<string, string> = {
+    price_per_share: "Price per share",
+    quantity: "Shares",
+    fees: "Fees",
+    carry: "Carry",
+    discount_premium: "Discount / premium",
+    seller_name: "Seller",
+    broker_name: "Broker",
+  };
+
+  return (
+    <div className="notice" data-testid={`placeholder-panel-${opportunity.id}`}>
+      <strong>Needs editing.</strong>{" "}
+      {provisional.length} value{provisional.length === 1 ? " is a placeholder" : "s are placeholders"}:{" "}
+      {provisional.map((f) => label[f] ?? f).join(", ")}.
+      {opportunity.placeholder_note && <div className="muted small">{opportunity.placeholder_note}</div>}
+      <button
+        type="button"
+        className="link-button"
+        data-testid={`placeholder-edit-${opportunity.id}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? "Cancel" : "Enter the real numbers"}
+      </button>
+      {message && <div className="small" data-testid={`placeholder-message-${opportunity.id}`}>{message}</div>}
+      {open && (
+        <form
+          className="form-row"
+          data-testid={`placeholder-form-${opportunity.id}`}
+          onSubmit={async (e) => {
+            e.preventDefault();
+            // Only send what was actually filled in. Confirming one field and leaving another
+            // provisional is a normal outcome of a meeting, not an error.
+            const payload: Record<string, number | string> = {};
+            for (const f of provisional) {
+              const raw = (values[f] ?? "").trim();
+              if (!raw) continue;
+              payload[f] = f.endsWith("_name") ? raw : Number(raw);
+            }
+            if (Object.keys(payload).length === 0) {
+              setMessage("Nothing entered yet.");
+              return;
+            }
+            const res = await api<{ placeholder_fields?: string; error?: string; detail?: string }>(
+              `/api/opportunities/${opportunity.id}/placeholders`,
+              { method: "POST", body: { values: payload } },
+            );
+            if (res.status !== 200) {
+              setMessage(`Not saved: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+              return;
+            }
+            const left = JSON.parse(res.data?.placeholder_fields ?? "[]") as string[];
+            setMessage(
+              left.length === 0
+                ? "Recorded. Nothing on this deal is a placeholder any more."
+                : `Recorded. Still to confirm: ${left.map((f) => label[f] ?? f).join(", ")}.`,
+            );
+            setOpen(false);
+            onConfirmed();
+          }}
+        >
+          {provisional.map((f) => (
+            <label key={f}>
+              {label[f] ?? f}{" "}
+              <input
+                data-testid={`placeholder-input-${f}-${opportunity.id}`}
+                value={values[f] ?? ""}
+                onChange={(ev) => setValues((v) => ({ ...v, [f]: ev.target.value }))}
+              />
+            </label>
+          ))}
+          <button type="submit" className="btn-strong" data-testid={`placeholder-save-${opportunity.id}`}>
+            Save
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 function InvestmentPage({ me }: { me: MeResponse }) {
   const companies = useApi<{ companies: CompanyRow[] }>("/api/companies");
   const [companyId, setCompanyId] = useState("");
@@ -1794,6 +1909,12 @@ function InvestmentPage({ me }: { me: MeResponse }) {
             — <code>{o.opportunity_type}</code> <code>{o.status}</code>
             {o.seller_name ? ` · seller ${o.seller_name}` : ""}
             {o.broker_name ? ` · broker ${o.broker_name}` : ""}
+            {o.backfilled_at && (
+              <span className="badge" title="Status was entered as history, not decided here">
+                backfilled
+              </span>
+            )}
+            <PlaceholderPanel opportunity={o} onConfirmed={() => opportunities.reload()} />
           </li>
         ))}
         {(opportunities.data?.opportunities ?? []).length === 0 && <li className="state-empty" data-testid="no-opportunities">No opportunities. Create one against a canonical company to start the investment record.</li>}

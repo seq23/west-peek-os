@@ -200,14 +200,21 @@ const OPPORTUNITIES = [
     // Community-sourced consumer deal. Recorded so the flywheel is measurable rather than asserted.
     relationship_origin: "COMMUNITY_INTRO",
     source_channel: "SPV",
+    // STAND-INS, chosen so the arithmetic totals the real $10,000 invested and nothing else.
+    // The operator asked for editable placeholders rather than empty fields, which is fine as
+    // long as they are loud: a number indistinguishable from a real one gets charted and
+    // eventually reported to an LP, and by then nobody can tell which figures were ever true.
+    price_per_share: 1,
+    quantity: 10_000,
+    placeholder_fields: ["price_per_share", "quantity"],
+    placeholder_note:
+      "Entry price and share count are STAND-INS totalling the real $10,000 invested. Ownership, " +
+      "mark and return computed from them are meaningless. Replace with the SPV terms.",
     terms: {
       vehicle: "SPV",
       amount_invested_usd: 10_000,
       status_note: "Closed. The firm's only investment to date; predates the fund.",
-      // Deliberately absent rather than guessed. Without it there is no ownership, no mark and
-      // no return — so it is recorded as a stated gap, which is a question the panel can ask.
       entry_valuation_usd: null,
-      unknown: ["entry_valuation_usd", "ownership_pct", "security_class"],
     },
   },
   {
@@ -392,8 +399,8 @@ async function main() {
   }
 
   notes.push(
-    "Sensori is CLOSED but has no transaction or position: both need an entry price and share " +
-    "count nobody has supplied, so ownership, mark and return cannot be computed. Ask for the SPV terms.",
+    "Sensori's price and share count are PLACEHOLDERS, marked as such. Anything computed from " +
+    "them is meaningless until the real SPV terms are entered on the Dealflow page.",
   );
   notes.push("relationship_origin has no PITCH_COMPETITION value; Psyflo is recorded as COMMUNITY_INTRO with the detail in terms.");
 

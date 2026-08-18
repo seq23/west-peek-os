@@ -1094,3 +1094,115 @@ describe("backfilling a holding that predates the system", () => {
     expect(JSON.parse(backfill!.payload_json).backfill).toBe(true);
   });
 });
+
+/**
+ * Placeholder economics (migration 0052).
+ *
+ * The firm's only investment is a closed SPV whose entry price and share count nobody has to hand.
+ * The operator asked for editable stand-ins rather than empty fields, which is fine — but only
+ * because they are marked. An unmarked stand-in gets charted and eventually reported to an LP, and
+ * by then nobody can tell which figures were ever true.
+ *
+ * These assert the two properties that make a placeholder safe: it is always visibly provisional,
+ * and the door that corrects it cannot become a general edit path for closed decisions.
+ */
+describe("values recorded as placeholders", () => {
+  async function provisionalOpportunity(): Promise<string> {
+    const company = await createCompany();
+    const res = await call<{ id: string }>("/api/opportunities", MP, "POST", {
+      company_id: company,
+      opportunity_type: "EARLY_STAGE_PRIMARY",
+      title: `provisional ${crypto.randomUUID().slice(0, 8)}`,
+      price_per_share: 1,
+      quantity: 10_000,
+      placeholder_fields: ["price_per_share", "quantity"],
+      placeholder_note: "stand-ins totalling the real amount invested",
+    });
+    expect(res.status).toBe(201);
+    return res.body.id;
+  }
+
+  it("is born provisional, and says which fields are", async () => {
+    const id = await provisionalOpportunity();
+    const got = await call<{ placeholder_fields: string; placeholder_note: string }>(`/api/opportunities/${id}`, MP);
+    expect(JSON.parse(got.body.placeholder_fields)).toEqual(["price_per_share", "quantity"]);
+    expect(got.body.placeholder_note).toContain("stand-ins");
+  });
+
+  it("can be corrected on a CLOSED record, which ordinary editing refuses", async () => {
+    const id = await provisionalOpportunity();
+    await call(`/api/opportunities/${id}/backfill`, MP, "POST", {
+      to: "CLOSED",
+      reason: "holding that predates the system, entered as history",
+    });
+
+    // The ordinary door is shut, and should be: a terminal opportunity is a decision.
+    const edit = await call(`/api/opportunities/${id}`, MP, "PATCH", { price_per_share: 9 });
+    expect(edit.status).toBe(409);
+
+    // This one opens, because a placeholder was never a decision.
+    const fixed = await call<{ price_per_share: number; placeholder_fields: string }>(
+      `/api/opportunities/${id}/placeholders`, MP, "POST", { values: { price_per_share: 2.5 } },
+    );
+    expect(fixed.status).toBe(200);
+    expect(fixed.body.price_per_share).toBe(2.5);
+    // Corrected fields stop being provisional; the untouched one stays flagged.
+    expect(JSON.parse(fixed.body.placeholder_fields)).toEqual(["quantity"]);
+  });
+
+  it("refuses to set a field that was never provisional", async () => {
+    const id = await provisionalOpportunity();
+    const res = await call(`/api/opportunities/${id}/placeholders`, MP, "POST", { values: { title: "sneaky rename" } });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("not_a_placeholder");
+  });
+
+  it("refuses a column the placeholder list has no business naming", async () => {
+    // The list is data. If data could name a column and have it written, this route would be
+    // arbitrary SQL with extra steps.
+    const company = await createCompany();
+    const made = await call<{ id: string }>("/api/opportunities", MP, "POST", {
+      company_id: company,
+      opportunity_type: "EARLY_STAGE_PRIMARY",
+      title: `bad field ${crypto.randomUUID().slice(0, 8)}`,
+      placeholder_fields: ["status"],
+    });
+    const res = await call(`/api/opportunities/${made.body.id}/placeholders`, MP, "POST", { values: { status: "CLOSED" } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("not_settable");
+  });
+
+  it("clears the note once nothing is provisional any more", async () => {
+    const id = await provisionalOpportunity();
+    const done = await call<{ placeholder_fields: string; placeholder_note: string | null }>(
+      `/api/opportunities/${id}/placeholders`, MP, "POST",
+      { values: { price_per_share: 2.5, quantity: 4000 } },
+    );
+    expect(JSON.parse(done.body.placeholder_fields)).toEqual([]);
+    // The warning must not outlive the thing it was warning about.
+    expect(done.body.placeholder_note).toBeNull();
+  });
+
+  it("refuses on a record with nothing provisional", async () => {
+    const company = await createCompany();
+    const made = await call<{ id: string }>("/api/opportunities", MP, "POST", {
+      company_id: company, opportunity_type: "EARLY_STAGE_PRIMARY", title: `solid ${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const res = await call(`/api/opportunities/${made.body.id}/placeholders`, MP, "POST", { values: { price_per_share: 1 } });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("nothing_provisional");
+  });
+
+  it("leaves a trail naming what was confirmed and what is still provisional", async () => {
+    const id = await provisionalOpportunity();
+    await call(`/api/opportunities/${id}/placeholders`, MP, "POST", { values: { price_per_share: 3 } });
+    const events = await t.db
+      .prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'investment.placeholders_confirmed'")
+      .bind(id)
+      .all<{ payload_json: string }>();
+    expect(events.results).toHaveLength(1);
+    const payload = JSON.parse(events.results![0]!.payload_json);
+    expect(payload.confirmed).toEqual(["price_per_share"]);
+    expect(payload.still_provisional).toEqual(["quantity"]);
+  });
+});
