@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 import { useApi, type MeResponse } from "../lib/api";
+import { useSelectedFund } from "../lib/selectedFund";
+import { FundPicker } from "./FundPicker";
 
 /**
  * Deal modeling — a doorway to the team's own tool, not a second copy of it.
@@ -46,8 +48,8 @@ interface Mandate {
 }
 
 export function ModelingPage({ me }: { me: MeResponse }) {
-  const funds = useApi<{ funds: Array<{ id: string; name: string }> }>("/api/funds");
-  const fund = funds.data?.funds?.[0] ?? null;
+  const selected = useSelectedFund();
+  const fund = selected.fund;
   const mandateVersions = useApi<{ versions: Array<{ mandate_json?: string; version_no: number }> }>(
     fund ? `/api/funds/${fund.id}/policies/mandate` : null,
     [fund?.id],
@@ -77,6 +79,7 @@ export function ModelingPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="modeling-page">
+      <FundPicker selected={selected} />
       <p className="muted small">
         The firm's deal math lives in the dashboards the team built, {me.fullName} — secondary
         deals, primary rounds and fund construction. This page does not repeat them. It hands you

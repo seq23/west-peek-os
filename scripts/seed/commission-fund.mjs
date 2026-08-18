@@ -38,9 +38,33 @@ const DRY_RUN = args.includes("--dry-run");
 const BASE_URL = String(flag("base-url", "http://127.0.0.1:8787")).replace(/\/$/, "");
 const DEV_USER = flag("dev-user");
 const ACCESS_TOKEN = flag("access-token");
+/**
+ * Identity for a `wrangler dev --env production --remote` session: the worker runs with production
+ * bindings (the real D1) but is reached on localhost, where no Access layer sits in front to set
+ * the header itself.
+ *
+ * THIS IS NOT AN AUTHENTICATION BYPASS. On the deployed route Cloudflare Access STRIPS any
+ * client-supplied Cf-Access-* header before the Worker sees it and sets its own from the verified
+ * session, so sending this at os.joinwestpeek.com achieves nothing. It only means anything on a
+ * dev session — which already requires Cloudflare credentials with D1 write, i.e. someone who
+ * could write these rows by hand regardless. It buys going through the real services rather than
+ * hand-written SQL, not access somebody did not already have.
+ */
+const AS_USER = flag("as-user");
 
-if (!DEV_USER && !ACCESS_TOKEN && !DRY_RUN) {
-  console.error("Refusing to run: pass --dev-user (local) or --access-token (production).");
+if (!DEV_USER && !ACCESS_TOKEN && !AS_USER && !DRY_RUN) {
+  console.error(
+    "Refusing to run: pass --dev-user (local), --access-token (deployed), or --as-user\n" +
+      "(a `wrangler dev --env production --remote` session).",
+  );
+  process.exit(2);
+}
+if (AS_USER && /^https?:\/\/(?!127\.0\.0\.1|localhost)/i.test(BASE_URL)) {
+  console.error(
+    `Refusing to run: --as-user is only meaningful against a local dev session, and ${BASE_URL} is remote.\n` +
+      "Cloudflare Access strips client-supplied Cf-Access-* headers on a protected route, so this\n" +
+      "would silently authenticate as nobody. Use --access-token for a deployed URL.",
+  );
   process.exit(2);
 }
 
@@ -48,6 +72,7 @@ const headers = {
   "content-type": "application/json",
   ...(DEV_USER ? { "x-wpos-dev-user": String(DEV_USER) } : {}),
   ...(ACCESS_TOKEN ? { "cf-access-token": String(ACCESS_TOKEN) } : {}),
+  ...(AS_USER ? { "Cf-Access-Authenticated-User-Email": String(AS_USER) } : {}),
 };
 
 let created = 0;

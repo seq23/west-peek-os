@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    a { color: #b4400f; text-decoration: none; }
+    a:hover { color: #8f3309; }
+    .lbl { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #6b635b; font-weight: 600; }
+    .card { background: #ffffff; border: 1px solid #e4ddd2; border-radius: 6px; }
+  </style>
+</helmet>
+
+<!-- A quiet day, and the day before the firm is loaded. The empty state is the design problem
+     that matters most here: twelve panels reading "Nothing here." is what made the product feel
+     broken. A colleague reporting nothing is different from a panel with nothing in it. -->
+<div style="width: 900px; height: 1180px; background: #f7f2ea; color: #15120f; padding: 32px 36px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px;">
+
+  <header style="display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; padding-bottom: 16px; border-bottom: 1px solid #cdc4b7;">
+    <div>
+      <div class="lbl" style="margin-bottom: 6px;">Saturday 23 August 2026</div>
+      <h1 style="margin: 0; font-size: 28px; line-height: 1.2; letter-spacing: -0.011em; font-weight: 700;">This morning, Sequoia</h1>
+    </div>
+    <div style="text-align: right;">
+      <div style="font-size: 13px; color: #4a443e;">Delivered 7:01 AM by <strong style="color: #15120f;">Wren</strong></div>
+      <div style="font-size: 12px; color: #6b635b;">Sequoia AI Chief of Staff</div>
+    </div>
+  </header>
+
+  <!-- A quiet morning is a finding, not a blank page. -->
+  <section class="card" style="padding: 24px 28px;">
+    <h2 style="margin: 0 0 8px; font-size: 20px; font-weight: 700; letter-spacing: -0.011em;">A quiet morning</h2>
+    <div style="font-size: 14px; line-height: 1.55; color: #15120f;">
+      Nothing is waiting on your signature, nothing in the pipeline moved, and the sweep found
+      nothing worth pulling out. The brief is short today because the day is.
+    </div>
+  </section>
+
+  <section>
+    <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px;">
+      <h2 style="margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.011em;">Deliveries</h2>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;">
+
+      <div class="card" style="padding: 16px 18px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 14px; font-weight: 600;">Deals close to a decision</div>
+        <div style="font-size: 13px; line-height: 1.55; color: #6b635b;">Nothing is waiting on the committee.</div>
+        <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+          <strong style="color: #15120f; font-weight: 600;">Poppy</strong> &middot; IC Facilitator
+        </div>
+      </div>
+
+      <div class="card" style="padding: 16px 18px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 14px; font-weight: 600;">Companies I am watching</div>
+        <div style="font-size: 13px; line-height: 1.55; color: #6b635b;">No open alerts on anything you own.</div>
+        <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+          <strong style="color: #15120f; font-weight: 600;">Winter</strong> &middot; Portfolio Support Manager
+        </div>
+      </div>
+
+      <div class="card" style="padding: 16px 18px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 14px; font-weight: 600;">Where the raise stands</div>
+        <div style="font-size: 13px; line-height: 1.55; color: #6b635b;">No movement on the LP side since you last looked.</div>
+        <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+          <strong style="color: #15120f; font-weight: 600;">Wesley</strong> &middot; LP Relations Manager
+        </div>
+      </div>
+
+      <div class="card" style="padding: 16px 18px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 14px; font-weight: 600;">Rooms you are in today</div>
+        <div style="font-size: 13px; line-height: 1.55; color: #6b635b;">Nothing scheduled.</div>
+        <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+          <strong style="color: #15120f; font-weight: 600;">Walter</strong> &middot; Meeting Buddy
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Before the firm is loaded, the page says what to do rather than showing empty panels.
+       This is the state production was actually in, and it read as a broken product. -->
+  <section class="card" style="padding: 24px 28px; border-color: #f4d3bf; background: #fff1e9;">
+    <div class="lbl" style="color: #b4400f; margin-bottom: 8px;">Before any of the above</div>
+    <h2 style="margin: 0 0 8px; font-size: 18px; font-weight: 700; letter-spacing: -0.011em;">This firm has no fund yet</h2>
+    <div style="font-size: 14px; line-height: 1.55; margin-bottom: 16px; max-width: 62ch;">
+      Nothing on this page can arrive until there is a fund, a thesis and something in the pipeline.
+      Every panel would sit empty and the product would look broken when it is simply unloaded.
+    </div>
+    <span style="display: inline-block; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 4px; background: #15120f; color: #ffffff;">Set up the fund</span>
+  </section>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

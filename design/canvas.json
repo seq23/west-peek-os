@@ -1,0 +1,24 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1440, "h": 1180, "title": "Proposed — the delivery window" },
+    { "file": "Current.dc.html", "x": 1560, "y": 0, "w": 900, "h": 1180, "title": "Today" },
+    { "file": "Quiet.dc.html", "x": 2580, "y": 0, "w": 900, "h": 1180, "title": "A quiet day, and an unloaded firm" }
+  ],
+  "annotations": [
+    {
+      "id": "what-changed",
+      "x": 0,
+      "y": -230,
+      "w": 620,
+      "text": "The change is attribution, not layout.\n\nThe panels are the same records. What is new is that each one comes from a named colleague you can go and ask — which is what having thirty-one employees should feel like.\n\nThe brief moves to the top and is the only thing on the page actually written by a model. Everything else is assembled from records by a query, and the byline names whose area it is rather than claiming authorship."
+    },
+    {
+      "id": "empty-note",
+      "x": 2580,
+      "y": -230,
+      "w": 620,
+      "text": "The empty state is the design problem that matters most.\n\nTwelve panels reading \"Nothing here.\" is what made production feel broken — it was empty, not faulty. A colleague reporting nothing is a different message from a blank box, and an unloaded firm should say so and offer the way out."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}

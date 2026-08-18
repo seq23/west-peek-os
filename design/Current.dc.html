@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    a { color: #b4400f; text-decoration: none; }
+    a:hover { color: #8f3309; }
+    .lbl { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #6b635b; font-weight: 600; }
+    .card { background: #ffffff; border: 1px solid #e4ddd2; border-radius: 6px; }
+  </style>
+</helmet>
+
+<!-- Today's Home, drawn from the shipped component — for comparison, not as a proposal.
+     The work surface only; the rail is identical in both and repeating it wastes the width. -->
+<div style="width: 900px; height: 1180px; background: #f7f2ea; color: #15120f; padding: 32px 36px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px;">
+
+  <div style="padding-bottom: 12px; border-bottom: 1px solid #cdc4b7;">
+    <h1 style="margin: 0 0 4px; font-size: 28px; font-weight: 700; letter-spacing: -0.011em;">Home</h1>
+    <div style="font-size: 13px; color: #4a443e;">Sequoia Taylor &middot; Managing Partner</div>
+  </div>
+
+  <!-- One thing to watch: correct, and unattributed. -->
+  <div class="card" style="padding: 16px 20px;">
+    <div class="lbl" style="margin-bottom: 6px;">One thing to watch</div>
+    <div style="font-size: 14px; font-weight: 600;">Approval waiting: Activate Paige as Analyst</div>
+    <div style="font-size: 12px; color: #6b635b; margin-top: 4px;">Shown because nothing is flagged in the portfolio, and this is the oldest decision waiting on you.</div>
+  </div>
+
+  <!-- Twelve panels, all equally present, none of them from anybody. -->
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;">
+
+    <div class="card" style="padding: 16px 18px;">
+      <div style="display: flex; justify-content: space-between; align-items: baseline;">
+        <div style="font-size: 15px; font-weight: 600;">Waiting on your decision <span style="color: #6b635b; font-weight: 400;">2</span></div>
+        <span style="font-size: 12px; color: #b4400f;">Open</span>
+      </div>
+      <div style="font-size: 12px; color: #6b635b; margin: 6px 0 10px;">What is blocked on a human decision</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55;">
+        <li>Activate Paige as Analyst — ai_employee.activate</li>
+        <li>September Room — approval.request</li>
+      </ul>
+    </div>
+
+    <div class="card" style="padding: 16px 18px;">
+      <div style="display: flex; justify-content: space-between; align-items: baseline;">
+        <div style="font-size: 15px; font-weight: 600;">Market signals <span style="color: #6b635b; font-weight: 400;">5</span></div>
+        <span style="font-size: 12px; color: #b4400f;">Open</span>
+      </div>
+      <div style="font-size: 12px; color: #6b635b; margin: 6px 0 10px;">What the firm picked up</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55;">
+        <li>Thirty-year yields at highest since 2007</li>
+        <li>Two ed-tech seed rounds priced</li>
+      </ul>
+    </div>
+
+    <div class="card" style="padding: 16px 18px;">
+      <div style="font-size: 15px; font-weight: 600;">Portfolio risk <span style="color: #6b635b; font-weight: 400;">0</span></div>
+      <div style="font-size: 12px; color: #6b635b; margin: 6px 0 10px;">Where a company needs attention</div>
+      <div style="font-size: 13px; color: #6b635b;">Nothing here.</div>
+    </div>
+
+    <div class="card" style="padding: 16px 18px;">
+      <div style="font-size: 15px; font-weight: 600;">IC / deal priorities <span style="color: #6b635b; font-weight: 400;">1</span></div>
+      <div style="font-size: 12px; color: #6b635b; margin: 6px 0 10px;">What is close to a decision</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55;">
+        <li>SCREENING · Psyflo — Psyflo, pre-seed</li>
+      </ul>
+    </div>
+
+    <div class="card" style="padding: 16px 18px;">
+      <div style="font-size: 15px; font-weight: 600;">LP / fundraising signals <span style="color: #6b635b; font-weight: 400;">3</span></div>
+      <div style="font-size: 12px; color: #6b635b; margin: 6px 0 10px;">Where the raise stands</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55;">
+        <li>INTRODUCED · Anchor LP</li>
+      </ul>
+    </div>
+
+    <div class="card" style="padding: 16px 18px;">
+      <div style="font-size: 15px; font-weight: 600;">Upcoming meetings <span style="color: #6b635b; font-weight: 400;">2</span></div>
+      <div style="font-size: 12px; color: #6b635b; margin: 6px 0 10px;">What is on today</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55;">
+        <li>2026-08-18T10:00 — Deana Oliver (FOUNDER)</li>
+      </ul>
+    </div>
+
+    <div class="card" style="padding: 16px 18px;">
+      <div style="font-size: 15px; font-weight: 600;">AI spend today <span style="color: #6b635b; font-weight: 400;">1</span></div>
+      <div style="font-size: 12px; color: #6b635b; margin: 6px 0 10px;">What the workforce cost</div>
+      <div style="font-size: 13px;">$0.42 of $25 cap · NORMAL/LOCAL · 0 blocked run(s)</div>
+    </div>
+
+    <div class="card" style="padding: 16px 18px;">
+      <div style="font-size: 15px; font-weight: 600;">What changed <span style="color: #6b635b; font-weight: 400;">4</span></div>
+      <div style="font-size: 12px; color: #6b635b; margin: 6px 0 10px;">What moved since you last looked</div>
+      <ul style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55;">
+        <li>policy.version_created — fund/f_wp1</li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="card" style="padding: 14px 18px; background: #fbf8f3;">
+    <div style="font-size: 14px; font-weight: 600;">Private layer</div>
+    <div style="font-size: 12px; color: #6b635b;">Personal timing overlays, visible only to you.</div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
