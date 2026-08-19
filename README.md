@@ -72,7 +72,8 @@ edited is not an audit trail. Correct a mistake by writing a compensating row.
 
 `scripts/validate/no-unauthorized-effects.mjs` fails the build if a worker file calls `fetch()`
 without being named in `EGRESS_ALLOWED`, with a reason. Today: the RSS feed client, the Resend
-transport, the Network OS client and the SEC EDGAR client. External *effects* (anything leaving the
+transport, the Network OS client, the SEC EDGAR client, and the Google client — OAuth and calendar,
+read-only scopes, reachable only for a partner who granted consent to their own account. External *effects* (anything leaving the
 firm) execute only in `src/worker/effects/executor.ts`, only against an approved receipt.
 
 Bindings are exempt because they are not `fetch` — Browser Rendering reaches the web through
