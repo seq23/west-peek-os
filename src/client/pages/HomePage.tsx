@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttention";
 import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
+import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { DailyBriefPanel } from "./DailyBriefPanel";
 import { ConnectPanel } from "./ConnectPanel";
 
@@ -73,6 +74,34 @@ const MODULE_LABELS: Record<string, string> = {
 
 
 /**
+ * An employee's face, at whatever size the surface needs.
+ *
+ * Portraits are AI-generated images of people who do not exist, and the alt text says so — a
+ * screen-reader user is told what a sighted user can only infer. A missing or failed file falls
+ * back to initials rather than a broken image, which is the failure mode that would otherwise show
+ * up on the busiest page in the product.
+ */
+function Face({ name, role, size = 36 }: { name: string; role: string; size?: number }) {
+  const src = portraitFor(name);
+  const initials = name.slice(0, 2).toUpperCase();
+  if (!src) return <span className="face" style={{ width: size, height: size }}>{initials}</span>;
+  return (
+    <img
+      className="face"
+      style={{ width: size, height: size }}
+      src={src}
+      alt={portraitAlt(name, role)}
+      width={size}
+      height={size}
+      loading="lazy"
+      onError={(e) => {
+        (e.currentTarget as HTMLImageElement).style.display = "none";
+      }}
+    />
+  );
+}
+
+/**
  * One delivery: the same records the module always held, now from somebody.
  *
  * The byline is the whole change. "Portfolio risk: 0" is a number; "Winter — no open alerts on
@@ -90,39 +119,42 @@ function DeliveryCard({ module, onNavigate }: { module: HomeModule; onNavigate: 
   const empty = module.items.length === 0;
 
   return (
-    <section className="module-card delivery-card" data-testid={`home-module-${module.key}`}>
-      <header className="module-card-head">
-        <h4>
-          {delivery?.headline ?? module.title}{" "}
-          <span className="module-count">{module.count}</span>
-        </h4>
-        <button type="button" className="link-button" onClick={() => onNavigate(module.link)}>
+    <li
+      className={empty ? "delivery delivery-quiet" : "delivery"}
+      data-testid={`home-module-${module.key}`}
+    >
+      {delivery && <Face name={delivery.by} role={role ?? ""} size={empty ? 28 : 36} />}
+
+      <div className="delivery-what">
+        {delivery && (
+          <div className="delivery-who" data-testid={`home-delivery-by-${module.key}`}>
+            <strong>{delivery.by}</strong>
+            {role && <span className="muted small"> {role}</span>}
+          </div>
+        )}
+
+        {empty ? (
+          <div className="muted small" data-testid={`home-module-empty-${module.key}`}>
+            {delivery?.whenEmpty ?? module.note ?? "Nothing to report."}
+          </div>
+        ) : (
+          <>
+            <div className="delivery-headline">{delivery?.headline ?? module.title}</div>
+            <ul className="module-items">
+              {module.items.slice(0, 2).map((item, i) => (
+                <li key={String(item.id ?? i)}>{summarize(module.key, item)}</li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+
+      {!empty && (
+        <button type="button" data-testid={`home-open-${module.key}`} onClick={() => onNavigate(module.link)}>
           Open
         </button>
-      </header>
-
-      {empty ? (
-        <p className="muted" data-testid={`home-module-empty-${module.key}`}>
-          {delivery?.whenEmpty ?? module.note ?? "Nothing to report."}
-        </p>
-      ) : (
-        <>
-          <ul className="module-items">
-            {module.items.slice(0, 3).map((item, i) => (
-              <li key={String(item.id ?? i)}>{summarize(module.key, item)}</li>
-            ))}
-          </ul>
-          {module.note && <p className="muted small">{module.note}</p>}
-        </>
       )}
-
-      {delivery && (
-        <p className="delivery-by" data-testid={`home-delivery-by-${module.key}`}>
-          <strong>{delivery.by}</strong>
-          {role ? ` · ${role}` : ""}
-        </p>
-      )}
-    </section>
+    </li>
   );
 }
 
@@ -386,12 +418,13 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
             {greetingFor(new Date().getHours())}, {me.fullName.split(" ")[0]}
           </h1>
         </div>
+        {/* The byline used to live here, floating in the corner, nowhere near the thing it
+            described. It now sits ON the briefing, the way a byline sits on an article. */}
         <div className="home-signed">
-          <div>
-            Delivered {new Date(data.generated_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} by{" "}
-            <strong>{chiefOfStaff.name}</strong>
+          <div className="muted small">
+            {deliveries.filter((m) => m.items.length > 0).length + (waiting && waiting.items.length > 0 ? 1 : 0)} of your
+            team have something for you
           </div>
-          <div className="muted small">{chiefOfStaff.role}</div>
         </div>
       </header>
 
@@ -465,7 +498,21 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           a single line once both are connected. */}
       <ConnectPanel me={me} />
 
-      <DailyBriefPanel />
+      <section className="card brief-delivery" data-testid="home-brief-delivery">
+        <header className="brief-byline">
+          <Face name={chiefOfStaff.name} role={chiefOfStaff.role} size={40} />
+          <div className="brief-byline-who">
+            <div className="brief-byline-line">
+              <strong>{chiefOfStaff.name}</strong> delivered your morning briefing
+            </div>
+            <div className="muted small">
+              {chiefOfStaff.role} ·{" "}
+              {new Date(data.generated_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+            </div>
+          </div>
+        </header>
+        <DailyBriefPanel />
+      </section>
 
       {/* Waiting on you: lifted out of the grid because it is the only group where something is
           blocked on the reader rather than the other way round. A decision waiting three days
@@ -502,13 +549,20 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
 
       <section data-testid="home-deliveries">
         <div className="home-section-head">
-          <h2>Deliveries</h2>
+          <h2>From your team</h2>
+          <span className="muted small">
+            {deliveries.filter((m) => m.items.length > 0).length} of {deliveries.length} have something for you
+          </span>
         </div>
-        <div className="module-grid">
-          {deliveries.map((m) => (
-            <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} />
-          ))}
-        </div>
+        {/* Anyone with something to say first; everyone else stays on the page, quieter. Silence
+            from a named colleague is information — an absent card is just a gap. */}
+        <ul className="delivery-list">
+          {[...deliveries]
+            .sort((a, b) => (b.items.length > 0 ? 1 : 0) - (a.items.length > 0 ? 1 : 0))
+            .map((m) => (
+              <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} />
+            ))}
+        </ul>
       </section>
 
       <section className="card" data-testid="home-questions">

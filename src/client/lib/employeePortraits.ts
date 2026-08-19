@@ -1,3 +1,5 @@
+import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
+
 /**
  * AI employee portraits (P32, Employee Lounge).
  *
@@ -13,15 +15,19 @@
  * needed. A missing file degrades to initials rather than a broken image.
  */
 
-/** Roster names that have a committed portrait. */
-const WITH_PORTRAIT = new Set([
-  "Walker", "Wendy", "Wren", "Willa",
-  "Winton", "Porter", "Winnie", "Waverly", "Wells", "Willow", "Wilson",
-  "Pierce", "Priya", "Paige", "Wyatt", "Poppy", "Walter",
-  "Piper", "Perry", "Wesley", "Penn",
-  "Winter", "Parker", "Wynn", "Percy", "Prue", "Pippa", "Pax", "Preston", "Perrin",
-  "Whitney",
-]);
+/**
+ * Roster names that have a committed portrait — DERIVED, not listed.
+ *
+ * This was a hardcoded set of thirty-one names, and after the roster consolidated to seventeen it
+ * still named fourteen people whose portrait files had been deleted. Nothing broke visibly, because
+ * retired employees do not render — which is precisely the kind of drift that sits there until the
+ * day something does render them and shows a broken image.
+ *
+ * The roster is the source of truth for who exists and the committed files are the source of truth
+ * for who has a face; `tests/employeePortraits.test.ts` already asserts those two agree in both
+ * directions, so deriving from the roster keeps this list correct without anyone maintaining it.
+ */
+const WITH_PORTRAIT = new Set(AI_EMPLOYEE_ROSTER.map((e) => e.name));
 
 /** Public URL for an employee's portrait, or null when there is none. */
 export function portraitFor(name: string): string | null {
