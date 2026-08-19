@@ -40,13 +40,18 @@ const FOREIGN_BINDING = /env\.(?!WP_OS_)(?:[A-Z][A-Z0-9_]{2,})\b/;
  *   keys — a credential for an effect this system performs itself, NOT a handle on another
  *   repository's database. The two switches that gate its use (WP_OS_EMAIL_SEND, WP_OS_EMAIL_FROM)
  *   already carry the WP_OS_ prefix and need no exemption.
+ * - GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET (P51): the firm's own OAuth client, used
+ *   so each partner can grant this system read access to their own calendar. Same category as the
+ *   provider keys — a credential for something this system does itself, not a handle on another
+ *   repository's storage. Platform-named, so neither can carry a WP_OS_ prefix, and both are
+ *   reachable only from effects/googleClient.ts.
  * - EMAIL (P33): Cloudflare's Email Sending binding, the second transport for that same effect.
  *   Platform-named, so it cannot carry a WP_OS_ prefix. It is a capability this system was granted
  *   on its own account — not a handle on another repository's storage — which is the thing this
  *   scan exists to prevent. It is declared in src/worker/env.ts and reachable only from
  *   effects/cloudflareEmailClient.ts, and being a binding it adds no egress surface at all.
  */
-const DECLARED_NON_STORAGE_BINDINGS = /env\.(ASSETS|OPENROUTER_API_KEY|FIREWORKS_API_KEY|AI_PROVIDER_API_KEY|HARVEY_API_KEY|NORM_API_KEY|RESEND_API_KEY|EMAIL)\b/;
+const DECLARED_NON_STORAGE_BINDINGS = /env\.(ASSETS|OPENROUTER_API_KEY|FIREWORKS_API_KEY|AI_PROVIDER_API_KEY|HARVEY_API_KEY|NORM_API_KEY|RESEND_API_KEY|EMAIL|GOOGLE_OAUTH_CLIENT_ID|GOOGLE_OAUTH_CLIENT_SECRET)\b/;
 const NETWORK_OS_HOST = /(network-os[a-z0-9.-]*\.(?:com|dev|net|io|workers\.dev)|api\.westpeeknetwork)/i;
 
 function listSourceFiles() {
