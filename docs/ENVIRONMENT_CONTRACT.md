@@ -14,8 +14,11 @@ PRESENT / MISSING / UNPROVEN (UNPROVEN = cannot be confirmed without credentials
 | `GOOGLE_GENERATIVE_AI_API_KEY` | yes (vault) | P4 live proof | AI provider adapter | MISSING — CREDENTIAL GATE |
 | `PERPLEXITY_API_KEY` | yes (vault) | P4 live proof (optional provider) | AI provider adapter | MISSING — CREDENTIAL GATE |
 | `OPENROUTER_API_KEY` | yes (vault) | P4 live proof (optional provider) | AI provider adapter | MISSING — CREDENTIAL GATE |
-| `GOOGLE_OAUTH_CLIENT_ID` | no | P7/P9 live scopes | calendar/Gmail adapters | MISSING — CREDENTIAL GATE |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | yes (vault) | P7/P9 live scopes | calendar/Gmail adapters | MISSING — CREDENTIAL GATE |
+| `GOOGLE_OAUTH_CLIENT_ID` | no | P51 calendar + Gmail send | `effects/googleClient.ts` | SET |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | yes (vault) | P51 calendar + Gmail send | `effects/googleClient.ts` | SET |
+| `RESEND_API_KEY` | yes (vault) | P33 outbound email | `effects/resendClient.ts` | SET |
+| `WP_OS_EMAIL_FROM` | no — config, not a secret | P33; the address the firm sends as | `effects/*`, `services/sendAs.ts` | SET (`os@westpeek.ventures`) |
+| `WP_OS_EMAIL_SEND` | no — config, not a secret | P33; must be the literal `enabled` | `effects/resendClient.ts` | SET (`enabled`) |
 | `TELEGRAM_BOT_TOKEN` | yes (vault) | deferred (capture channel) | capture adapter | MISSING — CREDENTIAL GATE |
 | `VAPID_PUBLIC_KEY` | no | deferred (push) | notifications | MISSING |
 | `VAPID_PRIVATE_KEY` | yes (vault) | deferred (push) | notifications | MISSING — CREDENTIAL GATE |
@@ -42,3 +45,22 @@ an LLM context, including a bare variable NAME.
 Rules: no plaintext `.env` during ordinary operation; `vault:run -- <cmd>` injects values into child
 process memory only; temporary files (if a tool forces one) are 0600, minimal-lifetime, deleted on exit,
 and never packaged.
+
+## Outbound email and calendar (P33, P51)
+
+Two settings deliberately live in `wrangler.toml` rather than in secret storage:
+`WP_OS_EMAIL_FROM` and `WP_OS_EMAIL_SEND`. They are configuration, not credentials, and keeping
+them in the repo means the decision to start emailing people is visible in review rather than
+hidden in a dashboard. `WP_OS_EMAIL_SEND` must be the literal string `enabled` — `true`, `yes` and
+`1` all leave sending off, which is intentional: it should be impossible to switch on by accident.
+
+The sending domain is verified with Resend. Its DNS records live on the `send` and
+`resend._domainkey` subdomains of `westpeek.ventures`, chosen so the root MX — Google Workspace,
+which carries the firm's inbound mail — is untouched.
+
+Google OAuth uses ONE client for the firm; each partner grants access to their own account
+separately, and the connection is stored per `firm_user`. Refresh tokens live in KV, never in D1:
+`partner_connection.credential_name` holds the KV key by NAME, so losing the database is not losing
+anybody's Google account. Two consents exist and are deliberately separate — connecting a calendar
+asks for `calendar.readonly` alone, and `gmail.send` is requested only when a partner turns on
+sending under their own name.

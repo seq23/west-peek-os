@@ -67,7 +67,9 @@ IndexNow, HeyGen. Those are correctly present and correctly irrelevant here.
 | Harvey (legal) | **REGISTERED AS CONFIGURATION ONLY** | Disabled, no data-class allowance, adapter unproven by design. |
 | Norm (compliance) | **REGISTERED AS CONFIGURATION ONLY** | As Harvey. |
 | Network OS | **IMPLEMENTED — fails closed** | Adapter contract implemented; live pull returns `503` without a configured endpoint, which the E2E suite asserts. |
-| Connectors (calendar/email/transcription/VDR/fund-admin) | **NOT CONFIGURED** | Every connector row ships `NOT_CONFIGURED` by schema default. |
+| Outbound email | **LIVE** | Resend, on a verified domain, gated behind an approved receipt and two switches. A partner may also send under their own name, off by default and self-service only. |
+| Calendar (Google) | **IMPLEMENTED — awaiting per-partner consent** | Full OAuth flow with refresh and revocation; read-only scopes; tokens in KV, never in D1. Each partner connects their own account. |
+| Connectors (transcription/VDR/fund-admin) | **NOT CONFIGURED** | These connector rows still ship `NOT_CONFIGURED` by schema default. |
 
 ---
 

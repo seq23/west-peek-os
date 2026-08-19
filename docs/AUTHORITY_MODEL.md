@@ -99,8 +99,9 @@ requires an approved receipt for the effect's action key (`effect.email.send`,
 Every execution appends `effect.executed` with the receipt id to the event spine.
 
 `npm run validate:authority` statically proves this confinement (no other worker file
-marks `external_effect_request` EXECUTED; no outbound fetch to non-localhost anywhere
-in worker code; merge/reverse/executor route through `authorize()`), self-tests its
+marks `external_effect_request` EXECUTED; no outbound fetch anywhere in worker code
+except the files named on `EGRESS_ALLOWED`, each with its reason; merge/reverse/executor
+route through `authorize()`), self-tests its
 own detection against synthetic violations, and verifies the generated seed SQL is
 current.
 
