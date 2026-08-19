@@ -63,6 +63,8 @@ const createWorkCardSchema = z.object({
   owner_type: z.enum(["HUMAN", "AI", "UNASSIGNED"]).optional(),
   owner_id: z.string().trim().min(1).optional(),
   priority: z.string().trim().min(1).optional(),
+  /** Optional instruction for whoever works it. */
+  prompt: z.string().max(4000).optional(),
   privacy_label: privacyLabelSchema.optional(),
   next_action: z.string().optional(),
   due_at: z.string().trim().min(1).optional(),
@@ -77,6 +79,7 @@ const updateWorkCardSchema = z
     owner_id: z.string().trim().min(1).nullable().optional(),
     priority: z.string().trim().min(1).optional(),
     next_action: z.string().nullable().optional(),
+    prompt: z.string().max(4000).nullable().optional(),
     due_at: z.string().trim().min(1).nullable().optional(),
   })
   .strict();
@@ -115,6 +118,8 @@ export interface CreateWorkCardInput {
   firm_scope?: string;
   next_action?: string;
   due_at?: string;
+  /** Optional instruction for whoever works it — how to do it, not what it is. */
+  prompt?: string;
 }
 
 /** Shared creation path (HTTP handler and capture routing). Authorizes internally. */
@@ -132,8 +137,8 @@ export async function createWorkCardInternal(
   await env.WP_OS_DB.prepare(
     `INSERT INTO work_card
        (id, capture_id, title, description, domain_id, machine_id, owner_type, owner_id,
-        state, priority, privacy_label, firm_scope, next_action, due_at, created_by)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'OPEN', ?9, ?10, ?11, ?12, ?13, ?14)`,
+        state, priority, privacy_label, firm_scope, next_action, due_at, created_by, prompt)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'OPEN', ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
   )
     .bind(
       id,
@@ -150,6 +155,7 @@ export async function createWorkCardInternal(
       input.next_action ?? null,
       input.due_at ?? null,
       identity.id,
+      input.prompt ?? null,
     )
     .run();
 

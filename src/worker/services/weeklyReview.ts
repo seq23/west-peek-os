@@ -623,7 +623,7 @@ export async function handleReviewNotes(ctx: RouteContext): Promise<Response> {
     inputs: [buildNotesPrompt(parsed.data.notes, week)],
     sensitivity: parsed.data.sensitivity as never,
     budgetContext: { expectedOutputTokens: 1500 },
-    routing: { category: "OPERATIONS" },
+    routing: { category: "OPERATIONS", taskClass: "employee-work" },
   });
 
   if (run.status === "EGRESS_BLOCKED") {

@@ -284,7 +284,157 @@ function PacketDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
   );
 }
 
-export function IntentPage({ me }: { me: MeResponse }) {
+
+interface Draft {
+  title: string;
+  next_action: string | null;
+  prompt: string;
+  owner_id: string | null;
+  owner_name: string | null;
+  needs_browser: boolean;
+  reasoning: string;
+}
+
+/**
+ * Ask, as a front door to a work card.
+ *
+ * WHY THIS REPLACED THE PACKET FLOW AT THE TOP OF THE PAGE. Ask produced "work packets" with their
+ * own lifecycle running beside work cards, so a request had two homes and neither was
+ * authoritative — the operator's read was that Ask is superfluous if it does not lead anywhere.
+ * It leads to a card now: you write a sentence, you get a card to read, you press Add.
+ *
+ * NOTHING IS CREATED BY ASKING. A front door that silently fills the board is one people stop
+ * typing into.
+ */
+function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string) => void }): JSX.Element {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function ask(e: React.FormEvent) {
+    e.preventDefault();
+    if (text.trim().length < 8) return;
+    setBusy(true);
+    setMsg(null);
+    const res = await api<{ draft: Draft; note?: string; detail?: string; error?: string }>("/api/intent/draft", {
+      method: "POST",
+      body: { text: text.trim() },
+    });
+    setBusy(false);
+    if (res.status === 200 && res.data) {
+      setDraft(res.data.draft);
+      setMsg(res.data.note ?? null);
+    } else {
+      setMsg(res.data?.detail ?? res.data?.error ?? `Could not draft that (HTTP ${res.status}).`);
+    }
+  }
+
+  async function add() {
+    if (!draft) return;
+    setBusy(true);
+    const res = await api<{ id?: string; detail?: string; error?: string }>("/api/work-cards", {
+      method: "POST",
+      body: {
+        title: draft.title,
+        ...(draft.next_action ? { next_action: draft.next_action } : {}),
+        prompt: draft.prompt,
+        owner_type: draft.owner_id ? "AI" : "UNASSIGNED",
+        ...(draft.owner_id ? { owner_id: draft.owner_id } : {}),
+      },
+    });
+    if (res.status === 201 && draft.needs_browser && res.data?.id) {
+      await api(`/api/work-cards/${res.data.id}/browser-permission`, { method: "POST", body: { allows_browser: true } });
+    }
+    setBusy(false);
+    if (res.status === 201) {
+      setDraft(null);
+      setText("");
+      setMsg("Added to Work.");
+    } else {
+      setMsg(`Not added: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    }
+  }
+
+  return (
+    <section className="card ask-card" data-testid="ask-for-card">
+      <form onSubmit={ask}>
+        <label htmlFor="ask-text">
+          <strong>{me.fullName.split(" ")[0]}, what do you need?</strong>
+          <span className="muted small"> Write it however you think about it.</span>
+        </label>
+        <textarea
+          id="ask-text"
+          data-testid="ask-text"
+          rows={3}
+          style={{ width: "100%" }}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="find out which accelerators in Texas back pre-seed B2B software"
+        />
+        <div className="form-row">
+          <button type="submit" className="btn-strong" disabled={busy || text.trim().length < 8} data-testid="ask-submit">
+            {busy ? "Working it out…" : "Turn it into work"}
+          </button>
+        </div>
+      </form>
+
+      {msg && <p className="notice small" data-testid="ask-message">{msg}</p>}
+
+      {draft && (
+        <div className="ask-draft" data-testid="ask-draft">
+          <p className="muted small">{draft.reasoning}</p>
+
+          <label>
+            The work{" "}
+            <input value={draft.title} data-testid="ask-draft-title" onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+          </label>
+          <label>
+            Next action{" "}
+            <input
+              value={draft.next_action ?? ""}
+              data-testid="ask-draft-next"
+              onChange={(e) => setDraft({ ...draft, next_action: e.target.value })}
+            />
+          </label>
+
+          {/* THE PROMPT IS THE POINT. These employees are LLM-powered, and the instruction is
+              usually the difference between work done well and work done plausibly. Almost nobody
+              writes one from a blank field, so it arrives drafted and you edit it. */}
+          <label>
+            How it should be done <span className="muted small">— the instruction the employee reads</span>
+            <textarea
+              rows={8}
+              style={{ width: "100%" }}
+              value={draft.prompt}
+              data-testid="ask-draft-prompt"
+              onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
+            />
+          </label>
+
+          <p className="muted small">
+            {draft.owner_name ? <>Suggested owner: <strong>{draft.owner_name}</strong>. </> : "Nobody assigned. "}
+            {draft.needs_browser
+              ? "It will be allowed to search and read pages."
+              : "It does not need the web."}
+          </p>
+
+          <div className="form-row">
+            <button type="button" className="btn-strong" disabled={busy} onClick={() => void add()} data-testid="ask-draft-add">
+              {busy ? "…" : "Add to Work"}
+            </button>
+            <button type="button" onClick={() => setDraft(null)}>Discard</button>
+            <button type="button" className="link-button" onClick={() => onNavigate("work-cards")}>
+              Open Work
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string) => void }) {
   const packets = useApi<{ packets: Packet[]; lens_bench: LensDef[] }>("/api/work-packets");
   const bench = useApi<{ lenses: LensDef[]; default_stack: string[]; storage_rule: string }>("/api/work-packets/lens-bench");
   const [text, setText] = useState("");
@@ -295,12 +445,19 @@ export function IntentPage({ me }: { me: MeResponse }) {
   return (
     <section data-testid="intent-page">
       <p className="surface-lede">
-        {me.fullName.split(" ")[0]}, what do you need? Write it however you think about it — you do not
-        need to know how the system is organised.
+        Say what you need. It comes back as a piece of work you can read, change, and hand to
+        somebody — including the instruction they will actually follow.
       </p>
 
+      <AskForACard me={me} onNavigate={onNavigate} />
+
+      {/* The packet flow, kept and folded. It is a different, heavier thing — a packet carries lenses
+          and revisions — and it stays available rather than being deleted out from under anyone
+          mid-use. Most requests want a card. */}
+
+      <details className="card">
+        <summary>Open a work packet instead</summary>
       <form
-        className="card"
         data-testid="intent-form"
         onSubmit={async (e) => {
           e.preventDefault();
@@ -344,6 +501,7 @@ export function IntentPage({ me }: { me: MeResponse }) {
           </button>
         </div>
       </form>
+      </details>
       {message && <p className="notice" data-testid="intent-message">{message}</p>}
 
       {selected && <PacketDetail id={selected} onChanged={packets.reload} />}

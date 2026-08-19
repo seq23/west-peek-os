@@ -6,6 +6,8 @@ import { actorFromIdentity, authorize } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { requestTask, runTask } from "./browserTask";
 import { searchQuestion } from "./liveSearch";
+import { z } from "zod";
+import { ASK_PROMPT_VERSION, buildDraftPrompt, parseDraft } from "../../shared/work/askToCard";
 import {
   MAX_STEPS,
   buildStepPrompt,
@@ -50,6 +52,7 @@ interface CardRow {
   owner_type: string;
   owner_id: string | null;
   allows_browser: number;
+  prompt: string | null;
   firm_scope: string;
 }
 
@@ -145,6 +148,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       employee_name: employee.name,
       employee_role: employee.role,
       allows_browser: card.allows_browser === 1,
+      prompt: card.prompt,
       history: await historyFor(env, card.id),
     };
 
@@ -156,7 +160,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       // loop carry confidential material to a provider without anybody deciding that.
       sensitivity: "INTERNAL" as never,
       budgetContext: { expectedOutputTokens: 400 },
-      routing: { category: "OPERATIONS" },
+      routing: { category: "OPERATIONS", taskClass: "employee-work" },
     });
 
     if (run.status !== "COMPLETED" || !run.output_text) {
@@ -288,4 +292,62 @@ export async function handleWorkCard(ctx: RouteContext): Promise<Response> {
 
   const out = await workCard(ctx.env, ctx, cardId);
   return json(out, { status: out.card ? 200 : 404 });
+}
+
+const askSchema = z.object({ text: z.string().trim().min(8).max(4000) });
+
+/**
+ * POST /api/intent/draft — turn a sentence into a work card the partner can read and accept.
+ *
+ * WRITES NOTHING. The draft comes back, the partner reads it, and pressing Add creates the card
+ * through the ordinary path. A front door that silently fills the board teaches people to stop
+ * typing into it.
+ *
+ * The prompt is drafted here because the employees are LLM-powered and the instruction is usually
+ * the difference between work done well and work done plausibly — and because almost nobody writes
+ * one from a blank field. A prompt field that stays empty is the same as not having one.
+ */
+export async function handleDraftCard(ctx: RouteContext): Promise<Response> {
+  const parsed = askSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "work_card.create", { objectType: "work_card" });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  // Only employees who are actually employed. Suggesting somebody switched off produces a card that
+  // cannot be worked and looks assigned.
+  const roster = ((await ctx.env.WP_OS_DB.prepare(
+    "SELECT id, name, role FROM ai_employee WHERE status = 'ACTIVE' ORDER BY name",
+  ).all<{ id: string; name: string; role: string }>()).results ?? []);
+
+  const { run } = await runAi(ctx.env, {
+    purpose: "drafting a work card from a request",
+    actor,
+    inputs: [buildDraftPrompt(parsed.data.text, roster.map((r) => ({ name: r.name, role: r.role })))],
+    // The request is firm-internal — it can name a company, a partner, a deal.
+    sensitivity: "INTERNAL" as never,
+    budgetContext: { expectedOutputTokens: 900 },
+    routing: { category: "OPERATIONS", taskClass: "employee-work" },
+  });
+
+  if (run.status !== "COMPLETED" || !run.output_text) {
+    return json({ error: "draft_failed", detail: run.failure_reason ?? `run ${run.status}`, run_id: run.id }, { status: 502 });
+  }
+
+  const draft = parseDraft(run.output_text);
+  if (!draft) {
+    return json({ error: "unreadable", detail: "could not turn that into a card", run_id: run.id }, { status: 502 });
+  }
+
+  // Resolve the suggested name to a real employee, or leave it unassigned. A name that does not
+  // match anybody employed is dropped rather than shown: a wrong owner looks decided.
+  const owner = roster.find((r) => r.name.toLowerCase() === (draft.suggested_owner ?? "").toLowerCase()) ?? null;
+
+  return json({
+    draft: { ...draft, owner_id: owner?.id ?? null, owner_name: owner?.name ?? null },
+    run_id: run.id,
+    prompt_version: ASK_PROMPT_VERSION,
+    note: "Nothing has been created. Read it, change anything, then add it.",
+  });
 }

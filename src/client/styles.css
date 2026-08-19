@@ -2634,3 +2634,19 @@ hr {
 }
 
 .cost-alltime { border-left: 3px solid var(--wp-orange); }
+
+/* Ask, as the front door to a card. Orange edge because it is the one thing this page wants you
+   to do; the packet flow below it is the exception. */
+.ask-card { border-left: 3px solid var(--wp-orange); }
+
+.ask-draft {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--wp-line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ask-draft label { display: block; }
+.ask-draft input { width: 100%; }

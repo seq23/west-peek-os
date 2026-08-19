@@ -52,6 +52,8 @@ export interface LoopContext {
   employee_name: string;
   employee_role: string;
   allows_browser: boolean;
+  /** What the partner said about HOW to do it. Absent on most cards. */
+  prompt: string | null;
   /** What has already happened this run and in previous ones, oldest first. */
   history: string[];
 }
@@ -65,6 +67,11 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     `  ${ctx.title}`,
     ctx.next_action ? `  Next action as stated: ${ctx.next_action}` : "  No next action was stated.",
     ctx.description ? `  Context: ${ctx.description}` : "",
+    "",
+    // THE PARTNER'S OWN INSTRUCTION OUTRANKS THE DEFAULTS. It is placed after the work and before
+    // the rules so it is read as part of the brief, and said to be authoritative so a model does
+    // not average it against the generic guidance below.
+    ctx.prompt ? `HOW THE PARTNER WANTS THIS DONE — follow this over any general advice below:\n${ctx.prompt}` : "",
     "",
     ctx.history.length
       ? `WHAT HAS HAPPENED SO FAR (oldest first):\n${ctx.history.map((h, i) => `  ${i + 1}. ${h}`).join("\n")}`

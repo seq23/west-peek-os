@@ -55,7 +55,7 @@ import {
   handleAddApprovalEvidence,
   handleApprovalContext,
 } from "./services/approvals";
-import { handleWorkCard } from "./services/employeeWork";
+import { handleDraftCard, handleWorkCard } from "./services/employeeWork";
 import {
   handleGoogleCallback,
   handleGoogleConnectStart,
@@ -785,6 +785,8 @@ const router = new Router()
   // P52 — the employee who owns this card gets on with it. A person starts the run; the employee
   // decides how, never whether.
   .post("/api/work-cards/:id/work", handleWorkCard)
+  // P53 — Ask drafts a card. It writes nothing; the partner reads it and presses Add.
+  .post("/api/intent/draft", handleDraftCard)
   .post("/api/work-cards/:id/look", handleCardLook)
   .post("/api/work-cards/:id/browser-permission", handleSetCardBrowserPermission)
   .post("/api/browser-tasks/:id/approve", handleApproveBrowserTask)

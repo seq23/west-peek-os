@@ -4003,7 +4003,7 @@ export function App() {
           {authed && active === "notifications" && <NotificationsPage me={me.data!} />}
           {authed && active === "today" && <TodayPage me={me.data!} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} />}
-          {authed && active === "intent" && <IntentPage me={me.data!} />}
+          {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={setActive} />}
           {authed && active === "work-cards" && (
             <>
               <WorkSurface me={me.data!} onChanged={refresh} onNavigate={setActive} />
