@@ -5,7 +5,7 @@ import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { browsePage, browserConfigured } from "../effects/browserClient";
-import { checkExecutable, checkRequest, type PaymentMode } from "../../shared/browser/taskPolicy";
+import { checkExecutable, checkRequest, searchStartUrl, type PaymentMode } from "../../shared/browser/taskPolicy";
 
 /**
  * Browser task lifecycle (P50) — the runner the scaffold was missing.
@@ -53,7 +53,13 @@ async function requireTask(env: Env, id: string): Promise<TaskRow> {
 
 const requestSchema = z.object({
   objective: z.string().min(8).max(500),
-  start_url: z.string().min(8).max(2000),
+  /**
+   * Optional. NAMING THE PAGE WAS THE WRONG ASK. "Find out whether Psyflo still has a VP of Sales"
+   * is the job; knowing which URL answers it is the job too, and demanding it up front made the
+   * operator do the looking before asking anybody to look. Absent, the task starts from a search
+   * for the objective — which is what a person would do.
+   */
+  start_url: z.string().max(2000).optional(),
   ai_employee_id: z.string().max(80).nullish(),
   /** The card this look is for. Carries the standing permission, and receives the result. */
   work_card_id: z.string().max(80).nullish(),
@@ -71,9 +77,14 @@ export async function requestTask(
   const authz = await authorize(env, actor, "ai.run", { objectType: "browser_task", firmScope });
   if (authz.decision !== "ALLOW") throw new BrowserTaskError(403, "forbidden", authz.reason);
 
+  // No page named? Start from a search for the objective, which is what a person would do.
+  const startUrl = input.start_url && input.start_url.trim().length >= 8
+    ? input.start_url.trim()
+    : searchStartUrl(input.objective);
+
   const refusal = checkRequest({
     objective: input.objective,
-    start_url: input.start_url,
+    start_url: startUrl,
     payment_mode: input.payment_mode,
     max_price_usd: input.max_price_usd,
     requested_by_type: actor.type === "HUMAN" ? "HUMAN" : "AI",
@@ -102,7 +113,7 @@ export async function requestTask(
                                payment_mode, max_price_usd, firm_scope)
      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)`,
   )
-    .bind(id, input.objective, input.start_url, actor.type === "HUMAN" ? "HUMAN" : "AI",
+    .bind(id, input.objective, startUrl, actor.type === "HUMAN" ? "HUMAN" : "AI",
           actor.firmUserId ?? actor.aiEmployeeId ?? "system", input.ai_employee_id ?? null,
           input.work_card_id ?? null,
           preApproved ? "APPROVED" : "REQUESTED",
@@ -121,7 +132,7 @@ export async function requestTask(
     actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
     objectType: "browser_task", objectId: id, firmScope,
     payload: {
-      start_url: input.start_url,
+      start_url: startUrl,
       payment_mode: input.payment_mode,
       work_card_id: input.work_card_id ?? null,
       // Recorded because "nobody pressed approve" is a thing an auditor must be able to explain.
@@ -339,8 +350,11 @@ export async function handleSetCardBrowserPermission(ctx: RouteContext): Promise
 export async function handleCardLook(ctx: RouteContext): Promise<Response> {
   const cardId = ctx.params.id;
   const body = (await ctx.request.json().catch(() => null)) as { objective?: string; start_url?: string } | null;
-  if (!cardId || !body?.objective || !body?.start_url) {
-    return json({ error: "invalid_input", detail: "objective and start_url are required" }, { status: 400 });
+  // Only the objective is required. Without a page it starts from a search, which is what a person
+  // would do — and is the difference between asking for what you want to know and being made to
+  // find it yourself first.
+  if (!cardId || !body?.objective) {
+    return json({ error: "invalid_input", detail: "say what they should find out" }, { status: 400 });
   }
 
   const actor = actorFromIdentity(ctx.identity!);
@@ -348,7 +362,7 @@ export async function handleCardLook(ctx: RouteContext): Promise<Response> {
   try {
     task = await requestTask(ctx.env, actor, {
       objective: body.objective,
-      start_url: body.start_url,
+      ...(body.start_url ? { start_url: body.start_url } : {}),
       work_card_id: cardId,
       payment_mode: "NONE",
       max_price_usd: 0,

@@ -146,3 +146,21 @@ export function fenceUntrusted(pageText: string): string {
     "<<<END FETCHED WEB CONTENT>>>",
   ].join("\n");
 }
+
+/**
+ * Where to start looking when nobody named a page.
+ *
+ * DEMANDING A URL WAS THE WRONG ASK. "Find out whether Psyflo still has a VP of Sales" is the job;
+ * working out which page answers it is ALSO the job. Requiring the address up front made the
+ * operator do the looking before asking anybody to look, which is most of why nobody ever used this.
+ *
+ * A search is what a person does first, so it is what this does first. DuckDuckGo's html endpoint
+ * is used because it returns readable results without a key, an account, or a consent wall — the
+ * things that make an automated first step fail in ways nobody can see.
+ *
+ * The result is still a normal https URL and still passes the same SSRF guard as any other start.
+ */
+export function searchStartUrl(objective: string): string {
+  const q = objective.trim().replace(/\s+/g, " ").slice(0, 300);
+  return `https://duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+}

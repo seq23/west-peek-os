@@ -48,7 +48,7 @@ interface WorkCardRow {
   allows_browser?: number;
   looks?: Array<{
     id: string; objective: string; start_url: string; status: string;
-    result_text: string | null; failure_reason: string | null;
+    result_text: string | null; refusal_reason: string | null;
   }>;
 }
 
@@ -72,6 +72,9 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   const [lookObjective, setLookObjective] = useState("");
   const [lookUrl, setLookUrl] = useState("");
   const [title, setTitle] = useState("");
+  // Decided while writing the card, not afterwards. Whether work may involve looking things up is
+  // part of describing the work.
+  const [newAllowsBrowser, setNewAllowsBrowser] = useState(false);
   const [nextAction, setNextAction] = useState("");
   // Defaults to you. Assigning to your partner or to an employee is the same act either way.
   const [owner, setOwner] = useState(`HUMAN:${me.id}`);
@@ -134,7 +137,19 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
       setMessage(`Not created: ${res.data?.detail ?? res.data?.error ?? res.status}`);
       return;
     }
-    setMessage(owner === `HUMAN:${me.id}` ? "Added, owned by you." : "Added and handed over.");
+    // The grant is part of describing the work, so it is applied as the card is created rather
+    // than left as a second thing to remember afterwards.
+    if (newAllowsBrowser && res.data?.id) {
+      await api(`/api/work-cards/${res.data.id}/browser-permission`, {
+        method: "POST",
+        body: { allows_browser: true },
+      });
+    }
+    setMessage(
+      (owner === `HUMAN:${me.id}` ? "Added, owned by you." : "Added and handed over.") +
+        (newAllowsBrowser ? " It can look things up online." : ""),
+    );
+    setNewAllowsBrowser(false);
     setTitle("");
     setNextAction("");
     setAdding(false);
@@ -155,11 +170,17 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
 
   /** Ask for a page to be read for this card. Runs now if the card permits it. */
   async function look(cardId: string) {
-    if (lookObjective.trim().length < 8 || lookUrl.trim().length < 8) return;
+    if (lookObjective.trim().length < 8) return;
     setBusy(true);
     const res = await api<{ ran?: boolean; ok?: boolean; detail?: string; error?: string }>(
       `/api/work-cards/${cardId}/look`,
-      { method: "POST", body: { objective: lookObjective.trim(), start_url: lookUrl.trim() } },
+      {
+        method: "POST",
+        body: {
+          objective: lookObjective.trim(),
+          ...(lookUrl.trim().length >= 8 ? { start_url: lookUrl.trim() } : {}),
+        },
+      },
     );
     setBusy(false);
     setMessage(
@@ -250,6 +271,19 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
               {busy ? "…" : "Add"}
             </button>
           </div>
+          <label className="muted small work-allow-browser">
+            <input
+              type="checkbox"
+              data-testid="work-card-new-browser"
+              checked={newAllowsBrowser}
+              onChange={(e) => setNewAllowsBrowser(e.target.checked)}
+            />{" "}
+            <span>
+              <strong>This work may involve looking things up online.</strong> Whoever carries it can
+              read public pages for this card without asking each time — read-only, recorded, and
+              only for this card.
+            </span>
+          </label>
           <p className="muted small">
             A card without a next action is a wish. Naming the next step is what makes it work
             somebody can pick up.
@@ -402,7 +436,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         <div key={l.id} className="work-look">
                           <p className="small"><strong>{l.objective}</strong></p>
                           <p className="muted small">{l.start_url} · {l.status.toLowerCase()}</p>
-                          {l.failure_reason && <p className="notice small">{l.failure_reason}</p>}
+                          {l.refusal_reason && <p className="notice small">{l.refusal_reason}</p>}
                           {l.result_text && (
                             <>
                               <pre className="browser-result">{l.result_text.slice(0, 1200)}</pre>
@@ -429,11 +463,14 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         placeholder="What should they find out?"
                         aria-label="What to find out"
                       />
+                      {/* OPTIONAL. Naming the page was the wrong ask — working out which page
+                          answers the question is part of the job, and demanding the address up
+                          front made the operator do the looking before asking anyone to look. */}
                       <input
                         value={lookUrl}
                         onChange={(e) => setLookUrl(e.target.value)}
-                        placeholder="https://…"
-                        aria-label="Page to read"
+                        placeholder="Leave blank and they will search for it"
+                        aria-label="Optional starting page"
                       />
                       <div className="form-row">
                         <button type="submit" className="btn-strong" disabled={busy}>

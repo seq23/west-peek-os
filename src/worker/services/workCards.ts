@@ -303,8 +303,8 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   const visibility = privacyVisibilityClause(ctx.identity!, "wc.privacy_label");
 
   const cards = await ctx.env.WP_OS_DB.prepare(
-    `SELECT wc.id, wc.title, wc.state, wc.priority, wc.owner_type, wc.owner_id,
-            wc.next_action, wc.due_at, wc.capture_id, wc.created_at,
+    `SELECT wc.id, wc.title, wc.description, wc.state, wc.priority, wc.owner_type, wc.owner_id,
+            wc.next_action, wc.due_at, wc.capture_id, wc.created_at, wc.allows_browser,
             COALESCE(e.name, u.full_name) AS owner_name,
             e.role AS owner_role
        FROM work_card wc
@@ -330,7 +330,7 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   // stored and invisible, which is worse than not having asked — the work looks undone and the
   // reading gets repeated.
   const looks = await ctx.env.WP_OS_DB.prepare(
-    `SELECT id, work_card_id, objective, start_url, status, result_text, failure_reason, created_at
+    `SELECT id, work_card_id, objective, start_url, status, result_text, refusal_reason, created_at
        FROM browser_task
       WHERE work_card_id IS NOT NULL
       ORDER BY created_at DESC
