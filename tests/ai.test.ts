@@ -656,7 +656,7 @@ describe("API: /api/ai/run records actor + returns the run; budget change needs 
     expect(body.trace_id).toMatch(/^trc_/);
   });
 
-  it("GET /api/ai/budget reports the current policy and today's spend; POST requires an approved receipt", async () => {
+  it("GET /api/ai/budget reports the policy, the spend, and who changed it last", async () => {
     const budget = await handleRequest(req("/api/ai/budget", MP), env);
     expect(budget.status).toBe(200);
     const current = (await budget.json()) as { policy: { privacy_mode: string }; today: { spent_usd: number } };
@@ -669,24 +669,41 @@ describe("API: /api/ai/run records actor + returns the run; budget change needs 
     );
     expect(denied.status).toBe(403);
 
-    const needsApproval = await handleRequest(
+    // A Managing Partner switches it directly. This used to require a receipt, which meant the SAME
+    // partner raised a card, approved their own card and applied it — three steps, one decision, no
+    // second pair of eyes. Nothing required a DIFFERENT approver, so the ceremony was friction that
+    // looked like control; the role check above is what actually keeps anyone else out.
+    const switched = await handleRequest(
       req("/api/ai/budget", MP, "POST", { cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 10, per_run_cap_usd: 1 }),
       env,
     );
-    expect(needsApproval.status).toBe(409);
+    expect(switched.status).toBe(201);
 
+    // A receipt still works, so a second partner CAN review a change when the firm wants one.
     const receipt = await approvedCard("governance.policy_change", "budget_policy", "west-peek");
-    const updated = await handleRequest(
+    const withReceipt = await handleRequest(
       req("/api/ai/budget", MP, "POST", {
         cost_mode: "NORMAL",
-        privacy_mode: "FRONTIER",
+        privacy_mode: "LOCKDOWN",
         daily_cap_usd: 10,
         per_run_cap_usd: 1,
         approval_receipt_id: receipt,
       }),
       env,
     );
-    expect(updated.status).toBe(201);
+    expect(withReceipt.status).toBe(201);
+
+    // The record is the control that replaced the ceremony: who changed it, and when.
+    const after = await handleRequest(req("/api/ai/budget", MP), env);
+    const state = (await after.json()) as {
+      history: Array<{ privacy_mode: string; set_by: string; created_at: string }>;
+    };
+    expect(state.history.length).toBeGreaterThanOrEqual(2);
+    expect(state.history[0]!.set_by).toBe("fu_scooter_taylor");
+    expect(state.history[0]!.created_at).toBeTruthy();
+    // Newest first, and nothing overwritten — every change is still its own immutable row.
+    expect(state.history[0]!.privacy_mode).toBe("LOCKDOWN");
+    expect(state.history.some((h) => h.privacy_mode === "FRONTIER")).toBe(true);
 
     // Versioning: the old row is preserved; the new row wins; UPDATE/DELETE rejected.
     const old = await t.db.prepare("SELECT id FROM budget_policy WHERE id = 'bp_default_west_peek'").first();

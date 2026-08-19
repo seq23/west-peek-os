@@ -2021,3 +2021,19 @@ hr {
 
 /* The mode the firm is actually in reads first in the list. */
 .privacy-mode-current { background: var(--wp-tint); border-left: 2px solid var(--wp-orange); padding-left: var(--space-sm); }
+
+.privacy-switch li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-lg); }
+
+/* Composition: length compares honestly where angle does not, and a long tail stays readable. */
+.composition-bars { list-style: none; margin: var(--space-sm) 0 0; padding: 0; }
+.composition-bars li {
+  display: grid;
+  grid-template-columns: minmax(90px, 140px) 1fr auto;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-xs) 0;
+}
+.composition-label { font-size: var(--text-sm); font-weight: 600; }
+.composition-track { background: var(--wp-surface-3); border-radius: var(--radius-xs); height: 14px; overflow: hidden; }
+.composition-fill { display: block; height: 100%; border-radius: var(--radius-xs); }
+.composition-pct { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }

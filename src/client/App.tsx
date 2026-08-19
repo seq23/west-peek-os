@@ -32,7 +32,7 @@ import { ModelingPage } from "./pages/ModelingPage";
 import { DealflowPage } from "./pages/DealflowPage";
 import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
 import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
-import { FundAllocation } from "./pages/FundAllocation";
+import { FundAllocation, Composition } from "./pages/FundAllocation";
 import { GOVERNANCE_UPDATE_TYPES, RECOMMENDED_GOVERNANCE, governanceType } from "@shared/governance/updateTypes";
 import { useSelectedFund } from "./lib/selectedFund";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
@@ -3702,6 +3702,11 @@ function StatusBar({ onNavigate, refreshNonce }: { onNavigate: (key: string) => 
   );
 }
 
+/** What the portfolio is actually made of — needs no fund, it reads the closed holdings. */
+function PortfolioComposition(): JSX.Element {
+  return <Composition />;
+}
+
 /** Resolves the selected fund for the allocation ring; renders nothing before one exists. */
 function PortfolioAllocation(): JSX.Element | null {
   const selected = useSelectedFund();
@@ -4004,6 +4009,7 @@ export function App() {
               {/* Where the fund goes, before how the companies are doing: the plan is the frame
                   the positions are read against. */}
               <PortfolioAllocation />
+              <PortfolioComposition />
               <PortfolioPage me={me.data!} />
             </>
           )}

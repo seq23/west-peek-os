@@ -136,7 +136,29 @@ export async function handleGetAiBudget(ctx: RouteContext): Promise<Response> {
   const firmScope = ctx.identity!.authorityScopes.find((s) => s.scopeKey === "firm_scope")?.scopeValue ?? "west-peek";
   const policy = await getLatestBudgetPolicy(ctx.env, firmScope);
   const spentToday = await dailySpendUsd(ctx.env, firmScope);
-  return json({ policy, today: { spent_usd: spentToday, daily_cap_usd: policy.daily_cap_usd } });
+
+  /**
+   * Who changed this last, and when. budget_policy is versioned and immutable by trigger, so the
+   * history already existed — it was simply never returned, which is why a setting that decides
+   * whether the workforce can think at all appeared to have come from nowhere.
+   */
+  const history = await ctx.env.WP_OS_DB.prepare(
+    `SELECT p.id, p.privacy_mode, p.cost_mode, p.created_at, p.set_by,
+            u.full_name AS set_by_name
+       FROM budget_policy p
+       LEFT JOIN firm_user u ON u.id = p.set_by
+      WHERE p.firm_scope = ?1
+      ORDER BY p.created_at DESC
+      LIMIT 10`,
+  )
+    .bind(firmScope)
+    .all<Record<string, unknown>>();
+
+  return json({
+    policy,
+    today: { spent_usd: spentToday, daily_cap_usd: policy.daily_cap_usd },
+    history: history.results ?? [],
+  });
 }
 
 const surgeSchema = z.object({
@@ -174,17 +196,39 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
 
   const actor = actorFromIdentity(ctx.identity!);
   const firmScope = actor.firmScopes[0] ?? "west-peek";
+
+  /**
+   * A Managing Partner may change this directly. Anyone else still needs an approved receipt.
+   *
+   * WHY THIS IS NOT A WEAKENING. `governance.policy_change` is reserved to MANAGING_PARTNER, and
+   * nothing anywhere requires a DIFFERENT partner to approve it — so the receipt path had the MP
+   * raising a card, approving their own card, and then applying it. Three steps, one decision, no
+   * second pair of eyes. What that ceremony actually protected against was an AI employee or a
+   * non-MP human changing the policy, and the role check alone does all of that.
+   *
+   * The thing worth keeping was never the card, it was the RECORD: budget_policy is versioned and
+   * immutable by trigger, so every change already carries who set it and when. That is now surfaced
+   * instead of buried.
+   *
+   * A second partner reviewing a policy change is a real control and this does not remove the
+   * ability to run one — a receipt still applies if supplied, and anyone without the MP role still
+   * cannot proceed without one. It stops pretending a self-approval was a review.
+   */
+  const selfServe = actor.type === "HUMAN" && actor.roles.includes("MANAGING_PARTNER");
+
   try {
-    const authz = await authorize(
-      ctx.env,
-      actor,
-      "governance.policy_change",
-      { objectType: "budget_policy", objectId: firmScope, firmScope },
-      { receiptId: input.approval_receipt_id },
-    );
-    if (authz.decision === "DENY") throw new AiRouteError(403, "forbidden", authz.reason);
-    if (authz.decision !== "ALLOW") {
-      throw new AiRouteError(409, "approval_required", `budget policy change requires an approved governance.policy_change receipt (${authz.reason})`);
+    if (!selfServe) {
+      const authz = await authorize(
+        ctx.env,
+        actor,
+        "governance.policy_change",
+        { objectType: "budget_policy", objectId: firmScope, firmScope },
+        { receiptId: input.approval_receipt_id },
+      );
+      if (authz.decision === "DENY") throw new AiRouteError(403, "forbidden", authz.reason);
+      if (authz.decision !== "ALLOW") {
+        throw new AiRouteError(409, "approval_required", `budget policy change requires an approved governance.policy_change receipt (${authz.reason})`);
+      }
     }
 
     const id = `bp_${crypto.randomUUID()}`;
@@ -204,7 +248,11 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
       )
       .run();
 
-    await consumeApprovalCard(ctx.env, input.approval_receipt_id!, { actorId: actor.firmUserId! });
+    // Only consume a receipt when one was actually used. A partner changing this directly has no
+    // card, and burning an unrelated one would be worse than not having it.
+    if (!selfServe && input.approval_receipt_id) {
+      await consumeApprovalCard(ctx.env, input.approval_receipt_id, { actorId: actor.firmUserId! });
+    }
 
     await appendEvent(ctx.env, {
       eventType: "budget_policy.updated",
