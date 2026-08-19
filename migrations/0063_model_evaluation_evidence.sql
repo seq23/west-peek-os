@@ -16,3 +16,5 @@
 -- Nullable because FIXTURE and OFFLINE_DETERMINISTIC evaluations have no run to cite, and because
 -- the rows already in this table predate the column.
 ALTER TABLE model_evaluation ADD COLUMN ai_run_id TEXT REFERENCES ai_run (id);
+
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0063_model_evaluation_evidence');

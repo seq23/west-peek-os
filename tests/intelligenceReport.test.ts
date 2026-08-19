@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIRM_INTERESTS, effectiveInterests, isFirmInterest } from "../src/shared/intelligence/interests";
 import {
   PROMPT_VERSION, REPORT_SECTIONS, buildSynthesisPrompt, parseReport, resolveEventIds, verifyReport,
   type EvidencePacket, type ParsedSection,
@@ -281,5 +282,51 @@ describe("citations abbreviated by the model", () => {
     // "iitem_a" is a prefix of "iitem_ab", but it is also an exact id: exact always wins.
     const out = resolveEventIds([{ key: "watch", body_md: "x", event_ids: ["iitem_a"] }], p);
     expect(out[0]!.event_ids).toEqual(["iitem_a"]);
+  });
+});
+
+/**
+ * Firm floor plus partner additions.
+ *
+ * Two partners were receiving identical briefings, because the only interests the system held were
+ * firm-level and therefore the same for everyone. These tests pin the two properties that make a
+ * brief personal without making it partial.
+ */
+describe("what a brief covers", () => {
+  it("gives a partner who has configured nothing the full firm floor", () => {
+    const out = effectiveInterests({ sectors: [], themes: [], companies: [] });
+    expect(out.sectors).toEqual([...FIRM_INTERESTS.sectors]);
+    expect(out.themes).toEqual([...FIRM_INTERESTS.themes]);
+  });
+
+  it("keeps the firm floor even when a partner has their own interests", () => {
+    // The failure this prevents: a partner who follows marketing stops hearing about the portfolio.
+    const out = effectiveInterests({ sectors: ["advertising"], themes: ["brand strategy"], companies: [] });
+    for (const f of FIRM_INTERESTS.sectors) expect(out.sectors).toContain(f);
+    expect(out.sectors).toContain("advertising");
+    expect(out.themes).toContain("brand strategy");
+  });
+
+  it("does not duplicate an interest the firm already carries", () => {
+    const dup = FIRM_INTERESTS.sectors[0]!;
+    const out = effectiveInterests({ sectors: [dup.toUpperCase()], themes: [], companies: [] });
+    expect(out.sectors.filter((s) => s.toLowerCase() === dup.toLowerCase())).toHaveLength(1);
+  });
+
+  it("puts the firm floor first, so it reads as the baseline it is", () => {
+    const out = effectiveInterests({ sectors: ["advertising"], themes: [], companies: [] });
+    expect(out.sectors[0]).toBe(FIRM_INTERESTS.sectors[0]);
+    expect(out.sectors[out.sectors.length - 1]).toBe("advertising");
+  });
+
+  it("recognises a firm interest however it is typed", () => {
+    expect(isFirmInterest("sectors", `  ${FIRM_INTERESTS.sectors[0]!.toUpperCase()}  `)).toBe(true);
+    expect(isFirmInterest("sectors", "advertising and media buying")).toBe(false);
+  });
+
+  it("gives two partners with different interests different lists", () => {
+    const scooter = effectiveInterests({ sectors: [], themes: ["brand strategy"], companies: [] });
+    const sequoia = effectiveInterests({ sectors: [], themes: ["down rounds and structure"], companies: [] });
+    expect(scooter.themes).not.toEqual(sequoia.themes);
   });
 });

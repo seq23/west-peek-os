@@ -2278,3 +2278,67 @@ hr {
 
 /* The caption inherits the fill's ink; .muted would drop it to a grey mixed for paper. */
 .brief-expand .muted { color: inherit; opacity: 0.78; font-weight: 400; }
+
+/* ── Interest chips ───────────────────────────────────────────────────────────
+ * Two kinds, and they have to look different. A firm interest has no remove
+ * control because there is no removing it; a partner's own comes off with one
+ * click, because an interest you cannot drop is a subscription, not a
+ * preference. The add-chips are buttons and are shaped like the thing they
+ * become, so picking one reads as moving it up into your list.
+ */
+.chip-row {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0;
+  margin: 0.4rem 0 1rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--wp-line-strong);
+  border-radius: 999px;
+  background: var(--wp-surface);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* Firm-level: reads as a statement rather than a control. */
+.chip-fixed {
+  background: var(--wp-neutral-tint);
+  border-style: dashed;
+  color: var(--wp-ink-2);
+}
+
+.chip > button {
+  border: 0;
+  background: none;
+  padding: 0 0.1rem;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--wp-muted);
+}
+
+.chip > button:hover { color: var(--wp-danger); }
+
+.chip-add {
+  cursor: pointer;
+  border-style: dashed;
+  border-color: var(--wp-orange);
+  color: var(--wp-orange-deep);
+  background: var(--wp-surface);
+}
+
+.chip-add:hover {
+  background: var(--wp-orange);
+  border-style: solid;
+  color: var(--wp-orange-ink);
+}
+
+.suggestion-group { margin-bottom: 0.5rem; }
+.suggestion-group .chip-row { margin-top: 0.2rem; }

@@ -167,6 +167,166 @@ function bold(text: string): JSX.Element {
  * readable in a minute (the numbered summary and the traffic lights), and the rest opens in place
  * on a click. Sources keeps the whole thing open: that page is where you go to READ it.
  */
+
+interface InterestsState {
+  firm: { sectors: string[]; themes: string[] };
+  mine: { sectors: string[]; themes: string[]; companies: string[] };
+  suggestions: Array<{ group: string; items: string[] }>;
+  note: string;
+}
+
+/**
+ * What this partner's brief covers, and the controls to change it.
+ *
+ * TWO KINDS OF CHIP, deliberately looking different. Firm interests carry no remove button because
+ * there is no removing them — a partner should still hear that a portfolio company is in trouble
+ * whatever else they follow. The partner's own come off with one click, because an interest you
+ * cannot drop is a subscription rather than a preference.
+ *
+ * SUGGESTIONS EXIST BECAUSE A BLANK BOX ASKS THE WRONG QUESTION. "What are you interested in" is
+ * hard to answer cold and easy to answer from a list, and the groups are named after the job
+ * somebody does so a partner recognises their own column.
+ */
+function InterestsEditor(): JSX.Element {
+  const state = useApi<InterestsState>("/api/daily-intelligence/interests");
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [kind, setKind] = useState<"themes" | "sectors">("themes");
+  const [message, setMessage] = useState<string | null>(null);
+
+  const data = state.data;
+  const mine = data?.mine ?? { sectors: [], themes: [], companies: [] };
+
+  async function save(next: { sectors: string[]; themes: string[] }) {
+    setBusy(true);
+    const res = await api<{ note?: string }>("/api/daily-intelligence/interests", {
+      method: "POST",
+      body: { sectors: next.sectors, themes: next.themes },
+    });
+    setBusy(false);
+    setMessage(res.status === 201 ? (res.data?.note ?? "Saved.") : `Could not save (HTTP ${res.status}).`);
+    state.reload();
+  }
+
+  function add(value: string, into: "themes" | "sectors") {
+    const v = value.trim();
+    if (!v) return;
+    const existing = into === "themes" ? mine.themes : mine.sectors;
+    if (existing.some((e) => e.toLowerCase() === v.toLowerCase())) return;
+    void save({
+      sectors: into === "sectors" ? [...mine.sectors, v] : mine.sectors,
+      themes: into === "themes" ? [...mine.themes, v] : mine.themes,
+    });
+  }
+
+  function remove(value: string, from: "themes" | "sectors") {
+    void save({
+      sectors: from === "sectors" ? mine.sectors.filter((x) => x !== value) : mine.sectors,
+      themes: from === "themes" ? mine.themes.filter((x) => x !== value) : mine.themes,
+    });
+  }
+
+  const alreadyHave = new Set(
+    [...mine.themes, ...mine.sectors, ...(data?.firm.themes ?? []), ...(data?.firm.sectors ?? [])].map((x) =>
+      x.toLowerCase(),
+    ),
+  );
+
+  return (
+    <details className="card summary-button" data-testid="brief-interests">
+      <summary>What my brief covers</summary>
+
+      {state.loading && <p className="muted small">Loading…</p>}
+      {data && (
+        <>
+          <p className="muted small">{data.note}</p>
+
+          <h4>On every partner&apos;s brief</h4>
+          <ul className="chip-row" data-testid="interests-firm">
+            {[...data.firm.sectors, ...data.firm.themes].map((f) => (
+              <li key={f} className="chip chip-fixed">{f}</li>
+            ))}
+          </ul>
+
+          <h4>Mine</h4>
+          {mine.themes.length + mine.sectors.length === 0 ? (
+            <p className="muted small" data-testid="interests-mine-empty">
+              Nothing added yet — your brief reads like the firm&apos;s. Add something below and it
+              starts leading with what you actually care about.
+            </p>
+          ) : (
+            <ul className="chip-row" data-testid="interests-mine">
+              {mine.sectors.map((v) => (
+                <li key={`s-${v}`} className="chip">
+                  {v}
+                  <button type="button" disabled={busy} aria-label={`Remove ${v}`} onClick={() => remove(v, "sectors")}>×</button>
+                </li>
+              ))}
+              {mine.themes.map((v) => (
+                <li key={`t-${v}`} className="chip">
+                  {v}
+                  <button type="button" disabled={busy} aria-label={`Remove ${v}`} onClick={() => remove(v, "themes")}>×</button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <form
+            className="form-row"
+            onSubmit={(e) => { e.preventDefault(); add(draft, kind); setDraft(""); }}
+          >
+            <label style={{ flexGrow: 1 }}>
+              Add your own{" "}
+              <input
+                data-testid="interests-input"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="how attention is bought, held and measured"
+              />
+            </label>
+            <label>
+              as a{" "}
+              <select value={kind} onChange={(e) => setKind(e.target.value as "themes" | "sectors")}>
+                <option value="themes">theme</option>
+                <option value="sectors">sector</option>
+              </select>
+            </label>
+            <button type="submit" className="btn-strong" disabled={busy || draft.trim().length < 2}>
+              {busy ? "…" : "Add"}
+            </button>
+          </form>
+
+          <h4>Or pick from these</h4>
+          {data.suggestions.map((g) => (
+            <div key={g.group} className="suggestion-group">
+              <p className="muted small"><strong>{g.group}</strong></p>
+              <ul className="chip-row">
+                {g.items
+                  .filter((i) => !alreadyHave.has(i.toLowerCase()))
+                  .map((i) => (
+                    <li key={i}>
+                      <button
+                        type="button"
+                        className="chip chip-add"
+                        disabled={busy}
+                        data-testid={`interest-suggest-${i.slice(0, 18)}`}
+                        onClick={() => add(i, "themes")}
+                      >
+                        + {i}
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          ))}
+
+          {message && <p className="notice small">{message}</p>}
+        </>
+      )}
+    </details>
+  );
+}
+
 export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {}): JSX.Element {
   const state = useApi<{ report: Report | null; sections: Section[]; citations: Citation[]; date: string }>("/api/daily-intelligence");
   const [busy, setBusy] = useState(false);
@@ -220,6 +380,10 @@ export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {})
         figure carries the source it came from; where a level could not be read, the report says so
         rather than estimating.
       </p>
+
+      {/* Editing what the brief covers belongs where the brief is READ, not in a settings page
+          nobody visits. Hidden on Home, where the point is to read today's, not tune tomorrow's. */}
+      {!compact && <InterestsEditor />}
 
       <div className="form-row">
         <button type="button" className="btn-strong" disabled={busy} data-testid="daily-brief-generate" onClick={generate}>

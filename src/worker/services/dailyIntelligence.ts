@@ -6,6 +6,10 @@ import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { notifyQuietly } from "./notifications";
 import {
+  EMPTY_INTERESTS, INTEREST_SUGGESTIONS, FIRM_INTERESTS, effectiveInterests, isFirmInterest,
+  normaliseInterest, type PartnerInterests,
+} from "../../shared/intelligence/interests";
+import {
   PROMPT_VERSION, REPORT_SECTIONS, buildSynthesisPrompt, parseReport, resolveEventIds, verifyReport,
   type EvidenceEvent, type EvidencePacket,
 } from "../../shared/intelligence/reportSchema";
@@ -14,6 +18,16 @@ import {
   type NormalisedItem, type PartnerLens, type SourceType,
 } from "../../shared/intelligence/pipeline";
 import { readMarket } from "./liveSearch";
+import { z } from "zod";
+
+/** Local body reader, matching the one in intelligence.ts: a malformed body is null, never a throw. */
+async function parseJsonBody(request: Request): Promise<unknown | null> {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Daily Executive Intelligence — the orchestrator (P41).
@@ -84,7 +98,26 @@ function lensFrom(p: ProfileRow): PartnerLens {
     const parsed = JSON.parse(p.depth_json);
     if (parsed && typeof parsed === "object") depth = parsed as Record<string, number>;
   } catch { /* a malformed dial set means default depth, never a failed report */ }
-  return { sectors: parseArray(p.sectors_json), companies: parseArray(p.companies_json), themes: parseArray(p.themes_json), depth };
+
+  // The stored lists are what this partner ADDED. What the brief is written against is those plus
+  // the firm floor — so a partner who has configured nothing still gets a complete briefing, and
+  // one who has configured plenty still hears about the portfolio.
+  const merged = effectiveInterests({
+    sectors: parseArray(p.sectors_json),
+    themes: parseArray(p.themes_json),
+    companies: parseArray(p.companies_json),
+  });
+  return { sectors: merged.sectors, companies: parseArray(p.companies_json), themes: merged.themes, depth };
+}
+
+/** This partner's own additions, without the firm floor mixed in — what the interface edits. */
+export async function loadInterests(env: Env, firmUserId: string): Promise<PartnerInterests> {
+  const p = await loadProfile(env, firmUserId);
+  return {
+    sectors: parseArray(p.sectors_json),
+    themes: parseArray(p.themes_json),
+    companies: parseArray(p.companies_json),
+  };
 }
 
 /** Firm-level entities that lift an item for everyone: portfolio, watchlist, live pipeline. */
@@ -548,4 +581,101 @@ export async function handleGenerateDailyReport(ctx: RouteContext): Promise<Resp
   } catch (err) {
     return errorResponse(err);
   }
+}
+
+// ── Interests: what this partner has added to their own briefing ──
+
+/**
+ * Read the interests screen: the firm floor, this partner's additions, and what they could add.
+ *
+ * The floor is returned alongside rather than merged, because the interface has to show the two
+ * differently — one is a list you edit, the other is a statement of what you get regardless.
+ */
+export async function handleGetInterests(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const mine = await loadInterests(ctx.env, actor.firmUserId!);
+  return json({
+    firm: { sectors: FIRM_INTERESTS.sectors, themes: FIRM_INTERESTS.themes },
+    mine,
+    suggestions: INTEREST_SUGGESTIONS,
+    note:
+      "Firm interests are on every partner's brief and cannot be removed — a partner should still " +
+      "hear that a portfolio company is in trouble whatever else they follow. What you add here is " +
+      "yours alone and changes what leads your brief, how much room it gets, and which sections " +
+      "get written at all.",
+  });
+}
+
+const interestsSchema = z.object({
+  sectors: z.array(z.string().trim().min(2).max(120)).max(30).optional(),
+  themes: z.array(z.string().trim().min(2).max(200)).max(30).optional(),
+  companies: z.array(z.string().trim().min(1).max(120)).max(60).optional(),
+});
+
+/**
+ * Replace this partner's own interests.
+ *
+ * A WHOLE-LIST WRITE rather than add/remove deltas. The interface offers adding and removing one
+ * at a time, but sending the resulting list is what makes two edits in quick succession converge
+ * instead of racing — and there is no case here where a partial update is what anybody wanted.
+ *
+ * Firm-floor entries are dropped rather than rejected: adding "venture capital" to a personal list
+ * is harmless and meaningless, and refusing the whole save over it would be obnoxious.
+ */
+export async function handleSetInterests(ctx: RouteContext): Promise<Response> {
+  const parsed = interestsSchema.safeParse(await parseJsonBody(ctx.request));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "mp_home_preference.set", {
+    objectType: "partner_intelligence_profile",
+    objectId: actor.firmUserId!,
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const current = await loadInterests(ctx.env, actor.firmUserId!);
+  const clean = (list: string[] | undefined, fallback: string[], kind?: "sectors" | "themes"): string[] => {
+    if (!list) return fallback;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of list) {
+      const value = raw.trim();
+      const key = normaliseInterest(value);
+      if (!key || seen.has(key)) continue;
+      if (kind && isFirmInterest(kind, value)) continue;
+      seen.add(key);
+      out.push(value);
+    }
+    return out;
+  };
+
+  const next: PartnerInterests = {
+    sectors: clean(parsed.data.sectors, current.sectors, "sectors"),
+    themes: clean(parsed.data.themes, current.themes, "themes"),
+    companies: clean(parsed.data.companies, current.companies),
+  };
+
+  await ctx.env.WP_OS_DB.prepare(
+    `INSERT INTO partner_intelligence_profile (firm_user_id, sectors_json, themes_json, companies_json)
+     VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT (firm_user_id) DO UPDATE SET
+       sectors_json = excluded.sectors_json,
+       themes_json = excluded.themes_json,
+       companies_json = excluded.companies_json`,
+  )
+    .bind(actor.firmUserId!, JSON.stringify(next.sectors), JSON.stringify(next.themes), JSON.stringify(next.companies))
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: "daily_intelligence.interests_changed",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "partner_intelligence_profile",
+    objectId: actor.firmUserId!,
+    firmScope: actor.firmScopes[0] ?? "west-peek",
+    // Counts, not contents: what somebody chooses to read about is theirs.
+    payload: { sectors: next.sectors.length, themes: next.themes.length, companies: next.companies.length },
+  });
+
+  return json({ mine: next, note: "Saved. Your next brief is written against these." }, { status: 201 });
 }

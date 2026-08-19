@@ -115,7 +115,7 @@ import { handleEvidenceLedger, handleListDecisions, handleWorkQueues } from "./s
 import { handleCompanyIntelligence, handleFollowOnCentre, handleSecondaries } from "./services/companyIntel";
 import { handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
 import { handleIngestTranscript } from "./services/captureAdapter";
-import { handleGenerateDailyReport, handleGetDailyReport } from "./services/dailyIntelligence";
+import { handleGenerateDailyReport, handleGetDailyReport, handleGetInterests, handleSetInterests } from "./services/dailyIntelligence";
 import { handleBuildPacket, handleExportPacket } from "./services/researchPacket";
 import { handleBuildMap, handleGetMap, handleListMaps } from "./services/marketMap";
 import {
@@ -740,6 +740,8 @@ const router = new Router()
   .get("/api/secondaries", handleSecondaries)
   .get("/api/daily-intelligence", handleGetDailyReport)
   .post("/api/daily-intelligence/generate", handleGenerateDailyReport)
+  .get("/api/daily-intelligence/interests", handleGetInterests)
+  .post("/api/daily-intelligence/interests", handleSetInterests)
   .post("/api/research/packets", handleBuildPacket)
   .get("/api/research/packets/:id/export", handleExportPacket)
   // P45 — West Peek University. Diary routes are declared BEFORE /:id so "diary" is never
