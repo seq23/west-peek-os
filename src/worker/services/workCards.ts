@@ -281,3 +281,69 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
   const updated = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<WorkCardRow>();
   return json(updated);
 }
+
+/**
+ * Who is carrying what — the firm's work, grouped by the person or employee doing it.
+ *
+ * WHY GROUPED BY OWNER. A flat list answers "what is open"; the question actually being asked is
+ * "what is my team doing", and that is a question about people. Grouping also exposes the two
+ * failures a flat list hides: an owner carrying nothing, and work carrying no owner at all.
+ *
+ * IT INCLUDES LIVE ACTIVITY, not just cards. An employee running a sweep right now is doing work
+ * that no card describes, and a page claiming to show what the team is doing while missing that is
+ * lying by omission. Runs and cards are kept SEPARATE in the response rather than merged into one
+ * list, because they are different things: a card is work somebody owns over time, a run is a
+ * single act that already happened. Turning every run into a card would make cards a log, and a log
+ * is the one thing this surface must not become.
+ *
+ * UNASSIGNED WORK IS ITS OWN GROUP and deliberately first. A card nobody owns is the most likely
+ * thing in this system to be quietly dropped.
+ */
+export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
+  const visibility = privacyVisibilityClause(ctx.identity!, "wc.privacy_label");
+
+  const cards = await ctx.env.WP_OS_DB.prepare(
+    `SELECT wc.id, wc.title, wc.state, wc.priority, wc.owner_type, wc.owner_id,
+            wc.next_action, wc.due_at, wc.capture_id, wc.created_at,
+            COALESCE(e.name, u.full_name) AS owner_name,
+            e.role AS owner_role
+       FROM work_card wc
+       LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
+       LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
+      WHERE ${visibility}
+      ORDER BY wc.created_at DESC
+      LIMIT 500`,
+  ).all<Record<string, unknown>>();
+
+  // What each employee has actually been doing. Recent rather than all time — "currently" is the
+  // question, and a run from March answers a different one.
+  const runs = await ctx.env.WP_OS_DB.prepare(
+    `SELECT r.ai_employee_id, e.name AS employee_name, r.purpose, r.status, r.created_at
+       FROM ai_run r
+       JOIN ai_employee e ON e.id = r.ai_employee_id
+      WHERE r.ai_employee_id IS NOT NULL
+      ORDER BY r.created_at DESC
+      LIMIT 40`,
+  ).all<Record<string, unknown>>();
+
+  const employed = await ctx.env.WP_OS_DB.prepare(
+    "SELECT id, name, role FROM ai_employee WHERE status = 'ACTIVE' ORDER BY name",
+  ).all<{ id: string; name: string; role: string }>();
+
+  const partners = await ctx.env.WP_OS_DB.prepare(
+    "SELECT id, full_name FROM firm_user WHERE status = 'ACTIVE' ORDER BY full_name",
+  ).all<{ id: string; full_name: string }>();
+
+  return json({
+    cards: cards.results ?? [],
+    recent_runs: runs.results ?? [],
+    /** Everyone a card can be given to, so the UI never offers an owner the server would refuse. */
+    assignable: {
+      employees: employed.results ?? [],
+      partners: partners.results ?? [],
+    },
+    note:
+      "Cards are work somebody owns over time. Runs are single acts that already happened. They are " +
+      "kept apart on purpose — turning every run into a card would make this a log.",
+  });
+}

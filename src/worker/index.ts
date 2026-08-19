@@ -40,6 +40,7 @@ import {
 } from "./services/captures";
 import {
   handleCreateWorkCard,
+  handleWorkByOwner,
   handleGetWorkCard,
   handleListWorkCards,
   handleUpdateWorkCard,
@@ -535,6 +536,8 @@ const router = new Router()
   .post("/api/captures/:id/archive", handleArchiveCapture)
   // P3 — work spine.
   .post("/api/work-cards", handleCreateWorkCard)
+  // Literal before the :id that would swallow it.
+  .get("/api/work-cards/by-owner", handleWorkByOwner)
   .get("/api/work-cards", handleListWorkCards)
   .get("/api/work-cards/:id", handleGetWorkCard)
   .patch("/api/work-cards/:id", handleUpdateWorkCard)

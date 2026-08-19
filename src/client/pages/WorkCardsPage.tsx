@@ -24,6 +24,13 @@ import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work
  * needs a person.
  */
 
+interface Owner {
+  key: string;
+  name: string;
+  role: string | null;
+  kind: "AI" | "HUMAN" | "NOBODY";
+}
+
 interface WorkCardRow {
   id: string;
   title: string;
@@ -36,19 +43,60 @@ interface WorkCardRow {
   due_at: string | null;
   capture_id: string | null;
   created_at: string;
+  owner_name?: string | null;
+  owner_role?: string | null;
+}
+
+interface RecentRun {
+  ai_employee_id: string;
+  employee_name: string;
+  purpose: string;
+  status: string;
+  created_at: string;
 }
 
 export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; onChanged: () => void; onNavigate: (k: string) => void }) {
-  const cards = useApi<{ work_cards: WorkCardRow[] }>("/api/work-cards");
+  const board = useApi<{
+    cards: WorkCardRow[];
+    recent_runs: RecentRun[];
+    assignable: { employees: Array<{ id: string; name: string; role: string }>; partners: Array<{ id: string; full_name: string }> };
+  }>("/api/work-cards/by-owner");
   const [message, setMessage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [nextAction, setNextAction] = useState("");
+  // Defaults to you. Assigning to your partner or to an employee is the same act either way.
+  const [owner, setOwner] = useState(`HUMAN:${me.id}`);
   const [busy, setBusy] = useState(false);
 
-  const all = cards.data?.work_cards ?? [];
+  const all = board.data?.cards ?? [];
   const live = useMemo(() => triage(all), [all]);
   const finished = all.filter((c) => c.state === "DONE" || c.state === "CANCELLED");
+  const runs = board.data?.recent_runs ?? [];
+
+  /**
+   * Work grouped by whoever is carrying it. Unassigned comes first: a card nobody owns is the most
+   * likely thing here to be quietly dropped, and a flat list hides exactly that.
+   */
+  const byOwner = useMemo(() => {
+    const groups = new Map<string, { owner: Owner; cards: WorkCardRow[] }>();
+    for (const c of live) {
+      const key = c.owner_type === "UNASSIGNED" || !c.owner_id ? "nobody" : `${c.owner_type}:${c.owner_id}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          owner: {
+            key,
+            name: key === "nobody" ? "Nobody yet" : c.owner_name ?? c.owner_id ?? "Unknown",
+            role: c.owner_role ?? null,
+            kind: key === "nobody" ? "NOBODY" : (c.owner_type as "AI" | "HUMAN"),
+          },
+          cards: [],
+        });
+      }
+      groups.get(key)!.cards.push(c);
+    }
+    return [...groups.values()].sort((a, b) => (a.owner.kind === "NOBODY" ? -1 : b.owner.kind === "NOBODY" ? 1 : 0));
+  }, [live]);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -59,8 +107,8 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
       body: {
         title: title.trim(),
         ...(nextAction.trim() ? { next_action: nextAction.trim() } : {}),
-        owner_type: "HUMAN",
-        owner_id: me.id,
+        owner_type: owner.split(":")[0],
+        owner_id: owner.split(":").slice(1).join(":"),
       },
     });
     setBusy(false);
@@ -68,11 +116,22 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
       setMessage(`Not created: ${res.data?.detail ?? res.data?.error ?? res.status}`);
       return;
     }
-    setMessage("Added, owned by you.");
+    setMessage(owner === `HUMAN:${me.id}` ? "Added, owned by you." : "Added and handed over.");
     setTitle("");
     setNextAction("");
     setAdding(false);
-    cards.reload();
+    board.reload();
+    onChanged();
+  }
+
+  /** Hand a card to somebody. The same act whether it is an employee or a partner. */
+  async function assign(id: string, ownerType: string, ownerId: string) {
+    const res = await api<{ error?: string; detail?: string }>(`/api/work-cards/${id}`, {
+      method: "PATCH",
+      body: { owner_type: ownerType, owner_id: ownerId },
+    });
+    if (res.status !== 200) setMessage(`Could not reassign it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    board.reload();
     onChanged();
   }
 
@@ -82,7 +141,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
       body: { state },
     });
     if (res.status !== 200) setMessage(`Could not move it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
-    cards.reload();
+    board.reload();
     onChanged();
   }
 
@@ -109,6 +168,20 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
             <label style={{ flexGrow: 1 }}>
               What happens next?{" "}
               <input data-testid="work-card-next" value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="Ask Shanna for the closing docs" />
+            </label>
+            <label>
+              Who carries it{" "}
+              <select data-testid="work-card-owner" value={owner} onChange={(e) => setOwner(e.target.value)}>
+                <option value={`HUMAN:${me.id}`}>Me</option>
+                {(board.data?.assignable.partners ?? [])
+                  .filter((p) => p.id !== me.id)
+                  .map((p) => (
+                    <option key={p.id} value={`HUMAN:${p.id}`}>{p.full_name}</option>
+                  ))}
+                {(board.data?.assignable.employees ?? []).map((e) => (
+                  <option key={e.id} value={`AI:${e.id}`}>{e.name} — {e.role}</option>
+                ))}
+              </select>
             </label>
             <button type="submit" className="btn-strong" disabled={busy} data-testid="work-card-submit">
               {busy ? "…" : "Add"}
@@ -152,11 +225,25 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </div>
       )}
 
-      <ul className="card-list" data-testid="work-card-list">
-        {live.map((c) => {
-          const meaning = stateMeaning(c.state);
-          return (
-            <li key={c.id} className="card work-card-row" data-testid={`work-card-${c.id}`}>
+      {byOwner.map((group) => (
+        <section key={group.owner.key} data-testid={`work-owner-${group.owner.key}`}>
+          <div className="home-section-head">
+            <h3>
+              {group.owner.name}
+              {group.owner.role && <span className="muted small"> {group.owner.role}</span>}
+            </h3>
+            <span className="muted small">
+              {group.owner.kind === "NOBODY"
+                ? "Nobody has picked these up"
+                : `${group.cards.length} open`}
+            </span>
+          </div>
+
+          <ul className="card-list" data-testid={`work-card-list-${group.owner.key}`}>
+            {group.cards.map((c) => {
+              const meaning = stateMeaning(c.state);
+              return (
+                <li key={c.id} className="card work-card-row" data-testid={`work-card-${c.id}`}>
               <div className="work-card-body">
                 <div className="notification-head">
                   <span className={c.state === "BLOCKED" ? "badge badge-bad" : "badge"}>
@@ -179,22 +266,62 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                 </p>
               </div>
 
-              <div className="notification-actions">
-                {c.state === "OPEN" && (
-                  <button type="button" data-testid={`work-card-start-${c.id}`} onClick={() => void move(c.id, "IN_PROGRESS")}>
-                    Start
-                  </button>
-                )}
-                {c.state !== "DONE" && (
-                  <button type="button" className="btn-strong" data-testid={`work-card-done-${c.id}`} onClick={() => void move(c.id, "DONE")}>
-                    Done
-                  </button>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                  <div className="notification-actions">
+                    <select
+                      aria-label={`Hand ${c.title} to somebody else`}
+                      data-testid={`work-card-assign-${c.id}`}
+                      value={`${c.owner_type}:${c.owner_id ?? ""}`}
+                      onChange={(e) => {
+                        const [t, ...rest] = e.target.value.split(":");
+                        void assign(c.id, t!, rest.join(":"));
+                      }}
+                    >
+                      <option value="UNASSIGNED:">Nobody</option>
+                      {(board.data?.assignable.partners ?? []).map((p) => (
+                        <option key={p.id} value={`HUMAN:${p.id}`}>{p.full_name}</option>
+                      ))}
+                      {(board.data?.assignable.employees ?? []).map((emp) => (
+                        <option key={emp.id} value={`AI:${emp.id}`}>{emp.name}</option>
+                      ))}
+                    </select>
+                    {c.state === "OPEN" && (
+                      <button type="button" data-testid={`work-card-start-${c.id}`} onClick={() => void move(c.id, "IN_PROGRESS")}>
+                        Start
+                      </button>
+                    )}
+                    {c.state !== "DONE" && (
+                      <button type="button" className="btn-strong" data-testid={`work-card-done-${c.id}`} onClick={() => void move(c.id, "DONE")}>
+                        Done
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+
+      {/* What employees have actually been doing. Kept SEPARATE from cards rather than merged:
+          a card is work somebody owns over time, a run is a single act that already happened, and
+          turning every run into a card would make this page a log. */}
+      {runs.length > 0 && (
+        <details className="card" data-testid="work-recent-runs">
+          <summary>What your employees have been doing</summary>
+          <p className="muted small">
+            Single acts rather than work anybody carries — these do not become cards, and a page
+            that turned them into cards would be a log.
+          </p>
+          <ul className="card-list small">
+            {runs.slice(0, 15).map((r, i) => (
+              <li key={i}>
+                <strong>{r.employee_name}</strong> · {r.purpose}{" "}
+                <span className="muted small">{r.status.toLowerCase()}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {finished.length > 0 && (
         <details className="card" data-testid="work-cards-finished">
