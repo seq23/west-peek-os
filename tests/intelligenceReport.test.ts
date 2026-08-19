@@ -179,3 +179,56 @@ describe("the v3 report asks for depth", () => {
     expect(PROMPT_VERSION).toBe("daily-intelligence-v3");
   });
 });
+
+/**
+ * The delimited output format.
+ *
+ * This exists because of a real production failure, not a hypothetical. v3 asked for the depth the
+ * operator wanted and got twenty thousand characters of it — inside JSON string values, where the
+ * model had used double quotes for emphasis and left them unescaped. One bare quote discarded the
+ * entire report. These tests pin the shape that has nothing to escape.
+ */
+describe("reading the delimited format", () => {
+  it("reads a section, its body and its event ids", () => {
+    const out = parseReport(
+      ["===SECTION executive_summary", "===EVENTS iitem_a, iitem_b", "1. Rates moved.", "===END"].join("\n"),
+    );
+    expect(out).toHaveLength(1);
+    expect(out![0]!.key).toBe("executive_summary");
+    expect(out![0]!.body_md).toBe("1. Rates moved.");
+    expect(out![0]!.event_ids).toEqual(["iitem_a", "iitem_b"]);
+  });
+
+  it("keeps double quotes, apostrophes and blank lines in the body", () => {
+    // The whole point. This exact body is what broke the JSON path in production.
+    const body = 'He called it "the AI capex that enabled it".\n\nToday\'s curve is steeper.';
+    const out = parseReport(["===SECTION investor_insight", "===EVENTS", body, "===END"].join("\n"));
+    expect(out![0]!.body_md).toBe(body);
+  });
+
+  it("survives a missing ===EVENTS line and a stray code fence", () => {
+    const out = parseReport("```\n===SECTION watch\nOne thing.\n===END\n```");
+    expect(out![0]!.key).toBe("watch");
+    expect(out![0]!.event_ids).toEqual([]);
+  });
+
+  it("reads several sections in order", () => {
+    const out = parseReport(
+      [
+        "===SECTION executive_summary", "===EVENTS", "Summary.", "===END",
+        "===SECTION classification", "===EVENTS", "Equities: RED — selloff", "===END",
+      ].join("\n"),
+    );
+    expect(out!.map((s) => s.key)).toEqual(["executive_summary", "classification"]);
+  });
+
+  it("still refuses an invented section key", () => {
+    // A forgiving format must not become a forgiving vocabulary.
+    expect(parseReport("===SECTION hot_takes\n===EVENTS\nNope.\n===END")).toBeNull();
+  });
+
+  it("still reads the JSON form, so stored reports and stubborn models both survive", () => {
+    const out = parseReport('{"sections":[{"key":"watch","body_md":"Still works.","event_ids":[]}]}');
+    expect(out![0]!.body_md).toBe("Still works.");
+  });
+});

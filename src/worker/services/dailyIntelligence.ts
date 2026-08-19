@@ -201,8 +201,16 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
     // A brief assembled from public sources is PUBLIC. Never raised, so it cannot be blocked by a
     // policy meant for confidential material — and never lowered either.
     sensitivity: "PUBLIC" as never,
-    budgetContext: { expectedOutputTokens: 2000 },
-    routing: { category: "INTELLIGENCE" },
+    // v3 asks for a report several times longer than v2's, so the estimate has to say so. This
+    // number is what the affordability check and the cost centre reason about; leaving it at the
+    // old 2000 would have understated every brief by a factor of four.
+    budgetContext: { expectedOutputTokens: 8000 },
+    // NAMING A TASK CLASS IS WHAT MAKES A ROUTING POLICY POSSIBLE. Without it the router falls back
+    // to "cheapest adequate priced model", which chose a flash-tier model and produced a report
+    // containing "the 30-year U.S. tax at 19 year high" and a corrupted copy of its own event ids.
+    // Structure was never the whole problem: choosing what belongs at the top of a brief is a
+    // judgement task, and judgement is the thing the cheap tier does not have.
+    routing: { category: "INTELLIGENCE", taskClass: "daily-intelligence" },
   });
   return {
     output: run.output_text ?? "",
@@ -245,11 +253,17 @@ export async function generateForPartner(
     .first<{ id: string }>())!;
   const id = report.id;
 
+  // The run id is captured by the synthesis step below and read here, so a FAILED report points at
+  // the run that actually failed. It used to be written only on success, which left the row
+  // carrying the id of whatever ran LAST TIME — so investigating a failure led straight to a
+  // healthy older run and its perfectly good output. That cost an hour once; it should cost nobody
+  // an hour again.
+  let failedRunId: string | null = null;
   const fail = async (code: string, message: string): Promise<GenerateResult> => {
     await env.WP_OS_DB.prepare(
-      "UPDATE intelligence_report SET status = 'FAILED', error_code = ?2, error_message = ?3, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+      "UPDATE intelligence_report SET status = 'FAILED', error_code = ?2, error_message = ?3, ai_run_id = ?4, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
     )
-      .bind(id, code, message)
+      .bind(id, code, message, failedRunId)
       .run();
     return { report_id: id, status: "FAILED", sections: 0, candidates: 0, flags: 0 };
   };
@@ -326,6 +340,7 @@ export async function generateForPartner(
   try {
     const result = await synthesise(env, actor, buildSynthesisPrompt(packet), reportDate, firmUserId);
     aiRunId = result.aiRunId;
+    failedRunId = result.aiRunId;
     model = result.model;
     if (result.failure) return await fail("synthesis_failed", result.failure);
     output = result.output;

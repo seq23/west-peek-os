@@ -155,15 +155,25 @@ export function buildSynthesisPrompt(packet: EvidencePacket): string {
       ? `<<<CALENDAR (scheduled today)>>>\n${JSON.stringify(packet.calendar, null, 1)}\n<<<END CALENDAR>>>`
       : "CALENDAR: nothing scheduled was found. Omit the key_events section.",
     "",
-    "Return ONLY a JSON object of this shape:",
-    JSON.stringify(
-      {
-        sections: [{ key: "executive_summary", body_md: "…", event_ids: ["…"] }],
-        watch: { body_md: "…", event_ids: ["…"] },
-      },
-      null,
-      1,
-    ),
+    "OUTPUT FORMAT — delimited blocks, NOT JSON. Return exactly this and nothing else:",
+    "",
+    "===SECTION executive_summary",
+    "===EVENTS iitem_abc123, iitem_def456",
+    "<the markdown body, as long as this section calls for, quotes and apostrophes and line breaks",
+    "all perfectly safe to use>",
+    "===END",
+    "===SECTION top_headlines",
+    "===EVENTS iitem_...",
+    "<...>",
+    "===END",
+    "",
+    "Repeat for each section you are writing. The ===EVENTS line lists the event_ids this section",
+    "rests on, comma-separated, and may be empty. Everything between the ===EVENTS line and ===END",
+    "is the body, copied verbatim — write normal prose and markdown there.",
+    "",
+    "This format is used INSTEAD OF JSON because these sections are long and full of quotation",
+    "marks, and a single unescaped quote inside a JSON string discards the entire report. Here",
+    "nothing needs escaping at all. Do not wrap the output in a code fence.",
     "",
     `Valid section keys: ${REPORT_SECTIONS.map((s) => s.key).join(", ")}.`,
     "Omit any section with nothing to say rather than writing filler. But understand that OMITTING",
@@ -243,8 +253,65 @@ export interface ParsedSection {
   event_ids: string[];
 }
 
-/** Pull the model's JSON out of whatever it wrapped it in. */
+/**
+ * Read the report back out of the model's reply.
+ *
+ * WHY TWO FORMATS. The delimited form is what the prompt now asks for and is tried first; the JSON
+ * form stays because reports written by earlier prompt versions are still in the database, and
+ * because a model that ignores the instruction and returns JSON anyway should not lose its work.
+ *
+ * THE DELIMITED FORM EXISTS BECAUSE OF A REAL FAILURE. v3 asked for the depth the operator wanted
+ * and got it — twenty thousand characters of it — inside JSON string values, where the model used
+ * double quotes for emphasis and left them unescaped. One bare quote discarded the whole report,
+ * and the surface said only "the model did not return a usable report". Escaping is a thing weak
+ * models do badly and long bodies do often, so the fix is a format with nothing to escape rather
+ * than a stricter instruction about escaping.
+ */
 export function parseReport(raw: string): ParsedSection[] | null {
+  const delimited = parseDelimited(raw);
+  if (delimited) return delimited;
+  return parseJsonReport(raw);
+}
+
+/**
+ * The delimited form: ===SECTION <key> / ===EVENTS <ids> / body / ===END.
+ *
+ * Deliberately forgiving about everything except the section key. A model that omits the ===EVENTS
+ * line, wraps the reply in a fence, or trails whitespace has still done the work; a model that
+ * invents a section key has not, and that one is refused exactly as before.
+ */
+function parseDelimited(raw: string): ParsedSection[] | null {
+  if (!/^\s*(?:```[a-z]*\s*)?===SECTION\s/m.test(raw)) return null;
+  const valid = new Set<string>(REPORT_SECTIONS.map((s) => s.key));
+  const out: ParsedSection[] = [];
+
+  const blocks = raw.split(/^===SECTION[ \t]+/m).slice(1);
+  for (const block of blocks) {
+    const nl = block.indexOf("\n");
+    if (nl === -1) continue;
+    const key = block.slice(0, nl).trim();
+    if (!valid.has(key)) continue;
+
+    let rest = block.slice(nl + 1);
+    // ===END closes the block; anything after it belongs to no section.
+    const end = rest.search(/^===END\s*$/m);
+    if (end !== -1) rest = rest.slice(0, end);
+
+    let eventIds: string[] = [];
+    const events = rest.match(/^===EVENTS[ \t]*(.*)$/m);
+    if (events) {
+      eventIds = events[1]!.split(",").map((i) => i.trim()).filter(Boolean);
+      rest = rest.replace(events[0], "");
+    }
+
+    const body = rest.replace(/```\s*$/, "").trim();
+    if (body) out.push({ key, body_md: body, event_ids: eventIds });
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** The original JSON form. Kept for stored reports and for a model that returns it anyway. */
+function parseJsonReport(raw: string): ParsedSection[] | null {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = (fenced?.[1] ?? raw).trim();
   const start = candidate.indexOf("{");
