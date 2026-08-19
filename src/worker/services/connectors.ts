@@ -197,6 +197,31 @@ export async function handleMeetingPrepQueue(ctx: RouteContext): Promise<Respons
 export async function handlePartnerConnections(ctx: RouteContext): Promise<Response> {
   const me = ctx.identity!;
 
+  // FIRM SENDING AND A PARTNER'S MAILBOX ARE DIFFERENT CAPABILITIES, and this endpoint used to
+  // report only the second. Outbound email went live through Resend and Home still said email was
+  // not connected — true of the mailbox, false of the thing the operator had just switched on, and
+  // indistinguishable from nothing having worked.
+  //
+  // Sending is firm-level: the OS sends AS the firm, from one configured address, and every message
+  // is human-approved. A mailbox is personal: reading your inbox and sending as you. One being live
+  // says nothing about the other, so they are reported separately.
+  const sendingFrom = ctx.env.WP_OS_EMAIL_FROM ?? null;
+  const sendingOn = ctx.env.WP_OS_EMAIL_SEND === "enabled";
+  const hasTransport = Boolean(ctx.env.RESEND_API_KEY) || Boolean(ctx.env.EMAIL);
+  const sending = {
+    live: sendingOn && hasTransport && Boolean(sendingFrom),
+    from: sendingFrom,
+    provider: ctx.env.EMAIL ? "cloudflare" : ctx.env.RESEND_API_KEY ? "resend" : null,
+    detail:
+      sendingOn && hasTransport && Boolean(sendingFrom)
+        ? `Approved messages go out as ${sendingFrom}. Every one still needs a human decision first.`
+        : !hasTransport
+          ? "No transport is configured, so approved messages are recorded rather than sent."
+          : !sendingFrom
+            ? "No sending address is set, so approved messages are recorded rather than sent."
+            : "Sending is switched off, so approved messages are recorded rather than sent.",
+  };
+
   const rows = await ctx.env.WP_OS_DB.prepare(
     `SELECT c.connector_key, c.name, c.kind, c.direction, c.status AS registry_status,
             c.credential_name, c.consent_required, c.approval_gate,
@@ -246,6 +271,7 @@ export async function handlePartnerConnections(ctx: RouteContext): Promise<Respo
 
   return json({
     partner: { id: me.id, name: me.fullName, email: me.email },
+    sending,
     connections,
     google_ready: googleReady,
     /** Stated so the screen never has to guess at the setup path. */

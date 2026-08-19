@@ -32,8 +32,16 @@ interface Connection {
   what_it_unlocks: string;
 }
 
+interface Sending {
+  live: boolean;
+  from: string | null;
+  provider: string | null;
+  detail: string;
+}
+
 export function ConnectPanel({ me }: { me: MeResponse }) {
   const state = useApi<{
+    sending: Sending;
     connections: Connection[];
     google_ready: boolean;
     setup: { what: string; then: string; note: string } | null;
@@ -45,18 +53,35 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
   const connected = d.connections.filter((c) => c.status === "CONNECTED");
   const broken = d.connections.filter((c) => c.status === "EXPIRED" || c.status === "FAILED" || c.status === "REVOKED");
 
+  // FIRM SENDING IS SHOWN EVEN WHEN NOTHING ELSE NEEDS DOING. It is the half of "email" that is
+  // actually live, and reporting only the mailbox made a working system look broken.
+  const sendingLine = d.sending?.live ? (
+    <p className="muted small" data-testid="connect-sending-live">
+      <span className="badge badge-ok">sending live</span> The firm sends approved email as{" "}
+      <strong>{d.sending.from}</strong>. Every message still needs a human decision first.
+    </p>
+  ) : null;
+
   // Everything working: one quiet line rather than a settings block on the busiest page.
   if (connected.length === d.connections.length && broken.length === 0) {
     return (
-      <p className="muted small" data-testid="connect-all-good">
-        Your mail and calendar are connected.
-      </p>
+      <>
+        {sendingLine}
+        <p className="muted small" data-testid="connect-all-good">
+          Your mail and calendar are connected.
+        </p>
+      </>
     );
   }
 
   return (
     <section className="card" data-testid="connect-panel">
-      <h3>Connect your mail and calendar</h3>
+      {sendingLine}
+      <h3>Connect your own mailbox and calendar</h3>
+      <p className="muted small">
+        Separate from the firm sending above. This is about <em>your</em> inbox and{" "}
+        <em>your</em> diary — reading what is in them, and sending as you rather than as the firm.
+      </p>
       <p className="muted small">
         {me.fullName.split(" ")[0]}, these are yours alone — {me.email}. Your partner connects
         theirs separately.
