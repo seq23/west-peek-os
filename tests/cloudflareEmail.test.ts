@@ -121,3 +121,40 @@ describe("sending", () => {
     ).rejects.toThrow(/no sending address/);
   });
 });
+
+/**
+ * Which transport wins.
+ *
+ * The executor prefers Cloudflare whenever its binding is present, which was right when the binding
+ * could send. It cannot: Email Sending needs the Workers Paid plan, which this firm is not on. A
+ * deployed-but-unusable binding therefore OUTRANKED a working Resend configuration and would have
+ * failed every send while Resend sat unused. The binding is commented out of wrangler.toml, and
+ * these tests pin the selection logic so re-adding it cannot quietly recreate that.
+ */
+describe("choosing a transport", () => {
+  const resendOnly = {
+    RESEND_API_KEY: "re_test_not_a_real_key",
+    WP_OS_EMAIL_FROM: "os@westpeek.ventures",
+    WP_OS_EMAIL_SEND: "enabled",
+  } as unknown as Env;
+
+  it("does not consider Cloudflare ready when there is no binding, however else it is configured", () => {
+    // Both switches are on and a sender is set; only the binding is absent. This is exactly the
+    // production shape, and getting it wrong means every approved email fails.
+    expect(isCloudflareEmailEnabled(resendOnly)).toBe(false);
+  });
+
+  it("reports the Resend reason when Resend is the transport in play", () => {
+    // Naming the Cloudflare blocker to somebody who is not using Cloudflare sends them to fix the
+    // wrong thing.
+    const halfSet = { ...resendOnly, WP_OS_EMAIL_SEND: undefined } as unknown as Env;
+    expect(cloudflareEmailBlockedReason(halfSet)).toMatch(/wrangler\.toml/);
+    expect(isCloudflareEmailEnabled(halfSet)).toBe(false);
+  });
+
+  it("is ready again the moment a binding comes back, without any other change", () => {
+    // The upgrade path: uncomment the binding and it takes over. Nothing else to remember.
+    const withBinding = { ...resendOnly, EMAIL: fakeBinding().binding } as unknown as Env;
+    expect(isCloudflareEmailEnabled(withBinding)).toBe(true);
+  });
+});

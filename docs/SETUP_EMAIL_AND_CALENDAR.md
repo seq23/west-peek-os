@@ -10,73 +10,65 @@ only you can create or a decision only you can make.
 
 ## Part 1 — Email
 
-**Status: the plumbing is built, deployed and switched off. Three steps left, about fifteen
-minutes.**
+**Status: the plumbing is built and switched off. Three steps left, about twenty minutes, no
+recurring cost.**
 
-West Peek OS sends email through **Cloudflare Email Sending**, using a Worker *binding* rather
-than an API key. That matters for one practical reason: there is no key to create, store or
-rotate, and no third party in the path. The binding is already live on the production Worker —
-you can see it as `env.EMAIL` — it simply refuses to send until the steps below are done.
+### Why not Cloudflare
 
-Nothing here makes the OS start emailing people on its own. Every outbound message still needs a
-human to approve that specific message first. These steps only decide whether an approved message
-actually leaves the building or gets recorded and held.
+The original plan was Cloudflare Email Sending, because it is a Worker binding — no API key to
+create, store or rotate, and no third party in the path. That plan is dead for now:
 
-### Step 1 — Let your API token manage Email Sending
+> Email Sending is currently only available with the Workers Paid plan.
 
-Right now the token cannot. This is what the failure looks like:
+The transport is written and tested and the binding is commented out of `wrangler.toml` with the
+reason attached. If you ever go to Workers Paid, uncomment it, run
+`wrangler email sending enable westpeek.ventures`, and it takes over automatically.
 
-```
-$ npx wrangler email sending list
-✘ Unauthorized [code: 2036]
-```
+Leaving the binding deployed would have been actively harmful, not merely useless: the executor
+prefers Cloudflare whenever the binding is present, so an unusable binding would have captured
+every send and failed it while Resend sat configured and unused.
 
-The token works fine for everything else — it lists all 50+ zones without complaint — so this is
-one missing permission, not a broken token.
+### What we use instead
 
-1. Go to **dash.cloudflare.com → My Profile → API Tokens**
-2. Find the token you use for West Peek OS and click **Edit**
-3. Under **Permissions**, add:
-   - `Account` · **Email Sending** · **Edit**
-4. **Save**
+**Resend**, which has been in this repo since the outbound channel was first built. Its free tier
+is **3,000 emails a month and 100 a day, with one custom domain** — far beyond what this fund
+sends. The transport is on the egress allowlist and covered by tests.
 
-> If you would rather not touch the token, skip to Step 2 and do it in the dashboard instead. The
-> token only matters if you want to run the command-line version.
+Nothing below makes the OS start emailing people on its own. Every outbound message still needs a
+human to approve that specific message. These steps only decide whether an approved message leaves
+the building or gets recorded and held.
 
-### Step 2 — Onboard the domain
+### Step 1 — Create a Resend account and verify the domain
 
-Cloudflare will only send from a domain that has been explicitly onboarded. `westpeek.ventures`
-is already an active zone on your account (id `36e5558b605f26547dce4ec9eddc39cf`), which is why
-this is quick.
+1. Sign up at **resend.com** (free plan, no card).
+2. **Domains → Add Domain** → `westpeek.ventures`.
+3. Resend shows you DNS records to add — an SPF/`MX` pair and a DKIM `TXT`.
+4. Add them in Cloudflare: the `westpeek.ventures` zone → **DNS** → **Add record**, copying each
+   exactly.
+   - **Set each one to DNS only (grey cloud), not proxied.** A proxied mail record does not work,
+     and this is the single most common way this step fails.
+5. Back in Resend, click **Verify**. It usually completes in a few minutes.
 
-**Command line:**
+Verification is what lets you send *as* `westpeek.ventures`. Without it you can only send from
+Resend's own test domain, which is fine for a smoke test and not fine for LPs.
 
-```bash
-npx wrangler email sending enable westpeek.ventures
-```
+### Step 2 — Create an API key
 
-**Or in the dashboard:** select the `westpeek.ventures` zone → **Email** → **Email Sending** →
-follow the enable flow.
+**API Keys → Create API Key.** Give it **Sending access** only, not full access — this key lives in
+a Worker and should not be able to reconfigure your domains.
 
-Because the domain's DNS is already on Cloudflare, the **SPF, DKIM and DMARC records are created
-for you automatically**. You do not need to add DNS records by hand, and you should not — a
-hand-written SPF record that conflicts with the generated one is the most common way to land in
-spam folders.
+Copy it once; Resend will not show it again.
 
-Confirm it worked:
+### Step 3 — Give it to the Worker and turn sending on
+
+The key is a secret and goes into Worker secret storage:
 
 ```bash
-npx wrangler email sending list
+npx wrangler secret put RESEND_API_KEY --env production
 ```
 
-`westpeek.ventures` should be listed. If it is not, nothing below will work.
-
-### Step 3 — Turn sending on
-
-Two settings. They are deliberately separate from the domain being ready, because a domain being
-*capable* of sending is not a decision to *start* sending.
-
-Add both to `[env.production.vars]` in `wrangler.toml`:
+The other two are configuration, not secrets, so they go in `wrangler.toml` where the switch is
+visible in the repo and in review:
 
 ```toml
 [env.production.vars]
@@ -90,34 +82,31 @@ Then deploy:
 npm run deploy:production
 ```
 
-Notes worth knowing:
+Two things worth knowing:
 
-- These are **not secrets** — they are configuration, and keeping them in `wrangler.toml` means
-  the switch is visible in the repo and in code review rather than hidden in a dashboard.
 - `WP_OS_EMAIL_SEND` must be the literal string `enabled`. `true`, `yes` and `1` all leave it off.
-  That is intentional: it should be impossible to switch on by accident.
-- The address must be on the onboarded domain. The Worker is additionally restricted to sending
-  **only** as `os@westpeek.ventures` (`allowed_sender_addresses` in `wrangler.toml`), so if you
-  want a different address, change it in both places.
+  That is intentional — it should be impossible to switch on by accident.
+- The address must be on the verified domain. `os@westpeek.ventures` needs no mailbox behind it to
+  send; give it one only if you want replies to land somewhere.
 
 ### Step 4 — Check it
 
-Approve any outbound email in the OS. The receipt will tell you which of three things happened:
+Approve any outbound email in the OS. The receipt tells you which of three things happened:
 
 | What the receipt says | What it means |
 |---|---|
-| `Sent to … via Cloudflare from os@westpeek.ventures (msg-id)` | It went out. The id is checkable against Cloudflare's own log. |
-| `Approved and recorded, NOT sent — …` | One of the switches is still off. The message names which. |
-| The effect is marked `FAILED` | Cloudflare rejected it. Usually the domain is not onboarded. |
+| `Delivered to … via Resend` | It went out. |
+| `Approved and recorded, NOT sent — …` | A switch is still off. The message names which. |
+| The effect is marked `FAILED` | Resend rejected it. Usually the domain is not verified yet. |
 
 A rejected send never leaves an "executed" receipt behind, so the audit trail cannot claim a
 message went out when it did not.
 
-### If you would rather use Resend
+### On cost
 
-The Resend transport still exists and still works. Set `RESEND_API_KEY` plus the same
-`WP_OS_EMAIL_SEND=enabled`, and leave the Cloudflare settings alone. If both are configured,
-Cloudflare is used — it needs no credential and adds no third party.
+Resend free covers this comfortably. If volume ever passes 3,000 a month, Resend's paid tier and
+Cloudflare's Workers Paid plan are within a few dollars of each other — at that point the binding
+is the better choice, because it removes a credential and a vendor.
 
 ---
 

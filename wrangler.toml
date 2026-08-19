@@ -53,16 +53,25 @@ id = "00000000000000000000000000000000"
 [browser]
 binding = "BROWSER"
 
-# Email Sending (P33). A BINDING, like [browser] above — nothing here calls fetch(), so outbound
-# mail down this path needs no egress exemption and no third-party credential. The `from` domain
-# must be onboarded to Email Sending on this account before the first send; westpeek.ventures is
-# the zone this fund's addresses live on.
-[[send_email]]
-name = "EMAIL"
-# The binding may only send AS this address. Onboarding the domain is what makes sending possible;
-# this is the narrower second fence, so a bug or a prompt injection cannot make the fund appear to
-# email as anybody else on the domain.
-allowed_sender_addresses = ["os@westpeek.ventures"]
+# Email Sending (P33) — DISABLED, and the reason is not technical.
+#
+# Cloudflare Email Sending requires the Workers Paid plan: "Email Sending is currently only
+# available with the Workers Paid plan." This firm is not on it and does not want to be, so the
+# binding cannot send and is commented out rather than left deployed.
+#
+# LEAVING IT DEPLOYED WOULD HAVE BEEN WORSE THAN USELESS. The executor prefers Cloudflare whenever
+# the binding is present, so a live binding against an un-onboarded domain would have captured
+# every send and failed it — while Resend sat configured and unused. An unusable transport that
+# outranks a working one is a trap, so it goes.
+#
+# Outbound mail goes through Resend instead (src/worker/effects/resendClient.ts): free to 3,000
+# messages a month and 100 a day, which is far beyond what this fund sends. To switch back, upgrade
+# the plan, run `wrangler email sending enable westpeek.ventures`, and uncomment.
+# [[send_email]]
+# name = "EMAIL"
+# # The binding may only send AS this address, so a bug or a prompt injection cannot make the fund
+# # appear to email as anybody else on the domain.
+# allowed_sender_addresses = ["os@westpeek.ventures"]
 
 [vars]
 # local | preview | production
@@ -117,16 +126,25 @@ id = "bf0750e8e9a648758a5de978088c97da"
 [env.production.browser]
 binding = "BROWSER"
 
-# Email Sending (P33). A BINDING, like [browser] above — nothing here calls fetch(), so outbound
-# mail down this path needs no egress exemption and no third-party credential. The `from` domain
-# must be onboarded to Email Sending on this account before the first send; westpeek.ventures is
-# the zone this fund's addresses live on.
-[[env.production.send_email]]
-name = "EMAIL"
-# The binding may only send AS this address. Onboarding the domain is what makes sending possible;
-# this is the narrower second fence, so a bug or a prompt injection cannot make the fund appear to
-# email as anybody else on the domain.
-allowed_sender_addresses = ["os@westpeek.ventures"]
+# Email Sending (P33) — DISABLED, and the reason is not technical.
+#
+# Cloudflare Email Sending requires the Workers Paid plan: "Email Sending is currently only
+# available with the Workers Paid plan." This firm is not on it and does not want to be, so the
+# binding cannot send and is commented out rather than left deployed.
+#
+# LEAVING IT DEPLOYED WOULD HAVE BEEN WORSE THAN USELESS. The executor prefers Cloudflare whenever
+# the binding is present, so a live binding against an un-onboarded domain would have captured
+# every send and failed it — while Resend sat configured and unused. An unusable transport that
+# outranks a working one is a trap, so it goes.
+#
+# Outbound mail goes through Resend instead (src/worker/effects/resendClient.ts): free to 3,000
+# messages a month and 100 a day, which is far beyond what this fund sends. To switch back, upgrade
+# the plan, run `wrangler email sending enable westpeek.ventures`, and uncomment.
+# [[env.production.send_email]]
+# name = "EMAIL"
+# # The binding may only send AS this address, so a bug or a prompt injection cannot make the fund
+# # appear to email as anybody else on the domain.
+# allowed_sender_addresses = ["os@westpeek.ventures"]
 
 [env.production.vars]
 # Not "local": the dev identity header `x-wpos-dev-user` is refused outside local,
