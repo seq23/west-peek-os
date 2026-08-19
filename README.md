@@ -94,7 +94,11 @@ than quietly downgraded.
 > any are still pending, builds, deploys, then probes the Worker. Do not deploy with bare
 > `wrangler deploy`, and do not reconnect the GitHub build trigger: Workers Builds does not run
 > migrations, and shipping code against an un-migrated database has already broken production
-> twice. See BACKLOG.md, "There is exactly ONE deploy path".
+> twice. Bare `wrangler deploy` fails differently and more quietly — it bundles the Worker from
+> source but does NOT build the client, so it ships today's backend with whatever frontend was
+> last built, and reports success. **[docs/DEPLOYING.md](docs/DEPLOYING.md)** has the full
+> reasoning, how to verify what actually shipped, and the transient Cloudflare failures worth
+> retrying rather than debugging.
 
 
 `wrangler deploy` succeeding does not mean your migration applied. This has caused two incidents in
@@ -173,6 +177,7 @@ The path most changes follow:
 | [docs/AI_GOVERNANCE.md](docs/AI_GOVERNANCE.md) | Privacy modes, egress control, the model ledger |
 | [docs/EVIDENCE_MODEL.md](docs/EVIDENCE_MODEL.md) | Claims, sources, and the self-promotion ban |
 | [docs/IDENTITY_MODEL.md](docs/IDENTITY_MODEL.md) | Firm users, roles, AI employees |
+| [docs/DEPLOYING.md](docs/DEPLOYING.md) | The one deploy path, and why bare `wrangler deploy` ships a stale interface |
 | [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md) | local / preview / production |
 | [docs/ENVIRONMENT_CONTRACT.md](docs/ENVIRONMENT_CONTRACT.md) | Every binding and secret, and what it is for |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | Backup and restore, including the proven production drill |
