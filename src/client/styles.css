@@ -2342,3 +2342,16 @@ hr {
 
 .suggestion-group { margin-bottom: 0.5rem; }
 .suggestion-group .chip-row { margin-top: 0.2rem; }
+
+/* A quieter divider for reference material below the thing a page is actually for. */
+.behind-the-brief {
+  margin-top: 2rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--wp-line);
+}
+
+.behind-the-brief h3 {
+  color: var(--wp-muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+}

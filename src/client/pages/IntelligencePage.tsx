@@ -184,15 +184,158 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
   };
 
   const lastRun = runs.data?.runs[0];
+  // A screenful at a time. Several hundred items rendered at once was the complaint.
+  const [itemLimit, setItemLimit] = useState(25);
 
   return (
     <section data-testid="intelligence-page">
+      {/* THE BRIEF COMES FIRST NOW. This page used to open with a sweep form and two reference
+          panels, so the thing a partner actually comes here to do — read the whole briefing, and
+          say what it should cover — was below three blocks of machinery. Everything that gathers,
+          scores and stores is real and stays; it is just no longer the first thing you meet. */}
       <p className="muted small">
-        Signed in as {me.fullName}. Items are ordered by how closely they match what the firm is watching.
+        Your full briefing, and everything behind it. The short version lands on Home each morning;
+        this is where you read all of it and decide what it should cover.
       </p>
 
-      <section className="card">
-        <h3>Run a sweep</h3>
+      <DailyBriefPanel />
+
+      <div className="home-section-head behind-the-brief">
+        <h3>Behind the brief</h3>
+        <span className="muted small">where the material comes from, and what was done with it</span>
+      </div>
+
+
+      {/* Sources, watchlist and history are REFERENCE, not the point of the page — they were
+          taking most of the screen above the items you actually came to read. Collapsed by
+          default using native <details> so they stay keyboard-operable and findable. */}
+      <details className="card intel-panel" data-testid="intel-sources-panel">
+        <summary>
+          Sources <span className="muted small">{(sources.data?.sources ?? []).length}</span>
+        </summary>
+        {sources.loading && <p>Loading sources…</p>}
+        <ul className="card-list" data-testid="intel-sources">
+        {(sources.data?.sources ?? []).map((s) => (
+          <li key={s.id} className="card" data-testid={`intel-source-${s.source_key}`}>
+            <p>
+              <strong>{s.name}</strong> <span className="badge">{s.kind}</span>{" "}
+              <span className={statusTone(s.status)} data-testid={`intel-source-status-${s.source_key}`}>
+                {s.status}
+              </span>{" "}
+              {s.enabled ? "" : <span className="badge badge-bad">DISABLED</span>}
+            </p>
+            {s.status_detail && <p className="muted small">{s.status_detail}</p>}
+            {s.last_checked_at && <p className="muted small">last checked {s.last_checked_at}</p>}
+          </li>
+        ))}
+      </ul>
+        {sources.data?.note && <p className="muted small">{sources.data.note}</p>}
+      </details>
+
+      <details className="card intel-panel" data-testid="intel-watchlist-panel">
+        <summary>
+          Watchlist <span className="muted small">{(watchlist.data?.watchlist ?? []).length}</span>
+        </summary>
+        <p className="muted small">
+          Anything on this list scores higher when a sweep ranks new items.
+        </p>
+      <form
+        className="form-row"
+        data-testid="intel-watch-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const res = await api<{ error?: string }>("/api/intelligence/watchlist", {
+            method: "POST",
+            body: { kind: watchKind, label: watchLabel, keywords: [watchLabel] },
+          });
+          setMessage(res.status === 201 ? `Watching “${watchLabel}”.` : `Refused: ${res.data?.error ?? res.status}`);
+          setWatchLabel("");
+          watchlist.reload();
+        }}
+      >
+        <select data-testid="intel-watch-kind" value={watchKind} onChange={(e) => setWatchKind(e.target.value)}>
+          {["TOPIC", "COMPANY", "SECTOR", "PERSON"].map((k) => (
+            <option key={k} value={k}>
+              {k}
+            </option>
+          ))}
+        </select>
+        <input data-testid="intel-watch-label" value={watchLabel} onChange={(e) => setWatchLabel(e.target.value)} placeholder="What should we watch?" />
+        <button type="submit" className="btn-strong" data-testid="intel-watch-submit">
+          Watch
+        </button>
+      </form>
+      <ul className="card-list" data-testid="intel-watchlist">
+        {(watchlist.data?.watchlist ?? []).map((w) => (
+          <li key={w.id}>
+            {w.label} <span className="badge">{w.kind}</span>{" "}
+            <button
+              type="button"
+              className="link-button"
+              data-testid={`intel-watch-toggle-${w.id}`}
+              onClick={async () => {
+                await api(`/api/intelligence/watchlist/${w.id}/active`, { method: "POST", body: { active: w.active !== 1 } });
+                watchlist.reload();
+              }}
+            >
+              {w.active === 1 ? "Stop watching" : "Resume"}
+            </button>
+          </li>
+        ))}
+        {!watchlist.loading && (watchlist.data?.watchlist ?? []).length === 0 && (
+          <li className="state-empty">Nothing on your watchlist. Watchlist matches are the strongest ranking signal.</li>
+        )}
+      </ul>
+      </details>
+
+      {/* WHAT AN ITEM IS was never stated anywhere, and the page rendered every one of several
+          hundred at full height. The operator's verdict — too long, not understood, overbearing —
+          was all three true at once. It is raw material, so it reads as raw material: folded away,
+          explained, and shown a screenful at a time. */}
+      <details className="card intel-panel" data-testid="intel-items-panel">
+        <summary>
+          Everything gathered <span className="muted small">{(items.data?.items ?? []).length}</span>
+        </summary>
+        <p className="muted small">
+          One headline each, as the sweep found it — before anything was written. Your brief is
+          drawn from the top of this list, so this is where you check what it was working from, or
+          find something it left out. You do not need to read it.
+        </p>
+        <p className="muted small">
+          The score is how closely an item matched what you and the firm follow. Nothing here is
+          deleted when a brief is written; archiving one only takes it out of tomorrow's ranking.
+        </p>
+
+        {items.loading && <p>Loading…</p>}
+        {!items.loading && (items.data?.items ?? []).length === 0 && (
+          <p className="state-empty" data-testid="intel-no-items">
+            Nothing gathered yet. Sweeps run each morning; there is a manual one below.
+          </p>
+        )}
+        <ul className="card-list" data-testid="intel-items">
+          {(items.data?.items ?? []).slice(0, itemLimit).map((i) => (
+            <ItemCard key={i.id} item={i} onChanged={reloadAll} />
+          ))}
+        </ul>
+        {(items.data?.items ?? []).length > itemLimit && (
+          <button
+            type="button"
+            className="link-button"
+            data-testid="intel-items-more"
+            onClick={() => setItemLimit((n) => n + 25)}
+          >
+            Show 25 more — {itemLimit} of {(items.data?.items ?? []).length} shown
+          </button>
+        )}
+      </details>
+
+      <details className="card intel-panel" data-testid="intel-sweep-panel">
+        <summary>Gather now, by hand</summary>
+        <p className="muted small">
+          Sweeps run on their own every morning before your brief is written. This is here for the
+          days you want fresh material immediately — after adding a source, or when something has
+          happened and you do not want to wait for tomorrow.
+        </p>
         <p className="muted small">
           A run acquires from enabled sources, drops duplicates firm-wide, scores against your watchlists, and stores a
           citation for every item kept. Running twice with the same key replays the first run instead of acquiring again.
@@ -313,105 +456,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
             {lastRun.failure_reason ? ` — ${lastRun.failure_reason}` : ""}
           </p>
         )}
-      </section>
-
-      <DailyBriefPanel />
-
-      {/* Sources, watchlist and history are REFERENCE, not the point of the page — they were
-          taking most of the screen above the items you actually came to read. Collapsed by
-          default using native <details> so they stay keyboard-operable and findable. */}
-      <details className="card intel-panel" data-testid="intel-sources-panel">
-        <summary>
-          Sources <span className="muted small">{(sources.data?.sources ?? []).length}</span>
-        </summary>
-        {sources.loading && <p>Loading sources…</p>}
-        <ul className="card-list" data-testid="intel-sources">
-        {(sources.data?.sources ?? []).map((s) => (
-          <li key={s.id} className="card" data-testid={`intel-source-${s.source_key}`}>
-            <p>
-              <strong>{s.name}</strong> <span className="badge">{s.kind}</span>{" "}
-              <span className={statusTone(s.status)} data-testid={`intel-source-status-${s.source_key}`}>
-                {s.status}
-              </span>{" "}
-              {s.enabled ? "" : <span className="badge badge-bad">DISABLED</span>}
-            </p>
-            {s.status_detail && <p className="muted small">{s.status_detail}</p>}
-            {s.last_checked_at && <p className="muted small">last checked {s.last_checked_at}</p>}
-          </li>
-        ))}
-      </ul>
-        {sources.data?.note && <p className="muted small">{sources.data.note}</p>}
       </details>
-
-      <details className="card intel-panel" data-testid="intel-watchlist-panel">
-        <summary>
-          Watchlist <span className="muted small">{(watchlist.data?.watchlist ?? []).length}</span>
-        </summary>
-        <p className="muted small">
-          Anything on this list scores higher when a sweep ranks new items.
-        </p>
-      <form
-        className="form-row"
-        data-testid="intel-watch-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const res = await api<{ error?: string }>("/api/intelligence/watchlist", {
-            method: "POST",
-            body: { kind: watchKind, label: watchLabel, keywords: [watchLabel] },
-          });
-          setMessage(res.status === 201 ? `Watching “${watchLabel}”.` : `Refused: ${res.data?.error ?? res.status}`);
-          setWatchLabel("");
-          watchlist.reload();
-        }}
-      >
-        <select data-testid="intel-watch-kind" value={watchKind} onChange={(e) => setWatchKind(e.target.value)}>
-          {["TOPIC", "COMPANY", "SECTOR", "PERSON"].map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
-        <input data-testid="intel-watch-label" value={watchLabel} onChange={(e) => setWatchLabel(e.target.value)} placeholder="What should we watch?" />
-        <button type="submit" className="btn-strong" data-testid="intel-watch-submit">
-          Watch
-        </button>
-      </form>
-      <ul className="card-list" data-testid="intel-watchlist">
-        {(watchlist.data?.watchlist ?? []).map((w) => (
-          <li key={w.id}>
-            {w.label} <span className="badge">{w.kind}</span>{" "}
-            <button
-              type="button"
-              className="link-button"
-              data-testid={`intel-watch-toggle-${w.id}`}
-              onClick={async () => {
-                await api(`/api/intelligence/watchlist/${w.id}/active`, { method: "POST", body: { active: w.active !== 1 } });
-                watchlist.reload();
-              }}
-            >
-              {w.active === 1 ? "Stop watching" : "Resume"}
-            </button>
-          </li>
-        ))}
-        {!watchlist.loading && (watchlist.data?.watchlist ?? []).length === 0 && (
-          <li className="state-empty">Nothing on your watchlist. Watchlist matches are the strongest ranking signal.</li>
-        )}
-      </ul>
-      </details>
-
-      <h3>Items</h3>
-      {items.loading && <p>Loading items…</p>}
-      {!items.loading && (items.data?.items ?? []).length === 0 && (
-        <p className="state-empty" data-testid="intel-no-items">
-          No active intelligence items. Run the engine above — the internal source reads governed West Peek state and
-          works offline.
-        </p>
-      )}
-      <ul className="card-list" data-testid="intel-items">
-        {(items.data?.items ?? []).map((i) => (
-          <ItemCard key={i.id} item={i} onChanged={reloadAll} />
-        ))}
-      </ul>
 
       <details className="card intel-panel" data-testid="intel-history-panel">
         <summary>Sweep history</summary>

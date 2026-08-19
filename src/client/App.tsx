@@ -423,14 +423,31 @@ function TodayPage({ me }: { me: MeResponse }) {
       )}
       <h3>Pending approvals</h3>
       <p data-testid="pending-approvals-count">{pendingCount} card(s) awaiting human decision.</p>
-      <h3>Recent activity</h3>
-      <ul data-testid="today-activity">
-        {(activity.data?.events ?? []).map((e) => (
-          <li key={e.id}>
-            <code>{e.event_type}</code> {e.object_type}/{e.object_id} — {e.created_at}
-          </li>
-        ))}
-      </ul>
+      {/* FOLDED, because it is the audit spine rather than something to read. It answers "did that
+          actually get recorded" on the rare day somebody asks, and the rest of the time it is a
+          wall of event types and ids between the reader and the bottom of the page. */}
+      <details className="card" data-testid="today-activity-panel">
+        <summary>
+          Recent activity <span className="muted small">{(activity.data?.events ?? []).length}</span>
+        </summary>
+        <p className="muted small">
+          Every governed action this firm took, newest first — the record behind the pages above.
+          Nothing here needs doing; it is here so you can check that something happened.
+        </p>
+        <ul data-testid="today-activity" className="small">
+          {(activity.data?.events ?? []).slice(0, 40).map((e) => (
+            <li key={e.id}>
+              <code>{e.event_type}</code> {e.object_type}/{e.object_id} — {e.created_at}
+            </li>
+          ))}
+          {(activity.data?.events ?? []).length === 0 && (
+            <li className="state-empty">Nothing recorded yet today.</li>
+          )}
+        </ul>
+        {(activity.data?.events ?? []).length > 40 && (
+          <p className="muted small">Showing the 40 most recent of {(activity.data?.events ?? []).length}.</p>
+        )}
+      </details>
     </section>
   );
 }
