@@ -13,9 +13,15 @@ import { CONNECTION_FACTS, FIRM_SENDING_FACTS, SEND_AS_FACTS } from "@shared/hel
  * PER PARTNER, NOT PER FIRM. A mailbox belongs to a person. Scooter connecting his calendar says
  * nothing about Sequoia's, and one firm-level toggle would claim otherwise.
  *
- * IT DISAPPEARS ONCE BOTH ARE CONNECTED. A permanent settings block on the busiest page in the
- * product is clutter the day after it is used; what stays is a quiet line, and only if something
- * has broken.
+ * IT IS ONE LINE UNTIL YOU OPEN IT. Setup is a thing you do once and then never think about, and
+ * this sat at the top of the busiest page in the product taking a full screen — pushing the morning
+ * briefing, which is the entire point of Home, below the fold every single day. The operator's word
+ * for it was intrusive, and a settings block that outranks the product it configures has earned
+ * that. What remains is a status strip: what is on, what is not, and a chevron.
+ *
+ * COLLAPSED STATE IS REMEMBERED, because "collapse this for later" means later, not until the next
+ * page load. Kept in localStorage rather than on the server: it is a per-device display preference
+ * with no consequence, and round-tripping it would be more machinery than the fact deserves.
  *
  * WHEN IT CANNOT WORK, IT SAYS WHY. A Connect button that shrugs is worse than no button — the
  * blocker here is a credential only the operator can create, so the panel names it rather than
@@ -121,14 +127,19 @@ interface SendAsState {
 /**
  * Whose name approved email goes out under.
  *
- * YOUR OWN SWITCH AND NOBODY ELSE'S. There is no control here for the other partner, and the
- * absence is the feature — arranging for mail to be sent in a colleague's name is not something a
- * role should carry, however senior.
+ * A BUTTON, NOT A CHECKBOX. A checkbox reads as a setting you tick on a form and submit later; this
+ * takes effect the moment it is pressed, and it changes what an LP sees at the top of a message.
+ * A control should look like what it does.
  *
- * OFF IS THE SAFE STATE and it looks like it. A message from a named partner reads to an LP as that
- * partner writing to them personally, so the switch says what it will do before it does it.
+ * IT LIVES IN THE EMAIL SECTION, under the greyed-out Connect, because that is where somebody
+ * asking "what can this thing do with my email" is already looking. Floating it above the section
+ * made it read as a third, separate capability rather than the one extra thing email can do.
+ *
+ * YOUR OWN AND NOBODY ELSE'S. There is no control here for the other partner, and the absence is
+ * the feature — arranging for mail to be sent in a colleague's name is not something a role should
+ * carry, however senior.
  */
-function SendAsSwitch(): JSX.Element | null {
+function SendAsButton(): JSX.Element | null {
   const state = useApi<SendAsState>("/api/me/send-as");
   const [busy, setBusy] = useState(false);
   const d = state.data;
@@ -143,25 +154,38 @@ function SendAsSwitch(): JSX.Element | null {
 
   return (
     <div className="send-as" data-testid="send-as">
-      <label className="send-as-row">
-        <input
-          type="checkbox"
-          checked={d.enabled}
-          disabled={busy || !d.eligible}
-          data-testid="send-as-toggle"
-          onChange={(e) => void flip(e.target.checked)}
-        />
-        <span>
-          <strong>Send my approved email as me</strong>
-          <span className="muted small"> — {d.detail}</span>
-        </span>
-      </label>
-      <p className="muted small">{d.note}</p>
+      <div>
+        <strong>Sending under your own name</strong>{" "}
+        {d.enabled && <span className="badge badge-ok">on</span>}
+        <div className="muted small">{d.detail}</div>
+      </div>
+      <button
+        type="button"
+        className={d.enabled ? undefined : "btn-strong"}
+        disabled={busy || !d.eligible}
+        data-testid="send-as-toggle"
+        onClick={() => void flip(!d.enabled)}
+      >
+        {busy ? "…" : d.enabled ? "Stop sending as me" : "Send as me instead"}
+      </button>
     </div>
   );
 }
 
+const FOLD_KEY = "wp.connect-panel.open";
+
+/** Closed unless this device says otherwise. "Collapse for later" has to mean later. */
+function readFold(): boolean {
+  try {
+    return window.localStorage.getItem(FOLD_KEY) === "1";
+  } catch {
+    // Private browsing or a blocked store. Defaulting to closed keeps the promise of the fold.
+    return false;
+  }
+}
+
 export function ConnectPanel({ me }: { me: MeResponse }) {
+  const [open, setOpen] = useState(readFold);
   const state = useApi<{
     sending: Sending;
     connections: Connection[];
@@ -184,32 +208,42 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
     </p>
   ) : null;
 
-  // Everything working: one quiet line rather than a settings block on the busiest page.
-  if (connected.length === d.connections.length && broken.length === 0) {
-    return (
-      <>
-        {sendingLine}
-        <SendAsSwitch />
-        <p className="muted small" data-testid="connect-all-good">
-          Your calendar is connected. <WhatConnectingDoes />
-        </p>
-      </>
-    );
-  }
+  // The one-line version: what is on, what is not. Everything the strip claims is a live fact, so a
+  // partner can decide whether to open it without opening it.
+  const calendarOn = d.connections.some((c) => c.connector_key === "calendar" && c.status === "CONNECTED");
+  const bits: string[] = [];
+  if (d.sending?.live) bits.push(`sending as ${d.sending.from}`);
+  bits.push(calendarOn ? "calendar connected" : "calendar not connected");
+  if (broken.length > 0) bits.push(`${broken.length} needs reconnecting`);
 
   return (
-    <section className="card" data-testid="connect-panel">
+    <details
+      className="card connect-strip"
+      open={open}
+      data-testid="connect-panel"
+      onToggle={(e) => {
+        const next = (e.currentTarget as HTMLDetailsElement).open;
+        setOpen(next);
+        try {
+          window.localStorage.setItem(FOLD_KEY, next ? "1" : "0");
+        } catch {
+          /* a blocked store just means the fold is not remembered; nothing here depends on it */
+        }
+      }}
+    >
+      <summary data-testid="connect-strip-summary">
+        <span className={d.sending?.live ? "badge badge-ok" : "badge badge-gate"}>
+          {d.sending?.live ? "set up" : "setup"}
+        </span>
+        <span className="muted small">{bits.join(" · ")}</span>
+      </summary>
+
       {sendingLine}
-      <SendAsSwitch />
 
       <h3>Connect your own mailbox and calendar</h3>
       <p className="muted small">
-        Separate from the firm sending above. This is about <em>your</em> inbox and{" "}
-        <em>your</em> diary — reading what is in them, and sending as you rather than as the firm.
-      </p>
-      <p className="muted small">
-        {me.fullName.split(" ")[0]}, these are yours alone — {me.email}. Your partner connects
-        theirs separately.
+        Separate from the firm sending above — this is about <em>your</em> diary and{" "}
+        <em>your</em> inbox. Yours alone, {me.email}; your partner connects theirs separately.
       </p>
 
       <WhatConnectingDoes />
@@ -220,6 +254,11 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
             <div>
               <strong>{c.name}</strong>
               {c.status === "CONNECTED" && <span className="badge badge-ok">connected</span>}
+              {/* The firm half of "email" is already on, and saying so here is what stops the
+                  greyed-out Connect beside it reading as a failure. */}
+              {c.connector_key === "email" && d.sending?.live && (
+                <span className="badge badge-ok">firm sending on</span>
+              )}
               {(c.status === "EXPIRED" || c.status === "REVOKED") && <span className="badge badge-gate">needs reconnecting</span>}
               {c.status === "FAILED" && <span className="badge badge-bad">failed</span>}
               <div className="muted small">{c.what_it_unlocks}</div>
@@ -256,6 +295,9 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
                 </button>
               )}
             </div>
+
+            {/* After the greyed Connect, because it is the thing you CAN do with email here. */}
+            {c.connector_key === "email" && <SendAsButton />}
           </li>
         ))}
       </ul>
@@ -268,6 +310,6 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
           </div>
         </div>
       )}
-    </section>
+    </details>
   );
 }

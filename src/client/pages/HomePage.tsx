@@ -406,6 +406,12 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
 
   return (
     <section data-testid="home-page">
+      {/* SETUP SITS ABOVE THE DATE, folded to one line. It was a full screen of settings between
+          the partner and the briefing they came for, every morning — so it now states what is on
+          and what is not, and opens only when asked. Above rather than below because a status strip
+          is a header, not an interruption: read it or ignore it before the day starts. */}
+      <ConnectPanel me={me} />
+
       {/* A delivery has a moment. "This morning" means something; "your dashboard" does not — so
           the page is dated, addressed, and signed by whoever brought it. The hour comes from the
           browser because a Worker runs in UTC and the partner does not. */}
@@ -496,7 +502,6 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           things named almost identically and neither where you would look. */}
       {/* Above the brief, because it is the reason the brief cannot yet see your day. Collapses to
           a single line once both are connected. */}
-      <ConnectPanel me={me} />
 
       <section className="card brief-delivery" data-testid="home-brief-delivery">
         <header className="brief-byline">

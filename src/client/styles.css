@@ -2398,22 +2398,54 @@ hr {
 
 .connect-help li { margin-bottom: 0.25rem; }
 
-/* The send-as switch. A real checkbox rather than a styled div: it is a consequential setting and
-   it should behave exactly like the control every operating system already taught you. */
+
+/* The setup strip. A header, not a card: quiet enough to sit above the date without competing with
+   it, and one line tall until somebody wants the rest. */
+.connect-strip {
+  padding: 0.5rem 0.9rem;
+  margin-bottom: 1rem;
+  background: var(--wp-neutral-tint);
+  border: 1px solid var(--wp-line);
+}
+
+.connect-strip > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.connect-strip > summary::-webkit-details-marker { display: none; }
+
+.connect-strip > summary::after {
+  content: "";
+  width: 0.42rem;
+  height: 0.42rem;
+  border-right: 2px solid var(--wp-muted);
+  border-bottom: 2px solid var(--wp-muted);
+  transform: rotate(45deg);
+  margin-left: auto;
+  transition: transform 120ms ease;
+}
+
+.connect-strip[open] > summary::after { transform: rotate(-135deg); }
+.connect-strip[open] > summary { margin-bottom: 0.9rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .connect-strip > summary::after { transition: none; }
+}
+
+/* Send-as sits inside the email row, so it is indented under it rather than floating beside. */
 .send-as {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  flex-wrap: wrap;
   border: 1px solid var(--wp-line);
   border-radius: 6px;
-  padding: 0.7rem 0.9rem;
-  margin: 0.6rem 0 1rem;
+  padding: 0.6rem 0.8rem;
+  margin: 0.6rem 0 0 0;
   background: var(--wp-surface);
 }
-
-.send-as-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-  cursor: pointer;
-}
-
-.send-as-row input { margin-top: 0.3rem; flex: 0 0 auto; }
-.send-as > p { margin: 0.5rem 0 0; }
