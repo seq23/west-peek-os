@@ -2355,3 +2355,18 @@ hr {
   font-size: 0.95rem;
   font-weight: 600;
 }
+
+/* Team headings in the lounge. Quieter than a page heading — they divide a list, they do not
+   introduce a new subject — but heavy enough to scan down and stop at the right one. */
+.team-head {
+  margin-top: 1.75rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--wp-line);
+}
+
+.team-head h3 {
+  font-size: 1.02rem;
+  margin: 0;
+}
+
+.team-head:first-of-type { margin-top: 0.75rem; }

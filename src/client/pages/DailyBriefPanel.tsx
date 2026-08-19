@@ -381,10 +381,6 @@ export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {})
         rather than estimating.
       </p>
 
-      {/* Editing what the brief covers belongs where the brief is READ, not in a settings page
-          nobody visits. Hidden on Home, where the point is to read today's, not tune tomorrow's. */}
-      {!compact && <InterestsEditor />}
-
       <div className="form-row">
         <button type="button" className="btn-strong" disabled={busy} data-testid="daily-brief-generate" onClick={generate}>
           {busy ? "Reading everything…" : report ? "Rebuild today's brief" : "Build today's brief"}
@@ -458,6 +454,11 @@ export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {})
           Fold it back up
         </button>
       )}
+
+      {/* AT THE FOOT, because the moment you want this is just after reading a brief that missed
+          something. It sat on the Sources page, which is now Admin plumbing and the wrong home for
+          a personal preference about your own daily read. One folded line until you open it. */}
+      <InterestsEditor />
     </section>
   );
 }

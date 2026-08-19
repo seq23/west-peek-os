@@ -458,6 +458,7 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
   const [department, setDepartment] = useState<string>("ALL");
   const [selected, setSelected] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "NOT_ACTIVE">("ALL");
+  const [query, setQuery] = useState("");
   /** Refusals from the on/off toggle. Only ever set on failure — a working toggle speaks by
       changing the button, not by announcing itself. */
   const [message, setMessage] = useState<string | null>(null);
@@ -475,24 +476,46 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
   if (lounge.loading && !lounge.data) return <p data-testid="lounge-loading">Loading the workforce…</p>;
   if (!lounge.data) return <p data-testid="lounge-error">Could not load the workforce (HTTP {lounge.status ?? "?"}).</p>;
 
-  const byDepartment =
-    department === "ALL" ? lounge.data.employees : lounge.data.employees.filter((e) => e.department === department);
-  const shown = byDepartment
-    .filter((e) =>
-      statusFilter === "ALL"
-        ? true
-        : statusFilter === "ACTIVE"
-          ? e.status === "ACTIVE"
-          : e.status !== "ACTIVE",
-    )
-    // Active first: who is working is the question this page is opened to answer.
-    .slice()
-    .sort((a, b) => {
-      if (a.status === "ACTIVE" && b.status !== "ACTIVE") return -1;
-      if (b.status === "ACTIVE" && a.status !== "ACTIVE") return 1;
-      return a.name.localeCompare(b.name);
-    });
-  const activeCount = byDepartment.filter((e) => e.status === "ACTIVE").length;
+  // RETIRED EMPLOYEES ARE NOT THE WORKFORCE. Fourteen of the thirty-one people on this page had
+  // been retired in a roster cull, and they were rendered exactly like everyone else — so almost
+  // half of what you scrolled past was a list of people who do not work here. Retirement is kept
+  // in the record, and the record is not this page.
+  const roster = lounge.data.employees.filter((e) => e.status !== "RETIRED");
+  const retiredCount = lounge.data.employees.length - roster.length;
+
+  const q = query.trim().toLowerCase();
+  const matches = (e: LoungeEmployee) =>
+    q.length === 0 ||
+    e.name.toLowerCase().includes(q) ||
+    e.role.toLowerCase().includes(q) ||
+    e.department.toLowerCase().includes(q);
+
+  const visible = roster
+    .filter((e) => (department === "ALL" ? true : e.department === department))
+    .filter((e) => (statusFilter === "ALL" ? true : statusFilter === "ACTIVE" ? e.status === "ACTIVE" : e.status !== "ACTIVE"))
+    .filter(matches);
+
+  // GROUPED BY TEAM, because "who handles LP questions" is the question people actually arrive
+  // with, and a flat alphabetical grid of seventeen strangers cannot answer it. Within a team,
+  // whoever is working comes first.
+  const teams = new Map<string, LoungeEmployee[]>();
+  for (const e of visible) {
+    const list = teams.get(e.department) ?? [];
+    list.push(e);
+    teams.set(e.department, list);
+  }
+  const grouped = [...teams.entries()]
+    .map(([team, list]) => [
+      team,
+      list.slice().sort((a, b) => {
+        if (a.status === "ACTIVE" && b.status !== "ACTIVE") return -1;
+        if (b.status === "ACTIVE" && a.status !== "ACTIVE") return 1;
+        return a.name.localeCompare(b.name);
+      }),
+    ] as const)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  const activeCount = roster.filter((e) => e.status === "ACTIVE").length;
 
   return (
     <section data-testid="employees-page">
@@ -523,20 +546,37 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as "ALL" | "ACTIVE" | "NOT_ACTIVE")}
           >
-            <option value="ALL">Everyone ({byDepartment.length})</option>
-            <option value="ACTIVE">Active only ({activeCount})</option>
-            <option value="NOT_ACTIVE">Not active ({byDepartment.length - activeCount})</option>
+            <option value="ALL">Everyone ({roster.length})</option>
+            <option value="ACTIVE">Working now ({activeCount})</option>
+            <option value="NOT_ACTIVE">Not working ({roster.length - activeCount})</option>
           </select>
+        </label>
+        <label style={{ flexGrow: 1 }}>
+          Find{" "}
+          <input
+            data-testid="lounge-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="a name, a role, or what you need doing"
+          />
         </label>
       </div>
 
       <p className="muted small" data-testid="lounge-status-summary">
-        <strong>{activeCount} active</strong> · {byDepartment.length - activeCount} not active
-        {statusFilter !== "ALL" && " · filtered"} · active shown first
+        <strong>{activeCount} working</strong> · {roster.length - activeCount} employed but not on ·{" "}
+        {visible.length} shown
       </p>
 
+      {grouped.map(([team, members]) => (
+      <div key={team} data-testid={`lounge-team-${team}`}>
+      <div className="home-section-head team-head">
+        <h3>{team}</h3>
+        <span className="muted small">
+          {members.filter((m) => m.status === "ACTIVE").length} of {members.length} working
+        </span>
+      </div>
       <div className="module-grid" data-testid="lounge-grid">
-        {shown.map((e) => (
+        {members.map((e) => (
           <section
             key={e.id}
             className={
@@ -641,7 +681,40 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
           </section>
         ))}
       </div>
-      {shown.length === 0 && <p className="state-empty">No employees in this department.</p>}
+      </div>
+      ))}
+      {visible.length === 0 && (
+        <p className="state-empty" data-testid="lounge-none">
+          {query.trim()
+            ? `Nobody matches “${query.trim()}”. Try a role — “LP”, “events”, “diligence”.`
+            : "Nobody matches those filters."}
+        </p>
+      )}
+
+      {/* Kept, folded, and named for what it is. Retirement is part of the record — a seat that
+          existed and then did not — but it is not the workforce, and it was taking up half this
+          page. */}
+      {retiredCount > 0 && (
+        <details className="card" data-testid="lounge-retired">
+          <summary>
+            Former employees <span className="muted small">{retiredCount}</span>
+          </summary>
+          <p className="muted small">
+            Seats that were merged away when the roster was cut. Kept because what the firm used to
+            look like is part of the record, and shown here so they are findable without being in
+            the way.
+          </p>
+          <ul className="card-list small">
+            {lounge.data.employees
+              .filter((e) => e.status === "RETIRED")
+              .map((e) => (
+                <li key={e.id}>
+                  <strong>{e.name}</strong> — {e.role}
+                </li>
+              ))}
+          </ul>
+        </details>
+      )}
 
       {selected && (
         <div id="employee-detail-anchor" ref={detailRef} tabIndex={-1} data-testid="employee-detail-anchor">

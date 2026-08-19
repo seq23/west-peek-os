@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
-import { DailyBriefPanel } from "./DailyBriefPanel";
 
 /**
  * Daily Intelligence surface (P14, GAP-05).
@@ -189,21 +188,15 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="intelligence-page">
-      {/* THE BRIEF COMES FIRST NOW. This page used to open with a sweep form and two reference
-          panels, so the thing a partner actually comes here to do — read the whole briefing, and
-          say what it should cover — was below three blocks of machinery. Everything that gathers,
-          scores and stores is real and stays; it is just no longer the first thing you meet. */}
+      {/* THE BRIEF IS NOT HERE ANY MORE. It was a second, always-expanded copy of what Home
+          already carries in full — Home shows the one-minute version and expands the whole report
+          in place — so this page was holding a duplicate of the read while calling itself Sources.
+          What is left is genuinely setup: where material comes from, and what was done with it.
+          That is why it now lives under Admin. */}
       <p className="muted small">
-        Your full briefing, and everything behind it. The short version lands on Home each morning;
-        this is where you read all of it and decide what it should cover.
+        Where your briefing gets its material. Nothing here is something to read — the brief itself
+        is on Home, and this is the plumbing behind it.
       </p>
-
-      <DailyBriefPanel />
-
-      <div className="home-section-head behind-the-brief">
-        <h3>Behind the brief</h3>
-        <span className="muted small">where the material comes from, and what was done with it</span>
-      </div>
 
 
       {/* Sources, watchlist and history are REFERENCE, not the point of the page — they were

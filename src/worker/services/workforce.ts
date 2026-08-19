@@ -158,7 +158,7 @@ export async function listLounge(env: Env): Promise<{ employees: LoungeEmployee[
     };
   });
 
-  const departments = [...new Set(out.map((e) => e.department))].sort();
+  const departments = [...new Set(out.filter((e) => e.status !== "RETIRED").map((e) => e.department))].sort();
   return {
     employees: out,
     departments,

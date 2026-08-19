@@ -263,7 +263,9 @@ const NAV_GROUPS = [
     // Looking something up, or being taught it.
     group: "Learn",
     items: [
-      { key: "intelligence", label: "Sources" },
+      // Sources moved to Admin as "Sources & sweeps". Once the brief itself came off that page it
+      // was feeds, a watchlist, raw gathered items and sweep history — setup, not something you
+      // read, and Learn is for looking things up.
       // Market mapping had its own tab and almost nothing on it, which reads as abandoned rather
       // than unused. It is the same activity as Research — finding out what is true about a market
       // — and now renders there. The route stays live so old links still resolve.
@@ -278,6 +280,7 @@ const NAV_GROUPS = [
     items: [
       { key: "ai-ops", label: "Cockpit" },
       { key: "ai", label: "AI" },
+      { key: "intelligence", label: "Sources & sweeps" },
       // "Go and look" moved to Work. Admin is where you configure the system; sending an employee
       // to read a live page is work that produces something you act on. The route stays live.
       { key: "machines", label: "Machines" },

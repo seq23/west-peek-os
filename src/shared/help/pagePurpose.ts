@@ -125,8 +125,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Assemble a reporting packet", "Send it for review", "See what was distributed and when"],
   },
   intelligence: {
-    purpose: "Where the firm's intelligence comes from. A sweep checks your sources, drops duplicates and ranks what is left.",
-    youCan: ["Run a sweep", "Add something you found yourself", "Choose what to watch", "Read the day's brief in full"],
+    purpose: "Where your briefing gets its material. A sweep checks every source, drops duplicates and ranks what is left against what you follow. Setup, not reading — the brief itself is on Home.",
+    youCan: ["See which sources are working", "Add a source", "Choose what to watch", "Check what a brief was written from"],
   },
   research: {
     purpose: "Get up to speed on a market, a company or a question — synthesised into something you can read and take with you.",
