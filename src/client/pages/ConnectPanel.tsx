@@ -1,4 +1,4 @@
-import { useApi, type MeResponse } from "../lib/api";
+import { api, useApi, type MeResponse } from "../lib/api";
 
 /**
  * Connect your mailbox and your calendar.
@@ -99,19 +99,36 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
               {c.account_label && <div className="muted small">{c.account_label}</div>}
               {c.last_error && <div className="muted small">{c.last_error}</div>}
             </div>
-            <button
-              type="button"
-              className={c.connectable ? "btn-strong" : undefined}
-              disabled={!c.connectable}
-              data-testid={`connect-${c.connector_key}-button`}
-              onClick={() => {
-                // The OAuth round trip leaves and comes back; the worker owns the redirect so the
-                // client never handles a token.
-                window.location.href = `/api/connect/${c.connector_key}/start`;
-              }}
-            >
-              {c.status === "CONNECTED" ? "Reconnect" : "Connect"}
-            </button>
+            <div className="form-row">
+              <button
+                type="button"
+                className={c.connectable ? "btn-strong" : undefined}
+                disabled={!c.connectable}
+                data-testid={`connect-${c.connector_key}-button`}
+                onClick={() => {
+                  // The OAuth round trip leaves and comes back; the worker owns the redirect so the
+                  // client never handles a token.
+                  window.location.href = `/api/connect/${c.connector_key}/start`;
+                }}
+              >
+                {c.status === "CONNECTED" ? "Reconnect" : "Connect"}
+              </button>
+              {/* Disconnect revokes at Google as well as forgetting locally. Forgetting without
+                  revoking leaves a live grant in your Google account that the OS can no longer
+                  withdraw — the opposite of what pressing this is asking for. */}
+              {c.status === "CONNECTED" && (
+                <button
+                  type="button"
+                  data-testid={`disconnect-${c.connector_key}`}
+                  onClick={async () => {
+                    await api("/api/connections/google/disconnect", { method: "POST", body: {} });
+                    state.reload();
+                  }}
+                >
+                  Disconnect
+                </button>
+              )}
+            </div>
           </li>
         ))}
       </ul>

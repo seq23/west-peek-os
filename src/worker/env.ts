@@ -31,6 +31,12 @@ export interface Env {
   /** Verified sender address. Without it a send is refused rather than guessed. */
   WP_OS_EMAIL_FROM?: string;
 
+  // ── Google OAuth (P51) ──
+  // One client for the whole firm; each partner still grants access to their own account. Scopes
+  // are read-only, so nothing this system holds can alter anybody's calendar.
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  GOOGLE_OAUTH_CLIENT_SECRET?: string;
+
   // ── Network OS live pull (P35) ──
   // All three are required. Network OS authenticates a `wpn_session` cookie signed with its own
   // APP_SESSION_SECRET, and only accepts emails on its approved-users list.

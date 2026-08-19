@@ -55,6 +55,12 @@ import {
   handleAddApprovalEvidence,
   handleApprovalContext,
 } from "./services/approvals";
+import {
+  handleGoogleCallback,
+  handleGoogleConnectStart,
+  handleGoogleDisconnect,
+  handleTodaysCalendar,
+} from "./services/googleConnect";
 import { handleListActivity } from "./services/activity";
 import { handleCreateGovernanceUpdate, handleListGovernanceUpdates } from "./services/governance";
 import { handleApprovalVolume } from "./services/diagnostics";
@@ -503,6 +509,13 @@ const router = new Router()
   .get("/api/companies/resolve", handleResolveCompany)
   .get("/api/companies/register", handleCompanyRegister)
   .get("/api/me/connections", handlePartnerConnections)
+  // P51 — connecting a partner's own Google account. The start route redirects the browser out to
+  // Google and the callback comes back through Access, so the client never handles a token.
+  .get("/api/connect/calendar/start", handleGoogleConnectStart)
+  .get("/api/connect/email/start", handleGoogleConnectStart)
+  .get("/api/connections/google/callback", handleGoogleCallback)
+  .post("/api/connections/google/disconnect", handleGoogleDisconnect)
+  .get("/api/me/calendar/today", handleTodaysCalendar)
   .get("/api/companies/:id", handleGetCompany)
   .patch("/api/companies/:id", handleUpdateCompany)
   .post("/api/companies/:id/aliases", handleAddAlias)
