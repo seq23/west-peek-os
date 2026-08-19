@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
-import { CONNECTION_FACTS, FIRM_SENDING_FACTS } from "@shared/help/connectionFacts";
+import { CONNECTION_FACTS, FIRM_SENDING_FACTS, SEND_AS_FACTS } from "@shared/help/connectionFacts";
 
 /**
  * Connect your mailbox and your calendar.
@@ -70,6 +71,15 @@ function WhatConnectingDoes(): JSX.Element {
         <ul className="small">{FIRM_SENDING_FACTS.cannot.map((x) => <li key={x}>{x}</li>)}</ul>
       </section>
 
+      <section className="connect-fact" data-testid="connect-help-send-as">
+        <h4>{SEND_AS_FACTS.title}</h4>
+        <p className="small">{SEND_AS_FACTS.summary}</p>
+        <p className="muted small"><strong>It cannot</strong></p>
+        <ul className="small">{SEND_AS_FACTS.cannot.map((x) => <li key={x}>{x}</li>)}</ul>
+        <p className="muted small"><strong>It can</strong></p>
+        <ul className="small">{SEND_AS_FACTS.can.map((x) => <li key={x}>{x}</li>)}</ul>
+      </section>
+
       {CONNECTION_FACTS.map((f) => (
         <section key={f.key} className="connect-fact" data-testid={`connect-help-${f.key}`}>
           <h4>{f.title}</h4>
@@ -95,6 +105,59 @@ function WhatConnectingDoes(): JSX.Element {
         <strong>Help → Connecting your email and calendar</strong>.
       </p>
     </details>
+  );
+}
+
+
+interface SendAsState {
+  enabled: boolean;
+  from_address: string;
+  eligible: boolean;
+  firm_address: string | null;
+  detail: string;
+  note: string;
+}
+
+/**
+ * Whose name approved email goes out under.
+ *
+ * YOUR OWN SWITCH AND NOBODY ELSE'S. There is no control here for the other partner, and the
+ * absence is the feature — arranging for mail to be sent in a colleague's name is not something a
+ * role should carry, however senior.
+ *
+ * OFF IS THE SAFE STATE and it looks like it. A message from a named partner reads to an LP as that
+ * partner writing to them personally, so the switch says what it will do before it does it.
+ */
+function SendAsSwitch(): JSX.Element | null {
+  const state = useApi<SendAsState>("/api/me/send-as");
+  const [busy, setBusy] = useState(false);
+  const d = state.data;
+  if (!d) return null;
+
+  async function flip(next: boolean) {
+    setBusy(true);
+    await api("/api/me/send-as", { method: "POST", body: { enabled: next } });
+    setBusy(false);
+    state.reload();
+  }
+
+  return (
+    <div className="send-as" data-testid="send-as">
+      <label className="send-as-row">
+        <input
+          type="checkbox"
+          checked={d.enabled}
+          disabled={busy || !d.eligible}
+          data-testid="send-as-toggle"
+          onChange={(e) => void flip(e.target.checked)}
+        />
+        <span>
+          <strong>Send my approved email as me</strong>
+          <span className="muted small"> — {d.detail}</span>
+        </span>
+      </label>
+      <p className="muted small">{d.note}</p>
+    </div>
   );
 }
 
@@ -126,6 +189,7 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
     return (
       <>
         {sendingLine}
+        <SendAsSwitch />
         <p className="muted small" data-testid="connect-all-good">
           Your calendar is connected. <WhatConnectingDoes />
         </p>
@@ -136,6 +200,8 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
   return (
     <section className="card" data-testid="connect-panel">
       {sendingLine}
+      <SendAsSwitch />
+
       <h3>Connect your own mailbox and calendar</h3>
       <p className="muted small">
         Separate from the firm sending above. This is about <em>your</em> inbox and{" "}

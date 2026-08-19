@@ -61,6 +61,7 @@ import {
   handleGoogleDisconnect,
   handleTodaysCalendar,
 } from "./services/googleConnect";
+import { handleGetSendAs, handleSetSendAs } from "./services/sendAs";
 import { handleListActivity } from "./services/activity";
 import { handleCreateGovernanceUpdate, handleListGovernanceUpdates } from "./services/governance";
 import { handleApprovalVolume } from "./services/diagnostics";
@@ -509,6 +510,10 @@ const router = new Router()
   .get("/api/companies/resolve", handleResolveCompany)
   .get("/api/companies/register", handleCompanyRegister)
   .get("/api/me/connections", handlePartnerConnections)
+  // Whose name approved email goes out under. Self-service only — the handler refuses to let one
+  // partner arrange for mail to be sent in the other's name.
+  .get("/api/me/send-as", handleGetSendAs)
+  .post("/api/me/send-as", handleSetSendAs)
   // P51 — connecting a partner's own Google account. The start route redirects the browser out to
   // Google and the callback comes back through Access, so the client never handles a token.
   .get("/api/connect/calendar/start", handleGoogleConnectStart)

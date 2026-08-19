@@ -6,6 +6,7 @@ import {
   sendViaCloudflare,
 } from "../src/worker/effects/cloudflareEmailClient";
 import type { Env } from "../src/worker/env";
+import { canSendAs, verifiedDomain } from "../src/worker/services/sendAs";
 
 /**
  * Cloudflare Email Sending transport (P33).
@@ -156,5 +157,35 @@ describe("choosing a transport", () => {
     // The upgrade path: uncomment the binding and it takes over. Nothing else to remember.
     const withBinding = { ...resendOnly, EMAIL: fakeBinding().binding } as unknown as Env;
     expect(isCloudflareEmailEnabled(withBinding)).toBe(true);
+  });
+});
+
+/**
+ * Sending as a partner rather than as the firm.
+ *
+ * The risk here is not technical — any address on a verified domain is a legal From. It is that the
+ * system speaks in a named person's voice to people who trust that person. So the tests are about
+ * the conditions under which it refuses to.
+ */
+describe("who a message goes out as", () => {
+  const base = { WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as unknown as Env;
+
+  it("only allows addresses on the firm's verified domain", () => {
+    // A partner on another domain would produce mail that fails DMARC and vanishes into spam —
+    // which reads as "the system did not send it" rather than as a misconfiguration.
+    expect(canSendAs(base, "scooter@westpeek.ventures")).toBe(true);
+    expect(canSendAs(base, "scooter@gmail.com")).toBe(false);
+    expect(canSendAs(base, "scooter@westpeek.ventures.evil.test")).toBe(false);
+    expect(canSendAs(base, null)).toBe(false);
+  });
+
+  it("reads the verified domain from the firm address rather than a second setting", () => {
+    expect(verifiedDomain(base)).toBe("westpeek.ventures");
+    expect(verifiedDomain({} as unknown as Env)).toBeNull();
+  });
+
+  it("treats a malformed address as not sendable", () => {
+    expect(canSendAs(base, "westpeek.ventures")).toBe(false);
+    expect(canSendAs(base, "@westpeek.ventures")).toBe(false);
   });
 });

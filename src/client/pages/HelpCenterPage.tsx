@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CONNECTION_FACTS, FIRM_SENDING_FACTS } from "@shared/help/connectionFacts";
+import { CONNECTION_FACTS, FIRM_SENDING_FACTS, SEND_AS_FACTS } from "@shared/help/connectionFacts";
 import { AI_EMPLOYEE_ROSTER, MAX_ACTIVE_AI_EMPLOYEES_DOC } from "../lib/helpFacts";
 
 /**
@@ -89,6 +89,13 @@ const TOPICS: Topic[] = [
         <ul>{FIRM_SENDING_FACTS.can.map((x) => <li key={x}>{x}</li>)}</ul>
         <p><strong>It cannot</strong></p>
         <ul>{FIRM_SENDING_FACTS.cannot.map((x) => <li key={x}>{x}</li>)}</ul>
+
+        <h4>{SEND_AS_FACTS.title}</h4>
+        <p>{SEND_AS_FACTS.summary}</p>
+        <p><strong>It cannot</strong></p>
+        <ul>{SEND_AS_FACTS.cannot.map((x) => <li key={x}>{x}</li>)}</ul>
+        <p><strong>It can</strong></p>
+        <ul>{SEND_AS_FACTS.can.map((x) => <li key={x}>{x}</li>)}</ul>
 
         {CONNECTION_FACTS.map((f) => (
           <section key={f.key}>

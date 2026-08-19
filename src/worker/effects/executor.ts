@@ -3,6 +3,7 @@ import { appendEvent } from "../events";
 import { EFFECT_TYPE_ACTION_KEYS } from "../../shared/registry/actionTypes";
 import { authorize, type Actor } from "../services/authorize";
 import { consumeApprovalCard } from "../services/approvals";
+import { fromAddressFor } from "../services/sendAs";
 import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
 import {
   cloudflareEmailBlockedReason,
@@ -117,10 +118,18 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
   const cloudflareReady = isCloudflareEmailEnabled(env);
   if (request.effect_type === "email.send" && (cloudflareReady || isEmailSendEnabled(env))) {
     const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string };
+    // WHOSE NAME IS ON IT. A partner who has turned on "send as me" has their approved messages go
+    // out under their own address instead of the firm's; everyone else, and every unattributed
+    // request, stays as the firm. Resolved from the person who REQUESTED the effect rather than
+    // whoever executed it — the request is the authorship, and the approval is a separate act.
+    const requestedBy = request.requested_by_type === "HUMAN" ? request.requested_by_id : null;
+    const from = (await fromAddressFor(env, requestedBy)) ?? undefined;
+
     const message = {
       to: request.destination,
       subject: payload.subject ?? "(no subject)",
       text: payload.text ?? payload.body ?? "",
+      from,
     };
     const result = cloudflareReady
       ? await sendViaCloudflare(env, message)

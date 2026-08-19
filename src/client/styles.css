@@ -2397,3 +2397,23 @@ hr {
 }
 
 .connect-help li { margin-bottom: 0.25rem; }
+
+/* The send-as switch. A real checkbox rather than a styled div: it is a consequential setting and
+   it should behave exactly like the control every operating system already taught you. */
+.send-as {
+  border: 1px solid var(--wp-line);
+  border-radius: 6px;
+  padding: 0.7rem 0.9rem;
+  margin: 0.6rem 0 1rem;
+  background: var(--wp-surface);
+}
+
+.send-as-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+
+.send-as-row input { margin-top: 0.3rem; flex: 0 0 auto; }
+.send-as > p { margin: 0.5rem 0 0; }

@@ -65,7 +65,8 @@ export const CONNECTION_FACTS: readonly ConnectionFacts[] = [
     ],
     cannot: [
       "Read your inbox, search it, or draft replies from it.",
-      "Send as you personally. Anything the firm sends goes out as the firm, from os@westpeek.ventures.",
+      "Send anything through your Gmail, or put a sent message in your Gmail Sent folder.",
+      "Be needed in order to send under your own name — that is a switch above, and it needs no mailbox access at all.",
     ],
     enforcedBy:
       "No mailbox permission is requested from Google, and no code exists that would read one.",
@@ -93,7 +94,28 @@ export const FIRM_SENDING_FACTS = {
   ],
   cannot: [
     "Send anything without a human approving that specific message first.",
-    "Send as you, or from your address.",
-    "Read any reply. Replies go to the mailbox, and the mailbox is not connected.",
+    "Read any reply. Replies come back to your normal inbox, which this system cannot see.",
+  ],
+} as const;
+
+/**
+ * Sending under a partner's own name.
+ *
+ * Kept beside the firm facts because it is the same capability wearing a different From, and
+ * separating them further would invite the belief that this one involves a mailbox. It does not.
+ */
+export const SEND_AS_FACTS = {
+  title: "Sending under your own name",
+  summary:
+    "Each partner can choose to have their approved messages go out as themselves rather than as the firm. It is off until you turn it on, and you can only turn on your own.",
+  can: [
+    "Send an approved message from your own firm address, so an LP sees it from you rather than from a shared account.",
+    "Be switched on and off whenever you like, with who changed it and when on the record.",
+  ],
+  cannot: [
+    "Be turned on for you by anybody else, including the other Managing Partner.",
+    "Skip approval. You still approve each message, exactly as before — this only decides whose name is on it.",
+    "Put the message in your Gmail Sent folder, because it does not travel through Gmail.",
+    "Work from an address outside the firm's verified domain, which would fail authentication and land in spam.",
   ],
 } as const;

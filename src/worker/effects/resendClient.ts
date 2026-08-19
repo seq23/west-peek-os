@@ -105,7 +105,9 @@ export async function sendViaResend(
       sent: true,
       provider: "resend",
       provider_message_id: messageId,
-      detail: `Delivered to ${payload.to} via Resend`,
+      // The FROM is on the receipt deliberately. Once a partner can send under their own name, the
+      // question an audit asks is not only whether a message went out but whose name was on it.
+      detail: `Delivered to ${payload.to} as ${from} via Resend`,
     };
   } finally {
     clearTimeout(timer);
