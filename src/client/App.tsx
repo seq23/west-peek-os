@@ -30,6 +30,7 @@ import { CockpitPage } from "./pages/CockpitPage";
 import { ThesisPage } from "./pages/ThesisPage";
 import { ModelingPage } from "./pages/ModelingPage";
 import { DealflowPage } from "./pages/DealflowPage";
+import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
@@ -3889,7 +3890,17 @@ export function App() {
               </details>
             </>
           )}
-          {authed && active === "meetings" && <MeetingsPage me={me.data!} />}
+          {authed && active === "meetings" && (
+            <>
+              <MeetingsSurface me={me.data!} onNavigate={setActive} />
+              {/* The older meeting record keeps prep packets, notes, debriefs and close-out —
+                  real machinery that belongs to one meeting rather than to the list. */}
+              <details className="card" data-testid="meeting-records">
+                <summary>Meeting records and close-out</summary>
+                <MeetingsPage me={me.data!} />
+              </details>
+            </>
+          )}
           {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
           {authed && active === "cockpit" && <CockpitPage me={me.data!} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}

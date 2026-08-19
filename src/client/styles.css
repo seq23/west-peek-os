@@ -1887,3 +1887,7 @@ hr {
   .spine-track { flex-wrap: wrap; gap: var(--space-lg); }
   .spine-stage { flex-basis: 30%; }
 }
+
+/* Seating: suggestions read first without shouting. */
+.seat-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-lg); }
+.seat-suggested { background: var(--wp-tint); border-left: 2px solid var(--wp-orange); padding-left: var(--space-sm); }
