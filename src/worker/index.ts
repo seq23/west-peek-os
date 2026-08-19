@@ -120,7 +120,7 @@ import {
 } from "./services/icPortal";
 import { handleEvidenceLedger, handleListDecisions, handleWorkQueues } from "./services/ledgers";
 import { handleCompanyIntelligence, handleFollowOnCentre, handleSecondaries } from "./services/companyIntel";
-import { handleAddReviewItem, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
+import { handleAddReviewItem, handleRefileReviewItem, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
 import { handleIngestTranscript } from "./services/captureAdapter";
 import { handleGenerateDailyReport, handleGetDailyReport, handleGetInterests, handleSetInterests } from "./services/dailyIntelligence";
 import { handleBuildPacket, handleExportPacket } from "./services/researchPacket";
@@ -790,6 +790,7 @@ const router = new Router()
   .post("/api/weekly-review/generate", handleGenerateWeeklyReview)
   // The capture box: put something on the agenda that no record knows about.
   .post("/api/weekly-review/items", handleAddReviewItem)
+  .post("/api/weekly-review/items/:id/heading", handleRefileReviewItem)
   .post("/api/weekly-review/items/:id/exit", handleSetItemExit)
   .get("/api/cross-office", handleListCrossOfficeConflicts)
   .post("/api/cross-office/detect", handleCrossOfficeDetect)

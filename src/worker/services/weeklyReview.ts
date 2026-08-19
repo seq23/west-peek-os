@@ -524,3 +524,39 @@ export async function handleAddReviewItem(ctx: RouteContext): Promise<Response> 
   const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM weekly_review_item WHERE id = ?1").bind(id).first();
   return json({ item: row, guessed: !parsed.data.heading }, { status: 201 });
 }
+
+const refileSchema = z.object({ heading: z.string().trim().min(2).max(60) });
+
+/**
+ * POST /api/weekly-review/items/:id/heading — move an item to a different heading.
+ *
+ * Exists because the capture box GUESSES. A guess is only acceptable when being wrong is cheap, and
+ * "cheap" has to mean one control on the item itself — not retyping it, and not a settings page.
+ */
+export async function handleRefileReviewItem(ctx: RouteContext): Promise<Response> {
+  const itemId = ctx.params.id;
+  const parsed = refileSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!itemId || !parsed.success) return json({ error: "invalid_input" }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "weekly_review.manage", {
+    objectType: "weekly_review_item",
+    objectId: itemId,
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  // A heading the canon does not define would render nowhere and be invisible rather than moved.
+  if (!REVIEW_HEADINGS.some((h) => h.key === parsed.data.heading)) {
+    return json({ error: "unknown_heading", detail: parsed.data.heading }, { status: 400 });
+  }
+
+  await ctx.env.WP_OS_DB.prepare(
+    "UPDATE weekly_review_item SET heading = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+  )
+    .bind(itemId, parsed.data.heading)
+    .run();
+
+  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM weekly_review_item WHERE id = ?1").bind(itemId).first();
+  if (!row) return json({ error: "not_found" }, { status: 404 });
+  return json(row);
+}
