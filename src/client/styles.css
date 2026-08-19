@@ -2092,3 +2092,17 @@ hr {
 .delivery-who { font-size: var(--text-base); }
 .delivery-headline { font-size: var(--text-base); margin-top: var(--space-3xs); }
 .delivery .module-items { margin: var(--space-2xs) 0 0; padding-left: var(--space-lg); font-size: var(--text-sm); }
+
+/* Untrusted text off a live page: monospaced and boxed, so it never reads as the product speaking. */
+.browser-result {
+  background: var(--wp-surface-2);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-md);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-normal);
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 22rem;
+}

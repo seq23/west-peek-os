@@ -33,6 +33,7 @@ import { DealflowPage } from "./pages/DealflowPage";
 import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
 import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
 import { FundAllocation, Composition } from "./pages/FundAllocation";
+import { BrowserTasksPage } from "./pages/BrowserTasksPage";
 import { GOVERNANCE_UPDATE_TYPES, RECOMMENDED_GOVERNANCE, governanceType } from "@shared/governance/updateTypes";
 import { useSelectedFund } from "./lib/selectedFund";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
@@ -272,6 +273,7 @@ const NAV_GROUPS = [
     items: [
       { key: "ai-ops", label: "Cockpit" },
       { key: "ai", label: "AI" },
+      { key: "browser-tasks", label: "Go and look" },
       { key: "machines", label: "Machines" },
       { key: "governance", label: "Governance" },
       { key: "contradictions", label: "Contradictions" },
@@ -3955,6 +3957,7 @@ export function App() {
           {authed && active === "secondaries" && <SecondariesPage />}
           {authed && active === "university" && <UniversityPage />}
           {authed && active === "market-map" && <MarketMapPage />}
+          {authed && active === "browser-tasks" && <BrowserTasksPage me={me.data!} />}
           {authed && active === "machines" && <MachinesPage me={me.data!} />}
           {authed && active === "jobs" && <JobsPage me={me.data!} />}
           {authed && active === "notifications" && <NotificationsPage me={me.data!} />}

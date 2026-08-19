@@ -168,6 +168,10 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "Every AI run the firm has made, and the governance around it.",
     youCan: ["Inspect a run and its cost", "See why a run was refused", "Accept or reject quarantined output"],
   },
+  "browser-tasks": {
+    purpose: "Ask an employee to go and read a page for you. Every task is approved by a human before it runs, because this is the one thing here that reaches out and touches the live web on the firm's behalf.",
+    youCan: ["Ask for something small and checkable", "Approve a task before it runs", "Read what it found, fenced as untrusted"],
+  },
   machines: {
     purpose: "The firm's departments, and what each is responsible for.",
     youCan: ["See what a machine owns", "Check whether it is running"],

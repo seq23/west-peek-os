@@ -53,6 +53,24 @@ export function browserBlockedReason(env: Env): string | null {
  * `launch` is injected so tests drive the whole path — guard, extraction, fencing, cleanup —
  * without a real browser, the same pattern feedClient and the Network OS client use.
  */
+/** A browser that never starts must not hold a request open until the platform kills it. */
+const LAUNCH_TIMEOUT_MS = 20_000;
+
+/** Reject with a readable reason rather than hanging, and never leave the timer running. */
+async function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} within ${Math.round(ms / 1000)}s`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function browsePage(
   env: Env,
   startUrl: string,
@@ -77,13 +95,34 @@ export async function browsePage(
     return { ok: false, text: null, finalUrl: null, title: null, detail: `${url.hostname} is an internal address and is never reachable.` };
   }
 
+  // Fail fast when there is no browser to launch.
+  //
+  // Found by running a task in local dev, where the binding does not exist: puppeteer.launch()
+  // against an undefined binding does not throw, it HANGS — the request sat for six minutes before
+  // it was killed. In production the binding is there, so this would only bite if Browser Rendering
+  // were removed from the account or the binding dropped from a config; both are exactly the sort
+  // of change nobody connects to "tasks stopped finishing" a week later.
+  const binding = (env as unknown as { BROWSER?: unknown }).BROWSER;
+  if (!launch && !binding) {
+    return {
+      ok: false,
+      text: null,
+      finalUrl: null,
+      title: null,
+      detail: "No browser is available in this environment — the BROWSER binding is not configured.",
+    };
+  }
+
   let browser: BrowserLike | null = null;
   try {
     const doLaunch = launch ?? (async (b: unknown) => {
       const puppeteer = await import("@cloudflare/puppeteer");
       return (await puppeteer.launch(b as never)) as unknown as BrowserLike;
     });
-    browser = await doLaunch((env as unknown as { BROWSER: unknown }).BROWSER);
+    // Bounded even so. The navigation timeout only covers goto(); a launch that never resolves is
+    // not covered by it, and an unbounded await inside a Worker is a request that dies silently
+    // rather than reporting anything the operator can act on.
+    browser = await withDeadline(doLaunch(binding), LAUNCH_TIMEOUT_MS, "the browser did not start");
 
     const page = await browser.newPage();
     await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
