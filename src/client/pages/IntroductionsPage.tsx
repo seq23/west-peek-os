@@ -44,7 +44,15 @@ interface SignalRow {
 const daysLeft = (iso: string): number =>
   Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000);
 
-export function IntroductionsPage(): JSX.Element {
+/**
+ * `embedded` is set when this renders INSIDE Community rather than as its own route.
+ *
+ * Embedded it drops its own explainer and steps its headings down a level, because a page that
+ * opens with one heading and then contains two more of the same rank is not a hierarchy, and two
+ * "How this works" panels on one page is one too many. The guidance is not lost — Community's own
+ * panel carries it.
+ */
+export function IntroductionsPage({ embedded = false }: { embedded?: boolean } = {}): JSX.Element {
   const matches = useApi<{ matches: MatchRow[] }>("/api/introductions");
   const signals = useApi<{ signals: SignalRow[] }>("/api/introductions/signals");
   const people = useApi<{ people: { id: string; full_name: string }[] }>("/api/people?limit=300");
@@ -76,9 +84,14 @@ export function IntroductionsPage(): JSX.Element {
   }
 
   const rows = (matches.data?.matches ?? []).filter((m) => m.status !== "DISMISSED");
+  // Which kind of empty this is. Told apart because they mean opposite things: one is a system
+  // nobody has set up, the other is a bar that held.
+  const peopleCount = people.data?.people?.length ?? 0;
+  const signalCount = signals.data?.signals?.length ?? 0;
 
   return (
     <div className="stack">
+      {!embedded && (
       <HowThisWorks
         title="Introductions"
         what="Suggested introductions between people we know, based on what one person needs and what another has actually done. Deliberately rare: a handful a month at most."
@@ -102,10 +115,11 @@ export function IntroductionsPage(): JSX.Element {
         ]}
         testId="introductions"
       />
+      )}
 
       <section className="panel">
         <header className="panel-head">
-          <h2>Suggested</h2>
+          {embedded ? <h3>Introductions</h3> : <h2>Suggested</h2>}
           <button type="button" onClick={run} disabled={running} data-testid="run-matching">
             {running ? "Looking…" : "Look for matches"}
           </button>
@@ -113,10 +127,32 @@ export function IntroductionsPage(): JSX.Element {
         {message && <p className="notice" data-testid="matching-message">{message}</p>}
 
         {rows.length === 0 ? (
+          /* THREE DIFFERENT EMPTINESSES, and they used to read identically. "Nothing to suggest,
+             that is the normal state" is TRUE once there are people and notes to match on — and
+             actively misleading before that, when the real answer is that nothing has been set up
+             yet. A page that says "working as intended" to somebody staring at an unconfigured
+             system teaches them to distrust it. */
           <p className="muted" data-testid="no-matches">
-            Nothing to suggest. That is the normal state — this is tuned to stay quiet unless a
-            match is obvious, because an introduction spends West Peek's credibility. Add what you
-            know about people below and it will have more to work with.
+            {peopleCount === 0 ? (
+              <>
+                <strong>No people to match yet.</strong> Network OS owns who the community is, and
+                none are visible here. Once members exist, note what each one needs or could help
+                with, and suggestions come from that.
+              </>
+            ) : signalCount === 0 ? (
+              <>
+                <strong>Nothing to match on yet.</strong> {peopleCount} {peopleCount === 1 ? "person" : "people"}{" "}
+                known, but nothing written down about what any of them need or could help with.
+                That is what matching runs on — add a note or two below.
+              </>
+            ) : (
+              <>
+                <strong>Nothing obvious this month.</strong> That is the normal result and not a
+                fault: this stays quiet unless a match is clear, because an introduction spends West
+                Peek&apos;s credibility. {signalCount} note{signalCount === 1 ? "" : "s"} on{" "}
+                {peopleCount} {peopleCount === 1 ? "person" : "people"} were considered.
+              </>
+            )}
           </p>
         ) : (
           <ul className="card-list">
@@ -168,6 +204,7 @@ export function IntroductionsPage(): JSX.Element {
       </section>
 
       <SignalEntry
+        embedded={embedded}
         people={people.data?.people ?? []}
         signals={signals.data?.signals ?? []}
         onChanged={() => { signals.reload(); }}
@@ -186,6 +223,7 @@ export function IntroductionsPage(): JSX.Element {
 function SignalEntry(props: {
   people: { id: string; full_name: string }[];
   signals: SignalRow[];
+  embedded?: boolean;
   onChanged: () => void;
 }): JSX.Element {
   const [personId, setPersonId] = useState("");
@@ -209,7 +247,7 @@ function SignalEntry(props: {
 
   return (
     <section className="panel">
-      <h2>What we know</h2>
+      {props.embedded ? <h3>What we know about people</h3> : <h2>What we know</h2>}
       <p className="muted">
         Write down what someone needs, or what they could help someone else with. This is what
         matching runs on. Notes expire after about four months so an old situation cannot resurface

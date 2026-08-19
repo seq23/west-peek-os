@@ -217,6 +217,7 @@ const NAV_GROUPS = [
     // What is in front of you today. Approvals leads because it is the only group where something
     // is waiting on YOU rather than the other way round.
     group: "Now",
+    blurb: "What is in front of you today",
     items: [
       { key: "approvals", label: "Approvals", icon: "approvals" },
       { key: "today", label: "Today" },
@@ -233,6 +234,7 @@ const NAV_GROUPS = [
   },
   {
     group: "Deals",
+    blurb: "Companies, from first look to exit",
     items: [
       { key: "thesis", label: "Thesis" },
       { key: "investment", label: "Dealflow" },
@@ -250,6 +252,7 @@ const NAV_GROUPS = [
     // The firm as an institution: the people around it and what it owes them. Employees sits here
     // rather than in a group of its own — the AI workforce is part of the firm, not a category.
     group: "Firm",
+    blurb: "The institution, and the people around it",
     items: [
       { key: "lp", label: "LP" },
       // Events used to be its own tab. A Room IS an event, and two tabs for one idea made the
@@ -264,6 +267,7 @@ const NAV_GROUPS = [
   {
     // Looking something up, or being taught it.
     group: "Learn",
+    blurb: "Looking something up, or being taught it",
     items: [
       // Sources moved to Admin as "Sources & sweeps". Once the brief itself came off that page it
       // was feeds, a watchlist, raw gathered items and sweep history — setup, not something you
@@ -278,6 +282,7 @@ const NAV_GROUPS = [
   },
   {
     group: "Admin",
+    blurb: "How the system is set up and behaving",
     secondary: true,
     items: [
       { key: "ai-ops", label: "Cockpit" },
@@ -3872,6 +3877,14 @@ export function App() {
                           {closedGroups.has(group.group) ? "+" : "−"}
                         </span>
                       </button>
+                    ) : null}
+                    {/* WHAT THIS SECTION IS FOR, in the operator's own terms. The reasoning behind
+                        each grouping lived only in a source comment, so the rail asked somebody to
+                        infer from five destination names what "Firm" means. Shown only while the
+                        group is open: a collapsed group is somebody saying they know what is in
+                        there. */}
+                    {group.group && "blurb" in group && group.blurb && !closedGroups.has(group.group) ? (
+                      <p className="rail-group-blurb">{group.blurb}</p>
                     ) : null}
                     <ul
                       aria-label={group.group || (pinned ? "Primary" : "Secondary")}

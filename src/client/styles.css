@@ -2488,3 +2488,36 @@ hr {
 .card-list .badge-gate {
   margin-left: 0.4rem;
 }
+
+/* ── Nav sections read as sections ────────────────────────────────────────────
+ * Every group now carries the banded treatment that only the Admin tier had:
+ * a rule above and below, its name, a one-line statement of what it is for, and
+ * the +/− that was already there. Previously the four main groups were bare
+ * labels floating in a list, so the rail asked somebody to infer from five
+ * destination names what "Firm" means, while Admin — the one group you visit
+ * least — was the only one that looked deliberate.
+ *
+ * The band is quiet on purpose. A signpost should not compete with the things it
+ * points at, and forty destinations in forty boxes would be worse than none.
+ */
+.shell-nav > .rail-scroll > div:not(.rail-pinned):not(.rail-footer):not(.rail-secondary) {
+  border-top: 1px solid var(--wp-shell-line);
+  border-bottom: 1px solid var(--wp-shell-line);
+  padding-block: var(--space-2xs);
+  margin-block: var(--space-2xs);
+}
+
+/* Consecutive bands would otherwise draw a double rule between every section. */
+.shell-nav > .rail-scroll > div + div:not(.rail-pinned):not(.rail-footer) {
+  border-top: 0;
+  margin-top: 0;
+}
+
+.rail-group-blurb {
+  margin: 0 0 var(--space-2xs);
+  padding: 0 var(--space-sm);
+  color: var(--wp-shell-ink-2);
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+  opacity: 0.72;
+}
