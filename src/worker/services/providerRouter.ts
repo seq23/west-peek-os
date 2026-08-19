@@ -301,6 +301,8 @@ const evaluationSchema = z.object({
   score: z.number(),
   sample_size: z.number().int().nonnegative().default(0),
   notes: z.string().trim().min(1),
+  /** Required for LIVE: the run that proves the vendor call happened. Verified, not trusted. */
+  ai_run_id: z.string().trim().min(1).optional(),
 });
 
 export async function handleRecordEvaluation(ctx: RouteContext): Promise<Response> {
@@ -313,21 +315,42 @@ export async function handleRecordEvaluation(ctx: RouteContext): Promise<Respons
   const model = await ctx.env.WP_OS_DB.prepare("SELECT id FROM provider_model WHERE id = ?1").bind(ctx.params.id!).first();
   if (!model) return errorResponse(404, "not_found");
 
-  // A LIVE evaluation asserts a real vendor call happened. No live provider access exists here,
-  // so recording one would be a false claim.
+  // A LIVE evaluation asserts a real vendor call happened, so it has to point at the one it means.
+  //
+  // This used to be refused outright, on the grounds that no provider credential existed and the
+  // record would therefore be false. That reasoning expired: OpenRouter is configured and real
+  // calls happen daily, so the refusal had stopped protecting anything and started blocking the
+  // honest case. Verifying the cited run is strictly stronger than refusing the method — the claim
+  // becomes checkable by anyone reading the audit trail rather than taken on trust.
   if (parsed.data.method === "LIVE") {
-    return errorResponse(
-      409,
-      "live_evaluation_unavailable",
-      "a LIVE evaluation requires a real provider call; no provider credential is configured, so this would be a false record",
-    );
+    if (!parsed.data.ai_run_id) {
+      return errorResponse(400, "evidence_required", "a LIVE evaluation must cite the ai_run_id of the call it is based on");
+    }
+    const evidence = await ctx.env.WP_OS_DB.prepare(
+      `SELECT r.id, r.status, m.id AS model_row
+         FROM ai_run r
+         LEFT JOIN provider_model m ON m.model = r.model
+        WHERE r.id = ?1`,
+    )
+      .bind(parsed.data.ai_run_id)
+      .first<{ id: string; status: string; model_row: string | null }>();
+
+    if (!evidence) return errorResponse(404, "unknown_run", `no ai_run ${parsed.data.ai_run_id} — a LIVE claim must cite a real call`);
+    if (evidence.status !== "COMPLETED") {
+      return errorResponse(409, "run_did_not_complete", `ai_run ${parsed.data.ai_run_id} ended ${evidence.status}; a run that did not complete proves nothing`);
+    }
+    // The run must be ON the model being evaluated. Citing someone else's good run is the exact
+    // way a fabricated evaluation would look, and it is cheap to rule out.
+    if (evidence.model_row !== ctx.params.id!) {
+      return errorResponse(409, "evidence_model_mismatch", "the cited run was not made on the model being evaluated");
+    }
   }
 
   const id = `mev_${crypto.randomUUID()}`;
   await ctx.env.WP_OS_DB.prepare(
-    "INSERT INTO model_evaluation (id, provider_model_id, task_class, method, score, sample_size, notes, evaluated_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    "INSERT INTO model_evaluation (id, provider_model_id, task_class, method, score, sample_size, notes, evaluated_by, ai_run_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
   )
-    .bind(id, ctx.params.id!, parsed.data.task_class, parsed.data.method, parsed.data.score, parsed.data.sample_size, parsed.data.notes, ctx.identity!.id)
+    .bind(id, ctx.params.id!, parsed.data.task_class, parsed.data.method, parsed.data.score, parsed.data.sample_size, parsed.data.notes, ctx.identity!.id, parsed.data.ai_run_id ?? null)
     .run();
   return json(await ctx.env.WP_OS_DB.prepare("SELECT * FROM model_evaluation WHERE id = ?1").bind(id).first(), { status: 201 });
 }

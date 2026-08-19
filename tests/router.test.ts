@@ -21,7 +21,7 @@ import { createFireworksAdapter } from "../src/worker/ai/providers/fireworks";
  *   deduped cost alert; the firmwide caps still apply first.
  * - The OpenRouter and Fireworks adapters fail CLOSED without a credential, before any network
  *   attempt, with a reason the operator can read.
- * - A LIVE evaluation cannot be recorded, because no live provider access exists.
+ * - A LIVE evaluation must cite an ai_run that completed on the model being evaluated.
  * - Promotion to ACTIVE requires a recorded evaluation.
  * - A health check can only be LOCAL_FIXTURE here, and says so in its own detail text.
  */
@@ -131,15 +131,18 @@ describe("the catalogue is honest about credentials, pricing, and health", () =>
     expect(res.body.problems.join(" ")).toContain("OPENROUTER_API_KEY".replace("OPENROUTER", "AI_PROVIDER"));
   });
 
-  it("refuses to record a LIVE evaluation, because no live provider access exists", async () => {
+  it("refuses a LIVE evaluation that cites no run", async () => {
+    // Was: refused outright, because no provider credential existed. That stopped being true, so
+    // the rule is now that a LIVE claim must point at the call it rests on — see the dedicated
+    // describe block at the end of this file.
     const res = await call("/api/ai/models/pm_openai_gpt4o_mini/evaluations", MP, "POST", {
       task_class: "drafting",
       method: "LIVE",
       score: 0.9,
       notes: "would be a false record",
     });
-    expect(res.status).toBe(409);
-    expect((res.body as any).error).toBe("live_evaluation_unavailable");
+    expect(res.status).toBe(400);
+    expect((res.body as any).error).toBe("evidence_required");
   });
 
   it("requires an evaluation before a model can be promoted to ACTIVE", async () => {
@@ -466,5 +469,40 @@ describe("the cost centre reports spend with its definitions attached", () => {
   it("labels estimate-only totals as estimates rather than invoices", async () => {
     const res = await call<{ totals: { estimate_only_runs: number }; definitions: Record<string, string> }>("/api/ai/cost", MP);
     expect(res.body.definitions.estimate_only_runs).toContain("not invoices");
+  });
+});
+
+/**
+ * LIVE evaluations must prove themselves.
+ *
+ * This method used to be refused outright because no provider credential existed — true when
+ * written, false once OpenRouter was configured, at which point the refusal was blocking the honest
+ * case rather than preventing a dishonest one. Verification replaced refusal, so these tests exist
+ * to keep it verification and stop it drifting back into a rubber stamp.
+ */
+describe("a LIVE model evaluation cites the run that proves it", () => {
+  const M = "/api/ai/models/pm_openai_gpt4o_mini/evaluations";
+
+  it("refuses a LIVE evaluation with no evidence at all", async () => {
+    const res = await call(M, MP, "POST", { task_class: "drafting", method: "LIVE", score: 9, notes: "trust me" });
+    expect(res.status).toBe(400);
+    expect((res.body as any).error).toBe("evidence_required");
+  });
+
+  it("refuses a cited run that does not exist", async () => {
+    const res = await call(M, MP, "POST", {
+      task_class: "drafting", method: "LIVE", score: 9, notes: "n", ai_run_id: "air_not_a_real_run",
+    });
+    expect(res.status).toBe(404);
+    expect((res.body as any).error).toBe("unknown_run");
+  });
+
+  it("still records the methods that make no claim about a vendor call", async () => {
+    // FIXTURE and OFFLINE_DETERMINISTIC assert nothing happened at a vendor, so demanding
+    // evidence of a vendor call would be theatre rather than rigour.
+    const res = await call(M, MP, "POST", {
+      task_class: "drafting", method: "FIXTURE", score: 7, sample_size: 5, notes: "ran the fixture set",
+    });
+    expect(res.status).toBe(201);
   });
 });
