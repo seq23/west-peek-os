@@ -43,6 +43,51 @@ function renderBody(md: string): JSX.Element {
           );
         }
 
+        // A markets table. The model is asked for one because a column of levels is read by
+        // comparison — the eye goes down it — and the same figures in prose are not.
+        if (lines.length >= 2 && lines.every((l) => l.startsWith("|") && l.endsWith("|"))) {
+          const rows = lines
+            .filter((l) => !/^\|[\s|:-]+\|$/.test(l))
+            .map((l) => l.slice(1, -1).split("|").map((c) => c.trim()));
+          const [head, ...body] = rows;
+          if (head && body.length > 0) {
+            return (
+              <div key={i} className="brief-table-wrap">
+                <table className="brief-table">
+                  <thead>
+                    <tr>{head.map((c, n) => <th key={n}>{c}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {body.map((r, n) => (
+                      <tr key={n}>{r.map((c, m) => <td key={m}>{bold(c)}</td>)}</tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          }
+        }
+
+        // Traffic lights. Every line of the block must be one, so an ordinary paragraph that
+        // happens to contain the word "red" is never repainted as a status row.
+        const lights = lines.map(readLight);
+        if (lines.length >= 2 && lights.every(Boolean)) {
+          return (
+            <ul key={i} className="brief-lights" data-testid="brief-classification">
+              {lights.map((l, n) => (
+                <li key={n}>
+                  <span className={`light light-${l!.tone}`} aria-hidden="true" />
+                  <strong>{l!.label}</strong>
+                  <span className="muted small">{l!.why}</span>
+                  {/* The colour is never the only carrier — it is repeated as a word for anyone
+                      who cannot separate the three, and for anyone reading this aloud. */}
+                  <span className="sr-only">{l!.tone}</span>
+                </li>
+              ))}
+            </ul>
+          );
+        }
+
         const bulleted = lines.length > 0 && lines.every((l) => /^[-*·]\s+/.test(l));
         if (bulleted) {
           return (
@@ -69,12 +114,12 @@ function renderBody(md: string): JSX.Element {
 /**
  * Pull an importance score out of a line so it can be shown as a chip rather than as bold text.
  *
- * The model is asked for "**Importance: 8/10**" because a fixed shape is what makes a score
+ * The model is asked for "**Investor Importance: 8/10**" because a fixed shape is what makes a score
  * comparable across a page. Rendering it as bold prose would waste that — the reader is scanning
  * for the nines, and a number they have to read a sentence to find is not scannable.
  */
 function extractImportance(line: string): { score: number; rest: string } | null {
-  const m = line.match(/\*\*Importance:\s*(\d{1,2})\s*\/\s*10\*\*\s*/i);
+  const m = line.match(/\*\*(?:Investor\s+)?Importance:\s*(\d{1,2})\s*\/\s*10\*\*\s*/i);
   if (!m) return null;
   const score = Number(m[1]);
   if (!Number.isFinite(score) || score < 0 || score > 10) return null;
@@ -88,6 +133,20 @@ function importanceClass(score: number): string {
   return "importance";
 }
 
+/**
+ * Read one classification line: `Equities: YELLOW — earnings strong, discount-rate pressure rising`.
+ *
+ * Returns null unless the line is exactly that shape, which is what lets the caller require EVERY
+ * line in a block to parse before it renders any of them as status.
+ */
+function readLight(line: string): { label: string; tone: string; why: string } | null {
+  const m = line
+    .replace(/^[-*·]\s+/, "")
+    .match(/^\*{0,2}([A-Za-z][A-Za-z /&-]{1,40}?)\*{0,2}:\s*\*{0,2}(GREEN|YELLOW|RED)\*{0,2}\s*[—–-]\s*(.+)$/i);
+  if (!m) return null;
+  return { label: m[1]!.trim(), tone: m[2]!.toLowerCase(), why: m[3]!.trim() };
+}
+
 function bold(text: string): JSX.Element {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
   return (
@@ -99,10 +158,20 @@ function bold(text: string): JSX.Element {
   );
 }
 
-export function DailyBriefPanel(): JSX.Element {
+/**
+ * The report, whole or folded.
+ *
+ * ON HOME IT ARRIVES FOLDED. The full report is thousands of words by design — that length is the
+ * product, not padding — but Home is where a partner checks what is waiting on them, and a wall of
+ * text there means the rest of the page is never seen. So Home gets the part that is meant to be
+ * readable in a minute (the numbered summary and the traffic lights), and the rest opens in place
+ * on a click. Sources keeps the whole thing open: that page is where you go to READ it.
+ */
+export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {}): JSX.Element {
   const state = useApi<{ report: Report | null; sections: Section[]; citations: Citation[]; date: string }>("/api/daily-intelligence");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const report = state.data?.report ?? null;
   const sections = state.data?.sections ?? [];
@@ -119,6 +188,13 @@ export function DailyBriefPanel(): JSX.Element {
     setBusy(false);
     state.reload();
   }
+
+  // What survives the fold on Home: the one-minute version, and the ten-second version under it.
+  // Everything else is the long read.
+  const ABOVE_FOLD = ["executive_summary", "classification"];
+  const folded = compact && !expanded;
+  const shown = folded ? sections.filter((s) => ABOVE_FOLD.includes(s.section_key)) : sections;
+  const hiddenCount = sections.length - shown.length;
 
   function sourcesFor(s: Section): Citation[] {
     let ids: string[] = [];
@@ -173,7 +249,7 @@ export function DailyBriefPanel(): JSX.Element {
         </p>
       )}
 
-      {sections.map((s) => {
+      {shown.map((s) => {
         const srcs = sourcesFor(s);
         return (
           <section key={s.section_key} className="brief-section" data-testid={`brief-${s.section_key}`}>
@@ -197,6 +273,27 @@ export function DailyBriefPanel(): JSX.Element {
           </section>
         );
       })}
+
+      {folded && hiddenCount > 0 && (
+        <button
+          type="button"
+          className="brief-expand"
+          data-testid="daily-brief-expand"
+          onClick={() => setExpanded(true)}
+        >
+          Read the full report
+          <span className="muted small">
+            {hiddenCount} more section{hiddenCount === 1 ? "" : "s"} — headlines, markets, what is
+            scheduled today
+          </span>
+        </button>
+      )}
+
+      {compact && expanded && (
+        <button type="button" className="link-button" data-testid="daily-brief-collapse" onClick={() => setExpanded(false)}>
+          Fold it back up
+        </button>
+      )}
     </section>
   );
 }

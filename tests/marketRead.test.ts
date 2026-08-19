@@ -62,8 +62,10 @@ describe("the prompt refuses to invent figures", () => {
   it("asks for the shape the operator wanted", () => {
     const prompt = buildSynthesisPrompt(basePacket());
     expect(prompt).toContain("NUMBERED list");
-    expect(prompt).toContain("Why it matters:");
-    expect(prompt).toContain("Importance: N/10");
+    // v3 drops the colon: the reference brief uses "Why it matters" as a standalone heading over
+    // its own block, which is what gives that block room to be an argument rather than a clause.
+    expect(prompt).toContain("**Why it matters**");
+    expect(prompt).toContain("Investor Importance: N/10");
     // …and warns against the failure mode of a scored list.
     expect(prompt).toContain("a page of nines is noise");
   });

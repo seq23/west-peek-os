@@ -250,8 +250,12 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
             adds it to Items. It sends nothing and changes nothing outside this page.
           </p>
 
-          <details className="intel-manual-add" data-testid="intel-manual-add">
-            <summary>Also add something I found myself (optional)</summary>
+          {/* Styled as a real button. As a bare <summary> this read as a line of prose and the
+              operator's verdict was that it did not look like a button at all — which is the whole
+              job of the control, since nothing else on the page tells you that you can add to what
+              gets read for you. */}
+          <details className="intel-manual-add summary-button" data-testid="intel-manual-add">
+            <summary>Add something I found myself</summary>
             <p className="muted small">
               Use this when you read something the sources will not pick up — a conversation, a
               paywalled article, a document. It is added to this sweep as one item.

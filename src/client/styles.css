@@ -2109,3 +2109,172 @@ hr {
 
 .work-card-row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-lg); }
 .work-card-body { min-width: 0; }
+
+/* ── Disclosures that have to LOOK like buttons ────────────────────────────────
+ * A <details><summary> is the right control for "reveal a form I rarely need" —
+ * native, keyboard-operable, no state to manage. Its default rendering is the
+ * problem: it reads as a line of prose, so the operator's verdict on the add-a-
+ * source control was "doesn't look like a button at all", and they were right.
+ *
+ * ORANGE IS EARNED HERE. The accent marks the one action a page wants you to
+ * take; on Sources that is adding your own. A chevron carries the other half of
+ * the message — that something is folded away rather than merely clickable — and
+ * it rotates on open so the control reports its own state.
+ */
+.summary-button > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--wp-orange);
+  border-radius: 6px;
+  background: var(--wp-orange);
+  color: var(--wp-orange-ink);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  /* The marker is replaced by the chevron below; both would be two arrows. */
+}
+
+.summary-button > summary::-webkit-details-marker { display: none; }
+
+.summary-button > summary::after {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translate(-1px, -1px);
+  transition: transform 120ms ease;
+}
+
+.summary-button[open] > summary::after {
+  transform: rotate(-135deg) translate(-1px, -1px);
+}
+
+.summary-button > summary:hover {
+  background: var(--wp-orange-strong);
+  border-color: var(--wp-orange-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .summary-button > summary::after { transition: none; }
+}
+
+/* The revealed form needs separating from the button that opened it. */
+.summary-button[open] > summary { margin-bottom: 0.75rem; }
+
+/* ── Brief: markets table, traffic lights ─────────────────────────────────────
+ * Both exist because the reference brief the operator supplied reads in two
+ * speeds. The table is the ten-second read of where markets are; the lights are
+ * the ten-second read of where each thing STANDS. Prose can carry neither — a
+ * column of levels is read by running the eye down it, and a status you have to
+ * read a sentence to find is not a status.
+ */
+.brief-table-wrap {
+  overflow-x: auto;              /* levels tables get wide; the page must not. */
+  margin: 0.75rem 0;
+}
+
+.brief-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+
+.brief-table th,
+.brief-table td {
+  text-align: left;
+  padding: 0.4rem 0.75rem 0.4rem 0;
+  border-bottom: 1px solid var(--wp-line);
+}
+
+.brief-table th {
+  font-weight: 600;
+  color: var(--wp-muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Levels line up only if the digits do. */
+.brief-table td:not(:first-child) { font-variant-numeric: tabular-nums; }
+
+.brief-lights {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.brief-lights li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.light {
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  align-self: center;
+  /* A hairline ring keeps the dot from dissolving into a tinted row. */
+  box-shadow: 0 0 0 1px var(--wp-line-strong);
+}
+
+.light-green  { background: var(--wp-good); }
+.light-yellow { background: var(--wp-warn); }
+.light-red    { background: var(--wp-danger); }
+
+/* In forced-colours mode every background is overridden, so the three dots would become one shape.
+   Shape carries the meaning there instead — and the spoken word in .sr-only carries it regardless. */
+@media (forced-colors: active) {
+  .light { forced-color-adjust: none; border-radius: 0; }
+  .light-yellow { border-radius: 50%; }
+  .light-red { transform: rotate(45deg); }
+}
+
+/* Visually hidden, still announced. Used where colour carries meaning and the word has to reach a
+   screen reader without appearing twice on screen. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The fold on Home. A full-width target rather than a link: it is the one thing the panel wants
+   you to do next, and a word-sized link at the end of a long block is easy to miss. */
+.brief-expand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--wp-orange);
+  border-radius: 6px;
+  background: var(--wp-orange);
+  color: var(--wp-orange-ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.brief-expand:hover {
+  background: var(--wp-orange-strong);
+  border-color: var(--wp-orange-strong);
+}
+
+/* The caption inherits the fill's ink; .muted would drop it to a grey mixed for paper. */
+.brief-expand .muted { color: inherit; opacity: 0.78; font-weight: 400; }

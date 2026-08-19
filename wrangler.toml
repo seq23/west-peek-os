@@ -53,6 +53,17 @@ id = "00000000000000000000000000000000"
 [browser]
 binding = "BROWSER"
 
+# Email Sending (P33). A BINDING, like [browser] above — nothing here calls fetch(), so outbound
+# mail down this path needs no egress exemption and no third-party credential. The `from` domain
+# must be onboarded to Email Sending on this account before the first send; westpeek.ventures is
+# the zone this fund's addresses live on.
+[[send_email]]
+name = "EMAIL"
+# The binding may only send AS this address. Onboarding the domain is what makes sending possible;
+# this is the narrower second fence, so a bug or a prompt injection cannot make the fund appear to
+# email as anybody else on the domain.
+allowed_sender_addresses = ["os@westpeek.ventures"]
+
 [vars]
 # local | preview | production
 WP_OS_ENV = "local"
@@ -105,6 +116,17 @@ id = "bf0750e8e9a648758a5de978088c97da"
 # so there is no second vendor, no second credential, and no x402 autonomous-payment surface.
 [env.production.browser]
 binding = "BROWSER"
+
+# Email Sending (P33). A BINDING, like [browser] above — nothing here calls fetch(), so outbound
+# mail down this path needs no egress exemption and no third-party credential. The `from` domain
+# must be onboarded to Email Sending on this account before the first send; westpeek.ventures is
+# the zone this fund's addresses live on.
+[[env.production.send_email]]
+name = "EMAIL"
+# The binding may only send AS this address. Onboarding the domain is what makes sending possible;
+# this is the narrower second fence, so a bug or a prompt injection cannot make the fund appear to
+# email as anybody else on the domain.
+allowed_sender_addresses = ["os@westpeek.ventures"]
 
 [env.production.vars]
 # Not "local": the dev identity header `x-wpos-dev-user` is refused outside local,

@@ -121,3 +121,61 @@ describe("verification", () => {
     expect(f).toEqual([]);
   });
 });
+
+/**
+ * v3: depth.
+ *
+ * The operator's repeated verdict on v2 was "still too thin", and the diagnosis was that v2 had the
+ * right skeleton with nothing under it — the prompt asked for two or three sentences where the
+ * reference brief runs three hundred words. These tests pin the things that made it thin, because
+ * a prompt is the easiest artefact in the system to quietly weaken later.
+ */
+describe("the v3 report asks for depth", () => {
+  const packet: EvidencePacket = {
+    report_date: "2026-08-18",
+    partner_name: "Sequoia Taylor",
+    firm_context: { sectors: [], portfolio: [], watchlist: [], themes: [] },
+    open_narratives: [],
+    events: [],
+  };
+
+  it("states word floors rather than sentence counts", () => {
+    const p = buildSynthesisPrompt(packet);
+    // The specific numbers matter less than that a floor is stated at all: "two or three
+    // sentences" is what produced the thin report.
+    expect(p).toMatch(/150 TO 300 WORDS/);
+    expect(p).toMatch(/50 TO 90 WORDS/);
+  });
+
+  it("teaches the two moves the reference brief actually makes", () => {
+    const p = buildSynthesisPrompt(packet);
+    expect(p).toContain("THE CASCADE");
+    expect(p).toContain("THE DISTINCTION");
+  });
+
+  it("names the difference between omitting a section and writing a thin one", () => {
+    expect(buildSynthesisPrompt(packet)).toMatch(/OMITTING[\s\S]{0,80}BEING THIN/);
+  });
+
+  it("accepts the two sections v3 adds", () => {
+    const parsed = parseReport(
+      JSON.stringify({
+        sections: [
+          { key: "classification", body_md: "Equities: YELLOW — discount-rate pressure rising", event_ids: [] },
+          { key: "later_this_week", body_md: "Thursday: Walmart earnings", event_ids: [] },
+        ],
+      }),
+    );
+    expect(parsed?.map((s) => s.key)).toEqual(["classification", "later_this_week"]);
+  });
+
+  it("still refuses a section key it does not know", () => {
+    // The widened section list must not become a widened door.
+    const parsed = parseReport(JSON.stringify({ sections: [{ key: "hot_takes", body_md: "…", event_ids: [] }] }));
+    expect(parsed).toBeNull();
+  });
+
+  it("carries a version that says which prompt wrote it", () => {
+    expect(PROMPT_VERSION).toBe("daily-intelligence-v3");
+  });
+});

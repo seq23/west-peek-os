@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { MarketMapPage } from "./MarketMapPage";
 
 /**
  * Research / Analyst Workstation (P21, GAP-14).
@@ -335,6 +336,25 @@ export function ResearchPage({ me }: { me: MeResponse }) {
         ))}
         {!projects.loading && (projects.data?.projects ?? []).length === 0 && <li className="state-empty">No research projects yet. Launch one with the question it exists to answer; findings promote into the evidence substrate, never a second store.</li>}
       </ul>
+      {/* MARKET MAPPING FOLDED IN. It had its own tab and almost nothing on it, which made it
+          look like a feature that had been abandoned rather than one you had not used yet. It is
+          the same activity as everything else here — finding out what is true about a market —
+          so it belongs beside the rest of it rather than one click away in a tab of its own. */}
+      <details className="card summary-button" data-testid="research-market-map">
+        <summary>Map a market</summary>
+        <p className="muted small">
+          A market map is the picture of who is already doing the thing a founder just pitched you:
+          the incumbents, the challengers, who is funded and by whom, and where the gap is that
+          makes a new company plausible. Build one before an IC conversation and the question stops
+          being <em>is this good</em> and becomes <em>is this better than the six companies already
+          doing it</em>.
+        </p>
+        <p className="muted small">
+          Research answers a question. A map answers <em>who else is here</em> — which is why they
+          live on the same page.
+        </p>
+        <MarketMapPage />
+      </details>
     </section>
   );
 }
