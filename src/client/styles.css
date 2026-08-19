@@ -2018,3 +2018,6 @@ hr {
 .importance-mid { background: var(--wp-warn-tint); color: var(--wp-warn); }
 /* Only "this changes a decision we are about to make" earns the accent. */
 .importance-high { background: var(--wp-orange); color: var(--wp-orange-ink); }
+
+/* The mode the firm is actually in reads first in the list. */
+.privacy-mode-current { background: var(--wp-tint); border-left: 2px solid var(--wp-orange); padding-left: var(--space-sm); }

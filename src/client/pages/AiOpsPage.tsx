@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { PrivacyModePanel } from "./PrivacyModePanel";
 
 /**
  * AI Operations — provider/model router + cost command center (P16; GAP-02, GAP-03).
@@ -130,6 +131,10 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="ai-ops-page">
+      {/* First on the page, because every number below it is meaningless while the firm is locked
+          down — spend, routing and provider health all describe calls that never reach a model. */}
+      <PrivacyModePanel me={me} />
+
       <h3>Providers</h3>
       {catalog.loading && !catalog.data && <p>Loading the catalogue…</p>}
       <ul className="card-list" data-testid="provider-catalog">
