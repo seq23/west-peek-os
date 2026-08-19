@@ -32,7 +32,7 @@ let envNoR2: Env; // degraded mode: no WP_OS_DOCUMENTS
 const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
 
 const MP_ACTOR: Actor = { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
-const AI_ACTOR: Actor = { type: "AI", aiEmployeeId: "aie_paige", roles: [], firmScopes: ["west-peek"] };
+const AI_ACTOR: Actor = { type: "AI", aiEmployeeId: "aie_wyatt", roles: [], firmScopes: ["west-peek"] };
 
 function req(path: string, headers: Record<string, string> = {}, method = "GET", body?: unknown): Request {
   return new Request(`https://test.local${path}`, {
@@ -249,7 +249,7 @@ describe("1. contradiction creation across conflicting value, period, and defini
     });
     expect(proposed.status).toBe("OPEN");
     expect(proposed.proposed_by_type).toBe("AI");
-    expect(proposed.proposed_by_id).toBe("aie_paige");
+    expect(proposed.proposed_by_id).toBe("aie_wyatt");
 
     await expect(
       resolveContradiction(env, AI_ACTOR, proposed.id, "RESOLVED", { note: "ai tried" }),

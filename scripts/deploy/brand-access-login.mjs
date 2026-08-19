@@ -44,12 +44,21 @@ const APPLY = process.argv.includes("--apply");
 const DESIGN = {
   background_color: "#F7F2EA",
   text_color: "#050505",
-  // The square WP mark. The horizontal ventures wordmark would be the better shape, but it is not
-  // actually deployed: every path serving it returns the site's SPA fallback — HTTP 200 carrying
-  // index.html — which is precisely the trap the byte check below exists to catch. Swap this the
-  // day the wordmark is genuinely reachable.
-  logo_path: "https://westpeek.ventures/assets/images/WP_Logo_1080x1080.png",
-  header_text: "West Peek Ventures",
+  // The horizontal wordmark, dark ink on a ground that already matches this page's paper.
+  //
+  // The first choice was the square WP mark, and it rendered as a BLACK SQUARE: the file is a JPEG,
+  // JPEG has no transparency, and the artwork is black on black. It passed the byte check below
+  // because it is a perfectly valid image — just an invisible one. No automated check catches
+  // that, which is why the URL is printed for a human to open.
+  //
+  // Served from joinwestpeek.com rather than westpeek.ventures: the ventures site answers every
+  // unknown path with its SPA shell, so three plausible-looking URLs there return 200 with HTML.
+  logo_path: "https://joinwestpeek.com/assets/img/ventures-logo.png",
+  // No header text. The wordmark above it already says West Peek Ventures, and Access renders
+  // header text inside a grey box that reads as a disabled input field — the operator's first
+  // reaction to it was to ask why her name was not in it, which is a form asking to be filled in.
+  // Removing it drops the duplication and the false affordance together.
+  header_text: "",
   footer_text: "Private and confidential. Access is limited to the firm.",
 };
 
@@ -126,6 +135,10 @@ async function main() {
       `${isPng ? "PNG" : isJpeg ? "JPEG" : isGif ? "GIF" : "WebP"} by its bytes ` +
       `(served as ${logoRes.headers.get("content-type") ?? "unknown"}).`,
   );
+  // The byte check proves it is an image. It cannot prove it is a VISIBLE one — the first logo
+  // tried here was valid, correctly served, and black artwork on a black JPEG background, so the
+  // login page showed a black square. That failure is only catchable by looking.
+  console.log(`Open it and check it actually reads on ${DESIGN.background_color}:\n  ${DESIGN.logo_path}`);
 
   if (!APPLY) {
     console.log("\nDry run. Re-run with --apply to write it.");

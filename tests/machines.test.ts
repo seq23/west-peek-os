@@ -221,7 +221,7 @@ describe("capabilities keep design maturity and proof separate", () => {
     const list = await call<{ capabilities: any[] }>("/api/capabilities", MP);
     const cap = list.body.capabilities.find((c: any) => c.capability_key === "secondary_block_pricing")!;
 
-    const toEmployee = await call(`/api/capabilities/${cap.id}/assignments`, MP, "POST", { target_kind: "EMPLOYEE", target_id: "aie_priya" });
+    const toEmployee = await call(`/api/capabilities/${cap.id}/assignments`, MP, "POST", { target_kind: "EMPLOYEE", target_id: "aie_pierce" });
     expect(toEmployee.status).toBe(201);
     const toMachine = await call(`/api/capabilities/${cap.id}/assignments`, MP, "POST", { target_kind: "MACHINE", target_id: "19" });
     expect(toMachine.status).toBe(201);

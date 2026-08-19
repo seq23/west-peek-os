@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttention";
+import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
+import { DailyBriefPanel } from "./DailyBriefPanel";
 
 /**
  * MP Home / Executive Command Center (P14, GAP-04 + GAP-23).
@@ -70,62 +72,54 @@ const MODULE_LABELS: Record<string, string> = {
 
 
 /**
- * The brief is model-authored Markdown. Rendered with a deliberately tiny formatter rather than a
- * Markdown library or `dangerouslySetInnerHTML`: model output is untrusted text, and the only
- * formatting a brief needs is headings, bold and bullets. Anything else renders as plain text,
- * which is the safe failure.
+ * One delivery: the same records the module always held, now from somebody.
+ *
+ * The byline is the whole change. "Portfolio risk: 0" is a number; "Winter — no open alerts on
+ * anything you own" is a colleague telling you something, and it is answerable, because you can go
+ * and ask her. Attribution names whose AREA this is — these panels are assembled from records by a
+ * query, not written — and the one genuinely authored thing on this page is the brief, which says
+ * so itself.
+ *
+ * An empty delivery keeps its byline and says what silence means. Twelve panels reading "Nothing
+ * here." is what made this product feel broken when it was merely unloaded.
  */
-function BriefProse({ markdown }: { markdown: string }): JSX.Element {
-  const blocks = markdown.split(/\n{2,}/);
-  const inline = (s: string) =>
-    s.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-      part.startsWith("**") && part.endsWith("**") ? <strong key={i}>{part.slice(2, -2)}</strong> : <span key={i}>{part}</span>,
-    );
-  return (
-    <div className="brief-prose" data-testid="home-brief-prose">
-      {blocks.map((b, i) => {
-        const lines = b.split("\n");
-        if (lines.every((l) => /^\s*[-*]\s+/.test(l))) {
-          return (
-            <ul key={i}>
-              {lines.map((l, j) => (
-                <li key={j}>{inline(l.replace(/^\s*[-*]\s+/, ""))}</li>
-              ))}
-            </ul>
-          );
-        }
-        if (/^#{1,6}\s/.test(b)) return <h5 key={i}>{inline(b.replace(/^#{1,6}\s/, ""))}</h5>;
-        return <p key={i}>{inline(b)}</p>;
-      })}
-    </div>
-  );
-}
+function DeliveryCard({ module, onNavigate }: { module: HomeModule; onNavigate: (key: string) => void }) {
+  const delivery = deliveryFor(module.key);
+  const role = delivery ? roleFor(delivery.by) : null;
+  const empty = module.items.length === 0;
 
-function ModuleCard({ module, onNavigate }: { module: HomeModule; onNavigate: (key: string) => void }) {
   return (
-    <section className="module-card" data-testid={`home-module-${module.key}`}>
+    <section className="module-card delivery-card" data-testid={`home-module-${module.key}`}>
       <header className="module-card-head">
         <h4>
-          {module.title} <span className="module-count">{module.count}</span>
+          {delivery?.headline ?? module.title}{" "}
+          <span className="module-count">{module.count}</span>
         </h4>
         <button type="button" className="link-button" onClick={() => onNavigate(module.link)}>
           Open
         </button>
       </header>
-      <p className="module-answers">{module.answers}</p>
-      {module.items.length === 0 ? (
+
+      {empty ? (
         <p className="muted" data-testid={`home-module-empty-${module.key}`}>
-          {module.note ?? "Nothing here."}
+          {delivery?.whenEmpty ?? module.note ?? "Nothing to report."}
         </p>
       ) : (
         <>
           <ul className="module-items">
-            {module.items.slice(0, 5).map((item, i) => (
+            {module.items.slice(0, 3).map((item, i) => (
               <li key={String(item.id ?? i)}>{summarize(module.key, item)}</li>
             ))}
           </ul>
           {module.note && <p className="muted small">{module.note}</p>}
         </>
+      )}
+
+      {delivery && (
+        <p className="delivery-by" data-testid={`home-delivery-by-${module.key}`}>
+          <strong>{delivery.by}</strong>
+          {role ? ` · ${role}` : ""}
+        </p>
       )}
     </section>
   );
@@ -328,9 +322,6 @@ function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => 
 
 export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
   const home = useApi<HomeResponse>("/api/mp-home");
-  const briefing = useApi<{ briefing: { one_thing_to_watch: string | null; selection_rule: string; briefing_date: string; synthesis_md: string | null; synthesis_state: string }; items: Array<{ id: string; title: string; url?: string | null }> }>(
-    "/api/briefings/current",
-  );
   // §8 — the four operator questions Home's modules do not answer: what is blocked, is scheduled
   // work healthy, is AI failing, is setup incomplete. Derived from live endpoints only.
   const jobs = useApi<{ jobs: JobHealth[] }>("/api/jobs");
@@ -352,6 +343,22 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
 
   const data = home.data;
 
+  // Approvals are pulled out of the grid; everything else is a delivery.
+  const waiting = data.modules.find((m) => m.key === "approvals") ?? null;
+  const deliveries = data.modules.filter((m) => m.key !== "approvals");
+
+  /**
+   * Who signs the morning off. The reader's own Chief of Staff — Wren for Sequoia, Walker for
+   * Scooter — because a delivery from "the system" is the anonymity this page exists to fix.
+   * Matched on first name so a retitle in the roster reaches the byline; falls back to the
+   * firm-wide chief rather than leaving the page unsigned.
+   */
+  const chiefOfStaff = (() => {
+    const first = me.fullName.split(" ")[0]?.toLowerCase() ?? "";
+    const mine = first === "scooter" ? "Walker" : first === "sequoia" ? "Wren" : "Wren";
+    return { name: mine, role: roleFor(mine) ?? "Chief of Staff" };
+  })();
+
   // `undefined` where a source has not answered, so the strip stays silent rather than guessing.
   const attention = operatorAttention({
     ...(jobs.data ? { jobs: jobs.data.jobs } : {}),
@@ -366,9 +373,26 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
 
   return (
     <section data-testid="home-page">
-      <p className="muted small">
-        Good day, {me.fullName}. Assembled {new Date(data.generated_at).toLocaleString()} from live firm state.
-      </p>
+      {/* A delivery has a moment. "This morning" means something; "your dashboard" does not — so
+          the page is dated, addressed, and signed by whoever brought it. The hour comes from the
+          browser because a Worker runs in UTC and the partner does not. */}
+      <header className="home-masthead" data-testid="home-masthead">
+        <div>
+          <div className="home-date">
+            {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+          </div>
+          <h1 data-testid="home-greeting">
+            {greetingFor(new Date().getHours())}, {me.fullName.split(" ")[0]}
+          </h1>
+        </div>
+        <div className="home-signed">
+          <div>
+            Delivered {new Date(data.generated_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} by{" "}
+            <strong>{chiefOfStaff.name}</strong>
+          </div>
+          <div className="muted small">{chiefOfStaff.role}</div>
+        </div>
+      </header>
 
       {/* ASK — its own highlighted band on Home, added on operator direction (17 Aug 2026): "it can
           be on the home page in its own section that is highlighted so users know its there for
@@ -433,11 +457,54 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
         </section>
       )}
 
-      <div className="module-grid" data-testid="home-modules">
-        {data.modules.map((m) => (
-          <ModuleCard key={m.key} module={m} onNavigate={onNavigate} />
-        ))}
-      </div>
+      {/* The brief, at the top, because it is the thing that ARRIVED. It used to render on the
+          Sources page while a list of ranked sweep items sat here called "Daily Brief" — two
+          things named almost identically and neither where you would look. */}
+      <DailyBriefPanel />
+
+      {/* Waiting on you: lifted out of the grid because it is the only group where something is
+          blocked on the reader rather than the other way round. A decision waiting three days
+          should not be one card among twelve. */}
+      {waiting && (
+        <section data-testid="home-waiting">
+          <div className="home-section-head">
+            <h2>Waiting on you</h2>
+            <span className="count-pill">{waiting.count}</span>
+          </div>
+          {waiting.items.length === 0 ? (
+            <p className="muted small" data-testid="home-waiting-empty">
+              {deliveryFor("approvals")?.whenEmpty ?? "Nothing is blocked on you."}
+            </p>
+          ) : (
+            <ul className="card-list waiting-list">
+              {waiting.items.slice(0, 5).map((item, i) => (
+                <li key={String(item.id ?? i)}>
+                  <span>{summarize("approvals", item)}</span>
+                  <button
+                    type="button"
+                    className="btn-strong"
+                    data-testid={`home-waiting-open-${i}`}
+                    onClick={() => onNavigate("approvals")}
+                  >
+                    Decide
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      <section data-testid="home-deliveries">
+        <div className="home-section-head">
+          <h2>Deliveries</h2>
+        </div>
+        <div className="module-grid">
+          {deliveries.map((m) => (
+            <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} />
+          ))}
+        </div>
+      </section>
 
       <section className="card" data-testid="home-questions">
         <h4>The ten questions this surface answers</h4>
@@ -455,60 +522,10 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
         </ul>
       </section>
 
-      {briefing.data?.briefing && (
-        <section className="card" data-testid="home-briefing">
-          <h4>Daily Brief — {briefing.data.briefing.briefing_date}</h4>
-
-          {/* P30: the written read. Prose is the product here; the item list is the evidence
-              behind it, not the thing to scan. When there is no synthesis the brief degrades to
-              the list rather than showing an empty card. */}
-          {briefing.data.briefing.synthesis_state === "READY" && briefing.data.briefing.synthesis_md ? (
-            <>
-              <BriefProse markdown={briefing.data.briefing.synthesis_md} />
-              <details className="brief-sources">
-                <summary>{briefing.data.items.length} source item(s)</summary>
-                <ul className="card-list small">
-                  {briefing.data.items.map((i, n) => (
-                    <li key={i.id}>
-                      [{n + 1}]{" "}
-                      {i.url ? (
-                        <a href={i.url} target="_blank" rel="noreferrer">{i.title}</a>
-                      ) : (
-                        i.title
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-              <p className="muted small">
-                Written by AI from the sources above. It states nothing that is not in them.
-              </p>
-            </>
-          ) : (
-            <>
-              <ul className="card-list">
-                {briefing.data.items.slice(0, 5).map((i) => (
-                  <li key={i.id}>{i.title}</li>
-                ))}
-                {briefing.data.items.length === 0 && (
-                  <li className="state-empty" data-testid="home-briefing-empty">
-                    Nothing in today&apos;s brief yet. Items arrive from a sweep — open Sweeps &amp; sources.
-                  </li>
-                )}
-              </ul>
-              {briefing.data.items.length > 0 && (
-                <p className="muted small" data-testid="home-briefing-unsynthesised">
-                  No written brief for today — showing the raw items instead.
-                </p>
-              )}
-            </>
-          )}
-
-          <button type="button" className="link-button" onClick={() => onNavigate("intelligence")}>
-            Open Sweeps &amp; sources
-          </button>
-        </section>
-      )}
+      {/* The older `/api/briefings/current` card used to render here as a SECOND brief, beneath a
+          module also called "Daily Brief". Three surfaces for one idea. The richer report — the one
+          with sections and real citations — is now at the top of this page, and this block is gone
+          rather than left as a quieter duplicate. The endpoint still exists and Sources still uses it. */}
 
       <ModuleSettings home={data} onSaved={home.reload} />
       <PersonalIntelligencePanel />

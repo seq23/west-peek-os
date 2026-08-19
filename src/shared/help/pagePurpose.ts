@@ -69,8 +69,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Change the sectors, stage and filters that define a fit", "Set the check size and the ownership to hold out for", "Read every version the firm has held"],
   },
   investment: {
-    purpose: "The early-stage pipeline — opportunities from first look through to an IC decision.",
-    youCan: ["Move an opportunity through its stages", "Open the diligence behind it", "Take it to the Investment Committee"],
+    purpose: "Where every company stands and what is stopping the next decision. Deals die of neglect rather than judgement, so each one shows how long it has sat where it is against that stage's own clock.",
+    youCan: ["See the whole pipeline as one line", "Move a company to its next stage", "Find what has stalled, and what is only waiting on your decision", "Add a company at the stage it is actually at"],
   },
   companies: {
     purpose: "Every company the firm has a record of, and what is known about each one.",

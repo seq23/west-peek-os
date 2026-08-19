@@ -44,40 +44,26 @@ CREATE TABLE IF NOT EXISTS ai_employee (
 );
 
 -- BEGIN GENERATED SEEDS (scripts/seed/generate-ai-employee-seed.mjs) — do not hand-edit
--- Registry provenance: AI employee roster v3.0 (Revised v3.0 roster + Whitney, ADR-002).
--- All 31 rows seed INACTIVE; activation is human-reserved (ai_employee.activate), never seed-time.
+-- Registry provenance: AI employee roster v4.0 (Revised v3.0 roster + Whitney, ADR-002).
+-- All 17 rows seed INACTIVE; activation is human-reserved (ai_employee.activate), never seed-time.
 INSERT OR IGNORE INTO ai_employee (id, name, role, layer, primary_machines_json, status, purpose) VALUES
-  ('aie_walker', 'Walker', 'Scooter AI Chief of Staff', 'MP Support', '["command_center","mp_personal_office"]', 'INACTIVE', 'Scooter AI Chief of Staff'),
-  ('aie_wendy', 'Wendy', 'Scooter AI Executive Assistant', 'MP Support', '["mp_personal_office"]', 'INACTIVE', 'Scooter AI Executive Assistant'),
-  ('aie_wren', 'Wren', 'Sequoia AI Chief of Staff', 'MP Support', '["command_center","mp_personal_office"]', 'INACTIVE', 'Sequoia AI Chief of Staff'),
-  ('aie_willa', 'Willa', 'Sequoia AI Executive Assistant', 'MP Support', '["mp_personal_office"]', 'INACTIVE', 'Sequoia AI Executive Assistant'),
-  ('aie_winton', 'Winton', 'Field Intake Coordinator', 'Intake/Relationship/Memory/Governance', '["global_capture_routing"]', 'INACTIVE', 'Field Intake Coordinator'),
-  ('aie_porter', 'Porter', 'Network OS Sync + Verification Mirror', 'Intake/Relationship/Memory/Governance', '["network_os_sync_verification"]', 'INACTIVE', 'Network OS Sync + Verification Mirror'),
-  ('aie_winnie', 'Winnie', 'Connection Intelligence / Warm Path Finder', 'Intake/Relationship/Memory/Governance', '["relationship_intelligence"]', 'INACTIVE', 'Connection Intelligence / Warm Path Finder'),
-  ('aie_waverly', 'Waverly', 'Community Manager', 'Intake/Relationship/Memory/Governance', '["community_intelligence"]', 'INACTIVE', 'Community Manager'),
-  ('aie_wells', 'Wells', 'Knowledge Manager', 'Intake/Relationship/Memory/Governance', '["knowledge_memory_promotion"]', 'INACTIVE', 'Knowledge Manager'),
-  ('aie_willow', 'Willow', 'Compliance + Privacy Gatekeeper / Compliance Linter', 'Intake/Relationship/Memory/Governance + LP', '["legal_compliance_rules","model_governance_privacy_airlock"]', 'INACTIVE', 'Compliance + Privacy Gatekeeper / Compliance Linter'),
-  ('aie_wilson', 'Wilson', 'Systems Operator', 'Intake/Relationship/Memory/Governance', '["systems_data_integration"]', 'INACTIVE', 'Systems Operator'),
-  ('aie_pierce', 'Pierce', 'Principal', 'Investment/IC/Meeting', '["early_stage_deal","ic_decision"]', 'INACTIVE', 'Principal'),
-  ('aie_priya', 'Priya', 'Associate', 'Investment/IC/Meeting', '["early_stage_deal","secondaries_investment"]', 'INACTIVE', 'Associate'),
-  ('aie_paige', 'Paige', 'Research Analyst', 'Investment/IC/Meeting', '["research_intelligence"]', 'INACTIVE', 'Research Analyst'),
-  ('aie_wyatt', 'Wyatt', 'Deal Watchlist Analyst', 'Investment/IC/Meeting', '["investment_mandate_exclusion","venturedeals_deal_math"]', 'INACTIVE', 'Deal Watchlist Analyst'),
-  ('aie_poppy', 'Poppy', 'IC Facilitator', 'Investment/IC/Meeting', '["ic_decision"]', 'INACTIVE', 'IC Facilitator'),
-  ('aie_walter', 'Walter', 'Meeting Buddy', 'Investment/IC/Meeting', '["meeting_intelligence"]', 'INACTIVE', 'Meeting Buddy'),
-  ('aie_piper', 'Piper', 'LP Sourcer', 'LP/Fundraising', '["lp_fundraising"]', 'INACTIVE', 'LP Sourcer'),
-  ('aie_perry', 'Perry', 'Enrichment + Scoring Agent', 'LP/Fundraising', '["lp_fundraising"]', 'INACTIVE', 'Enrichment + Scoring Agent'),
-  ('aie_wesley', 'Wesley', 'LP Relations Manager', 'LP/Fundraising', '["lp_fundraising"]', 'INACTIVE', 'LP Relations Manager'),
-  ('aie_penn', 'Penn', 'Outreach Composer', 'LP/Fundraising', '["lp_fundraising","marketing_pr_content"]', 'INACTIVE', 'Outreach Composer'),
-  ('aie_winter', 'Winter', 'Portfolio Support Manager', 'Portfolio/Event/Brand/Ops', '["portfolio_support"]', 'INACTIVE', 'Portfolio Support Manager'),
-  ('aie_parker', 'Parker', 'Event Marketing Coordinator', 'Portfolio/Event/Brand/Ops', '["west_peek_live_events"]', 'INACTIVE', 'Event Marketing Coordinator'),
-  ('aie_wynn', 'Wynn', 'Sponsorship Scout', 'Portfolio/Event/Brand/Ops', '["brand_sponsorship_revenue"]', 'INACTIVE', 'Sponsorship Scout'),
-  ('aie_percy', 'Percy', 'Marketing Lead', 'Portfolio/Event/Brand/Ops', '["marketing_pr_content"]', 'INACTIVE', 'Marketing Lead'),
-  ('aie_prue', 'Prue', 'PR Lead', 'Portfolio/Event/Brand/Ops', '["marketing_pr_content"]', 'INACTIVE', 'PR Lead'),
-  ('aie_pippa', 'Pippa', 'Content Manager', 'Portfolio/Event/Brand/Ops', '["marketing_pr_content"]', 'INACTIVE', 'Content Manager'),
-  ('aie_pax', 'Pax', 'Operations Manager', 'Portfolio/Event/Brand/Ops', '["continuity_maintenance"]', 'INACTIVE', 'Operations Manager'),
-  ('aie_preston', 'Preston', 'Finance Support', 'Portfolio/Event/Brand/Ops', '["finance_fund_admin"]', 'INACTIVE', 'Finance Support'),
-  ('aie_perrin', 'Perrin', 'Fund Admin Coordinator', 'Portfolio/Event/Brand/Ops', '["finance_fund_admin"]', 'INACTIVE', 'Fund Admin Coordinator'),
-  ('aie_whitney', 'Whitney', 'Market Intelligence Coach', 'Market Intelligence (deferred product)', '[]', 'INACTIVE', 'Market Intelligence Coach');
+  ('aie_walker', 'Walker', 'Scooter''s Chief of Staff', 'MP Support', '["command_center","mp_personal_office"]', 'INACTIVE', 'Scooter''s Chief of Staff'),
+  ('aie_wren', 'Wren', 'Sequoia''s Chief of Staff', 'MP Support', '["command_center","mp_personal_office"]', 'INACTIVE', 'Sequoia''s Chief of Staff'),
+  ('aie_porter', 'Porter', 'Systems & Intake Operator', 'Firm operations', '["global_capture_routing","network_os_sync_verification","systems_data_integration"]', 'INACTIVE', 'Systems & Intake Operator'),
+  ('aie_waverly', 'Waverly', 'Relationships & Community', 'Firm operations', '["relationship_intelligence","community_intelligence"]', 'INACTIVE', 'Relationships & Community'),
+  ('aie_wells', 'Wells', 'Knowledge Manager', 'Firm operations', '["knowledge_memory_promotion"]', 'INACTIVE', 'Knowledge Manager'),
+  ('aie_willow', 'Willow', 'Compliance & Privacy', 'Firm operations', '["legal_compliance_rules","model_governance_privacy_airlock"]', 'INACTIVE', 'Compliance & Privacy'),
+  ('aie_pierce', 'Pierce', 'Investment Lead', 'Investment', '["early_stage_deal","ic_decision","secondaries_investment"]', 'INACTIVE', 'Investment Lead'),
+  ('aie_wyatt', 'Wyatt', 'Analyst & Scout', 'Investment', '["research_intelligence","investment_mandate_exclusion","venturedeals_deal_math"]', 'INACTIVE', 'Analyst & Scout'),
+  ('aie_poppy', 'Poppy', 'IC Facilitator', 'Investment', '["ic_decision"]', 'INACTIVE', 'IC Facilitator'),
+  ('aie_walter', 'Walter', 'Meeting Buddy', 'Investment', '["meeting_intelligence"]', 'INACTIVE', 'Meeting Buddy'),
+  ('aie_piper', 'Piper', 'LP Sourcing', 'LP & fundraising', '["lp_fundraising"]', 'INACTIVE', 'LP Sourcing'),
+  ('aie_wesley', 'Wesley', 'LP Relations', 'LP & fundraising', '["lp_fundraising"]', 'INACTIVE', 'LP Relations'),
+  ('aie_winter', 'Winter', 'Portfolio Support', 'Portfolio & operations', '["portfolio_support"]', 'INACTIVE', 'Portfolio Support'),
+  ('aie_parker', 'Parker', 'Event Marketing Coordinator', 'Portfolio & operations', '["west_peek_live_events","brand_sponsorship_revenue"]', 'INACTIVE', 'Event Marketing Coordinator'),
+  ('aie_pippa', 'Pippa', 'Communications', 'Portfolio & operations', '["marketing_pr_content"]', 'INACTIVE', 'Communications'),
+  ('aie_pax', 'Pax', 'Operations Manager', 'Portfolio & operations', '["continuity_maintenance"]', 'INACTIVE', 'Operations Manager'),
+  ('aie_preston', 'Preston', 'Finance & Fund Admin', 'Portfolio & operations', '["finance_fund_admin"]', 'INACTIVE', 'Finance & Fund Admin');
 -- END GENERATED SEEDS
 
 -- ── AI employee lifecycle history (append-only; D15) ──

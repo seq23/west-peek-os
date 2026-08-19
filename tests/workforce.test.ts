@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
+import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import { changeLifecycle, computeScorecard, decideHandoff, postRoomMessage, proposeHandoff } from "../src/worker/services/workforce";
@@ -32,7 +33,7 @@ const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
 const MEMBER = { "x-wpos-dev-user": "member@westpeek.ventures" };
 
 const MP_ACTOR: Actor = { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
-const AI_ACTOR: Actor = { type: "AI", aiEmployeeId: "aie_paige", roles: [], firmScopes: ["west-peek"] };
+const AI_ACTOR: Actor = { type: "AI", aiEmployeeId: "aie_wyatt", roles: [], firmScopes: ["west-peek"] };
 
 function req(path: string, headers: Record<string, string> = {}, method = "GET", body?: unknown): Request {
   return new Request(`https://test.local${path}`, {
@@ -82,13 +83,14 @@ afterAll(async () => {
 });
 
 describe("the lounge turns the roster into an operating surface", () => {
-  it("lists all 31 employees with department, machines, scope, work, and cost", async () => {
+  it("lists every employee with department, machines, scope, work, and cost", async () => {
     const res = await call<{ employees: any[]; departments: string[]; active_count: number; max_active: number; activation_law: string }>(
       "/api/workforce/lounge",
       MP,
     );
     expect(res.status).toBe(200);
-    expect(res.body.employees).toHaveLength(31);
+    // Counted from the registry, not a literal: the roster went 31 → 17 and will move again.
+    expect(res.body.employees).toHaveLength(AI_EMPLOYEE_ROSTER.length);
     // max_active is now the whole roster: employment and attention were one number and are not
     // any more. Everyone may be employed; who is ON DUTY is the short list, and that rotates.
     expect(res.body.max_active).toBe(res.body.employees.length);
@@ -113,12 +115,12 @@ describe("the lounge turns the roster into an operating surface", () => {
 
   it("returns a full employee detail with the scorecard definition attached", async () => {
     const res = await call<{ employee: any; profile: any; scorecard_definition: Record<string, string> }>(
-      "/api/workforce/employees/aie_paige",
+      "/api/workforce/employees/aie_wyatt",
       MP,
     );
     expect(res.status).toBe(200);
-    expect(res.body.employee.name).toBe("Paige");
-    expect(res.body.profile.department).toBe("Investment/IC/Meeting");
+    expect(res.body.employee.name).toBe("Wyatt");
+    expect(res.body.profile.department).toBe("Investment");
     expect(res.body.scorecard_definition.not_measured).toContain("No 'value generated' figure is stored");
   });
 });
@@ -126,31 +128,31 @@ describe("the lounge turns the roster into an operating surface", () => {
 describe("profile and machine assignment are human acts", () => {
   it("sets department, manager, and brief", async () => {
     const res = await call<{ department: string; manager_employee_id: string; brief: string }>(
-      "/api/workforce/employees/aie_priya/profile",
+      "/api/workforce/employees/aie_pierce/profile",
       MP,
       "PATCH",
-      { department: "Investment/IC/Meeting", manager_employee_id: "aie_pierce", brief: "Associate covering secondaries diligence." },
+      { department: "Investment", manager_employee_id: "aie_walker", brief: "Investment lead covering secondaries diligence." },
     );
     expect(res.status).toBe(200);
-    expect(res.body.manager_employee_id).toBe("aie_pierce");
+    expect(res.body.manager_employee_id).toBe("aie_walker");
     expect(res.body.brief).toContain("secondaries");
   });
 
   it("refuses to let an employee manage itself", async () => {
-    const res = await call("/api/workforce/employees/aie_priya/profile", MP, "PATCH", { manager_employee_id: "aie_priya" });
+    const res = await call("/api/workforce/employees/aie_pierce/profile", MP, "PATCH", { manager_employee_id: "aie_pierce" });
     expect(res.status).toBe(400);
   });
 
   it("assigns a machine from the 45-machine registry and refuses an unknown one", async () => {
-    const ok = await call<{ machine_id: number }>("/api/workforce/employees/aie_paige/machines", MP, "POST", { machine_id: 23 });
+    const ok = await call<{ machine_id: number }>("/api/workforce/employees/aie_wyatt/machines", MP, "POST", { machine_id: 23 });
     expect(ok.status).toBe(201);
     expect(ok.body.machine_id).toBe(23);
 
-    const bad = await call("/api/workforce/employees/aie_paige/machines", MP, "POST", { machine_id: 999 });
+    const bad = await call("/api/workforce/employees/aie_wyatt/machines", MP, "POST", { machine_id: 999 });
     expect(bad.status).toBe(404);
 
     const lounge = await call<{ employees: any[] }>("/api/workforce/lounge", MP);
-    expect(lounge.body.employees.find((e: any) => e.id === "aie_paige")!.assigned_machine_ids).toContain(23);
+    expect(lounge.body.employees.find((e: any) => e.id === "aie_wyatt")!.assigned_machine_ids).toContain(23);
   });
 });
 
@@ -161,8 +163,8 @@ describe("the D10 activation law survives the new surface", () => {
   });
 
   it("lets a human pause an ACTIVE employee and records it on the same status history", async () => {
-    await activate("aie_paige");
-    const paused = await call<{ status: string }>("/api/workforce/employees/aie_paige/lifecycle", MP, "POST", {
+    await activate("aie_wyatt");
+    const paused = await call<{ status: string }>("/api/workforce/employees/aie_wyatt/lifecycle", MP, "POST", {
       to_status: "PAUSED",
       reason: "cost review",
     });
@@ -170,7 +172,7 @@ describe("the D10 activation law survives the new surface", () => {
     expect(paused.body.status).toBe("PAUSED");
 
     const history = await t.db
-      .prepare("SELECT * FROM ai_employee_status_history WHERE ai_employee_id = 'aie_paige' ORDER BY created_at DESC LIMIT 1")
+      .prepare("SELECT * FROM ai_employee_status_history WHERE ai_employee_id = 'aie_wyatt' ORDER BY created_at DESC LIMIT 1")
       .first<{ from_status: string; to_status: string; approval_receipt_id: string | null; reason: string }>();
     expect(history!.from_status).toBe("ACTIVE");
     expect(history!.to_status).toBe("PAUSED");
@@ -180,7 +182,7 @@ describe("the D10 activation law survives the new surface", () => {
   });
 
   it("refuses the same state twice and treats RETIRED as terminal on this path", async () => {
-    const again = await call("/api/workforce/employees/aie_paige/lifecycle", MP, "POST", { to_status: "PAUSED", reason: "again" });
+    const again = await call("/api/workforce/employees/aie_wyatt/lifecycle", MP, "POST", { to_status: "PAUSED", reason: "again" });
     expect(again.status).toBe(409);
 
     await call("/api/workforce/employees/aie_wyatt/lifecycle", MP, "POST", { to_status: "RETIRED", reason: "not needed" });
@@ -202,7 +204,7 @@ describe("the D10 activation law survives the new surface", () => {
 describe("the digital office maps collaboration to work", () => {
   it("accepts a message that references a real work card", async () => {
     const cardId = await makeWorkCard();
-    const res = await call<{ id: string; context_kind: string }>("/api/workforce/rooms/investment_ic_meeting/messages", MP, "POST", {
+    const res = await call<{ id: string; context_kind: string }>("/api/workforce/rooms/investment/messages", MP, "POST", {
       context_kind: "WORK_CARD",
       context_id: cardId,
       body: "Picking this up; diligence questions drafted.",
@@ -212,7 +214,7 @@ describe("the digital office maps collaboration to work", () => {
   });
 
   it("refuses a message that names a record which does not exist", async () => {
-    const res = await call("/api/workforce/rooms/investment_ic_meeting/messages", MP, "POST", {
+    const res = await call("/api/workforce/rooms/investment/messages", MP, "POST", {
       context_kind: "WORK_CARD",
       context_id: "wc_imaginary",
       body: "About that card…",
@@ -221,7 +223,7 @@ describe("the digital office maps collaboration to work", () => {
   });
 
   it("refuses a referenced message with no reference at all", async () => {
-    const res = await call("/api/workforce/rooms/investment_ic_meeting/messages", MP, "POST", {
+    const res = await call("/api/workforce/rooms/investment/messages", MP, "POST", {
       context_kind: "AI_RUN",
       body: "no id supplied",
     });
@@ -229,7 +231,7 @@ describe("the digital office maps collaboration to work", () => {
   });
 
   it("lets a HUMAN make a firm announcement but never an AI employee", async () => {
-    const human = await call("/api/workforce/rooms/investment_ic_meeting/messages", MP, "POST", {
+    const human = await call("/api/workforce/rooms/investment/messages", MP, "POST", {
       context_kind: "ANNOUNCEMENT",
       body: "Reminder: IC packets close Thursday.",
     });
@@ -277,7 +279,7 @@ describe("handoffs move real work and stay human-decided", () => {
     const cardId = await makeWorkCard();
     const res = await call("/api/workforce/handoffs", MP, "POST", {
       work_card_id: cardId,
-      to_employee_id: "aie_wendy",
+      to_employee_id: "aie_walker",
       reason: "she is inactive",
     });
     expect(res.status).toBe(409);

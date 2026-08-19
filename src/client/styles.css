@@ -1702,3 +1702,188 @@ hr {
   margin-bottom: 2px;
 }
 .thesis-grid dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HOME AS A DELIVERY WINDOW
+   Every value below is a token. The masthead is the only place on the work
+   surface that goes above --text-xl, because it is the one line that has to
+   read as an arrival rather than a heading.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.home-masthead {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: var(--space-lg);
+  padding-bottom: var(--space-lg);
+  margin-bottom: var(--space-xl);
+  border-bottom: 1px solid var(--wp-line-strong);
+}
+.home-date {
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--wp-muted);
+  font-weight: 600;
+  margin-bottom: var(--space-xs);
+}
+.home-masthead h1 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  font-weight: 700;
+}
+.home-signed { text-align: right; font-size: var(--text-sm); color: var(--wp-ink-2); }
+.home-signed .muted { color: var(--wp-muted); }
+
+.home-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin: var(--space-xl) 0 var(--space-md);
+}
+.home-section-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+}
+/* Orange earns its place here and almost nowhere else on the page: this count is the one
+   number on Home that means somebody is waiting on you. */
+.count-pill {
+  display: inline-block;
+  background: var(--wp-orange);
+  color: var(--wp-orange-ink);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  padding: var(--space-3xs) var(--space-sm);
+  border-radius: var(--radius-pill);
+}
+
+.waiting-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
+}
+
+/* A delivery keeps its byline whether or not it has anything to report — silence from a
+   named colleague is information; an unattributed empty box is just a gap. */
+.delivery-card { display: flex; flex-direction: column; }
+.delivery-by {
+  margin: auto 0 0;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--wp-line);
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+}
+.delivery-by strong { color: var(--wp-ink); font-weight: 600; }
+
+@media (max-width: 40rem) {
+  .home-masthead { flex-direction: column; align-items: flex-start; }
+  .home-signed { text-align: left; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DEALFLOW — the spine
+   A deal only moves forward or drops out, so the pipeline is drawn as a line.
+   Orange marks exactly one thing: a stage with deals waiting in it.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.spine { padding: var(--space-xl) var(--space-2xl) var(--space-lg); }
+.spine-track { display: flex; align-items: flex-start; }
+.spine-stage {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.spine-rail { display: flex; align-items: center; width: 100%; }
+.spine-line { height: 2px; background: var(--wp-line-strong); flex-grow: 1; }
+/* The line stops at the ends rather than trailing into nothing. */
+.spine-rail > .spine-line-end:first-child,
+.spine-rail > .spine-line-end:last-child { background: transparent; }
+.spine-node {
+  width: 40px; height: 40px; flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--wp-line-strong);
+  background: var(--wp-surface);
+  color: var(--wp-muted);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+.spine-node-filled { background: var(--wp-ink); border-color: var(--wp-ink); color: var(--wp-surface); }
+.spine-label { font-size: var(--text-sm); font-weight: 600; text-align: center; }
+.spine-question { font-size: var(--text-xs); color: var(--wp-muted); text-align: center; line-height: var(--lh-snug); }
+.spine-exits {
+  margin-top: var(--space-lg); padding-top: var(--space-md);
+  border-top: 1px solid var(--wp-line);
+  text-align: center; font-size: var(--text-xs); color: var(--wp-muted);
+}
+.spine-exits strong { color: var(--wp-ink); }
+
+.pipeline-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-lg);
+  margin: var(--space-lg) 0;
+}
+.stat-card {
+  background: var(--wp-surface);
+  border: 1px solid var(--wp-line);
+  border-left: 3px solid var(--wp-line-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+}
+.stat-card-bad { border-left-color: var(--wp-danger); }
+.stat-card-accent { border-left-color: var(--wp-orange); }
+.stat-number { font-size: var(--text-2xl); font-weight: 700; line-height: var(--lh-tight); font-variant-numeric: tabular-nums; }
+
+.deal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-md); }
+.deal-row {
+  background: var(--wp-surface);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.6fr) auto;
+  gap: var(--space-lg);
+  align-items: center;
+}
+/* A pass stays legible — recording why we said no is the point — but recedes. */
+.deal-row-out { opacity: 0.72; }
+.deal-name { font-size: var(--text-md); font-weight: 700; }
+.deal-age { font-size: var(--text-xs); color: var(--wp-muted); margin-top: var(--space-2xs); }
+.deal-age-stalled { color: var(--wp-danger); font-weight: 600; }
+.deal-blocker-text { font-size: var(--text-base); }
+.deal-blocker-text.warn { color: var(--wp-warn); }
+.deal-actions { display: flex; align-items: center; gap: var(--space-sm); }
+.deal-message { grid-column: 1 / -1; }
+
+.stage-chip {
+  display: inline-block;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: var(--space-3xs) var(--space-sm);
+  border-radius: var(--radius-pill);
+  background: var(--wp-neutral-tint);
+  color: var(--wp-ink-2);
+}
+/* Orange means "waiting on the firm"; green means done. Nothing else earns a colour. */
+.stage-chip-screening,
+.stage-chip-diligence,
+.stage-chip-ic_ready { background: var(--wp-orange); color: var(--wp-orange-ink); }
+.stage-chip-closed { background: var(--wp-good); color: var(--wp-surface); }
+
+@media (max-width: 60rem) {
+  .deal-row { grid-template-columns: 1fr; gap: var(--space-sm); }
+  .spine-track { flex-wrap: wrap; gap: var(--space-lg); }
+  .spine-stage { flex-basis: 30%; }
+}

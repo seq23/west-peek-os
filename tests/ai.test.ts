@@ -9,6 +9,7 @@ import {
 import { acceptQuarantinedOutput } from "../src/worker/services/aiRuns";
 import type { Actor } from "../src/worker/services/authorize";
 import { MANAGING_PARTNER_NAMES } from "../src/shared/registry/managingPartners";
+import { AI_EMPLOYEE_ROSTER } from "../src/shared/registry/aiEmployees";
 
 /**
  * P4 — governed AI layer suite. Every test targets a specific boundary rule of
@@ -440,10 +441,10 @@ describe("9. every run leaves a complete ai_run row", () => {
 // ── 10. AI employee lifecycle authority ──
 
 describe("10. activation governance (D10)", () => {
-  it("seeds exactly 31 employees, all INACTIVE, no Managing Partner names", async () => {
+  it("seeds exactly the roster, all INACTIVE, no Managing Partner names", async () => {
     const rows = await t.db.prepare("SELECT name, status FROM ai_employee").all<{ name: string; status: string }>();
     const employees = rows.results ?? [];
-    expect(employees).toHaveLength(31);
+    expect(employees).toHaveLength(AI_EMPLOYEE_ROSTER.length);
     for (const e of employees) {
       expect(e.status).toBe("INACTIVE");
       expect(MANAGING_PARTNER_NAMES.map((n) => n.toLowerCase())).not.toContain(e.name.toLowerCase());
@@ -733,10 +734,10 @@ describe("pausing and resuming an employee", () => {
   });
 
   it("resumes an already-approved employee without a second approval", async () => {
-    await employ("aie_winnie");
-    await handleRequest(req("/api/ai/employees/aie_winnie/running", MP, "POST", { running: false }), env);
+    await employ("aie_waverly");
+    await handleRequest(req("/api/ai/employees/aie_waverly/running", MP, "POST", { running: false }), env);
     const resumed = await handleRequest(
-      req("/api/ai/employees/aie_winnie/running", MP, "POST", { running: true }),
+      req("/api/ai/employees/aie_waverly/running", MP, "POST", { running: true }),
       env,
     );
     expect(resumed.status).toBe(200);
@@ -754,7 +755,9 @@ describe("pausing and resuming an employee", () => {
   });
 
   it("lets far more than five be employed at once", async () => {
-    for (const id of ["aie_percy", "aie_prue", "aie_pax", "aie_preston", "aie_perrin", "aie_winter"]) {
+    // Six DISTINCT employees none of the earlier tests in this file has already employed —
+    // employing somebody twice is a 409 and would prove nothing about the cap.
+    for (const id of ["aie_pax", "aie_preston", "aie_winter", "aie_parker", "aie_poppy", "aie_piper"]) {
       await employ(id);
     }
     const row = await t.db
@@ -779,15 +782,15 @@ describe("pausing and resuming an employee", () => {
   });
 
   it("never lets an AI employee pause or resume anyone", async () => {
-    await employ("aie_wilson");
+    await employ("aie_porter");
     // Called at the service level deliberately: an AI actor cannot reach the HTTP route at all, so
     // testing through it would prove only that the front door is locked. The guard that matters is
     // the one inside, which is what would still be standing if a future caller arrived some other way.
     await expect(
       setEmployeeRunning(
         env,
-        { type: "AI", aiEmployeeId: "aie_paige", roles: [], firmScopes: ["west-peek"] },
-        "aie_wilson",
+        { type: "AI", aiEmployeeId: "aie_wyatt", roles: [], firmScopes: ["west-peek"] },
+        "aie_porter",
         false,
         "an employee trying to bench a colleague",
       ),

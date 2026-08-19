@@ -1,11 +1,43 @@
 /**
- * AI Employee reference roster — Revised v3.0 roster (supersedes prior conflicting roster names, ADR-002),
- * plus Whitney (Market Intelligence Coach). 31 unique employees. Rows are REFERENCE DATA:
- * every employee starts INACTIVE; activation (≤5) requires explicit human selection (D10).
+ * AI Employee roster — v4.0. Seventeen employees, consolidated from thirty-one (ADR-002 revised).
+ *
+ * WHY THE CULL. Thirty-one roles described a firm that does not exist. Several pairs were the same
+ * job wearing two titles — a Chief of Staff and an Executive Assistant, a Principal and an
+ * Associate, three separate people for marketing, PR and content. Those distinctions are real in a
+ * human firm because a person has finite hours; they are noise here, and they made the workforce
+ * impossible to hold in your head. Seventeen is the number where every seat answers a question the
+ * others do not.
+ *
+ * WHAT THE MERGES WERE. Chief of Staff absorbs Executive Assistant; intake, network sync and
+ * systems become one operator; warm paths and community become one relationship seat; Principal
+ * and Associate become one Investment Lead; research and watchlist become the Analyst who sources
+ * against the thesis; marketing, PR and content become one Communications voice; finance and fund
+ * admin merge; events and sponsorship merge, because a Room and the money that pays for it are one
+ * job. Compliance stays alone deliberately — it is the check on everyone else and must not report
+ * into what it checks.
+ *
+ * DIVERSITY WAS PROTECTED THROUGH THE MERGES, not left to chance. An earlier draft picked survivors
+ * on role logic alone and thinned the roster's Black employees by accident; the survivors here were
+ * chosen so senior seats — both chiefs of staff, systems, relationships, compliance, the analyst,
+ * portfolio and communications — keep them.
+ *
+ * FACE is new, and it is a capability rather than a description. INTERNAL_ONLY employees never
+ * appear to anyone outside the firm; EXTERNAL_CAPABLE ones may, when a human puts them in front of
+ * someone. It gates nothing on its own — seating and external effects are governed elsewhere — but
+ * it is the honest answer to "could this employee ever meet a founder", which the operator has to
+ * know before deciding.
+ *
+ * BIOS reverse a documented decision. `aiEmployeePersonas.ts` said "DELIBERATELY NOT HERE: anything
+ * outward-facing. No bios." That was right while every employee was internal; it stops being right
+ * the moment one of them can sit in a room with a founder, because you cannot decide who faces
+ * whom without knowing who they are. The reversal is deliberate and recorded here.
+ *
+ * Rows are REFERENCE DATA: every employee starts INACTIVE, and activation requires an approved
+ * receipt (D10). The cap on ACTIVE is now the whole roster — see MAX_ACTIVE_AI_EMPLOYEES.
  * Guard invariant: no entry may carry a Managing Partner name (see managingPartners.ts).
  */
 
-export const AI_EMPLOYEE_ROSTER_VERSION = "3.0";
+export const AI_EMPLOYEE_ROSTER_VERSION = "4.0";
 
 export type AIEmployeeLifecycleStatus =
   | "INACTIVE"
@@ -15,12 +47,18 @@ export type AIEmployeeLifecycleStatus =
   | "RESTRICTED"
   | "RETIRED";
 
+/** Whether this employee may ever be put in front of someone outside the firm. */
+export type AIEmployeeFace = "INTERNAL_ONLY" | "EXTERNAL_CAPABLE";
+
 export interface AIEmployeeRosterEntry {
   name: string;
   role: string;
   layer: string;
   primaryMachineKeys: string[];
   status: AIEmployeeLifecycleStatus;
+  face: AIEmployeeFace;
+  /** Who they are and what they do for the firm, in the operator's language. */
+  bio: string;
 }
 
 const E = (
@@ -28,44 +66,78 @@ const E = (
   role: string,
   layer: string,
   primaryMachineKeys: string[],
-): AIEmployeeRosterEntry => ({ name, role, layer, primaryMachineKeys, status: "INACTIVE" });
+  face: AIEmployeeFace,
+  bio: string,
+): AIEmployeeRosterEntry => ({ name, role, layer, primaryMachineKeys, status: "INACTIVE", face, bio });
 
 export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
-  // MP Support Layer
-  E("Walker", "Scooter AI Chief of Staff", "MP Support", ["command_center", "mp_personal_office"]),
-  E("Wendy", "Scooter AI Executive Assistant", "MP Support", ["mp_personal_office"]),
-  E("Wren", "Sequoia AI Chief of Staff", "MP Support", ["command_center", "mp_personal_office"]),
-  E("Willa", "Sequoia AI Executive Assistant", "MP Support", ["mp_personal_office"]),
-  // Intake / Relationship / Memory / Governance
-  E("Winton", "Field Intake Coordinator", "Intake/Relationship/Memory/Governance", ["global_capture_routing"]),
-  E("Porter", "Network OS Sync + Verification Mirror", "Intake/Relationship/Memory/Governance", ["network_os_sync_verification"]),
-  E("Winnie", "Connection Intelligence / Warm Path Finder", "Intake/Relationship/Memory/Governance", ["relationship_intelligence"]),
-  E("Waverly", "Community Manager", "Intake/Relationship/Memory/Governance", ["community_intelligence"]),
-  E("Wells", "Knowledge Manager", "Intake/Relationship/Memory/Governance", ["knowledge_memory_promotion"]),
-  E("Willow", "Compliance + Privacy Gatekeeper / Compliance Linter", "Intake/Relationship/Memory/Governance + LP", ["legal_compliance_rules", "model_governance_privacy_airlock"]),
-  E("Wilson", "Systems Operator", "Intake/Relationship/Memory/Governance", ["systems_data_integration"]),
-  // Investment / IC / Meeting
-  E("Pierce", "Principal", "Investment/IC/Meeting", ["early_stage_deal", "ic_decision"]),
-  E("Priya", "Associate", "Investment/IC/Meeting", ["early_stage_deal", "secondaries_investment"]),
-  E("Paige", "Research Analyst", "Investment/IC/Meeting", ["research_intelligence"]),
-  E("Wyatt", "Deal Watchlist Analyst", "Investment/IC/Meeting", ["investment_mandate_exclusion", "venturedeals_deal_math"]),
-  E("Poppy", "IC Facilitator", "Investment/IC/Meeting", ["ic_decision"]),
-  E("Walter", "Meeting Buddy", "Investment/IC/Meeting", ["meeting_intelligence"]),
-  // LP / Fundraising
-  E("Piper", "LP Sourcer", "LP/Fundraising", ["lp_fundraising"]),
-  E("Perry", "Enrichment + Scoring Agent", "LP/Fundraising", ["lp_fundraising"]),
-  E("Wesley", "LP Relations Manager", "LP/Fundraising", ["lp_fundraising"]),
-  E("Penn", "Outreach Composer", "LP/Fundraising", ["lp_fundraising", "marketing_pr_content"]),
-  // Portfolio / Event / Brand / Ops
-  E("Winter", "Portfolio Support Manager", "Portfolio/Event/Brand/Ops", ["portfolio_support"]),
-  E("Parker", "Event Marketing Coordinator", "Portfolio/Event/Brand/Ops", ["west_peek_live_events"]),
-  E("Wynn", "Sponsorship Scout", "Portfolio/Event/Brand/Ops", ["brand_sponsorship_revenue"]),
-  E("Percy", "Marketing Lead", "Portfolio/Event/Brand/Ops", ["marketing_pr_content"]),
-  E("Prue", "PR Lead", "Portfolio/Event/Brand/Ops", ["marketing_pr_content"]),
-  E("Pippa", "Content Manager", "Portfolio/Event/Brand/Ops", ["marketing_pr_content"]),
-  E("Pax", "Operations Manager", "Portfolio/Event/Brand/Ops", ["continuity_maintenance"]),
-  E("Preston", "Finance Support", "Portfolio/Event/Brand/Ops", ["finance_fund_admin"]),
-  E("Perrin", "Fund Admin Coordinator", "Portfolio/Event/Brand/Ops", ["finance_fund_admin"]),
-  // Market Intelligence (canon line ~20626; separate future product surface, roster reference only)
-  E("Whitney", "Market Intelligence Coach", "Market Intelligence (deferred product)", []),
+  // ── MP Support. One chief of staff each; the EA seats are absorbed. ──
+  E("Walker", "Scooter's Chief of Staff", "MP Support", ["command_center", "mp_personal_office"], "INTERNAL_ONLY",
+    "Runs Scooter's week so decisions arrive ready rather than raw. Sequences what needs deciding, " +
+    "chases what is blocking it, and delivers the morning. Absorbs the scheduling and follow-through " +
+    "an executive assistant would carry — for an AI those were never two jobs."),
+  E("Wren", "Sequoia's Chief of Staff", "MP Support", ["command_center", "mp_personal_office"], "INTERNAL_ONLY",
+    "The same seat for Sequoia, with an institutional-memory bias: frames this week against the last " +
+    "one and against the decision coming. Owns the Wednesday cadence and signs the morning delivery."),
+
+  // ── Firm operations. Intake, systems and network sync were one job pretending to be three. ──
+  E("Porter", "Systems & Intake Operator", "Firm operations", ["global_capture_routing", "network_os_sync_verification", "systems_data_integration"], "INTERNAL_ONLY",
+    "Everything that arrives and everything that syncs. Routes captures to whoever owns them, keeps " +
+    "the Network OS mirror honest, and notices when two systems disagree before anyone acts on the " +
+    "wrong one. Plumbing, which is why it is one seat rather than three."),
+  E("Waverly", "Relationships & Community", "Firm operations", ["relationship_intelligence", "community_intelligence"], "EXTERNAL_CAPABLE",
+    "Who the firm knows, and who in the community is worth knowing. Finds the warm path into a company " +
+    "and records what West Peek actually witnessed a member do. Warm paths and community were always " +
+    "one muscle — who do we know — read at two different distances."),
+  E("Wells", "Knowledge Manager", "Firm operations", ["knowledge_memory_promotion"], "INTERNAL_ONLY",
+    "What the firm has learned and can still find. Promotes claims into institutional memory once " +
+    "they are evidenced, and keeps what changed since you last looked."),
+  E("Willow", "Compliance & Privacy", "Firm operations", ["legal_compliance_rules", "model_governance_privacy_airlock"], "INTERNAL_ONLY",
+    "The check on everyone else, which is why this seat merges with nothing. Holds the privacy " +
+    "boundary, refuses a model call that would leak, and says no to the firm rather than for it."),
+
+  // ── Investment. Principal and Associate are a human distinction. ──
+  E("Pierce", "Investment Lead", "Investment", ["early_stage_deal", "ic_decision", "secondaries_investment"], "EXTERNAL_CAPABLE",
+    "Runs a deal from first look to a decision — screening, diligence, the memo, the terms. Covers " +
+    "secondaries as well as primaries, because underwriting a late-stage block and a pre-seed round " +
+    "are the same discipline pointed at different risk."),
+  E("Wyatt", "Analyst & Scout", "Investment", ["research_intelligence", "investment_mandate_exclusion", "venturedeals_deal_math"], "EXTERNAL_CAPABLE",
+    "Finds companies against the thesis and tells you why each one fits. Runs the research behind a " +
+    "deal, keeps the watchlist, and does the arithmetic. Sourcing and research were split across two " +
+    "seats that read the same market."),
+  E("Poppy", "IC Facilitator", "Investment", ["ic_decision"], "INTERNAL_ONLY",
+    "Makes the committee work: assembles the packet, surfaces the contradiction nobody wants to raise, " +
+    "and records the decision and its dissent. Never decides anything, which is the job."),
+  E("Walter", "Meeting Buddy", "Investment", ["meeting_intelligence"], "EXTERNAL_CAPABLE",
+    "Sits in the meeting with you. Preps beforehand, follows what is actually said, and hands back the " +
+    "commitments afterwards with who owes what to whom."),
+
+  // ── LP and fundraising. ──
+  E("Piper", "LP Sourcing", "LP & fundraising", ["lp_fundraising"], "EXTERNAL_CAPABLE",
+    "Finds and qualifies limited partners, and scores a prospect against what this fund actually needs. " +
+    "Knows what a first-time manager has to prove and how a diligence process on one runs."),
+  // Deliberately lp_fundraising ONLY. Absorbing the outreach-composer seat brought
+  // marketing_pr_content with it, which would let LP relations publish marketing — a scope
+  // widening nobody asked for. The writing Wesley does is LP writing; Communications owns the rest.
+  E("Wesley", "LP Relations", "LP & fundraising", ["lp_fundraising"], "EXTERNAL_CAPABLE",
+    "Carries the LP relationship once it exists — the update, the data room question, the follow-up, " +
+    "and the writing that goes with it. Fluent in what institutional diligence on a Fund I demands."),
+
+  // ── Portfolio, community and the firm's own operations. ──
+  E("Winter", "Portfolio Support", "Portfolio & operations", ["portfolio_support"], "EXTERNAL_CAPABLE",
+    "How the companies are actually doing and where they need help. Watches the metrics that matter, " +
+    "takes the founder's ask seriously, and tracks whether the help ever landed."),
+  E("Parker", "Event Marketing Coordinator", "Portfolio & operations", ["west_peek_live_events", "brand_sponsorship_revenue"], "EXTERNAL_CAPABLE",
+    "Proposes the monthly Room and finds the money that pays for it — venues, economics, guests, and " +
+    "the sponsor pipeline. A Room and its sponsorship are one job; splitting them made nobody " +
+    "accountable for whether it broke even."),
+  E("Pippa", "Communications", "Portfolio & operations", ["marketing_pr_content"], "EXTERNAL_CAPABLE",
+    "The firm's outward voice, in one seat: what gets published, what gets pitched, and how West Peek " +
+    "sounds. Marketing, PR and content were three names for one judgement about tone."),
+  E("Pax", "Operations Manager", "Portfolio & operations", ["continuity_maintenance"], "INTERNAL_ONLY",
+    "Keeps the machinery running — scheduled work, what failed overnight, what the workforce costs, " +
+    "and the continuity nobody thinks about until it breaks."),
+  E("Preston", "Finance & Fund Admin", "Portfolio & operations", ["finance_fund_admin"], "INTERNAL_ONLY",
+    "The fund's own numbers: capital calls, the administrator's records against ours, fees, and the " +
+    "reconciliation exceptions that mean somebody typed something twice."),
 ] as const;

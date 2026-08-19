@@ -1,0 +1,243 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <style>
+    /* Values lifted from src/client/styles.css — the locked West Peek system. */
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    a { color: #b4400f; text-decoration: none; }
+    a:hover { color: #8f3309; }
+    .lbl { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #6b635b; font-weight: 600; }
+    .card { background: #ffffff; border: 1px solid #e4ddd2; border-radius: 6px; }
+    .rail-item { display: block; padding: 7px 12px; border-radius: 4px; color: #b9b0a5; font-size: 13px; text-decoration: none; }
+    .rail-item.on { background: #221d19; color: #ffffff; font-weight: 600; }
+    .pill { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px; }
+  </style>
+</helmet>
+
+<div style="display: flex; width: 1440px; height: 1180px; background: #f7f2ea; color: #15120f;">
+
+  <!-- ── Operating rail. Black is authority: the rail and nothing else. ── -->
+  <nav style="width: 248px; flex-shrink: 0; background: #050505; padding: 16px 12px; display: flex; flex-direction: column; gap: 16px;">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 4px 12px 12px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M2 3 L6 16 L10 6 L14 16 L18 3" stroke="#f6f1ea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+      <span style="color: #f6f1ea; font-weight: 700; font-size: 13px; letter-spacing: -0.011em;">West Peek OS</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <a class="rail-item on" href="#">Home</a>
+      <a class="rail-item" href="#">Ask</a>
+      <a class="rail-item" href="#">Capture</a>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <div class="lbl" style="color: #6b635b; padding: 8px 12px 4px;">Now</div>
+      <a class="rail-item" href="#">Approvals</a>
+      <a class="rail-item" href="#">Today</a>
+      <a class="rail-item" href="#">Weekly review</a>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <div class="lbl" style="color: #6b635b; padding: 8px 12px 4px;">Deals</div>
+      <a class="rail-item" href="#">Thesis</a>
+      <a class="rail-item" href="#">Dealflow</a>
+      <a class="rail-item" href="#">Deal Math</a>
+      <a class="rail-item" href="#">Portfolio</a>
+    </div>
+  </nav>
+
+  <!-- ── Work surface ── -->
+  <main style="flex-grow: 1; padding: 32px 40px 48px; display: flex; flex-direction: column; gap: 24px; min-width: 0;">
+
+    <!-- Masthead: a delivery has a moment. "This morning" means something; "dashboard" does not. -->
+    <header style="display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; padding-bottom: 16px; border-bottom: 1px solid #cdc4b7;">
+      <div>
+        <div class="lbl" style="margin-bottom: 6px;">Tuesday 18 August 2026</div>
+        <h1 style="margin: 0; font-size: 28px; line-height: 1.2; letter-spacing: -0.011em; font-weight: 700;">This morning, Sequoia</h1>
+      </div>
+      <div style="text-align: right;">
+        <div style="font-size: 13px; color: #4a443e;">Delivered 7:03 AM by <strong style="color: #15120f;">Wren</strong></div>
+        <div style="font-size: 12px; color: #6b635b;">Sequoia AI Chief of Staff</div>
+      </div>
+    </header>
+
+    <!-- The brief. The one genuinely authored thing on the page, and it says so. -->
+    <section class="card" style="padding: 24px 28px;">
+      <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 4px;">
+        <h2 style="margin: 0; font-size: 22px; letter-spacing: -0.011em; font-weight: 700;">Executive Intelligence Report</h2>
+        <span class="pill" style="background: #fff1e9; color: #b4400f;">Morning edition</span>
+      </div>
+      <div style="font-size: 12px; color: #6b635b; margin-bottom: 20px;">
+        Written from 47 items swept overnight &middot; every figure carries the source it came from
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div>
+          <div class="lbl" style="margin-bottom: 6px;">The one-minute version</div>
+          <ol style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.55; color: #15120f;">
+            <li style="margin-bottom: 6px;">Long rates and oil moved together overnight — the pressure on growth valuations is the discount rate, not the Fed.</li>
+            <li style="margin-bottom: 6px;">Two ed-tech seed rounds priced above where Psyflo would raise, which helps the comp you are building.</li>
+            <li>Nothing in your pipeline changed stage. Psyflo has been in screening nine days.</li>
+          </ol>
+        </div>
+
+        <div style="border-top: 1px solid #e4ddd2; padding-top: 16px;">
+          <div class="lbl" style="margin-bottom: 8px;">What matters most</div>
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; gap: 12px; align-items: flex-start;">
+              <span class="pill" style="background: #fbebe9; color: #97231b; flex-shrink: 0;">10/10</span>
+              <div style="min-width: 0;">
+                <div style="font-size: 14px; font-weight: 600;">Thirty-year yields at their highest since 2007</div>
+                <div style="font-size: 13px; color: #4a443e; line-height: 1.55;">Your cost of capital moves with the long end, not the funds rate — a falling hike probability does not make your discount rate friendlier.</div>
+              </div>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: flex-start;">
+              <span class="pill" style="background: #fdf2df; color: #8a5200; flex-shrink: 0;">8/10</span>
+              <div style="min-width: 0;">
+                <div style="font-size: 14px; font-weight: 600;">AI infrastructure financing is becoming a credit story</div>
+                <div style="font-size: 13px; color: #4a443e; line-height: 1.55;">Relevant to Synthient, which you passed on last week. Worth knowing why before the next one like it.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 20px; padding-top: 14px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+        Read the full report &rarr;
+      </div>
+    </section>
+
+    <!-- Waiting on you. The only group where something is blocked on the reader. -->
+    <section>
+      <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px;">
+        <h2 style="margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.011em;">Waiting on you</h2>
+        <span class="pill" style="background: #f05a1a; color: #0a0a0a;">2</span>
+      </div>
+      <div class="card" style="border-color: #cdc4b7;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid #e4ddd2;">
+          <div style="min-width: 0;">
+            <div style="font-size: 14px; font-weight: 600;">Activate Paige as Analyst</div>
+            <div style="font-size: 12px; color: #6b635b;">Walker &middot; waiting 2 days</div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-shrink: 0;">
+            <span style="font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 4px; background: #15120f; color: #ffffff;">Approve</span>
+            <span style="font-size: 13px; font-weight: 500; padding: 6px 14px; border-radius: 4px; border: 1px solid #9a9086; color: #15120f;">Decline</span>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 20px;">
+          <div style="min-width: 0;">
+            <div style="font-size: 14px; font-weight: 600;">September Room &mdash; venue and budget</div>
+            <div style="font-size: 12px; color: #6b635b;">Parker &middot; waiting 4 days</div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-shrink: 0;">
+            <span style="font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 4px; background: #15120f; color: #ffffff;">Approve</span>
+            <span style="font-size: 13px; font-weight: 500; padding: 6px 14px; border-radius: 4px; border: 1px solid #9a9086; color: #15120f;">Decline</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Deliveries. Same panels as today; what changes is that each has an author you can go and ask. -->
+    <section>
+      <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px;">
+        <h2 style="margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.011em;">Deliveries</h2>
+      </div>
+      <div style="font-size: 12px; color: #6b635b; margin-bottom: 12px;">Five on duty this shift &middot; everyone else is available</div>
+
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;">
+
+        <div class="card" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+            <div style="font-size: 14px; font-weight: 600;">Deals close to a decision</div>
+            <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #6b635b;">1</span>
+          </div>
+          <div style="font-size: 13px; line-height: 1.55; color: #15120f;">Psyflo &mdash; screening, 9 days. Blocker: no founder call booked.</div>
+          <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+            <strong style="color: #15120f; font-weight: 600;">Poppy</strong> &middot; IC Facilitator
+          </div>
+        </div>
+
+        <div class="card" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+            <div style="font-size: 14px; font-weight: 600;">Where the raise stands</div>
+            <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #6b635b;">3</span>
+          </div>
+          <div style="font-size: 13px; line-height: 1.55; color: #15120f;">Three LP conversations open. None have moved in two weeks.</div>
+          <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+            <strong style="color: #15120f; font-weight: 600;">Wesley</strong> &middot; LP Relations Manager
+          </div>
+        </div>
+
+        <div class="card" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+            <div style="font-size: 14px; font-weight: 600;">Companies I am watching</div>
+            <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #6b635b;">0</span>
+          </div>
+          <div style="font-size: 13px; line-height: 1.55; color: #6b635b;">No open alerts on anything you own.</div>
+          <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+            <strong style="color: #15120f; font-weight: 600;">Winter</strong> &middot; Portfolio Support Manager
+          </div>
+        </div>
+
+        <div class="card" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+            <div style="font-size: 14px; font-weight: 600;">Rooms you are in today</div>
+            <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #6b635b;">2</span>
+          </div>
+          <div style="font-size: 13px; line-height: 1.55; color: #15120f;">10:00 Deana Oliver, Psyflo &middot; 15:00 partner sync</div>
+          <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+            <strong style="color: #15120f; font-weight: 600;">Walter</strong> &middot; Meeting Buddy
+          </div>
+        </div>
+
+        <div class="card" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+            <div style="font-size: 14px; font-weight: 600;">Changed since you looked</div>
+            <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #6b635b;">4</span>
+          </div>
+          <div style="font-size: 13px; line-height: 1.55; color: #15120f;">Thesis moved to v2 &mdash; check size now $500&ndash;750K.</div>
+          <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+            <strong style="color: #15120f; font-weight: 600;">Wells</strong> &middot; Knowledge Manager
+          </div>
+        </div>
+
+        <div class="card" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
+            <div style="font-size: 14px; font-weight: 600;">What the workforce cost</div>
+            <span style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #6b635b;">$0.42</span>
+          </div>
+          <div style="font-size: 13px; line-height: 1.55; color: #15120f;">Of a $25 daily cap. Nothing blocked.</div>
+          <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid #e4ddd2; font-size: 12px; color: #6b635b;">
+            <strong style="color: #15120f; font-weight: 600;">Pax</strong> &middot; Operations Manager
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Private layer: collapsed, owner-only, and unchanged. -->
+    <section class="card" style="padding: 16px 20px; background: #fbf8f3; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+      <div>
+        <div style="font-size: 14px; font-weight: 600;">Private layer</div>
+        <div style="font-size: 12px; color: #6b635b;">Visible only to you. Never firm evidence, and never a justification for a decision.</div>
+      </div>
+      <span style="font-size: 13px; font-weight: 500; padding: 6px 14px; border-radius: 4px; border: 1px solid #9a9086; flex-shrink: 0;">Show</span>
+    </section>
+
+  </main>
+</div>
+</x-dc>
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

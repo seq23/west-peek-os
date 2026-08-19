@@ -24,7 +24,7 @@
  * apply, and `--check` fails until one exists.
  *
  * Hard guards (fail loudly, exit 1):
- * - exactly 31 roster rows (ADR-002);
+ * - the roster matches EXPECTED_ROSTER_SIZE (ADR-002, revised for roster v4.0);
  * - every row seeds INACTIVE (activation is a human-reserved action, never seed-time);
  * - no Managing Partner name (full or first) appears as an AI employee (D10/ADR-003).
  *
@@ -69,8 +69,22 @@ const { AI_EMPLOYEE_ROSTER, AI_EMPLOYEE_ROSTER_VERSION } = roster;
 const { MANAGING_PARTNER_NAMES } = mps;
 
 // ── Hard guards ──
-if (AI_EMPLOYEE_ROSTER.length !== 31) {
-  console.error(`FATAL: AI employee roster count is ${AI_EMPLOYEE_ROSTER.length}, expected 31 (ADR-002).`);
+/**
+ * The roster size, asserted rather than assumed.
+ *
+ * It was 31 under ADR-002 and is 17 under roster v4.0, consolidated on operator direction: several
+ * pairs were the same job wearing two titles, and thirty-one seats described a firm that does not
+ * exist. The check stays because its real job is catching an ACCIDENTAL loss — a bad merge, a
+ * deleted block — which a bare "whatever length the array is" would wave through. Changing this
+ * number is a deliberate act and should arrive with the roster change that justifies it.
+ */
+const EXPECTED_ROSTER_SIZE = 17;
+
+if (AI_EMPLOYEE_ROSTER.length !== EXPECTED_ROSTER_SIZE) {
+  console.error(
+    `FATAL: AI employee roster count is ${AI_EMPLOYEE_ROSTER.length}, expected ${EXPECTED_ROSTER_SIZE}.\n` +
+      "If the roster was deliberately resized, update EXPECTED_ROSTER_SIZE in this file with it.",
+  );
   process.exit(1);
 }
 for (const entry of AI_EMPLOYEE_ROSTER) {
@@ -86,7 +100,7 @@ for (const entry of AI_EMPLOYEE_ROSTER) {
 
 const lines = [];
 lines.push(`-- Registry provenance: AI employee roster v${AI_EMPLOYEE_ROSTER_VERSION} (Revised v3.0 roster + Whitney, ADR-002).`);
-lines.push("-- All 31 rows seed INACTIVE; activation is human-reserved (ai_employee.activate), never seed-time.");
+lines.push(`-- All ${AI_EMPLOYEE_ROSTER.length} rows seed INACTIVE; activation is human-reserved (ai_employee.activate), never seed-time.`);
 lines.push("INSERT OR IGNORE INTO ai_employee (id, name, role, layer, primary_machines_json, status, purpose) VALUES");
 lines.push(
   AI_EMPLOYEE_ROSTER.map((e, i) => {
@@ -123,7 +137,11 @@ function rolesUnreachableOutside0004() {
     .map((n) => readFileSync(path.join(MIGRATIONS_DIR, n), "utf8"))
     .join("\n");
   return AI_EMPLOYEE_ROSTER.filter((e) => {
-    const mentioned = others.includes(`'${e.name}'`) && others.includes(`'${e.role}'`);
+    // Compare against the SQL-ESCAPED forms. Roles like "Scooter's Chief of Staff" are written to
+    // the migration with a doubled apostrophe, so a raw substring test never matches and reports
+    // a perfectly reachable role as unreachable. It failed safe — a spurious backfill rather than a
+    // missing one — but it would have cried wolf on every apostrophe forever.
+    const mentioned = others.includes(esc(e.name)) && others.includes(esc(e.role));
     return !mentioned;
   });
 }
@@ -184,5 +202,51 @@ if (process.argv.includes("--check")) {
     ].join("\n");
     writeFileSync(file, body);
     console.log(`Wrote backfill: ${unreachable.length} employee role(s) unreachable by applied databases → ${path.relative(ROOT, file)}`);
+  }
+
+  // ── Employees who left the roster ──
+  //
+  // Removing someone from the registry does NOT remove their row: the seed is INSERT OR IGNORE and
+  // touches nothing that already exists. So a consolidation leaves the departed sitting in every
+  // live database, still selectable, still seatable in a meeting.
+  //
+  // They are RETIRED, never deleted. Their rows are referenced by ai_run attribution, meeting
+  // seating and work cards, and the history of what they did is real even though the seat is gone —
+  // deleting would break those references and erase the record with them. RETIRED already means
+  // "no longer employable" in the lifecycle, so nothing new is invented.
+  //
+  // Expressed as "anybody not on the roster" rather than a list of names, so it stays correct
+  // through the next consolidation without anyone maintaining a leavers' list.
+  //
+  // Emitted ONLY when no existing retirement migration already names exactly this roster. Without
+  // that check every regeneration adds another file, and a migration set grows a new no-op on each
+  // run until nobody can tell which ones did anything.
+  const retireList = AI_EMPLOYEE_ROSTER.map((e) => esc(e.name)).join(", ");
+  const alreadyRetired = readdirSync(MIGRATIONS_DIR)
+    .filter((n) => n.endsWith("_ai_employee_retire.sql"))
+    .some((n) => readFileSync(path.join(MIGRATIONS_DIR, n), "utf8").includes(retireList));
+
+  if (!alreadyRetired && !process.argv.includes("--no-retire")) {
+    const num = nextMigrationNumber();
+    const file = path.join(MIGRATIONS_DIR, `${num}_ai_employee_retire.sql`);
+    const body = [
+      `-- ${num}_ai_employee_retire.sql — generated by scripts/seed/generate-ai-employee-seed.mjs.`,
+      "--",
+      "-- Employees consolidated off the roster. Their rows stay: ai_run attribution, meeting seating",
+      "-- and work cards reference them, and what they did actually happened. RETIRED is the lifecycle's",
+      "-- existing word for a seat that no longer exists, so nothing new is introduced here.",
+      "--",
+      "-- Guarded so re-applying changes nothing, and so an already-RETIRED row is left alone.",
+      "",
+      `INSERT OR IGNORE INTO schema_version (migration) VALUES ('${num}_ai_employee_retire');`,
+      "",
+      "UPDATE ai_employee",
+      "   SET status = 'RETIRED'",
+      ` WHERE name NOT IN (${retireList})`,
+      "   AND status <> 'RETIRED';",
+      "",
+    ].join("\n");
+    writeFileSync(file, body);
+    console.log(`Wrote retirement: employees off the roster → ${path.relative(ROOT, file)}`);
   }
 }

@@ -19,6 +19,8 @@ interface LoungeEmployee {
   department: string;
   avatar_initials: string;
   brief: string;
+  bio: string | null;
+  face: string | null;
   manager_employee_id: string | null;
   status: string;
   primary_machines: string[];
@@ -611,7 +613,16 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
                 <p className="muted small employee-voice">{personaFor(e.name)!.voice}</p>
               </>
             )}
-            <p className="small">{e.brief}</p>
+            {/* The bio answers "who is this", which is the question you have to answer before
+                deciding whether they can sit in front of a founder. */}
+            <p className="small">{e.bio ?? e.brief}</p>
+            {e.face && (
+              <p className="muted small" data-testid={`employee-face-${e.id}`}>
+                {e.face === "EXTERNAL_CAPABLE"
+                  ? "Can meet people outside the firm, when you put them there."
+                  : "Internal only — never appears to anyone outside the firm."}
+              </p>
+            )}
             <p className="muted small">
               {e.department} · {e.current_work.length} open card(s) · {e.runs_30d} run(s)/30d ({e.blocked_runs_30d} blocked) · $
               {e.cost_30d_usd.toFixed(4)}

@@ -209,6 +209,7 @@ import {
   handleTransitionOpportunity,
   handleBackfillOpportunity,
   handleConfirmPlaceholders,
+  handleDealflowBoard,
   handleUpdateDealMathPacket,
   handleUpdateOpportunity,
   handleVoidTransaction,
@@ -610,6 +611,7 @@ const router = new Router()
   .post("/api/security-classes", handleCreateSecurityClass)
   .get("/api/security-classes", handleListSecurityClasses)
   // P6 — investment opportunities (secondaries keep seller/broker/class provenance).
+  .get("/api/dealflow/board", handleDealflowBoard)
   .post("/api/opportunities", handleCreateOpportunity)
   .get("/api/opportunities", handleListOpportunities)
   // P51 — where deals come from, and which ones nobody recorded.

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { useSelectedFund } from "../lib/selectedFund";
+import { FundPicker } from "./FundPicker";
 
 /**
  * The thesis — the firm's investment mandate, editable, and versioned rather than overwritten.
@@ -64,8 +66,8 @@ const usd = (n: number | undefined): string =>
 const toList = (s: string): string[] => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
 
 export function ThesisPage({ me }: { me: MeResponse }) {
-  const funds = useApi<{ funds: Array<{ id: string; name: string }> }>("/api/funds");
-  const fund = funds.data?.funds?.[0] ?? null;
+  const selected = useSelectedFund();
+  const fund = selected.fund;
   const versions = useApi<{ versions: PolicyVersion[] }>(
     fund ? `/api/funds/${fund.id}/policies/mandate` : null,
     [fund?.id],
@@ -89,11 +91,12 @@ export function ThesisPage({ me }: { me: MeResponse }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latest?.id, editing]);
 
-  if (funds.loading && !funds.data) return <p data-testid="thesis-loading">Loading…</p>;
+  if (selected.loading) return <p data-testid="thesis-loading">Loading…</p>;
 
   if (!fund) {
     return (
       <section data-testid="thesis-page">
+        <FundPicker selected={selected} />
         <p className="state-empty" data-testid="thesis-no-fund">
           No fund exists yet, so there is nothing for a thesis to belong to. Create the fund first —
           the mandate is a policy version on a fund, not a standalone document.
@@ -131,6 +134,7 @@ export function ThesisPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="thesis-page">
+      <FundPicker selected={selected} />
       <p className="muted small">
         What {fund.name} is looking for. This is the input the analyst searches against, so changing
         it changes what gets brought to you. Editing never overwrites — it writes a new version and
