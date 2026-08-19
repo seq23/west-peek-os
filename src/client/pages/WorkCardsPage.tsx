@@ -529,6 +529,20 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
             {finished.slice(0, 50).map((c) => (
               <li key={c.id}>
                 <span className="badge">{stateMeaning(c.state)?.label ?? c.state}</span> {c.title}
+                {/* CHANGING YOUR MIND HAS TO BE POSSIBLE. A dropped card is kept rather than
+                    deleted precisely because the decision might be revisited, and until now the
+                    record was kept and the reversal was not offered. Reopens as OPEN, not to
+                    whatever it was before: what it was is history, what it is now is undecided. */}
+                {c.state === "CANCELLED" && (
+                  <button
+                    type="button"
+                    className="link-button"
+                    data-testid={`work-card-undrop-${c.id}`}
+                    onClick={() => void move(c.id, "OPEN")}
+                  >
+                    Put it back
+                  </button>
+                )}
               </li>
             ))}
           </ul>

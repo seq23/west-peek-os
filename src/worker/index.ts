@@ -55,6 +55,7 @@ import {
   handleAddApprovalEvidence,
   handleApprovalContext,
 } from "./services/approvals";
+import { handleWorkCard } from "./services/employeeWork";
 import {
   handleGoogleCallback,
   handleGoogleConnectStart,
@@ -781,6 +782,9 @@ const router = new Router()
   .post("/api/browser-tasks", handleRequestBrowserTask)
   // P44 — looking at a page FOR a card. Runs immediately when the card carries permission; without
   // it, waits for a person exactly as a standalone task does.
+  // P52 — the employee who owns this card gets on with it. A person starts the run; the employee
+  // decides how, never whether.
+  .post("/api/work-cards/:id/work", handleWorkCard)
   .post("/api/work-cards/:id/look", handleCardLook)
   .post("/api/work-cards/:id/browser-permission", handleSetCardBrowserPermission)
   .post("/api/browser-tasks/:id/approve", handleApproveBrowserTask)

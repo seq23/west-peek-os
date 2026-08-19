@@ -2623,3 +2623,14 @@ hr {
   align-items: center;
   gap: 0.3rem;
 }
+
+/* What the firm has spent, all time. A number somebody asks for first deserves to be readable
+   from across the room rather than mixed into a sentence. */
+.cost-alltime-figure {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-alltime { border-left: 3px solid var(--wp-orange); }

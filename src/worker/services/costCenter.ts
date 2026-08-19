@@ -115,6 +115,18 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
   const today = await dailySpendUsd(ctx.env, firmScope);
 
   const committed = runs.reduce((sum, r) => sum + costOf(r).committed, 0);
+
+  // EVERYTHING THE FIRM HAS EVER SPENT. The overview reports a period, which answers "are we on
+  // track this month" and not "what has this cost us" — and the second question is the one somebody
+  // asks first. Computed in SQL rather than by loading every run: this grows without limit and the
+  // page must not.
+  const allTime = await ctx.env.WP_OS_DB.prepare(
+    `SELECT COUNT(*) AS runs,
+            COALESCE(SUM(CAST(json_extract(actual_usage_json, '$.cost_usd') AS REAL)), 0) AS spent,
+            MIN(created_at) AS first_run
+       FROM ai_run
+      WHERE status = 'COMPLETED' AND actual_usage_json IS NOT NULL`,
+  ).first<{ runs: number; spent: number; first_run: string | null }>();
   const estimatedOnly = runs.filter((r) => COMMITTED.has(r.status) && r.actual_usage_json === null);
   const blocked = runs.filter((r) => !COMMITTED.has(r.status));
   const quarantined = runs.filter((r) => r.status === "COMPLETED" && r.output_quarantine === 1);
@@ -150,6 +162,17 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
   ).results ?? [];
 
   return json({
+    /**
+     * Since the very first run. Stated apart from the period totals because they answer different
+     * questions, and because this one carries a caveat worth seeing: runs completed before cost
+     * recording was fixed on 19 Aug 2026 stored zero, so the true figure is a little higher than
+     * this. Understating is the honest direction for a number nobody should be surprised by.
+     */
+    all_time: {
+      spent_usd: Math.round(Number(allTime?.spent ?? 0) * 1_000_000) / 1_000_000,
+      runs: Number(allTime?.runs ?? 0),
+      since: allTime?.first_run ?? null,
+    },
     period,
     since,
     firm_policy: {

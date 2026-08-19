@@ -4,6 +4,7 @@ import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttenti
 import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { DailyBriefPanel } from "./DailyBriefPanel";
+import { chiefOfStaffFor } from "@shared/work/chiefOfStaff";
 import { ConnectPanel } from "./ConnectPanel";
 
 /**
@@ -387,8 +388,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
    * firm-wide chief rather than leaving the page unsigned.
    */
   const chiefOfStaff = (() => {
-    const first = me.fullName.split(" ")[0]?.toLowerCase() ?? "";
-    const mine = first === "scooter" ? "Walker" : first === "sequoia" ? "Wren" : "Wren";
+    const mine = chiefOfStaffFor(me.fullName);
     return { name: mine, role: roleFor(mine) ?? "Chief of Staff" };
   })();
 

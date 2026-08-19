@@ -43,6 +43,7 @@ interface CatalogResponse {
 interface CostResponse {
   period: string;
   firm_policy: { cost_mode: string; privacy_mode: string; daily_cap_usd: number; per_run_cap_usd: number; spent_today_usd: number };
+  all_time: { spent_usd: number; runs: number; since: string | null };
   totals: {
     committed_usd: number;
     runs: number;
@@ -255,6 +256,22 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
       </div>
       {cost.data && (
         <>
+          {/* WHAT IT HAS COST, EVER. The page reported a period, which answers "are we on track this
+              month" — not "what has this cost us", which is the question somebody asks first and
+              had no answer anywhere. */}
+          <section className="card cost-alltime" data-testid="cost-all-time">
+            <div>
+              <span className="cost-alltime-figure">${cost.data.all_time.spent_usd.toFixed(2)}</span>
+              <span className="muted small"> spent by the firm, all time</span>
+            </div>
+            <p className="muted small">
+              Across {cost.data.all_time.runs} completed run{cost.data.all_time.runs === 1 ? "" : "s"}
+              {cost.data.all_time.since ? ` since ${cost.data.all_time.since.slice(0, 10)}` : ""}. Runs
+              completed before cost recording was corrected on 19 Aug 2026 stored zero, so the true
+              figure is a little higher than this.
+            </p>
+          </section>
+
           <section className="card" data-testid="cost-totals">
             <p>
               <strong>${cost.data.totals.committed_usd.toFixed(4)}</strong> committed this {cost.data.period.toLowerCase()} across{" "}

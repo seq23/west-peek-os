@@ -55,6 +55,8 @@ export function browserBlockedReason(env: Env): string | null {
  */
 /** A browser that never starts must not hold a request open until the platform kills it. */
 const LAUNCH_TIMEOUT_MS = 20_000;
+/** Time for a framework to paint after load. Short: this is a cost as well as a wait. */
+const SETTLE_MS = 1_200;
 
 /** Reject with a readable reason rather than hanging, and never leave the timer running. */
 async function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
@@ -125,7 +127,13 @@ export async function browsePage(
     browser = await withDeadline(doLaunch(binding), LAUNCH_TIMEOUT_MS, "the browser did not start");
 
     const page = await browser.newPage();
-    await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    // WAIT FOR THE PAGE TO ACTUALLY EXIST. `domcontentloaded` fires before client-side rendering,
+    // and most of what this system needs to read — careers pages, pricing pages, anything built
+    // this decade — paints after that. Reading at domcontentloaded returns an empty shell or a
+    // skeleton, and the employee reasonably concludes the answer is not there. `load` waits for
+    // subresources; the settle below covers frameworks that render on an effect after that.
+    await page.goto(url.toString(), { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+    await new Promise((r) => setTimeout(r, SETTLE_MS));
 
     const finalUrl = await page.url();
     // A redirect can land somewhere the original guard never saw. Check again after navigation.
@@ -139,9 +147,36 @@ export async function browsePage(
     const title = await page.title().catch(() => null);
     const raw = await page.evaluate(() => document.body?.innerText ?? "");
 
+    // LINKS, BECAUSE innerText THROWS THEM AWAY. Without them a page can be read but never
+    // followed: an employee reaching a directory or a search result has the words and no way to
+    // reach what they point at, which is most of why multi-step lookups went nowhere. Same-page
+    // anchors and javascript: are dropped — they lead nowhere worth a second request.
+    const links = await page
+      .evaluate(() => {
+        const out: string[] = [];
+        for (const a of Array.from(document.querySelectorAll("a[href]")).slice(0, 400)) {
+          const href = (a as HTMLAnchorElement).href;
+          const label = ((a as HTMLAnchorElement).innerText || "").trim().replace(/\s+/g, " ").slice(0, 80);
+          if (!href.startsWith("http")) continue;
+          if (label) out.push(`${label} → ${href}`);
+        }
+        return Array.from(new Set(out)).slice(0, 60);
+      })
+      .catch(() => [] as string[]);
+
+    // Defensive: anything that is not an array of strings is treated as no links. The page decides
+    // what comes back from evaluate, and a value of an unexpected shape must degrade the extras
+    // rather than lose the page text that was successfully read.
+    const linkLines = Array.isArray(links) ? links.filter((l): l is string => typeof l === "string") : [];
+
     return {
       ok: true,
-      text: fenceUntrusted(String(raw).replace(/\n{3,}/g, "\n\n").trim().slice(0, MAX_TEXT)),
+      text: fenceUntrusted(
+        [
+          String(raw).replace(/\n{3,}/g, "\n\n").trim().slice(0, MAX_TEXT),
+          linkLines.length ? `\n\nLINKS ON THIS PAGE:\n${linkLines.join("\n")}` : "",
+        ].join(""),
+      ),
       finalUrl,
       title,
       detail: "ok",
@@ -161,6 +196,7 @@ export interface BrowserLike {
     url(): Promise<string> | string;
     title(): Promise<string>;
     evaluate<T>(fn: () => T): Promise<T>;
+    evaluate<T>(fn: () => T[]): Promise<T[]>;
   }>;
   close(): Promise<void>;
 }

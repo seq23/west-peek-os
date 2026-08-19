@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
 import { EXIT_TYPES, headingLabel } from "@shared/review/weeklyAgenda";
+import { jointByline } from "@shared/work/chiefOfStaff";
 
 /**
  * The weekly MP operating review (P37, V1 #18, canon §8).
@@ -183,6 +184,18 @@ export function WeeklyReviewPage(): JSX.Element {
             {d?.resolved ? "complete" : `${d?.unresolved ?? 0} unresolved`}
           </span>
         </div>
+      )}
+
+      {/* SIGNED BY BOTH CHIEFS OF STAFF. This is one document two partners work through, so it is
+          prepared jointly rather than by whichever of them happened to open it — an agenda that
+          looks like it belongs to one partner is one the other stops treating as theirs. The
+          derivation is machinery; the delivery has a face, which is the same reason the morning
+          brief carries a name. */}
+      {review && (
+        <p className="muted small" data-testid="weekly-byline">
+          Prepared for you both by <strong>{jointByline()}</strong>, your Chiefs of Staff — assembled
+          from live records, decided by nobody but you.
+        </p>
       )}
 
       {/* The oldest thing still on the table. By the third deferral this line is usually more
