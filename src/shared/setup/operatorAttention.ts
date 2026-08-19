@@ -78,7 +78,7 @@ export function operatorAttention(inputs: AttentionInputs): AttentionItem[] {
         .map((j) => j.name)
         .join(", ")}. That work stopped and will not retry.`,
       action: "Review and clear them on Work → Scheduled Work.",
-      link: "jobs",
+      link: "work-cards",
     });
   }
 
@@ -93,7 +93,7 @@ export function operatorAttention(inputs: AttentionInputs): AttentionItem[] {
         .map((j) => j.name)
         .join(", ")}.`,
       action: "Open the job to see the refusal reason on Work → Scheduled Work.",
-      link: "jobs",
+      link: "work-cards",
     });
   }
 
@@ -104,7 +104,7 @@ export function operatorAttention(inputs: AttentionInputs): AttentionItem[] {
       severity: "INFO",
       headline: `${pausedWithReason.length} scheduled job(s) are paused.`,
       action: "Switch on the ones that should be running, on Work → Scheduled Work.",
-      link: "jobs",
+      link: "work-cards",
     });
   }
 

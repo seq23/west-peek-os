@@ -386,3 +386,49 @@ describe("dismissing everything at once", () => {
     expect(typeof res.body.marked).toBe("number");
   });
 });
+
+/**
+ * Deciding an approval retires the notification that asked for it.
+ *
+ * Submitting a card raised "Approval waiting" and nothing ever retired it, so the inbox filled with
+ * unread requests for decisions already made — each linking to a card no longer in the queue. The
+ * operator's report was exactly that: a notification about an approval that is not in the approval
+ * queue at all.
+ */
+describe("an answered approval stops asking", () => {
+  it("marks the waiting notification read once the card is decided", async () => {
+    const created = await call<{ id: string }>("/api/approvals", SEQUOIA, "POST", {
+      action_key: "ai_employee.activate",
+      object_type: "ai_employee",
+      object_id: "aiemp_test_subject",
+      title: "Notification retirement test",
+      submit: true,
+    });
+    expect(created.status).toBe(201);
+    const cardId = created.body.id;
+
+    const before = await call<{ notifications: Array<Record<string, any>> }>("/api/notifications", SEQUOIA);
+    const waiting = before.body.notifications.filter(
+      (n) => n.object_type === "approval_card" && n.object_id === cardId && n.read_at === null,
+    );
+    expect(waiting.length, "submitting should raise an unread approval notification").toBeGreaterThan(0);
+
+    const decided = await call(`/api/approvals/${cardId}/decide`, SEQUOIA, "POST", {
+      decision: "approved",
+      note: "deciding it",
+    });
+    expect(decided.status).toBe(200);
+
+    const after = await call<{ notifications: Array<Record<string, any>> }>("/api/notifications", SEQUOIA);
+    const stillWaiting = after.body.notifications.filter(
+      (n) => n.object_type === "approval_card" && n.object_id === cardId && n.read_at === null,
+    );
+    expect(stillWaiting, "a decided approval must not still be asking").toEqual([]);
+
+    // Read, not deleted: what was asked and when is part of the record.
+    const kept = after.body.notifications.filter(
+      (n) => n.object_type === "approval_card" && n.object_id === cardId,
+    );
+    expect(kept.length).toBeGreaterThan(0);
+  });
+});

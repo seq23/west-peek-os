@@ -23,6 +23,7 @@ const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke";
 const CALENDAR_ENDPOINT = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const GMAIL_SEND_ENDPOINT = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 const USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo";
 
 const TIMEOUT_MS = 10_000;
@@ -32,6 +33,21 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
 ] as const;
+
+/**
+ * The extra permission for sending as yourself, asked for SEPARATELY.
+ *
+ * gmail.send can only send. It cannot read the inbox, list messages, touch drafts or see anything
+ * that already exists — Google's own description is "Send email on your behalf" and nothing more.
+ * That narrowness is why it is acceptable at all.
+ *
+ * It is a second consent rather than part of the first because a partner who wants their diary read
+ * should not be handed a mail permission to approve as the price. Google's incremental
+ * authorisation adds it to the existing grant, so nothing already given is lost.
+ */
+export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+
+export const GOOGLE_SCOPES_WITH_SEND = [...GOOGLE_SCOPES, GMAIL_SEND_SCOPE] as const;
 
 export interface GoogleTokens {
   access_token: string;
@@ -60,12 +76,17 @@ export function isGoogleConfigured(env: Env): boolean {
 }
 
 /** Where the partner is sent to say yes. Builds a URL; performs no request. */
-export function buildAuthUrl(env: Env, redirectUri: string, state: string): string {
+export function buildAuthUrl(
+  env: Env,
+  redirectUri: string,
+  state: string,
+  scopes: readonly string[] = GOOGLE_SCOPES,
+): string {
   const u = new URL(AUTH_ENDPOINT);
   u.searchParams.set("client_id", env.GOOGLE_OAUTH_CLIENT_ID!);
   u.searchParams.set("redirect_uri", redirectUri);
   u.searchParams.set("response_type", "code");
-  u.searchParams.set("scope", GOOGLE_SCOPES.join(" "));
+  u.searchParams.set("scope", scopes.join(" "));
   u.searchParams.set("state", state);
   // offline + consent together are what actually yield a refresh token. Without offline there is
   // no refresh token at all; without consent Google withholds it on every grant after the first,
@@ -247,4 +268,63 @@ export async function fetchEvents(
       html_link: e.htmlLink ? String(e.htmlLink) : null,
     };
   });
+}
+
+/**
+ * Send one message as the partner, through their own Gmail.
+ *
+ * WHY THIS EXISTS RATHER THAN ALWAYS USING RESEND. Mail sent through Resend under a partner's
+ * address is legitimate and arrives, but Gmail has never heard of it — so it is absent from their
+ * Sent folder and a reply does not thread against anything. Sent through Gmail it simply IS their
+ * email: in Sent, threaded, and signed by Google.
+ *
+ * RFC 822 BY HAND, because that is what the endpoint takes. Header values are stripped of CR and LF
+ * before they go in: a newline inside a subject or an address is header injection, and the subject
+ * here comes from a payload that a person or a model wrote.
+ */
+export async function sendViaGmail(
+  accessToken: string,
+  message: { to: string; from: string; fromName?: string; subject: string; text: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  const clean = (v: string) => v.replace(/[\r\n]+/g, " ").trim();
+  const from = message.fromName ? `${clean(message.fromName)} <${clean(message.from)}>` : clean(message.from);
+
+  const raw = [
+    `From: ${from}`,
+    `To: ${clean(message.to)}`,
+    `Subject: ${clean(message.subject)}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "",
+    message.text,
+  ].join("\r\n");
+
+  // base64url, which is what Gmail wants — not standard base64.
+  const bytes = new TextEncoder().encode(raw);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  const encoded = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetchImpl(GMAIL_SEND_ENDPOINT, {
+      method: "POST",
+      headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ raw: encoded }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (res.status === 401 || res.status === 403) throw new Error("google_unauthorised");
+  // Never echoes Google's body: it can contain the message that was being sent, and this string
+  // reaches an error surface and an event payload.
+  if (!res.ok) throw new Error(`gmail refused the send (HTTP ${res.status})`);
+
+  const body = (await res.json().catch(() => ({}))) as { id?: string };
+  return body.id ?? null;
 }

@@ -225,6 +225,28 @@ export async function decideApproval(
     ).bind(cardId, decision, actor.firmUserId!, decidedAt, note ?? null),
   ]);
 
+  // THE NOTIFICATION THAT ASKED FOR THIS DECISION IS NOW ANSWERED, so it stops asking.
+  //
+  // Submitting a card raises "Approval waiting"; nothing ever retired it. The result was an inbox
+  // filling with unread requests for decisions that had already been made, each linking to a card
+  // no longer in the queue — the operator's exact report was a notification about an approval that
+  // is not in the approval queue at all. Read rather than deleted: what was asked and when is part
+  // of the record, it simply stops being outstanding.
+  //
+  // Best-effort, and deliberately after the decision is committed. A notification that will not
+  // update is not a reason to fail a decision that already happened.
+  try {
+    await env.WP_OS_DB.prepare(
+      `UPDATE notification
+          SET read_at = ?2
+        WHERE object_type = 'approval_card' AND object_id = ?1 AND read_at IS NULL`,
+    )
+      .bind(cardId, decidedAt)
+      .run();
+  } catch {
+    /* the decision stands regardless */
+  }
+
   await appendEvent(env, {
     eventType: "approval.decided",
     actorType: "firm_user",

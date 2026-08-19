@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { operatorAttention } from "../src/shared/setup/operatorAttention";
 
@@ -18,7 +19,9 @@ describe("Home's attention strip only reports what it can prove", () => {
     expect(out[0]!.severity).toBe("BLOCKING");
     expect(out[0]!.headline).toContain("dead-letter");
     expect(out[0]!.headline).toContain("will not retry");
-    expect(out[0]!.link).toBe("jobs");
+    // Was "jobs" until Scheduled Work merged into Work. The route went; this assertion did not,
+    // so it pinned a dead link in place rather than catching one.
+    expect(out[0]!.link).toBe("work-cards");
   });
 
   it("reports refusals and failures as degraded, not as silence", () => {
@@ -75,5 +78,32 @@ describe("Home's attention strip only reports what it can prove", () => {
     // `undefined` means unknown. Only an explicit `false` is a finding.
     const out = operatorAttention({ aiProviderConfigured: undefined });
     expect(out.map((i) => i.key)).not.toContain("no-provider");
+  });
+});
+
+/**
+ * Every "Open" button goes somewhere.
+ *
+ * Three of these pointed at `jobs`, a route that stopped existing when Scheduled Work merged into
+ * Work. The links were not updated, so the button rendered, looked live, and did nothing — the
+ * worst kind of broken, because nothing reports it. Checked against App.tsx's actual route dispatch
+ * rather than a list someone maintains by hand.
+ */
+describe("attention links point at real destinations", () => {
+  const app = readFileSync(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const routes = new Set([...app.matchAll(/active === "([a-z0-9-]+)"/g)].map((m) => m[1]!));
+
+  it("reads a real route list out of App.tsx", () => {
+    // Guards the guard: a refactor that changed the dispatch shape would otherwise make this pass
+    // over an empty set.
+    expect(routes.size).toBeGreaterThan(20);
+    expect(routes.has("work-cards")).toBe(true);
+  });
+
+  it("has no attention item linking to a route that does not exist", () => {
+    const src = readFileSync(new URL("../src/shared/setup/operatorAttention.ts", import.meta.url), "utf8");
+    const links = [...src.matchAll(/link: "([a-z0-9-]+)"/g)].map((m) => m[1]!);
+    expect(links.length).toBeGreaterThan(0);
+    expect(links.filter((l) => !routes.has(l))).toEqual([]);
   });
 });
