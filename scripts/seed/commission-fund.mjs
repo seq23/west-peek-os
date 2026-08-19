@@ -354,6 +354,37 @@ async function main() {
     companyIds[c.canonical_name] = rec.id;
   }
 
+  // Companies created before the sector column existed have none, and `ensure` skips anything that
+  // already exists — correctly, since it must not clobber edits. Sector and one-liner are the two
+  // fields the register cannot be scanned without, so they are filled in when ABSENT and never
+  // overwritten: an operator who has retyped a sector keeps it.
+  console.log("\nCompany details");
+  for (const c of COMPANIES) {
+    if (!c.sector && !c.one_liner) continue;
+    const id = companyIds[c.canonical_name];
+    if (!id) continue;
+    const current = (await api("GET", `/api/companies/${id}`)).data ?? {};
+    const missing = {};
+    if (c.sector && !current.sector) missing.sector = c.sector;
+    if (c.one_liner && !current.one_liner) missing.one_liner = c.one_liner;
+    if (Object.keys(missing).length === 0) {
+      existed += 1;
+      console.log(`  ·  ${c.canonical_name} — already described`);
+      continue;
+    }
+    if (DRY_RUN) {
+      console.log(`  →  ${c.canonical_name} — WOULD SET ${Object.keys(missing).join(", ")}`);
+      continue;
+    }
+    const res = await api("PATCH", `/api/companies/${id}`, missing);
+    if (res.status >= 400) {
+      console.log(`  !  ${c.canonical_name} — ${JSON.stringify(res.data)?.slice(0, 120)}`);
+    } else {
+      created += 1;
+      console.log(`  →  ${c.canonical_name} — ${Object.keys(missing).join(" and ")} recorded`);
+    }
+  }
+
   console.log("\nOpportunities");
   for (const o of OPPORTUNITIES) {
     const { company, ...rest } = o;
