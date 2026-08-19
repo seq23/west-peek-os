@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  PROMPT_VERSION, REPORT_SECTIONS, buildSynthesisPrompt, parseReport, verifyReport,
+  PROMPT_VERSION, REPORT_SECTIONS, buildSynthesisPrompt, parseReport, resolveEventIds, verifyReport,
   type EvidencePacket, type ParsedSection,
 } from "../src/shared/intelligence/reportSchema";
 
@@ -230,5 +230,56 @@ describe("reading the delimited format", () => {
   it("still reads the JSON form, so stored reports and stubborn models both survive", () => {
     const out = parseReport('{"sections":[{"key":"watch","body_md":"Still works.","event_ids":[]}]}');
     expect(out![0]!.body_md).toBe("Still works.");
+  });
+});
+
+/**
+ * Resolving abbreviated citations.
+ *
+ * Another failure taken from production rather than imagined. The first report written by a model
+ * good enough to produce the whole brief cited every source by the first block of its UUID, so all
+ * fifty-four citations read as invented, every section was withheld as unverifiable, and twenty
+ * thousand words rendered as an empty page.
+ */
+describe("citations abbreviated by the model", () => {
+  const packet = (ids: string[]): EvidencePacket => ({
+    report_date: "2026-08-18",
+    partner_name: "Sequoia Taylor",
+    firm_context: { sectors: [], portfolio: [], watchlist: [], themes: [] },
+    open_narratives: [],
+    events: ids.map((event_id) => ({
+      event_id, title: "t", summary: "s", publisher: null, published_at: null,
+      categories: [], source_urls: [], importance: 5, why_ranked: [],
+    })),
+  });
+
+  it("expands a unique prefix to the full id", () => {
+    const p = packet(["iitem_8d236b17-d0a9-4e7f-855e-d31ebfa37637"]);
+    const out = resolveEventIds([{ key: "watch", body_md: "x", event_ids: ["iitem_8d236b17"] }], p);
+    expect(out[0]!.event_ids).toEqual(["iitem_8d236b17-d0a9-4e7f-855e-d31ebfa37637"]);
+    // And having been resolved, it must now verify.
+    expect(verifyReport(out, p).filter((f) => f.problem === "unknown_event")).toEqual([]);
+  });
+
+  it("leaves an AMBIGUOUS prefix alone, so it still fails verification", () => {
+    // This is the case where resolving really would be inventing a source.
+    const p = packet(["iitem_8d23-aaa", "iitem_8d23-bbb"]);
+    const out = resolveEventIds([{ key: "watch", body_md: "x", event_ids: ["iitem_8d23"] }], p);
+    expect(out[0]!.event_ids).toEqual(["iitem_8d23"]);
+    expect(verifyReport(out, p).some((f) => f.problem === "unknown_event")).toBe(true);
+  });
+
+  it("leaves an id matching nothing alone", () => {
+    const p = packet(["iitem_real"]);
+    const out = resolveEventIds([{ key: "watch", body_md: "x", event_ids: ["iitem_fabricated"] }], p);
+    expect(out[0]!.event_ids).toEqual(["iitem_fabricated"]);
+    expect(verifyReport(out, p).some((f) => f.problem === "unknown_event")).toBe(true);
+  });
+
+  it("does not disturb an id that was already correct", () => {
+    const p = packet(["iitem_a", "iitem_ab"]);
+    // "iitem_a" is a prefix of "iitem_ab", but it is also an exact id: exact always wins.
+    const out = resolveEventIds([{ key: "watch", body_md: "x", event_ids: ["iitem_a"] }], p);
+    expect(out[0]!.event_ids).toEqual(["iitem_a"]);
   });
 });

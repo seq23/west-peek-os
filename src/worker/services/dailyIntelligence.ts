@@ -6,7 +6,7 @@ import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { notifyQuietly } from "./notifications";
 import {
-  PROMPT_VERSION, REPORT_SECTIONS, buildSynthesisPrompt, parseReport, verifyReport,
+  PROMPT_VERSION, REPORT_SECTIONS, buildSynthesisPrompt, parseReport, resolveEventIds, verifyReport,
   type EvidenceEvent, type EvidencePacket,
 } from "../../shared/intelligence/reportSchema";
 import {
@@ -348,8 +348,15 @@ export async function generateForPartner(
     return await fail("synthesis_error", err instanceof Error ? err.message : String(err));
   }
 
-  const sections = parseReport(output);
-  if (!sections) return await fail("unparseable", "the model did not return a usable report");
+  const parsed = parseReport(output);
+  if (!parsed) return await fail("unparseable", "the model did not return a usable report");
+
+  // Citations first, verification second. Models abbreviate UUIDs, and an id shortened to its first
+  // block resolves to exactly one event or to none — the former is the id it meant, the latter
+  // still fails below. Without this every citation reads as invented and the whole report is
+  // withheld as unverifiable, which is precisely what happened the first time a model was good
+  // enough to write all of it.
+  const sections = resolveEventIds(parsed, packet);
 
   // ── Verify against the evidence, deterministically. ──
   await setStatus(env, id, "VERIFYING");
@@ -388,7 +395,9 @@ export async function generateForPartner(
     payload: { report_date: reportDate, candidates: candidates.length, sections: sections.length, flags: flags.length, prompt_version: PROMPT_VERSION },
   });
 
-  return { report_id: id, status: "READY", sections: sections.length - flags.length, candidates: candidates.length, flags: flags.length };
+  const flagged = new Set(flags.map((f) => f.section));
+  const kept = sections.filter((s) => !flagged.has(s.key)).length;
+  return { report_id: id, status: "READY", sections: kept, candidates: candidates.length, flags: flags.length };
 }
 
 /**

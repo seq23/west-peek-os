@@ -171,6 +171,10 @@ export function buildSynthesisPrompt(packet: EvidencePacket): string {
     "rests on, comma-separated, and may be empty. Everything between the ===EVENTS line and ===END",
     "is the body, copied verbatim — write normal prose and markdown there.",
     "",
+    "COPY EVENT IDS WHOLE. They are long UUIDs and the temptation is to shorten them; a shortened",
+    "id cannot be linked back to its source. Paste the entire id exactly as given, and do not put",
+    "ids in the body — the ===EVENTS line is where they belong.",
+    "",
     "This format is used INSTEAD OF JSON because these sections are long and full of quotation",
     "marks, and a single unescaped quote inside a JSON string discards the entire report. Here",
     "nothing needs escaping at all. Do not wrap the output in a code fence.",
@@ -344,6 +348,35 @@ function parseJsonReport(raw: string): ParsedSection[] | null {
   if (watch) push("watch", watch.body_md, watch.event_ids);
 
   return out.length > 0 ? out : null;
+}
+
+/**
+ * Rewrite cited ids to their canonical full form, where that is unambiguous.
+ *
+ * WHY THIS IS NEEDED. Evidence ids are UUIDs — `iitem_8d236b17-d0a9-4e7f-855e-d31ebfa37637` — and
+ * models abbreviate them. The first report written by a model good enough to produce the whole
+ * brief cited every source as `iitem_8d236b17`, so all fifty-four citations looked invented, every
+ * section was held back as unverifiable, and a correct twenty-thousand-character report rendered as
+ * nothing at all.
+ *
+ * A UNIQUE PREFIX IS NOT A GUESS. If exactly one supplied event starts with what the model wrote,
+ * that is the event it means; there is no other candidate to confuse it with. An ambiguous prefix
+ * is left untouched and fails verification exactly as before, which is the case where guessing
+ * WOULD be inventing a source.
+ *
+ * Done here rather than by loosening the verifier, so that what gets STORED is the real id — the
+ * citation links in the interface have to resolve, and a shortened id would break them silently.
+ */
+export function resolveEventIds(sections: readonly ParsedSection[], packet: EvidencePacket): ParsedSection[] {
+  const known = new Set(packet.events.map((e) => e.event_id));
+  return sections.map((s) => ({
+    ...s,
+    event_ids: s.event_ids.map((cited) => {
+      if (known.has(cited)) return cited;
+      const matches = packet.events.filter((e) => e.event_id.startsWith(cited));
+      return matches.length === 1 ? matches[0]!.event_id : cited;
+    }),
+  }));
 }
 
 export interface VerificationFlag {
