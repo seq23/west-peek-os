@@ -23,7 +23,9 @@ import { CONNECTION_FACTS } from "../src/shared/help/connectionFacts";
 
 const env = (over: Partial<Env> = {}): Env =>
   ({
-    GOOGLE_OAUTH_CLIENT_ID: "client-id.apps.googleusercontent.com",
+    // Deliberately NOT shaped like a real client id. The artifact gate matches credential
+    // fragments, and a convincing fake in a test is indistinguishable from a real one leaking.
+    GOOGLE_OAUTH_CLIENT_ID: "test-client-id-not-a-real-google-client",
     GOOGLE_OAUTH_CLIENT_SECRET: "client-secret",
     ...over,
   }) as unknown as Env;

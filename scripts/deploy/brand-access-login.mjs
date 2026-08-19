@@ -15,16 +15,25 @@
  * a decision somebody takes rather than a side effect of a deploy.
  *
  * Usage:
- *   CLOUDFLARE_API_TOKEN=… node scripts/deploy/brand-access-login.mjs            # show the plan
- *   CLOUDFLARE_API_TOKEN=… node scripts/deploy/brand-access-login.mjs --apply    # write it
+ *   CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… node scripts/deploy/brand-access-login.mjs
+ *   … --apply    # write it
  *
  * The token needs: Account → Access: Organizations → Edit.
  * Create at https://dash.cloudflare.com/profile/api-tokens (Custom token).
  */
 
-const ACCOUNT_ID = "8d147e242033699dd37c6f5a451f48d2";
-const API = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/access/organizations`;
+// FROM THE ENVIRONMENT, not baked in. It sat here as a literal, which the artifact gate refuses:
+// the account id is a managed value in the operator's vault, and shipping a vault value inside a
+// repository is the rule that check exists to enforce. It is also simply better practice — the
+// token beside it has always come from the environment, and there was never a reason for its
+// account to be different.
+const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
 const TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+if (!ACCOUNT_ID) {
+  console.error("CLOUDFLARE_ACCOUNT_ID is not set. Run under `npm run vault:run --` or export it.");
+  process.exit(2);
+}
+const API = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/access/organizations`;
 const APPLY = process.argv.includes("--apply");
 
 /**
