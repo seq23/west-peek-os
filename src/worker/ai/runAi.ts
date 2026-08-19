@@ -447,10 +447,29 @@ async function executeAttempt(
       model: rec.model,
       capabilityRequirement: rec.input.capabilityRequirement,
     });
+    // WHAT THE RUN ACTUALLY COST, priced locally when the provider will not say.
+    //
+    // Every completed run was recording cost_usd: 0, because OpenRouter only returns a cost when
+    // asked and nobody was asking. The consequence was not cosmetic: spend-to-date is summed from
+    // this field, so "spent today" was permanently zero and the firm's daily cap could never fire.
+    // The only ceiling actually in force was the per-run one.
+    //
+    // The provider's own figure is preferred — it is the real bill. Falling back to the catalogue
+    // rate on the planned model is an approximation, and on a run that fell back to a DIFFERENT
+    // model it prices the tokens at the planned model's rate. That is a knowable inaccuracy and it
+    // is still far better than recording nothing spent, because no run is free.
+    const pricedLocally =
+      (response.usage.inputTokens * (rec.estimate.input_per_mtok_usd ?? 0) +
+        response.usage.outputTokens * (rec.estimate.output_per_mtok_usd ?? 0)) /
+      1_000_000;
+    const costUsd = response.usage.costUsd > 0 ? response.usage.costUsd : pricedLocally;
+
     const actualUsage = {
       input_tokens: response.usage.inputTokens,
       output_tokens: response.usage.outputTokens,
-      cost_usd: response.usage.costUsd,
+      cost_usd: costUsd,
+      /** Whether the number above is the provider's bill or our own arithmetic. */
+      cost_source: response.usage.costUsd > 0 ? "provider" : "catalogue_rate",
       model: response.model,
     };
     await env.WP_OS_DB.prepare(
@@ -475,7 +494,7 @@ async function executeAttempt(
         provider_id: rec.providerId,
         model: response.model,
         output_quarantine: quarantine,
-        cost_usd: response.usage.costUsd,
+        cost_usd: costUsd,
       },
     });
   } catch (err) {

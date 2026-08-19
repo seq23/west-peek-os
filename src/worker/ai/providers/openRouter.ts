@@ -53,6 +53,10 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
             { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
             { role: "user", content: req.inputs.join("\n\n") },
           ],
+          // ASK FOR THE BILL. Without this OpenRouter returns token counts and no cost, so every
+          // run recorded cost_usd: 0 — which meant "spent today" was always zero and the firm's
+          // daily cap could never fire. A cap that cannot fire is not a cap.
+          usage: { include: true },
         }),
       });
       if (!res.ok) throw new Error(`provider_http_${res.status}`);
@@ -60,7 +64,7 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
       const body = (await res.json()) as {
         model?: string;
         choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number; total_cost?: number };
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_cost?: number; cost?: number };
       };
       const text = body.choices?.[0]?.message?.content;
       if (typeof text !== "string") throw new Error("provider_malformed_response");
@@ -71,9 +75,10 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
         usage: {
           inputTokens: body.usage?.prompt_tokens ?? 0,
           outputTokens: body.usage?.completion_tokens ?? 0,
-          // OpenRouter reports a total cost on the usage object when it knows one; absent means
-          // unknown, which the run records as 0 actual and keeps the estimate visible.
-          costUsd: body.usage?.total_cost ?? 0,
+          // Requested above via usage.include. OpenRouter has used both spellings; take either.
+          // Still 0 if the provider declines to say — runAi then prices it from the catalogue
+          // rather than recording a free run, because a run is never actually free.
+          costUsd: body.usage?.total_cost ?? body.usage?.cost ?? 0,
         },
       };
     },

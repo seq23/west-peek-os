@@ -133,11 +133,24 @@ export function buildSynthesisPrompt(packet: EvidencePacket): string {
     `DATE: ${packet.report_date}`,
     `READER: ${packet.partner_name}`,
     "",
-    "WHAT THIS FIRM CARES ABOUT:",
-    `- sectors: ${packet.firm_context.sectors.join(", ") || "not stated"}`,
+    // FIRM AND READER ARE DIFFERENT THINGS, and merging them produced two identical briefs for two
+    // partners who do different jobs. Portfolio and watchlist belong to the firm and matter to
+    // everyone; sectors and themes are this reader's own, and they are what should make their
+    // brief theirs.
+    "WHAT THE FIRM HOLDS (matters to every partner):",
     `- portfolio: ${packet.firm_context.portfolio.join(", ") || "none recorded"}`,
     `- watchlist: ${packet.firm_context.watchlist.join(", ") || "none recorded"}`,
-    `- themes: ${packet.firm_context.themes.join(", ") || "none recorded"}`,
+    "",
+    `WHAT ${packet.partner_name.split(" ")[0]?.toUpperCase() ?? "THIS READER"} PERSONALLY FOLLOWS:`,
+    `- sectors: ${packet.firm_context.sectors.join(", ") || "not stated"}`,
+    `- themes: ${packet.firm_context.themes.join(", ") || "not stated"}`,
+    "",
+    "Those stated interests are not a filter — everything the firm holds still gets covered — but",
+    "they decide EMPHASIS: which story leads, how much room each gets, and which optional sections",
+    "are worth writing at all. Two partners reading the same day should not receive the same brief.",
+    "If this reader follows marketing, brand or creative work, treat developments there as genuinely",
+    "important rather than as colour at the end, and read them the way a practitioner would: what",
+    "changed in how attention is bought, held or measured, and what it costs.",
     "",
     packet.open_narratives.length
       ? `RUNNING STORIES (say what CHANGED, do not re-report these as new):\n${packet.open_narratives.map((n) => `- ${n.topic}: ${n.summary} (last seen ${n.last_seen})`).join("\n")}`

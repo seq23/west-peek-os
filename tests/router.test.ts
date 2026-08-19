@@ -506,3 +506,54 @@ describe("a LIVE model evaluation cites the run that proves it", () => {
     expect(res.status).toBe(201);
   });
 });
+
+/**
+ * The OpenRouter adapter reports what a run cost.
+ *
+ * Every completed run was recording cost_usd: 0, because OpenRouter returns a cost only when the
+ * request asks for one and nothing was asking. Spend-to-date is summed from that field, so "spent
+ * today" was permanently zero and the firm's daily cap could never fire — the per-run cap was the
+ * only ceiling actually in force. A cap that cannot fire is not a cap.
+ */
+describe("OpenRouter cost accounting", () => {
+  function adapterWith(usage: Record<string, unknown>, seen: { body?: any } = {}) {
+    return createOpenRouterAdapter({
+      baseUrl: "https://provider.invalid",
+      model: "anthropic/claude-sonnet-5",
+      apiKey: "test-key-not-a-real-credential",
+      fetchImpl: (async (_url: unknown, init: any) => {
+        seen.body = JSON.parse(init.body as string);
+        return new Response(
+          JSON.stringify({ model: "anthropic/claude-sonnet-5", choices: [{ message: { content: "ok" } }], usage }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as unknown as typeof fetch,
+    });
+  }
+
+  it("asks OpenRouter to include usage accounting on every request", async () => {
+    const seen: { body?: any } = {};
+    await adapterWith({ prompt_tokens: 10, completion_tokens: 20, total_cost: 0.5 }, seen)
+      .complete({ purpose: "p", inputs: ["i"], model: "anthropic/claude-sonnet-5" });
+    // Without this flag the response carries tokens and no cost, which is how spend read as zero.
+    expect(seen.body?.usage).toEqual({ include: true });
+  });
+
+  it("reads the cost under either spelling OpenRouter has used", async () => {
+    const a = await adapterWith({ prompt_tokens: 1, completion_tokens: 2, total_cost: 0.25 })
+      .complete({ purpose: "p", inputs: ["i"], model: "anthropic/claude-sonnet-5" });
+    expect(a.usage.costUsd).toBe(0.25);
+
+    const b = await adapterWith({ prompt_tokens: 1, completion_tokens: 2, cost: 0.75 })
+      .complete({ purpose: "p", inputs: ["i"], model: "anthropic/claude-sonnet-5" });
+    expect(b.usage.costUsd).toBe(0.75);
+  });
+
+  it("reports zero only when the provider genuinely says nothing, leaving runAi to price it", async () => {
+    const r = await adapterWith({ prompt_tokens: 1, completion_tokens: 2 })
+      .complete({ purpose: "p", inputs: ["i"], model: "anthropic/claude-sonnet-5" });
+    expect(r.usage.costUsd).toBe(0);
+    expect(r.usage.inputTokens).toBe(1);
+    expect(r.usage.outputTokens).toBe(2);
+  });
+});
