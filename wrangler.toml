@@ -151,6 +151,20 @@ binding = "BROWSER"
 # and identity comes from `Cf-Access-Authenticated-User-Email` (src/worker/auth.ts).
 WP_OS_ENV = "production"
 
+# ── Outbound email (P33) ──
+# Configuration rather than secrets, so the switch is visible in the repo and in review instead of
+# hidden in a dashboard. The credential itself is a Worker secret (RESEND_API_KEY).
+#
+# WP_OS_EMAIL_SEND must be the literal "enabled". "true", "yes" and "1" all leave sending off, which
+# is deliberate: a transport being available has never been consent to start emailing people, and it
+# should be impossible to switch on by accident.
+#
+# os@westpeek.ventures needs no mailbox behind it to send. Inbound mail for this domain goes to
+# Google Workspace and is untouched by any of this — Resend's records live on the `send` and
+# `resend._domainkey` subdomains precisely so the root MX is left alone.
+WP_OS_EMAIL_FROM = "os@westpeek.ventures"
+WP_OS_EMAIL_SEND = "enabled"
+
 # Network OS live pull (P35, canon §12A). Non-secret: an origin and an identity, both of which
 # are useless without WP_OS_NETWORK_OS_SESSION_SECRET, which is a Worker secret and never in this
 # file. The pull stays 503 until all three are present.
