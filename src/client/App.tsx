@@ -4007,9 +4007,14 @@ export function App() {
           {authed && active === "work-cards" && (
             <>
               <WorkSurface me={me.data!} onChanged={refresh} onNavigate={setActive} />
-              <div className="home-section-head">
-                <h2>Runs on a schedule</h2>
-                <span className="muted small">machinery rather than anything somebody carries</span>
+              {/* "Runs on a schedule" read as a sentence fragment rather than a section name, and
+                  nothing said where the section ended. A chevron makes it obvious that what follows
+                  is the scheduled half of this page. */}
+              <div className="home-section-head work-scheduled-head">
+                <h2>
+                  <span className="chev" aria-hidden="true" /> Scheduled work
+                </h2>
+                <span className="muted small">machinery, not anything somebody carries</span>
               </div>
               <JobsPage me={me.data!} />
             </>

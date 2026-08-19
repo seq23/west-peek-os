@@ -126,8 +126,7 @@ import { handleGenerateDailyReport, handleGetDailyReport, handleGetInterests, ha
 import { handleBuildPacket, handleExportPacket } from "./services/researchPacket";
 import { handleBuildMap, handleGetMap, handleListMaps } from "./services/marketMap";
 import {
-  handleApproveBrowserTask, handleListBrowserTasks, handleRequestBrowserTask, handleRunBrowserTask,
-} from "./services/browserTask";
+  handleApproveBrowserTask, handleListBrowserTasks, handleRequestBrowserTask, handleRunBrowserTask, handleCardLook, handleSetCardBrowserPermission } from "./services/browserTask";
 import {
   handleGetSession as handleGetUniversitySession,
   handleListDiary,
@@ -780,6 +779,10 @@ const router = new Router()
   // arbitrary URL and feed it to an AI employee" is no approval at all.
   .get("/api/browser-tasks", handleListBrowserTasks)
   .post("/api/browser-tasks", handleRequestBrowserTask)
+  // P44 — looking at a page FOR a card. Runs immediately when the card carries permission; without
+  // it, waits for a person exactly as a standalone task does.
+  .post("/api/work-cards/:id/look", handleCardLook)
+  .post("/api/work-cards/:id/browser-permission", handleSetCardBrowserPermission)
   .post("/api/browser-tasks/:id/approve", handleApproveBrowserTask)
   .post("/api/browser-tasks/:id/run", handleRunBrowserTask)
   // P47 — Approval Centre context (canon §24.2).

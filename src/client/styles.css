@@ -376,7 +376,6 @@ hr {
 /* — Dividers only where the KIND of thing changes: above Admin, and above the footer. A line
      between every group would turn a forty-item rail into a spreadsheet, and the spacing already
      separates them — drawing both is saying it twice. */
-.rail-secondary,
 .rail-footer {
   margin-top: var(--space-md);
   padding-top: var(--space-sm);
@@ -1556,15 +1555,15 @@ hr {
 
 /* — Rail tiers. Weight follows how often a Managing Partner actually goes there. */
 
-/* A group header is a label. No hover, no pointer, not a tab stop — it must never look like a
-   destination you could try. */
-.rail-group { cursor: default; user-select: none; }
-.rail-group::after {
-  content: "";
-  display: block;
-  margin-top: var(--space-2xs);
-  border-bottom: 1px solid var(--wp-shell-line);
-}
+/* A group header does not double as a destination, so it never takes the pointer cursor of one.
+   `cursor: default` is overridden by .rail-group-toggle, which IS clickable.
+
+   THE ::after IS GONE, and it was doing real damage. It drew an underline back when this header was
+   a <p> label. The header became a flex button, so the pseudo-element turned into a THIRD FLEX
+   CHILD sitting between the name and the +/− — which is why the mark on every group floated in the
+   middle of the rail while Admin's sat flush right, and why the rules under each name were stubby
+   and uneven. The section band below draws the line properly. */
+.rail-group { user-select: none; }
 
 /* Pinned: the daily three. Heavier ink, taller target, no header above them. */
 .rail-pinned { margin-bottom: var(--space-sm); }
@@ -2500,18 +2499,19 @@ hr {
  * The band is quiet on purpose. A signpost should not compete with the things it
  * points at, and forty destinations in forty boxes would be worse than none.
  */
-.shell-nav > .rail-scroll > div:not(.rail-pinned):not(.rail-footer):not(.rail-secondary) {
+.shell-nav > .rail-scroll > div:not(.rail-pinned):not(.rail-footer) {
   border-top: 1px solid var(--wp-shell-line);
-  border-bottom: 1px solid var(--wp-shell-line);
   padding-block: var(--space-2xs);
-  margin-block: var(--space-2xs);
 }
 
-/* Consecutive bands would otherwise draw a double rule between every section. */
-.shell-nav > .rail-scroll > div + div:not(.rail-pinned):not(.rail-footer) {
-  border-top: 0;
-  margin-top: 0;
+/* The last section closes the stack; every other one is closed by the next one's top rule. Drawing
+   both would put two hairlines between every pair of sections, which is what "ugly" looked like. */
+.shell-nav > .rail-scroll > div:not(.rail-pinned):not(.rail-footer):last-of-type {
+  border-bottom: 1px solid var(--wp-shell-line);
 }
+
+/* Admin used its own margin on top of the band, so it sat lower than the rest. */
+.rail-secondary { margin-top: 0; padding-top: var(--space-2xs); border-top: 1px solid var(--wp-shell-line); }
 
 .rail-group-blurb {
   margin: 0 0 var(--space-2xs);
@@ -2520,4 +2520,106 @@ hr {
   font-size: var(--text-2xs);
   line-height: 1.35;
   opacity: 0.72;
+}
+
+/* ── Work cards look like cards ───────────────────────────────────────────────
+ * They were list rows in a stack, which is why the page did not read as a board.
+ * A grid you can run your eye across is the whole point of a card: you see how
+ * much there is before you read any of it.
+ */
+.work-card-grid {
+  list-style: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 0.75rem;
+}
+
+.work-card-grid > li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  border: 1px solid var(--wp-line);
+  border-radius: 8px;
+  background: var(--wp-surface);
+}
+
+/* Blocked earns a visible edge: it is the only state where work has stopped and
+   somebody has to intervene. */
+.work-card-grid > li:has(.badge-bad) { border-left: 3px solid var(--wp-danger); }
+
+.work-card-grid .notification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: auto;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--wp-line);
+}
+
+/* Where a card came from, set apart from what it says to do. */
+.work-card-origin {
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--wp-line-strong);
+}
+
+/* The legend, read before the cards rather than after them. */
+.work-legend {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.1rem;
+  margin: 0 0 1.25rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--wp-line);
+  border-radius: 6px;
+  background: var(--wp-neutral-tint);
+}
+
+.work-legend li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+/* Marks where the scheduled half of the page begins. */
+.work-scheduled-head {
+  margin-top: 2.5rem;
+  padding-top: 0.9rem;
+  border-top: 2px solid var(--wp-line-strong);
+}
+
+.work-scheduled-head .chev {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.35rem;
+  border-right: 2px solid var(--wp-muted);
+  border-bottom: 2px solid var(--wp-muted);
+  transform: rotate(45deg) translateY(-2px);
+}
+
+/* Looking at a page, asked for from the card that needs it. */
+.work-card-look {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  padding: 0.6rem;
+  border: 1px dashed var(--wp-orange);
+  border-radius: 6px;
+  background: var(--wp-surface);
+}
+
+.work-card-look input[type="text"],
+.work-card-look input:not([type]) {
+  width: 100%;
+}
+
+.work-card-look label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }

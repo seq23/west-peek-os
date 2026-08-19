@@ -55,6 +55,8 @@ const requestSchema = z.object({
   objective: z.string().min(8).max(500),
   start_url: z.string().min(8).max(2000),
   ai_employee_id: z.string().max(80).nullish(),
+  /** The card this look is for. Carries the standing permission, and receives the result. */
+  work_card_id: z.string().max(80).nullish(),
   payment_mode: z.enum(["NONE", "X402_AUTO"]).default("NONE"),
   max_price_usd: z.number().min(0).max(500).default(0),
 });
@@ -78,14 +80,38 @@ export async function requestTask(
   });
   if (refusal) throw new BrowserTaskError(400, refusal.code, refusal.detail);
 
+  // DOES A CARD ALREADY PERMIT THIS? A human granted that card standing permission to involve
+  // reading web pages, which is the approval — made once, deliberately, and scoped to one piece of
+  // work — rather than the same yes repeated for every careers page on a card whose whole job is
+  // checking careers pages. Without a card, or without permission on it, the task waits for a human
+  // exactly as before.
+  let preApproved = false;
+  if (input.work_card_id) {
+    const card = await env.WP_OS_DB.prepare(
+      "SELECT allows_browser FROM work_card WHERE id = ?1 AND firm_scope = ?2",
+    )
+      .bind(input.work_card_id, firmScope)
+      .first<{ allows_browser: number }>();
+    preApproved = card?.allows_browser === 1;
+  }
+
   const id = `bwt_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
     `INSERT INTO browser_task (id, objective, start_url, requested_by_type, requested_by_id,
-                               ai_employee_id, payment_mode, max_price_usd, firm_scope)
-     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)`,
+                               ai_employee_id, work_card_id, status, approval_card_id,
+                               payment_mode, max_price_usd, firm_scope)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)`,
   )
     .bind(id, input.objective, input.start_url, actor.type === "HUMAN" ? "HUMAN" : "AI",
           actor.firmUserId ?? actor.aiEmployeeId ?? "system", input.ai_employee_id ?? null,
+          input.work_card_id ?? null,
+          preApproved ? "APPROVED" : "REQUESTED",
+          // NULL, deliberately. approval_card_id is a foreign key to a real approval card, and a
+          // pre-approved look has none — the authority is the card's standing grant, which is
+          // recorded by work_card_id being set plus allows_browser on that card, and stated
+          // explicitly in the event below. Writing a synthetic id here failed the constraint, and
+          // rightly: inventing a receipt that points at nothing is exactly what that key prevents.
+          null,
           input.payment_mode, input.max_price_usd, firmScope)
     .run();
 
@@ -94,7 +120,13 @@ export async function requestTask(
     actorType: actor.type === "HUMAN" ? "firm_user" : "ai_employee",
     actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
     objectType: "browser_task", objectId: id, firmScope,
-    payload: { start_url: input.start_url, payment_mode: input.payment_mode },
+    payload: {
+      start_url: input.start_url,
+      payment_mode: input.payment_mode,
+      work_card_id: input.work_card_id ?? null,
+      // Recorded because "nobody pressed approve" is a thing an auditor must be able to explain.
+      pre_approved_by_card: preApproved,
+    },
   });
 
   return await requireTask(env, id);
@@ -235,4 +267,109 @@ export async function handleListBrowserTasks(ctx: RouteContext): Promise<Respons
     "SELECT id, objective, start_url, status, refusal_reason, result_url, created_at FROM browser_task ORDER BY created_at DESC LIMIT 100",
   ).all();
   return json({ tasks: rows.results ?? [] });
+}
+
+const grantSchema = z.object({ allows_browser: z.boolean() });
+
+/**
+ * POST /api/work-cards/:id/browser-permission — let this card's work involve reading web pages.
+ *
+ * HUMAN ONLY, and that is the whole point. This is the approval, moved from "yes to this URL" to
+ * "yes, this piece of work may involve looking things up" — a decision worth making once, about a
+ * scope somebody understands, rather than the same yes repeated for every careers page on a card
+ * whose entire purpose is checking careers pages.
+ *
+ * Scoped to one card. Granting it for "Diligence Psyflo" says nothing about any other work, and
+ * withdrawing it is the same click. Who granted it and when are recorded, because a standing
+ * permission with no record of who gave it is a setting rather than a permission.
+ */
+export async function handleSetCardBrowserPermission(ctx: RouteContext): Promise<Response> {
+  const cardId = ctx.params.id;
+  const parsed = grantSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!cardId || !parsed.success) return json({ error: "invalid_input" }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") {
+    return json({ error: "human_required", detail: "Only a person can let work reach the web." }, { status: 403 });
+  }
+  const authz = await authorize(ctx.env, actor, "approval.decide", {
+    objectType: "work_card",
+    objectId: cardId,
+    firmScope: actor.firmScopes[0] ?? "west-peek",
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const now = new Date().toISOString();
+  await ctx.env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET allows_browser = ?2,
+            browser_granted_by = ?3,
+            browser_granted_at = ?4
+      WHERE id = ?1`,
+  )
+    .bind(cardId, parsed.data.allows_browser ? 1 : 0, parsed.data.allows_browser ? ctx.identity!.id : null, parsed.data.allows_browser ? now : null)
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: parsed.data.allows_browser ? "work_card.browser_granted" : "work_card.browser_withdrawn",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "work_card",
+    objectId: cardId,
+    firmScope: actor.firmScopes[0] ?? "west-peek",
+    payload: {},
+  });
+
+  return json({
+    allows_browser: parsed.data.allows_browser,
+    granted_at: parsed.data.allows_browser ? now : null,
+    detail: parsed.data.allows_browser
+      ? "Whoever carries this card can now look at pages for it without asking each time. Every look is still recorded, and read-only."
+      : "Withdrawn. Looks for this card need a person to approve each one again.",
+  });
+}
+
+/**
+ * POST /api/work-cards/:id/look — ask for a page to be read, for this card.
+ *
+ * Runs IMMEDIATELY when the card carries permission, which is the operator's explicit instruction:
+ * work that is allowed to involve the web should not stop to ask on every page. Without permission
+ * it lands as a request and waits for a person, exactly as before.
+ */
+export async function handleCardLook(ctx: RouteContext): Promise<Response> {
+  const cardId = ctx.params.id;
+  const body = (await ctx.request.json().catch(() => null)) as { objective?: string; start_url?: string } | null;
+  if (!cardId || !body?.objective || !body?.start_url) {
+    return json({ error: "invalid_input", detail: "objective and start_url are required" }, { status: 400 });
+  }
+
+  const actor = actorFromIdentity(ctx.identity!);
+  let task: TaskRow;
+  try {
+    task = await requestTask(ctx.env, actor, {
+      objective: body.objective,
+      start_url: body.start_url,
+      work_card_id: cardId,
+      payment_mode: "NONE",
+      max_price_usd: 0,
+    } as never);
+  } catch (err) {
+    const e = err as BrowserTaskError;
+    return json({ error: e.code ?? "refused", detail: e.message }, { status: e.status ?? 400 });
+  }
+
+  // Pre-approved by the card's standing grant: go and look now.
+  if (task.status === "APPROVED") {
+    const result = await runTask(ctx.env, task.id);
+    return json({ task: result.task, ran: true, ok: result.ok, detail: result.detail }, { status: 201 });
+  }
+
+  return json(
+    {
+      task,
+      ran: false,
+      detail: "Raised. This card does not allow looking without asking, so it is waiting for a person to approve it.",
+    },
+    { status: 201 },
+  );
 }

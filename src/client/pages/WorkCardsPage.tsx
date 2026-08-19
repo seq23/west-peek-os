@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
-import { BrowserTasksPage } from "./BrowserTasksPage";
 
 /**
  * Work cards — what the firm is actually doing, who owns it, and what happens next.
@@ -46,6 +45,8 @@ interface WorkCardRow {
   created_at: string;
   owner_name?: string | null;
   owner_role?: string | null;
+  allows_browser?: number;
+  looks?: Array<{ id: string; objective: string; status: string; result_text: string | null }>;
 }
 
 interface RecentRun {
@@ -64,6 +65,9 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   }>("/api/work-cards/by-owner");
   const [message, setMessage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [looking, setLooking] = useState<string | null>(null);
+  const [lookObjective, setLookObjective] = useState("");
+  const [lookUrl, setLookUrl] = useState("");
   const [title, setTitle] = useState("");
   const [nextAction, setNextAction] = useState("");
   // Defaults to you. Assigning to your partner or to an employee is the same act either way.
@@ -76,28 +80,38 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   const runs = board.data?.recent_runs ?? [];
 
   /**
-   * Work grouped by whoever is carrying it. Unassigned comes first: a card nobody owns is the most
-   * likely thing here to be quietly dropped, and a flat list hides exactly that.
+   * FOUR BANDS, not one section per person.
+   *
+   * Grouping by individual owner meant a section header for every employee holding a single card —
+   * seventeen possible headings for a page whose entire job is letting somebody see what is on the
+   * firm's plate at a glance. What a partner actually asks is "what is on ME, what is on my
+   * partner, what are the employees doing, and what has nobody picked up".
+   *
+   * NOBODY LEADS, because a card nobody owns is the one most likely to be quietly dropped, and any
+   * grouping that buries it is hiding the thing worth seeing. Yours comes next: it is the only band
+   * you can act on without talking to anybody.
    */
-  const byOwner = useMemo(() => {
-    const groups = new Map<string, { owner: Owner; cards: WorkCardRow[] }>();
+  const bands = useMemo(() => {
+    const nobody: WorkCardRow[] = [];
+    const mine: WorkCardRow[] = [];
+    const partner: WorkCardRow[] = [];
+    const employees: WorkCardRow[] = [];
+
     for (const c of live) {
-      const key = c.owner_type === "UNASSIGNED" || !c.owner_id ? "nobody" : `${c.owner_type}:${c.owner_id}`;
-      if (!groups.has(key)) {
-        groups.set(key, {
-          owner: {
-            key,
-            name: key === "nobody" ? "Nobody yet" : c.owner_name ?? c.owner_id ?? "Unknown",
-            role: c.owner_role ?? null,
-            kind: key === "nobody" ? "NOBODY" : (c.owner_type as "AI" | "HUMAN"),
-          },
-          cards: [],
-        });
-      }
-      groups.get(key)!.cards.push(c);
+      if (c.owner_type === "UNASSIGNED" || !c.owner_id) nobody.push(c);
+      else if (c.owner_type === "AI") employees.push(c);
+      else if (c.owner_id === me.id) mine.push(c);
+      else partner.push(c);
     }
-    return [...groups.values()].sort((a, b) => (a.owner.kind === "NOBODY" ? -1 : b.owner.kind === "NOBODY" ? 1 : 0));
-  }, [live]);
+
+    const partnerName = partner[0]?.owner_name ?? "Your partner";
+    return [
+      { key: "nobody", name: "Nobody has picked these up", note: "the ones most likely to be dropped", cards: nobody },
+      { key: "mine", name: "Yours", note: me.fullName, cards: mine },
+      { key: "partner", name: partnerName, note: "your partner", cards: partner },
+      { key: "employees", name: "Your employees", note: `${new Set(employees.map((c) => c.owner_id)).size} carrying work`, cards: employees },
+    ].filter((b) => b.cards.length > 0);
+  }, [live, me.id, me.fullName]);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -136,6 +150,36 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
     onChanged();
   }
 
+  /** Ask for a page to be read for this card. Runs now if the card permits it. */
+  async function look(cardId: string) {
+    if (lookObjective.trim().length < 8 || lookUrl.trim().length < 8) return;
+    setBusy(true);
+    const res = await api<{ ran?: boolean; ok?: boolean; detail?: string; error?: string }>(
+      `/api/work-cards/${cardId}/look`,
+      { method: "POST", body: { objective: lookObjective.trim(), start_url: lookUrl.trim() } },
+    );
+    setBusy(false);
+    setMessage(
+      res.status === 201
+        ? res.data?.ran
+          ? `Looked: ${res.data.detail ?? "done"}`
+          : (res.data?.detail ?? "Raised for approval.")
+        : `Could not: ${res.data?.detail ?? res.data?.error ?? res.status}`,
+    );
+    if (res.status === 201) { setLooking(null); setLookObjective(""); setLookUrl(""); }
+    board.reload();
+  }
+
+  /** Give (or withdraw) this card standing permission to read pages. */
+  async function grantBrowser(cardId: string, allow: boolean) {
+    const res = await api<{ detail?: string }>(`/api/work-cards/${cardId}/browser-permission`, {
+      method: "POST",
+      body: { allows_browser: allow },
+    });
+    setMessage(res.data?.detail ?? null);
+    board.reload();
+  }
+
   async function move(id: string, state: string) {
     const res = await api<{ error?: string; detail?: string }>(`/api/work-cards/${id}`, {
       method: "PATCH",
@@ -150,10 +194,25 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
     <section data-testid="work-cards-page">
       <div className="home-section-head">
         <h2>{live.length === 0 ? "Nothing open" : `${live.length} open`}</h2>
-        <button type="button" className="link-button" data-testid="work-card-add-toggle" onClick={() => setAdding((a) => !a)}>
+        <button type="button" className="btn-strong" data-testid="work-card-add-toggle" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a card"}
         </button>
       </div>
+
+      {/* THE LEGEND BELONGS BEFORE THE THING IT EXPLAINS. It was a <details> at the very bottom of
+          the page, under every card and both archives — so the words telling you what "Blocked"
+          means sat below the blocked card you were trying to read. A legend read after the fact is
+          decoration. */}
+      <ul className="work-legend" data-testid="work-state-legend">
+        {STATE_MEANINGS.map((m) => (
+          <li key={m.key}>
+            <span className={m.key === "BLOCKED" ? "badge badge-bad" : m.key === "DONE" ? "badge badge-ok" : "badge"}>
+              {m.label}
+            </span>
+            <span className="muted small">{m.means}</span>
+          </li>
+        ))}
+      </ul>
 
       {message && <p className="notice" data-testid="work-cards-message">{message}</p>}
 
@@ -226,21 +285,16 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </div>
       )}
 
-      {byOwner.map((group) => (
-        <section key={group.owner.key} data-testid={`work-owner-${group.owner.key}`}>
+      {bands.map((group) => (
+        <section key={group.key} data-testid={`work-owner-${group.key}`}>
           <div className="home-section-head">
             <h3>
-              {group.owner.name}
-              {group.owner.role && <span className="muted small"> {group.owner.role}</span>}
+              {group.name} <span className="count-pill">{group.cards.length}</span>
             </h3>
-            <span className="muted small">
-              {group.owner.kind === "NOBODY"
-                ? "Nobody has picked these up"
-                : `${group.cards.length} open`}
-            </span>
+            <span className="muted small">{group.note}</span>
           </div>
 
-          <ul className="card-list" data-testid={`work-card-list-${group.owner.key}`}>
+          <ul className="work-card-grid" data-testid={`work-card-list-${group.key}`}>
             {group.cards.map((c) => {
               const meaning = stateMeaning(c.state);
               return (
@@ -260,8 +314,15 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                 ) : (
                   <p className="muted small">No next action — nobody knows what to do with this yet.</p>
                 )}
+                {/* WHERE THIS CAME FROM. The description holds it — "Raised in the weekly review",
+                    "Routed from a capture" — and was never rendered, so a card that appeared after
+                    a meeting looked like it came from nowhere. Provenance is the first thing you
+                    want when you do not recognise a card. */}
+                {c.description && <p className="muted small work-card-origin">{c.description}</p>}
                 <p className="muted small">
-                  {c.owner_type === "UNASSIGNED" ? "Nobody owns this" : `Owned by ${c.owner_id ?? c.owner_type.toLowerCase()}`}
+                  {c.owner_type === "UNASSIGNED"
+                    ? "Nobody owns this"
+                    : `Owned by ${c.owner_name ?? c.owner_id ?? c.owner_type.toLowerCase()}`}
                   {c.capture_id ? " · from something you captured" : ""}
                   {c.due_at ? ` · due ${c.due_at.slice(0, 10)}` : ""}
                 </p>
@@ -295,7 +356,72 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         Done
                       </button>
                     )}
+                    {/* DROP. The only way to clear something you had decided NOT to do was to mark
+                        it Done, which puts a lie on the record — the state existed in the schema
+                        and in the legend, and simply had no button. A decision not to act is still
+                        a decision and is kept, not deleted. */}
+                    {c.state !== "DONE" && c.state !== "CANCELLED" && (
+                      <button
+                        type="button"
+                        data-testid={`work-card-drop-${c.id}`}
+                        title="Deliberately not doing this. Kept on the record."
+                        onClick={() => void move(c.id, "CANCELLED")}
+                      >
+                        Drop
+                      </button>
+                    )}
+                    {/* LOOKING AT A PAGE BELONGS ON THE CARD THAT NEEDS IT. It used to be a
+                        disclosure floating between the bands, answering a question nobody asks at
+                        that moment — nobody opens Work wanting to read a webpage, they want to know
+                        whether a company still lists a VP of Sales. Zero tasks had ever run. */}
+                    {c.state !== "DONE" && c.state !== "CANCELLED" && (
+                      <button
+                        type="button"
+                        data-testid={`work-card-look-${c.id}`}
+                        title={c.allows_browser ? "Reads the page now — this card allows it" : "Raises a look for you to approve"}
+                        onClick={() => setLooking(looking === c.id ? null : c.id)}
+                      >
+                        {c.allows_browser ? "Check a page" : "Check a page…"}
+                      </button>
+                    )}
                   </div>
+
+                  {looking === c.id && (
+                    <form
+                      className="work-card-look"
+                      data-testid={`work-card-look-form-${c.id}`}
+                      onSubmit={(e) => { e.preventDefault(); void look(c.id); }}
+                    >
+                      <input
+                        value={lookObjective}
+                        onChange={(e) => setLookObjective(e.target.value)}
+                        placeholder="What should they find out?"
+                        aria-label="What to find out"
+                      />
+                      <input
+                        value={lookUrl}
+                        onChange={(e) => setLookUrl(e.target.value)}
+                        placeholder="https://…"
+                        aria-label="Page to read"
+                      />
+                      <div className="form-row">
+                        <button type="submit" className="btn-strong" disabled={busy}>
+                          {c.allows_browser ? "Go and look" : "Ask to look"}
+                        </button>
+                        {/* The grant, offered where it is relevant rather than in a settings page.
+                            Standing permission for THIS card only. */}
+                        <label className="muted small">
+                          <input
+                            type="checkbox"
+                            checked={c.allows_browser === 1}
+                            data-testid={`work-card-browser-grant-${c.id}`}
+                            onChange={(e) => void grantBrowser(c.id, e.target.checked)}
+                          />{" "}
+                          let this card look without asking each time
+                        </label>
+                      </div>
+                    </form>
+                  )}
                 </li>
               );
             })}
@@ -341,36 +467,8 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </details>
       )}
 
-      {/* GO AND LOOK LIVES HERE NOW. It sat under Admin, which is where you go to configure the
-          system rather than to get something done — so the one capability that can go and read a
-          live page for you was filed with the plumbing. Sending an employee to check a page is
-          work, it produces something you then act on, and this is the page about work. */}
-      <details className="card summary-button" data-testid="work-browser-tasks">
-        <summary>Send someone to go and look at a page</summary>
-        <p className="muted small">
-          This is the only thing here that reaches out and reads the live web for you. You give an
-          employee a page and a question — <em>does this company still list a VP of Sales</em>,{" "}
-          <em>what are their pricing tiers now</em>, <em>who is named on the about page</em> — and
-          they open it, read it and report back. You approve each one before it runs, and what
-          comes back is quoted as information about the world, never as instructions.
-        </p>
-        <p className="muted small">
-          Best for small, checkable questions where the answer is written on a page. Anything
-          needing judgement rather than looking belongs with a person.
-        </p>
-        <BrowserTasksPage me={me} />
-      </details>
 
-      <details className="card" data-testid="work-cards-explainer">
-        <summary>What the states mean</summary>
-        <ul className="card-list small">
-          {STATE_MEANINGS.map((s) => (
-            <li key={s.key}>
-              <strong>{s.label}</strong> — {s.means}
-            </li>
-          ))}
-        </ul>
-      </details>
+
     </section>
   );
 }
