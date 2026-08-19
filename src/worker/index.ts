@@ -13,6 +13,7 @@ import {
   handleMergeCompanies,
   handleRejectCandidate,
   handleResolveCompany,
+  handleCompanyRegister,
   handleReverseMerge,
   handleUpdateCompany,
 } from "./services/companies";
@@ -496,6 +497,7 @@ const router = new Router()
   .post("/api/companies", handleCreateCompany)
   .get("/api/companies", handleListCompanies)
   .get("/api/companies/resolve", handleResolveCompany)
+  .get("/api/companies/register", handleCompanyRegister)
   .get("/api/companies/:id", handleGetCompany)
   .patch("/api/companies/:id", handleUpdateCompany)
   .post("/api/companies/:id/aliases", handleAddAlias)

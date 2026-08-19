@@ -194,6 +194,8 @@ const CONCENTRATION = {
 const COMPANIES = [
   {
     canonical_name: "Sensori",
+    sector: "Consumer",
+    one_liner: "Alcohol-free drinks built around social occasions",
     website: "https://drinksensori.com",
     description:
       "Alcohol-free beverages built around social occasions, health and wellness. Founded 2024 " +
@@ -203,6 +205,8 @@ const COMPANIES = [
   },
   {
     canonical_name: "Psyflo",
+    sector: "Ed tech",
+    one_liner: "Mental health care for youth, delivered through schools",
     description:
       "Mental health care for youth and young adults, delivered through schools and " +
       "youth-serving non-profits. Uses AI agents for early intervention and delivers billable " +
@@ -211,6 +215,8 @@ const COMPANIES = [
   },
   {
     canonical_name: "Synthient.ai",
+    sector: "AI",
+    one_liner: "AI infrastructure for the future of work",
     description:
       "AI infrastructure and future-of-work company. Founders ex-Visa, Upwork, Lockheed Martin " +
       "and Hyperloop; CEO Marcell Hilliard. Appeared in the Fund I deck as pipeline.",

@@ -31,6 +31,9 @@ import { ThesisPage } from "./pages/ThesisPage";
 import { ModelingPage } from "./pages/ModelingPage";
 import { DealflowPage } from "./pages/DealflowPage";
 import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
+import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
+import { FundAllocation } from "./pages/FundAllocation";
+import { useSelectedFund } from "./lib/selectedFund";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
@@ -3621,6 +3624,13 @@ function StatusBar({ onNavigate, refreshNonce }: { onNavigate: (key: string) => 
   );
 }
 
+/** Resolves the selected fund for the allocation ring; renders nothing before one exists. */
+function PortfolioAllocation(): JSX.Element | null {
+  const selected = useSelectedFund();
+  if (selected.loading || !selected.fund) return null;
+  return <FundAllocation fundId={selected.fund.id} />;
+}
+
 export function App() {
   const [active, setActive] = useState<string>("home");
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -3870,7 +3880,17 @@ export function App() {
           {authed && active === "intent" && <IntentPage me={me.data!} />}
           {authed && active === "work-cards" && <WorkCardsPage me={me.data!} onChanged={refresh} />}
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
-          {authed && active === "companies" && <CompaniesPage me={me.data!} />}
+          {authed && active === "companies" && (
+            <>
+              <CompanyRegister me={me.data!} onNavigate={setActive} />
+              {/* Identity work — aliases, merges, external ids — belongs to one company rather
+                  than to the register, and is where duplicates get resolved. */}
+              <details className="card" data-testid="company-identity">
+                <summary>Identity: aliases, merges and duplicates</summary>
+                <CompaniesPage me={me.data!} />
+              </details>
+            </>
+          )}
           {authed && active === "research" && <ResearchPage me={me.data!} />}
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
           {authed && active === "modeling" && <ModelingPage me={me.data!} />}
@@ -3901,7 +3921,14 @@ export function App() {
               </details>
             </>
           )}
-          {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
+          {authed && active === "portfolio" && (
+            <>
+              {/* Where the fund goes, before how the companies are doing: the plan is the frame
+                  the positions are read against. */}
+              <PortfolioAllocation />
+              <PortfolioPage me={me.data!} />
+            </>
+          )}
           {authed && active === "cockpit" && <CockpitPage me={me.data!} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}
           {authed && active === "integrations" && <IntegrationsPage me={me.data!} />}
