@@ -223,8 +223,10 @@ const NAV_GROUPS = [
       { key: "notifications", label: "Notifications" },
       { key: "introductions", label: "Introductions" },
       { key: "weekly-review", label: "Weekly review" },
-      { key: "work-cards", label: "Work cards" },
-      { key: "jobs", label: "Scheduled work" },
+      // Scheduled work and work cards answered the same question — what is the firm doing — from
+      // two tabs, so you had to check both. One destination, two sections: the distinction between
+      // machinery on a clock and a task somebody carries is real and stays visible.
+      { key: "work-cards", label: "Work" },
     ],
   },
   {
@@ -3960,12 +3962,20 @@ export function App() {
           {authed && active === "market-map" && <MarketMapPage />}
           {authed && active === "browser-tasks" && <BrowserTasksPage me={me.data!} />}
           {authed && active === "machines" && <MachinesPage me={me.data!} />}
-          {authed && active === "jobs" && <JobsPage me={me.data!} />}
           {authed && active === "notifications" && <NotificationsPage me={me.data!} />}
           {authed && active === "today" && <TodayPage me={me.data!} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} />}
           {authed && active === "intent" && <IntentPage me={me.data!} />}
-          {authed && active === "work-cards" && <WorkSurface me={me.data!} onChanged={refresh} onNavigate={setActive} />}
+          {authed && active === "work-cards" && (
+            <>
+              <WorkSurface me={me.data!} onChanged={refresh} onNavigate={setActive} />
+              <div className="home-section-head">
+                <h2>Runs on a schedule</h2>
+                <span className="muted small">machinery rather than anything somebody carries</span>
+              </div>
+              <JobsPage me={me.data!} />
+            </>
+          )}
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && (
             <>

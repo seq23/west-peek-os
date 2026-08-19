@@ -53,12 +53,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Capture something quickly", "Route it to the right machine later"],
   },
   "work-cards": {
-    purpose: "What the firm is actually doing: a piece of work somebody owns, with a next action. Not a notification, which only says look at this, and not an approval, which is a decision waiting on you.",
-    youCan: ["See what has stopped, first", "Write a card yourself", "Start something, or mark it done", "See the five ways cards arrive"],
-  },
-  jobs: {
-    purpose: "Work that runs on a schedule rather than because someone asked. Everything starts paused.",
-    youCan: ["Switch a job on or off", "See when it last ran and what happened", "Investigate a failure"],
+    purpose: "Everything the firm is doing, in two kinds. Someone carries a work card and it stops if nobody picks it up; scheduled work is machinery that runs on a clock whether anyone looks. Both live here so you only check one place.",
+    youCan: ["See what has stopped, and who is carrying what", "Write a card and hand it to an employee or your partner", "Switch a scheduled job on or off", "See what your employees have actually been running"],
   },
   notifications: {
     purpose: "What is waiting on you, then what is worth knowing, then what you have already dealt with. Dismissing something says you saw it; acknowledging says you have taken responsibility for it, and that is recorded.",
