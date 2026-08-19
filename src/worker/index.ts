@@ -512,7 +512,6 @@ const router = new Router()
   // P51 — connecting a partner's own Google account. The start route redirects the browser out to
   // Google and the callback comes back through Access, so the client never handles a token.
   .get("/api/connect/calendar/start", handleGoogleConnectStart)
-  .get("/api/connect/email/start", handleGoogleConnectStart)
   .get("/api/connections/google/callback", handleGoogleCallback)
   .post("/api/connections/google/disconnect", handleGoogleDisconnect)
   .get("/api/me/calendar/today", handleTodaysCalendar)

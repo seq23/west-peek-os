@@ -1,4 +1,5 @@
 import { api, useApi, type MeResponse } from "../lib/api";
+import { CONNECTION_FACTS, FIRM_SENDING_FACTS } from "@shared/help/connectionFacts";
 
 /**
  * Connect your mailbox and your calendar.
@@ -39,6 +40,64 @@ interface Sending {
   detail: string;
 }
 
+
+/**
+ * What connecting actually does, next to the button that does it.
+ *
+ * FOLDED, because a partner who has read it once should not have to scroll past it every morning —
+ * and open on demand, because the one moment somebody wants this is the moment before they grant a
+ * system access to their diary.
+ *
+ * CANNOT COMES FIRST inside each block. The reassurance that matters is not a privacy statement, it
+ * is a specific list of things that are impossible and the reason they are impossible.
+ */
+function WhatConnectingDoes(): JSX.Element {
+  return (
+    <details className="card summary-button connect-help" data-testid="connect-help">
+      <summary>What happens if I connect?</summary>
+
+      <p className="muted small">
+        Two different things get called “email” here, which is most of the confusion. Sending is
+        something the firm does; a mailbox and a calendar belong to a person.
+      </p>
+
+      <section className="connect-fact" data-testid="connect-help-sending">
+        <h4>{FIRM_SENDING_FACTS.title} <span className="badge badge-ok">already on</span></h4>
+        <p className="small">{FIRM_SENDING_FACTS.summary}</p>
+        <p className="muted small"><strong>It can</strong></p>
+        <ul className="small">{FIRM_SENDING_FACTS.can.map((x) => <li key={x}>{x}</li>)}</ul>
+        <p className="muted small"><strong>It cannot</strong></p>
+        <ul className="small">{FIRM_SENDING_FACTS.cannot.map((x) => <li key={x}>{x}</li>)}</ul>
+      </section>
+
+      {CONNECTION_FACTS.map((f) => (
+        <section key={f.key} className="connect-fact" data-testid={`connect-help-${f.key}`}>
+          <h4>{f.title}</h4>
+          <p className="small">{f.availability}</p>
+
+          <p className="muted small"><strong>It cannot</strong></p>
+          <ul className="small">{f.cannot.map((x) => <li key={x}>{x}</li>)}</ul>
+
+          <p className="muted small"><strong>It can</strong></p>
+          <ul className="small">{f.can.map((x) => <li key={x}>{x}</li>)}</ul>
+
+          <p className="muted small">
+            <strong>Why that is true:</strong> {f.enforcedBy}
+          </p>
+          <p className="muted small"><strong>When you press Connect</strong></p>
+          <ol className="small">{f.whenYouConnect.map((x) => <li key={x}>{x}</li>)}</ol>
+          <p className="muted small"><strong>To undo it:</strong> {f.toUndo}</p>
+        </section>
+      ))}
+
+      <p className="muted small">
+        The same thing at more length, alongside everything else the system does, is under{" "}
+        <strong>Help → Connecting your email and calendar</strong>.
+      </p>
+    </details>
+  );
+}
+
 export function ConnectPanel({ me }: { me: MeResponse }) {
   const state = useApi<{
     sending: Sending;
@@ -68,7 +127,7 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
       <>
         {sendingLine}
         <p className="muted small" data-testid="connect-all-good">
-          Your mail and calendar are connected.
+          Your calendar is connected. <WhatConnectingDoes />
         </p>
       </>
     );
@@ -86,6 +145,8 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
         {me.fullName.split(" ")[0]}, these are yours alone — {me.email}. Your partner connects
         theirs separately.
       </p>
+
+      <WhatConnectingDoes />
 
       <ul className="card-list small connect-list">
         {d.connections.map((c) => (

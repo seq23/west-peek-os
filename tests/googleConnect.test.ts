@@ -9,6 +9,7 @@ import {
   revokeToken,
 } from "../src/worker/effects/googleClient";
 import type { Env } from "../src/worker/env";
+import { CONNECTION_FACTS } from "../src/shared/help/connectionFacts";
 
 /**
  * Google OAuth + Calendar (P51).
@@ -140,5 +141,40 @@ describe("reading the diary", () => {
     await expect(
       fetchEvents("stale", new Date(), new Date(), fetchImpl),
     ).rejects.toThrow(/google_unauthorised/);
+  });
+});
+
+/**
+ * What the interface promises about connecting.
+ *
+ * These are load-bearing claims about access to a partner's private data, so they are checked
+ * against the scopes actually requested rather than trusted as prose. A "cannot" list that drifts
+ * out of step with the scopes is worse than no list at all.
+ */
+describe("what the connect help promises", () => {
+  const calendar = CONNECTION_FACTS.find((f) => f.key === "calendar")!;
+  const mailbox = CONNECTION_FACTS.find((f) => f.key === "email")!;
+
+  it("promises no write access, and the requested scopes make that true", () => {
+    expect(calendar.cannot.join(" ")).toMatch(/create, move, cancel or edit/i);
+    // The promise is only honest while the scope list stays read-only.
+    expect(GOOGLE_SCOPES.every((s) => !s.endsWith("/calendar"))).toBe(true);
+    expect(GOOGLE_SCOPES.some((s) => s.endsWith("calendar.readonly"))).toBe(true);
+  });
+
+  it("promises no mail access, and no mail scope is requested", () => {
+    expect(calendar.cannot.join(" ")).toMatch(/see anything in your email/i);
+    expect(GOOGLE_SCOPES.some((s) => s.includes("gmail") || s.includes("mail.google"))).toBe(false);
+  });
+
+  it("says the mailbox is not built rather than offering it", () => {
+    // The defect this replaced: a Connect button that ran the calendar flow and left this row
+    // untouched, so it appeared to do nothing.
+    expect(mailbox.availability).toMatch(/not built/i);
+    expect(mailbox.whenYouConnect.join(" ")).toMatch(/disabled deliberately/i);
+  });
+
+  it("tells the partner disconnection is withdrawn at Google, not just forgotten", () => {
+    expect(calendar.toUndo).toMatch(/revoked at Google/i);
   });
 });

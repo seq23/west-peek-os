@@ -257,15 +257,26 @@ export async function handlePartnerConnections(ctx: RouteContext): Promise<Respo
       account_label: r.account_label ?? null,
       connected_at: r.connected_at ?? null,
       last_error: r.last_error ?? null,
-      /** Can a partner press Connect and have anything happen? */
-      connectable: googleReady,
-      blocked_by: googleReady
-        ? null
-        : "Google OAuth is not configured for this firm — GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are not set.",
+      /**
+       * Can a partner press Connect and have anything happen?
+       *
+       * CALENDAR CAN; A MAILBOX CANNOT, and saying otherwise was a real defect: both rows offered a
+       * Connect button, both ran the same Google flow, and that flow requests calendar scopes only.
+       * Pressing Connect on the mailbox row therefore granted calendar access, marked CALENDAR
+       * connected, and left the mailbox row exactly as it was — so the button did nothing, twice,
+       * and looked broken rather than absent.
+       */
+      connectable: r.connector_key === "calendar" && googleReady,
+      blocked_by:
+        r.connector_key !== "calendar"
+          ? "Reading your own inbox is not built. The firm can already SEND approved email without this — that is a separate thing and it is already on."
+          : googleReady
+            ? null
+            : "Google OAuth is not configured for this firm — GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are not set.",
       what_it_unlocks:
         r.connector_key === "calendar"
           ? "Your morning brief opens with what you are walking into, and meeting prep happens without being asked for."
-          : "Approved messages actually send, instead of being recorded and waiting for you to copy them somewhere.",
+          : "Nothing yet. Sending approved email as the firm already works and needs no connection here.",
     };
   });
 

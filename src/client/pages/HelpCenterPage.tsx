@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CONNECTION_FACTS, FIRM_SENDING_FACTS } from "@shared/help/connectionFacts";
 import { AI_EMPLOYEE_ROSTER, MAX_ACTIVE_AI_EMPLOYEES_DOC } from "../lib/helpFacts";
 
 /**
@@ -69,6 +70,50 @@ function MaturityTag({ maturity }: { maturity: Maturity }): JSX.Element {
 }
 
 const TOPICS: Topic[] = [
+  {
+    id: "connecting-email-calendar",
+    title: "Connecting your email and calendar — what can and cannot happen",
+    maturity: "IMPLEMENTED",
+    body: (
+      <>
+        <p>
+          Two unrelated things get called &ldquo;email&rdquo; here, and that is most of the
+          confusion. <strong>Sending</strong> is something the firm does. A <strong>mailbox</strong>{" "}
+          and a <strong>calendar</strong> belong to a person. One being on says nothing about the
+          other.
+        </p>
+
+        <h4>{FIRM_SENDING_FACTS.title} — already on</h4>
+        <p>{FIRM_SENDING_FACTS.summary}</p>
+        <p><strong>It can</strong></p>
+        <ul>{FIRM_SENDING_FACTS.can.map((x) => <li key={x}>{x}</li>)}</ul>
+        <p><strong>It cannot</strong></p>
+        <ul>{FIRM_SENDING_FACTS.cannot.map((x) => <li key={x}>{x}</li>)}</ul>
+
+        {CONNECTION_FACTS.map((f) => (
+          <section key={f.key}>
+            <h4>{f.title}</h4>
+            <p>{f.availability}</p>
+            <p><strong>It cannot</strong></p>
+            <ul>{f.cannot.map((x) => <li key={x}>{x}</li>)}</ul>
+            <p><strong>It can</strong></p>
+            <ul>{f.can.map((x) => <li key={x}>{x}</li>)}</ul>
+            <p><strong>Why that is true.</strong> {f.enforcedBy}</p>
+            <p><strong>When you press Connect</strong></p>
+            <ol>{f.whenYouConnect.map((x) => <li key={x}>{x}</li>)}</ol>
+            <p><strong>To undo it.</strong> {f.toUndo}</p>
+          </section>
+        ))}
+
+        <p>
+          <strong>Each partner connects their own.</strong> Sequoia connecting a calendar does
+          nothing for Scooter&apos;s and cannot see it. There is no firm-level switch for this, and
+          the absence is deliberate — one toggle would be a claim about whose diary the system can
+          read, and it would be false.
+        </p>
+      </>
+    ),
+  },
   {
     id: "what-is",
     title: "What West Peek OS is",

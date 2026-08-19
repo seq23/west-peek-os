@@ -2370,3 +2370,30 @@ hr {
 }
 
 .team-head:first-of-type { margin-top: 0.75rem; }
+
+/* The connect explainer. Each capability is its own block with a rule above it, because the whole
+   point is that they are SEPARATE things — running them together as one list is what made "email"
+   ambiguous in the first place. */
+.connect-help .connect-fact {
+  border-top: 1px solid var(--wp-line);
+  padding-top: 0.85rem;
+  margin-top: 1rem;
+}
+
+.connect-help .connect-fact:first-of-type {
+  border-top: 0;
+  margin-top: 0.4rem;
+}
+
+.connect-help h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.98rem;
+}
+
+.connect-help ul,
+.connect-help ol {
+  margin: 0.2rem 0 0.7rem;
+  padding-left: 1.15rem;
+}
+
+.connect-help li { margin-bottom: 0.25rem; }
