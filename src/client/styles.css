@@ -1978,3 +1978,43 @@ hr {
 
 .allocation-table { margin-top: var(--space-lg); }
 .table-scroll { overflow-x: auto; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE MORNING REPORT
+   Importance is a chip rather than bold prose: the reader is scanning for the
+   nines, and a number you have to read a sentence to find is not scannable.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.brief-masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+.brief-masthead h3 { margin: 0; }
+.brief-edition {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.brief-numbered { margin: 0 0 var(--space-md); padding-left: var(--space-xl); }
+.brief-numbered li { margin-bottom: var(--space-sm); line-height: var(--lh-normal); }
+
+.brief-scored { display: flex; gap: var(--space-sm); align-items: baseline; }
+.importance {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  padding: var(--space-3xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--wp-neutral-tint);
+  color: var(--wp-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.importance-mid { background: var(--wp-warn-tint); color: var(--wp-warn); }
+/* Only "this changes a decision we are about to make" earns the accent. */
+.importance-high { background: var(--wp-orange); color: var(--wp-orange-ink); }

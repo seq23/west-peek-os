@@ -32,6 +32,17 @@ function renderBody(md: string): JSX.Element {
     <>
       {blocks.map((block, i) => {
         const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+
+        const scored = extractImportance(block);
+        if (scored) {
+          return (
+            <p key={i} className="brief-scored">
+              <span className={importanceClass(scored.score)}>{scored.score}/10</span>
+              {bold(scored.rest)}
+            </p>
+          );
+        }
+
         const bulleted = lines.length > 0 && lines.every((l) => /^[-*·]\s+/.test(l));
         if (bulleted) {
           return (
@@ -40,10 +51,41 @@ function renderBody(md: string): JSX.Element {
             </ul>
           );
         }
+
+        const numbered = lines.length > 1 && lines.every((l) => /^\d+[.)]\s+/.test(l));
+        if (numbered) {
+          return (
+            <ol key={i} className="brief-numbered">
+              {lines.map((l, n) => <li key={n}>{bold(l.replace(/^\d+[.)]\s+/, ""))}</li>)}
+            </ol>
+          );
+        }
         return <p key={i}>{bold(block)}</p>;
       })}
     </>
   );
+}
+
+/**
+ * Pull an importance score out of a line so it can be shown as a chip rather than as bold text.
+ *
+ * The model is asked for "**Importance: 8/10**" because a fixed shape is what makes a score
+ * comparable across a page. Rendering it as bold prose would waste that — the reader is scanning
+ * for the nines, and a number they have to read a sentence to find is not scannable.
+ */
+function extractImportance(line: string): { score: number; rest: string } | null {
+  const m = line.match(/\*\*Importance:\s*(\d{1,2})\s*\/\s*10\*\*\s*/i);
+  if (!m) return null;
+  const score = Number(m[1]);
+  if (!Number.isFinite(score) || score < 0 || score > 10) return null;
+  return { score, rest: line.replace(m[0], "").trim() };
+}
+
+function importanceClass(score: number): string {
+  // Ten means it changes a decision the firm is about to make. Only that band earns the accent.
+  if (score >= 9) return "importance importance-high";
+  if (score >= 7) return "importance importance-mid";
+  return "importance";
 }
 
 function bold(text: string): JSX.Element {
@@ -86,10 +128,21 @@ export function DailyBriefPanel(): JSX.Element {
 
   return (
     <section className="card daily-brief" data-testid="daily-brief">
-      <h3>Daily intelligence</h3>
+      <header className="brief-masthead">
+        <h3>Executive Intelligence Report</h3>
+        {report && (
+          <span className="brief-edition">
+            {report.report_date}
+            {report.completed_at
+              ? ` · delivered ${new Date(report.completed_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+              : ""}
+          </span>
+        )}
+      </header>
       <p className="muted small">
-        What changed, what matters, and why — written from the items a sweep gathered. A sweep
-        collects; this is the read.
+        Written from what the sweep gathered overnight and the levels read this morning. Every
+        figure carries the source it came from; where a level could not be read, the report says so
+        rather than estimating.
       </p>
 
       <div className="form-row">
