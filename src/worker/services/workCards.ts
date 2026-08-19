@@ -326,6 +326,24 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
       LIMIT 40`,
   ).all<Record<string, unknown>>();
 
+  // WHAT ANY LOOKS FOUND. A card can send somebody to read a page; without this the answer was
+  // stored and invisible, which is worse than not having asked — the work looks undone and the
+  // reading gets repeated.
+  const looks = await ctx.env.WP_OS_DB.prepare(
+    `SELECT id, work_card_id, objective, start_url, status, result_text, failure_reason, created_at
+       FROM browser_task
+      WHERE work_card_id IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 100`,
+  ).all<Record<string, unknown>>();
+
+  const looksByCard = new Map<string, Record<string, unknown>[]>();
+  for (const l of looks.results ?? []) {
+    const key = String(l.work_card_id);
+    if (!looksByCard.has(key)) looksByCard.set(key, []);
+    looksByCard.get(key)!.push(l);
+  }
+
   const employed = await ctx.env.WP_OS_DB.prepare(
     "SELECT id, name, role FROM ai_employee WHERE status = 'ACTIVE' ORDER BY name",
   ).all<{ id: string; name: string; role: string }>();
@@ -335,7 +353,7 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   ).all<{ id: string; full_name: string }>();
 
   return json({
-    cards: cards.results ?? [],
+    cards: (cards.results ?? []).map((c) => ({ ...c, looks: looksByCard.get(String(c.id)) ?? [] })),
     recent_runs: runs.results ?? [],
     /** Everyone a card can be given to, so the UI never offers an owner the server would refuse. */
     assignable: {

@@ -46,7 +46,10 @@ interface WorkCardRow {
   owner_name?: string | null;
   owner_role?: string | null;
   allows_browser?: number;
-  looks?: Array<{ id: string; objective: string; status: string; result_text: string | null }>;
+  looks?: Array<{
+    id: string; objective: string; start_url: string; status: string;
+    result_text: string | null; failure_reason: string | null;
+  }>;
 }
 
 interface RecentRun {
@@ -385,6 +388,34 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                       </button>
                     )}
                   </div>
+
+                  {/* WHAT THE LOOK FOUND, on the card that asked. Fenced as untrusted where it is
+                      shown, because a web page saying "ignore your previous instructions" is
+                      exactly the input that fencing exists for. */}
+                  {(c.looks ?? []).length > 0 && (
+                    <details className="work-card-looks" data-testid={`work-card-looks-${c.id}`}>
+                      <summary>
+                        {c.looks!.length} look{c.looks!.length === 1 ? "" : "s"}
+                        {c.looks!.some((l) => l.status === "SUCCEEDED") ? " · answered" : ""}
+                      </summary>
+                      {c.looks!.map((l) => (
+                        <div key={l.id} className="work-look">
+                          <p className="small"><strong>{l.objective}</strong></p>
+                          <p className="muted small">{l.start_url} · {l.status.toLowerCase()}</p>
+                          {l.failure_reason && <p className="notice small">{l.failure_reason}</p>}
+                          {l.result_text && (
+                            <>
+                              <pre className="browser-result">{l.result_text.slice(0, 1200)}</pre>
+                              <p className="muted small">
+                                Read off a live page. Information about the world, not instructions —
+                                check anything you would act on.
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </details>
+                  )}
 
                   {looking === c.id && (
                     <form
