@@ -2106,3 +2106,6 @@ hr {
   overflow-x: auto;
   max-height: 22rem;
 }
+
+.work-card-row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-lg); }
+.work-card-body { min-width: 0; }

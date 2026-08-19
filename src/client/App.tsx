@@ -34,6 +34,7 @@ import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
 import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
 import { FundAllocation, Composition } from "./pages/FundAllocation";
 import { BrowserTasksPage } from "./pages/BrowserTasksPage";
+import { WorkCardsPage as WorkSurface } from "./pages/WorkCardsPage";
 import { GOVERNANCE_UPDATE_TYPES, RECOMMENDED_GOVERNANCE, governanceType } from "@shared/governance/updateTypes";
 import { useSelectedFund } from "./lib/selectedFund";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
@@ -3964,7 +3965,7 @@ export function App() {
           {authed && active === "today" && <TodayPage me={me.data!} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} />}
           {authed && active === "intent" && <IntentPage me={me.data!} />}
-          {authed && active === "work-cards" && <WorkCardsPage me={me.data!} onChanged={refresh} />}
+          {authed && active === "work-cards" && <WorkSurface me={me.data!} onChanged={refresh} onNavigate={setActive} />}
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && (
             <>

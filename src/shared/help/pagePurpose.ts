@@ -53,8 +53,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Capture something quickly", "Route it to the right machine later"],
   },
   "work-cards": {
-    purpose: "Units of governed work. Every task the firm is actually doing lives here with an owner and a next action.",
-    youCan: ["See what is open, blocked or in progress", "Change an owner or a next action", "Follow a card back to what created it"],
+    purpose: "What the firm is actually doing: a piece of work somebody owns, with a next action. Not a notification, which only says look at this, and not an approval, which is a decision waiting on you.",
+    youCan: ["See what has stopped, first", "Write a card yourself", "Start something, or mark it done", "See the five ways cards arrive"],
   },
   jobs: {
     purpose: "Work that runs on a schedule rather than because someone asked. Everything starts paused.",

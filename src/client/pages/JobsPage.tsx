@@ -161,15 +161,31 @@ export function JobsPage({ me }: { me: MeResponse }) {
               </button>
             </div>
 
-            <ul className="card-list small" data-testid={`job-runs-${j.job_key}`}>
-              {j.recent_runs.map((r) => (
-                <li key={r.id}>
-                  <span className={runBadge(r.status)}>{r.status}</span> attempt {r.attempt} · {r.trigger_kind} · {r.started_at}
-                  {r.outcome_summary ? ` — ${r.outcome_summary}` : ""}
-                </li>
-              ))}
-              {j.recent_runs.length === 0 && <li className="muted">Never run.</li>}
-            </ul>
+            {/* The run trail is folded away. It is the right thing to KEEP — a job that says it
+                succeeded while keeping zero items is only visible in its history — and the wrong
+                thing to lead with: four identical SUCCEEDED lines per job pushed the next job off
+                the screen, so the page read as a log rather than as a list of what runs. The
+                summary line carries whether the last run was healthy; the detail is one click away. */}
+            {j.recent_runs.length === 0 ? (
+              <p className="muted small" data-testid={`job-runs-${j.job_key}`}>Never run.</p>
+            ) : (
+              <details data-testid={`job-runs-${j.job_key}`}>
+                <summary>
+                  <span className={runBadge(j.recent_runs[0]!.status)}>{j.recent_runs[0]!.status}</span>{" "}
+                  last run {new Date(j.recent_runs[0]!.started_at).toLocaleString()}
+                  {j.recent_runs.length > 1 ? ` · ${j.recent_runs.length} runs recorded` : ""}
+                </summary>
+                <ul className="card-list small">
+                  {j.recent_runs.map((r) => (
+                    <li key={r.id}>
+                      <span className={runBadge(r.status)}>{r.status}</span> attempt {r.attempt} · {r.trigger_kind} ·{" "}
+                      {new Date(r.started_at).toLocaleString()}
+                      {r.outcome_summary ? ` — ${r.outcome_summary}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </li>
         ))}
         {!jobs.loading && (jobs.data?.jobs ?? []).length === 0 && <li className="state-empty">No jobs defined. A scheduled job names its target employee or machine, its budget, and its data class — and always starts PAUSED.</li>}

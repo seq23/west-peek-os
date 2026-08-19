@@ -1,0 +1,228 @@
+import { useMemo, useState } from "react";
+import { api, useApi, type MeResponse } from "../lib/api";
+import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
+
+/**
+ * Work cards — what the firm is actually doing, who owns it, and what happens next.
+ *
+ * WHAT WAS WRONG, in the operator's words: "I don't understand work cards, and there's no way to
+ * create them." Both halves were fair. Cards appear as a CONSEQUENCE of five different things
+ * happening elsewhere — a routed capture, an executed Ask, a meeting commitment, a system conflict —
+ * the page never said which, and the one route that makes a card directly had no button. So the
+ * concept was invisible and the page looked broken.
+ *
+ * A card is a unit of work somebody owns, with a next action. Those two halves are what separate it
+ * from everything nearby: a notification says look at this, an approval says decide this, a card
+ * says somebody is doing this and here is what happens next.
+ *
+ * WHY A SCHEDULED JOB HAS NO CARD, which was the other half of the question. A job is not a task
+ * somebody owns — it is machinery that runs on a clock. What a job PRODUCES can become a card, when
+ * it produces something a person has to carry.
+ *
+ * BLOCKED SORTS FIRST. It is the only state where work has stopped and someone must intervene;
+ * open and in-progress cards are moving. Sorting by priority or age alone buries the one kind that
+ * needs a person.
+ */
+
+interface WorkCardRow {
+  id: string;
+  title: string;
+  description: string | null;
+  state: string;
+  priority: string;
+  owner_type: string;
+  owner_id: string | null;
+  next_action: string | null;
+  due_at: string | null;
+  capture_id: string | null;
+  created_at: string;
+}
+
+export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; onChanged: () => void; onNavigate: (k: string) => void }) {
+  const cards = useApi<{ work_cards: WorkCardRow[] }>("/api/work-cards");
+  const [message, setMessage] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [nextAction, setNextAction] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const all = cards.data?.work_cards ?? [];
+  const live = useMemo(() => triage(all), [all]);
+  const finished = all.filter((c) => c.state === "DONE" || c.state === "CANCELLED");
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim()) return;
+    setBusy(true);
+    const res = await api<{ id?: string; error?: string; detail?: string }>("/api/work-cards", {
+      method: "POST",
+      body: {
+        title: title.trim(),
+        ...(nextAction.trim() ? { next_action: nextAction.trim() } : {}),
+        owner_type: "HUMAN",
+        owner_id: me.id,
+      },
+    });
+    setBusy(false);
+    if (res.status !== 201) {
+      setMessage(`Not created: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+      return;
+    }
+    setMessage("Added, owned by you.");
+    setTitle("");
+    setNextAction("");
+    setAdding(false);
+    cards.reload();
+    onChanged();
+  }
+
+  async function move(id: string, state: string) {
+    const res = await api<{ error?: string; detail?: string }>(`/api/work-cards/${id}`, {
+      method: "PATCH",
+      body: { state },
+    });
+    if (res.status !== 200) setMessage(`Could not move it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    cards.reload();
+    onChanged();
+  }
+
+  return (
+    <section data-testid="work-cards-page">
+      <div className="home-section-head">
+        <h2>{live.length === 0 ? "Nothing open" : `${live.length} open`}</h2>
+        <button type="button" className="link-button" data-testid="work-card-add-toggle" onClick={() => setAdding((a) => !a)}>
+          {adding ? "Cancel" : "Add a card"}
+        </button>
+      </div>
+
+      {message && <p className="notice" data-testid="work-cards-message">{message}</p>}
+
+      {adding && (
+        <form className="card" data-testid="work-card-form" onSubmit={create}>
+          <div className="form-row">
+            <label style={{ flexGrow: 1 }}>
+              What needs doing?{" "}
+              <input data-testid="work-card-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Get Sensori's SPV terms from the paperwork" />
+            </label>
+          </div>
+          <div className="form-row">
+            <label style={{ flexGrow: 1 }}>
+              What happens next?{" "}
+              <input data-testid="work-card-next" value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="Ask Shanna for the closing docs" />
+            </label>
+            <button type="submit" className="btn-strong" disabled={busy} data-testid="work-card-submit">
+              {busy ? "…" : "Add"}
+            </button>
+          </div>
+          <p className="muted small">
+            A card without a next action is a wish. Naming the next step is what makes it work
+            somebody can pick up.
+          </p>
+        </form>
+      )}
+
+      {live.length === 0 && !adding && (
+        <div className="card" data-testid="work-cards-empty">
+          <h3>Nothing is open</h3>
+          <p className="small">
+            A work card is a piece of work somebody owns, with a next action. It is not a
+            notification — that just says look at this — and not an approval, which is a decision
+            waiting on you.
+          </p>
+          <p className="muted small">Cards arrive five ways:</p>
+          <ul className="card-list small" data-testid="work-card-sources">
+            {CARD_SOURCES.map((src) => (
+              <li key={src.key}>
+                <strong>{src.label}</strong> — {src.how}
+                {src.page && (
+                  <>
+                    {" "}
+                    <button type="button" className="link-button" onClick={() => onNavigate(src.page!)}>
+                      Open
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="muted small">
+            A scheduled job does not get a card, because a job is machinery rather than a task
+            somebody owns. What a job produces can become one.
+          </p>
+        </div>
+      )}
+
+      <ul className="card-list" data-testid="work-card-list">
+        {live.map((c) => {
+          const meaning = stateMeaning(c.state);
+          return (
+            <li key={c.id} className="card work-card-row" data-testid={`work-card-${c.id}`}>
+              <div className="work-card-body">
+                <div className="notification-head">
+                  <span className={c.state === "BLOCKED" ? "badge badge-bad" : "badge"}>
+                    {meaning?.label ?? c.state}
+                  </span>
+                  {c.priority !== "NORMAL" && <span className="badge badge-gate">{c.priority.toLowerCase()}</span>}
+                  <strong>{c.title}</strong>
+                </div>
+                {c.next_action ? (
+                  <p className="small">
+                    <span className="lbl">Next</span> {c.next_action}
+                  </p>
+                ) : (
+                  <p className="muted small">No next action — nobody knows what to do with this yet.</p>
+                )}
+                <p className="muted small">
+                  {c.owner_type === "UNASSIGNED" ? "Nobody owns this" : `Owned by ${c.owner_id ?? c.owner_type.toLowerCase()}`}
+                  {c.capture_id ? " · from something you captured" : ""}
+                  {c.due_at ? ` · due ${c.due_at.slice(0, 10)}` : ""}
+                </p>
+              </div>
+
+              <div className="notification-actions">
+                {c.state === "OPEN" && (
+                  <button type="button" data-testid={`work-card-start-${c.id}`} onClick={() => void move(c.id, "IN_PROGRESS")}>
+                    Start
+                  </button>
+                )}
+                {c.state !== "DONE" && (
+                  <button type="button" className="btn-strong" data-testid={`work-card-done-${c.id}`} onClick={() => void move(c.id, "DONE")}>
+                    Done
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      {finished.length > 0 && (
+        <details className="card" data-testid="work-cards-finished">
+          <summary>{finished.length} finished or dropped</summary>
+          <p className="muted small">
+            Kept rather than deleted — what got done is the record, and a decision not to act is
+            still a decision.
+          </p>
+          <ul className="card-list small">
+            {finished.slice(0, 50).map((c) => (
+              <li key={c.id}>
+                <span className="badge">{stateMeaning(c.state)?.label ?? c.state}</span> {c.title}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      <details className="card" data-testid="work-cards-explainer">
+        <summary>What the states mean</summary>
+        <ul className="card-list small">
+          {STATE_MEANINGS.map((s) => (
+            <li key={s.key}>
+              <strong>{s.label}</strong> — {s.means}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </section>
+  );
+}
