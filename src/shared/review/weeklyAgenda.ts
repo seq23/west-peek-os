@@ -61,7 +61,6 @@ export function isResolved(items: ReadonlyArray<{ exit_type: string }>): boolean
   return items.length > 0 && items.every((i) => i.exit_type !== "UNRESOLVED");
 }
 
-/** Monday of the ISO week containing `d`, as YYYY-MM-DD. */
 /**
  * The Wednesday this review week began.
  *
