@@ -53,6 +53,15 @@ const RAISED_LABEL: Record<string, string> = {
 /** Which exits produce a work card, so the interface can say so before you pick one. */
 const RAISES_WORK = new Set(["OWNER", "DEADLINE", "DELEGATED_ACTION"]);
 
+interface Proposal {
+  heading: string;
+  body: string;
+  owner_hint: string | null;
+  owner_id: string | null;
+  deadline: string | null;
+  quote: string;
+}
+
 function shortDate(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`);
   return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
@@ -63,6 +72,10 @@ export function WeeklyReviewPage(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
   const [lastAdded, setLastAdded] = useState<{ id: string; heading: string; guessed: boolean } | null>(null);
+  const [notes, setNotes] = useState("");
+  const [sensitivity, setSensitivity] = useState("INTERNAL");
+  const [proposals, setProposals] = useState<Proposal[] | null>(null);
+  const [notesMessage, setNotesMessage] = useState<string | null>(null);
 
   const d = state.data;
   const items = d?.items ?? [];
@@ -108,6 +121,42 @@ export function WeeklyReviewPage(): JSX.Element {
   async function refile(id: string, heading: string) {
     await api(`/api/weekly-review/items/${id}/heading`, { method: "POST", body: { heading } });
     setLastAdded((prev) => (prev && prev.id === id ? { ...prev, heading, guessed: false } : prev));
+    state.reload();
+  }
+
+  /** Read pasted notes into PROPOSED items. Writes nothing. */
+  async function readNotes(e: React.FormEvent) {
+    e.preventDefault();
+    if (notes.trim().length < 20) return;
+    setBusy(true);
+    setNotesMessage(null);
+    const res = await api<{ proposals: Proposal[]; note: string; detail?: string; error?: string }>(
+      "/api/weekly-review/notes",
+      { method: "POST", body: { notes: notes.trim(), sensitivity } },
+    );
+    setBusy(false);
+    if (res.status === 200 && res.data) {
+      setProposals(res.data.proposals);
+      setNotesMessage(res.data.note);
+    } else {
+      setProposals(null);
+      setNotesMessage(res.data?.detail ?? res.data?.error ?? `Could not read those notes (HTTP ${res.status}).`);
+    }
+  }
+
+  /** Put one proposal on the agenda. Nothing is written until this is pressed. */
+  async function accept(p: Proposal, index: number) {
+    await api("/api/weekly-review/items", {
+      method: "POST",
+      body: {
+        body: p.body,
+        heading: p.heading,
+        from_notes: true,
+        ...(p.owner_id ? { owner_id: p.owner_id } : {}),
+        ...(p.deadline ? { deadline: p.deadline } : {}),
+      },
+    });
+    setProposals((prev) => (prev ? prev.filter((_, n) => n !== index) : prev));
     state.reload();
   }
 
@@ -187,6 +236,83 @@ export function WeeklyReviewPage(): JSX.Element {
         )}
       </form>
 
+      {/* ── Meeting notes ──────────────────────────────────────────────────────
+          The notetaker emails a summary after every call. Pasting it here turns prose into agenda
+          items — which is the actual work; how the text arrives is incidental. Nothing is written
+          until a partner accepts a line, because a model reading a meeting and silently filling the
+          agenda would put words in two partners' mouths on the page they decide from. */}
+      <details className="card summary-button" data-testid="weekly-notes">
+        <summary>Paste meeting notes</summary>
+        <p className="muted small">
+          Paste what your notetaker sent. It comes back as suggested agenda items with the sentence
+          each one came from, and nothing goes on the agenda until you accept it. The notes
+          themselves are never stored — only the lines you keep.
+        </p>
+        <form onSubmit={readNotes}>
+          <textarea
+            data-testid="weekly-notes-input"
+            rows={6}
+            style={{ width: "100%" }}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Paste the notetaker summary here…"
+          />
+          <div className="form-row">
+            <label>
+              These notes are{" "}
+              <select
+                data-testid="weekly-notes-sensitivity"
+                value={sensitivity}
+                onChange={(e) => setSensitivity(e.target.value)}
+              >
+                <option value="INTERNAL">ordinary firm business</option>
+                <option value="PUBLIC">nothing sensitive</option>
+                <option value="LP_PRIVATE">about specific LPs</option>
+                <option value="CONFIDENTIAL">confidential</option>
+                <option value="MNPI_SENSITIVE">material non-public</option>
+              </select>
+            </label>
+            <button type="submit" className="btn-strong" disabled={busy || notes.trim().length < 20}>
+              {busy ? "Reading…" : "Read them"}
+            </button>
+          </div>
+          <p className="muted small">
+            The last three are refused rather than sent anywhere — say so and add those items by
+            hand instead.
+          </p>
+        </form>
+
+        {notesMessage && <p className="notice small" data-testid="weekly-notes-message">{notesMessage}</p>}
+
+        {proposals && proposals.length > 0 && (
+          <ul className="card-list small" data-testid="weekly-proposals">
+            {proposals.map((p, n) => (
+              <li key={`${p.body}-${n}`}>
+                <div>
+                  <strong>{p.body}</strong>{" "}
+                  <span className="badge">{headingLabel(p.heading)}</span>
+                  {p.owner_id && <span className="badge badge-ok">{p.owner_id.includes("scooter") ? "Scooter" : "Sequoia"}</span>}
+                  {p.deadline && <span className="badge badge-gate">by {p.deadline}</span>}
+                </div>
+                {/* The sentence it came from, so you check the reading rather than trust it. */}
+                {p.quote && <div className="muted small">“{p.quote}”</div>}
+                <div className="form-row">
+                  <button type="button" className="btn-strong" onClick={() => void accept(p, n)}>
+                    Put on the agenda
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProposals((prev) => (prev ? prev.filter((_, i) => i !== n) : prev))}
+                  >
+                    Discard
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
+
       <div className="form-row">
         <button type="button" disabled={busy} data-testid="weekly-generate" onClick={generate}>
           {busy ? "Assembling…" : review ? "Refresh from records" : "Open this week"}
@@ -240,7 +366,9 @@ export function WeeklyReviewPage(): JSX.Element {
                           be trusted at all. */}
                       {i.source_type === "operator"
                         ? `${RAISED_LABEL[i.raised_by] ?? i.raised_by} raised this`
-                        : `from ${i.source_type ?? "the record"} · raised by ${RAISED_LABEL[i.raised_by] ?? i.raised_by}`}
+                        : i.source_type === "meeting_notes"
+                          ? `from meeting notes · accepted by ${RAISED_LABEL[i.raised_by] ?? i.raised_by}`
+                          : `from ${i.source_type ?? "the record"} · raised by ${RAISED_LABEL[i.raised_by] ?? i.raised_by}`}
                       {i.work_card_id && " · work card created"}
                     </div>
                     <select

@@ -5,6 +5,8 @@ import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { REVIEW_HEADINGS, guessHeading, isResolved, weekEnd, weekStart, type ReviewHeading } from "../../shared/review/weeklyAgenda";
+import { NOTES_PROMPT_VERSION, buildNotesPrompt, parseProposals, resolveOwner } from "../../shared/review/meetingNotes";
+import { runAi } from "../ai/runAi";
 
 /**
  * The weekly MP operating review (P37, V1 #18, canon §8).
@@ -233,7 +235,7 @@ export async function generateReview(
   // disappears the moment somebody refreshes the page, which is the one failure that would stop
   // anyone trusting the box at all.
   await env.WP_OS_DB.prepare(
-    "DELETE FROM weekly_review_item WHERE review_id = ?1 AND exit_type = 'UNRESOLVED' AND COALESCE(source_type,'') != 'operator'",
+    "DELETE FROM weekly_review_item WHERE review_id = ?1 AND exit_type = 'UNRESOLVED' AND COALESCE(source_type,'') NOT IN ('operator','meeting_notes')",
   )
     .bind(reviewId)
     .run();
@@ -464,6 +466,14 @@ const dumpSchema = z.object({
   body: z.string().trim().min(3).max(2000),
   /** Optional override. Absent means "you guess", which is the point of the box. */
   heading: z.string().trim().min(2).max(60).optional(),
+  /**
+   * Set when the line came from meeting notes a partner accepted, so the item can say so. Still an
+   * operator item — a person chose to put it on the agenda — but "from the Wednesday notes" is
+   * different from "Sequoia typed this", and the page should be able to tell you which.
+   */
+  from_notes: z.boolean().optional(),
+  owner_id: z.string().trim().max(80).optional(),
+  deadline: z.string().trim().max(40).optional(),
 });
 
 /**
@@ -515,10 +525,21 @@ export async function handleAddReviewItem(ctx: RouteContext): Promise<Response> 
   const raisedBy = ctx.identity!.id.includes("scooter") ? "SCOOTER" : "SEQUOIA";
   const id = `wri_${crypto.randomUUID()}`;
   await ctx.env.WP_OS_DB.prepare(
-    `INSERT INTO weekly_review_item (id, review_id, heading, body, raised_by, source_type, source_id, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'operator', ?6, ?7)`,
+    `INSERT INTO weekly_review_item (id, review_id, heading, body, raised_by, source_type, source_id, owner_id, deadline, firm_scope)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
   )
-    .bind(id, review.id, heading, parsed.data.body, raisedBy, ctx.identity!.id, scope)
+    .bind(
+      id,
+      review.id,
+      heading,
+      parsed.data.body,
+      raisedBy,
+      parsed.data.from_notes ? "meeting_notes" : "operator",
+      ctx.identity!.id,
+      parsed.data.owner_id ?? null,
+      parsed.data.deadline ?? null,
+      scope,
+    )
     .run();
 
   const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM weekly_review_item WHERE id = ?1").bind(id).first();
@@ -559,4 +580,80 @@ export async function handleRefileReviewItem(ctx: RouteContext): Promise<Respons
   const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM weekly_review_item WHERE id = ?1").bind(itemId).first();
   if (!row) return json({ error: "not_found" }, { status: 404 });
   return json(row);
+}
+
+const notesSchema = z.object({
+  notes: z.string().trim().min(20).max(60_000),
+  /**
+   * What is in these notes. The partner says, because only they know what the meeting covered.
+   * Defaults to INTERNAL, which is what an ordinary partner meeting is.
+   */
+  sensitivity: z.enum(["PUBLIC", "INTERNAL", "RESTRICTED", "LP_PRIVATE", "CONFIDENTIAL", "MNPI_SENSITIVE"]).default("INTERNAL"),
+});
+
+/**
+ * POST /api/weekly-review/notes — read meeting notes and PROPOSE agenda items.
+ *
+ * PROPOSES. Writes nothing. The partner accepts the ones that are right, and each accepted item is
+ * created through the ordinary path. A model reading a meeting and silently filling the agenda
+ * would put words in two partners' mouths on the page they make decisions from.
+ *
+ * THE NOTES ARE NOT STORED. Only accepted items are, and each records that it came from notes. A
+ * transcript of a partner meeting is a far heavier thing to hold than a line saying what to do
+ * about it, and there is no reason to hold the former.
+ *
+ * THE SENSITIVITY LABEL IS THE PARTNER'S TO SET, because only they know whether the meeting
+ * discussed LP commitments or material non-public information. If they say it did, the AI boundary
+ * refuses the run — OpenRouter is permitted PUBLIC and INTERNAL and nothing else — and the refusal
+ * is reported plainly so they can type the items by hand instead. Guessing INTERNAL on their behalf
+ * would be the system quietly relabelling somebody else's confidential conversation.
+ */
+export async function handleReviewNotes(ctx: RouteContext): Promise<Response> {
+  const parsed = notesSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "weekly_review.manage", { objectType: "weekly_review" });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const week = weekStart(new Date());
+  const { run } = await runAi(ctx.env, {
+    purpose: `weekly review: reading meeting notes for the week of ${week}`,
+    actor,
+    inputs: [buildNotesPrompt(parsed.data.notes, week)],
+    sensitivity: parsed.data.sensitivity as never,
+    budgetContext: { expectedOutputTokens: 1500 },
+    routing: { category: "OPERATIONS" },
+  });
+
+  if (run.status === "EGRESS_BLOCKED") {
+    return json(
+      {
+        error: "refused_by_privacy_boundary",
+        detail:
+          `These notes are labelled ${parsed.data.sensitivity}, which may not be sent to a model. ` +
+          "Nothing was sent. Add the items by hand using the box above.",
+        run_id: run.id,
+      },
+      { status: 409 },
+    );
+  }
+  if (run.status !== "COMPLETED" || !run.output_text) {
+    return json({ error: "read_failed", detail: run.failure_reason ?? `run ended ${run.status}`, run_id: run.id }, { status: 502 });
+  }
+
+  const proposals = parseProposals(run.output_text);
+  if (!proposals) {
+    return json({ error: "unreadable", detail: "the model did not return usable items", run_id: run.id }, { status: 502 });
+  }
+
+  return json({
+    proposals: proposals.map((p) => ({ ...p, owner_id: resolveOwner(p.owner_hint) })),
+    run_id: run.id,
+    prompt_version: NOTES_PROMPT_VERSION,
+    note:
+      proposals.length === 0
+        ? "Nothing in those notes needed deciding or doing. That is a real answer, not a failure."
+        : "Nothing has been added yet. Accept the ones that are right.",
+  });
 }

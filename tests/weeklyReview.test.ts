@@ -3,6 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { deriveItems, mergeItems } from "../src/worker/services/weeklyReview";
 import { REVIEW_HEADINGS, guessHeading, isResolved, weekEnd, weekStart } from "../src/shared/review/weeklyAgenda";
+import { buildNotesPrompt, parseProposals, resolveOwner } from "../src/shared/review/meetingNotes";
 
 /**
  * The weekly MP operating review (P37, V1 #18, canon §8).
@@ -174,5 +175,60 @@ describe("guessing where a typed thought belongs", () => {
     // "audit" deliberately files under finance rather than legal: for a fund the annual audit is a
     // fund-admin job, and that is where somebody would look for it.
     expect(guessHeading("chase the audit")).toBe("finance_cash");
+  });
+});
+
+/**
+ * Reading meeting notes into agenda items.
+ *
+ * A model reading a partner meeting and filling the agenda would put words in two people's mouths
+ * on the page they make decisions from. So the tests are mostly about what the parser REFUSES.
+ */
+describe("meeting notes become proposals, not minutes", () => {
+  it("keeps only items with a heading the canon defines", () => {
+    const out = parseProposals(JSON.stringify([
+      { heading: "early_stage", body: "Pass on Halcyon", owner_hint: null, deadline: null, quote: "we should pass on Halcyon" },
+      { heading: "invented_heading", body: "Something", owner_hint: null, deadline: null, quote: "x" },
+    ]));
+    expect(out).toHaveLength(1);
+    expect(out![0]!.heading).toBe("early_stage");
+  });
+
+  it("drops a vague phrase where a date should be", () => {
+    // "Soon" is not a date. Storing it as one would put a deadline on the agenda that nobody set.
+    const out = parseProposals(JSON.stringify([
+      { heading: "early_stage", body: "Send the deck", owner_hint: "Scooter", deadline: "soon", quote: "Scooter to send the deck soon" },
+      { heading: "early_stage", body: "Reply to Acme", owner_hint: null, deadline: "2026-08-24", quote: "reply by the 24th" },
+    ]));
+    expect(out![0]!.deadline).toBeNull();
+    expect(out![1]!.deadline).toBe("2026-08-24");
+  });
+
+  it("returns null rather than salvaging unparseable output", () => {
+    // A half-read proposal is worse than none: a partner would accept it without knowing it was
+    // reconstructed rather than read.
+    expect(parseProposals("the meeting went well, I think")).toBeNull();
+  });
+
+  it("treats an empty list as a real answer", () => {
+    expect(parseProposals("[]")).toEqual([]);
+  });
+
+  it("only resolves an owner when the notes name a partner unambiguously", () => {
+    expect(resolveOwner("Scooter")).toBe("fu_scooter_taylor");
+    expect(resolveOwner("sequoia to follow up")).toBe("fu_sequoia_taylor");
+    // Somebody outside the firm. Assigning work to them would invent a person.
+    expect(resolveOwner("Marcus")).toBeNull();
+    // Both named — the notes did not say which, so neither does this.
+    expect(resolveOwner("Sequoia and Scooter")).toBeNull();
+    expect(resolveOwner(null)).toBeNull();
+  });
+
+  it("tells the model not to firm up a vague statement", () => {
+    const p = buildNotesPrompt("some notes", "2026-08-19");
+    expect(p).toMatch(/do not tidy a vague statement into a firm one/i);
+    expect(p).toMatch(/Never invent an owner/i);
+    // The notes are somebody else's words and may contain anything.
+    expect(p).toMatch(/untrusted/i);
   });
 });
