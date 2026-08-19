@@ -7,6 +7,8 @@ import {
   isGoogleConfigured,
   refreshTokens,
   revokeToken,
+  sendViaGmail,
+  GOOGLE_SCOPES_WITH_SEND,
 } from "../src/worker/effects/googleClient";
 import type { Env } from "../src/worker/env";
 import { CONNECTION_FACTS } from "../src/shared/help/connectionFacts";
@@ -176,5 +178,83 @@ describe("what the connect help promises", () => {
 
   it("tells the partner disconnection is withdrawn at Google, not just forgotten", () => {
     expect(calendar.toUndo).toMatch(/revoked at Google/i);
+  });
+});
+
+/**
+ * Sending as a partner through their own Gmail.
+ *
+ * The permission is the sensitive part, so the tests are about what is asked for and what the
+ * message on the wire actually contains.
+ */
+describe("gmail.send", () => {
+  it("is not part of the calendar consent", () => {
+    // A partner who wants their diary read must not be handed a mail permission as the price.
+    const u = new URL(buildAuthUrl(env(), REDIRECT, "n"));
+    expect(u.searchParams.get("scope")).not.toContain("gmail.send");
+  });
+
+  it("is added by the second consent, alongside what was already granted", () => {
+    const u = new URL(buildAuthUrl(env(), REDIRECT, "n", GOOGLE_SCOPES_WITH_SEND));
+    const scope = u.searchParams.get("scope") ?? "";
+    expect(scope).toContain("gmail.send");
+    expect(scope).toContain("calendar.readonly");
+    // Incremental: Google keeps the existing grant rather than replacing it.
+    expect(u.searchParams.get("include_granted_scopes")).toBe("true");
+  });
+
+  it("never asks for a scope that could read mail", () => {
+    const scope = new URL(buildAuthUrl(env(), REDIRECT, "n", GOOGLE_SCOPES_WITH_SEND)).searchParams.get("scope") ?? "";
+    for (const forbidden of ["gmail.readonly", "gmail.modify", "mail.google.com", "gmail.metadata"]) {
+      expect(scope).not.toContain(forbidden);
+    }
+  });
+
+  it("builds a message Gmail accepts, base64url and not standard base64", async () => {
+    let sentBody: any = null;
+    const fetchImpl = (async (_u: unknown, init: any) => {
+      sentBody = JSON.parse(init.body as string);
+      return new Response(JSON.stringify({ id: "gmail-msg-1" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const id = await sendViaGmail(
+      "at",
+      { to: "lp@example.test", from: "scooter@westpeek.ventures", fromName: "Scooter Taylor", subject: "Hello", text: "Body." },
+      fetchImpl,
+    );
+    expect(id).toBe("gmail-msg-1");
+    // base64url uses - and _ and drops padding; standard base64 would break the API.
+    expect(sentBody.raw).not.toMatch(/[+/=]/);
+
+    const decoded = atob(sentBody.raw.replace(/-/g, "+").replace(/_/g, "/"));
+    expect(decoded).toContain("From: Scooter Taylor <scooter@westpeek.ventures>");
+    expect(decoded).toContain("To: lp@example.test");
+    expect(decoded).toContain("Subject: Hello");
+  });
+
+  it("strips newlines out of headers, because a subject is attacker-shaped input", async () => {
+    // A newline in a subject is header injection, and this subject comes from a payload a person
+    // or a model wrote.
+    let sentBody: any = null;
+    const fetchImpl = (async (_u: unknown, init: any) => {
+      sentBody = JSON.parse(init.body as string);
+      return new Response(JSON.stringify({ id: "x" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await sendViaGmail(
+      "at",
+      { to: "a@b.test", from: "c@westpeek.ventures", subject: "Hi\r\nBcc: sneak@evil.test", text: "Body." },
+      fetchImpl,
+    );
+    const decoded = atob(sentBody.raw.replace(/-/g, "+").replace(/_/g, "/"));
+    expect(decoded).not.toMatch(/^Bcc:/m);
+    expect(decoded).toContain("Subject: Hi Bcc: sneak@evil.test");
+  });
+
+  it("names a refusal distinctly so the caller can fall back rather than drop the message", async () => {
+    const fetchImpl = (async () => new Response("{}", { status: 403 })) as unknown as typeof fetch;
+    await expect(
+      sendViaGmail("at", { to: "a@b.test", from: "c@westpeek.ventures", subject: "s", text: "t" }, fetchImpl),
+    ).rejects.toThrow(/google_unauthorised/);
   });
 });

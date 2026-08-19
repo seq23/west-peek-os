@@ -117,6 +117,7 @@ function WhatConnectingDoes(): JSX.Element {
 
 interface SendAsState {
   enabled: boolean;
+  via_gmail: boolean;
   from_address: string;
   eligible: boolean;
   firm_address: string | null;
@@ -159,15 +160,33 @@ function SendAsButton(): JSX.Element | null {
         {d.enabled && <span className="badge badge-ok">on</span>}
         <div className="muted small">{d.detail}</div>
       </div>
-      <button
-        type="button"
-        className={d.enabled ? undefined : "btn-strong"}
-        disabled={busy || !d.eligible}
-        data-testid="send-as-toggle"
-        onClick={() => void flip(!d.enabled)}
-      >
-        {busy ? "…" : d.enabled ? "Stop sending as me" : "Send as me instead"}
-      </button>
+      <div className="form-row">
+        <button
+          type="button"
+          className={d.enabled ? undefined : "btn-strong"}
+          disabled={busy || !d.eligible}
+          data-testid="send-as-toggle"
+          onClick={() => void flip(!d.enabled)}
+        >
+          {busy ? "…" : d.enabled ? "Stop sending as me" : "Send as me instead"}
+        </button>
+        {/* The Sent-folder fix, offered only once sending as yourself is actually on — before that
+            it is an answer to a question nobody has asked yet. A SECOND consent: it adds permission
+            to send through Gmail and nothing else, and cannot read a single message. */}
+        {d.enabled && !d.via_gmail && (
+          <button
+            type="button"
+            className="btn-strong"
+            data-testid="connect-gmail-send"
+            onClick={() => {
+              window.location.href = "/api/connect/gmail-send/start";
+            }}
+          >
+            Put it in my Sent folder
+          </button>
+        )}
+        {d.via_gmail && <span className="badge badge-ok">through your Gmail</span>}
+      </div>
     </div>
   );
 }

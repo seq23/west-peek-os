@@ -42,7 +42,7 @@ export const CONNECTION_FACTS: readonly ConnectionFacts[] = [
       "Create, move, cancel or edit anything in your calendar. Not a typo — there is no write access at all.",
       "Invite anyone, respond to an invitation, or change your availability.",
       "Read any calendar other than yours, including Scooter's.",
-      "See anything in your email. That is a different permission and it is not requested.",
+      "See anything in your email. Connecting a calendar asks for the diary alone — no mail permission of any kind is requested.",
       "Keep reading after you disconnect — the access is withdrawn at Google, not just forgotten here.",
     ],
     enforcedBy:
@@ -114,8 +114,9 @@ export const SEND_AS_FACTS = {
   ],
   cannot: [
     "Be turned on for you by anybody else, including the other Managing Partner.",
+    "Read your inbox, even with Gmail sending granted. That permission can only send — it cannot list, search or open a single message.",
     "Skip approval. You still approve each message, exactly as before — this only decides whose name is on it.",
-    "Put the message in your Gmail Sent folder, because it does not travel through Gmail.",
+    "Put the message in your Gmail Sent folder — unless you also grant Gmail sending, which is a separate one-click permission offered beside the switch.",
     "Work from an address outside the firm's verified domain, which would fail authentication and land in spam.",
   ],
 } as const;

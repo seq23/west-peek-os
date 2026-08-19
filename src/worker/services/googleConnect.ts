@@ -4,6 +4,9 @@ import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity } from "./authorize";
 import {
+  GMAIL_SEND_SCOPE,
+  GOOGLE_SCOPES,
+  GOOGLE_SCOPES_WITH_SEND,
   buildAuthUrl,
   exchangeCode,
   fetchAccountEmail,
@@ -11,6 +14,7 @@ import {
   isGoogleConfigured,
   refreshTokens,
   revokeToken,
+  sendViaGmail,
   type CalendarEvent,
   type GoogleTokens,
 } from "../effects/googleClient";
@@ -75,10 +79,19 @@ export async function handleGoogleConnectStart(ctx: RouteContext): Promise<Respo
     return json({ error: "no_store", detail: "No KV binding, so a connection could not be held." }, { status: 500 });
   }
 
-  const nonce = crypto.randomUUID();
-  await env.WP_OS_KV.put(stateKey(nonce), identity!.id, { expirationTtl: STATE_TTL_SECONDS });
+  // WHICH PERMISSIONS THIS PARTICULAR TRIP IS ASKING FOR. Connecting a calendar asks for the diary
+  // alone; turning on "send as me through Gmail" is a second, separate trip that also asks for
+  // gmail.send. Keeping them apart is what lets the calendar screen keep promising it cannot touch
+  // your email — a promise that would be false if every connect asked for both.
+  const wantsSend = new URL(request.url).pathname.includes("gmail-send");
+  const scopes = wantsSend ? GOOGLE_SCOPES_WITH_SEND : GOOGLE_SCOPES;
 
-  const url = buildAuthUrl(env, redirectUriFor(request), nonce);
+  const nonce = crypto.randomUUID();
+  await env.WP_OS_KV.put(stateKey(nonce), JSON.stringify({ user: identity!.id, scopes }), {
+    expirationTtl: STATE_TTL_SECONDS,
+  });
+
+  const url = buildAuthUrl(env, redirectUriFor(request), nonce, scopes);
   // A redirect rather than JSON: the browser has to leave, and the client never touches a token.
   return new Response(null, { status: 302, headers: { location: url } });
 }
@@ -113,9 +126,17 @@ export async function handleGoogleCallback(ctx: RouteContext): Promise<Response>
   if (!env.WP_OS_KV) return done("Could not finish", "No store is available to hold the connection.", false);
 
   // Consume the state: single use, and it must belong to the person standing here.
-  const owner = await env.WP_OS_KV.get(stateKey(state));
+  const stored = await env.WP_OS_KV.get(stateKey(state));
   await env.WP_OS_KV.delete(stateKey(state));
-  if (!owner) return done("That link has expired", "Start the connection again from Home.", false);
+  if (!stored) return done("That link has expired", "Start the connection again from Home.", false);
+  // Tolerates the older bare-id form, so a flow already in flight when this shipped still lands.
+  let owner = stored;
+  try {
+    const parsed = JSON.parse(stored) as { user?: string };
+    if (parsed?.user) owner = parsed.user;
+  } catch {
+    /* a bare id is the old shape and is still valid */
+  }
   if (owner !== identity!.id) {
     return done("That did not match", "This authorisation was started by a different person.", false);
   }
@@ -174,9 +195,12 @@ export async function handleGoogleCallback(ctx: RouteContext): Promise<Response>
     payload: { provider: "GOOGLE", account: accountEmail, scopes: tokens.scope },
   });
 
+  const gotSend = tokens.scope.split(" ").includes(GMAIL_SEND_SCOPE);
   return done(
-    "Calendar connected",
-    `West Peek OS can now read ${accountEmail ?? "your"} calendar, and only read it. Your brief will open with what you are walking into.`,
+    gotSend ? "Connected, and you can send as yourself" : "Calendar connected",
+    gotSend
+      ? `West Peek OS can read ${accountEmail ?? "your"} calendar and send as you through Gmail. It still cannot read a single message in your inbox, and every send still needs your approval.`
+      : `West Peek OS can now read ${accountEmail ?? "your"} calendar, and only read it. Your brief will open with what you are walking into.`,
     true,
   );
 }
@@ -310,4 +334,44 @@ export async function handleGoogleDisconnect(ctx: RouteContext): Promise<Respons
       ? "Disconnected, and the grant was withdrawn at Google."
       : "Disconnected here. Google did not confirm the revocation — check your Google account permissions if you want to be certain.",
   });
+}
+
+/**
+ * Has this partner granted the send permission?
+ *
+ * Read from what Google actually returned rather than from what was requested. A partner can
+ * un-tick a permission on the consent screen, and treating the ask as the grant is how a system
+ * ends up confidently calling an endpoint it was refused.
+ */
+export async function hasGmailSend(env: Env, firmUserId: string): Promise<boolean> {
+  const row = await env.WP_OS_DB.prepare(
+    "SELECT scopes_json FROM partner_connection WHERE firm_user_id = ?1 AND connector_key = 'calendar' AND status = 'CONNECTED'",
+  )
+    .bind(firmUserId)
+    .first<{ scopes_json: string }>();
+  if (!row) return false;
+  try {
+    return (JSON.parse(row.scopes_json) as string[]).includes(GMAIL_SEND_SCOPE);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Send one message as this partner, through their own Gmail.
+ *
+ * Returns null when they have not granted the permission, which is the ordinary case and not a
+ * failure — the caller falls back to the firm transport. Throws only when Gmail was asked and said
+ * no, because silently posting a message somewhere else under a partner's name would be worse than
+ * an error.
+ */
+export async function trySendAsPartner(
+  env: Env,
+  firmUserId: string,
+  message: { to: string; from: string; fromName?: string; subject: string; text: string },
+): Promise<string | null> {
+  if (!(await hasGmailSend(env, firmUserId))) return null;
+  const token = await accessTokenFor(env, firmUserId);
+  if (!token) return null;
+  return await sendViaGmail(token, message, fetch);
 }

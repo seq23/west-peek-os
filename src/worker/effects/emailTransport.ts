@@ -20,7 +20,8 @@ export interface EmailPayload {
 
 export interface EmailSendResult {
   sent: boolean;
-  provider: "resend" | "cloudflare";
+  /** "gmail" means it went through a partner's own account and is in their Sent folder. */
+  provider: "resend" | "cloudflare" | "gmail";
   /** Null when the transport does not issue one. Better a gap than a fabricated identifier. */
   provider_message_id: string | null;
   detail: string;

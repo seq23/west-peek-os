@@ -4,6 +4,7 @@ import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity } from "./authorize";
 import { authorize } from "./authorize";
+import { hasGmailSend } from "./googleConnect";
 
 /**
  * Sending as a partner rather than as the firm (P33).
@@ -80,7 +81,10 @@ export async function handleGetSendAs(ctx: RouteContext): Promise<Response> {
   const me = ctx.identity!;
   const row = await loadSendAs(ctx.env, me.id);
   const eligible = canSendAs(ctx.env, me.email);
+  // Whether their mail can go through their OWN Gmail, which is what puts it in their Sent folder.
+  const viaGmail = await hasGmailSend(ctx.env, me.id);
   return json({
+    via_gmail: viaGmail,
     enabled: row?.enabled === 1,
     from_address: row?.from_address ?? me.email,
     changed_at: row?.changed_at ?? null,
@@ -92,8 +96,9 @@ export async function handleGetSendAs(ctx: RouteContext): Promise<Response> {
         : `Your approved messages go out as ${ctx.env.WP_OS_EMAIL_FROM ?? "the firm"}. Turn this on to send them under your own name instead.`
       : `Only addresses on the firm's verified domain can be used. ${me.email} is not one, so this stays off.`,
     // Said here because it is the question everyone asks second.
-    note:
-      "This changes whose name is on the message, nothing else. Every message still needs you to approve that exact message first, and replies go to your normal inbox. Sent mail will not appear in your Gmail Sent folder, because it does not go through Gmail.",
+    note: viaGmail
+      ? "Your messages go through your own Gmail, so they land in your Sent folder and thread with replies exactly as if you had written them there. Every message still needs you to approve it first."
+      : "This changes whose name is on the message, nothing else. Every message still needs you to approve that exact message first, and replies go to your normal inbox. Sent mail will not appear in your Gmail Sent folder unless you connect Gmail sending below.",
   });
 }
 

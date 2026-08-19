@@ -4,7 +4,9 @@ import { EFFECT_TYPE_ACTION_KEYS } from "../../shared/registry/actionTypes";
 import { authorize, type Actor } from "../services/authorize";
 import { consumeApprovalCard } from "../services/approvals";
 import { fromAddressFor } from "../services/sendAs";
+import { trySendAsPartner } from "../services/googleConnect";
 import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
+import type { EmailSendResult } from "./emailTransport";
 import {
   cloudflareEmailBlockedReason,
   isCloudflareEmailEnabled,
@@ -131,7 +133,32 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
       text: payload.text ?? payload.body ?? "",
       from,
     };
-    const result = cloudflareReady
+    // THROUGH THE PARTNER'S OWN GMAIL WHEN THEY HAVE GRANTED IT. Mail sent under a partner's address
+    // via the firm transport is legitimate and arrives, but Gmail has never heard of it — so it is
+    // absent from their Sent folder and a reply threads against nothing. Sent through Gmail it
+    // simply IS their email.
+    //
+    // Only when they are sending as themselves AND granted gmail.send; anything else, including a
+    // Gmail attempt that comes back refused, falls to the firm transport rather than not sending.
+    let result: EmailSendResult | null = null;
+    if (requestedBy && from && from !== env.WP_OS_EMAIL_FROM) {
+      try {
+        const gmailId = await trySendAsPartner(env, requestedBy, { ...message, from });
+        if (gmailId) {
+          result = {
+            sent: true,
+            provider: "gmail",
+            provider_message_id: gmailId,
+            detail: `Delivered to ${message.to} as ${from} through their own Gmail`,
+          };
+        }
+      } catch {
+        // Refused by Google — fall through to the firm transport rather than dropping the message.
+        result = null;
+      }
+    }
+
+    result ??= cloudflareReady
       ? await sendViaCloudflare(env, message)
       : await sendViaResend(env, message);
     return {
