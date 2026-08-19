@@ -28,6 +28,7 @@ import {
   handleListPolicyVersions,
 } from "./services/funds";
 import { handleDryRunImport } from "./import/contracts";
+import { handlePartnerConnections } from "./services/connectors";
 import {
   handleArchiveCapture,
   handleCreateCapture,
@@ -499,6 +500,7 @@ const router = new Router()
   .get("/api/companies", handleListCompanies)
   .get("/api/companies/resolve", handleResolveCompany)
   .get("/api/companies/register", handleCompanyRegister)
+  .get("/api/me/connections", handlePartnerConnections)
   .get("/api/companies/:id", handleGetCompany)
   .patch("/api/companies/:id", handleUpdateCompany)
   .post("/api/companies/:id/aliases", handleAddAlias)

@@ -180,3 +180,82 @@ export async function handleMeetingPrepQueue(ctx: RouteContext): Promise<Respons
       "This queue is built from meetings recorded in West Peek OS. No calendar is connected, so it reflects what the firm entered, not an external diary.",
   });
 }
+
+/**
+ * Each partner's own mailbox and calendar, and what is stopping them working.
+ *
+ * WHY THIS IS SEPARATE from the connector registry. That register is firm-scoped: it declares that
+ * this firm intends to have email, what it owns, which approval gates apply. A mailbox belongs to a
+ * person — Scooter connecting his calendar says nothing about Sequoia's — so the connection itself
+ * is per firm_user, and a single firm-level "connected" flag would claim otherwise.
+ *
+ * IT REPORTS WHAT IS MISSING RATHER THAN JUST 'NOT CONFIGURED'. A partner clicking Connect and
+ * getting a shrug is the failure this endpoint exists to prevent: the blocker is usually a
+ * credential nobody has created yet, and only the operator can create it. Saying which one turns a
+ * dead end into a task.
+ */
+export async function handlePartnerConnections(ctx: RouteContext): Promise<Response> {
+  const me = ctx.identity!;
+
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    `SELECT c.connector_key, c.name, c.kind, c.direction, c.status AS registry_status,
+            c.credential_name, c.consent_required, c.approval_gate,
+            pc.id AS connection_id, pc.status AS connection_status, pc.account_label,
+            pc.connected_at, pc.last_error, pc.scopes_json
+       FROM connector c
+       LEFT JOIN partner_connection pc
+         ON pc.connector_key = c.connector_key AND pc.firm_user_id = ?1
+      WHERE c.connector_key IN ('email', 'calendar')
+      ORDER BY c.connector_key`,
+  )
+    .bind(me.id)
+    .all<Record<string, unknown>>();
+
+  // Which credentials the environment actually holds. Names only — a value never leaves the vault,
+  // and this endpoint answers "can this work", not "what is the secret".
+  const configured = new Set<string>();
+  for (const [name, present] of [
+    ["GOOGLE_OAUTH_CLIENT_ID", Boolean((ctx.env as unknown as Record<string, unknown>).GOOGLE_OAUTH_CLIENT_ID)],
+    ["GOOGLE_OAUTH_CLIENT_SECRET", Boolean((ctx.env as unknown as Record<string, unknown>).GOOGLE_OAUTH_CLIENT_SECRET)],
+  ] as const) {
+    if (present) configured.add(name);
+  }
+  const googleReady = configured.has("GOOGLE_OAUTH_CLIENT_ID") && configured.has("GOOGLE_OAUTH_CLIENT_SECRET");
+
+  const connections = (rows.results ?? []).map((r) => {
+    const status = String(r.connection_status ?? "DISCONNECTED");
+    return {
+      connector_key: r.connector_key,
+      name: r.name,
+      direction: r.direction,
+      status,
+      account_label: r.account_label ?? null,
+      connected_at: r.connected_at ?? null,
+      last_error: r.last_error ?? null,
+      /** Can a partner press Connect and have anything happen? */
+      connectable: googleReady,
+      blocked_by: googleReady
+        ? null
+        : "Google OAuth is not configured for this firm — GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are not set.",
+      what_it_unlocks:
+        r.connector_key === "calendar"
+          ? "Your morning brief opens with what you are walking into, and meeting prep happens without being asked for."
+          : "Approved messages actually send, instead of being recorded and waiting for you to copy them somewhere.",
+    };
+  });
+
+  return json({
+    partner: { id: me.id, name: me.fullName, email: me.email },
+    connections,
+    google_ready: googleReady,
+    /** Stated so the screen never has to guess at the setup path. */
+    setup:
+      googleReady
+        ? null
+        : {
+            what: "A Google Cloud OAuth client for West Peek, with Gmail and Calendar enabled.",
+            then: "Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET as Worker secrets.",
+            note: "One client covers both partners; each still connects their own account separately.",
+          },
+  });
+}

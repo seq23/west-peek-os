@@ -2037,3 +2037,5 @@ hr {
 .composition-track { background: var(--wp-surface-3); border-radius: var(--radius-xs); height: 14px; overflow: hidden; }
 .composition-fill { display: block; height: 100%; border-radius: var(--radius-xs); }
 .composition-pct { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }
+
+.connect-list li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-lg); }

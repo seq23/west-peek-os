@@ -3,6 +3,7 @@ import { api, useApi, type MeResponse } from "../lib/api";
 import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttention";
 import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
 import { DailyBriefPanel } from "./DailyBriefPanel";
+import { ConnectPanel } from "./ConnectPanel";
 
 /**
  * MP Home / Executive Command Center (P14, GAP-04 + GAP-23).
@@ -460,6 +461,10 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       {/* The brief, at the top, because it is the thing that ARRIVED. It used to render on the
           Sources page while a list of ranked sweep items sat here called "Daily Brief" — two
           things named almost identically and neither where you would look. */}
+      {/* Above the brief, because it is the reason the brief cannot yet see your day. Collapses to
+          a single line once both are connected. */}
+      <ConnectPanel me={me} />
+
       <DailyBriefPanel />
 
       {/* Waiting on you: lifted out of the grid because it is the only group where something is
