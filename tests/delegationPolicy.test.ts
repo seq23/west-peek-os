@@ -19,7 +19,7 @@ import { buildDigest, parseProposals } from "../src/worker/services/meetingDeleg
 
 const ROSTER: RosterEntry[] = [
   { id: "aie_walker", name: "Walker", role: "Chief of Staff", status: "ACTIVE" },
-  { id: "aie_priya", name: "Priya", role: "Investment Associate", status: "ACTIVE" },
+  { id: "aie_pierce", name: "Priya", role: "Investment Associate", status: "ACTIVE" },
   { id: "aie_wesley", name: "Wesley", role: "LP Relations", status: "ACTIVE" },
 ];
 const FALLBACK = ROSTER[0]!;
@@ -40,7 +40,7 @@ describe("assignment defaults to AI employees", () => {
 
   it("honours a named employee the model suggested", () => {
     const r = resolveAssignment(propose({ suggested_employee_name: "Priya" }), ROSTER, FALLBACK);
-    expect(r.ai_employee_id).toBe("aie_priya");
+    expect(r.ai_employee_id).toBe("aie_pierce");
   });
 
   it("matches a suggested name case-insensitively and ignores surrounding space", () => {

@@ -32,7 +32,7 @@ const COMPLIANCE = { "x-wpos-dev-user": "compliance@westpeek.ventures" };
 
 const MP_ACTOR: Actor = { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
 const MEMBER_ACTOR: Actor = { type: "HUMAN", firmUserId: "fu_rep_member", roles: ["INVESTMENT_TEAM"], firmScopes: ["west-peek"] };
-const AI_ACTOR: Actor = { type: "AI", aiEmployeeId: "aie_paige", roles: [], firmScopes: ["west-peek"] };
+const AI_ACTOR: Actor = { type: "AI", aiEmployeeId: "aie_wyatt", roles: [], firmScopes: ["west-peek"] };
 
 function req(path: string, headers: Record<string, string> = {}, method = "GET", body?: unknown): Request {
   return new Request(`https://test.local${path}`, {

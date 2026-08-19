@@ -57,8 +57,8 @@ export interface Recommendation {
 const CANDIDATES: ReadonlyArray<Omit<Recommendation, "rank">> = [
   {
     name: "Wesley",
-    role: "LP Relations Manager",
-    layer: "LP/Fundraising",
+    role: "LP Relations",
+    layer: "LP & fundraising",
     priority: "FUNDRAISING_LP",
     because:
       "Fund I is the firm's active constraint. Wesley keeps LP conversations, materials and " +
@@ -66,25 +66,25 @@ const CANDIDATES: ReadonlyArray<Omit<Recommendation, "rank">> = [
   },
   {
     name: "Wyatt",
-    role: "Deal Watchlist Analyst",
-    layer: "Investment/IC/Meeting",
+    role: "Analyst & Scout",
+    layer: "Investment",
     priority: "DEAL_SOURCING",
     because:
       "Pre-seed sourcing is continuous monitoring, not a weekly search. Wyatt watches the " +
       "companies and signals already on the list so movement surfaces without being asked for.",
   },
   {
-    name: "Paige",
-    role: "Research Analyst",
-    layer: "Investment/IC/Meeting",
+    name: "Pierce",
+    role: "Investment Lead",
+    layer: "Investment",
     priority: "DILIGENCE_IC",
     because:
-      "Diligence is the most preparation-heavy work the partners do. Paige assembles the " +
-      "evidence so an IC discussion starts from a brief rather than from a blank page.",
+      "Diligence is the most preparation-heavy work the partners do. Pierce runs a deal from " +
+      "first look to a decision, so an IC discussion starts from a memo rather than a blank page.",
   },
   {
     name: "Wren",
-    role: "Sequoia AI Chief of Staff",
+    role: "Sequoia's Chief of Staff",
     layer: "MP Support",
     priority: "WEDNESDAY_MP_MEETING",
     because:
@@ -93,8 +93,8 @@ const CANDIDATES: ReadonlyArray<Omit<Recommendation, "rank">> = [
   },
   {
     name: "Willow",
-    role: "Compliance + Privacy Gatekeeper / Compliance Linter",
-    layer: "Intake/Relationship/Memory/Governance + LP",
+    role: "Compliance & Privacy",
+    layer: "Firm operations",
     priority: "COMPLIANCE_SAFEGUARDS",
     because:
       "Willow is the one recommendation that reduces risk rather than workload. With LP material " +
@@ -103,8 +103,8 @@ const CANDIDATES: ReadonlyArray<Omit<Recommendation, "rank">> = [
   },
   {
     name: "Winter",
-    role: "Portfolio Support Manager",
-    layer: "Portfolio/Event/Brand/Ops",
+    role: "Portfolio Support",
+    layer: "Portfolio & operations",
     priority: "PORTFOLIO_COMMUNITY",
     because:
       "Community is the firm's stated competitive advantage. Winter is the first hire to make " +

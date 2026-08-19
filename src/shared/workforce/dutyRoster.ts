@@ -68,14 +68,14 @@ export type ShiftKey = (typeof SHIFTS)[number]["key"];
  */
 const SHIFT_PREFERENCE: Record<ShiftKey, readonly string[]> = {
   // The brief lands at breakfast, and the day gets sequenced before it starts.
-  MORNING: ["Walker", "Wren", "Paige", "Wyatt", "Wendy", "Willa", "Winton"],
+  MORNING: ["Walker", "Wren", "Wyatt", "Wells", "Porter"],
   // Deal hours: sourcing, screening, the analyst, and the people who prepare a decision.
-  MIDDAY: ["Pierce", "Priya", "Paige", "Poppy", "Walter", "Wyatt", "Winnie"],
+  MIDDAY: ["Pierce", "Wyatt", "Poppy", "Walter", "Waverly"],
   // What got promised, to whom, and the relationships that carry the firm.
-  EVENING: ["Wesley", "Waverly", "Winnie", "Parker", "Winter", "Penn", "Percy"],
+  EVENING: ["Wesley", "Piper", "Waverly", "Parker", "Winter", "Pippa"],
   // Deliberately thin. Compliance and systems, because those are the two things
   // that should notice a problem at 3am; everyone else is off.
-  OVERNIGHT: ["Willow", "Wilson", "Pax"],
+  OVERNIGHT: ["Willow", "Porter", "Pax"],
 };
 
 export interface DutyAssignment {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 import { AI_EMPLOYEE_ROSTER } from "../src/shared/registry/aiEmployees";
 import {
   EMPLOYEE_PERSONAS,
@@ -29,9 +30,15 @@ describe("every employee is a distinct veteran, not a badge on one assistant", (
   });
 
   it("holds everyone to the veteran standard regardless of title", () => {
-    // An "Associate" must not be framed as junior. The title is the seat, not the ceiling.
-    const priya = personaFor("Priya")!;
-    expect(priya.expertise).toMatch(/veteran|depth/i);
+    // The title is the seat, not the ceiling. This used to check "Priya", the Associate, who was
+    // merged into the Investment Lead in roster v4.0. Naming one person was always the weaker
+    // test: the rule is that NO seat is framed as junior, and "Analyst" is simply the
+    // junior-sounding title that happens to survive today.
+    const junior = /\b(junior|entry.level|assists a|supports a senior|under the direction of|trainee)\b/i;
+    for (const p of EMPLOYEE_PERSONAS) {
+      expect(junior.test(p.expertise), `${p.name} is framed as junior`).toBe(false);
+      expect(junior.test(p.voice), `${p.name} is framed as junior`).toBe(false);
+    }
     for (const p of EMPLOYEE_PERSONAS) {
       expect(p.expertise.length).toBeGreaterThan(30);
       expect(p.voice.length).toBeGreaterThan(20);
@@ -56,5 +63,49 @@ describe("every employee is a distinct veteran, not a badge on one assistant", (
     // "Best in discipline" has to mean something operational or it is just flattery in a prompt.
     expect(VETERAN_STANDARD).toMatch(/never invent/i);
     expect(VETERAN_STANDARD).toMatch(/outside your competence|unknowable/i);
+  });
+});
+
+/**
+ * Roster v4.0 added two facts that get read together before a human decision: who somebody IS, and
+ * whether they can be put in front of an outsider. Both have to be present and honest on every
+ * seat, or the decision gets made on a guess.
+ */
+describe("bios and outward-facing capability", () => {
+  it("gives every employee a bio that says what they do", () => {
+    for (const e of AI_EMPLOYEE_ROSTER) {
+      expect(e.bio.length, `${e.name} has a thin bio`).toBeGreaterThan(80);
+      // A bio that only restates the title tells the operator nothing they did not have.
+      expect(e.bio.toLowerCase()).not.toBe(e.role.toLowerCase());
+    }
+  });
+
+  it("declares a face for every employee", () => {
+    for (const e of AI_EMPLOYEE_ROSTER) {
+      expect(["INTERNAL_ONLY", "EXTERNAL_CAPABLE"]).toContain(e.face);
+    }
+  });
+
+  it("keeps the seats that check the firm internal", () => {
+    // Compliance and the money must not be outward-facing: one is the check on everyone else, the
+    // other holds the fund's own numbers. Both would be a strange thing to put in a founder meeting.
+    for (const name of ["Willow", "Preston", "Pax"]) {
+      expect(AI_EMPLOYEE_ROSTER.find((e) => e.name === name)!.face).toBe("INTERNAL_ONLY");
+    }
+    // …and the seats whose whole job is meeting people are not locked inside.
+    for (const name of ["Walter", "Wesley", "Parker"]) {
+      expect(AI_EMPLOYEE_ROSTER.find((e) => e.name === name)!.face).toBe("EXTERNAL_CAPABLE");
+    }
+  });
+
+  it("consolidated to seventeen without losing a discipline", () => {
+    expect(AI_EMPLOYEE_ROSTER).toHaveLength(17);
+    // Every one of these still has somebody accountable for it after the merges.
+    const layers = new Set(AI_EMPLOYEE_ROSTER.map((e) => e.layer));
+    expect(layers.size).toBeGreaterThanOrEqual(4);
+    const roles = AI_EMPLOYEE_ROSTER.map((e) => e.role).join(" ").toLowerCase();
+    for (const discipline of ["chief of staff", "compliance", "investment", "analyst", "lp", "portfolio", "finance", "communications", "operations"]) {
+      expect(roles, `nobody covers ${discipline}`).toContain(discipline);
+    }
   });
 });

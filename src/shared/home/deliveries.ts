@@ -44,7 +44,7 @@ export const DELIVERIES: readonly Delivery[] = [
   },
   {
     module: "intelligence",
-    by: "Paige",
+    by: "Wyatt",
     headline: "What moved overnight",
     whenEmpty: "Nothing in the sweep worth pulling out.",
   },
@@ -80,7 +80,7 @@ export const DELIVERIES: readonly Delivery[] = [
   },
   {
     module: "reconciliation",
-    by: "Perrin",
+    by: "Preston",
     headline: "Numbers that do not agree",
     whenEmpty: "The administrator's records and ours match.",
   },
@@ -104,7 +104,7 @@ export const DELIVERIES: readonly Delivery[] = [
   },
   {
     module: "my_work",
-    by: "Wendy",
+    by: "Wren",
     headline: "Your open work",
     whenEmpty: "Nothing open in your name.",
   },

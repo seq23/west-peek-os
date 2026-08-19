@@ -6,6 +6,7 @@ import { appendEvent } from "../events";
 import { notifyQuietly } from "./notifications";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { MAX_ACTIVE_AI_EMPLOYEES, type AIEmployeeRow } from "./aiEmployees";
+import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 
 /**
  * Employee Lounge / Digital Office / Performance Management (P15; GAP-01, GAP-10, GAP-11).
@@ -65,6 +66,10 @@ export interface LoungeEmployee {
   department: string;
   avatar_initials: string;
   brief: string;
+  /** From the roster: who they are and what they do for the firm. */
+  bio: string | null;
+  /** From the roster: whether they may ever be put in front of someone outside the firm. */
+  face: string | null;
   manager_employee_id: string | null;
   manager_firm_user_id: string | null;
   status: string;
@@ -134,6 +139,10 @@ export async function listLounge(env: Env): Promise<{ employees: LoungeEmployee[
       department: e.department ?? e.layer,
       avatar_initials: e.avatar_initials ?? e.name.slice(0, 2).toUpperCase(),
       brief: e.brief ?? e.role,
+      // Read from the registry rather than the row: bio and face are reference data about the
+      // SEAT, and a database copy would drift the moment a role is rewritten.
+      bio: AI_EMPLOYEE_ROSTER.find((r) => r.name === e.name)?.bio ?? null,
+      face: AI_EMPLOYEE_ROSTER.find((r) => r.name === e.name)?.face ?? null,
       manager_employee_id: e.manager_employee_id,
       manager_firm_user_id: e.manager_firm_user_id,
       status: e.status,
