@@ -4,7 +4,7 @@ import { appendEvent } from "../events";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
-import { REVIEW_HEADINGS, isResolved, weekStart, type ReviewHeading } from "../../shared/review/weeklyAgenda";
+import { REVIEW_HEADINGS, guessHeading, isResolved, weekEnd, weekStart, type ReviewHeading } from "../../shared/review/weeklyAgenda";
 
 /**
  * The weekly MP operating review (P37, V1 #18, canon §8).
@@ -227,11 +227,58 @@ export async function generateReview(
 
   // Regeneration replaces items that are still UNRESOLVED and LEAVES DECIDED ONES ALONE. Wiping
   // the table would erase the partners' decisions the moment anyone refreshed the agenda.
+  //
+  // OPERATOR ITEMS SURVIVE REGARDLESS. Anything a partner typed into the capture box is not derived
+  // from a row, so re-deriving cannot reproduce it — deleting it here would mean a thought
+  // disappears the moment somebody refreshes the page, which is the one failure that would stop
+  // anyone trusting the box at all.
   await env.WP_OS_DB.prepare(
-    "DELETE FROM weekly_review_item WHERE review_id = ?1 AND exit_type = 'UNRESOLVED'",
+    "DELETE FROM weekly_review_item WHERE review_id = ?1 AND exit_type = 'UNRESOLVED' AND COALESCE(source_type,'') != 'operator'",
   )
     .bind(reviewId)
     .run();
+
+  // DEFERRED ITEMS COME BACK BY THEMSELVES. An item nobody decided has not gone away, and making a
+  // partner retype it next week is how it quietly stops being raised. It returns UNRESOLVED with
+  // its deferral count incremented — "deferred three times" is usually a more useful finding than
+  // the item's own text by that point.
+  const priorWeek = new Date(`${week}T00:00:00Z`);
+  priorWeek.setUTCDate(priorWeek.getUTCDate() - 7);
+  const priorWeekStart = priorWeek.toISOString().slice(0, 10);
+
+  const deferred = ((await env.WP_OS_DB.prepare(
+    `SELECT i.heading, i.body, i.raised_by, i.source_type, i.source_id, i.deferred_count
+       FROM weekly_review_item i
+       JOIN weekly_review r ON r.id = i.review_id
+      WHERE r.firm_scope = ?1 AND r.week_start = ?2 AND i.exit_type = 'DEFERRED_ITEM'`,
+  )
+    .bind(firmScope, priorWeekStart)
+    .all<Record<string, unknown>>()).results ?? []);
+
+  for (const d of deferred) {
+    const already = await env.WP_OS_DB.prepare(
+      "SELECT id FROM weekly_review_item WHERE review_id = ?1 AND body = ?2",
+    )
+      .bind(reviewId, String(d.body))
+      .first();
+    if (already) continue;
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO weekly_review_item (id, review_id, heading, body, raised_by, source_type, source_id, deferred_count, firm_scope)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    )
+      .bind(
+        `wri_${crypto.randomUUID()}`,
+        reviewId,
+        String(d.heading),
+        String(d.body),
+        String(d.raised_by ?? "BOTH"),
+        d.source_type ?? null,
+        d.source_id ?? null,
+        Number(d.deferred_count ?? 0) + 1,
+        firmScope,
+      )
+      .run();
+  }
 
   const existing = new Set(
     ((await env.WP_OS_DB.prepare("SELECT source_type, source_id FROM weekly_review_item WHERE review_id = ?1")
@@ -291,16 +338,37 @@ export async function handleGetWeeklyReview(ctx: RouteContext): Promise<Response
   const scope = "west-peek";
   try {
     const { review, items } = await loadReview(ctx.env, scope, week);
+    // ONLY THE HEADINGS THAT HAVE SOMETHING. Sixteen headings render, nine of which currently have
+    // no derivation at all and can never populate — so a partner scrolled past a wall of permanent
+    // blanks to reach two or three real lines, and learned to skim a page whose whole purpose is
+    // that it gets read. A heading returns the moment it has an item.
+    const present = new Set(items.map((i) => String(i.heading)));
+    const carried = items.filter((i) => Number((i as Record<string, unknown>).deferred_count ?? 0) > 0);
     return json({
       review, items,
-      headings: REVIEW_HEADINGS,
+      week_end: weekEnd(week),
+      headings: REVIEW_HEADINGS.filter((h) => present.has(h.key)),
+      // The full list stays available so the capture box can offer every heading as an override,
+      // including ones nothing has landed under yet.
+      all_headings: REVIEW_HEADINGS,
       resolved: isResolved(items as Array<{ exit_type: string }>),
       // Named so the page can say what is still outstanding instead of showing a bare count.
       unresolved: items.filter((i) => i.exit_type === "UNRESOLVED").length,
+      decisions_waiting: items.filter((i) => i.heading === "decisions_required" && i.exit_type === "UNRESOLVED").length,
+      carried_over: carried.length,
+      /** The oldest thing still on the table. Usually the most useful line on the page. */
+      most_deferred: carried.reduce(
+        (worst, i) =>
+          Number((i as Record<string, unknown>).deferred_count ?? 0) > Number(worst?.deferred_count ?? 0) ? i : worst,
+        null as Record<string, unknown> | null,
+      ),
     });
   } catch (err) {
     if (err instanceof WeeklyReviewError && err.status === 404) {
-      return json({ review: null, items: [], headings: REVIEW_HEADINGS, resolved: false, unresolved: 0 });
+      return json({
+        review: null, items: [], headings: [], all_headings: REVIEW_HEADINGS,
+        resolved: false, unresolved: 0, decisions_waiting: 0, carried_over: 0, most_deferred: null,
+      });
     }
     return errorResponse(err);
   }
@@ -339,7 +407,120 @@ export async function handleSetItemExit(ctx: RouteContext): Promise<Response> {
     .bind(itemId, d.exit_type, d.exit_note ?? null, d.owner_id ?? null, d.deadline ?? null)
     .run();
 
-  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM weekly_review_item WHERE id = ?1").bind(itemId).first();
+  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM weekly_review_item WHERE id = ?1")
+    .bind(itemId)
+    .first<Record<string, unknown>>();
   if (!row) return json({ error: "not_found" }, { status: 404 });
-  return json(row);
+
+  // AN EXIT THAT EXITS INTO NOTHING IS NOT AN EXIT. Marking an item OWNER, DEADLINE or
+  // DELEGATED_ACTION used to update a column and stop there, so a partner made a real decision in a
+  // real meeting and the system forgot it by Thursday. Those three now raise a work card, which is
+  // where work already lives — the review stops being a document nobody reopens.
+  //
+  // DECISION and CLOSED_ITEM deliberately raise nothing: a decision IS the artifact, and closing
+  // something is the absence of further work. DEFERRED_ITEM raises nothing either, because it comes
+  // back on next week's agenda by itself.
+  let workCardId: string | null = null;
+  const raisesWork = d.exit_type === "OWNER" || d.exit_type === "DEADLINE" || d.exit_type === "DELEGATED_ACTION";
+  if (raisesWork) {
+    const { createWorkCardInternal } = await import("./workCards");
+    try {
+      const card = await createWorkCardInternal(ctx.env, ctx.identity!, {
+        title: String(row.body ?? "Weekly review item").slice(0, 200),
+        description: `Raised in the weekly review week of ${String(row.review_id ?? "")}. ${d.exit_note ?? ""}`.trim(),
+        owner_type: d.owner_id ? "HUMAN" : "UNASSIGNED",
+        ...(d.owner_id ? { owner_id: d.owner_id } : {}),
+        ...(d.deadline ? { due_at: d.deadline } : {}),
+        ...(d.exit_note ? { next_action: d.exit_note } : {}),
+        priority: d.exit_type === "DEADLINE" ? "HIGH" : "NORMAL",
+      });
+      workCardId = card.id;
+      await ctx.env.WP_OS_DB.prepare(
+        "UPDATE weekly_review_item SET work_card_id = ?2 WHERE id = ?1",
+      )
+        .bind(itemId, workCardId)
+        .run();
+    } catch {
+      // The exit stands even if the card could not be raised. Losing the decision because the
+      // follow-through failed would be the wrong way round.
+      workCardId = null;
+    }
+  }
+
+  await appendEvent(ctx.env, {
+    eventType: "weekly_review.item_exited",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "weekly_review_item",
+    objectId: itemId,
+    firmScope: actor.firmScopes[0] ?? "west-peek",
+    payload: { exit_type: d.exit_type, work_card_id: workCardId },
+  });
+
+  return json({ ...row, work_card_id: workCardId, work_card_created: Boolean(workCardId) });
+}
+
+const dumpSchema = z.object({
+  body: z.string().trim().min(3).max(2000),
+  /** Optional override. Absent means "you guess", which is the point of the box. */
+  heading: z.string().trim().min(2).max(60).optional(),
+});
+
+/**
+ * POST /api/weekly-review/items — put something on the agenda that no record knows about.
+ *
+ * WHY THIS EXISTS. Every other item on this page is derived from a row, which is what makes the
+ * agenda checkable. But the things that actually decide a fund's week — a hunch about a founder, a
+ * worry about runway, a name somebody mentioned — are in two people's heads and nowhere else. Until
+ * now they had no way onto the agenda at all, so the review could only discuss what the database
+ * already knew.
+ *
+ * PROVENANCE STAYS HONEST. A dumped item is recorded with source_type 'operator' and the partner
+ * who raised it, never dressed up as derived. "Sequoia raised this on 20 Aug" is a different kind
+ * of claim from "this is a pending approval", and the page should never blur them.
+ */
+export async function handleAddReviewItem(ctx: RouteContext): Promise<Response> {
+  const parsed = dumpSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "weekly_review.manage", { objectType: "weekly_review_item" });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const scope = actor.firmScopes[0] ?? "west-peek";
+  const week = weekStart(new Date());
+  let review = await ctx.env.WP_OS_DB.prepare(
+    "SELECT * FROM weekly_review WHERE firm_scope = ?1 AND week_start = ?2",
+  )
+    .bind(scope, week)
+    .first<{ id: string }>();
+
+  // Typing a thought should never fail because nobody pressed Generate yet.
+  if (!review) {
+    await generateReview(ctx.env, actor, new Date());
+    review = await ctx.env.WP_OS_DB.prepare(
+      "SELECT * FROM weekly_review WHERE firm_scope = ?1 AND week_start = ?2",
+    )
+      .bind(scope, week)
+      .first<{ id: string }>();
+  }
+  if (!review) return json({ error: "no_review", detail: "could not open this week's review" }, { status: 500 });
+
+  const known = new Set<string>(REVIEW_HEADINGS.map((h) => h.key));
+  const heading =
+    parsed.data.heading && known.has(parsed.data.heading)
+      ? (parsed.data.heading as ReviewHeading)
+      : guessHeading(parsed.data.body);
+
+  const raisedBy = ctx.identity!.id.includes("scooter") ? "SCOOTER" : "SEQUOIA";
+  const id = `wri_${crypto.randomUUID()}`;
+  await ctx.env.WP_OS_DB.prepare(
+    `INSERT INTO weekly_review_item (id, review_id, heading, body, raised_by, source_type, source_id, firm_scope)
+     VALUES (?1, ?2, ?3, ?4, ?5, 'operator', ?6, ?7)`,
+  )
+    .bind(id, review.id, heading, parsed.data.body, raisedBy, ctx.identity!.id, scope)
+    .run();
+
+  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM weekly_review_item WHERE id = ?1").bind(id).first();
+  return json({ item: row, guessed: !parsed.data.heading }, { status: 201 });
 }

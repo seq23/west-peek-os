@@ -62,10 +62,71 @@ export function isResolved(items: ReadonlyArray<{ exit_type: string }>): boolean
 }
 
 /** Monday of the ISO week containing `d`, as YYYY-MM-DD. */
+/**
+ * The Wednesday this review week began.
+ *
+ * THE FIRM MEETS ON WEDNESDAY, so the week must start on one. It used to shift to Monday, which put
+ * the meeting in the MIDDLE of the period it was reviewing: everything decided in the room landed
+ * in the next week's agenda instead of closing out the one on the table, and Wednesday's own events
+ * were split across two reviews. A cadence whose boundary falls inside its own meeting cannot close
+ * anything.
+ *
+ * Wednesday itself belongs to the week it opens, which is what makes the agenda you read at the
+ * meeting the agenda for the week you are about to have.
+ */
 export function weekStart(d: Date): string {
   const copy = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  // getUTCDay(): 0 = Sunday. Shift so Monday is the first day.
-  const day = (copy.getUTCDay() + 6) % 7;
+  // getUTCDay(): 0 = Sunday, 3 = Wednesday. Shift back to the most recent Wednesday.
+  const day = (copy.getUTCDay() + 4) % 7;
   copy.setUTCDate(copy.getUTCDate() - day);
   return copy.toISOString().slice(0, 10);
+}
+
+/** The Tuesday this review week ends — stated, because a week people plan against needs both ends. */
+export function weekEnd(weekStartIso: string): string {
+  const d = new Date(`${weekStartIso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 6);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Guess which heading a typed line belongs under.
+ *
+ * A PARTNER MID-MEETING SHOULD NOT HAVE TO CATEGORISE. The point of the capture box is that a
+ * thought survives the moment it occurs; making somebody choose from sixteen headings first is how
+ * the thought gets lost instead. So this guesses, the guess is shown, and one click moves it.
+ *
+ * Deliberately keyword matching rather than a model call. It runs as you type, it must be instant
+ * and free, and being wrong costs one click — nothing here is worth a round trip to a provider, and
+ * an item silently mis-filed by a model is harder to notice than one mis-filed by an obvious rule.
+ *
+ * Order matters: the first heading with a hit wins, so the more specific vocabularies are listed
+ * before the general ones.
+ */
+const HEADING_HINTS: ReadonlyArray<{ heading: ReviewHeading; words: readonly string[] }> = [
+  { heading: "fundraising_lp", words: ["lp", "lps", "fundrais", "commit", "close the fund", "anchor", "allocation letter", "subscription"] },
+  { heading: "secondary", words: ["secondar", "spv", "tender", "continuation", "direct secondary"] },
+  { heading: "early_stage", words: ["pre-seed", "preseed", "seed", "founder", "pitch", "term sheet", "diligence", "deal", "dealflow", "screening"] },
+  { heading: "portfolio_health", words: ["runway", "burn", "portfolio company", "struggling", "layoff", "bridge", "down round", "kpi"] },
+  { heading: "portfolio_construction", words: ["ownership", "reserve", "check size", "concentration", "pacing", "construction", "target ownership"] },
+  { heading: "finance_cash", words: ["cash", "invoice", "expense", "budget", "capital call", "management fee", "audit", "bank"] },
+  { heading: "legal_compliance", words: ["legal", "counsel", "compliance", "contract", "sec ", "regulat", "filing", "nda"] },
+  { heading: "events", words: ["event", "dinner", "summit", "venue", "invite", "rsvp", "speaker"] },
+  { heading: "community_founder", words: ["community", "member", "mentor", "office hours", "founder support"] },
+  { heading: "marketing_visibility", words: ["brand", "marketing", "press", "podcast", "content", "social", "website", "visibility"] },
+  { heading: "relationship_intel", words: ["intro", "introduction", "warm path", "who knows", "connect me", "referral", "network"] },
+  { heading: "operations_vendors", words: ["vendor", "tool", "subscription", "ops", "process", "hiring", "contractor"] },
+  { heading: "agent_work", words: ["employee", "agent", "approval", "automation", "job", "sweep", "brief"] },
+  { heading: "risks_unresolved", words: ["risk", "worried", "concern", "blocked", "stalled", "chase", "overdue"] },
+  { heading: "seven_day", words: ["this week", "next week", "priority", "must do", "before friday"] },
+];
+
+export function guessHeading(text: string): ReviewHeading {
+  const t = ` ${text.toLowerCase()} `;
+  for (const { heading, words } of HEADING_HINTS) {
+    if (words.some((w) => t.includes(w))) return heading;
+  }
+  // Nothing matched. Seven-day priorities is the honest default: a partner typed it into this
+  // week's review, so at minimum it is something they think matters this week.
+  return "seven_day";
 }

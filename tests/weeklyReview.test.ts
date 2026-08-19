@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { deriveItems, mergeItems } from "../src/worker/services/weeklyReview";
-import { REVIEW_HEADINGS, isResolved, weekStart } from "../src/shared/review/weeklyAgenda";
+import { REVIEW_HEADINGS, guessHeading, isResolved, weekEnd, weekStart } from "../src/shared/review/weeklyAgenda";
 
 /**
  * The weekly MP operating review (P37, V1 #18, canon §8).
@@ -40,11 +40,12 @@ describe("canon §8 structure", () => {
     expect(REVIEW_HEADINGS).toHaveLength(16);
   });
 
-  it("starts the week on Monday", () => {
-    // A Sunday must belong to the week that began six days earlier, not start a new one.
-    expect(weekStart(new Date("2026-08-19T12:00:00Z"))).toBe("2026-08-17"); // Wed → Mon
-    expect(weekStart(new Date("2026-08-17T00:00:00Z"))).toBe("2026-08-17"); // Mon → itself
-    expect(weekStart(new Date("2026-08-23T23:59:00Z"))).toBe("2026-08-17"); // Sun → same week
+  it("starts the week on Wednesday, the day the firm meets", () => {
+    // Was Monday, which put the meeting in the middle of the week it was reviewing. A Sunday still
+    // belongs to the week that began earlier rather than starting a new one.
+    expect(weekStart(new Date("2026-08-19T12:00:00Z"))).toBe("2026-08-19"); // Wed → itself
+    expect(weekStart(new Date("2026-08-17T00:00:00Z"))).toBe("2026-08-12"); // Mon → prior Wed
+    expect(weekStart(new Date("2026-08-23T23:59:00Z"))).toBe("2026-08-19"); // Sun → same week
   });
 });
 
@@ -126,5 +127,52 @@ describe("resolution", () => {
   it("an empty agenda is not 'resolved'", () => {
     // Otherwise a review that failed to generate would report itself complete.
     expect(isResolved([])).toBe(false);
+  });
+});
+
+/**
+ * The Wednesday cadence, the capture box, and exits that exit somewhere.
+ *
+ * The week used to start on Monday while the firm met on Wednesday, which put the meeting in the
+ * middle of the period it was reviewing — everything decided in the room landed in the NEXT week's
+ * agenda instead of closing out the one on the table.
+ */
+describe("the week runs Wednesday to Tuesday", () => {
+  it("puts Wednesday at the start of its own week", () => {
+    // The meeting day opens the week it is about, which is what lets the agenda close anything.
+    expect(weekStart(new Date("2026-08-19T09:00:00Z"))).toBe("2026-08-19"); // a Wednesday
+    expect(weekEnd("2026-08-19")).toBe("2026-08-25"); // the Tuesday after
+  });
+
+  it("puts Tuesday at the END of the week that began the previous Wednesday", () => {
+    expect(weekStart(new Date("2026-08-25T23:00:00Z"))).toBe("2026-08-19");
+  });
+
+  it("rolls to a new week on Wednesday, not on Monday", () => {
+    expect(weekStart(new Date("2026-08-24T12:00:00Z"))).toBe("2026-08-19"); // Monday — same week
+    expect(weekStart(new Date("2026-08-26T00:30:00Z"))).toBe("2026-08-26"); // Wednesday — new week
+  });
+});
+
+describe("guessing where a typed thought belongs", () => {
+  it("files by the vocabulary a partner would actually use", () => {
+    expect(guessHeading("LP intro from Marcus — worth chasing?")).toBe("fundraising_lp");
+    expect(guessHeading("Psyflo term sheet timing")).toBe("early_stage");
+    expect(guessHeading("worried about Sensori runway")).toBe("portfolio_health");
+    expect(guessHeading("book the venue for the October dinner")).toBe("events");
+    expect(guessHeading("who knows someone at Stripe")).toBe("relationship_intel");
+  });
+
+  it("falls back to seven-day priorities rather than guessing wildly", () => {
+    // Somebody typed it into THIS week's review, so at minimum it matters this week. A confident
+    // wrong heading is worse than an honest default, because nobody checks a confident one.
+    expect(guessHeading("aoifjaoisfj")).toBe("seven_day");
+  });
+
+  it("is case-insensitive, because nobody capitalises in a meeting", () => {
+    expect(guessHeading("CALL COUNSEL ABOUT THE NDA")).toBe("legal_compliance");
+    // "audit" deliberately files under finance rather than legal: for a fund the annual audit is a
+    // fund-admin job, and that is where somebody would look for it.
+    expect(guessHeading("chase the audit")).toBe("finance_cash");
   });
 });
