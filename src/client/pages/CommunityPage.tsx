@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
+import { IntroductionsPage } from "./IntroductionsPage";
 
 /**
  * Community OS — the firm's read on the community as a population (P33, canon §14, §12A.4).
@@ -65,6 +66,18 @@ export function CommunityPage(): JSX.Element {
       <p className="muted">
         How the community is behaving — segments, engagement, and what that suggests for the firm.
       </p>
+
+      {/* INTRODUCTIONS LIVES HERE NOW, and first, because it is the only thing on this page anybody
+          has to ACT on. It had a tab of its own next to Approvals and Notifications, which put a
+          surface that is empty most months — deliberately, because the matcher is tuned to be rare
+          — alongside the things that always have something waiting. Community is who the members
+          are; introductions is what the firm does about them. One subject, one page. */}
+      <IntroductionsPage />
+
+      <div className="home-section-head behind-the-brief">
+        <h3>The members themselves</h3>
+        <span className="muted small">who they are, and how the firm reads them</span>
+      </div>
 
       <p className="notice" data-testid="community-scope">
         Scaffolding, and an <strong>interpretation layer</strong>: Network OS owns who is a member.

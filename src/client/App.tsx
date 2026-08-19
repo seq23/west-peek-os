@@ -221,7 +221,9 @@ const NAV_GROUPS = [
       { key: "approvals", label: "Approvals", icon: "approvals" },
       { key: "today", label: "Today" },
       { key: "notifications", label: "Notifications" },
-      { key: "introductions", label: "Introductions" },
+      // Introductions moved into Community. It sat here beside Approvals and Notifications — things
+      // that always have something waiting — while being a surface that is deliberately empty most
+      // months, so its presence read as a system that had stopped working. The route stays live.
       { key: "weekly-review", label: "Weekly review" },
       // Scheduled work and work cards answered the same question — what is the firm doing — from
       // two tabs, so you had to check both. One destination, two sections: the distinction between

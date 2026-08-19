@@ -109,7 +109,7 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Track an LP conversation", "Prepare reporting", "See what is committed and what is not"],
   },
   introductions: {
-    purpose: "Suggested introductions between people we know, where one person's need meets another's experience. Deliberately rare, and never sent by a machine.",
+    purpose: "Suggested introductions between people we know, where one person's need meets another's experience. Deliberately rare, never sent by a machine, and now part of Community.",
     youCan: ["Note what someone needs or can help with", "Approve or dismiss a suggestion", "Record that both sides said yes"],
   },
   rooms: {
@@ -117,8 +117,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Read and approve the Room proposed this month", "Call a venue and confirm it", "Work the sponsor pipeline"],
   },
   community: {
-    purpose: "The firm's read on the community as a population — segments, engagement, and what that suggests. Network OS owns who is a member.",
-    youCan: ["Place someone in a segment", "Record how engaged they are"],
+    purpose: "The people around the firm, and what the firm does about them — how they are behaving, and which of them should meet each other.",
+    youCan: ["See suggested introductions", "Record that both sides said yes", "Add or update a member", "Read the firm's take on a segment"],
   },
   reporting: {
     purpose: "What goes out to LPs, and the review it passes through first.",
