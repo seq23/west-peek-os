@@ -238,6 +238,30 @@ describe("3. privacy modes (D8)", () => {
 });
 
 // ── 4. Credential scrub ──
+//
+// Both directions matter. A scrub that misses a key leaks it; a scrub that fires on English stops
+// the firm working and teaches everyone to route around it. The second failure is the one that
+// actually happened: two ordinary news-article URL slugs blocked an entire morning briefing.
+
+describe("4b. ordinary prose is NOT mistaken for a credential", () => {
+  it("lets hyphenated English through, including the slugs that blocked a real briefing", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    await setAllProviders(1);
+    // Every one of these begins with sk-/pk-/key-/api- and was matched by the old pattern.
+    const innocent = [
+      "https://example.test/2026/08/ai-is-key-for-stock-boost",
+      "the piece was titled key-spread-flares-out",
+      "sk-hynix-memory-chips-record-quarter",
+      "an api-first-architecture-guide for platform teams",
+    ];
+    for (const input of innocent) {
+      const stub = stubFetch();
+      const { run: r } = await run({ inputs: [input] }, { fetchImpl: stub.fetchImpl });
+      expect(r.status, input).not.toBe("EGRESS_BLOCKED");
+      expect(r.failure_reason ?? "", input).not.toContain("credential_like_content");
+    }
+  });
+});
 
 describe("4. credential-shaped input is blocked before any provider call", () => {
   it("fake API keys, vault key names, and wire instructions all block (EGRESS_BLOCKED)", async () => {
@@ -245,6 +269,8 @@ describe("4. credential-shaped input is blocked before any provider call", () =>
     await setAllProviders(1);
     const cases: Array<[string, string]> = [
       ["here is the key sk-a1b2c3d4e5f6g7h8 use it", "vendor_api_key"],
+      ["sk-live-4eC39HqLyjWDarjtT1zdp7dc", "vendor_api_key"],
+      ["sk-proj-abcdefghijklmnopqrstuvwxyz123456", "vendor_api_key"],
       ["config value ANTHROPIC_API_KEY is set in the vault", "vault_key_name"],
       ["wire instructions: routing number 021000021, account 12345678", "wire_instructions"],
     ];

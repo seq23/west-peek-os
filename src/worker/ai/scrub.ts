@@ -13,8 +13,19 @@ interface SecretPattern {
 }
 
 const SECRET_PATTERNS: readonly SecretPattern[] = [
-  // Vendor-shaped API keys (e.g. sk-…, key-…).
-  { name: "vendor_api_key", pattern: /\b(?:sk|pk|key|api)-(?:live|test|prod-)?[A-Za-z0-9_-]{12,}\b/ },
+  // Vendor-shaped API keys (e.g. sk-live-4eC39HqLyjWDarjtT1zdp7dc, sk-proj-…).
+  //
+  // THE SUFFIX MUST BE ONE UNBROKEN RUN, which is the whole difference between a key and a
+  // sentence. The previous form allowed hyphens inside the run, so it matched any hyphenated
+  // English beginning with one of these words — `key-for-stock-boost` and `key-spread-flares-out`,
+  // both ordinary news-article URL slugs, blocked an entire morning briefing as credential-like
+  // content. A scrub that fires on prose does not make the system safer; it trains everyone to
+  // route around it.
+  //
+  // Real vendor keys are a long unbroken alphanumeric run, optionally after one short environment
+  // segment (live/test/proj/prod). English words separated by hyphens never reach sixteen
+  // unbroken characters, so the two are cleanly separable without weakening detection.
+  { name: "vendor_api_key", pattern: /\b(?:sk|pk|key|api)[-_](?:[A-Za-z0-9]{2,8}[-_])?[A-Za-z0-9]{16,}\b/ },
   // Vault-style environment key names (e.g. ANTHROPIC_API_KEY, VAULT_SECRET).
   { name: "vault_key_name", pattern: /\b[A-Z][A-Z0-9_]*(?:_API_KEY|_SECRET|_TOKEN|_PASSWORD|_PRIVATE_KEY)\b/ },
   // Bearer tokens inline.
