@@ -345,3 +345,42 @@ export async function handleNotificationDeliveries(ctx: RouteContext): Promise<R
   ).results ?? [];
   return json({ deliveries: rows });
 }
+
+/**
+ * Mark everything currently unread as read, for this reader.
+ *
+ * WHY IN BULK. Clearing a list one row at a time is not a feature, it is an omission — and the
+ * absence of this is why the page defaulted to showing already-read items: with no way to clear
+ * them, hiding them would have made the list look permanently empty.
+ *
+ * READ, NEVER ACKNOWLEDGED. Acknowledgement records that a human saw an exception and accepted
+ * responsibility for it, and it lands on the audit spine. Nobody accepts responsibility for
+ * eighteen things with one click, so this deliberately cannot do that — the two acts stay
+ * different, which is the distinction the original design got right.
+ *
+ * SCOPED TO WHAT THE READER CAN SEE, so a bulk action can never quietly clear a notification aimed
+ * at the other partner or above this reader's privacy label.
+ */
+export async function handleReadAllNotifications(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "notification.read", { objectType: "notification", objectId: "*" });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
+  const now = new Date().toISOString();
+
+  const result = await ctx.env.WP_OS_DB.prepare(
+    `UPDATE notification
+        SET read_at = ?2, read_by = ?3
+      WHERE read_at IS NULL
+        AND (firm_user_id IS NULL OR firm_user_id = ?1)
+        AND ${visibility}`,
+  )
+    .bind(ctx.identity!.id, now, ctx.identity!.id)
+    .run();
+
+  return json({
+    marked: result.meta?.changes ?? 0,
+    note: "Marked read. Anything needing you to accept responsibility still has to be acknowledged one at a time.",
+  });
+}

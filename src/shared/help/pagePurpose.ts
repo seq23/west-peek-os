@@ -61,8 +61,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Switch a job on or off", "See when it last ran and what happened", "Investigate a failure"],
   },
   notifications: {
-    purpose: "What the system has told you, and how it reached you.",
-    youCan: ["Read and acknowledge notifications", "Set quiet hours and what you want to hear about"],
+    purpose: "What is waiting on you, then what is worth knowing, then what you have already dealt with. Dismissing something says you saw it; acknowledging says you have taken responsibility for it, and that is recorded.",
+    youCan: ["See what actually needs you, first", "Dismiss everything at once", "Acknowledge a serious one, on the record", "Set the hours you would rather not hear from us"],
   },
   thesis: {
     purpose: "What the firm is looking for, and the check and ownership it is looking for it at. Editing writes a new version rather than replacing the old one.",

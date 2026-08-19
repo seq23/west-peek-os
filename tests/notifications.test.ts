@@ -315,3 +315,74 @@ describe("the PWA surface exists and never caches institutional state", () => {
     expect(main).toContain('navigator.serviceWorker.register("/sw.js")');
   });
 });
+
+/**
+ * Dismissing in bulk.
+ *
+ * Its absence was half of why the page defaulted to showing already-read items: with no way to
+ * clear them, hiding them would have left the inbox looking permanently empty. The two defects
+ * held each other up.
+ */
+describe("dismissing everything at once", () => {
+  it("marks every unread notification read for this reader", async () => {
+    await notify(env, {
+      kind: "APPROVAL",
+      severity: "WARNING",
+      title: "bulk one",
+      firmUserId: "fu_scooter_taylor",
+      objectType: "approval_card",
+      objectId: `apc_bulk_${crypto.randomUUID().slice(0, 8)}`,
+      dedupeKey: `bulk-one-${crypto.randomUUID()}`,
+    });
+    await notify(env, {
+      kind: "APPROVAL",
+      severity: "INFO",
+      title: "bulk two",
+      firmUserId: "fu_scooter_taylor",
+      objectType: "approval_card",
+      objectId: `apc_bulk_${crypto.randomUUID().slice(0, 8)}`,
+      dedupeKey: `bulk-two-${crypto.randomUUID()}`,
+    });
+
+    const before = await call<{ unread_count: number }>("/api/notifications", MP);
+    expect(before.body.unread_count).toBeGreaterThan(0);
+
+    const res = await call<{ marked: number }>("/api/notifications/read-all", MP, "POST", {});
+    expect(res.status).toBe(200);
+    expect(res.body.marked).toBeGreaterThan(0);
+
+    const after = await call<{ unread_count: number }>("/api/notifications", MP);
+    expect(after.body.unread_count).toBe(0);
+  });
+
+  it("dismisses without acknowledging anything", async () => {
+    // Acknowledgement records that a human accepted responsibility and lands on the audit spine.
+    // Nobody accepts responsibility for eighteen things with one click, so bulk must not do it.
+    const id = `apc_ack_${crypto.randomUUID().slice(0, 8)}`;
+    await notify(env, {
+      kind: "APPROVAL",
+      severity: "CRITICAL",
+      title: "must still be acknowledged by hand",
+      firmUserId: "fu_scooter_taylor",
+      objectType: "approval_card",
+      objectId: id,
+      dedupeKey: `ack-by-hand-${crypto.randomUUID()}`,
+    });
+    await call("/api/notifications/read-all", MP, "POST", {});
+
+    const list = await call<{ notifications: Array<{ title: string; read_at: string | null; acked_at: string | null }> }>(
+      "/api/notifications",
+      MP,
+    );
+    const row = list.body.notifications.find((n) => n.title === "must still be acknowledged by hand")!;
+    expect(row.read_at).not.toBeNull();
+    expect(row.acked_at).toBeNull();
+  });
+
+  it("is reachable by its own name rather than being read as an id", async () => {
+    // "read-all" is a perfectly good notification id as far as the router is concerned.
+    const res = await call<{ marked: number }>("/api/notifications/read-all", MP, "POST", {});
+    expect(res.status).toBe(200);
+    expect(typeof res.body.marked).toBe("number");
+  });
+});

@@ -2039,3 +2039,9 @@ hr {
 .composition-pct { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }
 
 .connect-list li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-lg); }
+
+/* Notifications: the row is a message plus what you can do about it, in fixed positions. */
+.notification-row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-lg); }
+.notification-body { min-width: 0; }
+.notification-head { display: flex; align-items: baseline; gap: var(--space-sm); flex-wrap: wrap; }
+.notification-actions { display: flex; gap: var(--space-sm); flex-shrink: 0; }

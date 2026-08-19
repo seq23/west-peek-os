@@ -403,6 +403,7 @@ import {
   handleListNotifications,
   handleNotificationDeliveries,
   handleReadNotification,
+  handleReadAllNotifications,
   handleSetNotificationPreferences,
 } from "./services/notifications";
 import {
@@ -944,6 +945,8 @@ const router = new Router()
   .post("/api/notifications/preferences", handleSetNotificationPreferences)
   .get("/api/notifications", handleListNotifications)
   .get("/api/notifications/:id/deliveries", handleNotificationDeliveries)
+  // Literal before the :param, or "read-all" is read as a notification id.
+  .post("/api/notifications/read-all", handleReadAllNotifications)
   .post("/api/notifications/:id/read", handleReadNotification)
   .post("/api/notifications/:id/acknowledge", handleAckNotification)
   // P21 — research workstation. Findings reach truth only through the P5 claim substrate.
