@@ -973,10 +973,15 @@ export async function handleRegisterSource(ctx: RouteContext): Promise<Response>
   const body = parsed.data;
   // An HTTP feed is registered as UNCONFIGURED until an egress path exists: registering a
   // URL is not the same as being able to read it, and the surface must not imply otherwise.
-  const status = body.kind === "HTTP_FEED" ? "EGRESS_GATED" : "CONFIGURED";
+  // A feed starts UNCONFIGURED rather than EGRESS_GATED. The old label — and its "no outbound feed
+  // client" detail — predated feedClient.ts and the Managing Partner's authorisation of outbound
+  // retrieval, so a freshly added source announced that it could never be read. It can: the next
+  // sweep fetches it and flips it to CONFIGURED. EGRESS_GATED keeps its real meaning, which is that
+  // a sweep tried and was refused; claiming it before anyone has tried is what made it misleading.
+  const status = body.kind === "HTTP_FEED" ? "UNCONFIGURED" : "CONFIGURED";
   const detail =
     body.kind === "HTTP_FEED"
-      ? "registered; external retrieval is UNPROVEN in this runtime (no outbound feed client, no credential)"
+      ? "registered; the next sweep will read it for the first time"
       : "registered";
   const id = `isrc_${crypto.randomUUID()}`;
   try {
@@ -1012,7 +1017,7 @@ export async function handleListSources(ctx: RouteContext): Promise<Response> {
   const rows = await ctx.env.WP_OS_DB.prepare("SELECT * FROM intelligence_source ORDER BY rowid").all<IntelligenceSourceRow>();
   return json({
     sources: rows.results ?? [],
-    note: "status EGRESS_GATED means the source is registered but has never been read: this runtime has no outbound feed client.",
+    note: "UNCONFIGURED means registered but not yet swept. EGRESS_GATED means a sweep tried and could not reach it.",
   });
 }
 

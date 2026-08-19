@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import type { EmailPayload, EmailSendResult } from "./emailTransport";
 
 /**
  * Resend transport for the `email.send` external effect (P33).
@@ -29,20 +30,7 @@ import type { Env } from "../env";
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const TIMEOUT_MS = 10_000;
 
-export interface EmailPayload {
-  to: string;
-  subject: string;
-  /** Plain text. No HTML path yet: nothing in the product composes HTML mail. */
-  text: string;
-  from?: string;
-}
-
-export interface EmailSendResult {
-  sent: boolean;
-  provider: "resend";
-  provider_message_id: string | null;
-  detail: string;
-}
+export type { EmailPayload, EmailSendResult } from "./emailTransport";
 
 /**
  * Both switches must be on. Order matters for the message: an operator who set the flag but has no

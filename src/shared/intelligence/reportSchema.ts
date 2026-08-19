@@ -11,25 +11,44 @@
  */
 
 /**
- * v2 adds the shape the operator asked for: a numbered one-minute summary, a "why it matters" under
- * each headline, an importance score out of ten, and the market levels and calendar that a
- * search-grounded pass now supplies. The version is bumped rather than edited in place because
- * "which prompt wrote this" is the first question asked when report quality changes, and it is
- * unanswerable after the fact.
+ * v2 added the shape: a numbered one-minute summary, a "why it matters" under each headline, an
+ * importance score, and the market levels a search-grounded pass supplies.
+ *
+ * v3 fixes DEPTH, which is what the operator kept reporting as "still too thin". v2 got the
+ * skeleton right and then asked for two or three sentences under each bone, so the report was
+ * correctly organised and said almost nothing. The reference brief the operator supplied runs three
+ * hundred words under a single headline, and the length is not padding — it is the causal chain
+ * being followed all the way to something the reader can act on.
+ *
+ * So v3 states word counts, and more importantly teaches the two MOVES that reference brief makes
+ * over and over, because they are what separate it from a competent summary:
+ *
+ *   THE CASCADE — name a change, then follow it through every asset class it touches, one per line.
+ *   THE DISTINCTION — "the danger is not X, the danger is Y". Most analysis dies on a false
+ *   version of the question, and naming the real one is most of the value.
+ *
+ * v3 also adds `classification` (a traffic-light read per category, the thing in the reference that
+ * makes the report scannable in ten seconds) and `later_this_week`, and requires the reader's own
+ * stated interests to steer what gets covered.
+ *
+ * The version is bumped rather than edited in place because "which prompt wrote this" is the first
+ * question asked when report quality changes, and it is unanswerable after the fact.
  */
-export const PROMPT_VERSION = "daily-intelligence-v2";
+export const PROMPT_VERSION = "daily-intelligence-v3";
 
 /** The sections a report can contain, in reading order. */
 export const REPORT_SECTIONS = [
   { key: "executive_summary", heading: "The one-minute version" },
   { key: "top_headlines", heading: "What matters most" },
   { key: "markets_macro", heading: "Markets and macro" },
+  { key: "classification", heading: "Where each thing stands" },
   { key: "key_events", heading: "What is scheduled today" },
   { key: "ai_technology", heading: "AI and technology" },
   { key: "capital_markets", heading: "Capital markets, IPO and M&A" },
   { key: "venture_private", heading: "Venture, private markets and secondaries" },
   { key: "government_legal", heading: "Government, legal and regulatory" },
   { key: "investor_insight", heading: "The connection" },
+  { key: "later_this_week", heading: "Later this week" },
   { key: "what_changed", heading: "What changed since yesterday" },
   { key: "watch", heading: "One thing to watch" },
 ] as const;
@@ -136,39 +155,95 @@ export function buildSynthesisPrompt(packet: EvidencePacket): string {
       ? `<<<CALENDAR (scheduled today)>>>\n${JSON.stringify(packet.calendar, null, 1)}\n<<<END CALENDAR>>>`
       : "CALENDAR: nothing scheduled was found. Omit the key_events section.",
     "",
-    "Return ONLY a JSON object of this shape:",
-    JSON.stringify(
-      {
-        sections: [{ key: "executive_summary", body_md: "…", event_ids: ["…"] }],
-        watch: { body_md: "…", event_ids: ["…"] },
-      },
-      null,
-      1,
-    ),
+    "OUTPUT FORMAT — delimited blocks, NOT JSON. Return exactly this and nothing else:",
+    "",
+    "===SECTION executive_summary",
+    "===EVENTS iitem_abc123, iitem_def456",
+    "<the markdown body, as long as this section calls for, quotes and apostrophes and line breaks",
+    "all perfectly safe to use>",
+    "===END",
+    "===SECTION top_headlines",
+    "===EVENTS iitem_...",
+    "<...>",
+    "===END",
+    "",
+    "Repeat for each section you are writing. The ===EVENTS line lists the event_ids this section",
+    "rests on, comma-separated, and may be empty. Everything between the ===EVENTS line and ===END",
+    "is the body, copied verbatim — write normal prose and markdown there.",
+    "",
+    "This format is used INSTEAD OF JSON because these sections are long and full of quotation",
+    "marks, and a single unescaped quote inside a JSON string discards the entire report. Here",
+    "nothing needs escaping at all. Do not wrap the output in a code fence.",
     "",
     `Valid section keys: ${REPORT_SECTIONS.map((s) => s.key).join(", ")}.`,
-    "Omit any section with nothing to say rather than writing filler.",
-    "SHAPE OF EACH SECTION:",
+    "Omit any section with nothing to say rather than writing filler. But understand that OMITTING",
+    "and BEING THIN are different failures. If a section has substance, develop it properly — the",
+    "most common defect in this report is a correct outline with nothing underneath it.",
     "",
-    "executive_summary — a NUMBERED list of three to five points, each one or two sentences. Each",
-    "  point stands alone: a partner who reads only this section should know what today is about.",
+    "HOW TO WRITE, which matters more than what to cover. Two moves carry this report:",
     "",
-    "top_headlines — the handful that matter, in this shape and no other:",
-    "  **1. <the headline as a claim, not a topic>**",
-    "  <what happened, in two or three sentences>",
-    "  **Why it matters:** <what it changes for an earliest-stage venture fund — not a summary again>",
-    "  **Importance: N/10** — where 10 means it changes a decision this firm is about to make, and 5",
+    "  THE CASCADE. Name a change, then follow it through everything it touches, one item per line.",
+    "  Not 'this pressures risk assets' but which assets, in order: growth equities, leveraged",
+    "  balance sheets, real estate, private-equity financing, venture marks, long-duration",
+    "  infrastructure. The list IS the analysis; a reader can find the headline anywhere.",
+    "",
+    "  THE DISTINCTION. Most analysis answers a slightly wrong question, so name the right one",
+    "  against the wrong one: 'the danger is not that AI demand disappears; the danger is that too",
+    "  much leverage was attached to assets on optimistic residual-value assumptions.' Or:",
+    "  'regulatory accommodation is helpful now; statutory certainty is still missing.' Use this",
+    "  wherever the obvious reading and the correct reading differ.",
+    "",
+    "Write in short declarative paragraphs. Use a line break where a comma would bury a step in a",
+    "chain. Never write 'this could have implications for' — say which, for whom, in which direction.",
+    "",
+    "SHAPE AND LENGTH OF EACH SECTION. The word counts are floors for a section that has real",
+    "material, not targets to pad toward:",
+    "",
+    "executive_summary — a NUMBERED list of exactly five points, EACH 50 TO 90 WORDS. Not one",
+    "  sentence: a dense paragraph carrying the specific figures. A partner who reads only this",
+    "  section should be able to run their morning from it. Lead each point with the thing that",
+    "  changed, not with context.",
+    "",
+    "top_headlines — five, in this shape and no other:",
+    "  **1. <the headline as a full claim, not a topic>**",
+    "  <what happened: TWO paragraphs, 60-110 words total, carrying every specific figure the",
+    "  evidence supplies — sizes, prices, percentages, dates, names>",
+    "  **Why it matters**",
+    "  <150 TO 300 WORDS. This is the section the reader is paying for, and it is where thin",
+    "  reports fail. Use the cascade and the distinction. Say what it changes for an earliest-stage",
+    "  venture fund specifically — cost of capital, deal pricing, exit timing, LP appetite, which",
+    "  sectors get harder to underwrite. Never restate the facts above in different words.>",
+    "  **Investor Importance: N/10** — 10 means it changes a decision this firm is about to make; 5",
     "  means a partner should know it but nothing changes. Score honestly; a page of nines is noise.",
     "",
-    "markets_macro — read the LEVELS block below. State the levels and what they mean together.",
-    "  Never invent a number that is not in that block, and never say a market is up or down unless",
-    "  the block says so.",
+    "markets_macro — read the LEVELS block. Give the levels as a markdown TABLE (| Market | Latest |),",
+    "  then a short paragraph on what the combination means — not each level in isolation, but what",
+    "  they do TOGETHER. Never invent a number that is not in that block, and never say a market is",
+    "  up or down unless the block says so.",
     "",
-    "key_events — read the CALENDAR block. What is scheduled today and what it would tell us.",
+    "classification — a traffic-light read, one per line, in exactly this shape:",
+    "  `Equities: YELLOW — earnings strong, discount-rate pressure rising`",
+    "  Use GREEN / YELLOW / RED (the interface renders the colour). Cover the categories that today",
+    "  actually bears on, drawn from: Equities, Rates, Consumer, AI fundamentals, AI valuations, AI",
+    "  financing, Energy, Private markets, Secondaries, Regulatory. The clause after the dash must",
+    "  say WHY that colour, in under twelve words. This is the ten-second read of the whole report.",
+    "",
+    "key_events — read the CALENDAR block. Each item: when it lands, then what to WATCH inside it",
+    "  (the specific series or line, not the release name) and what each outcome would tell us.",
     "  Omit the section entirely if the block is empty.",
     "",
-    "investor_insight should be ONE paragraph connecting at least two separate events into something",
-    "neither says alone.",
+    "ai_technology, capital_markets, venture_private, government_legal — each opens with a",
+    "  claim-style subheading on its own line (`**The most important AI development today is",
+    "  financial, not technical**`), then 120 TO 300 WORDS developing it. These are themes, not",
+    "  headline repeats: if a section would only restate a headline, omit it. venture_private is the",
+    "  one this reader cares about most — cover deal pricing, dry powder, secondaries marks and",
+    "  what it means for a sub-$50M fund writing $50-100K checks.",
+    "",
+    "investor_insight — 120 TO 250 WORDS connecting at least two separate events into something",
+    "  neither says alone, built on a distinction. This is the one section allowed a strong opinion.",
+    "",
+    "later_this_week — what is already known to be coming, grouped by day as a short list. Omit if",
+    "  the evidence carries nothing forward-dated.",
   ].join("\n");
 }
 
@@ -178,8 +253,65 @@ export interface ParsedSection {
   event_ids: string[];
 }
 
-/** Pull the model's JSON out of whatever it wrapped it in. */
+/**
+ * Read the report back out of the model's reply.
+ *
+ * WHY TWO FORMATS. The delimited form is what the prompt now asks for and is tried first; the JSON
+ * form stays because reports written by earlier prompt versions are still in the database, and
+ * because a model that ignores the instruction and returns JSON anyway should not lose its work.
+ *
+ * THE DELIMITED FORM EXISTS BECAUSE OF A REAL FAILURE. v3 asked for the depth the operator wanted
+ * and got it — twenty thousand characters of it — inside JSON string values, where the model used
+ * double quotes for emphasis and left them unescaped. One bare quote discarded the whole report,
+ * and the surface said only "the model did not return a usable report". Escaping is a thing weak
+ * models do badly and long bodies do often, so the fix is a format with nothing to escape rather
+ * than a stricter instruction about escaping.
+ */
 export function parseReport(raw: string): ParsedSection[] | null {
+  const delimited = parseDelimited(raw);
+  if (delimited) return delimited;
+  return parseJsonReport(raw);
+}
+
+/**
+ * The delimited form: ===SECTION <key> / ===EVENTS <ids> / body / ===END.
+ *
+ * Deliberately forgiving about everything except the section key. A model that omits the ===EVENTS
+ * line, wraps the reply in a fence, or trails whitespace has still done the work; a model that
+ * invents a section key has not, and that one is refused exactly as before.
+ */
+function parseDelimited(raw: string): ParsedSection[] | null {
+  if (!/^\s*(?:```[a-z]*\s*)?===SECTION\s/m.test(raw)) return null;
+  const valid = new Set<string>(REPORT_SECTIONS.map((s) => s.key));
+  const out: ParsedSection[] = [];
+
+  const blocks = raw.split(/^===SECTION[ \t]+/m).slice(1);
+  for (const block of blocks) {
+    const nl = block.indexOf("\n");
+    if (nl === -1) continue;
+    const key = block.slice(0, nl).trim();
+    if (!valid.has(key)) continue;
+
+    let rest = block.slice(nl + 1);
+    // ===END closes the block; anything after it belongs to no section.
+    const end = rest.search(/^===END\s*$/m);
+    if (end !== -1) rest = rest.slice(0, end);
+
+    let eventIds: string[] = [];
+    const events = rest.match(/^===EVENTS[ \t]*(.*)$/m);
+    if (events) {
+      eventIds = events[1]!.split(",").map((i) => i.trim()).filter(Boolean);
+      rest = rest.replace(events[0], "");
+    }
+
+    const body = rest.replace(/```\s*$/, "").trim();
+    if (body) out.push({ key, body_md: body, event_ids: eventIds });
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** The original JSON form. Kept for stored reports and for a model that returns it anyway. */
+function parseJsonReport(raw: string): ParsedSection[] | null {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = (fenced?.[1] ?? raw).trim();
   const start = candidate.indexOf("{");

@@ -4,6 +4,11 @@ import { EFFECT_TYPE_ACTION_KEYS } from "../../shared/registry/actionTypes";
 import { authorize, type Actor } from "../services/authorize";
 import { consumeApprovalCard } from "../services/approvals";
 import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
+import {
+  cloudflareEmailBlockedReason,
+  isCloudflareEmailEnabled,
+  sendViaCloudflare,
+} from "./cloudflareEmailClient";
 
 /**
  * External-effect executor — the ONLY module in the system allowed to execute an
@@ -98,19 +103,28 @@ export interface EffectExecutionResult {
 /**
  * Perform the effect itself, AFTER authorization has already passed.
  *
- * Only `email.send` has a real transport (Resend, P33). It is used only when BOTH a key and an
- * explicit enable flag are present; otherwise the effect still succeeds as a recorded simulation,
- * because the approval was genuinely granted and swallowing it would lose the receipt. The summary
- * says which of the two happened, so no one has to guess whether a message actually went out.
+ * Only `email.send` has a real transport, and now there are two of them. CLOUDFLARE IS TRIED FIRST
+ * because it is a binding: nothing about it calls fetch(), so it needs no egress exemption and no
+ * third-party credential, and it cannot be reached by code that was not given the binding. Resend
+ * stays as the fallback and still works exactly as before — this is a preference, not a removal.
+ *
+ * EITHER WAY BOTH SWITCHES APPLY. A transport being available has never been consent to start
+ * emailing people. When neither is on, the effect still succeeds as a recorded simulation, because
+ * the approval was genuinely granted and swallowing it would lose the receipt. The summary says
+ * which of the three happened, so nobody has to guess whether a message actually went out.
  */
 async function performEffect(env: Env, request: ExternalEffectRequestRow): Promise<SimulatedDelivery> {
-  if (request.effect_type === "email.send" && isEmailSendEnabled(env)) {
+  const cloudflareReady = isCloudflareEmailEnabled(env);
+  if (request.effect_type === "email.send" && (cloudflareReady || isEmailSendEnabled(env))) {
     const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string };
-    const result = await sendViaResend(env, {
+    const message = {
       to: request.destination,
       subject: payload.subject ?? "(no subject)",
       text: payload.text ?? payload.body ?? "",
-    });
+    };
+    const result = cloudflareReady
+      ? await sendViaCloudflare(env, message)
+      : await sendViaResend(env, message);
     return {
       simulated: !result.sent,
       channel: "email",
@@ -122,7 +136,12 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
   }
 
   if (request.effect_type === "email.send") {
-    const why = emailSendBlockedReason(env) ?? "email sending is not enabled";
+    // Report the Cloudflare reason when a binding is present — that is the path the operator is
+    // most likely mid-setup on. Otherwise the Resend reason, which is the older configured route.
+    const why =
+      (env.EMAIL ? cloudflareEmailBlockedReason(env) : null) ??
+      emailSendBlockedReason(env) ??
+      "email sending is not enabled";
     return {
       simulated: true,
       channel: "email",

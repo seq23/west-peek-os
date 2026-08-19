@@ -133,7 +133,7 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Ask for a research packet", "See the evidence behind each finding", "Export it"],
   },
   "market-map": {
-    purpose: "A map of who exists in a sector and how big they are, grouped into subsegments, with every figure traceable to its source.",
+    purpose: "The picture of who is already doing the thing a founder just pitched you — incumbents, challengers, who is funded and by whom, and where the gap is. Lives inside Research.",
     youCan: ["Map any sector or subsector", "See which companies are already yours", "Sort by how much each has raised", "Follow a number back to the filing it came from"],
   },
   university: {
@@ -165,7 +165,7 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Inspect a run and its cost", "See why a run was refused", "Accept or reject quarantined output"],
   },
   "browser-tasks": {
-    purpose: "Ask an employee to go and read a page for you. Every task is approved by a human before it runs, because this is the one thing here that reaches out and touches the live web on the firm's behalf.",
+    purpose: "Send an employee to read a live page and report back — does this company still list a VP of Sales, what are their pricing tiers now. Approved by a human each time, because this is the one thing here that touches the live web. Lives inside Work.",
     youCan: ["Ask for something small and checkable", "Approve a task before it runs", "Read what it found, fenced as untrusted"],
   },
   machines: {

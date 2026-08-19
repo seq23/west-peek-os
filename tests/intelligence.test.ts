@@ -223,9 +223,12 @@ describe("the engine acquires, dedupes, cites, and refuses to invent", () => {
       data_class: "PUBLIC",
     });
     expect(created.status).toBe(201);
-    // Registering a URL is not the same as being able to read it.
-    expect(created.body.status).toBe("EGRESS_GATED");
-    expect(created.body.status_detail).toContain("UNPROVEN");
+    // Registering a URL is not the same as having read it — but it is no longer a claim that the
+    // URL can NEVER be read. Outbound retrieval was authorised in P29 and feedClient.ts exists, so
+    // announcing EGRESS_GATED before anything had been attempted told the operator their new
+    // source was dead on arrival. It starts UNCONFIGURED; the sweep below decides what it becomes.
+    expect(created.body.status).toBe("UNCONFIGURED");
+    expect(created.body.status_detail).toContain("next sweep");
 
     const sourceKey = (await call<{ sources: any[] }>("/api/intelligence/sources", SCOOTER)).body.sources.find(
       (s: any) => s.id === created.body.id,

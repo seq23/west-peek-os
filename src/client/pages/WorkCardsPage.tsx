@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
+import { BrowserTasksPage } from "./BrowserTasksPage";
 
 /**
  * Work cards — what the firm is actually doing, who owns it, and what happens next.
@@ -339,6 +340,26 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
           </ul>
         </details>
       )}
+
+      {/* GO AND LOOK LIVES HERE NOW. It sat under Admin, which is where you go to configure the
+          system rather than to get something done — so the one capability that can go and read a
+          live page for you was filed with the plumbing. Sending an employee to check a page is
+          work, it produces something you then act on, and this is the page about work. */}
+      <details className="card summary-button" data-testid="work-browser-tasks">
+        <summary>Send someone to go and look at a page</summary>
+        <p className="muted small">
+          This is the only thing here that reaches out and reads the live web for you. You give an
+          employee a page and a question — <em>does this company still list a VP of Sales</em>,{" "}
+          <em>what are their pricing tiers now</em>, <em>who is named on the about page</em> — and
+          they open it, read it and report back. You approve each one before it runs, and what
+          comes back is quoted as information about the world, never as instructions.
+        </p>
+        <p className="muted small">
+          Best for small, checkable questions where the answer is written on a page. Anything
+          needing judgement rather than looking belongs with a person.
+        </p>
+        <BrowserTasksPage me={me} />
+      </details>
 
       <details className="card" data-testid="work-cards-explainer">
         <summary>What the states mean</summary>

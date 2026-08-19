@@ -72,3 +72,22 @@
   (`docs/ENVIRONMENT_CONTRACT.md` is names-only).
 - `--remote` wrangler flags are forbidden for agents; any remote operation is an
   explicit human-gated action.
+
+## Running the test suite
+
+Use `npx vitest run --no-file-parallelism`.
+
+The suite is resource-hungry — each file spins up a Miniflare worker with a real D1 — and under
+parallel execution or alongside other heavy processes it fails in ways that look like real bugs
+and are not:
+
+- a file reported as FAILED with all of its tests **skipped** (the file was aborted mid-run);
+- `Test timed out in 60000ms` on a test that takes under a second on its own;
+- `undici ... other side closed` from the worker's socket.
+
+**Before believing any full-suite failure, re-run the named file on its own.** Every one of these
+has so far passed in isolation. What makes this expensive is that the failure moves between files
+from run to run, so it reads as a regression in whatever you touched last.
+
+Do not run anything else heavy against the repo while the suite runs — including a shell loop
+polling for its output, which is enough on its own to push files past the 60-second timeout.

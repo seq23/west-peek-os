@@ -17,6 +17,12 @@ const APP = readFileSync(new URL("../src/client/App.tsx", import.meta.url), "utf
 // silently dropped them from coverage — the check quietly stopped watching the three pages it
 // most needed to watch, while still reporting green.
 const NAV_KEYS = [...APP.matchAll(/\{ key: "([a-z0-9-]+)", label: "/g)].map((m) => m[1]!);
+// Every key App.tsx will actually RENDER, which is a wider set than the nav lists. A page can be
+// reachable without being listed: Go and look renders inside Work, Market mapping inside Research,
+// and both keep their own route so existing links still resolve. The orphan check below runs
+// against this rather than the nav, so it still catches a purpose left behind by a DELETED page
+// while allowing one that merely stopped being a top-level tab.
+const ROUTE_KEYS = [...APP.matchAll(/active === "([a-z0-9-]+)"/g)].map((m) => m[1]!);
 
 describe("nav coverage", () => {
   it("reads a real nav out of App.tsx", () => {
@@ -30,9 +36,17 @@ describe("nav coverage", () => {
     expect(NAV_KEYS.filter((k) => !pagePurpose(k))).toEqual([]);
   });
 
+  it("routes everything it lists in the nav", () => {
+    // Guards the guard again: ROUTE_KEYS is only a safe basis for the orphan check below if it is
+    // really being read out of App.tsx.
+    expect(ROUTE_KEYS.length).toBeGreaterThan(20);
+    expect(NAV_KEYS.filter((k) => !ROUTE_KEYS.includes(k) && k !== "home")).toEqual([]);
+  });
+
   it("has no purpose for a page that no longer exists", () => {
-    // Stops the registry accumulating entries for deleted routes.
-    expect(Object.keys(PAGE_PURPOSES).filter((k) => !NAV_KEYS.includes(k))).toEqual([]);
+    // Stops the registry accumulating entries for deleted routes — a page that is merely absent
+    // from the nav but still rendered is not deleted, and keeps its explanation.
+    expect(Object.keys(PAGE_PURPOSES).filter((k) => !ROUTE_KEYS.includes(k))).toEqual([]);
   });
 });
 

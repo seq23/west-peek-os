@@ -42,4 +42,11 @@ export interface Env {
   // Cloudflare's own headless browser, as a binding rather than an HTTP client — so browser tasks
   // need no egress exemption and no third-party credential.
   BROWSER?: Fetcher;
+
+  // ── Email Sending (P33, Cloudflare transport) ──
+  // Like BROWSER: a binding, not an HTTP client, so outbound mail down this path needs no egress
+  // exemption and no third-party credential. Typed loosely here because the send_email binding's
+  // shape is the platform's own SendEmail type, and cloudflareEmailClient.ts is the only module
+  // allowed to call it.
+  EMAIL?: SendEmail;
 }

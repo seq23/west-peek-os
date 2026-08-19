@@ -511,7 +511,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
             </div>
           </div>
         </header>
-        <DailyBriefPanel />
+        <DailyBriefPanel compact />
       </section>
 
       {/* Waiting on you: lifted out of the grid because it is the only group where something is

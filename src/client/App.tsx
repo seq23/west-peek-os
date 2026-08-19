@@ -264,8 +264,10 @@ const NAV_GROUPS = [
     group: "Learn",
     items: [
       { key: "intelligence", label: "Sources" },
+      // Market mapping had its own tab and almost nothing on it, which reads as abandoned rather
+      // than unused. It is the same activity as Research — finding out what is true about a market
+      // — and now renders there. The route stays live so old links still resolve.
       { key: "research", label: "Research" },
-      { key: "market-map", label: "Market mapping" },
       { key: "university", label: "University" },
       { key: "documents", label: "Documents" },
     ],
@@ -276,7 +278,8 @@ const NAV_GROUPS = [
     items: [
       { key: "ai-ops", label: "Cockpit" },
       { key: "ai", label: "AI" },
-      { key: "browser-tasks", label: "Go and look" },
+      // "Go and look" moved to Work. Admin is where you configure the system; sending an employee
+      // to read a live page is work that produces something you act on. The route stays live.
       { key: "machines", label: "Machines" },
       { key: "governance", label: "Governance" },
       { key: "contradictions", label: "Contradictions" },
