@@ -4,7 +4,7 @@ import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
 import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy";
-import { actorFromIdentity, authorize, getApprovalCard, type AuthorizationDecision } from "./authorize";
+import { actorFromIdentity, authorize, getApprovalCard, privacyVisibilityClause, type AuthorizationDecision } from "./authorize";
 import { consumeApprovalCard } from "./approvals";
 
 /**
@@ -125,6 +125,9 @@ const externalIdentityInputSchema = z.object({
 
 const createCompanySchema = z.object({
   canonical_name: z.string().trim().min(1),
+  /** What the company does — free text, because the thesis that defines sectors is edited often. */
+  sector: z.string().trim().min(1).optional(),
+  one_liner: z.string().trim().min(1).optional(),
   legal_name: z.string().trim().min(1).optional(),
   website: z.string().trim().min(1).optional(),
   description: z.string().optional(),
@@ -138,6 +141,8 @@ const updateCompanySchema = z
     legal_name: z.string().trim().min(1).nullable().optional(),
     website: z.string().trim().min(1).nullable().optional(),
     description: z.string().nullable().optional(),
+    sector: z.string().trim().min(1).nullable().optional(),
+    one_liner: z.string().trim().min(1).nullable().optional(),
     privacy_label: privacyLabelSchema.optional(),
     // Identity fields are explicitly NOT updatable here:
     canonical_name: z.never().optional(),
@@ -262,8 +267,8 @@ export async function handleCreateCompany(ctx: RouteContext): Promise<Response> 
   const id = `cc_${crypto.randomUUID()}`;
   const statements: D1PreparedStatement[] = [
     env.WP_OS_DB.prepare(
-      `INSERT INTO canonical_company (id, canonical_name, legal_name, website, description, privacy_label, created_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      `INSERT INTO canonical_company (id, canonical_name, legal_name, website, description, privacy_label, created_by, sector, one_liner)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
     ).bind(
       id,
       input.canonical_name.trim(),
@@ -272,6 +277,8 @@ export async function handleCreateCompany(ctx: RouteContext): Promise<Response> 
       input.description ?? null,
       input.privacy_label ?? DEFAULT_PRIVACY_LABEL,
       identity!.id,
+      input.sector ?? null,
+      input.one_liner ?? null,
     ),
   ];
   for (const a of input.aliases ?? []) {
@@ -351,14 +358,14 @@ export async function handleUpdateCompany(ctx: RouteContext): Promise<Response> 
   const parsed = updateCompanySchema.safeParse(body);
   if (!parsed.success) {
     return json(
-      { error: "invalid_input", detail: "only non-identity fields (legal_name, website, description, privacy_label) are updatable", issues: parsed.error.issues },
+      { error: "invalid_input", detail: "only non-identity fields (legal_name, website, description, sector, one_liner, privacy_label) are updatable", issues: parsed.error.issues },
       { status: 400 },
     );
   }
   const input = parsed.data;
   const sets: string[] = [];
   const binds: unknown[] = [];
-  for (const field of ["legal_name", "website", "description", "privacy_label"] as const) {
+  for (const field of ["legal_name", "website", "description", "privacy_label", "sector", "one_liner"] as const) {
     if (input[field] !== undefined) {
       sets.push(`${field} = ?${binds.length + 2}`);
       binds.push(input[field]);
@@ -730,4 +737,59 @@ export async function handleReverseMerge(ctx: RouteContext): Promise<Response> {
     .bind(splitId)
     .first();
   return json({ split_receipt: split, restored_references: restored }, { status: 201 });
+}
+
+/**
+ * The register as something you can scan.
+ *
+ * WHY NOT JUST /api/companies. That returns identity rows — name, status, created — which is
+ * correct for the identity spine and useless for eyeballing: a partner looking at the list cannot
+ * tell an ed-tech company from a beverage brand without opening each one. This joins the two facts
+ * that make a company legible at a glance, which live elsewhere: what stage its deal is at, and how
+ * much of the fund is in it.
+ *
+ * MONEY IS READ FROM THE DEAL, and honestly. An opportunity's price and quantity multiply into an
+ * amount — but Sensori's are placeholders, so the amount is returned WITH a flag saying the
+ * arithmetic rests on stand-ins. A number that cannot be trusted is worse than no number when
+ * nothing on screen says which it is.
+ */
+export async function handleCompanyRegister(ctx: RouteContext): Promise<Response> {
+  const visibility = privacyVisibilityClause(ctx.identity!, "c.privacy_label");
+
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    `SELECT c.id, c.canonical_name, c.sector, c.one_liner, c.website, c.status, c.created_at,
+            (SELECT o.status FROM investment_opportunity o
+              WHERE o.company_id = c.id ORDER BY o.created_at DESC LIMIT 1) AS deal_status,
+            (SELECT o.price_per_share * o.quantity FROM investment_opportunity o
+              WHERE o.company_id = c.id AND o.price_per_share IS NOT NULL AND o.quantity IS NOT NULL
+              ORDER BY o.created_at DESC LIMIT 1) AS amount_usd,
+            (SELECT o.placeholder_fields FROM investment_opportunity o
+              WHERE o.company_id = c.id ORDER BY o.created_at DESC LIMIT 1) AS placeholder_fields,
+            (SELECT o.relationship_origin FROM investment_opportunity o
+              WHERE o.company_id = c.id ORDER BY o.created_at DESC LIMIT 1) AS origin,
+            (SELECT COUNT(*) FROM meeting m WHERE m.company_id = c.id) AS meetings
+       FROM canonical_company c
+      WHERE ${visibility} AND c.status <> 'MERGED'
+      ORDER BY c.canonical_name
+      LIMIT 500`,
+  ).all<Record<string, unknown>>();
+
+  const companies: Array<Record<string, unknown>> = (rows.results ?? []).map((r) => {
+    let provisional: string[] = [];
+    try {
+      provisional = JSON.parse(String(r.placeholder_fields ?? "[]")) as string[];
+    } catch {
+      provisional = [];
+    }
+    return {
+      ...r,
+      placeholder_fields: undefined,
+      // The amount is arithmetic over values that may be stand-ins. Say so rather than showing a
+      // confident number nobody can tell is invented.
+      amount_is_provisional: provisional.length > 0,
+    };
+  });
+
+  const sectors = [...new Set(companies.map((c) => c.sector).filter(Boolean))].sort();
+  return json({ companies, sectors, count: companies.length });
 }

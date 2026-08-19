@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PROMPT_VERSION } from "@shared/intelligence/reportSchema";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
@@ -90,7 +91,11 @@ describe("the funnel", () => {
     const row = await env.WP_OS_DB.prepare(
       "SELECT prompt_version, model FROM intelligence_report WHERE firm_user_id = 'fu_scooter_taylor'",
     ).first<{ prompt_version: string; model: string }>();
-    expect(row!.prompt_version).toBe("daily-intelligence-v1");
+    // Against the constant, not a literal. Bumping the version is the deliberate act the field
+    // exists for — pinning the string here made a correct change look like a regression, while
+    // testing nothing that matters. What matters is that whatever wrote the report is RECORDED.
+    expect(row!.prompt_version).toBe(PROMPT_VERSION);
+    expect(row!.prompt_version).toMatch(/^daily-intelligence-v\d+$/);
     expect(row!.model).toBe("fake-test-model");
   });
 

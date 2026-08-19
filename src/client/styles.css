@@ -45,6 +45,22 @@
   --wp-line-strong: #cdc4b7;     /* emphasis divider */
   --wp-line-control: #9a9086;    /* the border of a real control — 3.1:1 on white */
 
+  /* — Data visualisation. VALIDATED, not chosen by eye: lightness band, chroma floor, colourblind
+     separation, normal-vision separation and contrast, all checked against this product's own
+     paper and its dark ground. Slot 1 IS the brand orange, so the firm's colour leads the data.
+     These are the only hues in the system that are not brand or status, and they exist because a
+     categorical scale needs separable identity that orange alone cannot provide.
+
+     THE FIRST ATTEMPT USED VIOLET AND MAGENTA and this validator rejected it, correctly: the brand
+     system forbids blue, cyan, indigo, violet and purple outright. Rather than weaken the rule, the
+     palette was re-derived inside the allowed hue space — orange, teal, gold, deep red — and
+     re-validated. Four slots, not five, because that is how many separable hues this hue space
+     honestly yields; a fifth series folds into "other" rather than being invented. */
+  --viz-1: #f05a1a;
+  --viz-2: #00816a;
+  --viz-3: #b4820a;
+  --viz-4: #97231b;
+
   /* — Semantics. Orange never carries these meanings. */
   --wp-good: #1f6b45;
   --wp-good-tint: #e9f2ec;
@@ -1887,3 +1903,118 @@ hr {
   .spine-track { flex-wrap: wrap; gap: var(--space-lg); }
   .spine-stage { flex-basis: 30%; }
 }
+
+/* Seating: suggestions read first without shouting. */
+.seat-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-lg); }
+.seat-suggested { background: var(--wp-tint); border-left: 2px solid var(--wp-orange); padding-left: var(--space-sm); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COMPANY REGISTER — a grid you can scan
+   Four facts in fixed positions on every card. The eye learns the layout once
+   and then reads the page at a glance; that is what makes a grid worth having.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.company-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-lg);
+  margin: var(--space-lg) 0;
+}
+.company-card { padding: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-sm); }
+.company-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-sm); }
+.company-card-head h4 { margin: 0; font-size: var(--text-md); font-weight: 700; }
+.company-oneliner { margin: 0; font-size: var(--text-sm); line-height: var(--lh-snug); color: var(--wp-ink-2); }
+.company-facts {
+  margin: auto 0 0;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--wp-line);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-sm) var(--space-md);
+}
+.company-facts dt {
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--wp-muted);
+}
+.company-facts dd { margin: 0; font-size: var(--text-sm); font-weight: 600; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DATA VISUALISATION
+   The categorical slots below were VALIDATED, not chosen by eye: lightness
+   band, chroma floor, colourblind separation, normal-vision separation and
+   contrast, all checked against this product's own paper (#f7f2ea) and its
+   dark surface. Slot 1 is the brand orange, so the firm's colour leads the
+   data. Dark steps are re-stepped for the dark ground, never flipped.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.allocation-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xl);
+  margin: var(--space-lg) 0;
+}
+.ring-total { font-size: 15px; font-weight: 700; fill: var(--wp-ink); font-variant-numeric: tabular-nums; }
+.ring-caption { font-size: 7px; fill: var(--wp-muted); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+
+.allocation-legend { list-style: none; margin: 0; padding: 0; flex: 1 1 320px; min-width: 0; }
+.allocation-legend li {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: baseline;
+  gap: var(--space-sm);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--wp-line);
+}
+.allocation-legend li:last-child { border-bottom: none; }
+.legend-swatch { width: 10px; height: 10px; border-radius: var(--radius-xs); }
+.legend-label { font-size: var(--text-base); font-weight: 600; }
+.legend-value, .legend-pct { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.legend-pct { color: var(--wp-muted); min-width: 3.5ch; text-align: right; }
+/* The note explains the slice; it belongs under the row rather than competing with the number. */
+.legend-note { grid-column: 2 / -1; font-size: var(--text-xs); color: var(--wp-muted); }
+
+.allocation-table { margin-top: var(--space-lg); }
+.table-scroll { overflow-x: auto; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE MORNING REPORT
+   Importance is a chip rather than bold prose: the reader is scanning for the
+   nines, and a number you have to read a sentence to find is not scannable.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.brief-masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+.brief-masthead h3 { margin: 0; }
+.brief-edition {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.brief-numbered { margin: 0 0 var(--space-md); padding-left: var(--space-xl); }
+.brief-numbered li { margin-bottom: var(--space-sm); line-height: var(--lh-normal); }
+
+.brief-scored { display: flex; gap: var(--space-sm); align-items: baseline; }
+.importance {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  padding: var(--space-3xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--wp-neutral-tint);
+  color: var(--wp-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.importance-mid { background: var(--wp-warn-tint); color: var(--wp-warn); }
+/* Only "this changes a decision we are about to make" earns the accent. */
+.importance-high { background: var(--wp-orange); color: var(--wp-orange-ink); }

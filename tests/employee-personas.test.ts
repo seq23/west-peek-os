@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 import { AI_EMPLOYEE_ROSTER } from "../src/shared/registry/aiEmployees";
 import {
   EMPLOYEE_PERSONAS,

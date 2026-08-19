@@ -173,8 +173,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["See what a machine owns", "Check whether it is running"],
   },
   governance: {
-    purpose: "The rules the firm operates under, and who acknowledged them.",
-    youCan: ["Issue a rule or a bulletin", "See who has read it"],
+    purpose: "The rules this firm operates under, and the reasoning behind decisions somebody will otherwise re-argue in six months. Everything issued here is permanent and attributed — a correction is a new update, never an edit.",
+    youCan: ["Set a rule that binds what people and employees may do", "Tell the firm something without changing anyone's permissions", "Record why a decision was taken, for whoever reads it next", "See what is worth writing down and has not been"],
   },
   "cross-office": {
     purpose: "Where the two partners' offices are colliding — the same work twice, the same employee twice, or two drafts to one recipient.",

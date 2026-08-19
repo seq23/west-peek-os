@@ -209,3 +209,137 @@ export async function findVenues(
     return { ok: false, hits: [], citations: [], aiRunId: null, detail: err instanceof Error ? err.message : String(err) };
   }
 }
+
+/**
+ * Today's market levels, and the calendar the day turns on.
+ *
+ * WHY THIS EXISTS. The morning brief was written from swept RSS, which carries headlines and no
+ * numbers, so it could never say where the ten-year sits or that Housing Starts print at 7:30.
+ * Those are the two things a partner actually opens a brief for, and their absence is why it read
+ * as a news digest rather than an intelligence report.
+ *
+ * WHY IT IS SEARCH AND NOT A MARKET-DATA VENDOR. A quotes API was the obvious answer and the wrong
+ * one for this firm: the capability was already here and already paid for. A search-grounded model
+ * returns the level AND the source it read it from, which is the same discipline the rest of this
+ * file follows — the value over an ordinary model is the citation, so a figure that arrives without
+ * one is discarded rather than shown.
+ *
+ * WHAT IT IS NOT. Not a price feed and not a trading input. Levels are indicative, minutes old at
+ * best, and the report says so where they are shown. They exist to frame a morning, not to mark a
+ * position — which is exactly why they never touch the deal-math path, where every number is
+ * verified arithmetic over recorded inputs.
+ */
+
+export interface MarketLevel {
+  /** What it is, in the words a partner would use — "10-year Treasury", not "US10Y". */
+  instrument: string;
+  /** The level as read, verbatim. A string because "above $91" and "4.73%" are both real answers. */
+  level: string;
+  /** Direction if the source stated one. Never inferred. */
+  move: string | null;
+}
+
+export interface CalendarItem {
+  /** "Housing Starts", "Home Depot earnings". */
+  event: string;
+  /** When, as stated by the source. */
+  when: string;
+  /** Why a venture partner should care — one line, from the source's framing. */
+  why: string | null;
+}
+
+export interface MarketRead {
+  ok: boolean;
+  levels: MarketLevel[];
+  calendar: CalendarItem[];
+  citations: string[];
+  aiRunId: string | null;
+  detail: string;
+}
+
+/** Pull the market JSON out of whatever the model wrapped it in. Shape errors degrade to empty. */
+export function parseMarketRead(raw: string): { levels: MarketLevel[]; calendar: CalendarItem[] } {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const body = (fenced?.[1] ?? raw).trim();
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+  if (start === -1 || end <= start) return { levels: [], calendar: [] };
+
+  let parsed: { levels?: unknown; calendar?: unknown };
+  try {
+    parsed = JSON.parse(body.slice(start, end + 1));
+  } catch {
+    return { levels: [], calendar: [] };
+  }
+
+  const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+  const levels = Array.isArray(parsed.levels)
+    ? (parsed.levels as Array<Record<string, unknown>>)
+        .map((l) => ({ instrument: str(l.instrument), level: str(l.level), move: str(l.move) }))
+        // An instrument with no level is the failure this whole module guards against: a name with
+        // a confident-looking blank beside it reads as "unchanged" rather than as "unknown".
+        .filter((l): l is MarketLevel => Boolean(l.instrument && l.level))
+    : [];
+
+  const calendar = Array.isArray(parsed.calendar)
+    ? (parsed.calendar as Array<Record<string, unknown>>)
+        .map((c) => ({ event: str(c.event), when: str(c.when), why: str(c.why) }))
+        .filter((c): c is CalendarItem => Boolean(c.event && c.when))
+    : [];
+
+  return { levels, calendar };
+}
+
+export async function readMarket(env: Env, actor: Actor, watchlist: readonly string[] = []): Promise<MarketRead> {
+  const extra = watchlist.length > 0 ? `\nAlso, if publicly traded: ${watchlist.slice(0, 5).join(", ")}.` : "";
+  const prompt = [
+    "Report today's market levels and today's economic calendar, for a venture investor's morning briefing.",
+    "",
+    "LEVELS — report only what you can read from a source right now:",
+    "- S&P 500 and Nasdaq futures or index level",
+    "- The US 10-year and 30-year Treasury yields",
+    "- Brent crude",
+    extra,
+    "",
+    "CALENDAR — scheduled releases and earnings for TODAY only, with the time as published.",
+    "",
+    "RULES:",
+    "- Report the level as your source states it. Do NOT round, convert or interpolate.",
+    "- If you cannot find a current level for something, OMIT it. An omitted line is honest;",
+    "  a stale or guessed one is not, and the reader cannot tell the difference.",
+    "- Do not forecast, do not recommend, and do not explain what the market will do next.",
+    "",
+    'Return ONLY JSON: {"levels":[{"instrument":"…","level":"…","move":"…"}],',
+    ' "calendar":[{"event":"…","when":"…","why":"…"}]}',
+  ].join("\n");
+
+  try {
+    const { run } = await runAi(env, {
+      purpose: "daily market levels and calendar",
+      actor,
+      inputs: [prompt],
+      // PUBLIC and never raised: the query leaves this system for a search engine.
+      sensitivity: "PUBLIC" as never,
+      budgetContext: { expectedOutputTokens: 900, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
+      routing: { category: "INTELLIGENCE" },
+    });
+
+    if (run.status !== "COMPLETED" || !run.output_text) {
+      return { ok: false, levels: [], calendar: [], citations: [], aiRunId: run.id, detail: run.failure_reason ?? `run ${run.status}` };
+    }
+    const { levels, calendar } = parseMarketRead(run.output_text);
+    return {
+      ok: true,
+      levels,
+      calendar,
+      citations: extractUrls(run.output_text),
+      aiRunId: run.id,
+      detail: `${levels.length} level(s), ${calendar.length} calendar item(s)`,
+    };
+  } catch (err) {
+    // A brief without market levels is thinner. A brief that fails to arrive is useless, and the
+    // sweep-based half of it is unaffected by this call — so search failing degrades, never fails.
+    return { ok: false, levels: [], calendar: [], citations: [], aiRunId: null, detail: err instanceof Error ? err.message : String(err) };
+  }
+}

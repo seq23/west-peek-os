@@ -10,13 +10,21 @@
  * first question and there is no way to answer it after the fact.
  */
 
-export const PROMPT_VERSION = "daily-intelligence-v1";
+/**
+ * v2 adds the shape the operator asked for: a numbered one-minute summary, a "why it matters" under
+ * each headline, an importance score out of ten, and the market levels and calendar that a
+ * search-grounded pass now supplies. The version is bumped rather than edited in place because
+ * "which prompt wrote this" is the first question asked when report quality changes, and it is
+ * unanswerable after the fact.
+ */
+export const PROMPT_VERSION = "daily-intelligence-v2";
 
 /** The sections a report can contain, in reading order. */
 export const REPORT_SECTIONS = [
   { key: "executive_summary", heading: "The one-minute version" },
   { key: "top_headlines", heading: "What matters most" },
   { key: "markets_macro", heading: "Markets and macro" },
+  { key: "key_events", heading: "What is scheduled today" },
   { key: "ai_technology", heading: "AI and technology" },
   { key: "capital_markets", heading: "Capital markets, IPO and M&A" },
   { key: "venture_private", heading: "Venture, private markets and secondaries" },
@@ -41,14 +49,36 @@ export interface EvidenceEvent {
   why_ranked: string[];
 }
 
+/** A level as read from a source this morning, with the direction if one was stated. */
+export interface MarketLevelInput {
+  instrument: string;
+  level: string;
+  move: string | null;
+}
+
+export interface CalendarInput {
+  event: string;
+  when: string;
+  why: string | null;
+}
+
 export interface EvidencePacket {
   report_date: string;
   partner_name: string;
+  /** Time of day the report is being delivered, for the header. */
+  edition?: string;
   /** What the firm cares about, bounded — never the whole database. */
   firm_context: { sectors: string[]; portfolio: string[]; watchlist: string[]; themes: string[] };
   /** Running stories, so the model can say what changed rather than re-reporting. */
   open_narratives: Array<{ topic: string; summary: string; last_seen: string }>;
   events: EvidenceEvent[];
+  /**
+   * Levels and the day's calendar, from a search-grounded pass. Empty when that call failed or was
+   * not run — the report degrades to the swept half rather than inventing numbers, which is why
+   * these are separate from `events` and are never cited by event_id.
+   */
+  market_levels?: MarketLevelInput[];
+  calendar?: CalendarInput[];
 }
 
 /**
@@ -98,6 +128,14 @@ export function buildSynthesisPrompt(packet: EvidencePacket): string {
     JSON.stringify(packet.events, null, 1),
     "<<<END EVENTS>>>",
     "",
+    packet.market_levels?.length
+      ? `<<<LEVELS (read this morning; use these figures verbatim and no others)>>>\n${JSON.stringify(packet.market_levels, null, 1)}\n<<<END LEVELS>>>`
+      : "LEVELS: none available this morning. Do not state any market figure — say the levels could not be read.",
+    "",
+    packet.calendar?.length
+      ? `<<<CALENDAR (scheduled today)>>>\n${JSON.stringify(packet.calendar, null, 1)}\n<<<END CALENDAR>>>`
+      : "CALENDAR: nothing scheduled was found. Omit the key_events section.",
+    "",
     "Return ONLY a JSON object of this shape:",
     JSON.stringify(
       {
@@ -110,8 +148,27 @@ export function buildSynthesisPrompt(packet: EvidencePacket): string {
     "",
     `Valid section keys: ${REPORT_SECTIONS.map((s) => s.key).join(", ")}.`,
     "Omit any section with nothing to say rather than writing filler.",
-    "executive_summary should be three to five sentences. investor_insight should be ONE paragraph",
-    "connecting at least two separate events into something neither says alone.",
+    "SHAPE OF EACH SECTION:",
+    "",
+    "executive_summary — a NUMBERED list of three to five points, each one or two sentences. Each",
+    "  point stands alone: a partner who reads only this section should know what today is about.",
+    "",
+    "top_headlines — the handful that matter, in this shape and no other:",
+    "  **1. <the headline as a claim, not a topic>**",
+    "  <what happened, in two or three sentences>",
+    "  **Why it matters:** <what it changes for an earliest-stage venture fund — not a summary again>",
+    "  **Importance: N/10** — where 10 means it changes a decision this firm is about to make, and 5",
+    "  means a partner should know it but nothing changes. Score honestly; a page of nines is noise.",
+    "",
+    "markets_macro — read the LEVELS block below. State the levels and what they mean together.",
+    "  Never invent a number that is not in that block, and never say a market is up or down unless",
+    "  the block says so.",
+    "",
+    "key_events — read the CALENDAR block. What is scheduled today and what it would tell us.",
+    "  Omit the section entirely if the block is empty.",
+    "",
+    "investor_insight should be ONE paragraph connecting at least two separate events into something",
+    "neither says alone.",
   ].join("\n");
 }
 
@@ -191,6 +248,21 @@ export function verifyReport(sections: readonly ParsedSection[], packet: Evidenc
     const url = s.body_md.match(/https?:\/\/[^\s)"']+/);
     if (url) {
       flags.push({ section: s.key, problem: "invented_url", detail: `contains a URL the system did not supply: ${url[0]}` });
+    }
+
+    // A market figure with no levels behind it. The model is told to say the levels could not be
+    // read; this catches it stating one anyway, which is the single most believable kind of
+    // invention in a morning brief — a partner will act on "the ten-year is at 4.7" without
+    // checking, and nothing else in the pipeline can tell that number came from memory.
+    if (s.key === "markets_macro" && !(packet.market_levels?.length)) {
+      const figure = s.body_md.match(/\d+(?:\.\d+)?\s?%|\$\s?\d[\d,.]*/);
+      if (figure) {
+        flags.push({
+          section: s.key,
+          problem: "invented_market_figure",
+          detail: `states ${figure[0]} with no levels supplied this morning`,
+        });
+      }
     }
 
     // Rumour → fact. Only flagged when the section asserts completion AND every event it rests on

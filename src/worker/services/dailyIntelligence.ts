@@ -13,6 +13,7 @@ import {
   SOURCE_AUTHORITY, classify, dedupe, isWeekend, localReportDate, rank,
   type NormalisedItem, type PartnerLens, type SourceType,
 } from "../../shared/intelligence/pipeline";
+import { readMarket } from "./liveSearch";
 
 /**
  * Daily Executive Intelligence — the orchestrator (P41).
@@ -299,9 +300,17 @@ export async function generateForPartner(
     why_ranked: c.reasons,
   }));
 
+  // Levels and the calendar, from a search-grounded pass. Deliberately AFTER the candidate check:
+  // a day with nothing to report does not spend a search call, and the empty-day path above already
+  // returned. Failure here degrades the report rather than failing it — the swept half is unaffected,
+  // and the prompt is told to say the levels could not be read rather than to invent any.
+  const market = await readMarket(env, actor, lens.companies ?? []);
+
   const packet: EvidencePacket = {
     report_date: reportDate,
     partner_name: user?.full_name ?? "Partner",
+    market_levels: market.levels,
+    calendar: market.calendar,
     firm_context: {
       sectors: lens.sectors, portfolio: entities.slice(0, 40), watchlist: lens.companies, themes: lens.themes,
     },

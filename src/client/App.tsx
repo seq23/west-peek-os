@@ -30,6 +30,11 @@ import { CockpitPage } from "./pages/CockpitPage";
 import { ThesisPage } from "./pages/ThesisPage";
 import { ModelingPage } from "./pages/ModelingPage";
 import { DealflowPage } from "./pages/DealflowPage";
+import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
+import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
+import { FundAllocation } from "./pages/FundAllocation";
+import { GOVERNANCE_UPDATE_TYPES, RECOMMENDED_GOVERNANCE, governanceType } from "@shared/governance/updateTypes";
+import { useSelectedFund } from "./lib/selectedFund";
 import { HelpCenterPage } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
@@ -940,8 +945,70 @@ function GovernancePage({ me }: { me: MeResponse }) {
   const [message, setMessage] = useState<string | null>(null);
   const isMp = me.roles.includes("MANAGING_PARTNER");
 
+  const chosen = governanceType(updateType);
+
   return (
     <section data-testid="governance-page">
+      {/* The page used to open on a dropdown of five nouns. Every one is a different act with a
+          different consequence, and the screen explained none of them — so the honest response was
+          to pick the first and hope, which is how a rule ends up filed as a bulletin and binds
+          nobody. */}
+      <section className="card" data-testid="governance-explainer">
+        <h3>What this page is for</h3>
+        <p>
+          The rules this firm operates under, and the reasoning behind decisions somebody will
+          otherwise re-argue in six months. Everything issued here is permanent and attributed —
+          nothing is edited or deleted, and a correction is a new update.
+        </p>
+        <p className="muted small">
+          The distinction that matters is whether it <strong>binds</strong>. A rule changes what
+          people and employees may do. Everything else tells the firm something. Getting that
+          backwards is expensive in both directions: an unenforced rule is worse than none, and a
+          bulletin dressed as a rule makes the firm ignore the next real one.
+        </p>
+        <ul className="card-list small" data-testid="governance-types">
+          {GOVERNANCE_UPDATE_TYPES.map((t) => (
+            <li key={t.key}>
+              <strong>{t.label}</strong>
+              {t.binds && <span className="badge">binding</span>} — {t.what}
+              <div className="muted small">{t.when}</div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {isMp && RECOMMENDED_GOVERNANCE.length > 0 && (
+        <section className="card" data-testid="governance-recommended">
+          <h3>Worth writing down</h3>
+          <p className="muted small">
+            Three suggestions, not a checklist. Each is somewhere this firm&apos;s own history
+            already shows the cost of not having written it down.
+          </p>
+          <ul className="card-list small">
+            {RECOMMENDED_GOVERNANCE.map((g) => (
+              <li key={g.key} data-testid={`governance-gap-${g.key}`}>
+                <strong>{g.title}</strong>{" "}
+                <span className="badge">{governanceType(g.suggests)?.label ?? g.suggests}</span>
+                <div className="muted small">{g.because}</div>
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid={`governance-draft-${g.key}`}
+                  onClick={() => {
+                    setUpdateType(g.suggests);
+                    setTitle(g.title);
+                    setBody("");
+                    setMessage("Drafted from a suggestion — write the body in your own words before issuing.");
+                  }}
+                >
+                  Start this one
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {isMp && (
         <form
           className="card"
@@ -965,9 +1032,9 @@ function GovernancePage({ me }: { me: MeResponse }) {
             <label>
               Type{" "}
               <select value={updateType} onChange={(e) => setUpdateType(e.target.value)}>
-                {["RULE", "BULLETIN", "BROADCAST", "CONTEXT_NOTE", "VENDOR_UPDATE"].map((t) => (
-                  <option key={t} value={t}>
-                    {t}
+                {GOVERNANCE_UPDATE_TYPES.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label}
                   </option>
                 ))}
               </select>
@@ -977,8 +1044,20 @@ function GovernancePage({ me }: { me: MeResponse }) {
             </label>
           </div>
           <div className="form-row">
-            <textarea rows={3} style={{ width: "100%" }} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Body" />
+            <textarea rows={4} style={{ width: "100%" }} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Body" />
           </div>
+          {chosen && (
+            <div className="notice small" data-testid="governance-example">
+              <strong>{chosen.label}</strong>
+              {chosen.binds ? " binds the firm. " : " changes no permissions. "}
+              {chosen.when}
+              <details>
+                <summary>What one of these looks like</summary>
+                <p><strong>{chosen.example.title}</strong></p>
+                <p>{chosen.example.body}</p>
+              </details>
+            </div>
+          )}
           <button type="submit" className="btn-strong" data-testid="governance-submit">
             Issue
           </button>
@@ -999,7 +1078,10 @@ function GovernancePage({ me }: { me: MeResponse }) {
         {(updates.data?.governance_updates ?? []).map((u) => (
           <li key={u.id} className="card">
             <p>
-              <strong>{u.title}</strong> — <code>{u.update_type}</code> by {u.issued_by} ({u.created_at})
+              <strong>{u.title}</strong>{" "}
+              <span className="badge">{governanceType(u.update_type)?.label ?? u.update_type}</span>
+              {governanceType(u.update_type)?.binds && <span className="badge">binding</span>}{" "}
+              <span className="muted small">issued {u.created_at.slice(0, 10)}</span>
             </p>
             <p>{u.body}</p>
           </li>
@@ -3620,6 +3702,13 @@ function StatusBar({ onNavigate, refreshNonce }: { onNavigate: (key: string) => 
   );
 }
 
+/** Resolves the selected fund for the allocation ring; renders nothing before one exists. */
+function PortfolioAllocation(): JSX.Element | null {
+  const selected = useSelectedFund();
+  if (selected.loading || !selected.fund) return null;
+  return <FundAllocation fundId={selected.fund.id} />;
+}
+
 export function App() {
   const [active, setActive] = useState<string>("home");
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -3869,7 +3958,17 @@ export function App() {
           {authed && active === "intent" && <IntentPage me={me.data!} />}
           {authed && active === "work-cards" && <WorkCardsPage me={me.data!} onChanged={refresh} />}
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
-          {authed && active === "companies" && <CompaniesPage me={me.data!} />}
+          {authed && active === "companies" && (
+            <>
+              <CompanyRegister me={me.data!} onNavigate={setActive} />
+              {/* Identity work — aliases, merges, external ids — belongs to one company rather
+                  than to the register, and is where duplicates get resolved. */}
+              <details className="card" data-testid="company-identity">
+                <summary>Identity: aliases, merges and duplicates</summary>
+                <CompaniesPage me={me.data!} />
+              </details>
+            </>
+          )}
           {authed && active === "research" && <ResearchPage me={me.data!} />}
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
           {authed && active === "modeling" && <ModelingPage me={me.data!} />}
@@ -3889,8 +3988,25 @@ export function App() {
               </details>
             </>
           )}
-          {authed && active === "meetings" && <MeetingsPage me={me.data!} />}
-          {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
+          {authed && active === "meetings" && (
+            <>
+              <MeetingsSurface me={me.data!} onNavigate={setActive} />
+              {/* The older meeting record keeps prep packets, notes, debriefs and close-out —
+                  real machinery that belongs to one meeting rather than to the list. */}
+              <details className="card" data-testid="meeting-records">
+                <summary>Meeting records and close-out</summary>
+                <MeetingsPage me={me.data!} />
+              </details>
+            </>
+          )}
+          {authed && active === "portfolio" && (
+            <>
+              {/* Where the fund goes, before how the companies are doing: the plan is the frame
+                  the positions are read against. */}
+              <PortfolioAllocation />
+              <PortfolioPage me={me.data!} />
+            </>
+          )}
           {authed && active === "cockpit" && <CockpitPage me={me.data!} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}
           {authed && active === "integrations" && <IntegrationsPage me={me.data!} />}
