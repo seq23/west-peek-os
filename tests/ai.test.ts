@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
@@ -931,5 +932,53 @@ describe("images are gated separately from text", () => {
     const est = (r: { cost_estimate_json: string }) =>
       Number(JSON.parse(r.cost_estimate_json || "{}").input_tokens ?? 0);
     expect(est(withImage.run)).toBeGreaterThan(est(textOnly.run));
+  });
+});
+
+/**
+ * A VISION RUN THAT REACHES A BLIND MODEL IS THE WORST OUTCOME AVAILABLE.
+ *
+ * A text-only model handed a multimodal message does not fail. It ignores the images and answers
+ * from the prompt, so a design review comes back fluent, confident and entirely invented — the
+ * exact failure `look_at` was built to prevent, arriving in the shape of success.
+ *
+ * Nothing in the routing data can catch this on its own: every model in the registry declares only
+ * `text-completion`, so there is no vision capability to filter on. Hence the named list, and hence
+ * this test.
+ */
+describe("images only go to a model that can see", () => {
+  const shot = { mediaType: "image/jpeg", dataBase64: "/9j/4AAQSkZJRg==", label: "desktop" };
+
+  it("refuses a vision run in LOCKDOWN rather than answering from the prompt", async () => {
+    // The test firm runs in LOCKDOWN, which short-circuits to the deterministic offline adapter
+    // before any model is selected. That adapter cannot see and does not fail — it answers from
+    // the prompt, so the review comes back canned and reads exactly like success.
+    //
+    // This was found by instrumenting the capability check below and discovering it was never
+    // executed: a run completed with images attached, against a model with no eyes, and reported
+    // nothing wrong.
+    const stub = stubFetch();
+    const { run: r } = await run({ sensitivity: "PUBLIC", images: [shot] }, { fetchImpl: stub.fetchImpl });
+    expect(r.status).not.toBe("COMPLETED");
+    expect(r.failure_reason).toContain("images_need_a_frontier_model");
+    // Nothing was sent anywhere.
+    expect(stub.calls.length).toBe(0);
+  });
+
+  it("keeps text runs working in LOCKDOWN — only images are refused", async () => {
+    // The refusal must be about the images, not about lockdown. Ordinary work still runs offline.
+    const stub = stubFetch();
+    const { run: r } = await run({ sensitivity: "PUBLIC" }, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("COMPLETED");
+  });
+
+  it("names the model in the frontier refusal, so the fix is obvious", () => {
+    // Adding a model to the list is a five-second fix only if the message says which is missing.
+    const src = readFileSync(new URL("../src/worker/ai/runAi.ts", import.meta.url), "utf8");
+    expect(src).toContain("model_cannot_see_images:${selected.pricing.model}");
+    expect(src).toContain("VISION_CAPABLE_MODELS");
+    // And the list must actually contain the model the firm has pinned for employee work, or every
+    // design review blocks the moment it leaves lockdown.
+    expect(src).toContain('"anthropic/claude-sonnet-5"');
   });
 });

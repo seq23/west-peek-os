@@ -151,6 +151,27 @@ const TOKENS_PER_IMAGE = 1_200;
  */
 const MAX_IMAGES_PER_RUN = 4;
 
+/**
+ * Models known to actually accept images.
+ *
+ * Maintained by hand and deliberately so. The provider registry has no vision concept — every model
+ * in it declares `text-completion` and nothing else — so there is nothing to derive this from, and
+ * inferring it from the model name would let anything through that happened to be spelled right.
+ *
+ * The consequence of an omission is a blocked run with the model named in the reason, which is the
+ * right direction to fail: a missing entry is a five-second fix, and a wrong entry is a design
+ * review of a page the model never saw.
+ */
+const VISION_CAPABLE_MODELS: ReadonlySet<string> = new Set([
+  "anthropic/claude-sonnet-5",
+  "anthropic/claude-opus-5",
+  "anthropic/claude-sonnet-4",
+  "openai/gpt-5",
+  "openai/gpt-4o",
+  "google/gemini-2.5-pro",
+  "google/gemini-2.5-flash",
+]);
+
 export interface RunAiDeps {
   /** Injected into the external adapter — tests ALWAYS pass a stub. */
   fetchImpl?: typeof fetch;
@@ -697,6 +718,28 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     return { run: await blocked("EGRESS_BLOCKED", `credential_like_content:${scrub.matches.join(",")}`) };
   }
 
+  /*
+   * 2b. NO MODEL THAT RUNS LOCALLY CAN SEE.
+   *
+   * LOCKDOWN and LOCAL route to the deterministic offline adapter, which returns canned text. Hand
+   * it screenshots and it does not fail — it answers from the prompt, exactly as a text-only
+   * frontier model would, and a design review comes back fluent and entirely invented.
+   *
+   * This is the same failure the vision-capability check below guards against, arriving one step
+   * earlier and by a different door: the privacy short-circuit returns before that check is ever
+   * reached. Caught by instrumenting the guard and finding it was never executed in a test that
+   * completed a run with images attached.
+   *
+   * REFUSED RATHER THAN DEGRADED. There is no honest text-only version of "look at this page and
+   * tell me what is wrong with it", so the run stops and says why. Anyone who needs it can take the
+   * firm out of lockdown deliberately.
+   */
+  if (input.images?.length && (policy.privacy_mode === "LOCKDOWN" || policy.privacy_mode === "LOCAL")) {
+    return {
+      run: await blocked("PREFLIGHT_BLOCKED", `images_need_a_frontier_model:privacy_mode_${policy.privacy_mode}`),
+    };
+  }
+
   // 3. Privacy-mode resolution (D8).
   if (policy.privacy_mode === "LOCKDOWN" || policy.privacy_mode === "LOCAL") {
     // Local/manual path: the deterministic local adapter always works offline.
@@ -857,6 +900,39 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     input_per_mtok_usd: selected.pricing.input_per_mtok_usd,
     output_per_mtok_usd: selected.pricing.output_per_mtok_usd,
   };
+
+  /*
+   * 6b. A VISION RUN MUST REACH A MODEL THAT CAN SEE.
+   *
+   * The capability filter above works at PROVIDER level, and every model in the registry declares
+   * only "text-completion" — there is no concept of vision anywhere in the routing data. So today a
+   * run carrying screenshots resolves to whatever the task class pins, and the fact that it happens
+   * to be a model with eyes is luck rather than design.
+   *
+   * The failure that makes this worth blocking rather than warning: a text-only model handed a
+   * multimodal message does not error. It ignores the images and answers from the prompt — which
+   * for a design review means a fluent, confident, entirely invented critique of a page nobody
+   * looked at. That is precisely the failure `look_at` exists to prevent, and it would arrive
+   * looking exactly like success.
+   *
+   * A NAMED LIST, not a heuristic. Guessing from a model string is how a text-only model with
+   * "vision" in its name gets through. Anything not on this list is refused, loudly, naming the
+   * model — adding a model here is a deliberate act, and the cost of forgetting is a blocked run
+   * rather than a fabricated review.
+   */
+  if (input.images?.length) {
+    if (!VISION_CAPABLE_MODELS.has(selected.pricing.model)) {
+      return {
+        run: await blocked(
+          "PREFLIGHT_BLOCKED",
+          `model_cannot_see_images:${selected.pricing.model}`,
+          estimate,
+          selected.provider.id,
+          selected.pricing.model,
+        ),
+      };
+    }
+  }
 
   // 7. Cost preflight: per-run and daily caps. A valid unexpired surge lifts both
   //    caps to the surge budget.

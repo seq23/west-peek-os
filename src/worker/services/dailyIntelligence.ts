@@ -19,6 +19,7 @@ import {
 } from "../../shared/intelligence/pipeline";
 import { readMarket } from "./liveSearch";
 import { deliver } from "./deliverables";
+import { machineForKey } from "./attribution";
 import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
 import { z } from "zod";
 
@@ -229,6 +230,7 @@ export interface SynthesisResult {
 export type Synthesise = (env: Env, actor: Actor, prompt: string, reportDate: string, firmUserId: string) => Promise<SynthesisResult>;
 
 const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, firmUserId) => {
+  const intelligenceMachineId = await machineForKey(env, "research_intelligence");
   const { run } = await runAi(env, {
     purpose: `daily intelligence report ${reportDate} for ${firmUserId}`,
     actor,
@@ -245,7 +247,13 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
     // containing "the 30-year U.S. tax at 19 year high" and a corrupted copy of its own event ids.
     // Structure was never the whole problem: choosing what belongs at the top of a brief is a
     // judgement task, and judgement is the thing the cheap tier does not have.
-    routing: { category: "INTELLIGENCE", taskClass: "daily-intelligence" },
+    // The brief is the Research & Intelligence machine's output. Attributed so its cost lands on that
+      // machine's line rather than on nobody's, which is where all 64 prior runs went.
+      routing: {
+        category: "INTELLIGENCE",
+        taskClass: "daily-intelligence",
+        ...(intelligenceMachineId === null ? {} : { machineId: intelligenceMachineId }),
+      },
   });
   return {
     output: run.output_text ?? "",

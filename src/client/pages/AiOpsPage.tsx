@@ -323,6 +323,14 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
 
           <h3>Budgets</h3>
           <ul className="card-list small" data-testid="budget-list">
+            {/* SET, AND THEN STUCK. A budget could be created and never changed or removed from
+                here — the operator's report, and accurate. The server has always supported both:
+                re-publishing the same scope writes a new version, and `active: false` retires one.
+                Neither was reachable, so a cap typed wrong was permanent.
+
+                Amending pre-fills the form below rather than editing in place, because a budget is
+                a versioned policy: you are writing the next version, not correcting the last one,
+                and the old one stays readable. */}
             {cost.data.budgets.map((b) => (
               <li key={`${b.scope_type}-${b.scope_id}-${b.period}`}>
                 <code>
@@ -330,6 +338,53 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
                 </code>{" "}
                 {b.period} — ${b.spent_usd.toFixed(4)} of ${b.cap_usd}
                 {b.utilisation_pct !== null ? ` (${b.utilisation_pct}%)` : ""} · v{b.version_no} · {b.reason}
+                {isMp && (
+                  <>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="link-button"
+                      data-testid={`budget-amend-${b.scope_type}-${b.scope_id}`}
+                      onClick={() => {
+                        setScopeType(b.scope_type);
+                        setScopeId(b.scope_id);
+                        setBudgetPeriod(b.period);
+                        setCap(String(b.cap_usd));
+                        setMessage(`Amending ${b.scope_type}:${b.scope_id}. Change the cap below and save — it becomes version ${b.version_no + 1}.`);
+                      }}
+                    >
+                      change the cap
+                    </button>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="link-button"
+                      data-testid={`budget-retire-${b.scope_type}-${b.scope_id}`}
+                      title="Stops this cap applying. The versions stay on the record."
+                      onClick={async () => {
+                        const res = await api<{ version_no?: number; error?: string; detail?: string }>("/api/ai/budgets", {
+                          method: "POST",
+                          body: {
+                            scope_type: b.scope_type,
+                            scope_id: b.scope_id,
+                            period: b.period,
+                            cap_usd: b.cap_usd,
+                            active: false,
+                            reason: `retired from the cost centre by ${me.fullName}`,
+                          },
+                        });
+                        setMessage(
+                          res.status === 201
+                            ? `${b.scope_type}:${b.scope_id} no longer applies. Every version it had is still on the record.`
+                            : `Refused: ${res.data?.detail ?? res.data?.error ?? res.status}`,
+                        );
+                        cost.reload();
+                      }}
+                    >
+                      stop applying it
+                    </button>
+                  </>
+                )}
               </li>
             ))}
             {cost.data.budgets.length === 0 && <li className="state-empty">No scoped budgets. Only the firmwide caps apply.</li>}

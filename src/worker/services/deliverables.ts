@@ -68,11 +68,26 @@ export async function deliver(env: Env, actor: Actor, input: DeliverInput): Prom
   const id = `dlv_${crypto.randomUUID()}`;
   const privacy = input.privacyLabel ?? "INTERNAL";
 
-  // Re-delivering the same source updates rather than stacking duplicates on a Home page.
+  /*
+   * Re-delivering the same source updates rather than stacking duplicates on a Home page.
+   *
+   * THE `WHERE` IS LOAD-BEARING AND WAS MISSING. The unique index on (source_type, source_id) is
+   * PARTIAL — it only covers rows where both are non-null — and SQLite requires a conflict target
+   * to match a real index including its predicate. Without the WHERE repeated here, every call
+   * failed with "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".
+   *
+   * It failed SILENTLY, which is the worse half: both callers wrap `deliver()` in a try/catch so
+   * that a handover failure cannot fail the brief or the research packet it belongs to. So the
+   * whole deliverables road would have thrown on every single call and reported nothing, and the
+   * first thing to exercise it would have been an unattended cron job at six in the morning.
+   * Typecheck, 1,154 tests and four validators all passed with this in place; it was found by
+   * running the statement against the real schema.
+   */
   await env.WP_OS_DB.prepare(
     `INSERT INTO deliverable (id, kind, title, body, prepared_by, prepared_for, source_type, source_id, privacy_label, firm_scope)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-     ON CONFLICT (source_type, source_id) DO UPDATE SET
+     ON CONFLICT (source_type, source_id) WHERE source_type IS NOT NULL AND source_id IS NOT NULL
+     DO UPDATE SET
        title = excluded.title, body = excluded.body, prepared_by = excluded.prepared_by,
        created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   )

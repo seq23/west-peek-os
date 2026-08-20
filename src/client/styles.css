@@ -3122,3 +3122,11 @@ hr {
 }
 
 .deliverable-actions { margin-top: 0.15rem; }
+
+/* The row you opened. Without this the only feedback for pressing "Open" was a
+   panel appearing below forty-five rows of table, off the bottom of the screen. */
+tbody tr.is-selected > td {
+  background: var(--wp-tint);
+  border-top: 1px solid var(--wp-tint-line);
+  border-bottom: 1px solid var(--wp-tint-line);
+}

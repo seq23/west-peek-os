@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 
 /**
@@ -277,6 +277,13 @@ function CapabilityPanel({ me }: { me: MeResponse }) {
 export function MachinesPage({ me }: { me: MeResponse }) {
   const fleet = useApi<{ machines: MachineRow[]; note: string }>("/api/machines/control-center");
   const [selected, setSelected] = useState<number | null>(null);
+  const detailRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (selected === null || !detailRef.current) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    detailRef.current.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  }, [selected]);
   const [domain, setDomain] = useState("ALL");
 
   if (fleet.loading && !fleet.data) return <p data-testid="machines-loading">Loading the fleet…</p>;
@@ -333,8 +340,21 @@ export function MachinesPage({ me }: { me: MeResponse }) {
                 </td>
                 <td className="num">${m.spend_30d_usd.toFixed(4)}</td>
                 <td>
-                  <button type="button" className="link-button" data-testid={`machine-open-${m.id}`} onClick={() => setSelected(m.id)}>
-                    Open
+                  {/* THE BUTTON WORKED AND LOOKED LIKE IT DID NOT.
+                      The detail panel renders below a forty-five row table, so opening row three
+                      rendered a panel far below the fold, with nothing on the row itself changing.
+                      The operator's reading was that the button was broken; what was broken was
+                      that nothing acknowledged the press. Three fixes, all of them small: the row
+                      marks itself, the button says what it will do next, and the panel is scrolled
+                      to rather than left to be found. */}
+                  <button
+                    type="button"
+                    className="link-button"
+                    data-testid={`machine-open-${m.id}`}
+                    aria-expanded={selected === m.id}
+                    onClick={() => setSelected(selected === m.id ? null : m.id)}
+                  >
+                    {selected === m.id ? "Close" : "Open"}
                   </button>
                 </td>
               </tr>
@@ -343,7 +363,11 @@ export function MachinesPage({ me }: { me: MeResponse }) {
         </table>
       </div>
 
-      {selectedMachine && <MachineDetail machine={selectedMachine} onChanged={fleet.reload} />}
+      {/* Scrolled to on open, so the answer to "did that do anything" is that you are looking at
+          it. `smooth` is skipped for anyone who has asked for reduced motion. */}
+      <div ref={detailRef}>
+        {selectedMachine && <MachineDetail machine={selectedMachine} onChanged={fleet.reload} />}
+      </div>
 
       <CapabilityPanel me={me} />
     </section>

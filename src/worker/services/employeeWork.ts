@@ -6,6 +6,7 @@ import { actorFromIdentity, authorize } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { requestTask, runTask } from "./browserTask";
 import { searchQuestion } from "./liveSearch";
+import { machineForEmployee } from "./attribution";
 import { buildDesignReviewPrompt } from "../../shared/design/reviewRubric";
 import { z } from "zod";
 import { ASK_PROMPT_VERSION, buildDraftPrompt, parseAnswer } from "../../shared/work/askToCard";
@@ -142,6 +143,10 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
     .bind(card.id)
     .run();
 
+  // WHOSE WORK THIS IS, for the cost centre. Resolved once rather than per step: the employee does
+  // not change mid-run, and this is a lookup against the machine table.
+  const machineId = await machineForEmployee(env, employee.name);
+
   for (let step = 1; step <= MAX_STEPS; step++) {
     const loopCtx: LoopContext = {
       title: card.title,
@@ -162,7 +167,15 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       // loop carry confidential material to a provider without anybody deciding that.
       sensitivity: "INTERNAL" as never,
       budgetContext: { expectedOutputTokens: 400 },
-      routing: { category: "OPERATIONS", taskClass: "employee-work" },
+      // Named, so the run lands on this employee's line in the cost centre and this machine's line
+      // on the Machines page. Every run before this was attributed to nobody.
+      aiEmployeeId: employee.id,
+      routing: {
+        category: "OPERATIONS",
+        taskClass: "employee-work",
+        ...(machineId === null ? {} : { machineId }),
+        workCardId: card.id,
+      },
     });
 
     if (run.status !== "COMPLETED" || !run.output_text) {
@@ -178,7 +191,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       break;
     }
 
-    const outcome = await applyDecision(env, ctx, card, decision, step, employee.name);
+    const outcome = await applyDecision(env, ctx, card, decision, step, employee.name, employee.id, machineId);
     steps.push(outcome);
     if (outcome.action === "done" || outcome.action === "blocked" || outcome.action === "waiting") break;
   }
@@ -218,6 +231,9 @@ async function applyDecision(
   step: number,
   /** Who is doing the work. A design review is signed by a person, not by the system. */
   employeeName: string,
+  /** And whose cost line it lands on — see services/attribution.ts for why this was all NULL. */
+  employeeId: string,
+  machineId: number | null,
 ): Promise<StepOutcome> {
   const actor = actorFromIdentity(ctx.identity!);
 
@@ -327,7 +343,13 @@ async function applyDecision(
       // anything the firm holds privately would be labelled higher and refused, by design.
       sensitivity: "PUBLIC" as never,
       budgetContext: { expectedOutputTokens: 1_200 },
-      routing: { category: "OPERATIONS", taskClass: "employee-work" },
+      aiEmployeeId: employeeId,
+      routing: {
+        category: "OPERATIONS",
+        taskClass: "employee-work",
+        ...(machineId === null ? {} : { machineId }),
+        workCardId: card.id,
+      },
     });
 
     if (run.status !== "COMPLETED" || !run.output_text) {
