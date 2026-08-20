@@ -74,7 +74,7 @@ export function MarketMapPage(): JSX.Element {
       <form className="card" onSubmit={build} data-testid="mkt-build-form">
         <div className="form-row">
           <input
-            data-testid="mkt-sector"
+            data-testid="mkt-sector" aria-label="Sector to map"
             value={sector}
             onChange={(e) => setSector(e.target.value)}
             placeholder="AI inference infrastructure, health tech scheduling, embedded fintech…"

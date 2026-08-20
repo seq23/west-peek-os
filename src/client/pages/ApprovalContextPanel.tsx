@@ -97,13 +97,13 @@ export function ApprovalContextPanel({ cardId }: { cardId: string }): JSX.Elemen
       )}
 
       <form className="form-row" onSubmit={addEvidence}>
-        <select value={kind} onChange={(e) => setKind(e.target.value)} data-testid={`approval-evidence-kind-${cardId}`}>
+        <select aria-label="Kind of evidence" value={kind} onChange={(e) => setKind(e.target.value)} data-testid={`approval-evidence-kind-${cardId}`}>
           {["CLAIM", "DOCUMENT", "INTELLIGENCE_ITEM", "MEETING", "CONTRADICTION", "OTHER"].map((k) => (
             <option key={k} value={k}>{k.toLowerCase().replace("_", " ")}</option>
           ))}
         </select>
         <input
-          data-testid={`approval-evidence-label-${cardId}`}
+          aria-label="What this evidence is" data-testid={`approval-evidence-label-${cardId}`}
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="What supports this?"
@@ -129,7 +129,7 @@ export function ApprovalContextPanel({ cardId }: { cardId: string }): JSX.Elemen
 
       <form className="form-row" onSubmit={addComment}>
         <input
-          data-testid={`approval-comment-${cardId}`}
+          aria-label="Add a comment to this approval" data-testid={`approval-comment-${cardId}`}
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           placeholder="Ask before deciding…"

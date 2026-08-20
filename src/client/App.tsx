@@ -669,7 +669,7 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
         </div>
         <div className="form-row">
           <textarea
-            data-testid="capture-text"
+            data-testid="capture-text" aria-label="What you need, in your own words"
             rows={4}
             style={{ width: "100%" }}
             placeholder="What's on your mind?"
@@ -1145,7 +1145,7 @@ function GovernancePage({ me }: { me: MeResponse }) {
             </label>
           </div>
           <div className="form-row">
-            <textarea rows={4} style={{ width: "100%" }} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Body" />
+            <textarea aria-label="What the update says" rows={4} style={{ width: "100%" }} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Body" />
           </div>
           {chosen && (
             <div className="notice small" data-testid="governance-example">
@@ -1278,7 +1278,7 @@ function AiPage({ me }: { me: MeResponse }) {
         </div>
         <div className="form-row">
           <textarea
-            data-testid="ai-input"
+            data-testid="ai-input" aria-label="What you want to ask"
             rows={3}
             style={{ width: "100%" }}
             placeholder="Input for the model"
@@ -1774,7 +1774,7 @@ function DocumentsPage() {
           <label>
             Type <input data-testid="doc-type" value={docType} onChange={(e) => setDocType(e.target.value)} />
           </label>
-          <input data-testid="doc-file" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input data-testid="doc-file" aria-label="Choose a file to upload" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </div>
         <button type="submit" className="btn-strong" data-testid="doc-submit">
           Upload
@@ -2361,14 +2361,14 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
           setNoteBody("");
         }}
       >
-        <select data-testid="note-type" value={noteType} onChange={(e) => setNoteType(e.target.value)}>
+        <select data-testid="note-type" aria-label="Kind of note" value={noteType} onChange={(e) => setNoteType(e.target.value)}>
           {["MANUAL", "OFF_RECORD"].map((n) => (
             <option key={n} value={n}>
               {n}
             </option>
           ))}
         </select>
-        <input data-testid="note-body" value={noteBody} onChange={(e) => setNoteBody(e.target.value)} placeholder="meeting note" />
+        <input data-testid="note-body" aria-label="What the update says" value={noteBody} onChange={(e) => setNoteBody(e.target.value)} placeholder="meeting note" />
         <button type="submit" className="btn-strong" data-testid="note-submit">
           Add note
         </button>
@@ -2383,7 +2383,7 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
           setCommitmentText("");
         }}
       >
-        <input data-testid="commitment-text" value={commitmentText} onChange={(e) => setCommitmentText(e.target.value)} placeholder="commitment made in the meeting" />
+        <input data-testid="commitment-text" aria-label="What you need, in your own words" value={commitmentText} onChange={(e) => setCommitmentText(e.target.value)} placeholder="commitment made in the meeting" />
         <button type="submit" className="btn-strong" data-testid="commitment-submit">
           Record commitment
         </button>
@@ -2672,7 +2672,7 @@ function SupportRequestDetail({ requestId, onChanged }: { requestId: string; onC
           setTarget("");
         }}
       >
-        <input data-testid="match-target" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="who could help" />
+        <input data-testid="match-target" aria-label="Who or what to match against" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="who could help" />
         <button type="submit" className="btn-strong" data-testid="match-submit">
           Propose match
         </button>

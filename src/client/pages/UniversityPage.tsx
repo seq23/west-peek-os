@@ -105,7 +105,7 @@ export function UniversityPage(): JSX.Element {
           <h3>What do you want to learn?</h3>
           <div className="form-row">
             <input
-              data-testid="university-topic"
+              data-testid="university-topic" aria-label="What you want to learn"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder="Pro rata rights, AI diligence, liquidation preferences, portfolio construction…"
@@ -165,7 +165,7 @@ export function UniversityPage(): JSX.Element {
 
           <form className="form-row" onSubmit={send} data-testid="university-reply-form">
             <input
-              data-testid="university-message"
+              data-testid="university-message" aria-label="Your message"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               placeholder="Answer, or ask for it another way…"

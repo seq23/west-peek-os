@@ -246,14 +246,14 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
           watchlist.reload();
         }}
       >
-        <select data-testid="intel-watch-kind" value={watchKind} onChange={(e) => setWatchKind(e.target.value)}>
+        <select data-testid="intel-watch-kind" aria-label="Kind of thing to watch" value={watchKind} onChange={(e) => setWatchKind(e.target.value)}>
           {["TOPIC", "COMPANY", "SECTOR", "PERSON"].map((k) => (
             <option key={k} value={k}>
               {k}
             </option>
           ))}
         </select>
-        <input data-testid="intel-watch-label" value={watchLabel} onChange={(e) => setWatchLabel(e.target.value)} placeholder="What should we watch?" />
+        <input data-testid="intel-watch-label" aria-label="What to watch" value={watchLabel} onChange={(e) => setWatchLabel(e.target.value)} placeholder="What should we watch?" />
         <button type="submit" className="btn-strong" data-testid="intel-watch-submit">
           Watch
         </button>
@@ -428,7 +428,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
           </div>
           <div className="form-row">
             <textarea
-              data-testid="intel-manual-body"
+              data-testid="intel-manual-body" aria-label="The item to add by hand"
               rows={2}
               style={{ width: "100%" }}
               value={manualBody}

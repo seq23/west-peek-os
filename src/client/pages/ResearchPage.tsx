@@ -148,22 +148,22 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
           refresh();
         }}
       >
-        <select data-testid="research-source-kind" value={sourceKind} onChange={(e) => setSourceKind(e.target.value)}>
+        <select data-testid="research-source-kind" aria-label="Kind of source" value={sourceKind} onChange={(e) => setSourceKind(e.target.value)}>
           {["HUMAN", "URL", "DOCUMENT", "INTELLIGENCE_ITEM", "INTERNAL_RECORD"].map((k) => (
             <option key={k} value={k}>
               {k}
             </option>
           ))}
         </select>
-        <input data-testid="research-source-title" value={sourceTitle} onChange={(e) => setSourceTitle(e.target.value)} placeholder="What is the source?" />
-        <select data-testid="research-source-reliability" value={reliability} onChange={(e) => setReliability(e.target.value)}>
+        <input data-testid="research-source-title" aria-label="Source title" value={sourceTitle} onChange={(e) => setSourceTitle(e.target.value)} placeholder="What is the source?" />
+        <select data-testid="research-source-reliability" aria-label="How reliable this source is" value={reliability} onChange={(e) => setReliability(e.target.value)}>
           {["UNKNOWN", "LOW", "MEDIUM", "HIGH"].map((r) => (
             <option key={r} value={r}>
               {r}
             </option>
           ))}
         </select>
-        <input data-testid="research-source-basis" value={basis} onChange={(e) => setBasis(e.target.value)} placeholder="What does that judgement rest on?" />
+        <input data-testid="research-source-basis" aria-label="Why this source is as reliable as you say" value={basis} onChange={(e) => setBasis(e.target.value)} placeholder="What does that judgement rest on?" />
         <button type="submit" className="btn-strong" data-testid="research-source-submit">
           Add source
         </button>
@@ -193,7 +193,7 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
           refresh();
         }}
       >
-        <select data-testid="research-finding-source" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+        <select data-testid="research-finding-source" aria-label="Which source this finding comes from" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
           <option value="">(first source)</option>
           {d.sources.map((s) => (
             <option key={s.id} value={s.id}>
@@ -202,7 +202,7 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
           ))}
         </select>
         <input
-          className="field-wide" data-testid="research-finding-statement"
+          className="field-wide" data-testid="research-finding-statement" aria-label="What this finding establishes"
           value={statement}
           onChange={(e) => setStatement(e.target.value)}
           placeholder="What did you find?"
@@ -271,7 +271,7 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
           refresh();
         }}
       >
-        <input data-testid="research-packet-title" value={packetTitle} onChange={(e) => setPacketTitle(e.target.value)} placeholder="Packet title" />
+        <input data-testid="research-packet-title" aria-label="Packet title" value={packetTitle} onChange={(e) => setPacketTitle(e.target.value)} placeholder="Packet title" />
         <button type="submit" className="btn-strong" data-testid="research-packet-submit">
           Assemble packet
         </button>
@@ -365,9 +365,9 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         }}
       >
         <div className="form-row">
-          <input data-testid="research-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Project title" />
+          <input data-testid="research-title" aria-label="Title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Project title" />
           <input
-            className="field-wide" data-testid="research-question"
+            className="field-wide" data-testid="research-question" aria-label="The question to answer"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             placeholder="The question this research must answer"

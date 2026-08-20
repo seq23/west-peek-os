@@ -123,7 +123,7 @@ function MachineDetail({ machine, onChanged }: { machine: MachineRow; onChanged:
       <h4>Controls</h4>
       <div className="form-row">
         <input
-          data-testid={`machine-reason-${machine.id}`}
+          aria-label="Why — recorded against this change" data-testid={`machine-reason-${machine.id}`}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder="Reason (required)"
@@ -152,7 +152,7 @@ function MachineDetail({ machine, onChanged }: { machine: MachineRow; onChanged:
       </div>
 
       <div className="form-row">
-        <input data-testid={`machine-memo-${machine.id}`} value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="Operating note" />
+        <input aria-label="Note to keep on this department" data-testid={`machine-memo-${machine.id}`} value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="Operating note" />
         <button
           type="button"
           data-testid={`machine-memo-submit-${machine.id}`}
@@ -262,8 +262,8 @@ function CapabilityPanel({ me }: { me: MeResponse }) {
           caps.reload();
         }}
       >
-        <input data-testid="capability-key" value={key} onChange={(e) => setKey(e.target.value)} placeholder="capability_key" />
-        <input data-testid="capability-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
+        <input data-testid="capability-key" aria-label="Capability key" value={key} onChange={(e) => setKey(e.target.value)} placeholder="capability_key" />
+        <input data-testid="capability-name" aria-label="Capability name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
         <button type="submit" className="btn-strong" data-testid="capability-submit">
           Register capability
         </button>

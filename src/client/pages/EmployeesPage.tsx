@@ -281,12 +281,12 @@ function EmployeeDetailPanel({ id, me, onChanged }: { id: string; me: MeResponse
           >
             <div className="form-row">
               <input
-                data-testid={`employee-review-finding-${id}`}
+                aria-label="What the review found" data-testid={`employee-review-finding-${id}`}
                 value={finding}
                 onChange={(e) => setFinding(e.target.value)}
                 placeholder="What did you observe?"
               />
-              <select data-testid={`employee-review-disposition-${id}`} value={disposition} onChange={(e) => setDisposition(e.target.value)}>
+              <select aria-label="What happens to this employee" data-testid={`employee-review-disposition-${id}`} value={disposition} onChange={(e) => setDisposition(e.target.value)}>
                 {["CONTINUE", "IMPROVEMENT_PLAN", "RETRAIN", "RESTRICT", "RETIRE"].map((x) => (
                   <option key={x} value={x}>
                     {x}
@@ -375,7 +375,7 @@ function RoomsPanel({ me }: { me: MeResponse }) {
             }}
           >
             <input
-              className="field-wide" data-testid="room-announce-body"
+              className="field-wide" data-testid="room-announce-body" aria-label="What to announce to the firm"
               value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder={`Announcement from ${me.fullName}`}

@@ -116,7 +116,7 @@ function SectionEditor({
       ) : (
         <>
           <textarea
-            data-testid={`ic-body-${sectionId}`}
+            aria-label="Section text" data-testid={`ic-body-${sectionId}`}
             rows={5}
             value={body}
             placeholder="What we found, and what we still don't know."

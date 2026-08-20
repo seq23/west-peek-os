@@ -483,22 +483,22 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
                 cost.reload();
               }}
             >
-              <select data-testid="budget-scope-type" value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
+              <select data-testid="budget-scope-type" aria-label="What kind of thing this cap applies to" value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
                 {["FIRM", "EMPLOYEE", "MACHINE", "PROVIDER", "MODEL", "CATEGORY"].map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>
                 ))}
               </select>
-              <input data-testid="budget-scope-id" value={scopeId} onChange={(e) => setScopeId(e.target.value)} placeholder="scope id" />
-              <select data-testid="budget-period" value={budgetPeriod} onChange={(e) => setBudgetPeriod(e.target.value)}>
+              <input data-testid="budget-scope-id" aria-label="Which employee, machine or model this cap applies to" value={scopeId} onChange={(e) => setScopeId(e.target.value)} placeholder="scope id" />
+              <select data-testid="budget-period" aria-label="How often the cap resets" value={budgetPeriod} onChange={(e) => setBudgetPeriod(e.target.value)}>
                 {["DAILY", "WEEKLY", "MONTHLY"].map((p) => (
                   <option key={p} value={p}>
                     {p}
                   </option>
                 ))}
               </select>
-              <input data-testid="budget-cap" value={cap} onChange={(e) => setCap(e.target.value)} placeholder="cap USD" />
+              <input data-testid="budget-cap" aria-label="Spending cap in dollars" value={cap} onChange={(e) => setCap(e.target.value)} placeholder="cap USD" />
               <button type="submit" className="btn-strong" data-testid="budget-submit">
                 Set budget
               </button>

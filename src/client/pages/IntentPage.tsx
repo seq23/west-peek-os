@@ -223,14 +223,14 @@ function PacketDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
           }}
         >
           <div className="form-row">
-            <select data-testid="lens-key" value={lensKey} onChange={(e) => setLensKey(e.target.value)}>
+            <select data-testid="lens-key" aria-label="Which lens" value={lensKey} onChange={(e) => setLensKey(e.target.value)}>
               {stack.map((k) => (
                 <option key={k} value={k}>
                   {k}
                 </option>
               ))}
             </select>
-            <select data-testid="lens-verdict" value={verdict} onChange={(e) => setVerdict(e.target.value)}>
+            <select data-testid="lens-verdict" aria-label="Lens verdict" value={verdict} onChange={(e) => setVerdict(e.target.value)}>
               {["PASS", "CONCERN", "ADVERSE"].map((v) => (
                 <option key={v} value={v}>
                   {v}
@@ -238,7 +238,7 @@ function PacketDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
               ))}
             </select>
             <input
-              className="field-wide" data-testid="lens-critique"
+              className="field-wide" data-testid="lens-critique" aria-label="What the lens found"
               value={critique}
               onChange={(e) => setCritique(e.target.value)}
               placeholder="What did this lens find?"
@@ -414,7 +414,7 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
         </label>
         <textarea
           id="ask-text"
-          data-testid="ask-text"
+          data-testid="ask-text" aria-label="What you need, in your own words"
           rows={3}
           style={{ width: "100%" }}
           value={text}
@@ -568,7 +568,7 @@ export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k:
       >
         <div className="form-row">
           <textarea
-            className="field-wide" data-testid="intent-text"
+            className="field-wide" data-testid="intent-text" aria-label="What you need, in your own words"
             rows={3}
             style={{ width: "100%" }}
             value={text}

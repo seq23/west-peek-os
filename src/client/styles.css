@@ -3178,3 +3178,33 @@ tbody tr.is-selected > td {
 
 .posture-tradeoff { border-top: 1px solid var(--wp-line); padding-top: 0.35rem; margin-top: 0.15rem; }
 .spend-lever { margin-bottom: 1rem; }
+
+/* ── Touch targets ─────────────────────────────────────────────────────────
+   `.link-button` is the most-used interactive element in the product — sixty-four
+   of them — and it carried `min-height: auto` with 2px/4px padding, so on a phone
+   the app's primary affordance was roughly a 24px tap target against a 44px
+   minimum. On a mouse that is fine and the compact look is deliberate, so the
+   target is enlarged only where the pointer is actually coarse. Rows get slightly
+   taller on touch, which is the correct trade. */
+@media (pointer: coarse) {
+  .link-button,
+  .work-card-summary,
+  .posture-pick,
+  summary {
+    min-height: 44px;
+  }
+
+  .link-button {
+    display: inline-flex;
+    align-items: center;
+    /* Horizontal room too: a 44px-tall target two characters wide is still a miss. */
+    padding-inline: var(--space-xs);
+  }
+
+  /* Inputs and selects are hit as often as buttons and were sized for a cursor. */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  button {
+    min-height: 44px;
+  }
+}

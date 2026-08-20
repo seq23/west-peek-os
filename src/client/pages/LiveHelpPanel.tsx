@@ -250,7 +250,7 @@ export function LiveHelpPanel({ meetingId }: { meetingId: string }): JSX.Element
         }}
       >
         <input
-          data-testid="live-help-input"
+          data-testid="live-help-input" aria-label="Ask the employees in this meeting"
           value={question}
           placeholder="Ask the room…"
           disabled={busy || seated.length === 0}

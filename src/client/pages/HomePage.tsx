@@ -204,7 +204,7 @@ function PersonalIntelligencePanel() {
   return (
     <section className="card private-panel" data-testid="personal-intelligence">
       <header className="module-card-head">
-        <h4>Private layer</h4>
+        <h3>Private layer</h3>
         <button type="button" className="link-button" data-testid="personal-toggle" onClick={() => setOpen((o) => !o)}>
           {open ? "Hide" : "Show"}
         </button>
@@ -256,7 +256,7 @@ function PersonalIntelligencePanel() {
                 entries.reload();
               }}
             >
-              <select data-testid="personal-kind" value={kind} onChange={(e) => setKind(e.target.value)}>
+              <select data-testid="personal-kind" aria-label="Kind of entry" value={kind} onChange={(e) => setKind(e.target.value)}>
                 {["TRANSIT", "LUNAR", "TIMING_WINDOW", "NOTE"].map((k) => (
                   <option key={k} value={k}>
                     {k}
@@ -264,7 +264,7 @@ function PersonalIntelligencePanel() {
                 ))}
               </select>
               <input
-                data-testid="personal-headline"
+                data-testid="personal-headline" aria-label="Headline"
                 value={headline}
                 onChange={(e) => setHeadline(e.target.value)}
                 placeholder="What are you watching for yourself?"
@@ -302,7 +302,7 @@ function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => 
   return (
     <section className="card" data-testid="home-settings">
       <header className="module-card-head">
-        <h4>Home layout</h4>
+        <h3>Home layout</h3>
         <button type="button" className="link-button" data-testid="home-settings-toggle" onClick={() => setOpen((o) => !o)}>
           {open ? "Done" : "Configure"}
         </button>
@@ -447,7 +447,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           The examples are real capabilities, not placeholder prompts: showing something Ask cannot
           do would teach the operator to distrust it on the first try. */}
       <section className="card ask-band" data-testid="home-ask">
-        <h3>Ask</h3>
+        <h2>Ask</h2>
         <p>
           Describe what you need in your own words. Ask works out which part of the firm owns it,
           shows you the plan, and does nothing consequential without your approval.
@@ -473,7 +473,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           survives on the API as one_thing_to_watch for anything that still wants it. */}
       {attention.length > 0 && (
         <section className="card" data-testid="home-attention">
-          <h3>Needs your attention</h3>
+          <h2>Needs your attention</h2>
           <ul className="card-list small">
             {attention.map((a) => (
               <li key={a.key} data-testid={`home-attention-${a.key}`}>
@@ -593,7 +593,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       </section>
 
       <section className="card" data-testid="home-questions">
-        <h4>The ten questions this surface answers</h4>
+        <h3>The ten questions this surface answers</h3>
         <ul className="question-list">
           {data.questions.map((q) => (
             <li key={q.question} data-testid={`home-question-${q.module ?? "none"}`}>

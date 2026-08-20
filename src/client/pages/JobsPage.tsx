@@ -112,7 +112,7 @@ export function JobsPage({ me }: { me: MeResponse }) {
         <summary className="muted small">Run everything that is due, and how this works underneath</summary>
         <div className="form-row">
           <input
-            data-testid="job-reason"
+            data-testid="job-reason" aria-label="Why — recorded against this change"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="Why (recorded against switching a job on or off)"

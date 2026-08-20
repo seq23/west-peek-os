@@ -231,7 +231,7 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
         <div className="form-row">
           <input
             id="weekly-dump"
-            data-testid="weekly-dump-input"
+            data-testid="weekly-dump-input" aria-label="Anything on your mind for this week"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="LP intro from Marcus — worth chasing?"
@@ -275,7 +275,7 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
         </p>
         <form onSubmit={readNotes}>
           <textarea
-            data-testid="weekly-notes-input"
+            data-testid="weekly-notes-input" aria-label="Paste your meeting notes"
             rows={6}
             style={{ width: "100%" }}
             value={notes}
