@@ -148,12 +148,21 @@ export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
        FROM scheduled_job j`,
   ).all<{ job_key: string; status: string; target_kind: string; target_id: string | null; last_run_at: string | null; last_status: string | null }>()
     .catch(() => ({ results: [] }))).results ?? []);
-  const employees = ((await env.WP_OS_DB.prepare("SELECT name, status FROM ai_employee").all<{ name: string; status: string }>()
+  const employees = ((await env.WP_OS_DB.prepare("SELECT id, name, status FROM ai_employee").all<{ id: string; name: string; status: string }>()
     .catch(() => ({ results: [] }))).results ?? []);
-  const byName = new Map(employees.map((e) => [e.name, e.status]));
+  /*
+   * Keyed by id AND name. `scheduled_job.target_id` holds the id after migration 0087; keying on
+   * name alone would have turned every EMPLOYEE job amber the moment that landed — the same
+   * disagreement this board exists to surface, committed by the board itself.
+   */
+  const byRef = new Map<string, { status: string; name: string }>();
+  for (const e of employees) {
+    byRef.set(e.id, { status: e.status, name: e.name });
+    byRef.set(e.name, { status: e.status, name: e.name });
+  }
 
   const active = jobs.filter((j) => j.status === "ACTIVE");
-  const stalled = active.filter((j) => j.target_kind === "EMPLOYEE" && j.target_id && byName.get(j.target_id) !== "ACTIVE");
+  const stalled = active.filter((j) => j.target_kind === "EMPLOYEE" && j.target_id && byRef.get(j.target_id)?.status !== "ACTIVE");
   const failing = active.filter((j) => j.last_status === "FAILED" || j.last_status === "DEAD_LETTER");
   checks.push({
     key: "scheduled_work",
@@ -161,7 +170,7 @@ export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
     state: failing.length > 0 ? "DOWN" : stalled.length > 0 ? "DEGRADED" : active.length > 0 ? "OK" : "DEGRADED",
     reading: `${active.length} of ${jobs.length} running${failing.length ? ` · ${failing.length} failing` : ""}${stalled.length ? ` · ${stalled.length} cannot run` : ""}`,
     remedy: stalled.length
-      ? `${stalled.map((j) => j.target_id).join(", ")} ${stalled.length === 1 ? "is" : "are"} switched off, so ${stalled.length === 1 ? "that job" : "those jobs"} cannot run.`
+      ? `${stalled.map((j) => byRef.get(j.target_id!)?.name ?? j.target_id).join(", ")} ${stalled.length === 1 ? "is" : "are"} switched off, so ${stalled.length === 1 ? "that job" : "those jobs"} cannot run.`
       : failing.length
         ? `${failing.map((j) => j.job_key).join(", ")} failed on the last attempt.`
         : active.length === 0 ? "Nothing is scheduled to run." : undefined,

@@ -111,7 +111,12 @@ interface RunOutcome {
 }
 
 /**
- * Find an employee by whichever way the caller addressed them.
+ * Find an employee by whichever way the caller addressed them, and return the CANONICAL row.
+ *
+ * THE RULE (migration 0087): a reference to an employee is their id; a byline is their name. Stored
+ * references are ids, so this resolver exists for the boundary — a human typing "Parker" into the
+ * job form, or a row written before the rule existed. It accepts either and hands back the id, so
+ * nothing downstream has to care which form arrived.
  *
  * THIS EXISTS BECAUSE OF A REAL REFUSAL. `scheduled_job.target_id` holds the roster NAME —
  * "Parker" — which is how the rest of the system addresses an AI employee: the actor carries
@@ -275,13 +280,26 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   } catch {
     payload = {};
   }
+  // Resolved here rather than read from the row, so attribution is the canonical id whichever
+  // form the column happens to carry. Preconditions already proved the employee exists and is on.
+  const employeeId =
+    job.target_kind === "EMPLOYEE" && job.target_id
+      ? (await resolveEmployee(env, job.target_id))?.id ?? job.target_id
+      : null;
+
   const { run } = await runAi(env, {
     purpose: `scheduled job ${job.job_key}: ${job.name}`,
-    actor: { type: "AI", aiEmployeeId: job.target_id ?? undefined, roles: [], firmScopes: [job.firm_scope] },
+    /*
+     * THE CANONICAL ID, resolved, never the raw column. This passed `target_id` straight through,
+     * so a scheduled job that succeeded would have written "Parker" into `ai_run.ai_employee_id`
+     * where every other writer puts "aie_parker" — splitting one employee's spend across two keys
+     * on the cost centre. It had never shown up because the job had never once succeeded.
+     */
+    actor: { type: "AI", aiEmployeeId: employeeId ?? undefined, roles: [], firmScopes: [job.firm_scope] },
     inputs: [payload.prompt ?? job.name],
     sensitivity: (job.data_class as never) ?? "INTERNAL",
     capabilityRequirement: job.capability_key ?? undefined,
-    aiEmployeeId: job.target_kind === "EMPLOYEE" ? job.target_id ?? undefined : undefined,
+    aiEmployeeId: employeeId ?? undefined,
     budgetContext: { expectedOutputTokens: 512 },
     routing: {
       taskClass: job.task_class ?? undefined,
@@ -579,14 +597,23 @@ export async function handleListJobs(ctx: RouteContext): Promise<Response> {
   // to say so — it showed a green ACTIVE badge on a job that does nothing. Parker's Monthly Room
   // proposal had been in exactly that state.
   const employees = (
-    await ctx.env.WP_OS_DB.prepare("SELECT name, status FROM ai_employee").all<{ name: string; status: string }>()
+    await ctx.env.WP_OS_DB.prepare("SELECT id, name, status FROM ai_employee").all<{ id: string; name: string; status: string }>()
   ).results ?? [];
-  const statusByName = new Map(employees.map((e) => [e.name, e.status]));
+  /*
+   * Keyed by BOTH id and name. The column holds ids after 0087, and the map used to be keyed on
+   * name alone — which is the same disagreement in the other direction, and would have blanked
+   * every job's employee status the moment the migration landed.
+   */
+  const statusByRef = new Map<string, string>();
+  for (const e of employees) {
+    statusByRef.set(e.id, e.status);
+    statusByRef.set(e.name, e.status);
+  }
 
   return json({
     jobs: jobs.map((j) => ({
       ...j,
-      target_employee_status: j.target_kind === "EMPLOYEE" && j.target_id ? statusByName.get(j.target_id) ?? null : null,
+      target_employee_status: j.target_kind === "EMPLOYEE" && j.target_id ? statusByRef.get(j.target_id) ?? null : null,
       recent_runs: runs.filter((r) => r.job_id === j.id).slice(0, 5),
       dead_letters: runs.filter((r) => r.job_id === j.id && r.status === "DEAD_LETTER").length,
     })),

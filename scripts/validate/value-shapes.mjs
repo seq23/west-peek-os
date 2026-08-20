@@ -142,6 +142,54 @@ async function orphanAudit(tables) {
   return findings;
 }
 
+
+/**
+ * Polymorphic columns whose target IS decided, even though the schema cannot say so.
+ *
+ * `scheduled_job.target_id` points at an employee, a machine or nothing, depending on target_kind —
+ * so it can carry no REFERENCES clause and check A can never see it. That is precisely why the
+ * id/name divergence lived there. Migration 0087 settled the rule (a reference is an id, a byline
+ * is a name); this is what stops it drifting back.
+ */
+const POLY_PINS = [
+  {
+    table: "scheduled_job",
+    column: "target_id",
+    where: "target_kind = 'EMPLOYEE'",
+    target: { table: "ai_employee", column: "id" },
+    rule: "an employee REFERENCE is their id — their name is a byline, not a pointer (migration 0087)",
+  },
+  {
+    table: "work_card",
+    column: "owner_id",
+    where: "owner_type = 'AI'",
+    target: { table: "ai_employee", column: "id" },
+    rule: "an employee REFERENCE is their id (migration 0087)",
+  },
+  {
+    table: "ai_run",
+    column: "ai_employee_id",
+    where: "ai_employee_id IS NOT NULL",
+    target: { table: "ai_employee", column: "id" },
+    rule: "spend is attributed by id, so one employee is never split across two keys",
+  },
+];
+
+async function polyPinAudit() {
+  const findings = [];
+  await pooled(POLY_PINS, async (pin) => {
+    const rows = await query(
+      `SELECT DISTINCT c."${pin.column}" AS v FROM "${pin.table}" c
+        WHERE ${pin.where} AND c."${pin.column}" IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM "${pin.target.table}" t WHERE t."${pin.target.column}" = c."${pin.column}")
+        LIMIT 10`,
+    ).catch(() => null);
+    if (!rows || rows.length === 0) return;
+    findings.push({ ...pin, offenders: rows.map((r) => String(r.v)) });
+  });
+  return findings;
+}
+
 // ── B · what a polymorphic column actually points at ────────────────────────
 
 function polymorphicColumns(tables) {
@@ -389,6 +437,7 @@ async function main() {
   const drift = constantDriftAudit(tables);
   const literals = sqlLiteralAudit(tables, files);
   const orphans = await orphanAudit(tables);
+  const pins = await polyPinAudit();
   const poly = await polymorphicReport(tables);
 
   let failed = false;
@@ -421,6 +470,17 @@ async function main() {
     }
   }
 
+  if (pins.length > 0) {
+    failed = true;
+    process.stdout.write(`\nA REFERENCE POINTING AT THE WRONG THING — ${pins.length}:\n`);
+    for (const p of pins) {
+      process.stdout.write(
+        `  ✗ ${p.table}.${p.column} (${p.where}) holds ${JSON.stringify(p.offenders)}\n` +
+          `      which is not a ${p.target.table}.${p.target.column}\n      ${p.rule}\n`,
+      );
+    }
+  }
+
   // Printed every run, pass or fail. Parker's bug was invisible precisely because nothing ever
   // stated what `scheduled_job.target_id` contained; a line of output is the whole fix.
   process.stdout.write(`\nPolymorphic columns — what their values actually match:\n`);
@@ -439,7 +499,7 @@ async function main() {
     return;
   }
   process.stdout.write(
-    `\nVALUE SHAPE SCAN PASSED: no constant out of step with its column, no SQL literal the column rejects, no orphaned reference.\n`,
+    `\nVALUE SHAPE SCAN PASSED: no constant out of step with its column, no SQL literal the column rejects, no orphaned reference, and every pinned reference points at the right kind of thing.\n`,
   );
 }
 

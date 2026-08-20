@@ -326,6 +326,41 @@ describe("an employee addressed by name, which is what the rows hold", () => {
     expect(run.body.run.outcome_summary ?? "").not.toContain("does not exist");
   });
 
+  /*
+   * THE LATENT BUG THE INCONSISTENCY WAS HIDING. `jobs.ts` passed `target_id` straight through as
+   * the run's `aiEmployeeId`, so a job addressed by name that SUCCEEDED would have written "Parker"
+   * into `ai_run.ai_employee_id`, where employeeWork.ts and every other writer put "aie_parker".
+   * One employee, two keys, spend split across both on the cost centre. Nobody had seen it because
+   * the broken lookup refused the job before it could ever succeed — fixing the lookup alone would
+   * have traded a visible refusal for a silent accounting error.
+   */
+  it("attributes the run to the employee's id even when the job names them", async () => {
+    const employee = await t.db.prepare("SELECT id, name FROM ai_employee WHERE id = 'aie_wells'")
+      .first<{ id: string; name: string }>();
+    // Already switched on by the D10 test above; activation is a once-only reserved receipt.
+
+    await call("/api/jobs", MP, "POST", {
+      job_key: "attribution_by_name",
+      name: `Task for ${employee!.name}`,
+      kind: "EMPLOYEE_TASK",
+      schedule_kind: "DAILY_AT",
+      daily_at_utc: "11:00",
+      target_kind: "EMPLOYEE",
+      target_id: employee!.name,
+      payload: { prompt: "Do the thing." },
+    });
+    await call("/api/jobs/attribution_by_name/status", MP, "POST", { status: "ACTIVE", reason: "on" });
+
+    const run = await call<{ run: { ai_run_id: string | null } }>("/api/jobs/attribution_by_name/run", MP, "POST");
+    expect(run.body.run.ai_run_id).not.toBeNull();
+
+    const aiRun = await t.db.prepare("SELECT ai_employee_id FROM ai_run WHERE id = ?1")
+      .bind(run.body.run.ai_run_id)
+      .first<{ ai_employee_id: string }>();
+    expect(aiRun?.ai_employee_id, "spend must land on the id, never on the display name").toBe(employee!.id);
+    expect(aiRun?.ai_employee_id).not.toBe(employee!.name);
+  });
+
   it("still refuses a target that genuinely is not there", async () => {
     const created = await call<{ error?: string }>("/api/jobs", MP, "POST", {
       job_key: "ghost_job",
