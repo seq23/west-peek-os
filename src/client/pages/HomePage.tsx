@@ -362,6 +362,17 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
   // work healthy, is AI failing, is setup incomplete. Derived from live endpoints only.
   const jobs = useApi<{ jobs: JobHealth[] }>("/api/jobs");
   const providers = useApi<{ providers: Array<{ enabled: number; kill_switched: number }> }>("/api/ai/providers");
+  /*
+   * EVERY HOOK ABOVE EVERY EARLY RETURN. This one was written next to the code that uses it, which
+   * sits below `if (home.loading) return …` — so the first render ran three hooks and the second
+   * ran four, React threw "rendered more hooks than during the previous render", and Home went
+   * blank. Typecheck cannot see it; only opening the page can.
+   *
+   * Silencing is matched on the item's key AND the words it was showing, so an item whose headline
+   * changes comes back — see the attention service. Nothing is filtered while this is still
+   * loading: hiding an alert on the strength of data you do not have yet is the wrong way round.
+   */
+  const silenced = useApi<{ silenced: Array<{ item_key: string; signature: string }> }>("/api/attention/silenced");
 
   // Mark the visit AFTER the first read, so "what changed" is a diff against the
   // previous visit rather than against this one.
@@ -406,13 +417,6 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       : {}),
   });
 
-  /*
-   * Silencing is matched on the item's key AND the words it was showing. An item whose headline
-   * changes has become a different thing to be told about, so it comes back — see the attention
-   * service for the reasoning. Nothing is filtered while the silence list is still loading, because
-   * hiding an alert on the strength of data you do not have yet is the wrong way round.
-   */
-  const silenced = useApi<{ silenced: Array<{ item_key: string; signature: string }> }>("/api/attention/silenced");
   const silencedKeys = new Set((silenced.data?.silenced ?? []).map((r) => attentionSignature(r.item_key, r.signature)));
   const visibleAttention = attention.filter((a) => !silencedKeys.has(attentionSignature(a.key, a.headline)));
   const silencedCount = attention.length - visibleAttention.length;
@@ -635,6 +639,11 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
         <DeliverableList
           limit={4}
           onNavigate={onNavigate}
+          // "Prepared for you" means for YOU. It used to list both partners' briefs, and because
+          // the other partner's is often generated later in the day it sat on top, signed by their
+          // chief of staff — under a heading promising these were yours.
+          mine
+          meId={me.id}
           emptyNote="Nothing has been prepared for you yet. Research packets, briefs and the weekly review all arrive here once somebody produces one."
         />
       </section>

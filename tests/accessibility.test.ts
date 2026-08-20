@@ -185,3 +185,43 @@ describe("source files contain no invisible characters", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/*
+ * NO HOOK BELOW AN EARLY RETURN.
+ *
+ * React requires the same hooks in the same order on every render. A `useApi` written next to the
+ * code that uses it, below `if (loading) return <p>…</p>`, runs three hooks on the first render and
+ * four on the second — React throws "rendered more hooks than during the previous render" and the
+ * page renders as a blank white screen. It typechecks, every test passes, and the only way to find
+ * it is to open the page. That is exactly what happened to Home.
+ *
+ * This scans each component for a top-level `return` followed later by a hook call at the same
+ * depth. Deliberately conservative: it only looks at statements indented two spaces, which is where
+ * a component's own body sits, so a hook inside a nested callback or a child component does not
+ * trip it.
+ */
+describe("hooks are not conditional", () => {
+  it("has no hook call below an early return in a component body", () => {
+    const offenders: string[] = [];
+    for (const f of clientFiles()) {
+      const lines = readFileSync(f, "utf8").split("\n");
+      let sawEarlyReturn: string | null = null;
+      for (const line of lines) {
+        // A new function at column 0 starts a fresh component body.
+        if (/^(export )?(default )?function |^const \w+ = \(|^export function /.test(line)) sawEarlyReturn = null;
+        // `  if (…) return …` or `  return …` at body depth, but not the component's final return
+        // of JSX, which is `  return (` and always last.
+        if (/^  (if \(.*\) )?return [^(]/.test(line) || /^    return </.test(line)) {
+          sawEarlyReturn = line.trim().slice(0, 60);
+        }
+        if (sawEarlyReturn && /^  const \w+ = use[A-Z]\w*[<(]/.test(line)) {
+          offenders.push(
+            `${f.split("/client/")[1]}: ${line.trim().slice(0, 60)} — below "${sawEarlyReturn}"`,
+          );
+          sawEarlyReturn = null;
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

@@ -176,17 +176,42 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
    */
   const dismissed = url.searchParams.get("dismissed") === "1";
   const dismissClause = dismissed ? "dismissed_at IS NOT NULL" : "dismissed_at IS NULL";
+  /*
+   * "PREPARED FOR YOU" HAS TO MEAN FOR YOU.
+   *
+   * Sharing is right for research — the operator asked for it in those words, so that if Scooter
+   * commissions something she can find it. It is wrong for a morning brief, which is addressed,
+   * personal, and signed by that partner's own chief of staff. Home listed both under "Prepared for
+   * you", and because Scooter's brief was generated later in the day it sat ABOVE hers, signed by
+   * Walker — so the page appeared to say her chief of staff had changed.
+   *
+   * `mine=1` filters to the reader. Everywhere that stays shared now labels whose it is instead of
+   * leaving the byline to be misread.
+   */
+  const mineOnly = url.searchParams.get("mine") === "1";
+  const mineClause = mineOnly ? "prepared_for = ?mine" : "1=1";
 
   // BOTH PARTNERS SEE EACH OTHER'S. Research is INTERNAL by default, and the operator's question was
   // explicitly "if scooter requests research i can find it". Anything labelled more sensitive is
   // filtered by the visibility clause, which is where that decision belongs.
+  // The reader's name travels with each row so a shared list can say whose a piece is without a
+  // second request per row.
+  const select = `SELECT d.*, (SELECT full_name FROM firm_user u WHERE u.id = d.prepared_for) AS prepared_for_name
+                    FROM deliverable d`;
+  const me = ctx.identity!.id;
   const rows = kind
     ? await ctx.env.WP_OS_DB.prepare(
-        `SELECT * FROM deliverable WHERE kind = ?1 AND ${dismissClause} AND ${visibility} ORDER BY created_at DESC LIMIT ?2`,
-      ).bind(kind, limit).all<DeliverableRow>()
+        `${select} WHERE kind = ?1 AND ${dismissClause} AND ${mineClause.replace("?mine", "?3")} AND ${visibility}
+          ORDER BY created_at DESC LIMIT ?2`,
+      )
+        .bind(...(mineOnly ? [kind, limit, me] : [kind, limit]))
+        .all<DeliverableRow>()
     : await ctx.env.WP_OS_DB.prepare(
-        `SELECT * FROM deliverable WHERE ${dismissClause} AND ${visibility} ORDER BY created_at DESC LIMIT ?1`,
-      ).bind(limit).all<DeliverableRow>();
+        `${select} WHERE ${dismissClause} AND ${mineClause.replace("?mine", "?2")} AND ${visibility}
+          ORDER BY created_at DESC LIMIT ?1`,
+      )
+        .bind(...(mineOnly ? [limit, me] : [limit]))
+        .all<DeliverableRow>();
 
   return json({ deliverables: rows.results ?? [] });
 }

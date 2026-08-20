@@ -111,6 +111,31 @@ interface RunOutcome {
 }
 
 /**
+ * Find an employee by whichever way the caller addressed them.
+ *
+ * THIS EXISTS BECAUSE OF A REAL REFUSAL. `scheduled_job.target_id` holds the roster NAME —
+ * "Parker" — which is how the rest of the system addresses an AI employee: the actor carries
+ * `aiEmployeeId: "Pierce"`, the jobs list resolves status with `statusByName.get(target_id)`, and
+ * the job's own display name is "Monthly Room proposal (Parker)". The precondition check queried
+ * `WHERE id = ?1` instead, so it looked for an employee whose id was "Parker", found nothing, and
+ * refused the job twice a day with "target employee Parker does not exist" — about an employee who
+ * exists, is ACTIVE, and whose id is `aie_parker`.
+ *
+ * That is the fourth bug of this exact family: two pieces of code disagreeing about what a column
+ * holds, both sides typed `string`, so nothing could catch it but running it. Matching on either
+ * form is the honest fix — the column's contents are a convention, not a constraint — and it makes
+ * a job addressed by id work too rather than trading one half of the bug for the other.
+ */
+async function resolveEmployee(
+  env: Env,
+  ref: string,
+): Promise<{ id: string; name: string; status: string } | null> {
+  return await env.WP_OS_DB.prepare("SELECT id, name, status FROM ai_employee WHERE name = ?1 OR id = ?1")
+    .bind(ref)
+    .first<{ id: string; name: string; status: string }>();
+}
+
+/**
  * Governance preconditions, checked before any work and before any spend. A refusal here is a
  * recorded outcome, never an exception: the operator needs to see WHY a scheduled job did nothing.
  */
@@ -118,9 +143,7 @@ async function checkPreconditions(env: Env, job: ScheduledJobRow): Promise<strin
   if (job.status === "PAUSED") return `job is PAUSED: ${job.pause_reason ?? "no reason recorded"}`;
 
   if (job.target_kind === "EMPLOYEE") {
-    const employee = await env.WP_OS_DB.prepare("SELECT id, name, status FROM ai_employee WHERE id = ?1")
-      .bind(job.target_id!)
-      .first<{ id: string; name: string; status: string }>();
+    const employee = await resolveEmployee(env, job.target_id!);
     if (!employee) return `target employee ${job.target_id} does not exist`;
     if (employee.status !== "ACTIVE") {
       // GAP-22 in one line: existing is not the same as running.
@@ -468,7 +491,7 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
     return json({ error: "invalid_input", detail: `${b.target_kind} jobs need a target_id` }, { status: 400 });
   }
   if (b.target_kind === "EMPLOYEE") {
-    const employee = await ctx.env.WP_OS_DB.prepare("SELECT id FROM ai_employee WHERE id = ?1").bind(b.target_id!).first();
+    const employee = await resolveEmployee(ctx.env, b.target_id!);
     if (!employee) return json({ error: "employee_not_found" }, { status: 404 });
   }
   if (b.target_kind === "MACHINE") {

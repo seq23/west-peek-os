@@ -286,3 +286,58 @@ describe("failures retry to the limit and then dead-letter", () => {
     expect(res.status).toBe(409);
   });
 });
+
+/*
+ * ADDRESSING AN EMPLOYEE THE WAY PRODUCTION ACTUALLY DOES.
+ *
+ * Every test above targets an employee by id — "aie_wells", "aie_pierce". Production does not:
+ * `scheduled_job.target_id` holds the roster NAME, because that is how the whole system addresses
+ * an AI employee. So the precondition check's `WHERE id = ?1` matched nothing, and the Monthly Room
+ * proposal refused itself twice a day with "target employee Parker does not exist" — about an
+ * employee who exists, is ACTIVE, and whose id is `aie_parker`.
+ *
+ * The tests passed throughout, because the fixtures encoded a convention the real rows do not use.
+ * That is the actual lesson: a test that addresses data differently from production proves the code
+ * works on data that will never arrive.
+ */
+describe("an employee addressed by name, which is what the rows hold", () => {
+  it("finds them, rather than refusing a job for an employee who plainly exists", async () => {
+    const employee = await t.db.prepare("SELECT id, name FROM ai_employee WHERE id = 'aie_wells'")
+      .first<{ id: string; name: string }>();
+    expect(employee, "fixture must have the employee this test addresses").toBeTruthy();
+
+    const created = await call<{ job_key: string }>("/api/jobs", MP, "POST", {
+      job_key: "by_name_job",
+      name: `Task for ${employee!.name}`,
+      kind: "EMPLOYEE_TASK",
+      schedule_kind: "DAILY_AT",
+      daily_at_utc: "09:00",
+      target_kind: "EMPLOYEE",
+      // The name, exactly as scheduled_job rows carry it in production.
+      target_id: employee!.name,
+      payload: { prompt: "Do the thing." },
+    });
+    expect(created.status, "a job addressed by name must be creatable").toBe(201);
+
+    await call("/api/jobs/by_name_job/status", MP, "POST", { status: "ACTIVE", reason: "switching it on" });
+    const run = await call<{ run: { status: string; outcome_summary: string } }>("/api/jobs/by_name_job/run", MP, "POST");
+
+    // It may still refuse for a real reason — but never for this one.
+    expect(run.body.run.outcome_summary ?? "").not.toContain("does not exist");
+  });
+
+  it("still refuses a target that genuinely is not there", async () => {
+    const created = await call<{ error?: string }>("/api/jobs", MP, "POST", {
+      job_key: "ghost_job",
+      name: "Task for nobody",
+      kind: "EMPLOYEE_TASK",
+      schedule_kind: "DAILY_AT",
+      daily_at_utc: "09:00",
+      target_kind: "EMPLOYEE",
+      target_id: "Nobodyham",
+      payload: { prompt: "Do the thing." },
+    });
+    // 404 employee_not_found — the route's own answer for a target that is not there.
+    expect(created.status, "matching on either form must not make every name valid").toBe(404);
+  });
+});

@@ -315,6 +315,36 @@ describe("answering a deliverable", () => {
     expect(ghost?.n).toBe(0);
   });
 
+  /*
+   * "Prepared for you" listed both partners' briefs. Because the other partner's is often built
+   * later in the day, theirs sat ABOVE the reader's, signed by THEIR chief of staff — so the page
+   * appeared to say the reader's chief of staff had changed. The byline was right all along; the
+   * list was wrong.
+   */
+  it("lists only what was prepared for the reader when asked for mine", async () => {
+    await deliver(env, ACTOR, {
+      kind: "daily_brief", title: "Sequoia's brief", body: "hers",
+      preparedBy: "Wren", preparedFor: "fu_sequoia_taylor",
+    });
+    await deliver(env, ACTOR, {
+      kind: "daily_brief", title: "Scooter's brief", body: "his",
+      preparedBy: "Walker", preparedFor: "fu_scooter_taylor",
+    });
+
+    const mine = await listDeliverables("&kind=daily_brief&mine=1");
+    expect(mine.length).toBeGreaterThan(0);
+    for (const row of mine) {
+      expect(row.prepared_for, "a list promising 'for you' must not carry the other partner's").toBe("fu_sequoia_taylor");
+    }
+    expect(mine.some((r) => r.prepared_by === "Walker"), "Walker signs Scooter's brief, never hers").toBe(false);
+
+    // Sharing still works where it is wanted, and the row says whose it is.
+    const shared = await listDeliverables("&kind=daily_brief");
+    expect(shared.some((r) => r.prepared_for === "fu_scooter_taylor")).toBe(true);
+    const his = shared.find((r) => r.prepared_for === "fu_scooter_taylor");
+    expect(his?.prepared_for_name, "a shared row must be able to say whose it is").toBeTruthy();
+  });
+
   it("refuses empty feedback rather than sending an employee a blank note", async () => {
     const id = await make("blank");
     const res = await handleRequest(apiReq(`/api/deliverables/${id}/feedback`, "POST", { note: "   " }), env);

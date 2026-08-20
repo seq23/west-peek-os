@@ -26,6 +26,7 @@ interface Deliverable {
   created_at: string;
   acknowledged_at: string | null;
   dismissed_at: string | null;
+  prepared_for_name: string | null;
 }
 
 /** The one-word reads a partner can leave without writing a sentence. */
@@ -42,17 +43,23 @@ export function DeliverableList({
   limit = 5,
   emptyNote,
   onNavigate,
+  mine = false,
+  meId,
 }: {
   kind?: string;
   limit?: number;
   emptyNote: string;
   onNavigate?: (k: string) => void;
+  /** Only what was prepared for the reader. Home sets this; shared surfaces do not. */
+  mine?: boolean;
+  /** The reader, so a shared list can mark the rows that are somebody else's. */
+  meId?: string;
 }): JSX.Element {
   // The default view is what still wants attention. Dismissed pieces are one toggle away, never
   // more than that, because "where did it go" is the question dismissing usually creates.
   const [showDismissed, setShowDismissed] = useState(false);
   const list = useApi<{ deliverables: Deliverable[] }>(
-    `/api/deliverables?limit=${limit}${kind ? `&kind=${kind}` : ""}${showDismissed ? "&dismissed=1" : ""}`,
+    `/api/deliverables?limit=${limit}${kind ? `&kind=${kind}` : ""}${showDismissed ? "&dismissed=1" : ""}${mine ? "&mine=1" : ""}`,
   );
   const [open, setOpen] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -159,6 +166,14 @@ export function DeliverableList({
                   <span className="badge badge-quiet" data-testid={`deliverable-read-${d.id}`}>read</span>
                 )}
                 {d.dismissed_at && <span className="badge badge-quiet">put away</span>}
+                {/* On a shared surface, whose piece this is. A morning brief is addressed and
+                    signed by that partner's own chief of staff, so an unlabelled one sitting in
+                    somebody else's list reads as their chief of staff having changed. */}
+                {meId && d.prepared_for !== meId && d.prepared_for_name && (
+                  <span className="badge badge-quiet" data-testid={`deliverable-for-${d.id}`}>
+                    for {d.prepared_for_name.split(" ")[0]}
+                  </span>
+                )}
               </div>
 
               <button
