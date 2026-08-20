@@ -7,6 +7,7 @@ import { runAi } from "../ai/runAi";
 import { requestTask, runTask } from "./browserTask";
 import { searchQuestion } from "./liveSearch";
 import { machineForEmployee } from "./attribution";
+import { deliver } from "./deliverables";
 import { guidanceBlock } from "../../shared/skills/library";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { buildDesignReviewPrompt } from "../../shared/design/reviewRubric";
@@ -523,4 +524,120 @@ async function loadShots(
     }
   }
   return out;
+}
+
+const writeBriefSchema = z.object({
+  title: z.string().trim().min(3).max(160),
+  question: z.string().trim().min(5).max(600),
+  author: z.string().trim().max(80).optional(),
+});
+
+/**
+ * POST /api/intent/brief — research a question and hand back a written document.
+ *
+ * THIS IS WHAT THE WORK-PACKET FLOW ALWAYS WAS. That flow was built first, wears builder vocabulary
+ * — lens stack, acceptance criteria, output definition, enhancement strength — and has produced
+ * exactly zero packets, because no partner has ever thought in those words. Same idea, asked for
+ * the way somebody would actually ask, and delivered the way everything else here is delivered:
+ * signed by a named employee, filed in Documents, downloadable, emailable, on the Home page of
+ * whoever asked.
+ *
+ * WHY IT IS NOT A WORK CARD. A card is work somebody CARRIES — an owner, a next action, a place on
+ * a board until it is done. A brief is something you asked for and receive. Putting one on the
+ * board fills it with questions wearing deadlines, which is how a board stops being read.
+ *
+ * SIGNED BY THE AUTHOR, not by a Chief of Staff. The morning brief and the weekly agenda are
+ * firm-wide things assembled by machinery, which is why they need a person attached. A brief has an
+ * author already — usually Wyatt, since most of these are research — and routing his own writing
+ * through somebody else's byline would be the anonymity problem in reverse.
+ */
+export async function handleWriteBrief(ctx: RouteContext): Promise<Response> {
+  const parsed = writeBriefSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.env ? ctx.identity! : ctx.identity!);
+  const input = parsed.data;
+
+  const roster = ((await ctx.env.WP_OS_DB.prepare(
+    "SELECT id, name, role FROM ai_employee WHERE status = 'ACTIVE' ORDER BY name",
+  ).all<{ id: string; name: string; role: string }>()).results ?? []);
+
+  // The named author if they are employed and switched on, else whoever owns research. A brief
+  // signed by somebody who does not work here would be the worst kind of attribution.
+  const author =
+    roster.find((r) => r.name.toLowerCase() === (input.author ?? "").toLowerCase()) ??
+    roster.find((r) => r.name === "Wyatt") ??
+    roster[0];
+  if (!author) {
+    return json(
+      { error: "nobody_employed", detail: "No AI employee is switched on, so nobody can write this. Activate one on Team → Employees." },
+      { status: 409 },
+    );
+  }
+
+  const machineId = await machineForEmployee(ctx.env, author.name);
+  const rosterEntry = AI_EMPLOYEE_ROSTER.find((e) => e.name === author.name);
+
+  const { run } = await runAi(ctx.env, {
+    purpose: `${author.name} writing a brief: ${input.title.slice(0, 60)}`,
+    actor,
+    inputs: [
+      [
+        `You are ${author.name}, ${author.role} at West Peek Ventures, an earliest-stage venture fund.`,
+        "A Managing Partner has asked for a written brief. Write it.",
+        "",
+        `TITLE: ${input.title}`,
+        `THE QUESTION IT ANSWERS: ${input.question}`,
+        "",
+        // The department's own methods, so a brief reflects how this firm works rather than how
+        // any firm works. See shared/skills/library.ts.
+        guidanceBlock(rosterEntry?.primaryMachineKeys ?? []),
+        "HOW TO WRITE IT:",
+        "- Answer the question in the first two sentences. Everything after that is support.",
+        "- Say plainly what you do NOT know. An absence you name is a finding; one you skip past",
+        "  reads as a claim that nothing was there.",
+        "- Never invent a figure, a date, a company or a quote. If you are reasoning rather than",
+        "  reporting, say which it is.",
+        "- Markdown headings, short sections. A partner reads this on a phone before a meeting.",
+        "- No preamble, no restating the question back, no sign-off — it is signed already.",
+        "",
+        "Write the brief.",
+      ].filter((l) => l !== "").join("\n"),
+    ],
+    // The question can name a company, a partner, a deal.
+    sensitivity: "INTERNAL" as never,
+    budgetContext: { expectedOutputTokens: 1_800 },
+    aiEmployeeId: author.id,
+    routing: {
+      category: "RESEARCH",
+      taskClass: "employee-work",
+      ...(machineId === null ? {} : { machineId }),
+    },
+  });
+
+  if (run.status !== "COMPLETED" || !run.output_text) {
+    return json({ error: "brief_failed", detail: run.failure_reason ?? `run ${run.status}`, run_id: run.id }, { status: 502 });
+  }
+
+  const delivered = await deliver(ctx.env, actor, {
+    kind: "ask_brief",
+    title: input.title,
+    body: run.output_text,
+    preparedBy: author.name,
+    preparedFor: ctx.identity!.id,
+    sourceType: "ai_run",
+    sourceId: run.id,
+  });
+
+  return json(
+    {
+      deliverable_id: delivered.id,
+      title: delivered.title,
+      prepared_by: delivered.prepared_by,
+      filed: Boolean(delivered.document_id),
+      run_id: run.id,
+      note: `${author.name} wrote it. It is on your Home page under “Prepared for you”, and in Documents.`,
+    },
+    { status: 201 },
+  );
 }

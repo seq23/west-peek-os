@@ -96,6 +96,8 @@ function EmployeeDetailPanel({ id, me, onChanged }: { id: string; me: MeResponse
   const [message, setMessage] = useState<string | null>(null);
   const [finding, setFinding] = useState("");
   const [disposition, setDisposition] = useState("CONTINUE");
+  const [newTitle, setNewTitle] = useState("");
+  const [retitling, setRetitling] = useState(false);
   const isMp = me.roles.includes("MANAGING_PARTNER");
 
   if (detail.loading && !detail.data) return <p>Loading employee…</p>;
@@ -117,6 +119,50 @@ function EmployeeDetailPanel({ id, me, onChanged }: { id: string; me: MeResponse
         {d.profile?.department ?? "unassigned department"} · prompt {d.employee.prompt_version}
         {d.profile?.manager_employee_id ? ` · reports to ${d.profile.manager_employee_id}` : ""}
       </p>
+
+      {/* CHANGING A TITLE.
+          A title is editorial, not authority: what an employee may DO comes from their tool scope,
+          their machine seating and authorize(), and none of that reads this field. So this is a low
+          -stakes act treated as one — no receipt, human only, on the record. It is also how a seat
+          gets re-pointed, which is what brought Whitney back to teach and Percy back to judge
+          landing pages. */}
+      {isMp && (
+        <form
+          className="form-row retitle"
+          data-testid={`employee-retitle-${id}`}
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const next = newTitle.trim();
+            if (!next || next === d.employee.role) return;
+            setRetitling(true);
+            const res = await api<{ was?: string; detail?: string; error?: string }>(`/api/workforce/${id}/role`, {
+              method: "PATCH",
+              body: { role: next, reason: `retitled by ${me.fullName}` },
+            });
+            setRetitling(false);
+            setMessage(
+              res.status === 200
+                ? `${d.employee.name} is now ${next}. Was ${res.data?.was ?? d.employee.role}.`
+                : `Could not retitle: ${res.data?.detail ?? res.data?.error ?? res.status}`,
+            );
+            refresh();
+          }}
+        >
+          <label style={{ flexGrow: 1 }}>
+            Title{" "}
+            <input
+              data-testid={`employee-title-input-${id}`}
+              aria-label={`${d.employee.name}'s title`}
+              value={newTitle}
+              onChange={(ev) => setNewTitle(ev.target.value)}
+              placeholder={d.employee.role}
+            />
+          </label>
+          <button type="submit" disabled={retitling || !newTitle.trim() || newTitle.trim() === d.employee.role}>
+            {retitling ? "Saving…" : "Change title"}
+          </button>
+        </form>
+      )}
 
       <h4>Current work</h4>
       <ul className="card-list small" data-testid={`employee-work-${id}`}>
@@ -458,6 +504,49 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
   const [department, setDepartment] = useState<string>("ALL");
   const [selected, setSelected] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "NOT_ACTIVE">("ALL");
+  /**
+   * FEEDBACK, because the operator's report was that "you press it and nothing happens".
+   *
+   * Requesting an activation, pausing, resuming and un-retiring all did their work and said nothing
+   * — the list reloaded and a badge somewhere changed. `busyId` disables the control that was
+   * pressed and says it is working; `flash` states what changed, in a sentence, and marks the
+   * affected card so the eye can find it. A state change nobody can see reads as a broken button.
+   */
+  const isMp = me.roles.includes("MANAGING_PARTNER");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [flash, setFlash] = useState<{ id: string; text: string; tone: "ok" | "bad" } | null>(null);
+  const [advice, setAdvice] = useState<{ id: string; verdict: string; why: string; watchFor: string; newRole: string | null } | null>(null);
+
+  async function adviseUnretire(id: string, name: string) {
+    setBusyId(id);
+    setAdvice(null);
+    const res = await api<{ verdict?: string; why?: string; watchFor?: string; newRole?: string | null; detail?: string; error?: string }>(
+      `/api/workforce/${id}/unretire-advice`,
+      { method: "POST", body: {} },
+    );
+    setBusyId(null);
+    if (res.status === 200 && res.data?.verdict) {
+      setAdvice({ id, verdict: res.data.verdict, why: res.data.why ?? "", watchFor: res.data.watchFor ?? "", newRole: res.data.newRole ?? null });
+    } else {
+      setFlash({ id, text: `Could not get advice on ${name}: ${res.data?.detail ?? res.data?.error ?? res.status}`, tone: "bad" });
+    }
+  }
+
+  async function unretire(id: string, name: string, role: string) {
+    setBusyId(id);
+    const res = await api<{ note?: string; detail?: string; error?: string }>(`/api/workforce/${id}/unretire`, {
+      method: "POST",
+      body: { new_role: role, reason: `brought back from the lounge by ${me.fullName}` },
+    });
+    setBusyId(null);
+    setAdvice(null);
+    setFlash(
+      res.status === 200
+        ? { id, text: res.data?.note ?? `${name} is back on the roster.`, tone: "ok" }
+        : { id, text: `Could not bring ${name} back: ${res.data?.detail ?? res.data?.error ?? res.status}`, tone: "bad" },
+    );
+    lounge.reload();
+  }
   const [query, setQuery] = useState("");
   /** Refusals from the on/off toggle. Only ever set on failure — a working toggle speaks by
       changing the button, not by announcing itself. */
@@ -531,10 +620,16 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
         <label>
           Department{" "}
           <select data-testid="lounge-department" value={department} onChange={(e) => setDepartment(e.target.value)}>
-            <option value="ALL">All ({lounge.data.employees.length})</option>
+            {/* COUNTS WHAT IS ON THE PAGE, not what is in the table. This said "All (31)" while
+                showing sixteen: `lounge.data.employees` includes retired seats, and the grid below
+                deliberately hides them — so the number and the list disagreed, and the number was
+                describing a firm that has not existed since the roster was consolidated. */}
+            <option value="ALL">All ({roster.length})</option>
+            {/* Each department carries its own count for the same reason "All" now does — picking a
+                team should tell you how many people are on it before you pick it. */}
             {lounge.data.departments.map((d) => (
               <option key={d} value={d}>
-                {d}
+                {d} ({roster.filter((e) => e.department === d).length})
               </option>
             ))}
           </select>
@@ -561,6 +656,14 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
           />
         </label>
       </div>
+
+      {/* WHAT JUST HAPPENED. Every action in this section used to complete in silence. */}
+      {flash && (
+        <p className={flash.tone === "ok" ? "notice notice-ok" : "notice"} data-testid="lounge-flash" role="status">
+          {flash.text}{" "}
+          <button type="button" className="link-button" onClick={() => setFlash(null)}>dismiss</button>
+        </p>
+      )}
 
       <p className="muted small" data-testid="lounge-status-summary">
         <strong>{activeCount} working</strong> · {roster.length - activeCount} employed but not on ·{" "}
@@ -704,12 +807,71 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
             look like is part of the record, and shown here so they are findable without being in
             the way.
           </p>
-          <ul className="card-list small">
+          <ul className="retired-list">
             {lounge.data.employees
               .filter((e) => e.status === "RETIRED")
               .map((e) => (
-                <li key={e.id}>
-                  <strong>{e.name}</strong> — {e.role}
+                <li key={e.id} className="retired-person" data-testid={`retired-${e.id}`}>
+                  {/* THEY HAVE FACES AGAIN. All thirty-one portraits are committed, so somebody
+                      returning from retirement no longer arrives as a grey initial on the page
+                      whose whole job is making the workforce feel like people. */}
+                  {portraitFor(e.name) ? (
+                    <img className="owner-face" src={portraitFor(e.name)!} alt={portraitAlt(e.name, e.role)} loading="lazy" />
+                  ) : (
+                    <span className="owner-face owner-face-initial" aria-hidden="true">{e.name.slice(0, 1)}</span>
+                  )}
+                  <span className="retired-who">
+                    <strong>{e.name}</strong> <span className="muted small">{e.role}</span>
+                  </span>
+                  {isMp && (
+                    <span className="retired-actions">
+                      {/* ADVICE BEFORE THE BUTTON, deliberately in that order. The roster went from
+                          thirty-one seats to seventeen because several pairs were the same job
+                          wearing two titles, and every un-retirement risks recreating exactly that.
+                          The advisor is asked one narrow question — does this seat answer something
+                          the current roster cannot — and it decides nothing. */}
+                      <button
+                        type="button"
+                        className="link-button"
+                        disabled={busyId === e.id}
+                        data-testid={`retired-advise-${e.id}`}
+                        onClick={() => void adviseUnretire(e.id, e.name)}
+                      >
+                        {busyId === e.id ? "Thinking…" : "Should we?"}
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        disabled={busyId === e.id}
+                        data-testid={`retired-unretire-${e.id}`}
+                        onClick={() => void unretire(e.id, e.name, e.role)}
+                      >
+                        Bring back
+                      </button>
+                    </span>
+                  )}
+                  {advice?.id === e.id && (
+                    <div className={`unretire-advice verdict-${advice.verdict.toLowerCase()}`} data-testid={`retired-advice-${e.id}`}>
+                      <p>
+                        <span className="badge">{advice.verdict.replace(/_/g, " ").toLowerCase()}</span>{" "}
+                        {advice.why}
+                      </p>
+                      {advice.newRole && (
+                        <p className="small">
+                          Suggested title: <strong>{advice.newRole}</strong>{" "}
+                          <button
+                            type="button"
+                            className="link-button"
+                            data-testid={`retired-accept-role-${e.id}`}
+                            onClick={() => void unretire(e.id, e.name, advice.newRole!)}
+                          >
+                            bring back as this
+                          </button>
+                        </p>
+                      )}
+                      {advice.watchFor && <p className="muted small">Watch for: {advice.watchFor}</p>}
+                    </div>
+                  )}
                 </li>
               ))}
           </ul>

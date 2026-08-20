@@ -3208,3 +3208,43 @@ tbody tr.is-selected > td {
     min-height: 44px;
   }
 }
+
+/* ── The retired drawer ────────────────────────────────────────────────────
+   They have faces again — all thirty-one portraits are committed — because the
+   page whose job is making the workforce feel like people should not show a
+   grey initial to somebody you are considering bringing back. */
+.retired-list { list-style: none; margin: 0.75rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+
+.retired-person {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--wp-line);
+}
+.retired-person:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.retired-who { flex: 1 1 12rem; min-width: 0; }
+.retired-actions { display: flex; gap: 0.75rem; flex: 0 0 auto; }
+
+/* The advisor's verdict. Colour is never the only cue — the verdict word is in
+   the badge — but the edge lets you scan several at once. */
+.unretire-advice {
+  flex: 1 1 100%;
+  border-left: 3px solid var(--wp-line-strong);
+  padding: 0.5rem 0 0.5rem 0.8rem;
+  margin-top: 0.35rem;
+}
+.unretire-advice p { margin: 0 0 0.3rem; }
+.unretire-advice p:last-child { margin-bottom: 0; }
+.unretire-advice.verdict-bring_back { border-left-color: var(--wp-good); }
+.unretire-advice.verdict-re_point { border-left-color: var(--wp-orange); }
+.unretire-advice.verdict-decline { border-left-color: var(--wp-line-control); }
+
+/* A change that succeeded should look different from one that failed. */
+.notice-ok {
+  background: var(--wp-good-tint);
+  border-color: var(--wp-good-line);
+  color: var(--wp-good);
+}

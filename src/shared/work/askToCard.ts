@@ -29,10 +29,21 @@
  *          something that is already there.
  *   WORK — nobody has done this and somebody must. That is a card.
  *   TELL — the system holds the answer and can just say it.
+ *   BRIEF — the answer has to be RESEARCHED and written up, and what you want back is a document.
  *
  * Forcing everything into a card is how a board fills with items that were only ever questions.
+ *
+ * WHY BRIEF IS SEPARATE FROM WORK, which is the distinction that took longest to see. A card is
+ * work somebody CARRIES: it has an owner, a next action, and it sits on a board until it is done.
+ * A brief is a document you asked for and will receive — nobody carries it, and putting it on the
+ * board as a card means a board full of things that are really just questions with a deadline.
+ *
+ * This is what the "work packet" flow always was. It was built first, wears builder vocabulary —
+ * lens stack, acceptance criteria, output definition — and had produced exactly zero packets,
+ * because no partner ever thinks in those words. Same machinery, asked for the way somebody would
+ * actually ask, and delivered the way everything else here is delivered: signed, filed, downloadable.
  */
-export type AskOutcome = "GO" | "WORK" | "TELL";
+export type AskOutcome = "GO" | "WORK" | "TELL" | "BRIEF";
 
 export interface AskAnswer {
   outcome: AskOutcome;
@@ -42,6 +53,8 @@ export interface AskAnswer {
   says: string;
   /** For WORK: the card to read and accept. */
   card?: CardDraft | null;
+  /** For BRIEF: what to research and write up, and who should sign it. */
+  brief?: BriefRequest | null;
 }
 
 export interface CardDraft {
@@ -57,7 +70,20 @@ export interface CardDraft {
   reasoning: string;
 }
 
-export const ASK_PROMPT_VERSION = "ask-to-card-v1";
+export interface BriefRequest {
+  /** What the finished document is called. */
+  title: string;
+  /** The question it answers, stated once so the writer cannot drift off it. */
+  question: string;
+  /** Employee NAME the model thinks should write it; resolved by the caller. */
+  suggested_author: string | null;
+  /** Whether answering it plainly requires reading things on the web. */
+  needs_browser: boolean;
+  /** Why a document rather than a card — shown so the partner can disagree with the shape. */
+  reasoning: string;
+}
+
+export const ASK_PROMPT_VERSION = "ask-to-card-v2-brief";
 
 export function buildDraftPrompt(
   request: string,
@@ -65,7 +91,7 @@ export function buildDraftPrompt(
   pages: Array<{ key: string; purpose: string }>,
 ): string {
   return [
-    "First decide WHICH OF THREE THINGS this request is. Getting this right matters more than the",
+    "First decide WHICH OF FOUR THINGS this request is. Getting this right matters more than the",
     "rest: a board that fills with items which were only ever questions stops being read.",
     "",
     '  GO   — the answer already exists on a page of this system. Choose this whenever somebody is',
@@ -77,6 +103,18 @@ export function buildDraftPrompt(
     "",
     '  TELL — you can answer it outright from what is in the request and general knowledge, and no',
     "         page and no work is involved. Use this sparingly; prefer GO when a page holds it.",
+    "",
+    '  BRIEF — what they want back is a DOCUMENT. The answer has to be researched and written up,',
+    "         and when it is finished they want to read it, keep it, and probably send it to their",
+    "         partner. Nobody carries a brief the way somebody carries a task.",
+    "",
+    "         WORK vs BRIEF is the distinction to get right. A card is work somebody CARRIES: it has",
+    "         an owner, a next action, and it sits on a board until it is done. A brief is something",
+    "         they asked for and will RECEIVE. 'Check whether Psyflo still lists a VP of Sales' is a",
+    "         card — one act, one answer, then it is over. 'What are comparable seed valuations in",
+    "         devtools right now' is a brief — it needs gathering, weighing and writing up, and what",
+    "         they want at the end is a page they can read. When in doubt ask: would they be",
+    "         satisfied by a sentence, or do they want something to read?",
     "",
     "THE PAGES OF THIS SYSTEM:",
     ...pages.map((p) => `  ${p.key} — ${p.purpose}`),
@@ -118,6 +156,9 @@ export function buildDraftPrompt(
     'For WORK: {"outcome":"WORK","says":"one sentence on why this is work",',
     '           "card":{"title":"…","next_action":"…","prompt":"…","suggested_owner":"Name or null",',
     '                   "needs_browser":true,"reasoning":"why this shape"}}',
+    'For BRIEF:{"outcome":"BRIEF","says":"one sentence on what they will get back",',
+    '           "brief":{"title":"…","question":"the one question it answers","suggested_author":"Name or null",',
+    '                    "needs_browser":true,"reasoning":"why a document rather than a card"}}',
   ].join("\n");
 }
 
@@ -151,6 +192,28 @@ export function parseAnswer(raw: string, validPages: ReadonlySet<string>): AskAn
     const card = d.card && typeof d.card === "object" ? parseDraft(JSON.stringify(d.card)) : null;
     if (!card) return null;
     return { outcome: "WORK", says, card };
+  }
+  if (outcome === "BRIEF") {
+    const b = d.brief as Record<string, unknown> | undefined;
+    if (!b || typeof b !== "object") return null;
+    const title = typeof b.title === "string" ? b.title.trim().slice(0, 160) : "";
+    const question = typeof b.question === "string" ? b.question.trim().slice(0, 600) : "";
+    // A brief with no question is a document with no job. Refused rather than half-built: the
+    // partner is about to commission a piece of writing and needs to see what it will answer.
+    if (!title || !question) return null;
+    return {
+      outcome: "BRIEF",
+      says,
+      brief: {
+        title,
+        question,
+        suggested_author: typeof b.suggested_author === "string" && b.suggested_author.trim()
+          ? b.suggested_author.trim().slice(0, 80)
+          : null,
+        needs_browser: b.needs_browser === true,
+        reasoning: typeof b.reasoning === "string" ? b.reasoning.trim().slice(0, 600) : "",
+      },
+    };
   }
   return null;
 }

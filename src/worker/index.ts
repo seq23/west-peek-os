@@ -56,7 +56,7 @@ import {
   handleAddApprovalEvidence,
   handleApprovalContext,
 } from "./services/approvals";
-import { handleDraftCard, handleWorkCard } from "./services/employeeWork";
+import { handleDraftCard, handleWorkCard, handleWriteBrief } from "./services/employeeWork";
 import {
   handleGoogleCallback,
   handleGoogleConnectStart,
@@ -122,6 +122,11 @@ import {
 } from "./services/icPortal";
 import { handleEvidenceLedger, handleListDecisions, handleWorkQueues } from "./services/ledgers";
 import { handleCompanyIntelligence, handleFollowOnCentre, handleSecondaries } from "./services/companyIntel";
+import {
+  handleRetitleEmployee,
+  handleUnretireAdvice,
+  handleUnretireEmployee,
+} from "./services/workforce";
 import { handleGenerateImage } from "./services/imageGeneration";
 import { handleDownloadDeliverable, handleEmailDeliverable, handleListDeliverables } from "./services/deliverables";
 import { handleAddReviewItem, handleDeleteReviewItem,
@@ -562,7 +567,11 @@ const router = new Router()
   // P3 — work spine.
   .post("/api/work-cards", handleCreateWorkCard)
   // Literal before the :id that would swallow it.
+  .post("/api/intent/brief", handleWriteBrief)
   .post("/api/images/generate", handleGenerateImage)
+  .post("/api/workforce/:id/unretire", handleUnretireEmployee)
+  .post("/api/workforce/:id/unretire-advice", handleUnretireAdvice)
+  .patch("/api/workforce/:id/role", handleRetitleEmployee)
   .get("/api/deliverables", handleListDeliverables)
   .get("/api/deliverables/:id/download", handleDownloadDeliverable)
   .post("/api/deliverables/:id/email", handleEmailDeliverable)

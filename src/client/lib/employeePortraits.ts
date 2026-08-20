@@ -28,23 +28,32 @@ import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
  * directions, so deriving from the roster keeps this list correct without anyone maintaining it.
  */
 /**
- * Roster names whose portrait has not been committed yet.
+ * WHO HAS A FACE — everybody, including the retired.
  *
- * EMPTY, AND THAT IS THE POINT. It exists so a gap is a named, reviewable line rather than a broken
- * image — Whitney was in it for exactly as long as it took to find that her portrait had survived
- * the retirement in the operator's own archive, from the original run of thirty-one. The two-way
- * drift check in `tests/employeePortraits.test.ts` treats a non-empty set as a deliberate exception
- * and still enforces parity for everybody else.
+ * This was derived from AI_EMPLOYEE_ROSTER, which holds only the nineteen currently-employed seats.
+ * That was right while retired employees never rendered, and wrong the moment the lounge let you
+ * bring one back: an employee returning from retirement arrived with no face, and the page that
+ * exists to make the workforce feel like people showed a grey initial.
+ *
+ * All thirty-one portraits from the original run are committed — the whole set is 520KB at the size
+ * it is actually displayed. Keying off the FILES rather than the roster means a name resolves if
+ * its picture exists, which is the honest question, and un-retiring somebody needs no change here.
+ *
+ * `tests/employeePortraits.test.ts` asserts the roster is a SUBSET of what is committed: every
+ * working employee must have a face; a face with nobody currently claiming it is a retired seat, not
+ * dead weight.
  */
-export const AWAITING_PORTRAIT: ReadonlySet<string> = new Set();
-
-const WITH_PORTRAIT = new Set(
-  AI_EMPLOYEE_ROSTER.map((e) => e.name).filter((n) => !AWAITING_PORTRAIT.has(n)),
-);
+const COMMITTED = new Set([
+  "paige", "parker", "pax", "penn", "percy", "perrin", "perry", "pierce", "piper", "pippa",
+  "poppy", "porter", "preston", "priya", "prue", "walker", "walter", "waverly", "wells",
+  "wendy", "wesley", "whitney", "willa", "willow", "wilson", "winnie", "winter", "winton",
+  "wren", "wyatt", "wynn",
+]);
 
 /** Public URL for an employee's portrait, or null when there is none. */
 export function portraitFor(name: string): string | null {
-  return WITH_PORTRAIT.has(name) ? `/employees/${name.toLowerCase()}.jpg` : null;
+  const file = name.trim().toLowerCase();
+  return COMMITTED.has(file) ? `/employees/${file}.jpg` : null;
 }
 
 /**

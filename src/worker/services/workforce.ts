@@ -3,6 +3,12 @@ import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
+import { runAi } from "../ai/runAi";
+import {
+  UNRETIRE_ADVICE_VERSION,
+  buildUnretirePrompt,
+  parseUnretireAdvice,
+} from "../../shared/workforce/unretireAdvice";
 import { notifyQuietly } from "./notifications";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { MAX_ACTIVE_AI_EMPLOYEES, type AIEmployeeRow } from "./aiEmployees";
@@ -845,4 +851,203 @@ export async function handleEmployeeDetail(ctx: RouteContext): Promise<Response>
     recent_runs: runs.map((r) => ({ ...r, cost_usd: costOfRun(r) })),
     scorecard_definition: SCORECARD_DEFINITION,
   });
+}
+
+const unretireSchema = z.object({
+  /** Optional new title — an employee often comes back to a different job. */
+  new_role: z.string().trim().min(2).max(120).optional(),
+  reason: z.string().trim().min(3).max(600),
+});
+
+/**
+ * POST /api/workforce/:id/unretire — bring somebody back onto the roster.
+ *
+ * WHY THIS EXISTS AS A ROUTE. Retirement was terminal by design and the only way back was a
+ * migration, which is how Whitney and Percy returned — and one of those migrations activated her
+ * directly and had to be reversed, because a migration cannot carry an approval receipt. Editing
+ * the roster should not require a deploy, and the partners asked to "manipulate employees at our
+ * will". So it is a route, with the same law applied.
+ *
+ * THEY COME BACK INACTIVE. Always. Un-retiring is an employment decision; switching somebody on is
+ * an activation, needs a Managing Partner receipt, and stays exactly where it was. Coming back
+ * straight to ACTIVE would route around D10 through a door marked something else.
+ *
+ * HUMAN ONLY, like every other lifecycle change — an AI employee must never be able to grow the
+ * workforce.
+ */
+export async function handleUnretireEmployee(ctx: RouteContext): Promise<Response> {
+  const parsed = unretireSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  try {
+    requireHuman(actor, "bringing an employee out of retirement");
+  } catch (err) {
+    return errorResponse(err);
+  }
+
+  const employee = await getEmployee(ctx.env, ctx.params.id!);
+  if (!employee) return json({ error: "not_found" }, { status: 404 });
+  if (employee.status !== "RETIRED") {
+    return json({ error: "not_retired", detail: `${employee.name} is ${employee.status}, not retired` }, { status: 409 });
+  }
+
+  const authz = await authorize(ctx.env, actor, "ai_employee.lifecycle_change", {
+    objectType: "ai_employee",
+    objectId: employee.id,
+    firmScope: employee.firm_scope,
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const role = parsed.data.new_role ?? employee.role;
+  await ctx.env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'INACTIVE', role = ?2 WHERE id = ?1")
+    .bind(employee.id, role)
+    .run();
+
+  await ctx.env.WP_OS_DB.prepare(
+    `INSERT INTO ai_employee_status_history (id, ai_employee_id, from_status, to_status, actor_type, actor_id, reason, approval_receipt_id, firm_scope)
+     VALUES (?1, ?2, 'RETIRED', 'INACTIVE', ?3, ?4, ?5, NULL, ?6)`,
+  )
+    .bind(
+      `aish_${crypto.randomUUID()}`,
+      employee.id,
+      actor.type,
+      actor.firmUserId!,
+      parsed.data.new_role
+        ? `${parsed.data.reason} (re-pointed from "${employee.role}" to "${role}")`
+        : parsed.data.reason,
+      employee.firm_scope,
+    )
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: "ai_employee.unretired",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "ai_employee",
+    objectId: employee.id,
+    firmScope: employee.firm_scope,
+    payload: { name: employee.name, from_role: employee.role, to_role: role, reason: parsed.data.reason },
+  });
+
+  return json({
+    id: employee.id,
+    name: employee.name,
+    role,
+    status: "INACTIVE",
+    note: `${employee.name} is back on the roster as ${role}, employed but not switched on. Activating still needs a Managing Partner approval.`,
+  });
+}
+
+const retitleSchema = z.object({
+  role: z.string().trim().min(2).max(120),
+  reason: z.string().trim().max(600).optional(),
+});
+
+/**
+ * PATCH /api/workforce/:id/role — change what somebody is called.
+ *
+ * A title is editorial, not authority. What an employee may DO comes from their tool scope, their
+ * machine seating and `authorize()`; none of that reads this field. So retitling is a low-stakes
+ * act and is treated as one — no receipt, human only, and on the record.
+ *
+ * The registry in `shared/registry/aiEmployees.ts` still carries the canonical roster. A title
+ * changed here diverges from it until somebody edits that file, which is the honest trade for
+ * being able to adjust the firm without a deploy.
+ */
+export async function handleRetitleEmployee(ctx: RouteContext): Promise<Response> {
+  const parsed = retitleSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  try {
+    requireHuman(actor, "changing an employee's title");
+  } catch (err) {
+    return errorResponse(err);
+  }
+
+  const employee = await getEmployee(ctx.env, ctx.params.id!);
+  if (!employee) return json({ error: "not_found" }, { status: 404 });
+  if (employee.role === parsed.data.role) return json({ id: employee.id, role: employee.role, unchanged: true });
+
+  await ctx.env.WP_OS_DB.prepare("UPDATE ai_employee SET role = ?2 WHERE id = ?1")
+    .bind(employee.id, parsed.data.role)
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: "ai_employee.retitled",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "ai_employee",
+    objectId: employee.id,
+    firmScope: employee.firm_scope,
+    payload: { name: employee.name, from: employee.role, to: parsed.data.role, reason: parsed.data.reason ?? null },
+  });
+
+  return json({ id: employee.id, name: employee.name, role: parsed.data.role, was: employee.role });
+}
+
+const adviceSchema = z.object({
+  /** What the partners think they need this seat for. Optional; the advice is sharper with it. */
+  need: z.string().trim().max(600).optional(),
+});
+
+/**
+ * POST /api/workforce/:id/unretire-advice — should this person come back?
+ *
+ * IT ADVISES AND DOES NOTHING ELSE. No status changes, no role changes, no side effects beyond the
+ * governed AI run itself. A model that could bring an employee back would be a model that changes
+ * who works at this firm, which is the opposite of how every other lifecycle change works here.
+ *
+ * The question it is asked is deliberately narrow — does this seat answer something the current
+ * roster cannot — because that is the test the consolidation from thirty-one to seventeen was made
+ * on, and it is the one an un-retirement is most likely to fail.
+ */
+export async function handleUnretireAdvice(ctx: RouteContext): Promise<Response> {
+  const parsed = adviceSchema.safeParse(await ctx.request.json().catch(() => ({})));
+  if (!parsed.success) return json({ error: "invalid_input" }, { status: 400 });
+
+  const employee = await getEmployee(ctx.env, ctx.params.id!);
+  if (!employee) return json({ error: "not_found" }, { status: 404 });
+
+  // The most recent retirement note, which usually says why far better than anything else on record.
+  const retirement = await ctx.env.WP_OS_DB.prepare(
+    `SELECT reason FROM ai_employee_status_history
+      WHERE ai_employee_id = ?1 AND to_status = 'RETIRED'
+      ORDER BY created_at DESC LIMIT 1`,
+  )
+    .bind(employee.id)
+    .first<{ reason: string }>();
+
+  const current = ((await ctx.env.WP_OS_DB.prepare(
+    "SELECT name, role, status FROM ai_employee WHERE status != 'RETIRED' ORDER BY name",
+  ).all<{ name: string; role: string; status: string }>()).results ?? []);
+
+  const { run } = await runAi(ctx.env, {
+    purpose: `advising on bringing ${employee.name} out of retirement`,
+    actor: actorFromIdentity(ctx.identity!),
+    inputs: [
+      buildUnretirePrompt({
+        candidate: { name: employee.name, role: employee.role, layer: employee.layer, retiredReason: retirement?.reason ?? null },
+        current,
+        need: parsed.data.need ?? null,
+      }),
+    ],
+    // The roster and what the firm needs are internal facts about this firm.
+    sensitivity: "INTERNAL" as never,
+    budgetContext: { expectedOutputTokens: 500 },
+    routing: { category: "OPERATIONS", taskClass: "employee-work" },
+  });
+
+  if (run.status !== "COMPLETED" || !run.output_text) {
+    return json({ error: "advice_failed", detail: run.failure_reason ?? `run ${run.status}`, run_id: run.id }, { status: 502 });
+  }
+
+  const advice = parseUnretireAdvice(run.output_text);
+  if (!advice) {
+    // Never guessed at. This is shown to a partner as a recommendation about who works here.
+    return json({ error: "unreadable", detail: "could not read a verdict back", run_id: run.id }, { status: 502 });
+  }
+
+  return json({ ...advice, employee: employee.name, run_id: run.id, prompt_version: UNRETIRE_ADVICE_VERSION });
 }

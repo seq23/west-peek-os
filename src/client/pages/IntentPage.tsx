@@ -313,17 +313,35 @@ const ASK_EXAMPLES: ReadonlyArray<{ group: string; note: string; items: readonly
     ],
   },
   {
+    group: "Write it up for me",
+    note: "comes back as a document you can keep",
+    items: [
+      "what are comparable seed valuations in devtools right now",
+      "brief me on the AI infrastructure market before Thursday",
+      "what should we know about Sputnik ATX before we talk to them",
+    ],
+  },
+  {
     group: "Just tell me",
     note: "answered here",
     items: ["what is the difference between a work card and an approval"],
   },
 ];
 
+interface BriefRequest {
+  title: string;
+  question: string;
+  suggested_author: string | null;
+  needs_browser: boolean;
+  reasoning: string;
+}
+
 interface AskResult {
-  outcome: "GO" | "WORK" | "TELL";
+  outcome: "GO" | "WORK" | "TELL" | "BRIEF";
   says: string;
   page: string | null;
   draft: Draft | null;
+  brief?: BriefRequest | null;
   note?: string;
 }
 
@@ -372,6 +390,35 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
       setMsg(res.data.note || null);
     } else {
       setMsg(res.data?.detail ?? res.data?.error ?? `Could not work that out (HTTP ${res.status}).`);
+    }
+  }
+
+  /**
+   * Commission the brief. Nothing is written until this is pressed — the draft above is a proposal
+   * about what to write, and the partner should be able to reject the shape before paying for it.
+   */
+  async function writeBrief() {
+    if (!result?.brief) return;
+    setBusy(true);
+    setMsg(null);
+    const res = await api<{ note?: string; title?: string; prepared_by?: string; detail?: string; error?: string }>(
+      "/api/intent/brief",
+      {
+        method: "POST",
+        body: {
+          title: result.brief.title,
+          question: result.brief.question,
+          ...(result.brief.suggested_author ? { author: result.brief.suggested_author } : {}),
+        },
+      },
+    );
+    setBusy(false);
+    if (res.status === 201) {
+      setResult(null);
+      setText("");
+      setMsg(res.data?.note ?? "Written and filed.");
+    } else {
+      setMsg(`Could not write it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
     }
   }
 
@@ -466,6 +513,41 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
         </div>
       )}
 
+      {/* BRIEF — what they want back is a document, not a task somebody carries. This is what the
+          work-packet flow always was: same machinery, asked for the way a partner would actually
+          ask, and delivered the way everything else is — signed, filed, downloadable. */}
+      {result?.outcome === "BRIEF" && result.brief && (
+        <div className="ask-draft" data-testid="ask-brief">
+          <p>{result.says}</p>
+          <div className="card">
+            <h3>{result.brief.title}</h3>
+            <p className="small">
+              <span className="lbl">Answers</span> {result.brief.question}
+            </p>
+            <p className="muted small">
+              {result.brief.suggested_author ? `${result.brief.suggested_author} would write it` : "Whoever owns research would write it"}
+              {result.brief.needs_browser ? " · it will read live sources" : ""}
+            </p>
+            {result.brief.reasoning && <p className="muted small">{result.brief.reasoning}</p>}
+          </div>
+          <div className="form-row">
+            <button
+              type="button"
+              className="btn-strong"
+              disabled={busy}
+              data-testid="ask-brief-write"
+              onClick={() => void writeBrief()}
+            >
+              {busy ? "Writing…" : "Write it"}
+            </button>
+            <button type="button" onClick={() => { setResult(null); }}>Not that</button>
+            <span className="muted small">
+              You will get a document, signed, on your Home page and in Documents.
+            </span>
+          </div>
+        </div>
+      )}
+
       {result?.outcome === "TELL" && (
         <div className="ask-draft" data-testid="ask-tell">
           <p>{result.says}</p>
@@ -547,7 +629,12 @@ export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k:
           mid-use. Most requests want a card. */}
 
       <details className="card">
-        <summary>Open a work packet instead</summary>
+        <summary className="muted small">The older packet flow, with the lens bench</summary>
+        <p className="muted small">
+          This is the same idea as a brief, from before Ask could commission one — it exposes the
+          lens bench and the acceptance criteria directly. Nothing has ever been created through it.
+          Kept because it is not deleted out from under anyone mid-use.
+        </p>
       <form
         data-testid="intent-form"
         onSubmit={async (e) => {
