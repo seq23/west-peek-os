@@ -500,7 +500,12 @@ function TodayPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string)
         <ul data-testid="today-activity" className="small">
           {(activity.data?.events ?? []).slice(0, 40).map((e) => (
             <li key={e.id}>
-              <code>{e.event_type}</code> {e.object_type}/{e.object_id} — {e.created_at}
+              {/* An audit row keeps its ids — they are what you search for when something has gone
+                  wrong, and hiding them would defeat the point of the ledger. The TIMESTAMP is a
+                  different matter: `2026-08-20T06:41:28.855Z` is a machine's way of saying a time
+                  to a person who is scanning for when something happened. */}
+              <code>{e.event_type}</code> {e.object_type}/{e.object_id}{" "}
+              <span className="muted">— {new Date(e.created_at).toLocaleString()}</span>
             </li>
           ))}
           {(activity.data?.events ?? []).length === 0 && (
@@ -1036,7 +1041,7 @@ function ActivityPage({ refreshNonce }: { me: MeResponse; refreshNonce: number }
           <tbody>
             {(activity.data?.events ?? []).map((e) => (
               <tr key={e.id} data-testid={`activity-event-${e.event_type}`}>
-                <td>{e.created_at}</td>
+                <td>{new Date(e.created_at).toLocaleString()}</td>
                 <td>
                   <code>{e.event_type}</code>
                 </td>

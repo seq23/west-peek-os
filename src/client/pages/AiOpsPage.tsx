@@ -88,6 +88,21 @@ function pricingBadge(state: string): string {
   return "badge badge-gate";
 }
 
+/**
+ * A spend breakdown, with the row keys read as what they are.
+ *
+ * The employee table printed `aie_wyatt` — a database id on the page where a partner is deciding
+ * whether the firm is spending too much on somebody. `label` turns the id into a name where one is
+ * knowable and leaves everything else alone, so provider and model rows (which really are keys, and
+ * are what you would search for) are untouched.
+ */
+function spendRowLabel(key: string | null): string {
+  if (!key) return "unattributed";
+  const m = /^aie_(.+)$/.exec(key);
+  if (!m) return key;
+  return m[1]!.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
 function SpendTable({ title, rows, testid }: { title: string; rows: Array<{ key: string; committed_usd: number; runs: number; blocked: number }>; testid: string }) {
   return (
     <section className="module-card" data-testid={testid}>
@@ -99,7 +114,7 @@ function SpendTable({ title, rows, testid }: { title: string; rows: Array<{ key:
           <table>
             <thead>
               <tr>
-                <th>Key</th>
+                <th>Who or what</th>
                 <th className="num">Committed</th>
                 <th className="num">Runs</th>
                 <th className="num">Blocked</th>
@@ -108,7 +123,7 @@ function SpendTable({ title, rows, testid }: { title: string; rows: Array<{ key:
             <tbody>
               {rows.slice(0, 8).map((r) => (
                 <tr key={r.key}>
-                  <td>{r.key}</td>
+                  <td>{spendRowLabel(r.key)}</td>
                   <td className="num">${r.committed_usd.toFixed(4)}</td>
                   <td className="num">{r.runs}</td>
                   <td className="num">{r.blocked}</td>

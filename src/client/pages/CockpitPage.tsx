@@ -141,7 +141,8 @@ export function CockpitPage({ me }: { me: MeResponse }) {
           <ul className="small">
             {(c?.changed_this_week ?? []).slice(0, 8).map((e, i) => (
               <li key={`${e.object_id}-${i}`}>
-                <code>{e.event_type}</code> {e.created_at}
+                <code>{e.event_type}</code>{" "}
+                <span className="muted">{new Date(e.created_at).toLocaleString()}</span>
               </li>
             ))}
             {(c?.changed_this_week ?? []).length === 0 && <li className="state-empty">No portfolio events in the last 7 days.</li>}
