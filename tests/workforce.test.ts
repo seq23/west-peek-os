@@ -437,34 +437,35 @@ describe("memos and governance acknowledgement", () => {
  * nothing about any of the six. It looked like a rendering fault because it was one.
  */
 describe("why each person is on duty", () => {
-  const roster = [
-    { name: "Walker", role: "Scooter's Chief of Staff" },
-    { name: "Wren", role: "Sequoia's Chief of Staff" },
-    { name: "Wyatt", role: "Analyst & Scout" },
-    { name: "Wells", role: "Knowledge Manager" },
-    { name: "Porter", role: "Systems & Intake Operator" },
-  ];
+  // resolveDuty(hour, size) — the roster comes from the registry, not from an argument.
+  const MORNING_HOUR = 8;
 
   it("gives every person a different reason", () => {
-    const duty = resolveDuty("MORNING", roster);
+    const duty = resolveDuty(MORNING_HOUR, 5);
     const reasons = duty.onDuty.map((d) => d.because);
     expect(reasons.length).toBeGreaterThan(1);
     expect(new Set(reasons).size).toBe(reasons.length);
   });
 
   it("never repeats the shift's own heading back as a person's reason", () => {
-    // The exact bug: the heading and every row said the same thing.
-    for (const shift of ["MORNING", "MIDDAY", "EVENING", "OVERNIGHT"] as const) {
-      const duty = resolveDuty(shift, roster);
+    // The exact bug: the heading above the list and every row beneath it said the same thing.
+    for (const hour of [8, 14, 19, 2]) {
+      const duty = resolveDuty(hour, 6);
       for (const d of duty.onDuty) {
-        expect(d.because, `${shift}/${d.name} is just echoing the shift intent`).not.toBe(duty.intent);
+        expect(d.because, `${duty.shift}/${d.name} is just echoing the shift intent`).not.toBe(duty.intent);
       }
     }
   });
 
+  it("says something about the person, not just their job title", () => {
+    const duty = resolveDuty(MORNING_HOUR, 5);
+    const wren = duty.onDuty.find((d) => d.name === "Wren");
+    expect(wren?.because).toContain("morning brief");
+  });
+
   it("still lets a pinned person say they were asked for", () => {
-    const duty = resolveDuty("MORNING", roster, { pinned: ["Wells"] });
-    expect(duty.onDuty[0]!.name).toBe("Wells");
+    const duty = resolveDuty(MORNING_HOUR, 5, { pinned: ["Willow"] });
+    expect(duty.onDuty[0]!.name).toBe("Willow");
     expect(duty.onDuty[0]!.because).toContain("asked for them");
   });
 });

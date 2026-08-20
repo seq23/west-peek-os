@@ -46,7 +46,10 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     deliveredBy: JOINT_CHIEFS,
   },
   weekly_mp_review: {
-    what: "The Wednesday operating review — the week's agenda, built from what actually happened rather than from memory.",
+    what:
+      "The Wednesday operating review — the week's agenda, built from what actually happened rather " +
+      "than from memory. It rebuilds every day and that is deliberate: the meeting is weekly, the " +
+      "agenda is not, so whatever happened this morning is on it by the time you sit down.",
     why: "So the partners' weekly meeting starts from a prepared page instead of from whoever remembers the most.",
     deliveredBy: JOINT_CHIEFS,
   },
@@ -57,13 +60,22 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
   },
 };
 
-/** Cadence in words. `every 1440 min` is a true and useless way to say "once a day". */
+/**
+ * Cadence in words. `every 1440 min` is a true and useless way to say "once a day".
+ *
+ * THE ENUM IS `DAILY_AT`, NOT `DAILY`. This checked for "DAILY", never matched, fell through to the
+ * interval branch — which is null for every job the firm has — and printed "No cadence set" on all
+ * three, directly above a line stating the next run time. Two contradictory facts, one of them
+ * false, from guessing a value instead of reading the schema. `validate:sql` catches this class in
+ * SQL; in TypeScript a string comparison against the wrong literal just quietly never matches, so
+ * the test below asserts against the values production actually stores.
+ */
 export function cadenceInWords(job: {
   schedule_kind: string;
   interval_minutes: number | null;
   daily_at_utc: string | null;
 }): string {
-  if (job.schedule_kind === "DAILY" && job.daily_at_utc) {
+  if ((job.schedule_kind === "DAILY_AT" || job.schedule_kind === "DAILY") && job.daily_at_utc) {
     return `Every day at ${job.daily_at_utc} UTC`;
   }
   const m = job.interval_minutes;

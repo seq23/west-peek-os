@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { actorName } from "@shared/help/actionNames";
 import { HowThisWorks } from "./HowThisWorks";
 
 /**
@@ -292,7 +293,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
             <ul className="card-list small" data-testid="ic-audit-list">
               {audit.data!.events.map((e, i) => (
                 <li key={i}>
-                  <code>{e.event_type}</code> · {e.actor_id} ·{" "}
+                  <code>{e.event_type}</code> · {actorName(e.actor_id)} ·{" "}
                   <span className="muted small">{new Date(e.created_at).toLocaleString()}</span>
                 </li>
               ))}

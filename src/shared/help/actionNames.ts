@@ -90,3 +90,29 @@ export function roleWords(key: string): string {
   };
   return known[key] ?? key.toLowerCase().replace(/_/g, " ");
 }
+
+/**
+ * A firm_user id as a person's name.
+ *
+ * The decision ledger printed `fu_sequoia_taylor` beside every approval — on the page whose entire
+ * job is being the readable record of what the firm decided. The same class as Approvals rendering
+ * `HUMAN/fu_sequoia_taylor`, in the one place a person is most likely to go looking years later.
+ *
+ * Derived from the id rather than joined, because the ledger is deliberately a flat read and adding
+ * a join to it for cosmetics would be the wrong trade. `fu_sequoia_taylor` → "Sequoia Taylor"; a
+ * system actor says so; anything unrecognised is returned untouched rather than mangled into a
+ * name that was never there.
+ */
+export function actorName(actorId: string | null | undefined): string {
+  const id = (actorId ?? "").trim();
+  if (!id) return "unattributed";
+  if (id === "system" || id.startsWith("migration:")) return `the system (${id})`;
+  if (id === "fu_browser_agent") return "the firm's browser";
+  const m = /^fu_(.+)$/.exec(id);
+  if (!m) return id;
+  return m[1]!
+    .split("_")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}

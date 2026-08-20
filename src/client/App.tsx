@@ -15,7 +15,7 @@ import { WeeklyReviewPage } from "./pages/WeeklyReviewPage";
 import { CrossOfficePage } from "./pages/CrossOfficePage";
 import { SecondariesPage } from "./pages/SecondariesPage";
 import { PagePurposeBlock } from "./pages/PagePurposeBlock";
-import { actionDescription, actionName, approvalStateWords, roleWords } from "@shared/help/actionNames";
+import { actionDescription, actionName, actorName, approvalStateWords, roleWords } from "@shared/help/actionNames";
 import { stateMeaning } from "@shared/work/workCards";
 import { SignInCard, SignedOutPage } from "./pages/AuthSurfaces";
 import { UniversityPage } from "./pages/UniversityPage";
@@ -1041,7 +1041,7 @@ function ActivityPage({ refreshNonce }: { me: MeResponse; refreshNonce: number }
                   <code>{e.event_type}</code>
                 </td>
                 <td className="mono">
-                  {e.actor_type}/{e.actor_id}
+                  {actorName(e.actor_id)}
                 </td>
                 <td className="mono">
                   {e.object_type}/{e.object_id}

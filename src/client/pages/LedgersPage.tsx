@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useApi } from "../lib/api";
+import { actorName } from "@shared/help/actionNames";
 import { HowThisWorks } from "./HowThisWorks";
 
 /**
@@ -76,7 +77,9 @@ export function LedgersPage(): JSX.Element {
                   <strong>{e.decision}</strong>
                   {e.subject && <> — {e.subject}</>}
                   <div className="muted small">
-                    {e.decided_by} · {new Date(e.decided_at).toLocaleString()}
+                    {/* Was the raw firm_user id, on the page that exists to be the readable
+                        record of what this firm decided. */}
+                    {actorName(e.decided_by)} · {new Date(e.decided_at).toLocaleString()}
                   </div>
                   {e.rationale && <div className="muted small">{e.rationale}</div>}
                 </li>
