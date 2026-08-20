@@ -508,8 +508,13 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
         <header className="brief-byline">
           <Face name={chiefOfStaff.name} role={chiefOfStaff.role} size={40} />
           <div className="brief-byline-who">
+            {/* SAYS WHAT IS TRUE, not what usually is. This read "Wren delivered your morning
+                briefing" unconditionally, directly above a panel saying "No brief for today yet"
+                — so the page claimed a delivery and then denied it in the next breath. Home does
+                not hold the brief (the panel below fetches it), so the line is written to be
+                honest either way: whose briefing it is, not a claim that it arrived. */}
             <div className="brief-byline-line">
-              <strong>{chiefOfStaff.name}</strong> delivered your morning briefing
+              <strong>{chiefOfStaff.name}</strong> — your morning briefing
             </div>
             <div className="muted small">
               {chiefOfStaff.role} ·{" "}

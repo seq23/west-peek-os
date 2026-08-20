@@ -2144,6 +2144,12 @@ hr {
  * the message — that something is folded away rather than merely clickable — and
  * it rotates on open so the control reports its own state.
  */
+/* THE ACCENT MARKS ONE ACTION PER PAGE, so this class is for that one action and
+   nothing else. It spread to help panels and secondary views, where it shouted
+   louder than the things somebody actually came to do — on Home a reference panel
+   opened once a month was the loudest control on the screen. Two uses remain and
+   both are the page's primary action: adding your own sources, and pasting the
+   meeting notes the weekly review is built from. */
 .summary-button > summary {
   display: inline-flex;
   align-items: center;

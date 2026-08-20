@@ -398,7 +398,7 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           look like a feature that had been abandoned rather than one you had not used yet. It is
           the same activity as everything else here — finding out what is true about a market —
           so it belongs beside the rest of it rather than one click away in a tab of its own. */}
-      <details className="card summary-button" data-testid="research-market-map">
+      <details className="card" data-testid="research-market-map">
         <summary>Map a market</summary>
         <p className="muted small">
           A market map is the picture of who is already doing the thing a founder just pitched you:

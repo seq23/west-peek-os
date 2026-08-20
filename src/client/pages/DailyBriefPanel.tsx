@@ -233,8 +233,17 @@ function InterestsEditor(): JSX.Element {
   );
 
   return (
-    <details className="card summary-button" data-testid="brief-interests">
-      <summary>What my brief covers</summary>
+    /*
+     * A QUIET DISCLOSURE, not the loudest thing on the page.
+     *
+     * `summary-button` paints the accent across the whole control, which was written for the one
+     * action a page wants you to take. On Home that made "What my brief covers" — a reference
+     * panel you open once a month — shout louder than "Ask for something" and "Build today's
+     * brief", the two things somebody actually comes here to do. The accent marks one thing; this
+     * is not it.
+     */
+    <details className="card" data-testid="brief-interests">
+      <summary className="muted small">What my brief covers</summary>
 
       {state.loading && <p className="muted small">Loading…</p>}
       {data && (

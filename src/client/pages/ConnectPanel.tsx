@@ -60,7 +60,7 @@ interface Sending {
  */
 function WhatConnectingDoes(): JSX.Element {
   return (
-    <details className="card summary-button connect-help" data-testid="connect-help">
+    <details className="card connect-help" data-testid="connect-help">
       <summary>What happens if I connect?</summary>
 
       <p className="muted small">
