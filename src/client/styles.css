@@ -1643,16 +1643,32 @@ hr {
 
 /* — Page purpose block. Quiet by design: it orients a first-time reader and should be skimmable
      past in a second by everyone else, so it is tinted rather than boxed and sets no heading. */
+/* One quiet line at the top of a page, not a block. It is read once and skimmed
+   past several hundred times, so it takes the space that ratio deserves. */
 .page-purpose {
-  border-left: 2px solid var(--wp-line-strong);
-  padding: 0 0 0 var(--space-sm);
-  margin-bottom: var(--space-md);
+  border-left: 2px solid var(--wp-line);
+  padding: 0 0 0 var(--space-xs);
+  margin-bottom: var(--space-sm);
+  font-size: var(--text-sm);
+  line-height: 1.45;
 }
-.page-purpose-what { margin: 0 0 var(--space-2xs); color: var(--wp-ink-2); }
+
+.page-purpose > summary {
+  cursor: pointer;
+  color: var(--wp-muted);
+  /* The marker is the only thing saying there is more; without it this reads as
+     a caption and nobody discovers what the page can do. */
+  list-style-position: outside;
+}
+
+.page-purpose > summary strong { color: var(--wp-ink); font-weight: 600; }
+.page-purpose[open] > summary { margin-bottom: var(--space-2xs); }
+.page-purpose-what { color: var(--wp-muted); }
+
 .page-purpose-can {
   display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-sm);
   list-style: none; padding: 0; margin: 0 0 var(--space-2xs);
-  font-size: 0.9rem; color: var(--wp-muted);
+  color: var(--wp-muted);
 }
 .page-purpose-can li::before { content: "· "; }
 .page-purpose-can li:first-child::before { content: ""; }

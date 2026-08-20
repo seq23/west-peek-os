@@ -25,10 +25,21 @@ export function PagePurposeBlock({
   if (!p || navKey === "help") return null;
 
   return (
-    <section className="page-purpose" data-testid={`page-purpose-${navKey}`}>
-      <p className="page-purpose-what">
-        <strong>{label}.</strong> {p.purpose}
-      </p>
+    /*
+     * ONE LINE, NOT FOUR BLOCKS.
+     *
+     * This was a paragraph at body size, then a wrapped list of everything you can do, then a link
+     * — on every page, above everything, every time. The operator reads it once and then scrolls
+     * past it several hundred times, and it was pushing the actual page down by a third of a screen.
+     *
+     * So: the sentence stays, at small size, because a page that does not say what it is for is the
+     * failure this was built to fix. Everything else goes behind the same line — a <details> whose
+     * summary IS the sentence, so opening it costs one click and closing it costs nothing.
+     */
+    <details className="page-purpose" data-testid={`page-purpose-${navKey}`}>
+      <summary>
+        <strong>{label}.</strong> <span className="page-purpose-what">{p.purpose}</span>
+      </summary>
       <ul className="page-purpose-can">
         {p.youCan.map((c) => (
           <li key={c}>{c}</li>
@@ -42,6 +53,6 @@ export function PagePurposeBlock({
       >
         How everything works →
       </button>
-    </section>
+    </details>
   );
 }

@@ -87,23 +87,25 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
           Find{" "}
           <input data-testid="companies-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="name, sector or what they do" />
         </label>
-        {/* THE DOOR MOVED, AND THIS SAYS WHERE.
-            Both this page and Dealflow carried an "Add a company" button, and they did different
-            things — this one created a company record and no deal, that one attached a deal to a
-            company that had to already exist. So the top of the funnel had two openings and neither
-            was complete. Dealflow now does both in one form and owns the only Add button.
-
-            The pointer stays rather than the button simply vanishing: somebody who has been adding
-            companies here for months should be told where it went, not left hunting. */}
-        <button type="button" className="link-button" data-testid="companies-add-toggle" onClick={() => onNavigate("investment")}>
-          Add a company →
-        </button>
       </div>
 
+      {/* THE DOOR MOVED, AND LEAVING A BUTTON BEHIND WAS THE MISTAKE.
+
+          Both this page and Dealflow carried "Add a company", doing different things — this one
+          made a company record and no deal, that one attached a deal to a company that had to
+          already exist. So the top of the funnel had two openings and neither was complete.
+
+          The first fix left a button here labelled "Add a company →" that navigated to Dealflow.
+          Same place, same words, still button-shaped: the operator read the page as unchanged, and
+          fairly. A signpost must not be shaped like the thing it replaced. It is a sentence now,
+          in the register's own explanation, where it reads as information rather than as an action. */}
       <p className="muted small" data-testid="companies-register-note">
         This is the register — everything the firm has recorded, whether or not it is a live deal.
-        Companies are added on <strong>Dealflow</strong>, because a company worth recording is
-        almost always a company you are looking at.
+        Nothing is created here. A company enters the firm in one place, on{" "}
+        <button type="button" className="link-button" data-testid="companies-add-toggle" onClick={() => onNavigate("investment")}>
+          Dealflow
+        </button>
+        , because a company worth recording is almost always one you are already looking at.
       </p>
 
       {message && <p className="notice" data-testid="companies-message">{message}</p>}

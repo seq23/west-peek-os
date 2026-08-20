@@ -263,11 +263,40 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
 
   return (
     <section data-testid="dealflow-page">
+      {/*
+        THE PAGE HAS THREE JOBS AND USED TO ANNOUNCE NONE OF THEM.
+
+        It opened on a line of prose, then the stage spine, then counts, then a heading called
+        "Every deal", then the list, then a note about staleness — one continuous scroll with no
+        statement of what part of it was for. The operator's words: "I don't know what to prompt you
+        to get you to do this right."
+
+        The three jobs, named and in the order you need them:
+          1. WHAT WE ARE LOOKING FOR — the thesis. Every screening decision is against it, and it
+             lives on another page, so the funnel should point at it rather than assume you hold it
+             in your head.
+          2. EVERY DEAL — the pipeline itself, and the only door into the firm.
+          3. DEAL RECORDS AND TOOLING — the stage spine, the staleness rule, the arithmetic. The
+             machinery you consult occasionally, not the thing you came for.
+      */}
+      <div className="home-section-head">
+        <h2>What we are looking for</h2>
+        <button type="button" className="link-button" data-testid="dealflow-thesis" onClick={() => onNavigate("thesis")}>
+          Open the thesis →
+        </button>
+      </div>
       <p className="muted small">
-        Where every company stands, {me.fullName.split(" ")[0]}, and what is stopping the next decision.
+        Every screen below is a judgement against the firm's written mandate — sectors, stage,
+        cheque size, the tests that make something a fast no. Screening against instinct instead is
+        how a pipeline fills with companies that are interesting and out of mandate.
       </p>
 
-      <Spine counts={board.data?.counts ?? {}} />
+      <div className="home-section-head">
+        <h2>Every deal</h2>
+        <span className="muted small">
+          Where each company stands, {me.fullName.split(" ")[0]}, and what is stopping the next decision
+        </span>
+      </div>
 
       <div className="pipeline-stats">
         <div className="stat-card stat-card-bad">
@@ -288,7 +317,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       </div>
 
       <div className="home-section-head">
-        <h2>Every deal</h2>
+        <h3>The pipeline</h3>
         <span className="muted small">sorted by what needs you soonest</span>
         {/* THE ONLY WAY IN. Companies used to carry an identical button that did half of this. */}
         <button type="button" className="btn-strong" data-testid="dealflow-add-toggle" onClick={() => setAdding((a) => !a)}>
@@ -375,6 +404,13 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           </li>
         )}
       </ul>
+
+      <div className="home-section-head">
+        <h2>Deal records and tooling</h2>
+        <span className="muted small">the machinery behind the list — consulted, not read</span>
+      </div>
+
+      <Spine counts={board.data?.counts ?? {}} />
 
       <p className="muted small" data-testid="dealflow-staleness-note">
         {board.data?.how_staleness_works}

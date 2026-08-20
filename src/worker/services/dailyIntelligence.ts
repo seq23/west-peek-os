@@ -232,8 +232,17 @@ export type Synthesise = (env: Env, actor: Actor, prompt: string, reportDate: st
 
 const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, firmUserId) => {
   const intelligenceMachineId = await machineForKey(env, "research_intelligence");
+  /*
+   * WHOSE BRIEF, BY NAME. The purpose string is not internal bookkeeping — it is the line the AI
+   * page lists every run under, so "daily intelligence report 2026-08-19 for fu_sequoia_taylor"
+   * put a database id in front of a partner reading their own spend. Written at run time, so this
+   * only helps runs from here on; the ones already recorded keep the id they were given.
+   */
+  const reader = await env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1")
+    .bind(firmUserId)
+    .first<{ full_name: string }>();
   const { run } = await runAi(env, {
-    purpose: `daily intelligence report ${reportDate} for ${firmUserId}`,
+    purpose: `daily intelligence report ${reportDate} for ${reader?.full_name ?? firmUserId}`,
     actor,
     inputs: [prompt],
     // A brief assembled from public sources is PUBLIC. Never raised, so it cannot be blocked by a

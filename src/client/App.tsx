@@ -4202,10 +4202,10 @@ export function App() {
           {authed && active === "notifications" && <NotificationsPage me={me.data!} />}
           {authed && active === "today" && <TodayPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} />}
-          {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={setActive} />}
+          {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "work-cards" && (
             <>
-              <WorkSurface me={me.data!} onChanged={refresh} onNavigate={setActive} />
+              <WorkSurface me={me.data!} onChanged={refresh} onNavigate={navigate} />
               {/* "Runs on a schedule" read as a sentence fragment rather than a section name, and
                   nothing said where the section ended. A chevron makes it obvious that what follows
                   is the scheduled half of this page. */}
@@ -4221,7 +4221,7 @@ export function App() {
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && (
             <>
-              <CompanyRegister me={me.data!} onNavigate={setActive} />
+              <CompanyRegister me={me.data!} onNavigate={navigate} />
               {/* Identity work — aliases, merges, external ids — belongs to one company rather
                   than to the register, and is where duplicates get resolved. */}
               <details className="card" data-testid="company-identity">
@@ -4235,7 +4235,7 @@ export function App() {
           {authed && active === "modeling" && <ModelingPage me={me.data!} />}
           {authed && active === "investment" && (
             <>
-              <DealflowPage me={me.data!} onNavigate={setActive} />
+              <DealflowPage me={me.data!} onNavigate={navigate} />
               {/* The old surface keeps its deal-math packets, IC assembly and company 360 — real
                   tooling that belongs to a single deal rather than to the board. Folded away
                   rather than deleted or left as a second page competing with the pipeline. */}
@@ -4251,7 +4251,7 @@ export function App() {
           )}
           {authed && active === "meetings" && (
             <>
-              <MeetingsSurface me={me.data!} onNavigate={setActive} />
+              <MeetingsSurface me={me.data!} onNavigate={navigate} />
               {/* The older meeting record keeps prep packets, notes, debriefs and close-out —
                   real machinery that belongs to one meeting rather than to the list. */}
               <details className="card" data-testid="meeting-records">

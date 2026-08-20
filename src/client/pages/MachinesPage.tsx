@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { departmentDef } from "@shared/registry/departments";
-import { skillsForMachines } from "@shared/skills/library";
+import { SKILL_LIBRARY, skillsForMachines } from "@shared/skills/library";
 import { api, useApi, type MeResponse } from "../lib/api";
 
 /**
@@ -221,7 +221,27 @@ function CapabilityPanel({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="capabilities-panel">
-      <h3>Capabilities</h3>
+      {/* WHAT A CAPABILITY IS, said before three columns of them.
+          The operator's question was literally "what are capabilities and what do I do with them",
+          asked while looking at Active / Bench / Archive with no statement anywhere of what any of
+          it meant. Three buckets of unexplained nouns is not a control surface. */}
+      <div className="home-section-head">
+        <h3>Capabilities</h3>
+        <span className="muted small">specific things an employee is allowed to do</span>
+      </div>
+      <p className="small">
+        A <strong>capability</strong> is one named ability — reading a live web page, searching
+        sources, drafting an outbound message. An employee can only do what they have been granted,
+        so this is where the workforce's reach is widened or narrowed. It is separate from a
+        department, which is <em>where</em> somebody works, and from a skill, which is <em>how</em>
+        this firm prefers it done.
+      </p>
+      <ul className="card-list small">
+        <li><strong>Active</strong> — granted and in use. This is the firm's current reach.</li>
+        <li><strong>Bench</strong> — defined but not granted to anyone. Available to turn on.</li>
+        <li><strong>Archive</strong> — retired. Kept because a capability an employee once had is
+          part of explaining what they did.</li>
+      </ul>
       <div className="module-grid">
         {section("Active", caps.data?.active ?? [], "capabilities-active")}
         {section("Bench", caps.data?.bench ?? [], "capabilities-bench")}
@@ -331,7 +351,57 @@ export function MachinesPage({ me }: { me: MeResponse }) {
         </label>
       </div>
 
-      {/* THE SKILL LIBRARY, where the department it belongs to is on screen.
+      {/* THE SKILL LIBRARY, and it used to be invisible.
+
+          It only rendered when a specific area was chosen from the filter, and the filter defaults
+          to "Everything" — so the operator's verdict was that nothing on this tab had changed, and
+          they were right: the one thing that had was behind a control nobody had reason to touch.
+          Hiding the best part of a page behind an optional filter is the same mistake as putting a
+          legend at the bottom.
+
+          Now it is always on the page, and choosing an area narrows it rather than revealing it. */}
+      <section className="card" data-testid="skill-library-all">
+        <div className="home-section-head">
+          <h3>The firm's methods</h3>
+          <span className="muted small">
+            what employees seated in each department read before working
+          </span>
+        </div>
+        <p className="muted small">
+          Guidelines, not rules — the rules are enforced in code and cannot be broken from a prompt.
+          A department with none written down says so; that is how the whole firm worked until
+          recently, and why nothing could be reviewed.
+        </p>
+        {SKILL_LIBRARY.map((dept) => {
+          const machine = fleet.data!.machines.find((m) => m.key === dept.machineKey);
+          const seated = (machine?.employees ?? []).filter((e) => e.status !== "RETIRED");
+          return (
+            <details key={dept.machineKey} data-testid={`skills-${dept.machineKey}`}>
+              <summary>
+                <strong>{machine?.name.replace(/ Machines?$/, "") ?? dept.machineKey}</strong>{" "}
+                <span className="muted small">
+                  {dept.skills.length} method{dept.skills.length === 1 ? "" : "s"}
+                  {seated.length > 0 ? ` · read by ${seated.map((e) => e.name).join(", ")}` : " · nobody seated here yet"}
+                </span>
+              </summary>
+              <ul className="card-list small">
+                {dept.skills.map((sk) => (
+                  <li key={sk.key}>
+                    <strong>{sk.title}</strong> <span className="muted small">{sk.when}</span>
+                    <ul className="card-list small">
+                      {sk.guidance.map((g, i) => (
+                        <li key={i}>{g.trim()}</li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          );
+        })}
+      </section>
+
+      {/* The same library, narrowed, when an area is chosen.
           The firm's methods used to live scattered across prompt strings in four services, so
           "how we screen a deal" could not be read, reviewed or disagreed with. Now an employee
           seated here reads these before working, and so can you. */}
