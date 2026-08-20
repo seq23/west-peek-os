@@ -29,7 +29,19 @@ function clientFiles(): string[] {
   return out;
 }
 
-/** Element boundaries, honouring braces and quotes — a naive `[^>]*>` stops at a JSX arrow. */
+/**
+ * Element boundaries, honouring braces and every kind of quote.
+ *
+ * Three things break a naive scan of JSX, and this file has now been bitten by all three:
+ *   `[^>]*>`        stops at the `>` in an arrow function;
+ *   ignoring braces stops at a `>` inside an expression;
+ *   ignoring BACKTICKS treats the apostrophe in `${name}'s title` as an opening quote that never
+ *                   closes, so the tag runs on into the next element and reports a duplicate
+ *                   attribute that does not exist.
+ *
+ * The third one produced a false failure on a perfectly good control. Template literals are quotes
+ * too, and an apostrophe inside one is just a letter.
+ */
 function tagsIn(src: string, names: string[]): string[] {
   const out: string[] = [];
   const re = new RegExp(`<(${names.join("|")})\\b`, "g");
@@ -42,7 +54,7 @@ function tagsIn(src: string, names: string[]): string[] {
       const c = src[j]!;
       if (quote) {
         if (c === quote && src[j - 1] !== "\\") quote = null;
-      } else if (c === '"' || c === "'") quote = c;
+      } else if (c === '"' || c === "'" || c === "`") quote = c;
       else if (c === "{") depth++;
       else if (c === "}") depth--;
       else if (c === ">" && depth === 0) break;
