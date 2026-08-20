@@ -106,6 +106,7 @@ describe("1. unauthenticated requests are denied on every P3 route (401)", () =>
       ["POST", "/api/governance/updates", { update_type: "BULLETIN", title: "t", body: "b" }],
       ["GET", "/api/governance/updates"],
       ["GET", "/api/diagnostics/approval-volume"],
+      ["GET", "/api/diagnostics/health"],
       ["GET", "/api/machines"],
       ["GET", "/api/domains"],
     ];

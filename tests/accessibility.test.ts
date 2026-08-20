@@ -78,6 +78,14 @@ describe("every control can be announced", () => {
         const open = before.lastIndexOf("<label");
         const close = before.lastIndexOf("</label>");
         if (open > close) continue; // inside a <label>
+        /*
+         * A SEPARATE <label htmlFor> IS A NAME TOO, and the scanner used to say otherwise.
+         * It flagged the Capture box, which carries a visible label above it wired by id —
+         * better for everybody than an aria-label a sighted user never sees. A check that
+         * pushes an author away from the visible label toward the invisible one is wrong.
+         */
+        const id = tag.match(/\bid="([^"]+)"/)?.[1];
+        if (id && src.includes(`htmlFor="${id}"`)) continue;
         nameless.push(`${f.split("/client/")[1]}: ${tag.replace(/\s+/g, " ").slice(0, 70)}`);
       }
     }

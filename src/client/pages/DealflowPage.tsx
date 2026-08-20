@@ -152,6 +152,20 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
             {busy ? "…" : `Move to ${next.label.toLowerCase()}`}
           </button>
         )}
+        {/* A pass is reversible, and the button says what it costs: the deal comes back at screening
+            rather than where it left, because the reason it was passed on has to be looked at again. */}
+        {(deal.status === "PASS" || deal.status === "WITHDRAWN") && (
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={busy}
+            data-testid={`deal-reopen-${deal.id}`}
+            title="Brings it back at screening — the earlier work is not carried forward"
+            onClick={() => void moveTo("SCREENING")}
+          >
+            {busy ? "\u2026" : "Look at it again"}
+          </button>
+        )}
         {deal.backfilled && <span className="badge" title="Status was entered as history, not decided here">history</span>}
       </div>
 

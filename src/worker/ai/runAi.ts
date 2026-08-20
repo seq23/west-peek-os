@@ -596,6 +596,11 @@ async function executeAttempt(
 
 // ── The boundary ──
 
+/** True when the platform gave this Worker the Workers AI binding — the near-free tier. */
+export function workersAiConfigured(env: Env): boolean {
+  return Boolean((env as unknown as { AI?: unknown }).AI);
+}
+
 export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): Promise<AIRunResult> {
   if (!input.purpose || input.purpose.trim().length === 0) {
     throw new RunAiError(400, "invalid_input", "purpose is required");
@@ -834,7 +839,7 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * So: skipped when unbound, considered when bound. Narrow, and for a reason that does not
    * generalise to the others.
    */
-  const bindingAbsent = !(env as unknown as { AI?: unknown }).AI;
+  const bindingAbsent = !workersAiConfigured(env);
   const selectable = bindingAbsent ? capable.filter((p) => p.provider_key !== "workers_ai") : capable;
 
   const pricing = await latestPricing(env, selectable.map((p) => p.id));

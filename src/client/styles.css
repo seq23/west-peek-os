@@ -3479,3 +3479,101 @@ textarea,
 body {
   padding-bottom: env(safe-area-inset-bottom);
 }
+
+/* ── The health board (Diagnostics) ──────────────────────────────────────────
+   THREE STATES, TWO CUES EACH. The dot carries colour and, for anything not OK,
+   motion; the state word beside it carries the same fact in text, because a
+   colour-only reading of "is my firm broken" fails for anyone who cannot
+   separate the red from the green. Red blinks and amber does not: attention is
+   a scarce resource and everything cannot have it. */
+.health-down { background: var(--wp-danger); animation: health-alarm 1.1s steps(1, end) infinite; }
+
+@keyframes health-alarm {
+  0%, 60%  { opacity: 1; }
+  61%, 100% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .health-down { animation: none; }
+}
+
+.health-headline {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-md);
+  background: var(--wp-surface);
+  margin-bottom: var(--space-md);
+}
+.health-headline .health-dot { width: 0.75rem; height: 0.75rem; }
+.health-headline strong { font-size: 1.05rem; }
+
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: var(--space-sm);
+}
+
+.health-card {
+  border: 1px solid var(--wp-line);
+  border-left-width: 3px;
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--wp-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.health-card[data-state="OK"] { border-left-color: var(--wp-good); }
+.health-card[data-state="DEGRADED"] { border-left-color: var(--wp-warn); }
+.health-card[data-state="DOWN"] { border-left-color: var(--wp-danger); }
+
+.health-card-top { display: flex; align-items: center; gap: 0.45rem; }
+.health-card-label { font-weight: 600; }
+.health-card-state {
+  margin-left: auto;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--wp-muted);
+}
+.health-card-reading { font-size: 0.9rem; color: var(--wp-ink); font-variant-numeric: tabular-nums; }
+.health-card-remedy { font-size: 0.85rem; color: var(--wp-muted); }
+
+/* ── Capture ─────────────────────────────────────────────────────────────────
+   The box is the page. It was a four-row textarea below three unlabelled inputs,
+   which read as a form to fill in rather than somewhere to think out loud. */
+.capture-explainer { margin-bottom: var(--space-md); }
+.capture-explainer h3 { margin-top: 0; }
+
+.capture-box-label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.capture-box {
+  width: 100%;
+  padding: var(--space-sm);
+  font: inherit;
+  font-size: 1.05rem;
+  line-height: 1.5;
+  border: 1px solid var(--wp-line-strong);
+  border-radius: var(--radius-md);
+  background: var(--wp-surface);
+  color: var(--wp-ink);
+  resize: vertical;
+}
+.capture-box::placeholder { color: var(--wp-muted); }
+
+.capture-choices { margin-top: var(--space-sm); gap: var(--space-sm); flex-wrap: wrap; }
+.capture-choices label { display: flex; flex-direction: column; gap: 0.25rem; font-weight: 600; }
+.capture-choices select { font-weight: 400; max-width: 22rem; }
+
+.capture-hint {
+  margin: 0.35rem 0 var(--space-sm);
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--wp-line-strong);
+}

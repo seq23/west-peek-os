@@ -68,8 +68,21 @@ const OPPORTUNITY_TRANSITIONS: Readonly<Record<OpportunityStatus, readonly Oppor
   IC_READY: ["IC_DECIDED", "PASS", "WITHDRAWN"],
   IC_DECIDED: ["CLOSED", "WITHDRAWN"],
   CLOSED: [],
-  PASS: [],
-  WITHDRAWN: [],
+  /*
+   * A PASS IS A DECISION, NOT A GRAVE. The operator asked how to bring Synthient.ai back after the
+   * firm passed on it, and the honest answer was that the table made it impossible — the same
+   * dead-end shape that made "put it back" fail on a cancelled work card. Companies raise again,
+   * change their team, ship the thing that was missing; a fund that cannot reconsider one has
+   * confused a judgement with a filing.
+   *
+   * It reopens at SCREENING and never at the stage it left. The pass happened for a reason, and
+   * dropping a reopened company straight back into diligence would carry forward work that was
+   * done against a company that no longer exists in that form. The event ledger keeps the whole
+   * walk — passed on this date by this person, reopened on that date by that one — so the history
+   * of the reversal survives even though the status does not show it.
+   */
+  PASS: ["SCREENING"],
+  WITHDRAWN: ["SCREENING"],
 };
 
 /** Human review transitions for math quality. INPUTS_MISSING resolves via update/calculate. */

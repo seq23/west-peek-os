@@ -201,8 +201,8 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["See what is connected", "Check why something is not"],
   },
   diagnostics: {
-    purpose: "Whether the system itself is healthy, and what is degraded if not.",
-    youCan: ["Check system health", "See what is failing and why"],
+    purpose: "Whether anything is broken right now, read from the system itself rather than from its settings.",
+    youCan: ["See at a glance whether anything is wrong", "Read the measurement behind every light", "Go straight to the page that fixes it", "Watch how often you are being asked to approve things"],
   },
   setup: {
     purpose: "Getting the firm configured — the team, the providers, and the work that should run without being asked.",

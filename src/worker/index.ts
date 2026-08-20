@@ -67,6 +67,7 @@ import { handleGetSendAs, handleSetSendAs } from "./services/sendAs";
 import { handleListActivity } from "./services/activity";
 import { handleCreateGovernanceUpdate, handleListGovernanceUpdates } from "./services/governance";
 import { handleApprovalVolume } from "./services/diagnostics";
+import { handleSystemHealth } from "./services/health";
 import { handleListDomains, handleListMachines } from "./services/registry";
 import {
   handleCreateEffectRequest,
@@ -610,6 +611,7 @@ const router = new Router()
   .post("/api/governance/updates", handleCreateGovernanceUpdate)
   .get("/api/governance/updates", handleListGovernanceUpdates)
   // P3 — diagnostics (observational only, D7).
+  .get("/api/diagnostics/health", handleSystemHealth)
   .get("/api/diagnostics/approval-volume", handleApprovalVolume)
   // P3 — registry reference data (read-only).
   .get("/api/machines", handleListMachines)

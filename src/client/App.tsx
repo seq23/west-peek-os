@@ -612,7 +612,53 @@ function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolv
   );
 }
 
-function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
+/**
+ * WHAT A CAPTURE IS FOR, and why this page had never been used once.
+ *
+ * The page asked for a "Type" and a "Channel" as free text and offered a privacy dropdown of seven
+ * SHOUTING enum values. Nothing on it said what a capture was, what happened to one after you wrote
+ * it, or why you would use this instead of Ask. So nobody did — production held zero captures on
+ * the day this was rewritten.
+ *
+ * The distinction that makes it worth having: ASK is for something you want done, and it comes back
+ * with an answer. CAPTURE is for something you do not want to lose and do not want to think about
+ * yet — a name from a dinner, a rumour, a number, a thing to chase. It is written down first and
+ * sorted second. So the page leads with the box, offers real kinds rather than free text, and says
+ * where each kind ends up.
+ */
+const CAPTURE_KINDS: readonly [{ value: string; label: string; hint: string }, ...{ value: string; label: string; hint: string }[]] = [
+  { value: "note", label: "A note to self", hint: "Anything you want kept. Sits in the record until you or someone routes it." },
+  { value: "company", label: "A company worth a look", hint: "Route it to Dealflow and it becomes a deal record to screen." },
+  { value: "person", label: "Someone worth knowing", hint: "Goes to the Network so the firm remembers who they are and who introduced them." },
+  { value: "signal", label: "A market signal or rumour", hint: "Feeds the morning brief and the thesis work — what is moving and who said so." },
+  { value: "task", label: "Something that must get done", hint: "Route it and it becomes a work card with an owner and a next action." },
+  { value: "lp", label: "An LP conversation", hint: "Kept against the LP record. Mark it LP-private if it was said in confidence." },
+  { value: "meeting", label: "Something from a meeting", hint: "Attaches to the meeting record so the debrief has it." },
+  { value: "question", label: "A question to answer later", hint: "Held until you send it to Ask, so it is not lost while you are busy." },
+];
+
+const CAPTURE_CHANNELS: { value: string; label: string }[] = [
+  { value: "web", label: "Typed here" },
+  { value: "phone", label: "Phone call" },
+  { value: "email", label: "Email" },
+  { value: "meeting", label: "In a meeting" },
+  { value: "event", label: "At an event" },
+  { value: "text", label: "Text or DM" },
+  { value: "referral", label: "Someone told me" },
+];
+
+/** The seven storage labels in the words a partner would use, with what each one costs you. */
+const PRIVACY_CHOICES: readonly [{ value: string; label: string; hint: string }, { value: string; label: string; hint: string }, ...{ value: string; label: string; hint: string }[]] = [
+  { value: "PUBLIC", label: "Public — already public knowledge", hint: "Any employee can use it, including with an outside model." },
+  { value: "INTERNAL", label: "Internal — ordinary firm business", hint: "The default. Employees can work with it." },
+  { value: "CONFIDENTIAL", label: "Confidential — sensitive to the firm", hint: "Stays inside. No outside model sees it." },
+  { value: "RESTRICTED", label: "Restricted — partners only", hint: "No AI employee may read it." },
+  { value: "LP_PRIVATE", label: "LP private — said by an LP in confidence", hint: "Never leaves the LP record." },
+  { value: "MNPI_SENSITIVE", label: "Material non-public information", hint: "Locked. Handling it wrongly is a regulatory problem, not a preference." },
+  { value: "BANKING_RESTRICTED", label: "Banking restricted", hint: "Locked to the banking side of a deal." },
+];
+
+function CapturePage({ onChanged, onNavigate }: { me: MeResponse; onChanged: () => void; onNavigate: (page: string) => void }) {
   const [captureType, setCaptureType] = useState("note");
   const [sourceChannel, setSourceChannel] = useState("web");
   const [rawText, setRawText] = useState("");
@@ -622,9 +668,42 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
   const [machineId, setMachineId] = useState<number>(3);
   const [error, setError] = useState<string | null>(null);
   const machines = useApi<{ machines: MachineRow[] }>("/api/machines");
+  const recent = useApi<{ captures: CaptureRow[] }>("/api/captures");
+
+  const kind = CAPTURE_KINDS.find((k) => k.value === captureType) ?? CAPTURE_KINDS[0];
+  const privacy = PRIVACY_CHOICES.find((p) => p.value === privacyLabel) ?? PRIVACY_CHOICES[1];
+  const unrouted = (recent.data?.captures ?? []).filter((c) => c.status === "NEW");
 
   return (
     <section data-testid="capture-page">
+      <div className="card capture-explainer">
+        <h3>Write it down now, sort it out later</h3>
+        <p>
+          This is the box for anything you do not want to lose and do not want to think about yet — a name from a
+          dinner, a company somebody mentioned, a number, a thing to chase. Nothing here needs to be tidy.
+        </p>
+        <p className="muted">
+          It is not the{" "}
+          <button type="button" className="link-button" onClick={() => onNavigate("intent")}>
+            Ask
+          </button>{" "}
+          box. Ask is for something you want done and comes back with an answer. Capture is for something you want
+          kept. Once it is in, you — or an AI employee — can send it on to{" "}
+          <button type="button" className="link-button" onClick={() => onNavigate("companies")}>
+            Dealflow
+          </button>
+          ,{" "}
+          <button type="button" className="link-button" onClick={() => onNavigate("network")}>
+            the Network
+          </button>
+          , or{" "}
+          <button type="button" className="link-button" onClick={() => onNavigate("work-cards")}>
+            a work card
+          </button>{" "}
+          with an owner. Until then it just sits there safely, and it survives losing signal mid-sentence.
+        </p>
+      </div>
+
       <form
         data-testid="capture-form"
         onSubmit={async (e) => {
@@ -653,6 +732,8 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
             });
             if (status === 201 && data) {
               setResult(data);
+              setRawText("");
+              recent.reload();
               onChanged();
             } else {
               setError(data?.error ?? `HTTP ${status}`);
@@ -670,38 +751,59 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
           }
         }}
       >
-        <div className="form-row">
+        <label className="capture-box-label" htmlFor="capture-text">
+          What happened, or what do you want to remember?
+        </label>
+        <textarea
+          id="capture-text"
+          data-testid="capture-text"
+          className="capture-box"
+          rows={5}
+          placeholder="Met the founder of a warehouse-robotics company at the Ferry Building — ex-Amazon, raising a seed in the autumn, wants an intro to Scooter."
+          value={rawText}
+          onChange={(e) => setRawText(e.target.value)}
+        />
+
+        <div className="form-row capture-choices">
           <label>
-            Type{" "}
-            <input data-testid="capture-type" value={captureType} onChange={(e) => setCaptureType(e.target.value)} />
+            What kind of thing is it?{" "}
+            <select data-testid="capture-type" value={captureType} onChange={(e) => setCaptureType(e.target.value)}>
+              {CAPTURE_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
-            Channel{" "}
-            <input data-testid="capture-channel" value={sourceChannel} onChange={(e) => setSourceChannel(e.target.value)} />
+            Where did it come from?{" "}
+            <select data-testid="capture-channel" value={sourceChannel} onChange={(e) => setSourceChannel(e.target.value)}>
+              {CAPTURE_CHANNELS.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
-            Privacy{" "}
+            Who may see it?{" "}
             <select data-testid="capture-privacy" value={privacyLabel} onChange={(e) => setPrivacyLabel(e.target.value)}>
-              {["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED", "LP_PRIVATE", "MNPI_SENSITIVE", "BANKING_RESTRICTED"].map((l) => (
-                <option key={l} value={l}>
-                  {l}
+              {PRIVACY_CHOICES.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
                 </option>
               ))}
             </select>
           </label>
         </div>
-        <div className="form-row">
-          <textarea
-            data-testid="capture-text" aria-label="What you need, in your own words"
-            rows={4}
-            style={{ width: "100%" }}
-            placeholder="What's on your mind?"
-            value={rawText}
-            onChange={(e) => setRawText(e.target.value)}
-          />
-        </div>
-        <button type="submit" className="btn-primary" data-testid="capture-submit">
-          Capture
+        {/* The two choices that change what happens next explain themselves in place, so nobody has
+            to guess what "signal" does or what LP_PRIVATE costs them. */}
+        <p className="muted small capture-hint" data-testid="capture-hint">
+          {kind.hint} · {privacy.hint}
+        </p>
+
+        <button type="submit" className="btn-primary" data-testid="capture-submit" disabled={!rawText.trim()}>
+          Keep this
         </button>
         {error && <p role="alert">Capture failed: {error}</p>}
       </form>
@@ -709,7 +811,7 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
       {result && (
         <div className="card" data-testid="capture-result">
           <p>
-            Captured <code>{result.id}</code> — status <strong>{result.status}</strong> · privacy {result.privacy_label}
+            Kept. <strong>{kind.label}</strong> · {privacy.value.replace(/_/g, " ").toLowerCase()} · <code>{result.id}</code>
           </p>
           <ResolveCapture captureId={result.id} onResolved={onChanged} />
           {result.status === "NEW" && (
@@ -719,19 +821,24 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
                 e.preventDefault();
                 const { status, data } = await api<{ capture: CaptureRow; work_card: WorkCardRow | null; error?: string }>(
                   `/api/captures/${result.id}/route`,
-                  { method: "POST", body: { machine_id: machineId, create_work_card: true, title: rawText.slice(0, 120) } },
+                  { method: "POST", body: { machine_id: machineId, create_work_card: true, title: (result.raw_text ?? "").slice(0, 120) } },
                 );
                 if (status === 200 && data) {
                   setResult(data.capture);
-                  setRouteResult(`Routed to machine #${data.capture.routed_machine_id}; work card ${data.work_card?.id ?? "none"} created.`);
+                  recent.reload();
+                  setRouteResult(`Sent to machine #${data.capture.routed_machine_id}. ${data.work_card ? "A work card was opened for it." : "No work card was opened."}`);
                   onChanged();
                 } else {
-                  setRouteResult(`Route failed: ${data?.error ?? `HTTP ${status}`}`);
+                  setRouteResult(`Could not send it on: ${data?.error ?? `HTTP ${status}`}`);
                 }
               }}
             >
+              <p className="muted small">
+                It is saved either way. Sending it on hands it to a department and opens a work card so somebody
+                owns it.
+              </p>
               <label>
-                Route to machine{" "}
+                Send it to{" "}
                 <select data-testid="route-machine" value={machineId} onChange={(e) => setMachineId(Number(e.target.value))}>
                   {(machines.data?.machines ?? []).map((m) => (
                     <option key={m.id} value={m.id}>
@@ -741,12 +848,40 @@ function CapturePage({ onChanged }: { me: MeResponse; onChanged: () => void }) {
                 </select>
               </label>{" "}
               <button type="submit" className="btn-strong" data-testid="route-submit">
-                Route + create work card
+                Send it on and open a work card
               </button>
             </form>
           )}
           {routeResult && <p data-testid="route-result">{routeResult}</p>}
         </div>
+      )}
+
+      {/* A page with nothing on it reads as broken. Recent captures show the box is real and give
+          the unrouted ones somewhere to be seen rather than quietly accumulating. */}
+      <h3>Recently kept</h3>
+      {unrouted.length > 0 && (
+        <p className="notice" data-testid="capture-unrouted">
+          {unrouted.length} {unrouted.length === 1 ? "capture has" : "captures have"} not been sent anywhere yet.
+        </p>
+      )}
+      {(recent.data?.captures ?? []).length === 0 ? (
+        <p className="muted">
+          Nothing kept yet. The first one can be a single line — it does not have to be a finished thought.
+        </p>
+      ) : (
+        <ul className="card-list" data-testid="capture-recent">
+          {(recent.data?.captures ?? []).slice(0, 8).map((c) => (
+            <li key={c.id} className="card" data-testid={`capture-row-${c.id}`}>
+              <p>
+                <strong>{CAPTURE_KINDS.find((k) => k.value === c.capture_type)?.label ?? c.capture_type}</strong>{" "}
+                <span className="muted small">
+                  · {c.status === "NEW" ? "not sent anywhere yet" : c.status.toLowerCase().replace(/_/g, " ")}
+                </span>
+              </p>
+              <p>{(c.raw_text ?? "").slice(0, 220)}</p>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );
@@ -1360,31 +1495,89 @@ function AiPage({ me }: { me: MeResponse }) {
   );
 }
 
-function DiagnosticsPage() {
-  const health = useApi<HealthResponse>("/api/health");
+interface HealthCheckRow {
+  key: string;
+  label: string;
+  state: "OK" | "DEGRADED" | "DOWN";
+  reading: string;
+  remedy?: string;
+  page?: string;
+}
+interface SystemHealth {
+  overall: "OK" | "DEGRADED" | "DOWN";
+  summary: string;
+  checks: HealthCheckRow[];
+  checked_at: string;
+}
+
+const HEALTH_WORD: Record<string, string> = { OK: "Working", DEGRADED: "Needs a look", DOWN: "Broken" };
+/* Where each check is fixed, named as the destination rather than as the fault — "Open the morning
+   brief" is a place to go; "Go to morning brief" is the check's title said twice. */
+const HEALTH_DESTINATION: Record<string, string> = {
+  home: "Open the morning brief",
+  "work-cards": "Open scheduled work",
+  employees: "Open the employee lounge",
+  "ai-ops": "Open spend and routing",
+  record: "Open the record",
+  integrations: "Open integrations",
+};
+const HEALTH_CLASS: Record<string, string> = { OK: "health-ok", DEGRADED: "health-warn", DOWN: "health-down" };
+
+/**
+ * The dot never travels alone. Colour says it fast, the word beside it says it at all — the same
+ * fact twice, so the board still reads for somebody who cannot separate the red from the green.
+ */
+function HealthDot({ state }: { state: string }) {
+  return <span className={`health-dot ${HEALTH_CLASS[state] ?? "health-warn"}`} aria-hidden="true" />;
+}
+
+function DiagnosticsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
+  const health = useApi<SystemHealth>("/api/diagnostics/health");
   const volume = useApi<ApprovalVolume>("/api/diagnostics/approval-volume");
+  const data = health.data;
+
   return (
     <section data-testid="diagnostics-page">
-      <h3>System health</h3>
-      {health.status === 200 && health.data ? (
-        <div data-testid="health-panel">
-          <p>
-            API: <strong>{health.data.ok ? "OK" : "DEGRADED"}</strong> — env <code>{health.data.env}</code>, schema{" "}
-            <code>{health.data.d1.schemaVersion ?? "none"}</code>
-          </p>
-          <ul>
-            {Object.entries(health.data.bindings).map(([name, present]) => (
-              <li key={name}>
-                {name}: {present ? "bound" : "absent (degraded)"}
-              </li>
+      <h3>Is anything broken?</h3>
+      {data ? (
+        <>
+          <div className="health-headline" data-testid="health-headline" role="status">
+            <HealthDot state={data.overall} />
+            <strong>{HEALTH_WORD[data.overall]}</strong>
+            <span className="muted">— {data.summary}</span>
+          </div>
+          <div className="health-grid" data-testid="health-grid">
+            {data.checks.map((c) => (
+              <div className="health-card" data-state={c.state} data-testid={`health-${c.key}`} key={c.key}>
+                <div className="health-card-top">
+                  <HealthDot state={c.state} />
+                  <span className="health-card-label">{c.label}</span>
+                  <span className="health-card-state">{HEALTH_WORD[c.state]}</span>
+                </div>
+                <div className="health-card-reading">{c.reading}</div>
+                {c.remedy ? <div className="health-card-remedy">{c.remedy}</div> : null}
+                {c.page ? (
+                  <button type="button" className="link-button" onClick={() => onNavigate(c.page!)}>
+                    {HEALTH_DESTINATION[c.page] ?? "Go and look"} &rarr;
+                  </button>
+                ) : null}
+              </div>
             ))}
-          </ul>
-        </div>
+          </div>
+          <p className="muted small">
+            Read {data.checked_at.slice(11, 16)} UTC. Every line above is a measurement taken just now, not a
+            configuration setting — a green light here means something was actually checked.
+          </p>
+        </>
       ) : (
-        <p>Health check failed (HTTP {health.status ?? "network error"}).</p>
+        <p>{health.status ? `Health check failed (HTTP ${health.status}).` : "Reading the system\u2026"}</p>
       )}
 
-      <h3>Approval volume (D7 — observational; target ≤ {volume.data?.targetPerDay ?? 15}/day)</h3>
+      <h3>How much are you being asked to approve?</h3>
+      <p className="muted">
+        The firm is supposed to need you no more than {volume.data?.targetPerDay ?? 15} times a day. More than that
+        and the machine is pushing its judgement onto you.
+      </p>
       <div className="table-wrap">
         <table data-testid="approval-volume">
           <thead>
@@ -4202,7 +4395,7 @@ export function App() {
           {authed && active === "machines" && <MachinesPage me={me.data!} />}
           {authed && active === "notifications" && <NotificationsPage me={me.data!} />}
           {authed && active === "today" && <TodayPage me={me.data!} onNavigate={navigate} />}
-          {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} />}
+          {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} onNavigate={navigate} />}
           {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "work-cards" && (
             <>
@@ -4286,7 +4479,7 @@ export function App() {
           {authed && active === "governance" && <GovernancePage me={me.data!} />}
           {authed && active === "ai" && <AiPage me={me.data!} />}
           {authed && active === "ai-ops" && <AiOpsPage me={me.data!} />}
-          {authed && active === "diagnostics" && <DiagnosticsPage />}
+          {authed && active === "diagnostics" && <DiagnosticsPage onNavigate={navigate} />}
           </div>
         </main>
       </div>

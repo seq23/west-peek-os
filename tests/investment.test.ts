@@ -882,8 +882,9 @@ describe("7. opportunity lifecycle and the event spine", () => {
       const res = await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to });
       expect(res.status).toBe(200);
     }
-    const terminal = await call<{ error: string }>(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "SCREENING" });
-    expect(terminal.status).toBe(409);
+    // A pass is reversible but not a free pass: the only way out of it is back to screening.
+    const jump = await call<{ error: string }>(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "CLOSED" });
+    expect(jump.status).toBe(409);
 
     const events = await t.db
       .prepare("SELECT event_type FROM event_record WHERE object_type = 'investment_opportunity' AND object_id = ?1 ORDER BY created_at, id")
@@ -892,6 +893,57 @@ describe("7. opportunity lifecycle and the event spine", () => {
     const types = (events.results ?? []).map((e) => e.event_type);
     expect(types[0]).toBe("investment.opportunity_created");
     expect(types.filter((x) => x === "investment.opportunity_transitioned")).toHaveLength(3);
+  });
+
+  /*
+   * The operator asked how to bring Synthient.ai back after the firm passed on it. The answer used
+   * to be that you could not — PASS was a dead end in the table, the same shape that made "put it
+   * back" fail on a cancelled work card. Companies raise again; a pass is a judgement, not a filing.
+   */
+  it("a passed deal can be looked at again, and comes back at screening rather than where it left", async () => {
+    const company = await createCompany("Reconsidered Co");
+    const opp = await createOpportunityApi(company, { title: "reconsider" });
+    for (const to of ["SCREENING", "DILIGENCE", "PASS"]) {
+      expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to })).status).toBe(200);
+    }
+
+    const reopened = await call<{ status: string }>(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "SCREENING" });
+    expect(reopened.status).toBe(200);
+    expect(reopened.body.status).toBe("SCREENING");
+
+    // It does not resume at diligence — the earlier work was done against the company as it was.
+    const backToDiligence = await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "DILIGENCE" });
+    expect(backToDiligence.status).toBe(200);
+
+    // The reversal is on the ledger, so the history survives even though the status no longer shows it.
+    const events = await t.db
+      .prepare(
+        "SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'investment.opportunity_transitioned' ORDER BY created_at, id",
+      )
+      .bind(opp.id)
+      .all<{ payload_json: string }>();
+    const walk = (events.results ?? []).map((e) => JSON.parse(e.payload_json) as { from: string; to: string });
+    expect(walk).toContainEqual({ from: "PASS", to: "SCREENING" });
+  });
+
+  // A withdrawn deal is the same story: the company went away, and companies come back.
+  it("a withdrawn deal can also be brought back", async () => {
+    const company = await createCompany("Returned Co");
+    const opp = await createOpportunityApi(company, { title: "returned" });
+    expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "WITHDRAWN" })).status).toBe(200);
+    expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "SCREENING" })).status).toBe(200);
+  });
+
+  // CLOSED stays terminal. Money moved; that is not a status anybody walks back out of.
+  it("an invested deal has no way out of CLOSED", async () => {
+    const company = await createCompany("Invested Terminal Co");
+    const opp = await createOpportunityApi(company, { title: "terminal" });
+    for (const to of ["SCREENING", "DILIGENCE", "IC_READY", "IC_DECIDED", "CLOSED"]) {
+      expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to })).status).toBe(200);
+    }
+    for (const to of ["SCREENING", "PASS", "WITHDRAWN", "DILIGENCE"]) {
+      expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to })).status).toBe(409);
+    }
   });
 
   it("a transaction whose approval card is refused can be resubmitted, and is never auto-VOIDed", async () => {
