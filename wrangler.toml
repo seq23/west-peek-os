@@ -38,6 +38,11 @@ database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
 # R2 — governed binary documents/artifacts only. D1 holds metadata/provenance.
+# Workers AI — the cheap tier. A binding, so no hostname, no key, nothing on the egress allowlist.
+# 10,000 neurons a day are included, which makes small routine work genuinely free.
+[ai]
+binding = "AI"
+
 [[r2_buckets]]
 binding = "WP_OS_DOCUMENTS"
 bucket_name = "west-peek-os-documents"
@@ -111,6 +116,9 @@ binding = "WP_OS_DB"
 database_name = "west-peek-os-db"
 database_id = "1d7c242b-fddc-41f1-843c-03dd2db6fbef"
 migrations_dir = "migrations"
+
+[env.production.ai]
+binding = "AI"
 
 [[env.production.r2_buckets]]
 binding = "WP_OS_DOCUMENTS"

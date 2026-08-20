@@ -178,6 +178,12 @@ const budgetUpdateSchema = z.object({
   daily_cap_usd: z.number().min(0),
   per_run_cap_usd: z.number().min(0),
   strategic_surge: surgeSchema.nullable().optional(),
+  /**
+   * Whether a routing pin survives CHEAPO. Only the "free only" posture sets this false, and it is
+   * the one setting allowed to override the morning brief's frontier pin. Defaults true so nothing
+   * changes for anyone who does not send it.
+   */
+  honours_pins: z.boolean().default(true),
   approval_receipt_id: z.string().trim().min(1).optional(),
 });
 
@@ -233,8 +239,8 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
 
     const id = `bp_${crypto.randomUUID()}`;
     await ctx.env.WP_OS_DB.prepare(
-      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, strategic_surge_json, set_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, strategic_surge_json, honours_pins, set_by)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
     )
       .bind(
         id,
@@ -244,6 +250,7 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
         input.daily_cap_usd,
         input.per_run_cap_usd,
         input.strategic_surge ? JSON.stringify(input.strategic_surge) : null,
+        input.honours_pins ? 1 : 0,
         actor.firmUserId!,
       )
       .run();

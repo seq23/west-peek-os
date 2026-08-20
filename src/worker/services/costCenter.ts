@@ -215,6 +215,9 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
     since,
     firm_policy: {
       cost_mode: policy.cost_mode,
+      // Which posture this is, so the lever can show where it currently sits rather than making
+      // the operator infer it from a mode name and a boolean.
+      honours_pins: Number((policy as unknown as { honours_pins?: number }).honours_pins ?? 1) === 1,
       privacy_mode: policy.privacy_mode,
       daily_cap_usd: policy.daily_cap_usd,
       per_run_cap_usd: policy.per_run_cap_usd,

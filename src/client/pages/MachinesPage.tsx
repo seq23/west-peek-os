@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { departmentDef } from "@shared/registry/departments";
+import { skillsForMachines } from "@shared/skills/library";
 import { api, useApi, type MeResponse } from "../lib/api";
 
 /**
@@ -295,23 +297,90 @@ export function MachinesPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="machines-page">
-      <p className="muted small" data-testid="machines-note">
-        {fleet.data.machines.length} machines · {fleet.data.machines.filter((m) => m.status === "PAUSED").length} paused. {fleet.data.note}
-      </p>
+      {/*
+        WHAT A MACHINE IS, said once, at the top.
+
+        The page opened on a filter of shouted enum values and a table of ids, and the operator's
+        verdict was that it "tells me nothing" — accurate, because nothing on it said what a machine
+        was or why the firm has forty-five. A machine is a part of the firm that does a kind of
+        work: a department. Saying so is most of the fix.
+      */}
+      <div className="card" data-testid="machines-what">
+        <p className="small">
+          <strong>A machine is a department</strong> — a part of the firm that does one kind of work.
+          Employees are seated in them, work is routed to them, and each one has its own budget,
+          its own pause switch and its own methods.
+        </p>
+        <p className="muted small" data-testid="machines-note">
+          {fleet.data.machines.length} of them, grouped into {domains.length} areas ·{" "}
+          {fleet.data.machines.filter((m) => m.status === "PAUSED").length} paused. {fleet.data.note}
+        </p>
+      </div>
 
       <div className="form-row">
         <label>
-          Domain{" "}
+          Area{" "}
           <select data-testid="machines-domain" value={domain} onChange={(e) => setDomain(e.target.value)}>
-            <option value="ALL">All ({fleet.data.machines.length})</option>
+            <option value="ALL">Everything ({fleet.data.machines.length})</option>
             {domains.map((d) => (
               <option key={d} value={d}>
-                {d}
+                {departmentDef(d).name}
               </option>
             ))}
           </select>
         </label>
       </div>
+
+      {/* THE SKILL LIBRARY, where the department it belongs to is on screen.
+          The firm's methods used to live scattered across prompt strings in four services, so
+          "how we screen a deal" could not be read, reviewed or disagreed with. Now an employee
+          seated here reads these before working, and so can you. */}
+      {domain !== "ALL" && (
+        <section className="card" data-testid="department-skills">
+          <div className="home-section-head">
+            <h3>{departmentDef(domain).name}</h3>
+            <span className="muted small">{departmentDef(domain).what}</span>
+          </div>
+          {(() => {
+            const keys = shown.map((m) => m.key);
+            const skills = skillsForMachines(keys);
+            if (skills.length === 0) {
+              return (
+                <p className="state-empty">
+                  No methods written down for this area yet. Employees seated here work from their
+                  own judgement and whatever the card says — which is how the whole firm worked
+                  until recently, and why it was impossible to review.
+                </p>
+              );
+            }
+            return (
+              <>
+                <p className="muted small">
+                  {skills.length} method{skills.length === 1 ? "" : "s"} every employee seated here
+                  reads before working. Guidelines, not rules — the rules are enforced in code and
+                  cannot be broken from a prompt.
+                </p>
+                <ul className="card-list small">
+                  {skills.map((sk) => (
+                    <li key={sk.key} data-testid={`skill-${sk.key}`}>
+                      <details>
+                        <summary>
+                          <strong>{sk.title}</strong> <span className="muted small">{sk.when}</span>
+                        </summary>
+                        <ul className="card-list small">
+                          {sk.guidance.map((g, i) => (
+                            <li key={i}>{g.trim()}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            );
+          })()}
+        </section>
+      )}
 
       <div className="table-wrap">
         <table data-testid="machines-table">
@@ -330,7 +399,7 @@ export function MachinesPage({ me }: { me: MeResponse }) {
             {shown.map((m) => (
               <tr key={m.id} data-testid={`machine-row-${m.id}`}>
                 <td className="num">{m.id}</td>
-                <td>{m.name}</td>
+                <td>{m.name.replace(/ Machines?$/, "")}</td>
                 <td>
                   <span className={statusBadge(m.status)}>{m.status}</span>
                 </td>

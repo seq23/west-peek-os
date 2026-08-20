@@ -63,6 +63,14 @@ export interface LoopContext {
   allows_browser: boolean;
   /** What the partner said about HOW to do it. Absent on most cards. */
   prompt: string | null;
+  /**
+   * The firm's own methods for this employee's department, from the skill library.
+   *
+   * Empty for a department that has not written any down yet, and the prompt omits the section
+   * entirely in that case — an employee told "HOW THIS FIRM WORKS:" followed by nothing has been
+   * told something false about the firm.
+   */
+  guidance: string;
   /** What has already happened this run and in previous ones, oldest first. */
   history: string[];
 }
@@ -80,6 +88,9 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     // THE PARTNER'S OWN INSTRUCTION OUTRANKS THE DEFAULTS. It is placed after the work and before
     // the rules so it is read as part of the brief, and said to be authoritative so a model does
     // not average it against the generic guidance below.
+    // THE FIRM'S METHODS, above the generic rules and below the specific work. An employee should
+    // read how West Peek does this kind of thing before being told how anyone does anything.
+    ctx.guidance,
     ctx.prompt ? `HOW THE PARTNER WANTS THIS DONE — follow this over any general advice below:\n${ctx.prompt}` : "",
     "",
     ctx.history.length

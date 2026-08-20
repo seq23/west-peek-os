@@ -25,6 +25,11 @@ export interface Env {
   // ── Outbound email (P33) ──
   // Both are required before a single message can leave. A key alone does nothing: arriving in the
   // environment is not a decision to start emailing people.
+  /**
+   * Cloudflare Workers AI. A platform binding, not a credential — see effects/ for the same
+   * pattern with EMAIL. Absent means the cheap tier is unavailable, not that anything is broken.
+   */
+  AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> };
   RESEND_API_KEY?: string;
   /** Runware image generation. Absent means the capability is simply off, not broken. */
   RUNWARE_API_KEY?: string;

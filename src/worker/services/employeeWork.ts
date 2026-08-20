@@ -7,6 +7,8 @@ import { runAi } from "../ai/runAi";
 import { requestTask, runTask } from "./browserTask";
 import { searchQuestion } from "./liveSearch";
 import { machineForEmployee } from "./attribution";
+import { guidanceBlock } from "../../shared/skills/library";
+import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { buildDesignReviewPrompt } from "../../shared/design/reviewRubric";
 import { z } from "zod";
 import { ASK_PROMPT_VERSION, buildDraftPrompt, parseAnswer } from "../../shared/work/askToCard";
@@ -146,6 +148,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
   // WHOSE WORK THIS IS, for the cost centre. Resolved once rather than per step: the employee does
   // not change mid-run, and this is a lookup against the machine table.
   const machineId = await machineForEmployee(env, employee.name);
+  const rosterEntry = AI_EMPLOYEE_ROSTER.find((e) => e.name === employee.name);
 
   for (let step = 1; step <= MAX_STEPS; step++) {
     const loopCtx: LoopContext = {
@@ -156,6 +159,9 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       employee_role: employee.role,
       allows_browser: card.allows_browser === 1,
       prompt: card.prompt,
+      // Resolved from where this employee sits, so nothing is assigned by hand and nothing is
+      // maintained twice — the roster already says which machines they work.
+      guidance: guidanceBlock(rosterEntry?.primaryMachineKeys ?? []),
       history: await historyFor(env, card.id),
     };
 

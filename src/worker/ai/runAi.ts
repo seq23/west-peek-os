@@ -199,6 +199,11 @@ export interface BudgetPolicyRow {
   id: string;
   firm_scope: string;
   cost_mode: CostMode;
+  /**
+   * Whether a routing pin survives CHEAPO. 0 only under the "free only" posture, which is the one
+   * setting allowed to override the brief's frontier pin — see the routing branch below.
+   */
+  honours_pins?: number;
   privacy_mode: PrivacyMode;
   daily_cap_usd: number;
   per_run_cap_usd: number;
@@ -813,9 +818,28 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
       return false;
     }
   });
-  const pricing = await latestPricing(env, capable.map((p) => p.id));
+  /*
+   * A PROVIDER THAT CANNOT BE CALLED IS NOT A CANDIDATE — but only where that is knowable.
+   *
+   * HTTP providers are excluded from this check on purpose. A missing key there produces a run that
+   * lands BLOCKED_DEFERRED with an honest reason, and the tests inject a fetch stub precisely so
+   * that path stays exercisable; filtering on key presence would quietly change what they cover.
+   *
+   * Workers AI is different in kind. It is a BINDING: absent means there is no object to call at
+   * all, it cannot be stubbed through fetch, and it is the cheapest thing in the catalogue — so it
+   * wins every unpinned selection and then fails every one of them. Adding it broke every routing
+   * test in exactly that way, which is the same thing that would have happened in any environment
+   * where the binding was not granted.
+   *
+   * So: skipped when unbound, considered when bound. Narrow, and for a reason that does not
+   * generalise to the others.
+   */
+  const bindingAbsent = !(env as unknown as { AI?: unknown }).AI;
+  const selectable = bindingAbsent ? capable.filter((p) => p.provider_key !== "workers_ai") : capable;
+
+  const pricing = await latestPricing(env, selectable.map((p) => p.id));
   const options: ModelOption[] = pricing.flatMap((price) => {
-    const provider = capable.find((p) => p.id === price.provider_id);
+    const provider = selectable.find((p) => p.id === price.provider_id);
     return provider ? [{ provider, pricing: price }] : [];
   });
   if (options.length === 0) {
@@ -857,12 +881,30 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
       ordered = [];
       explanation = `machine ${input.routing!.machineId} pins ${machinePolicy.preferred_provider_key}/${machinePolicy.preferred_model}, which is not available (disabled, egress-denied, or unpriced)`;
     }
-  } else if (routePolicy) {
+  } else if (routePolicy && !(effectiveCostMode === "CHEAPO" && Number(policy.honours_pins ?? 1) === 0)) {
     ordered = orderByPolicy(routePolicy, routingCandidates);
     explanation =
       ordered.length > 0
         ? `routing policy '${routePolicy.task_class}' v${routePolicy.version_no}: ${ordered.map((c) => `${c.providerKey}/${c.model}`).join(" → ")}${routePolicy.allow_fallback ? " (fallback allowed)" : " (no fallback)"}`
         : `routing policy '${routePolicy.task_class}' v${routePolicy.version_no} names no available candidate`;
+  } else if (routePolicy) {
+    /*
+     * THE ONE POSTURE THAT OVERRIDES A PIN, and it says so on the record.
+     *
+     * "Free only" exists because the operator asked for a lever that gets the firm to $0, and a
+     * lever that stops at the two things which actually run is not a lever. Both the morning brief
+     * and employee work are pinned, so honouring pins meant CHEAPO changed nothing at all.
+     *
+     * Overriding is stated rather than silent for a specific reason: the brief is pinned BECAUSE
+     * the cheap tier once produced "the 30-year U.S. tax at 19 year high" and shipped it as fact.
+     * Anyone reading a thin brief later can find this explanation on the run and know why.
+     */
+    const cheapest = routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+    ordered = [cheapest];
+    explanation =
+      `spend posture is 'free only', which overrides routing policy '${routePolicy.task_class}' ` +
+      `v${routePolicy.version_no} (pinned ${orderByPolicy(routePolicy, routingCandidates)[0]?.model ?? "nothing available"}). ` +
+      `Cheapest available used instead: ${cheapest.providerKey}/${cheapest.model}. Quality on pinned work is lower by design.`;
   } else {
     const preferred = input.budgetContext?.preferredModel;
     let head: RoutingCandidate;

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { SPEND_POSTURES, postureDef, postureFor } from "@shared/ai/spendPosture";
 import { PrivacyModePanel } from "./PrivacyModePanel";
 
 /**
@@ -42,7 +43,7 @@ interface CatalogResponse {
 
 interface CostResponse {
   period: string;
-  firm_policy: { cost_mode: string; privacy_mode: string; daily_cap_usd: number; per_run_cap_usd: number; spent_today_usd: number };
+  firm_policy: { cost_mode: string; privacy_mode: string; daily_cap_usd: number; per_run_cap_usd: number; spent_today_usd: number; honours_pins: boolean };
   all_time: {
     spent_usd: number; model_spent_usd: number; vendor_spent_usd: number;
     runs: number; since: string | null; unpriced_vendor_calls: number;
@@ -263,6 +264,73 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
           {/* WHAT IT HAS COST, EVER. The page reported a period, which answers "are we on track this
               month" — not "what has this cost us", which is the question somebody asks first and
               had no answer anywhere. */}
+          {/*
+            THE LEVER, AND IT NOW DOES SOMETHING.
+
+            There has always been a `cost_mode`, and dragging it changed nothing: the cheapest
+            registered model was $0.075 per million tokens, and the only two things that actually
+            run — the morning brief and employee work — are both PINNED by routing policy, and a pin
+            beat cost mode outright.
+
+            Both are fixed. Cloudflare's open models are now in the catalogue at roughly a fortieth
+            of the frontier rate, free inside the daily allowance; and the cheapest posture is
+            allowed to override a pin, on the record, with the consequence stated rather than
+            discovered in a thin brief.
+          */}
+          {isMp && (
+            <section className="card spend-lever" data-testid="spend-posture">
+              <div className="home-section-head">
+                <h3>How much to spend</h3>
+                <span className="muted small">applies to everything the firm runs</span>
+              </div>
+              <ul className="posture-list">
+                {SPEND_POSTURES.map((p) => {
+                  const current =
+                    postureFor(cost.data!.firm_policy.cost_mode, cost.data!.firm_policy.honours_pins) === p.key;
+                  return (
+                    <li key={p.key} className={current ? "posture is-current" : "posture"}>
+                      <button
+                        type="button"
+                        className="posture-pick"
+                        aria-pressed={current}
+                        data-testid={`posture-${p.key}`}
+                        onClick={async () => {
+                          const res = await api<{ error?: string; detail?: string }>("/api/ai/budget", {
+                            method: "POST",
+                            body: {
+                              cost_mode: p.costMode,
+                              privacy_mode: cost.data!.firm_policy.privacy_mode,
+                              daily_cap_usd: cost.data!.firm_policy.daily_cap_usd,
+                              per_run_cap_usd: cost.data!.firm_policy.per_run_cap_usd,
+                              honours_pins: p.honoursPins,
+                            },
+                          });
+                          setMessage(
+                            res.status === 201 || res.status === 200
+                              ? `Now on “${p.label}”. ${p.tradeoff}`
+                              : `Refused: ${res.data?.detail ?? res.data?.error ?? res.status}`,
+                          );
+                          cost.reload();
+                        }}
+                      >
+                        <span className="posture-label">
+                          {p.label}
+                          {current && <span className="badge badge-ok">current</span>}
+                        </span>
+                        <span className="small">{p.what}</span>
+                        <span className="muted small">{p.cost}</span>
+                        {/* THE DOWNSIDE, ON THE CONTROL. Every one of these has one, and a lever
+                            that only advertises its upside is how the brief got quietly wrecked
+                            the first time. */}
+                        <span className="muted small posture-tradeoff">{p.tradeoff}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+
           <section className="card cost-alltime" data-testid="cost-all-time">
             <div>
               <span className="cost-alltime-figure">${cost.data.all_time.spent_usd.toFixed(2)}</span>
@@ -308,7 +376,8 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
               {cost.data.totals.quarantined_runs} quarantined output(s).
             </p>
             <p className="muted small">
-              Firm policy: {cost.data.firm_policy.cost_mode} / {cost.data.firm_policy.privacy_mode} · today $
+              Firm policy: {postureDef(postureFor(cost.data.firm_policy.cost_mode, cost.data.firm_policy.honours_pins)).label}
+              {" / "}{cost.data.firm_policy.privacy_mode} · today $
               {cost.data.firm_policy.spent_today_usd.toFixed(4)} of ${cost.data.firm_policy.daily_cap_usd}
             </p>
           </section>

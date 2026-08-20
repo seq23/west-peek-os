@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import type { ProviderAdapter } from "./providers/types";
 import { createHttpExternalAdapter } from "./providers/httpExternal";
 import { createOpenRouterAdapter } from "./providers/openRouter";
+import { createWorkersAiAdapter, type WorkersAiBinding } from "./providers/workersAi";
 import { createFireworksAdapter } from "./providers/fireworks";
 import { createSpecialistAdapter } from "./providers/specialist";
 
@@ -80,6 +81,23 @@ export function adapterFor(
     return {
       adapter: createOpenRouterAdapter({ baseUrl, model: candidate.model, apiKey: env.OPENROUTER_API_KEY, fetchImpl }),
       credentialConfigured: typeof env.OPENROUTER_API_KEY === "string" && env.OPENROUTER_API_KEY.length > 0,
+    };
+  }
+  /*
+   * WORKERS AI — a binding, so "is the credential configured" means "was the binding granted".
+   *
+   * No hostname, no bearer token, nothing to leak and nothing on the egress allowlist. If the
+   * binding is absent the provider is simply unavailable and routing moves on, which is the same
+   * shape as a missing API key everywhere else in this function.
+   */
+  if (candidate.providerKey === "workers_ai") {
+    const binding = (env as unknown as { AI?: WorkersAiBinding }).AI;
+    return {
+      adapter: createWorkersAiAdapter({
+        binding: binding ?? { run: async () => { throw new Error("workers_ai_binding_absent"); } },
+        model: candidate.model,
+      }),
+      credentialConfigured: Boolean(binding),
     };
   }
   if (candidate.providerKey === "fireworks") {
