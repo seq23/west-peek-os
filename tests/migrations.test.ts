@@ -52,8 +52,31 @@ describe("migration 0001 — schema + seeds", () => {
   it("re-applying migrations is a tracked no-op (idempotency)", async () => {
     const secondRun = await applyMigrations(t.db);
     expect(secondRun).toEqual([]);
+
+    /*
+     * Three rows, and the third is not a person.
+     *
+     * This asserted a bare count of two, which was the right check while every firm_user was a
+     * partner. Migration 0085 adds `fu_browser_agent` — the identity the firm's own browser uses to
+     * open the firm's own pages, since everything here sits behind Cloudflare Access.
+     *
+     * A count would now pass for the wrong reasons, so what is asserted is the PROPERTY that makes
+     * that row safe: exactly two principals hold a role, and the agent holds none. Its entire
+     * control is the absence — `authorize()` denies every reserved action to an actor without the
+     * approver role, so a roleless identity cannot approve, activate or decide anything.
+     */
     const users = await t.db.prepare("SELECT COUNT(*) AS n FROM firm_user").first<{ n: number }>();
-    expect(users?.n).toBe(2);
+    expect(users?.n).toBe(3);
+
+    const withRoles = await t.db
+      .prepare("SELECT COUNT(DISTINCT firm_user_id) AS n FROM firm_user_role")
+      .first<{ n: number }>();
+    expect(withRoles?.n).toBe(2);
+
+    const agentRoles = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM firm_user_role WHERE firm_user_id = 'fu_browser_agent'")
+      .first<{ n: number }>();
+    expect(agentRoles?.n).toBe(0);
   });
 });
 

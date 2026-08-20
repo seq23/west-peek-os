@@ -30,6 +30,18 @@ export interface Env {
    * pattern with EMAIL. Absent means the cheap tier is unavailable, not that anything is broken.
    */
   AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> };
+  /**
+   * The Access service token this firm's own browser authenticates with. Present means a request
+   * Access has already vouched for can be mapped onto the read-only browser identity; absent means
+   * that capability simply does not exist. See auth.ts and migration 0085.
+   */
+  CF_ACCESS_CLIENT_ID?: string;
+  /**
+   * The other half of the service token. Used ONLY by the browser client, and only when the host it
+   * is opening is this firm's own — see isOwnHost(). The Worker's own auth never reads it: Access
+   * has already verified both halves before a request reaches us.
+   */
+  CF_ACCESS_CLIENT_SECRET?: string;
   RESEND_API_KEY?: string;
   /** Runware image generation. Absent means the capability is simply off, not broken. */
   RUNWARE_API_KEY?: string;

@@ -39,7 +39,10 @@ export const CARD_SOURCES: readonly CardSource[] = [
   {
     key: "ask",
     label: "Something you asked for",
-    how: "Ask turns a rough request into a work packet; executing that packet creates the card that carries it out.",
+    // Was "Ask turns a rough request into a work packet; executing that packet creates the card".
+    // That described the flow Ask replaced — it now drafts the card itself, and a request that
+    // wants a document rather than a task comes back as a brief instead.
+    how: "Ask reads what you need, writes the card for you, and shows it before anything is created — or hands back a written brief when a document is what you actually wanted.",
     page: "intent",
   },
   {

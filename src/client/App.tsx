@@ -244,7 +244,6 @@ const NAV_GROUPS = [
       { key: "meetings", label: "Meetings" },
       { key: "secondaries", label: "Secondaries" },
       { key: "portfolio", label: "Portfolio" },
-      { key: "follow-on", label: "Follow-on" },
       // Allocation merged into Fund strategy. Two tabs answered one question — "what the portfolio
       // is made of" and "where the fund goes" lived on one, "allocation decision view" on the
       // other — so you had to visit both to be sure you had seen everything. The route stays live.
@@ -360,6 +359,24 @@ const NAV_ITEMS: Array<{ key: string; label: string; group: string; secondary: b
       secondary: "secondary" in g && g.secondary === true,
     })),
   );
+
+/**
+ * Every destination the URL may name.
+ *
+ * Derived from the nav rather than listed, so a page added to NAV_GROUPS is linkable the moment it
+ * exists and a page removed stops resolving — the two cannot drift. Routes kept alive after a merge
+ * (allocation, follow-on, market-map) are handled where they render, not here.
+ */
+const ALL_NAV_KEYS: ReadonlySet<string> = new Set([
+  ...NAV_ITEMS.map((n) => n.key),
+  // Merged destinations whose addresses still work, so an old link or bookmark lands somewhere real.
+  "allocation",
+  "follow-on",
+  "market-map",
+  "jobs",
+  "browser-tasks",
+  "introductions",
+]);
 
 /** Keys that live behind the More / System disclosure. */
 const SECONDARY_KEYS: ReadonlySet<string> = new Set(
@@ -3835,6 +3852,7 @@ const STRATEGY_STEPS: readonly { q: string; where: string }[] = [
   { q: "What is left, and what is at risk?", where: "Alerts and the companies moving the wrong way." },
   { q: "What would this next cheque do?", where: "Scenarios: model it before you commit to it." },
   { q: "What does it cost us later?", where: "Reserves and follow-on capacity after the cheque." },
+  { q: "And the companies we already own?", where: "Follow-on: which of them earns the next cheque." },
 ];
 
 function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
@@ -3866,18 +3884,66 @@ function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
         <span className="muted small">scenarios, and what each one breaks</span>
       </div>
       <AllocationPage me={me} />
+
+      {/* FOLLOW-ON IS THE SAME DECISION, SEEN LATER.
+          It had its own tab, which meant "should we write this cheque" and "should we write ANOTHER
+          cheque into a company we already own" were answered on different pages — while sharing the
+          reserves they both draw from. Deciding a follow-on without the allocation picture in front
+          of you is deciding it blind, and the reserve consequence is the last step of the sequence
+          this page already walks. */}
+      <div className="home-section-head">
+        <h2>Following on</h2>
+        <span className="muted small">the companies we already own, and what a second cheque costs</span>
+      </div>
+      <FollowOnPage />
     </section>
   );
 }
 
+/**
+ * Which page the URL is asking for.
+ *
+ * THE APP HAD NO ROUTING AT ALL. `active` was React state initialised to "home", so the address bar
+ * never changed: a page could not be bookmarked, a link to one could not be sent to Scooter,
+ * refreshing dumped you back at Home from wherever you were, and the browser's back button did
+ * nothing. Everything in here already speaks in nav keys — `onNavigate("work-cards")` — so the keys
+ * were a routing table that was simply never connected to the URL.
+ *
+ * HASH RATHER THAN PATH, deliberately. A path needs the server to serve the app for every route;
+ * the Worker already does that, but a hash cannot 404 and cannot be mistaken for an API path — and
+ * `/api/...` and `/work-cards` living in the same namespace is a trap worth not setting.
+ *
+ * An unknown key falls back to Home rather than rendering nothing, because a stale link somebody
+ * saved should land somewhere real.
+ */
+function keyFromHash(known: (key: string) => boolean): string {
+  const raw = window.location.hash.replace(/^#\/?/, "").trim();
+  return raw && known(raw) ? raw : "home";
+}
+
 export function App() {
-  const [active, setActive] = useState<string>("home");
+  const [active, setActive] = useState<string>(() => keyFromHash((k) => ALL_NAV_KEYS.has(k)));
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [navOpen, setNavOpen] = useState(false);
   // Open if the current destination lives there, so arriving at a system page by deep link or by
   // an in-app jump never leaves the operator looking at a collapsed region with no active item.
   const [systemOpen, setSystemOpen] = useState<boolean>(() => SECONDARY_KEYS.has("home"));
   const me = useApi<MeResponse>("/api/me");
+
+  /*
+   * The back button, and anyone arriving on a link. Without this, pressing back changed the URL and
+   * left the page where it was — which is worse than no routing, because the address then lies
+   * about what is on screen.
+   */
+  useEffect(() => {
+    const onHash = () => {
+      const key = keyFromHash((k) => ALL_NAV_KEYS.has(k));
+      setActive(key);
+      if (SECONDARY_KEYS.has(key)) setSystemOpen(true);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   // Distinguishes "signed out deliberately" from "never signed in". Without it the two states
   // render the same screen and the operator cannot tell whether sign-out worked.
   const [signedOut, setSignedOut] = useState(false);
@@ -3930,6 +3996,12 @@ export function App() {
   const navigate = useCallback((key: string) => {
     setActive(key);
     setNavOpen(false);
+    // The URL follows the page, so it can be bookmarked, sent to your partner, and survive a
+    // refresh. `replace: false` on purpose — the back button should walk back through where you
+    // have actually been.
+    if (typeof window !== "undefined" && keyFromHash((k) => ALL_NAV_KEYS.has(k)) !== key) {
+      window.location.hash = `#/${key}`;
+    }
     // Reveal the secondary tier when something inside it becomes current. Never auto-COLLAPSE:
     // closing the region under an operator who just opened it is the annoying half of this.
     if (SECONDARY_KEYS.has(key)) setSystemOpen(true);
@@ -4113,7 +4185,8 @@ export function App() {
           {authed && active === "introductions" && <IntroductionsPage />}
           {authed && active === "community" && <CommunityPage />}
           {authed && active === "record" && <LedgersPage />}
-          {authed && active === "follow-on" && <FollowOnPage />}
+          {/* Follow-on merged into Fund strategy. The route stays live. */}
+          {authed && active === "follow-on" && <FundStrategyPage me={me.data!} />}
           {authed && active === "weekly-review" && <WeeklyReviewPage onNavigate={navigate} />}
           {authed && active === "cross-office" && <CrossOfficePage />}
           {authed && active === "secondaries" && <SecondariesPage onNavigate={navigate} />}

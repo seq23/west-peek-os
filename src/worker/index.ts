@@ -472,6 +472,19 @@ import {
 async function handleHealth(ctx: RouteContext): Promise<Response> {
   const { env } = ctx;
 
+  /*
+   * WHICH IDENTITY HEADERS ACTUALLY ARRIVE. Names only — never values.
+   *
+   * The firm's browser could not authenticate and there was no way to tell why: the Worker sees
+   * whatever Cloudflare Access chooses to forward, and guessing at that from documentation is how
+   * two deploys were spent on the wrong header. This answers it directly, and it is safe to leave
+   * on because a header NAME is not a secret and this route is already unauthenticated.
+   */
+  const identityHeaders = [...ctx.request.headers.keys()]
+    .filter((h) => h.toLowerCase().startsWith("cf-"))
+    .sort();
+
+
   let d1: { reachable: boolean; schemaVersion: string | null; error?: string } = {
     reachable: false,
     schemaVersion: null,
@@ -488,6 +501,8 @@ async function handleHealth(ctx: RouteContext): Promise<Response> {
   return json({
     ok: d1.reachable,
     env: env.WP_OS_ENV,
+    identity_headers: identityHeaders,
+    access_client_id_configured: typeof env.CF_ACCESS_CLIENT_ID === "string" && env.CF_ACCESS_CLIENT_ID.length > 0,
     d1,
     bindings: {
       WP_OS_DB: typeof env.WP_OS_DB !== "undefined",

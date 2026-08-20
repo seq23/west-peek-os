@@ -674,8 +674,8 @@ export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k:
               ))}
             </select>
           </label>
-          <button type="submit" className="btn-strong" data-testid="intent-submit">
-            Open work packet
+          <button type="submit" data-testid="intent-submit">
+            Open one the old way
           </button>
         </div>
       </form>

@@ -66,6 +66,46 @@ export type ShiftKey = (typeof SHIFTS)[number]["key"];
  * Names are roster names, and `resolveDuty` silently drops any that are not on the roster — so
  * consolidating the workforce cannot break the rota, it just shortens a shift's bench.
  */
+/**
+ * WHY EACH PERSON, at this hour.
+ *
+ * `because` was set to the shift's own intent, which is already printed as the heading above the
+ * list — so the page showed the same sentence six times, once per person, saying nothing about any
+ * of them. It read as a rendering fault because it was one.
+ *
+ * A reason has to be about THAT person on THAT shift, or it is decoration. Anyone without an entry
+ * falls back to their role, which at least says something true.
+ */
+const WHY_ON_SHIFT: Record<ShiftKey, Record<string, string>> = {
+  MORNING: {
+    Walker: "signs Scooter's morning brief and sequences his day",
+    Wren: "signs your morning brief and holds the Wednesday cadence",
+    Wyatt: "the overnight sweep is his, so the brief has something in it",
+    Wells: "surfaces what changed in the record since you last looked",
+    Porter: "checks the overnight syncs landed before anyone acts on them",
+  },
+  MIDDAY: {
+    Pierce: "deal hours — screening and diligence run through him",
+    Wyatt: "runs the research behind whatever is being decided",
+    Poppy: "assembles the packet while the committee is still reachable",
+    Walter: "sits in the meetings and catches what was actually said",
+    Waverly: "finds the warm path while people are at their desks",
+  },
+  EVENING: {
+    Wesley: "the LP follow-ups that should not wait until tomorrow",
+    Piper: "qualifies the day's LP conversations while they are fresh",
+    Waverly: "the community is awake in the evening and the firm is not",
+    Parker: "events and the guest list, which are an evening job",
+    Winter: "checks the portfolio asks that came in today",
+    Pippa: "reads anything due to go out before it does",
+  },
+  OVERNIGHT: {
+    Willow: "the compliance check that should notice a problem at 3am",
+    Porter: "keeps the syncs running while nobody is watching",
+    Pax: "the scheduled work runs overnight and something has to watch it",
+  },
+};
+
 const SHIFT_PREFERENCE: Record<ShiftKey, readonly string[]> = {
   // The brief lands at breakfast, and the day gets sequenced before it starts.
   MORNING: ["Walker", "Wren", "Wyatt", "Wells", "Porter"],
@@ -136,7 +176,9 @@ export function resolveDuty(
   };
 
   for (const name of options.pinned ?? []) take(name, "you asked for them specifically");
-  for (const name of SHIFT_PREFERENCE[shift]) take(name, meta.intent);
+  for (const name of SHIFT_PREFERENCE[shift]) {
+    take(name, WHY_ON_SHIFT[shift][name] ?? byName.get(name)?.role ?? "rostered for this shift");
+  }
 
   // A thin shift is left thin rather than padded with whoever is left. An employee on duty with no
   // reason to be is noise, and the operator can always pin someone.

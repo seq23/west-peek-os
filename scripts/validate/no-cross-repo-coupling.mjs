@@ -40,6 +40,13 @@ const FOREIGN_BINDING = /env\.(?!WP_OS_)(?:[A-Z][A-Z0-9_]{2,})\b/;
  *   keys — a credential for an effect this system performs itself, NOT a handle on another
  *   repository's database. The two switches that gate its use (WP_OS_EMAIL_SEND, WP_OS_EMAIL_FROM)
  *   already carry the WP_OS_ prefix and need no exemption.
+ * - CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET: this firm's OWN Cloudflare Access service
+ *   token, used so the firm's browser can open the firm's own pages — every West Peek page sits
+ *   behind Access, so a design reviewer that can critique any founder's homepage could not open
+ *   ours. Platform-named, so neither can carry a WP_OS_ prefix. It is a credential for this
+ *   system's own front door, not a handle on another repository's storage, which is the thing this
+ *   scan exists to prevent. The secret is reachable only from effects/browserClient.ts and only for
+ *   hosts isOwnHost() accepts.
  * - RUNWARE_API_KEY: the image-generation credential. Same category as the provider and transport
  *   keys — a credential for an effect this system performs itself, not a handle on another
  *   repository's storage, which is the thing this scan exists to prevent. Vendor-named, so it
@@ -56,7 +63,7 @@ const FOREIGN_BINDING = /env\.(?!WP_OS_)(?:[A-Z][A-Z0-9_]{2,})\b/;
  *   scan exists to prevent. It is declared in src/worker/env.ts and reachable only from
  *   effects/cloudflareEmailClient.ts, and being a binding it adds no egress surface at all.
  */
-const DECLARED_NON_STORAGE_BINDINGS = /env\.(ASSETS|OPENROUTER_API_KEY|FIREWORKS_API_KEY|AI_PROVIDER_API_KEY|HARVEY_API_KEY|NORM_API_KEY|RESEND_API_KEY|RUNWARE_API_KEY|EMAIL|GOOGLE_OAUTH_CLIENT_ID|GOOGLE_OAUTH_CLIENT_SECRET)\b/;
+const DECLARED_NON_STORAGE_BINDINGS = /env\.(ASSETS|OPENROUTER_API_KEY|FIREWORKS_API_KEY|AI_PROVIDER_API_KEY|HARVEY_API_KEY|NORM_API_KEY|RESEND_API_KEY|RUNWARE_API_KEY|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET|EMAIL|GOOGLE_OAUTH_CLIENT_ID|GOOGLE_OAUTH_CLIENT_SECRET)\b/;
 const NETWORK_OS_HOST = /(network-os[a-z0-9.-]*\.(?:com|dev|net|io|workers\.dev)|api\.westpeeknetwork)/i;
 
 function listSourceFiles() {

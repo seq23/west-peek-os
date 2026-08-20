@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
 import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
+import { resolveDuty } from "@shared/workforce/dutyRoster";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import { changeLifecycle, computeScorecard, decideHandoff, postRoomMessage, proposeHandoff } from "../src/worker/services/workforce";
@@ -425,5 +426,45 @@ describe("memos and governance acknowledgement", () => {
     expect(first.status).toBe(201);
     const second = await call(`/api/governance/updates/${update.body.id}/acknowledge`, MEMBER, "POST");
     expect(second.status).toBe(409);
+  });
+});
+
+/**
+ * The rota says something about each person, or it says nothing at all.
+ *
+ * `because` was set to the shift's own intent for everybody, and that same sentence is printed as
+ * the heading above the list — so the page rendered it six times in a row and told the operator
+ * nothing about any of the six. It looked like a rendering fault because it was one.
+ */
+describe("why each person is on duty", () => {
+  const roster = [
+    { name: "Walker", role: "Scooter's Chief of Staff" },
+    { name: "Wren", role: "Sequoia's Chief of Staff" },
+    { name: "Wyatt", role: "Analyst & Scout" },
+    { name: "Wells", role: "Knowledge Manager" },
+    { name: "Porter", role: "Systems & Intake Operator" },
+  ];
+
+  it("gives every person a different reason", () => {
+    const duty = resolveDuty("MORNING", roster);
+    const reasons = duty.onDuty.map((d) => d.because);
+    expect(reasons.length).toBeGreaterThan(1);
+    expect(new Set(reasons).size).toBe(reasons.length);
+  });
+
+  it("never repeats the shift's own heading back as a person's reason", () => {
+    // The exact bug: the heading and every row said the same thing.
+    for (const shift of ["MORNING", "MIDDAY", "EVENING", "OVERNIGHT"] as const) {
+      const duty = resolveDuty(shift, roster);
+      for (const d of duty.onDuty) {
+        expect(d.because, `${shift}/${d.name} is just echoing the shift intent`).not.toBe(duty.intent);
+      }
+    }
+  });
+
+  it("still lets a pinned person say they were asked for", () => {
+    const duty = resolveDuty("MORNING", roster, { pinned: ["Wells"] });
+    expect(duty.onDuty[0]!.name).toBe("Wells");
+    expect(duty.onDuty[0]!.because).toContain("asked for them");
   });
 });

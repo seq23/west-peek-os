@@ -59,6 +59,17 @@ export function browserBlockedReason(env: Env): string | null {
 const LAUNCH_TIMEOUT_MS = 20_000;
 /** Time for a framework to paint after load. Short: this is a cost as well as a wait. */
 const SETTLE_MS = 1_200;
+
+/**
+ * Hosts that are this firm's own, and therefore the only ones the Access credentials are ever sent
+ * to. An exact suffix match on the apex domain — `joinwestpeek.com.evil.test` must not qualify, and
+ * `endsWith(".joinwestpeek.com")` alone would let `x.joinwestpeek.com.evil.test` through were it
+ * not anchored by the leading dot plus the exact-match arm.
+ */
+export function isOwnHost(hostname: string): boolean {
+  const h = hostname.trim().toLowerCase();
+  return h === "joinwestpeek.com" || h.endsWith(".joinwestpeek.com");
+}
 /** A screenshot that has not arrived in this long is not going to. */
 const SHOT_TIMEOUT_MS = 15_000;
 /** Above the fold at 1440×900 as JPEG is well under this; anything larger is a rendering fault. */
@@ -166,6 +177,28 @@ export async function browsePage(
     // this decade — paints after that. Reading at domcontentloaded returns an empty shell or a
     // skeleton, and the employee reasonably concludes the answer is not there. `load` waits for
     // subresources; the settle below covers frameworks that render on an effect after that.
+    /*
+     * OUR OWN PAGES, AND ONLY OUR OWN.
+     *
+     * Every West Peek page sits behind Cloudflare Access, so a browser task pointed at one used to
+     * come back with a login screen — which meant a design reviewer that can critique any founder's
+     * homepage could not open ours, and every interface change shipped unseen.
+     *
+     * The service-token headers are attached ONLY when the host is ours. That restriction is the
+     * whole safety argument and it is enforced here rather than described: sending a credential to
+     * whatever host a work card happened to name would be handing the firm's key to a stranger, and
+     * a work card's URL is chosen by a model.
+     *
+     * Checked against the FINAL hostname too, further down — a redirect must not carry it off-site.
+     */
+    const ownHost = isOwnHost(url.hostname);
+    if (ownHost && typeof page.setExtraHTTPHeaders === "function" && env.CF_ACCESS_CLIENT_ID && env.CF_ACCESS_CLIENT_SECRET) {
+      await page.setExtraHTTPHeaders({
+        "CF-Access-Client-Id": env.CF_ACCESS_CLIENT_ID,
+        "CF-Access-Client-Secret": env.CF_ACCESS_CLIENT_SECRET,
+      });
+    }
+
     await page.goto(url.toString(), { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
     await new Promise((r) => setTimeout(r, SETTLE_MS));
 
@@ -175,6 +208,17 @@ export async function browsePage(
       const landed = new URL(finalUrl);
       if (isBlockedBrowserHost(landed.hostname)) {
         return { ok: false, text: null, finalUrl, title: null, detail: `Redirected to ${landed.hostname}, an internal address. Nothing was read.` };
+      }
+      // A redirect off our own host must not carry the firm's Access credentials with it. Puppeteer
+      // applies extra headers to every request on the page, so the only safe answer is to stop.
+      if (ownHost && !isOwnHost(landed.hostname)) {
+        return {
+          ok: false,
+          text: null,
+          finalUrl,
+          title: null,
+          detail: `Started on a West Peek page and was redirected to ${landed.hostname}. Stopped rather than carry our Access credentials off-site.`,
+        };
       }
     } catch { /* an unparseable final URL is handled by the extraction below */ }
 
@@ -264,6 +308,8 @@ export interface BrowserLike {
     evaluate<T>(fn: () => T[]): Promise<T[]>;
     /** Only needed when a shot is asked for; optional so existing test doubles still satisfy this. */
     setViewport?(v: { width: number; height: number; deviceScaleFactor?: number }): Promise<unknown>;
+    /** Only used to get past our own Access gate; optional so existing doubles still satisfy this. */
+    setExtraHTTPHeaders?(headers: Record<string, string>): Promise<unknown>;
     screenshot?(opts?: { type?: string; quality?: number; fullPage?: boolean }): Promise<ArrayBuffer | Uint8Array>;
   }>;
   close(): Promise<void>;

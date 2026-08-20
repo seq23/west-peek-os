@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browsePage, browserBlockedReason, browserConfigured, type BrowserLike } from "../src/worker/effects/browserClient";
+import { browsePage, browserBlockedReason, browserConfigured, isOwnHost, type BrowserLike } from "../src/worker/effects/browserClient";
 import type { Env } from "../src/worker/env";
 
 /**
@@ -165,5 +165,89 @@ describe("seeing the page, not only reading it", () => {
     const r = await browsePage(BOUND, "https://example.test", fakeBrowser(), { shots: true });
     expect(r.ok).toBe(true);
     expect(r.shots).toBeUndefined();
+  });
+});
+
+/**
+ * The firm's own Access credentials, and where they are allowed to go.
+ *
+ * The browser can now open West Peek's own pages, which every other host on the internet must not
+ * be able to trigger. Puppeteer applies extra headers to EVERY request a page makes, so "attach the
+ * credential" and "attach it to the right host" are the same decision — and a work card's URL is
+ * chosen by a model.
+ */
+describe("where the firm's Access credentials are allowed to go", () => {
+  it("recognises our own hosts and nothing that merely looks like them", () => {
+    expect(isOwnHost("os.joinwestpeek.com")).toBe(true);
+    expect(isOwnHost("joinwestpeek.com")).toBe(true);
+    expect(isOwnHost("OS.JoinWestPeek.com")).toBe(true);
+    // The attacks this has to survive are suffix tricks.
+    expect(isOwnHost("joinwestpeek.com.evil.test")).toBe(false);
+    expect(isOwnHost("notjoinwestpeek.com")).toBe(false);
+    expect(isOwnHost("evil-joinwestpeek.com")).toBe(false);
+    expect(isOwnHost("example.test")).toBe(false);
+  });
+
+  it("sends nothing to a third-party host", async () => {
+    // The common case: an employee reading a founder's homepage. Our key must never be on it.
+    let sent: Record<string, string> | null = null;
+    const stub = {
+      async newPage() {
+        return {
+          async goto() { return null; },
+          url: () => "https://example.test/page",
+          async title() { return "A page"; },
+          async evaluate<T>() { return "text" as unknown as T; },
+          async setExtraHTTPHeaders(h: Record<string, string>) { sent = h; return null; },
+        };
+      },
+      async close() { return undefined; },
+    } as unknown as BrowserLike;
+
+    const withCreds = { ...BOUND, CF_ACCESS_CLIENT_ID: "id", CF_ACCESS_CLIENT_SECRET: "secret" } as Env;
+    await browsePage(withCreds, "https://example.test/page", async () => stub);
+    expect(sent).toBeNull();
+  });
+
+  it("sends them to our own host, which is the point", async () => {
+    let sent: Record<string, string> | null = null;
+    const stub = {
+      async newPage() {
+        return {
+          async goto() { return null; },
+          url: () => "https://os.joinwestpeek.com/",
+          async title() { return "West Peek OS"; },
+          async evaluate<T>() { return "text" as unknown as T; },
+          async setExtraHTTPHeaders(h: Record<string, string>) { sent = h; return null; },
+        };
+      },
+      async close() { return undefined; },
+    } as unknown as BrowserLike;
+
+    const withCreds = { ...BOUND, CF_ACCESS_CLIENT_ID: "id", CF_ACCESS_CLIENT_SECRET: "secret" } as Env;
+    await browsePage(withCreds, "https://os.joinwestpeek.com/", async () => stub);
+    expect(sent).toEqual({ "CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "secret" });
+  });
+
+  it("stops rather than following a redirect off our host while carrying them", async () => {
+    // Headers are applied per PAGE, not per request, so a redirect would carry the firm's key to
+    // whatever host it landed on. Refusing is the only safe answer.
+    const stub = {
+      async newPage() {
+        return {
+          async goto() { return null; },
+          url: () => "https://somewhere-else.test/landed",
+          async title() { return "Elsewhere"; },
+          async evaluate<T>() { return "text" as unknown as T; },
+          async setExtraHTTPHeaders() { return null; },
+        };
+      },
+      async close() { return undefined; },
+    } as unknown as BrowserLike;
+
+    const withCreds = { ...BOUND, CF_ACCESS_CLIENT_ID: "id", CF_ACCESS_CLIENT_SECRET: "secret" } as Env;
+    const r = await browsePage(withCreds, "https://os.joinwestpeek.com/", async () => stub);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("Stopped rather than carry our Access credentials off-site");
   });
 });

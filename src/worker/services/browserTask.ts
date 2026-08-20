@@ -302,7 +302,11 @@ export async function handleApproveBrowserTask(ctx: RouteContext): Promise<Respo
 export async function handleRunBrowserTask(ctx: RouteContext): Promise<Response> {
   if (!ctx.params.id) return json({ error: "invalid_input" }, { status: 400 });
   try {
-    const out = await runTask(ctx.env, ctx.params.id);
+    // `?shots=1` captures screenshots as well as text. Opt-in, because shots cost time and money
+    // and almost every task only needs to read — but reachable from this route so a page can be
+    // LOOKED at without going through a work card's employee loop.
+    const wantShots = new URL(ctx.request.url).searchParams.get("shots") === "1";
+    const out = await runTask(ctx.env, ctx.params.id, undefined, { shots: wantShots });
     return json(out, { status: out.ok ? 200 : 409 });
   } catch (err) {
     return fail(err);

@@ -84,9 +84,12 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "How portfolio companies are doing, and where they need help.",
     youCan: ["See metrics and alerts", "Record a founder's request for support", "Track whether help actually landed"],
   },
+  // Merged into Fund strategy — "should we write this cheque" and "should we write another into a
+  // company we already own" were answered on separate pages while sharing the same reserves. The
+  // entry stays so an old link still gets an explanation rather than a blank block.
   "follow-on": {
-    purpose: "Where more money might go — reviews already open, and companies where a tracked metric has improved.",
-    youCan: ["See which reviews are pending", "Look at what is moving before deciding to open one"],
+    purpose: "Now part of Fund strategy, where the reserves a follow-on draws from are actually visible.",
+    youCan: ["See which companies have earned another cheque", "Check what a follow-on leaves for everyone else"],
   },
   // Merged into Fund strategy — the entry stays so an old link still gets an explanation rather
   // than a blank block, and it says where the page went.
