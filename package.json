@@ -26,7 +26,8 @@
     "vault:sync:cloudflare": "node scripts/vault/vault.mjs sync:cloudflare",
     "validate:network-boundary": "node scripts/validate/no-cross-repo-coupling.mjs && node scripts/validate/no-cross-repo-coupling.mjs --self-test",
     "validate:brand": "node scripts/validate/west-peek-brand-system.mjs && node scripts/validate/west-peek-brand-system.mjs --self-test",
-    "deploy:production": "node scripts/deploy/production.mjs"
+    "deploy:production": "node scripts/deploy/production.mjs",
+    "validate:sql": "node scripts/validate/sql-against-schema.mjs"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",

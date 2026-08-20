@@ -274,13 +274,33 @@ export async function checkEvidence(env: Env, evidenceType: string, refId: strin
     };
   }
   if (evidenceType === "KNOWLEDGE_RECORD") {
-    const row = await env.WP_OS_DB.prepare("SELECT id, superseded_by FROM knowledge_record WHERE id = ?1").bind(refId).first<{ id: string; superseded_by: string | null }>();
+    /*
+     * THERE IS NO `superseded_by` COLUMN, and this query threw every time it ran.
+     *
+     * `knowledge_record` records the link in the other direction: `supersedes_id` points at what a
+     * record REPLACES. So "is this one still current" is not a column read, it is a question about
+     * whether anything else points back at it.
+     *
+     * This gate decides whether a knowledge record may be used as evidence behind an LP claim, so
+     * failing it open would be the serious version of this bug — an LP shown a claim resting on
+     * knowledge the firm has since replaced. Found by running every statement in the worker through
+     * EXPLAIN against the live schema; it typechecked perfectly and had never been executed.
+     */
+    const row = await env.WP_OS_DB.prepare("SELECT id FROM knowledge_record WHERE id = ?1")
+      .bind(refId)
+      .first<{ id: string }>();
     if (!row) return { evidence_type: evidenceType, evidence_ref_id: refId, approved: false, reason: "knowledge_record_not_found" };
+
+    const replacement = await env.WP_OS_DB.prepare(
+      "SELECT id FROM knowledge_record WHERE supersedes_id = ?1 LIMIT 1",
+    )
+      .bind(refId)
+      .first<{ id: string }>();
     return {
       evidence_type: evidenceType,
       evidence_ref_id: refId,
-      approved: row.superseded_by === null,
-      reason: row.superseded_by === null ? "current_knowledge_record" : "superseded",
+      approved: !replacement,
+      reason: replacement ? `superseded_by:${replacement.id}` : "current_knowledge_record",
     };
   }
   const doc = await env.WP_OS_DB.prepare("SELECT id FROM document WHERE id = ?1").bind(refId).first();

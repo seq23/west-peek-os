@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
+import { recordSwallowed } from "./swallowed";
 import { deliver } from "./deliverables";
 import { jointByline } from "../../shared/work/chiefOfStaff";
 import { json } from "../router";
@@ -315,9 +316,19 @@ export async function generateReview(
    * the unique index on (source_type, source_id) does that, and the source is the review.
    */
   try {
+    /*
+     * `firm_user` HAS NO firm_scope COLUMN. It is id, email, full_name, status, created_at — and
+     * this query threw on every weekly review, silently, because the whole block is wrapped so a
+     * failed handover cannot fail the agenda it belongs to.
+     *
+     * Found by running every statement in the worker through EXPLAIN against the live schema. It
+     * is the second bug today of exactly this shape: correct-looking SQL, typechecked, never
+     * executed, inside a catch that reported nothing. The scoping this was reaching for lives on
+     * the review itself; every firm user is a partner of this firm.
+     */
     const partners = ((await env.WP_OS_DB.prepare(
-      "SELECT id FROM firm_user WHERE firm_scope = ?1",
-    ).bind(firmScope).all<{ id: string }>()).results ?? []);
+      "SELECT id FROM firm_user WHERE status = 'ACTIVE'",
+    ).all<{ id: string }>()).results ?? []);
 
     const items = ((await env.WP_OS_DB.prepare(
       "SELECT heading, body, exit_type, source_type FROM weekly_review_item WHERE review_id = ?1 ORDER BY heading",
@@ -337,8 +348,10 @@ export async function generateReview(
         });
       }
     }
-  } catch {
-    // The agenda stands. It simply has not been filed, which the page reports.
+  } catch (err) {
+    // The agenda stands. It simply has not been filed — and the ledger says why, which is the
+    // difference between a feature that is broken and one that is broken invisibly.
+    await recordSwallowed(env, "weekly_review.deliverable", err, { review_id: reviewId });
   }
 
   await appendEvent(env, {

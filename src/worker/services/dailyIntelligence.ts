@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
+import { recordSwallowed } from "./swallowed";
 import { runAi } from "../ai/runAi";
 import { json } from "../router";
 import type { RouteContext } from "../router";
@@ -523,8 +524,10 @@ export async function deliverReport(env: Env, reportId: string): Promise<{ deliv
         },
       );
     }
-  } catch {
-    // The brief is delivered. It simply has no filed copy, which the interface reports.
+  } catch (err) {
+    // The brief is delivered. It simply has no filed copy — recorded, so a handover that has
+    // silently stopped working shows up in Activity rather than in an empty table months later.
+    await recordSwallowed(env, "daily_intelligence.deliverable", err, { report_id: reportId });
   }
 
   return { delivered: true };

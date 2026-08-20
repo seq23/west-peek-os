@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
+import { recordSwallowed } from "./swallowed";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { uploadDocument } from "./documents";
 import {
@@ -119,8 +120,11 @@ export async function deliver(env: Env, actor: Actor, input: DeliverInput): Prom
         .bind(row.id, document.id)
         .run();
       row.document_id = document.id;
-    } catch {
-      // Filing failed. The handover stands; the interface reports the missing archive copy.
+    } catch (err) {
+      // Filing failed. The handover stands and the interface reports the missing archive
+      // copy — but it also goes in the ledger, because a filing path that has quietly stopped
+      // working is otherwise only discoverable by noticing the documents table is empty.
+      await recordSwallowed(env, "deliverables.file", err, { deliverable_id: row.id, kind: row.kind });
     }
   }
 

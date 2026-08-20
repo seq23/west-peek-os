@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
+import { recordSwallowed } from "./swallowed";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
@@ -255,8 +256,10 @@ export async function runTask(
       )
         .bind(`bts_${crypto.randomUUID()}`, id, shot.key, shot.width, shot.height, key, sha, shot.bytes.byteLength, task.firm_scope)
         .run();
-    } catch {
-      // This shot is not kept. The reading stands.
+    } catch (err) {
+      // This shot is not kept. The reading stands — but a screenshot path that has stopped
+      // working would otherwise look exactly like a page that declined to render.
+      await recordSwallowed(env, "browser_task.shot", err, { task_id: id, viewport: shot.key });
     }
   }
 

@@ -132,12 +132,21 @@ npm run validate:authority
 npm run validate:ai-boundary
 npm run validate:network-boundary
 npm run validate:brand
+npm run validate:sql          # needs network: parses every statement against the live schema
 ```
 
 The validators are not optional decoration. Each one refuses a specific class of change: egress
 outside the allowlist, a model call outside the boundary, a foreign binding, a colour outside the
 token block. If one fails, the rule is right until you have shown otherwise — widen an allowlist
 only with the reason written next to the entry.
+
+`validate:sql` is the newest and the one that earned its place fastest. SQL is a string, so
+TypeScript cannot see into it and tests only cover paths that actually run — which is how three
+statements shipped in a single day that were wrong on their face: an `ON CONFLICT` against a partial
+index without its predicate, a `WHERE firm_scope` on a table with no such column, and a
+`superseded_by` that is spelled `supersedes_id` and points the other way. Two of the three sat inside
+deliberately non-fatal catches, so the features were simply dead and said nothing. `EXPLAIN` parses
+each statement against the real schema without executing it, and finds all three in about a minute.
 
 ---
 
