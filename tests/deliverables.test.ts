@@ -32,9 +32,37 @@ const ACTOR = {
   roles: ["MANAGING_PARTNER"],
 };
 
+/**
+ * An in-memory R2, so the filing half is exercised rather than assumed.
+ *
+ * `document` has zero rows in production, which means `uploadDocument` has never once succeeded
+ * there — and both deliverables and image generation depend on it. Without a bucket here the
+ * filing throws, the catch swallows it, and the test passes while proving only the D1 write. That
+ * is exactly the gap that let the whole deliverables road be dead for a day.
+ */
+function fakeBucket() {
+  const store = new Map<string, Uint8Array>();
+  return {
+    store,
+    bucket: {
+      put: async (key: string, body: ArrayBuffer | Uint8Array) => {
+        store.set(key, body instanceof Uint8Array ? body : new Uint8Array(body));
+        return { key };
+      },
+      get: async (key: string) => {
+        const bytes = store.get(key);
+        return bytes ? { arrayBuffer: async () => bytes.buffer } : null;
+      },
+    },
+  };
+}
+
+let r2: ReturnType<typeof fakeBucket>;
+
 beforeAll(async () => {
   t = await createTestDb();
-  env = makeTestEnv(t.db);
+  r2 = fakeBucket();
+  env = makeTestEnv(t.db, { WP_OS_DOCUMENTS: r2.bucket as never });
 });
 
 afterAll(async () => {
@@ -124,5 +152,56 @@ describe("what leaves the building", () => {
 
   it("names the file the way a person would recognise it months later", () => {
     expect(exportFilename(sample)).toBe("2026-08-19-morning-brief-2026-08-19.md");
+  });
+});
+
+describe("the filing half, which had never run anywhere", () => {
+  it("writes the bytes to R2 and records the document against the deliverable", async () => {
+    // `document` has zero rows in production. This is the first execution of that path anywhere.
+    const before = r2.store.size;
+    const row = await deliver(env, ACTOR as never, {
+      kind: "ask_brief",
+      title: "Filing probe",
+      body: "The body that should end up in the bucket.",
+      preparedBy: "Wren",
+      preparedFor: "fu_sequoia_taylor",
+      sourceType: "probe",
+      sourceId: "filing_1",
+    });
+
+    expect(row.document_id).toBeTruthy();
+    expect(r2.store.size).toBe(before + 1);
+
+    // The filed copy is the rendered document, not the raw body — signed, so it stays
+    // attributable after it has been forwarded twice.
+    const key = [...r2.store.keys()].find((k) => k.includes(row.document_id!))!;
+    const filed = new TextDecoder().decode(r2.store.get(key)!);
+    expect(filed).toContain("Prepared by Wren");
+    expect(filed).toContain("The body that should end up in the bucket.");
+  });
+
+  it("keeps the deliverable when filing fails, and says it is unfiled", async () => {
+    // The non-fatal wrapping is deliberate: losing a handover because the archive is down would be
+    // the wrong trade. What must not happen is the failure being invisible — see recordSwallowed.
+    const broken = makeTestEnv(t.db, {
+      WP_OS_DOCUMENTS: { put: async () => { throw new Error("bucket down"); } } as never,
+    });
+    const row = await deliver(broken, ACTOR as never, {
+      kind: "ask_brief",
+      title: "Unfiled probe",
+      body: "still delivered",
+      preparedBy: "Wren",
+      preparedFor: "fu_sequoia_taylor",
+      sourceType: "probe",
+      sourceId: "filing_2",
+    });
+    expect(row.id).toBeTruthy();
+    expect(row.document_id).toBeNull();
+
+    // And the failure is on the record rather than lost.
+    const ev = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'system.swallowed_failure'")
+      .first<{ n: number }>();
+    expect(ev!.n).toBeGreaterThan(0);
   });
 });
