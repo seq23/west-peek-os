@@ -179,6 +179,7 @@ export async function runTask(
   env: Env,
   id: string,
   browse: typeof browsePage = browsePage,
+  opts?: { shots?: boolean },
 ): Promise<RunResult> {
   const task = await requireTask(env, id);
 
@@ -209,7 +210,7 @@ export async function runTask(
   }
 
   await env.WP_OS_DB.prepare("UPDATE browser_task SET status = 'RUNNING' WHERE id = ?1").bind(id).run();
-  const result = await browse(env, task.start_url);
+  const result = await browse(env, task.start_url, undefined, { shots: opts?.shots === true });
 
   if (!result.ok) {
     await env.WP_OS_DB.prepare(
@@ -227,11 +228,43 @@ export async function runTask(
     .bind(id, result.text, result.finalUrl)
     .run();
 
+  /*
+   * KEEP THE PICTURES.
+   *
+   * Bytes to R2, metadata to D1 — the same split documents already use, because a few hundred
+   * kilobytes per shot is not something D1 should be holding.
+   *
+   * BEST EFFORT AND LAST. The reading has already been recorded as SUCCEEDED above; a storage
+   * failure must not turn a page that was read perfectly well into a failed task. What is lost in
+   * that case is the evidence, not the answer, and the interface shows which shots exist rather
+   * than assuming both.
+   */
+  for (const shot of result.shots ?? []) {
+    try {
+      const bucket = env.WP_OS_DOCUMENTS;
+      if (!bucket) break;
+      const digest = await crypto.subtle.digest("SHA-256", shot.bytes as unknown as ArrayBuffer);
+      const sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const key = `${task.firm_scope}/browser-shots/${id}/${shot.key}-${sha.slice(0, 16)}.jpg`;
+      await bucket.put(key, shot.bytes as unknown as ArrayBuffer, {
+        httpMetadata: { contentType: "image/jpeg" },
+      });
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO browser_task_shot (id, task_id, viewport, width, height, r2_key, sha256, size_bytes, firm_scope)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      )
+        .bind(`bts_${crypto.randomUUID()}`, id, shot.key, shot.width, shot.height, key, sha, shot.bytes.byteLength, task.firm_scope)
+        .run();
+    } catch {
+      // This shot is not kept. The reading stands.
+    }
+  }
+
   await appendEvent(env, {
     eventType: "browser_task.succeeded",
     actorType: "system", actorId: "system",
     objectType: "browser_task", objectId: id, firmScope: task.firm_scope,
-    payload: { final_url: result.finalUrl, chars: result.text?.length ?? 0 },
+    payload: { final_url: result.finalUrl, chars: result.text?.length ?? 0, shots: result.shots?.length ?? 0 },
   });
 
   return { task: await requireTask(env, id), ok: true, detail: "ok" };

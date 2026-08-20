@@ -1,6 +1,24 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { MarketMapPage } from "./MarketMapPage";
+import { DeliverableList } from "./DeliverableList";
+import { personaFor } from "@shared/registry/aiEmployeePersonas";
+import { portraitAlt, portraitFor } from "../lib/employeePortraits";
+
+/**
+ * Research has an analyst, and it is Wyatt — not a new seat.
+ *
+ * The instinct was to invent a Head of Research. Wyatt is already Analyst & Scout, already owns the
+ * research_intelligence machine, and is already the name on the intelligence you get each morning.
+ * A second research seat beside him would be the split the roster consolidation removed: research
+ * and sourcing read the same market, which is why they are one job here.
+ *
+ * WHY A WELCOME AT ALL. This page opened with a bare rule string and a form. Research is the one
+ * surface where the answer genuinely does not arrive while you wait — a project is opened, sources
+ * are gathered, findings are promoted — and a page that says nothing about that reads as broken
+ * rather than as patient. Somebody telling you they will come back with it is the difference.
+ */
+const ANALYST = { name: "Wyatt", role: "Analyst & Scout" } as const;
 
 /**
  * Research / Analyst Workstation (P21, GAP-14).
@@ -273,7 +291,7 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
   );
 }
 
-export function ResearchPage({ me }: { me: MeResponse }) {
+export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string) => void }) {
   const projects = useApi<{ projects: Project[]; rule: string }>("/api/research/projects");
   const [title, setTitle] = useState("");
   const [question, setQuestion] = useState("");
@@ -282,6 +300,46 @@ export function ResearchPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="research-page">
+      <div className="card professor-welcome" data-testid="research-analyst">
+        {portraitFor(ANALYST.name) ? (
+          <img className="professor-face" src={portraitFor(ANALYST.name)!} alt={portraitAlt(ANALYST.name, ANALYST.role)} />
+        ) : (
+          <span className="professor-face professor-face-initial" aria-hidden="true">{ANALYST.name.slice(0, 1)}</span>
+        )}
+        <div>
+          <p>
+            <strong>{ANALYST.name}</strong> <span className="muted small">{ANALYST.role}</span>
+          </p>
+          <p className="small">
+            Research runs through me. Open a project with the question you actually want answered and
+            I will gather the sources, say how reliable each one is, and come back with findings —
+            this is not a search box, and the answer arrives after the work rather than instead of it.
+          </p>
+          <p className="muted small">{personaFor(ANALYST.name)?.voice ?? ""}</p>
+        </div>
+      </div>
+
+      {/*
+        WHAT WYATT HAS ALREADY DELIVERED.
+
+        A finished project produces a packet, and until now that packet went nowhere — the record
+        existed and nothing put it in front of the person who asked. The latest five sit here as a
+        convenience view; every one of them is also filed in Documents from the moment it is
+        delivered, so nothing migrates between the two and "where is it now" has one answer.
+      */}
+      <section data-testid="research-delivered">
+        <div className="home-section-head">
+          <h3>Delivered research</h3>
+          <span className="muted small">the five most recent · all of them live in Documents</span>
+        </div>
+        <DeliverableList
+          kind="research_packet"
+          limit={5}
+          onNavigate={onNavigate}
+          emptyNote="Nothing delivered yet. Open a project below, gather sources, then assemble a packet — that is the point at which Wyatt hands it over, files it, and puts it on your Home page."
+        />
+      </section>
+
       <p className="muted small" data-testid="research-rule">
         {projects.data?.rule}
       </p>

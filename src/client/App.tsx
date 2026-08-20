@@ -15,6 +15,8 @@ import { WeeklyReviewPage } from "./pages/WeeklyReviewPage";
 import { CrossOfficePage } from "./pages/CrossOfficePage";
 import { SecondariesPage } from "./pages/SecondariesPage";
 import { PagePurposeBlock } from "./pages/PagePurposeBlock";
+import { actionDescription, actionName, approvalStateWords, roleWords } from "@shared/help/actionNames";
+import { stateMeaning } from "@shared/work/workCards";
 import { SignInCard, SignedOutPage } from "./pages/AuthSurfaces";
 import { UniversityPage } from "./pages/UniversityPage";
 import { MarketMapPage } from "./pages/MarketMapPage";
@@ -243,7 +245,9 @@ const NAV_GROUPS = [
       { key: "secondaries", label: "Secondaries" },
       { key: "portfolio", label: "Portfolio" },
       { key: "follow-on", label: "Follow-on" },
-      { key: "allocation", label: "Allocation" },
+      // Allocation merged into Fund strategy. Two tabs answered one question — "what the portfolio
+      // is made of" and "where the fund goes" lived on one, "allocation decision view" on the
+      // other — so you had to visit both to be sure you had seen everything. The route stays live.
       { key: "cockpit", label: "Fund strategy" },
       { key: "modeling", label: "Deal Math" },
     ],
@@ -406,7 +410,7 @@ function IdentityPanel({ me, status, loading, onSignOut }: { me: MeResponse | nu
 
 // ── Pages ──
 
-function TodayPage({ me }: { me: MeResponse }) {
+function TodayPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string) => void }) {
   const cards = useApi<{ work_cards: WorkCardRow[] }>("/api/work-cards");
   const approvals = useApi<{ approvals: ApprovalCardRow[] }>("/api/approvals?state=pending_review");
   const activity = useApi<{ events: ActivityEvent[] }>("/api/activity?limit=10");
@@ -418,21 +422,53 @@ function TodayPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="today-page">
-      <h3>My open work</h3>
+      {/* A LIST OF WORK WITH NO WAY TO REACH IT. Today showed the operator their open cards and
+          offered no route to the page that can do anything about them — you could read that a card
+          existed and then had to go and find it yourself. Every item is a link now, and the section
+          heading carries the way through. */}
+      <div className="home-section-head">
+        <h3>My open work</h3>
+        {mine.length > 0 && (
+          <button type="button" className="link-button" data-testid="today-open-work" onClick={() => onNavigate("work-cards")}>
+            Open Work →
+          </button>
+        )}
+      </div>
       {mine.length === 0 ? (
-        <p className="state-empty">No open work cards assigned to you. Work reaches you by capture routing, an accepted handoff, or an executed work packet.</p>
+        <p className="state-empty">
+          Nothing open and assigned to you.{" "}
+          <button type="button" className="link-button" onClick={() => onNavigate("work-cards")}>
+            Add a card on Work
+          </button>{" "}
+          — or one reaches you from a routed capture, an accepted handoff, or something you asked for.
+        </p>
       ) : (
-        <ul>
+        <ul className="card-list small" data-testid="today-my-work">
           {mine.map((c) => (
             <li key={c.id}>
-              <strong>{c.title}</strong> — {c.state} · {c.priority}
-              {c.next_action ? ` · next: ${c.next_action}` : ""}
+              <button type="button" className="link-button" onClick={() => onNavigate("work-cards")}>
+                <strong>{c.title}</strong>
+              </button>{" "}
+              <span className="muted small">
+                {stateMeaning(c.state)?.label ?? c.state}
+                {c.next_action ? ` · next: ${c.next_action}` : ""}
+              </span>
             </li>
           ))}
         </ul>
       )}
-      <h3>Pending approvals</h3>
-      <p data-testid="pending-approvals-count">{pendingCount} card(s) awaiting human decision.</p>
+
+      <div className="home-section-head">
+        <h3>Pending approvals</h3>
+        {pendingCount > 0 && (
+          <button type="button" className="link-button" data-testid="today-open-approvals" onClick={() => onNavigate("approvals")}>
+            Open Approvals →
+          </button>
+        )}
+      </div>
+      <p data-testid="pending-approvals-count">
+        {pendingCount === 0 ? "Nothing is waiting on your signature." : `${pendingCount} waiting on a decision from you.`}
+      </p>
       {/* FOLDED, because it is the audit spine rather than something to read. It answers "did that
           actually get recorded" on the rare day somebody asks, and the rest of the time it is a
           wall of event types and ids between the reader and the bottom of the page. */}
@@ -808,6 +844,9 @@ function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeRe
     }
   })();
   const canDecide = card.state === "pending_review" && requiredRoles.some((r) => me.roles.includes(r));
+  // "requested by HUMAN/fu_sequoia_taylor" is you. Saying so beats printing your own row id back.
+  const whoRequested =
+    card.requested_by_id === me.id ? "you" : card.requested_by_type === "HUMAN" ? "your partner" : card.requested_by_id;
 
   const decide = async (decision: "approved" | "rejected" | "revise_requested") => {
     await api(`/api/approvals/${card.id}/decide`, { method: "POST", body: { decision, note: note || undefined } });
@@ -819,16 +858,43 @@ function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeRe
     <li className="card" data-testid={`approval-card-${card.id}`}>
       <div className="panel-head">
         <h4>{card.title}</h4>
-        <span className={approvalStateBadge(card.state)}>{card.state}</span>
+        <span className={approvalStateBadge(card.state)} title={approvalStateWords(card.state).means}>{approvalStateWords(card.state).label}</span>
       </div>
 
       {/* Risk, evidence and questions, on the card. Canon §24.2 asks for these because an approval
           you have to leave the page to evaluate is one you end up rubber-stamping. */}
       <ApprovalContextPanel cardId={card.id} />
-      <p className="muted small">
-        action <code>{card.action_key}</code> on {card.object_type}/{card.object_id} · requested by {card.requested_by_type}/
-        {card.requested_by_id} · requires {requiredRoles.join(" or ")}
+      {/* WHAT YOU ARE ACTUALLY DECIDING, in English. This line used to read
+          `action effect.email.send on external_effect/eff_01J… · requested by HUMAN/fu_sequoia_taylor`
+          — six facts, all true, none of them readable, on the one page where a Managing Partner
+          makes the firm's binding decisions. Every one of those keys has a human name written down
+          in the action registries; the page had simply never joined to them. */}
+      <p className="small">
+        <strong>{actionName(card.action_key)}</strong>
+        {actionDescription(card.action_key) ? ` — ${actionDescription(card.action_key)}` : ""}
       </p>
+      <p className="muted small">
+        Asked for by {card.requested_by_type === "AI" ? card.requested_by_id : whoRequested}
+        {" · "}
+        {requiredRoles.length === 0
+          ? "no particular role is required"
+          : `only ${requiredRoles.map(roleWords).join(" or ")} can decide this`}
+      </p>
+      {/* The key stays, because when something goes wrong it is what you search for. */}
+      <p className="muted small approval-keys">
+        <code>{card.action_key}</code> on <code>{card.object_type}/{card.object_id}</code>
+      </p>
+
+      {/* WHY THE BUTTONS ARE OFF. Three disabled buttons and no reason is the same failure as an
+          empty page with no explanation: the operator cannot tell whether the system is broken,
+          whether they lack permission, or whether the decision has already been made. */}
+      {!canDecide && (
+        <p className="notice small" data-testid={`approval-why-locked-${card.id}`}>
+          {card.state !== "pending_review"
+            ? `Nothing to decide — this is ${approvalStateWords(card.state).label.toLowerCase()}. ${approvalStateWords(card.state).means}`
+            : `This needs ${requiredRoles.map(roleWords).join(" or ")}, and you do not hold that role.`}
+        </p>
+      )}
       {card.state === "pending_review" && (
         <>
           <div className="form-row">
@@ -912,7 +978,7 @@ function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNonce: num
           <select data-testid="approval-filter" value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
             {["pending_review", "drafted", "approved", "rejected", "revise_requested", "executed", "blocked"].map((s) => (
               <option key={s} value={s}>
-                {s}
+                {approvalStateWords(s).label}
               </option>
             ))}
           </select>
@@ -3749,6 +3815,61 @@ function PortfolioAllocation(): JSX.Element | null {
   return <FundAllocation fundId={selected.fund.id} />;
 }
 
+/**
+ * Fund strategy — the allocation decision, start to finish.
+ *
+ * TWO TABS ANSWERED ONE QUESTION. Allocation carried "What the portfolio is made of" and "Where the
+ * fund goes"; Fund strategy carried "Allocation decision view". Each duplicated a heading the other
+ * owned, so being sure you had seen everything meant visiting both — the same failure that merged
+ * Scheduled Work into Work.
+ *
+ * ORDERED AS THE DECISION RUNS, not as the components happened to be written. The question a
+ * partner arrives with is "can we write this cheque, and what does it cost us later", and that is
+ * answered in a sequence: what the thesis promised, what has gone out, what is left, what this
+ * cheque does to the shape, and what it costs the reserves. Five panels of numbers in an arbitrary
+ * order is a dashboard; the same five in that order is a method.
+ */
+const STRATEGY_STEPS: readonly { q: string; where: string }[] = [
+  { q: "What did we say we would build?", where: "The thesis — target positions, ownership and cheque size." },
+  { q: "What have we actually got?", where: "Composition: where the money has gone so far." },
+  { q: "What is left, and what is at risk?", where: "Alerts and the companies moving the wrong way." },
+  { q: "What would this next cheque do?", where: "Scenarios: model it before you commit to it." },
+  { q: "What does it cost us later?", where: "Reserves and follow-on capacity after the cheque." },
+];
+
+function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
+  return (
+    <section data-testid="fund-strategy-page">
+      {/* The sequence, stated once at the top. It teaches the order rather than assuming it. */}
+      <details className="card" data-testid="strategy-how">
+        <summary className="muted small">How this decision runs</summary>
+        <ol className="card-list small">
+          {STRATEGY_STEPS.map((s) => (
+            <li key={s.q}>
+              <strong>{s.q}</strong> — {s.where}
+            </li>
+          ))}
+        </ol>
+      </details>
+
+      <CockpitPage me={me} />
+
+      <div className="home-section-head">
+        <h2>What the portfolio is made of</h2>
+        <span className="muted small">read from closed holdings, not projected</span>
+      </div>
+      <PortfolioComposition />
+      <PortfolioAllocation />
+
+      <div className="home-section-head">
+        <h2>Modelling the next cheque</h2>
+        <span className="muted small">scenarios, and what each one breaks</span>
+      </div>
+      <AllocationPage me={me} />
+    </section>
+  );
+}
+
 export function App() {
   const [active, setActive] = useState<string>("home");
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -3993,15 +4114,15 @@ export function App() {
           {authed && active === "community" && <CommunityPage />}
           {authed && active === "record" && <LedgersPage />}
           {authed && active === "follow-on" && <FollowOnPage />}
-          {authed && active === "weekly-review" && <WeeklyReviewPage />}
+          {authed && active === "weekly-review" && <WeeklyReviewPage onNavigate={navigate} />}
           {authed && active === "cross-office" && <CrossOfficePage />}
-          {authed && active === "secondaries" && <SecondariesPage />}
+          {authed && active === "secondaries" && <SecondariesPage onNavigate={navigate} />}
           {authed && active === "university" && <UniversityPage />}
           {authed && active === "market-map" && <MarketMapPage />}
           {authed && active === "browser-tasks" && <BrowserTasksPage me={me.data!} />}
           {authed && active === "machines" && <MachinesPage me={me.data!} />}
           {authed && active === "notifications" && <NotificationsPage me={me.data!} />}
-          {authed && active === "today" && <TodayPage me={me.data!} />}
+          {authed && active === "today" && <TodayPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} />}
           {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={setActive} />}
           {authed && active === "work-cards" && (
@@ -4031,7 +4152,7 @@ export function App() {
               </details>
             </>
           )}
-          {authed && active === "research" && <ResearchPage me={me.data!} />}
+          {authed && active === "research" && <ResearchPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
           {authed && active === "modeling" && <ModelingPage me={me.data!} />}
           {authed && active === "investment" && (
@@ -4070,11 +4191,12 @@ export function App() {
               <PortfolioPage me={me.data!} />
             </>
           )}
-          {authed && active === "cockpit" && <CockpitPage me={me.data!} />}
+          {authed && active === "cockpit" && <FundStrategyPage me={me.data!} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}
           {authed && active === "integrations" && <IntegrationsPage me={me.data!} />}
           {authed && active === "lp" && <LpPage me={me.data!} />}
-          {authed && active === "allocation" && <AllocationPage me={me.data!} />}
+          {/* The old address still works and lands in the same place. */}
+          {authed && active === "allocation" && <FundStrategyPage me={me.data!} />}
           {authed && active === "reporting" && <ReportingPage me={me.data!} />}
           {authed && active === "documents" && <DocumentsPage />}
           {authed && active === "contradictions" && <ContradictionsPage />}

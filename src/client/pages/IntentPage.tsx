@@ -285,6 +285,48 @@ function PacketDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
 }
 
 
+/**
+ * EXAMPLES, BECAUSE A BLANK BOX IS A HARD QUESTION. "What do you need?" is answerable only by
+ * somebody who already knows what the system can do, which is the opposite of who this page is for.
+ * These are grouped by the three things an ask turns out to be, so the shape of the answer is
+ * visible before anybody types.
+ */
+const ASK_EXAMPLES: ReadonlyArray<{ group: string; note: string; items: readonly string[] }> = [
+  {
+    group: "Find something out",
+    note: "becomes work somebody carries",
+    items: [
+      "which accelerators in Texas back pre-seed B2B software",
+      "check whether Psyflo still lists a VP of Sales",
+      "review a portfolio founder's homepage and say what to fix",
+      "what are comparable seed valuations in devtools right now",
+    ],
+  },
+  {
+    group: "Where do I…",
+    note: "sends you to the page that already has it",
+    items: [
+      "what has the firm spent on AI so far",
+      "where do I see what is waiting on my approval",
+      "how do I connect my calendar",
+      "where is this week's agenda",
+    ],
+  },
+  {
+    group: "Just tell me",
+    note: "answered here",
+    items: ["what is the difference between a work card and an approval"],
+  },
+];
+
+interface AskResult {
+  outcome: "GO" | "WORK" | "TELL";
+  says: string;
+  page: string | null;
+  draft: Draft | null;
+  note?: string;
+}
+
 interface Draft {
   title: string;
   next_action: string | null;
@@ -310,6 +352,7 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [result, setResult] = useState<AskResult | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   async function ask(e: React.FormEvent) {
@@ -317,19 +360,22 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
     if (text.trim().length < 8) return;
     setBusy(true);
     setMsg(null);
-    const res = await api<{ draft: Draft; note?: string; detail?: string; error?: string }>("/api/intent/draft", {
+    setResult(null);
+    const res = await api<AskResult & { detail?: string; error?: string }>("/api/intent/draft", {
       method: "POST",
       body: { text: text.trim() },
     });
     setBusy(false);
     if (res.status === 200 && res.data) {
+      setResult(res.data);
       setDraft(res.data.draft);
-      setMsg(res.data.note ?? null);
+      setMsg(res.data.note || null);
     } else {
-      setMsg(res.data?.detail ?? res.data?.error ?? `Could not draft that (HTTP ${res.status}).`);
+      setMsg(res.data?.detail ?? res.data?.error ?? `Could not work that out (HTTP ${res.status}).`);
     }
   }
 
+  /** Create the card. Nothing existed until this is pressed. */
   async function add() {
     if (!draft) return;
     setBusy(true);
@@ -343,12 +389,15 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
         ...(draft.owner_id ? { owner_id: draft.owner_id } : {}),
       },
     });
+    // Permission granted as the card is made, so work that plainly needs the web is not blocked on
+    // a second thing to remember.
     if (res.status === 201 && draft.needs_browser && res.data?.id) {
       await api(`/api/work-cards/${res.data.id}/browser-permission`, { method: "POST", body: { allows_browser: true } });
     }
     setBusy(false);
     if (res.status === 201) {
       setDraft(null);
+      setResult(null);
       setText("");
       setMsg("Added to Work.");
     } else {
@@ -379,7 +428,49 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
         </div>
       </form>
 
+      {/* Shown until the first ask, then out of the way. Hand-holding is for the first time. */}
+      {!result && (
+        <div className="ask-examples-grid" data-testid="ask-examples">
+          {ASK_EXAMPLES.map((g) => (
+            <div key={g.group}>
+              <p className="muted small">
+                <strong>{g.group}</strong> — {g.note}
+              </p>
+              <ul className="card-list small">
+                {g.items.map((ex) => (
+                  <li key={ex}>
+                    <button type="button" className="link-button" onClick={() => setText(ex)}>
+                      {ex}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+
       {msg && <p className="notice small" data-testid="ask-message">{msg}</p>}
+
+      {/* GO — the answer already exists. Making a card would be a task to look at something that is
+          already there. */}
+      {result?.outcome === "GO" && result.page && (
+        <div className="ask-draft" data-testid="ask-go">
+          <p>{result.says}</p>
+          <div className="form-row">
+            <button type="button" className="btn-strong" onClick={() => onNavigate(result.page!)}>
+              Take me there
+            </button>
+            <span className="muted small">No work needed — this already exists.</span>
+          </div>
+        </div>
+      )}
+
+      {result?.outcome === "TELL" && (
+        <div className="ask-draft" data-testid="ask-tell">
+          <p>{result.says}</p>
+        </div>
+      )}
 
       {draft && (
         <div className="ask-draft" data-testid="ask-draft">

@@ -27,7 +27,20 @@ import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
  * for who has a face; `tests/employeePortraits.test.ts` already asserts those two agree in both
  * directions, so deriving from the roster keeps this list correct without anyone maintaining it.
  */
-const WITH_PORTRAIT = new Set(AI_EMPLOYEE_ROSTER.map((e) => e.name));
+/**
+ * Roster names whose portrait has not been committed yet.
+ *
+ * EMPTY, AND THAT IS THE POINT. It exists so a gap is a named, reviewable line rather than a broken
+ * image — Whitney was in it for exactly as long as it took to find that her portrait had survived
+ * the retirement in the operator's own archive, from the original run of thirty-one. The two-way
+ * drift check in `tests/employeePortraits.test.ts` treats a non-empty set as a deliberate exception
+ * and still enforces parity for everybody else.
+ */
+export const AWAITING_PORTRAIT: ReadonlySet<string> = new Set();
+
+const WITH_PORTRAIT = new Set(
+  AI_EMPLOYEE_ROSTER.map((e) => e.name).filter((n) => !AWAITING_PORTRAIT.has(n)),
+);
 
 /** Public URL for an employee's portrait, or null when there is none. */
 export function portraitFor(name: string): string | null {

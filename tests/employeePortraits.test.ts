@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
-import { portraitAlt, portraitFor } from "../src/client/lib/employeePortraits";
+import { AWAITING_PORTRAIT, portraitAlt, portraitFor } from "../src/client/lib/employeePortraits";
 
 /**
  * The manifest and the committed files are two lists that must not drift apart. Either kind of
@@ -12,13 +12,28 @@ const DIR = new URL("../src/client/public/employees/", import.meta.url).pathname
 const onDisk = readdirSync(DIR).filter((f) => f.endsWith(".jpg")).map((f) => f.replace(/\.jpg$/, ""));
 
 describe("employee portraits", () => {
-  it("gives every roster employee a portrait", () => {
+  it("gives every roster employee a portrait, or says out loud that one is outstanding", () => {
     const missing = AI_EMPLOYEE_ROSTER.filter((e) => !portraitFor(e.name)).map((e) => e.name);
-    expect(missing).toEqual([]);
+    expect(missing).toEqual([...AWAITING_PORTRAIT]);
+  });
+
+  it("does not let the awaiting list name somebody who is not on the roster", () => {
+    // Otherwise a stale entry survives a rename and quietly suppresses a real portrait.
+    const names = new Set(AI_EMPLOYEE_ROSTER.map((e) => e.name));
+    expect([...AWAITING_PORTRAIT].filter((n) => !names.has(n))).toEqual([]);
+  });
+
+  it("keeps a casting direction for anybody whose portrait is outstanding", () => {
+    // The gap is only cheap to close if the direction survives alongside it.
+    const casting = JSON.parse(readFileSync(new URL("../src/client/public/employees/CASTING.json", import.meta.url), "utf8")) as
+      { cast: Array<{ name: string }> };
+    const cast = new Set(casting.cast.map((c) => c.name));
+    expect([...AWAITING_PORTRAIT].filter((n) => !cast.has(n))).toEqual([]);
   });
 
   it("resolves every manifest entry to a file that exists", () => {
     const unresolved = AI_EMPLOYEE_ROSTER
+      .filter((e) => portraitFor(e.name))
       .map((e) => ({ name: e.name, file: portraitFor(e.name)!.split("/").pop()!.replace(/\.jpg$/, "") }))
       .filter((x) => !onDisk.includes(x.file));
     expect(unresolved).toEqual([]);

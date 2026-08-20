@@ -551,9 +551,19 @@ export async function handleListJobs(ctx: RouteContext): Promise<Response> {
   const runs = (
     await ctx.env.WP_OS_DB.prepare("SELECT * FROM job_run ORDER BY started_at DESC LIMIT 200").all<Record<string, unknown>>()
   ).results ?? [];
+  // WHETHER THE EMPLOYEE THIS JOB DEPENDS ON IS ACTUALLY SWITCHED ON. An EMPLOYEE_TASK job whose
+  // employee is INACTIVE is enabled and cannot run, and until this was returned the page had no way
+  // to say so — it showed a green ACTIVE badge on a job that does nothing. Parker's Monthly Room
+  // proposal had been in exactly that state.
+  const employees = (
+    await ctx.env.WP_OS_DB.prepare("SELECT name, status FROM ai_employee").all<{ name: string; status: string }>()
+  ).results ?? [];
+  const statusByName = new Map(employees.map((e) => [e.name, e.status]));
+
   return json({
     jobs: jobs.map((j) => ({
       ...j,
+      target_employee_status: j.target_kind === "EMPLOYEE" && j.target_id ? statusByName.get(j.target_id) ?? null : null,
       recent_runs: runs.filter((r) => r.job_id === j.id).slice(0, 5),
       dead_letters: runs.filter((r) => r.job_id === j.id && r.status === "DEAD_LETTER").length,
     })),

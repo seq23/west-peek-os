@@ -1,3 +1,4 @@
+import { IC_FLOW, currentStep } from "@shared/ic/meetingFlow";
 import { useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { MEETING_TYPES, meetingType, seatableFor } from "@shared/meetings/meetingTypes";
@@ -121,8 +122,22 @@ function SeatingPanel({ meeting, me }: { meeting: MeetingRow; me: MeResponse }) 
 }
 
 export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
-  const meetings = useApi<{ meetings: MeetingRow[] }>("/api/meetings");
+  const meetings = useApi<{
+    meetings: MeetingRow[];
+    ic?: {
+      ready_deals: number; packets: number; meetings: number; decisions: number;
+      facilitator: { name: string; status: string } | null;
+    };
+  }>("/api/meetings");
   const companies = useApi<{ companies: Array<{ id: string; canonical_name: string }> }>("/api/companies");
+  const icCounts = meetings.data?.ic ?? { ready_deals: 0, packets: 0, meetings: 0, decisions: 0, facilitator: null };
+  const facilitator = icCounts.facilitator;
+  const at = currentStep({
+    readyDeals: icCounts.ready_deals,
+    packets: icCounts.packets,
+    meetings: icCounts.meetings,
+    decisions: icCounts.decisions,
+  });
   const [title, setTitle] = useState("");
   const [type, setType] = useState("FOUNDER");
   const [companyId, setCompanyId] = useState("");
@@ -210,7 +225,9 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         })}
         {rows.length === 0 && (
           <li className="state-empty" data-testid="no-meetings">
-            No meetings recorded yet.
+            No meetings recorded yet. Add one above — a founder call, diligence, a portfolio check-in
+            or an LP conversation. Recording a meeting is what lets an employee prep it beforehand
+            and hand back the commitments afterwards.
           </li>
         )}
       </ul>
@@ -220,15 +237,78 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       {/* The IC portal was reachable only by opening a deal and following its packet id — the
           surface built for running a committee could not be found from where committees are
           scheduled. */}
+      {/*
+        THE COMMITTEE, DRAWN AS THE SEQUENCE IT IS.
+
+        This was four lines of prose and a link, and the operator's verdict was that it made no sense
+        with no packet in the system — fairly, since it is always in that state and will be for a
+        while. "Nothing has reached this stage" and "this is broken" look identical unless the page
+        says which, and an IC is exactly the process nobody should be discovering the shape of for
+        the first time on the morning it matters.
+
+        So the steps are always shown, always in order, and the one you are actually at is marked.
+        Each names who does it, because a step with nobody against it is one nobody has agreed to do.
+      */}
       <section className="card" data-testid="meetings-ic">
-        <h4>Investment Committee</h4>
-        <p className="muted small">
-          The committee runs off a packet assembled from a deal: the company, the memo, the market,
-          the people and the decision. Assemble one from the deal, then run the meeting against it.
-        </p>
-        <button type="button" className="link-button" data-testid="meetings-ic-open" onClick={() => onNavigate("investment")}>
-          Go to Dealflow to assemble a packet →
-        </button>
+        <div className="home-section-head">
+          <h3>Investment Committee</h3>
+          <span className="muted small">how a deal becomes a decision</span>
+        </div>
+
+        <ol className="ic-flow" data-testid="ic-flow">
+          {IC_FLOW.map((step, i) => {
+            const here = step.key === at;
+            const done = IC_FLOW.findIndex((f) => f.key === at) > i;
+            return (
+              <li
+                key={step.key}
+                className={here ? "ic-step is-here" : done ? "ic-step is-done" : "ic-step"}
+                data-testid={`ic-step-${step.key}`}
+              >
+                <span className="ic-step-num" aria-hidden="true">{i + 1}</span>
+                <div className="ic-step-body">
+                  <p className="ic-step-title">
+                    <strong>{step.title}</strong>
+                    {here && <span className="badge badge-gate">you are here</span>}
+                    {done && <span className="badge badge-ok">done</span>}
+                  </p>
+                  <p className="small">{step.what}</p>
+                  <p className="muted small">
+                    {step.who} · needs {step.needs.charAt(0).toLowerCase() + step.needs.slice(1)}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+
+        {/* WHETHER THE PERSON WHO RUNS IT IS SWITCHED ON. Poppy assembles the packet and records
+            the dissent; if she is inactive the committee still meets, but nobody does either of
+            those things — and that is worth knowing before the meeting, not during it. */}
+        {facilitator && facilitator.status !== "ACTIVE" && (
+          <p className="notice small" data-testid="ic-facilitator-off">
+            {facilitator.name} facilitates the committee — assembling the packet and recording the
+            dissent — and is currently {facilitator.status.toLowerCase()}. The committee can still
+            meet; nobody will prepare it or write it down.{" "}
+            <button type="button" className="link-button" onClick={() => onNavigate("employees")}>
+              Activate her
+            </button>
+          </p>
+        )}
+
+        <div className="form-row">
+          <button type="button" className="btn-strong" data-testid="meetings-ic-open" onClick={() => onNavigate("investment")}>
+            {icCounts.ready_deals > 0
+              ? `Open Dealflow — ${icCounts.ready_deals} deal${icCounts.ready_deals === 1 ? "" : "s"} could go to committee`
+              : "Open Dealflow"}
+          </button>
+          {icCounts.ready_deals === 0 && (
+            <span className="muted small">
+              Nothing has reached this stage yet. That is not a fault — a deal has to get through
+              screening and diligence first.
+            </span>
+          )}
+        </div>
       </section>
     </section>
   );

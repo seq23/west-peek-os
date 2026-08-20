@@ -6,6 +6,7 @@ import { appendEvent } from "../events";
 import type { FirmUserIdentity } from "../auth";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { createClaim, type ClaimSourceType } from "./evidence";
+import { deliver } from "./deliverables";
 import { privacyLabelSchema } from "../../shared/privacy";
 
 /**
@@ -161,11 +162,17 @@ export async function handleGetProject(ctx: RouteContext): Promise<Response> {
  * resolves the project through this helper, so the visibility rule that governs the read path
  * governs the write path too.
  */
-async function visibleProject(ctx: RouteContext, projectId: string): Promise<{ id: string; company_id: string | null; privacy_label: string } | null> {
+/** owner_id comes back too: it is who asked, and therefore whose Home page a packet lands on. */
+async function visibleProject(
+  ctx: RouteContext,
+  projectId: string,
+): Promise<{ id: string; company_id: string | null; privacy_label: string; owner_id: string } | null> {
   const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
-  return ctx.env.WP_OS_DB.prepare(`SELECT id, company_id, privacy_label FROM research_project WHERE id = ?1 AND ${visibility}`)
+  return ctx.env.WP_OS_DB.prepare(
+    `SELECT id, company_id, privacy_label, owner_id FROM research_project WHERE id = ?1 AND ${visibility}`,
+  )
     .bind(projectId)
-    .first<{ id: string; company_id: string | null; privacy_label: string }>();
+    .first<{ id: string; company_id: string | null; privacy_label: string; owner_id: string }>();
 }
 
 const questionSchema = z.object({ question: z.string().trim().min(1) });
@@ -504,5 +511,83 @@ export async function handleAssemblePacket(ctx: RouteContext): Promise<Response>
     payload: { project_id: project.id, ic_ready: icReady, open_questions: openQuestions.length, unpromoted_findings: unpromoted.length },
   });
 
+  /*
+   * WYATT HANDS IT OVER.
+   *
+   * Assembling a packet used to be where research stopped: the record existed, and nothing put it
+   * in front of the person who asked for it. Now it is delivered — filed in Documents, listed on
+   * Research, and on the Home page of whoever owns the project.
+   *
+   * SIGNED BY WYATT, NOT BY A CHIEF OF STAFF. The morning brief and the weekly agenda are
+   * firm-wide things assembled by machinery, which is why they need a person attached to them.
+   * Research already has one: Wyatt owns the research machine and is the analyst named on the page.
+   * Routing his own work through somebody else's byline would be the anonymity problem in reverse.
+   *
+   * DELIVERED TO project.owner_id, which is who opened it — so Scooter's research lands on
+   * Scooter's Home page and stays findable by both partners at INTERNAL.
+   *
+   * BEST EFFORT. A failed handover must not lose the packet: the assembly above is the record, and
+   * this is how it reaches somebody. The catch is deliberate and the packet is returned either way.
+   */
+  try {
+    await deliver(ctx.env, actorFromIdentity(ctx.identity!), {
+      kind: "research_packet",
+      title: parsed.data.title,
+      body: renderPacketBody(parsed.data.summary, findings, openQuestions, contradictions, icReady, reasons),
+      preparedBy: "Wyatt",
+      preparedFor: project.owner_id,
+      sourceType: "research_packet",
+      sourceId: id,
+      privacyLabel: project.privacy_label,
+    });
+  } catch {
+    // The packet stands. It simply has not been handed over, which the Research page reports.
+  }
+
   return json(await ctx.env.WP_OS_DB.prepare("SELECT * FROM research_packet WHERE id = ?1").bind(id).first(), { status: 201 });
+}
+
+/**
+ * The packet as a document somebody reads, rather than as JSON columns.
+ *
+ * WHY THE CONTRADICTIONS ARE IN THE BODY and not an appendix: a packet that quietly drops what the
+ * record disagrees about is how a committee agrees on something the evidence does not support. They
+ * travel with the work, in the middle of it, where they cannot be skipped.
+ */
+function renderPacketBody(
+  summary: string,
+  findings: readonly { statement: string; source_title?: string; reliability?: string }[],
+  openQuestions: readonly { question: string }[],
+  contradictions: readonly { summary?: string; description?: string }[],
+  icReady: boolean,
+  reasons: readonly string[],
+): string {
+  const out: string[] = [summary.trim(), ""];
+
+  out.push("## What we established", "");
+  if (findings.length === 0) out.push("Nothing yet. No findings have been recorded on this project.");
+  for (const f of findings) {
+    const src = f.source_title ? ` — ${f.source_title}${f.reliability ? ` (${f.reliability.toLowerCase()})` : ""}` : "";
+    out.push(`- ${f.statement}${src}`);
+  }
+  out.push("");
+
+  if (openQuestions.length > 0) {
+    out.push("## Still open", "");
+    for (const q of openQuestions) out.push(`- ${q.question}`);
+    out.push("");
+  }
+
+  if (contradictions.length > 0) {
+    out.push("## Where the record disagrees with itself", "");
+    for (const c of contradictions) out.push(`- ${c.summary ?? c.description ?? "An unresolved contradiction on this company."}`);
+    out.push("");
+  }
+
+  out.push("## Ready for committee?", "");
+  out.push(icReady
+    ? "Yes. Every question is closed and every finding is governed evidence."
+    : `Not yet — ${reasons.join("; ")}.`);
+
+  return out.join("\n");
 }

@@ -129,3 +129,64 @@ export function guessHeading(text: string): ReviewHeading {
   // week's review, so at minimum it is something they think matters this week.
   return "seven_day";
 }
+
+/**
+ * Where an agenda item came from, in words.
+ *
+ * THE OPERATOR'S QUESTION WAS "I have no idea where this LP from Marcus shit came from". The
+ * answer was on the row the whole time: `source_type = 'operator'` means they typed it into the box
+ * themselves. The page rendered that as "Sequoia raised this", which is true and answers a
+ * different question — who, not how — and for derived items it printed the raw table name, so the
+ * agenda said `from investment_opportunity`.
+ *
+ * Nobody thinks in table names. The distinction that actually matters on this page is between a
+ * thought somebody had and a fact the system read off a record, because the second kind can be
+ * checked and the first cannot.
+ */
+export interface SourceWords {
+  /** One line: where this came from. */
+  said: string;
+  /** The nav key to open the record behind it, when there is one to open. */
+  page: string | null;
+}
+
+const SOURCES: Readonly<Record<string, { said: string; page: string | null }>> = {
+  operator: { said: "You typed this into the box", page: null },
+  meeting_notes: { said: "Read out of meeting notes you pasted in", page: null },
+  approval_card: { said: "An approval has been waiting for a decision", page: "approvals" },
+  lp_engagement: { said: "From an LP relationship record", page: "lp" },
+  investment_opportunity: { said: "From a deal in the pipeline", page: "investment" },
+  portfolio_alert: { said: "A portfolio company raised an alert", page: "portfolio" },
+  support_request: { said: "A founder asked for help", page: "portfolio" },
+  evt_event: { said: "From an event in the calendar", page: "rooms" },
+  job_run: { said: "A scheduled job failed or was refused", page: "work-cards" },
+  meeting_commitment: { said: "Somebody committed to this in a meeting", page: "meetings" },
+  contradiction_record: { said: "Two records disagree with each other", page: "contradictions" },
+};
+
+export function sourceWords(sourceType: string | null): SourceWords {
+  if (!sourceType) return { said: "No source recorded", page: null };
+  return SOURCES[sourceType] ?? { said: `From a ${sourceType.replace(/_/g, " ")} record`, page: null };
+}
+
+/** True when a person put this here rather than the system deriving it from a row. */
+export function isTyped(sourceType: string | null): boolean {
+  return sourceType === "operator" || sourceType === "meeting_notes";
+}
+
+/**
+ * What "pull in what has changed" actually reads, named for the page that has to explain it.
+ *
+ * "Refresh from records" was accurate and told nobody anything — the operator's response was
+ * literally "what does that mean". These are the eight places it looks.
+ */
+export const REFRESH_READS: readonly string[] = [
+  "approvals still waiting on a decision",
+  "deals moving through the pipeline",
+  "LP relationships that have gone quiet",
+  "portfolio alerts raised by companies",
+  "founders who asked for help",
+  "events coming up",
+  "scheduled jobs that failed or were refused",
+  "commitments people made in meetings",
+];

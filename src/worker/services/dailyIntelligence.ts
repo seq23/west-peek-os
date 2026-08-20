@@ -18,6 +18,8 @@ import {
   type NormalisedItem, type PartnerLens, type SourceType,
 } from "../../shared/intelligence/pipeline";
 import { readMarket } from "./liveSearch";
+import { deliver } from "./deliverables";
+import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
 import { z } from "zod";
 
 /** Local body reader, matching the one in intelligence.ts: a malformed body is null, never a throw. */
@@ -476,6 +478,46 @@ export async function deliverReport(env: Env, reportId: string): Promise<{ deliv
   )
     .bind(`did_${crypto.randomUUID()}`, reportId, (prior?.n ?? 0) + 1)
     .run();
+
+  /*
+   * AND HAND IT OVER AS A DELIVERABLE, so the brief can be kept.
+   *
+   * A notification tells you it exists; a deliverable is the thing itself — filed in Documents,
+   * downloadable, emailable. The brief has been the firm's best output for months and there has
+   * never been a way to send one to anybody, which is the gap the deliverable road closes for all
+   * four artifacts at once.
+   *
+   * SIGNED BY THE READER'S OWN CHIEF OF STAFF. Intelligence assembles it; a person hands it over,
+   * which is the whole delivery model and was the operator's explicit instruction for this artifact.
+   *
+   * Best effort: a failed handover must not fail a delivered brief.
+   */
+  try {
+    const reader = await env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1")
+      .bind(report.firm_user_id)
+      .first<{ full_name: string }>();
+    const sections = ((await env.WP_OS_DB.prepare(
+      "SELECT heading, body_md FROM intelligence_report_section WHERE report_id = ?1 ORDER BY position",
+    ).bind(reportId).all<{ heading: string; body_md: string }>()).results ?? []);
+
+    if (sections.length > 0) {
+      await deliver(
+        env,
+        { type: "SYSTEM", firmUserId: null, firmScopes: [report.firm_scope], roles: [] } as unknown as Actor,
+        {
+          kind: "daily_brief",
+          title: `Morning brief — ${report.report_date}`,
+          body: sections.map((sec) => `## ${sec.heading}\n\n${sec.body_md}`).join("\n\n"),
+          preparedBy: chiefOfStaffFor(reader?.full_name ?? ""),
+          preparedFor: report.firm_user_id,
+          sourceType: "intelligence_report",
+          sourceId: reportId,
+        },
+      );
+    }
+  } catch {
+    // The brief is delivered. It simply has no filed copy, which the interface reports.
+  }
 
   return { delivered: true };
 }

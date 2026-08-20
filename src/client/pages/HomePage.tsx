@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttention";
 import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
+import { DeliverableList } from "./DeliverableList";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { DailyBriefPanel } from "./DailyBriefPanel";
 import { chiefOfStaffFor } from "@shared/work/chiefOfStaff";
@@ -551,6 +552,27 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           )}
         </section>
       )}
+
+      {/*
+        WRITTEN THINGS FIRST. The modules below are areas of the firm with something in them — a
+        count, a list, a signal. A deliverable is different in kind: somebody sat down and produced
+        a document for you, and it should not queue behind a panel reporting that there are three
+        portfolio alerts.
+
+        Filed and exportable from here, so the answer to "can I send this to Scooter" is on the page
+        you were already reading rather than three clicks into an archive.
+      */}
+      <section data-testid="home-deliverables">
+        <div className="home-section-head">
+          <h2>Prepared for you</h2>
+          <span className="muted small">briefs, reviews and research — yours to keep</span>
+        </div>
+        <DeliverableList
+          limit={4}
+          onNavigate={onNavigate}
+          emptyNote="Nothing has been prepared for you yet. Research packets, briefs and the weekly review all arrive here once somebody produces one."
+        />
+      </section>
 
       <section data-testid="home-deliveries">
         <div className="home-section-head">

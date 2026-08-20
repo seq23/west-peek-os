@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
-import { EXIT_TYPES, headingLabel } from "@shared/review/weeklyAgenda";
+import { EXIT_TYPES, headingLabel, REFRESH_READS, isTyped, sourceWords } from "@shared/review/weeklyAgenda";
 import { jointByline } from "@shared/work/chiefOfStaff";
 
 /**
@@ -68,9 +68,21 @@ function shortDate(iso: string): string {
   return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 }
 
-export function WeeklyReviewPage(): JSX.Element {
+export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => void }): JSX.Element {
   const state = useApi<Payload>("/api/weekly-review");
   const [busy, setBusy] = useState(false);
+
+  /**
+   * Take an item off the agenda. Confirmed only when it cannot come back — a derived item removed
+   * this week reappears next week if the record behind it is still open, so asking about that
+   * would be a dialog for something reversible.
+   */
+  async function removeItem(id: string) {
+    const res = await api<{ was_typed?: boolean }>(`/api/weekly-review/items/${id}/remove`, { method: "POST" });
+    if (res.status !== 200) setNotesMessage(`Could not remove it (HTTP ${res.status}).`);
+    state.reload();
+  }
+
   const [draft, setDraft] = useState("");
   const [lastAdded, setLastAdded] = useState<{ id: string; heading: string; guessed: boolean } | null>(null);
   const [notes, setNotes] = useState("");
@@ -327,15 +339,34 @@ export function WeeklyReviewPage(): JSX.Element {
       </details>
 
       <div className="form-row">
-        <button type="button" disabled={busy} data-testid="weekly-generate" onClick={generate}>
-          {busy ? "Assembling…" : review ? "Refresh from records" : "Open this week"}
+        <button type="button" className="btn-strong" disabled={busy} data-testid="weekly-generate" onClick={generate}>
+          {busy ? "Assembling…" : review ? "Pull in what has changed" : "Open this week"}
         </button>
         {review && (
           <span className="muted small" data-testid="weekly-meta">
-            assembled {new Date(review.generated_at).toLocaleString()} · your own notes are kept
+            assembled {new Date(review.generated_at).toLocaleString()}
           </span>
         )}
       </div>
+
+      {/* WHAT THAT BUTTON DOES. It said "Refresh from records" and the operator's response was
+          "what does that mean" — fair, since "records" could mean anything in a system with two
+          hundred tables. Naming the eight places it looks is the whole explanation, and the
+          reassurance underneath is the half people actually worry about. */}
+      <details className="card weekly-refresh-explainer" data-testid="weekly-refresh-explainer">
+        <summary className="muted small">What that pulls in</summary>
+        <p className="small">It reads eight places and raises anything that needs the two of you:</p>
+        <ul className="card-list small">
+          {REFRESH_READS.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+        <p className="muted small">
+          It never touches what you typed into the box or accepted from meeting notes, and it never
+          reopens something you have already decided. Anything you deferred last week comes back by
+          itself, with a count of how many times it has been put off.
+        </p>
+      </details>
 
       {!review && (
         <p className="state-empty" data-testid="weekly-empty">
@@ -374,15 +405,38 @@ export function WeeklyReviewPage(): JSX.Element {
                       )}
                     </div>
                     <div className="muted small">
-                      {/* A typed item says who thought of it; a derived one says which record it
-                          came from. Never blurred — that distinction is why the derived half can
-                          be trusted at all. */}
-                      {i.source_type === "operator"
-                        ? `${RAISED_LABEL[i.raised_by] ?? i.raised_by} raised this`
-                        : i.source_type === "meeting_notes"
-                          ? `from meeting notes · accepted by ${RAISED_LABEL[i.raised_by] ?? i.raised_by}`
-                          : `from ${i.source_type ?? "the record"} · raised by ${RAISED_LABEL[i.raised_by] ?? i.raised_by}`}
+                      {/* WHERE IT CAME FROM, in words. This printed the raw table name — the
+                          agenda literally said `from investment_opportunity` — and for a typed
+                          item it said "Sequoia raised this", which answers who rather than how.
+                          The operator could not place an item they had written themselves. */}
+                      {sourceWords(i.source_type).said}
+                      {!isTyped(i.source_type) && ` · raised by ${RAISED_LABEL[i.raised_by] ?? i.raised_by}`}
+                      {sourceWords(i.source_type).page && (
+                        <>
+                          {" "}
+                          <button
+                            type="button"
+                            className="link-button"
+                            data-testid={`weekly-source-${i.id}`}
+                            onClick={() => onNavigate(sourceWords(i.source_type).page!)}
+                          >
+                            open it
+                          </button>
+                        </>
+                      )}
                       {i.work_card_id && " · work card created"}
+                      {" · "}
+                      <button
+                        type="button"
+                        className="link-button"
+                        data-testid={`weekly-remove-${i.id}`}
+                        title={isTyped(i.source_type)
+                          ? "Removes it for good — nothing can re-derive something you typed"
+                          : "Takes it off this week. It comes back if the record is still open"}
+                        onClick={() => void removeItem(i.id)}
+                      >
+                        remove
+                      </button>
                     </div>
                     <select
                       data-testid={`weekly-exit-${i.id}`}

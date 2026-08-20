@@ -24,6 +24,8 @@ import { fenceUntrusted, isBlockedBrowserHost } from "../../shared/browser/taskP
  */
 
 export interface BrowseResult {
+  /** Present only when shots were asked for and the page allowed them. */
+  shots?: PageShot[];
   ok: boolean;
   /** Fenced, truncated page text. Never raw HTML. */
   text: string | null;
@@ -57,6 +59,10 @@ export function browserBlockedReason(env: Env): string | null {
 const LAUNCH_TIMEOUT_MS = 20_000;
 /** Time for a framework to paint after load. Short: this is a cost as well as a wait. */
 const SETTLE_MS = 1_200;
+/** A screenshot that has not arrived in this long is not going to. */
+const SHOT_TIMEOUT_MS = 15_000;
+/** Above the fold at 1440×900 as JPEG is well under this; anything larger is a rendering fault. */
+const MAX_SHOT_BYTES = 3_000_000;
 
 /** Reject with a readable reason rather than hanging, and never leave the timer running. */
 async function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
@@ -73,10 +79,38 @@ async function withDeadline<T>(work: Promise<T>, ms: number, what: string): Prom
   }
 }
 
+/**
+ * SEEING A PAGE IS A DIFFERENT JOB FROM READING IT, and until now only reading existed.
+ *
+ * `innerText` answers "does this page mention a VP of Sales". It cannot answer "is the hierarchy
+ * wrong", "is the call to action invisible", "does this look trustworthy" — the questions a founder
+ * actually asks when they want their homepage reviewed. Those need the pixels.
+ *
+ * TWO WIDTHS, because half of design review is what happens on a phone, and a desktop-only review
+ * of a page most of whose visitors are on mobile is a review of something nobody sees.
+ *
+ * ABOVE THE FOLD, NOT FULL PAGE. A full-page shot of a long marketing site is an enormous image
+ * that costs a fortune to send to a vision model and buries the thing being judged — the first
+ * screen is where the five-second question is decided. Deliberate, not a limitation.
+ */
+export const SHOT_VIEWPORTS = [
+  { key: "desktop", width: 1440, height: 900 },
+  { key: "mobile", width: 390, height: 844 },
+] as const;
+
+export interface PageShot {
+  key: string;
+  width: number;
+  height: number;
+  /** JPEG bytes. PNG of a marketing page is several times larger for no benefit to a judgement. */
+  bytes: Uint8Array;
+}
+
 export async function browsePage(
   env: Env,
   startUrl: string,
   launch?: (binding: unknown) => Promise<BrowserLike>,
+  opts?: { shots?: boolean },
 ): Promise<BrowseResult> {
   const blocked = browserBlockedReason(env);
   if (blocked) return { ok: false, text: null, finalUrl: null, title: null, detail: blocked };
@@ -169,8 +203,39 @@ export async function browsePage(
     // rather than lose the page text that was successfully read.
     const linkLines = Array.isArray(links) ? links.filter((l): l is string => typeof l === "string") : [];
 
+    /*
+     * THE SHOTS, LAST. Everything above already succeeded, so a screenshot failure degrades the
+     * result to text-only rather than losing a page that was read perfectly well. Some sites refuse
+     * to render in a headless viewport, and that must not cost the reading.
+     */
+    let shots: PageShot[] | undefined;
+    if (opts?.shots && typeof page.screenshot === "function" && typeof page.setViewport === "function") {
+      shots = [];
+      for (const vp of SHOT_VIEWPORTS) {
+        try {
+          await page.setViewport({ width: vp.width, height: vp.height, deviceScaleFactor: 1 });
+          // Reflow after a viewport change is not instant, and a shot taken mid-reflow shows a
+          // layout that never existed — the worst possible input to a design judgement.
+          await new Promise((r) => setTimeout(r, 600));
+          const raw = await withDeadline(
+            Promise.resolve(page.screenshot({ type: "jpeg", quality: 72, fullPage: false })),
+            SHOT_TIMEOUT_MS,
+            `the ${vp.key} screenshot did not finish`,
+          );
+          const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw as ArrayBuffer);
+          if (bytes.byteLength > 0 && bytes.byteLength <= MAX_SHOT_BYTES) {
+            shots.push({ key: vp.key, width: vp.width, height: vp.height, bytes });
+          }
+        } catch {
+          // This viewport did not produce an image. The others, and the text, still stand.
+        }
+      }
+      if (shots.length === 0) shots = undefined;
+    }
+
     return {
       ok: true,
+      shots,
       text: fenceUntrusted(
         [
           String(raw).replace(/\n{3,}/g, "\n\n").trim().slice(0, MAX_TEXT),
@@ -197,6 +262,9 @@ export interface BrowserLike {
     title(): Promise<string>;
     evaluate<T>(fn: () => T): Promise<T>;
     evaluate<T>(fn: () => T[]): Promise<T[]>;
+    /** Only needed when a shot is asked for; optional so existing test doubles still satisfy this. */
+    setViewport?(v: { width: number; height: number; deviceScaleFactor?: number }): Promise<unknown>;
+    screenshot?(opts?: { type?: string; quality?: number; fullPage?: boolean }): Promise<ArrayBuffer | Uint8Array>;
   }>;
   close(): Promise<void>;
 }

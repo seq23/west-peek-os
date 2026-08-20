@@ -26,6 +26,8 @@ export interface Env {
   // Both are required before a single message can leave. A key alone does nothing: arriving in the
   // environment is not a decision to start emailing people.
   RESEND_API_KEY?: string;
+  /** Runware image generation. Absent means the capability is simply off, not broken. */
+  RUNWARE_API_KEY?: string;
   /** Literal "enabled" switches sending on. Anything else — unset included — keeps it recorded-only. */
   WP_OS_EMAIL_SEND?: string;
   /** Verified sender address. Without it a send is refused rather than guessed. */

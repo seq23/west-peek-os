@@ -114,6 +114,11 @@ export interface RunAiInput {
   purpose: string;
   actor: Actor;
   inputs: string[];
+  /**
+   * Images for vision work. Optional, and deliberately routed through this boundary rather than
+   * around it — see the gate in the pipeline below for why that is not a formality.
+   */
+  images?: RunAiImage[];
   sensitivity: PrivacyLabel;
   capabilityRequirement?: string;
   budgetContext?: RunAiBudgetContext;
@@ -122,6 +127,29 @@ export interface RunAiInput {
   /** P16 routing/attribution. Optional; absence preserves P4 behaviour exactly. */
   routing?: RunAiRoutingContext;
 }
+
+export interface RunAiImage {
+  mediaType: string;
+  dataBase64: string;
+  label: string;
+}
+
+/**
+ * Images cost tokens, and a lot of them.
+ *
+ * A screenshot at 1440×900 runs to roughly this many input tokens on the models that can see. It is
+ * an approximation and it is deliberately generous: the budget check exists to stop a run that
+ * would be expensive, and under-estimating an image would let exactly that run through.
+ */
+const TOKENS_PER_IMAGE = 1_200;
+
+/**
+ * The most images one run may carry.
+ *
+ * Two viewports of one page is the real case. A run trying to send twenty screenshots is either a
+ * mistake or a way to spend a lot of money in one call, and neither should be possible by accident.
+ */
+const MAX_IMAGES_PER_RUN = 4;
 
 export interface RunAiDeps {
   /** Injected into the external adapter — tests ALWAYS pass a stub. */
@@ -444,6 +472,7 @@ async function executeAttempt(
     const response = await adapter.complete({
       purpose: rec.input.purpose,
       inputs: rec.input.inputs,
+      ...(rec.input.images?.length ? { images: rec.input.images } : {}),
       model: rec.model,
       capabilityRequirement: rec.input.capabilityRequirement,
     });
@@ -559,7 +588,10 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   const inputHash = await sha256Hex(input.inputs.join("\n"));
 
   const expectedInputTokens =
-    input.budgetContext?.expectedInputTokens ?? Math.max(1, Math.ceil(input.inputs.join("\n").length / 4));
+    input.budgetContext?.expectedInputTokens ??
+    // Images are the expensive half of a vision run, and a budget check that cannot see them is
+    // checking the cheap part.
+    Math.max(1, Math.ceil(input.inputs.join("\n").length / 4)) + (input.images?.length ?? 0) * TOKENS_PER_IMAGE;
   const expectedOutputTokens = input.budgetContext?.expectedOutputTokens ?? 512;
 
   const baseEstimate: CostEstimate = {
@@ -602,6 +634,40 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     await recordAttribution(env, row.id, attribution);
     return row;
   };
+
+  /*
+   * 0a. IMAGES — the gate, and it is not a formality.
+   *
+   * Every control in this pipeline was written for text. The credential scrubber reads strings; a
+   * screenshot of a page displaying an API key is, to that scrubber, an opaque blob. So an image
+   * cannot be cleared the way a paragraph can, and the only honest position is that images ride the
+   * DECLARED sensitivity and nothing else.
+   *
+   * PUBLIC and INTERNAL only, checked here rather than left to the data policy alone. The data
+   * policy would already deny RESTRICTED and above to OpenRouter, and this is the same answer
+   * arrived at twice on purpose: a future provider permitted a higher label for text would silently
+   * inherit that permission for images, and a screenshot of an LP portal is not the same risk as a
+   * sentence about one. Refusing here means adding such a provider cannot quietly widen this.
+   *
+   * The count cap is a spend control. Two viewports of one page is the real case; twenty
+   * screenshots in one call is either a mistake or an expensive accident.
+   */
+  if (input.images?.length) {
+    if (input.sensitivity !== "PUBLIC" && input.sensitivity !== "INTERNAL") {
+      return {
+        run: await blocked("EGRESS_BLOCKED", `images_not_permitted_at_label:${input.sensitivity}`),
+      };
+    }
+    if (input.images.length > MAX_IMAGES_PER_RUN) {
+      return {
+        run: await blocked("PREFLIGHT_BLOCKED", `too_many_images:${input.images.length}>${MAX_IMAGES_PER_RUN}`),
+      };
+    }
+    const badType = input.images.find((i) => i.mediaType !== "image/jpeg" && i.mediaType !== "image/png");
+    if (badType) {
+      return { run: await blocked("PREFLIGHT_BLOCKED", `unsupported_image_type:${badType.mediaType}`) };
+    }
+  }
 
   // 0. Machine pause (P17): a paused machine cannot spend AI budget. Checked before anything
   //    else so a paused machine costs nothing, not even an estimate.

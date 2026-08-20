@@ -6,8 +6,10 @@ import { actorFromIdentity, authorize } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { requestTask, runTask } from "./browserTask";
 import { searchQuestion } from "./liveSearch";
+import { buildDesignReviewPrompt } from "../../shared/design/reviewRubric";
 import { z } from "zod";
-import { ASK_PROMPT_VERSION, buildDraftPrompt, parseDraft } from "../../shared/work/askToCard";
+import { ASK_PROMPT_VERSION, buildDraftPrompt, parseAnswer } from "../../shared/work/askToCard";
+import { PAGE_PURPOSES } from "../../shared/help/pagePurpose";
 import {
   MAX_STEPS,
   buildStepPrompt,
@@ -176,7 +178,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       break;
     }
 
-    const outcome = await applyDecision(env, ctx, card, decision, step);
+    const outcome = await applyDecision(env, ctx, card, decision, step, employee.name);
     steps.push(outcome);
     if (outcome.action === "done" || outcome.action === "blocked" || outcome.action === "waiting") break;
   }
@@ -214,6 +216,8 @@ async function applyDecision(
   card: CardRow,
   d: EmployeeDecision,
   step: number,
+  /** Who is doing the work. A design review is signed by a person, not by the system. */
+  employeeName: string,
 ): Promise<StepOutcome> {
   const actor = actorFromIdentity(ctx.identity!);
 
@@ -253,6 +257,85 @@ async function applyDecision(
       .bind(card.id, `Waiting on your approval to open ${d.start_url}`)
       .run();
     return { step, action: "waiting", detail: `Needs your approval to open ${d.start_url}` };
+  }
+
+  /*
+   * LOOK AT: the page as a person sees it.
+   *
+   * Same governed browser task as a visit — same approval, same allowlist, same record — but the
+   * shots are captured and then actually LOOKED AT by a model that can see, through runAi with the
+   * images attached. Text alone cannot answer a question about layout, and an employee answering
+   * one from `innerText` would be inventing a review of something it never saw.
+   *
+   * The judgement is written down as a finding on the card, so the operator reads the review where
+   * the work is rather than in a run log.
+   */
+  if (d.action === "look_at") {
+    let task;
+    try {
+      task = await requestTask(env, actor, {
+        objective: d.objective!,
+        start_url: d.start_url!,
+        work_card_id: card.id,
+        payment_mode: "NONE",
+        max_price_usd: 0,
+      } as never);
+    } catch (err) {
+      return { step, action: "look_refused", detail: err instanceof Error ? err.message : String(err) };
+    }
+
+    if (task.status !== "APPROVED") {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
+        .bind(card.id, `Waiting on your approval to look at ${d.start_url}`)
+        .run();
+      return { step, action: "waiting", detail: `Needs your approval to look at ${d.start_url}` };
+    }
+
+    const result = await runTask(env, task.id, undefined, { shots: true });
+    if (!result.ok) {
+      return { step, action: "looked", detail: `Could not open ${d.start_url}: ${result.detail}` };
+    }
+
+    const shots = await loadShots(env, task.id);
+    if (shots.length === 0) {
+      // NO PICTURES MEANS NO REVIEW. Falling back to judging the text would produce a fluent,
+      // plausible review of a layout nobody saw — the exact failure this action exists to prevent.
+      const detail = `Opened ${d.start_url} but could not capture a screenshot, so there is nothing to judge the design from. The page text was read and is on the card.`;
+      await appendFinding(env, card, detail);
+      return { step, action: "looked", detail };
+    }
+
+    const { run } = await runAi(env, {
+      purpose: `${employeeName} looking at ${d.start_url}`,
+      actor,
+      inputs: [
+        buildDesignReviewPrompt({
+          url: result.task.result_url ?? d.start_url!,
+          whatTheyAsked: d.objective!,
+          reviewerName: employeeName,
+          hasDesktop: shots.some((sh) => sh.viewport === "desktop"),
+          hasMobile: shots.some((sh) => sh.viewport === "mobile"),
+          pageText: (result.task.result_text ?? "").slice(0, 6_000) || null,
+        }),
+      ],
+      images: shots.map((sh) => ({
+        mediaType: "image/jpeg",
+        dataBase64: sh.base64,
+        label: `${sh.viewport} ${sh.width}x${sh.height}`,
+      })),
+      // A public web page is public. This is what lets the images through the boundary at all —
+      // anything the firm holds privately would be labelled higher and refused, by design.
+      sensitivity: "PUBLIC" as never,
+      budgetContext: { expectedOutputTokens: 1_200 },
+      routing: { category: "OPERATIONS", taskClass: "employee-work" },
+    });
+
+    if (run.status !== "COMPLETED" || !run.output_text) {
+      return { step, action: "looked", detail: `Saw ${d.start_url} but could not form a judgement: ${run.failure_reason ?? run.status}` };
+    }
+
+    await appendFinding(env, card, run.output_text.slice(0, 4_000));
+    return { step, action: "looked", detail: `Looked at ${d.start_url} and wrote up what is wrong with it.` };
   }
 
   if (d.action === "note") {
@@ -324,7 +407,16 @@ export async function handleDraftCard(ctx: RouteContext): Promise<Response> {
   const { run } = await runAi(ctx.env, {
     purpose: "drafting a work card from a request",
     actor,
-    inputs: [buildDraftPrompt(parsed.data.text, roster.map((r) => ({ name: r.name, role: r.role })))],
+    // The page registry is the routing table. It already states what each page is for, in the
+    // operator's own words, so "where do I see what we have spent" has an answer without anybody
+    // maintaining a second list that would drift from the first.
+    inputs: [
+      buildDraftPrompt(
+        parsed.data.text,
+        roster.map((r) => ({ name: r.name, role: r.role })),
+        Object.entries(PAGE_PURPOSES).map(([key, p]) => ({ key, purpose: p.purpose })),
+      ),
+    ],
     // The request is firm-internal — it can name a company, a partner, a deal.
     sensitivity: "INTERNAL" as never,
     budgetContext: { expectedOutputTokens: 900 },
@@ -335,19 +427,72 @@ export async function handleDraftCard(ctx: RouteContext): Promise<Response> {
     return json({ error: "draft_failed", detail: run.failure_reason ?? `run ${run.status}`, run_id: run.id }, { status: 502 });
   }
 
-  const draft = parseDraft(run.output_text);
-  if (!draft) {
-    return json({ error: "unreadable", detail: "could not turn that into a card", run_id: run.id }, { status: 502 });
+  const answer = parseAnswer(run.output_text, new Set(Object.keys(PAGE_PURPOSES)));
+  if (!answer) {
+    return json({ error: "unreadable", detail: "could not work out what that needs", run_id: run.id }, { status: 502 });
   }
 
-  // Resolve the suggested name to a real employee, or leave it unassigned. A name that does not
-  // match anybody employed is dropped rather than shown: a wrong owner looks decided.
-  const owner = roster.find((r) => r.name.toLowerCase() === (draft.suggested_owner ?? "").toLowerCase()) ?? null;
+  // Resolve a suggested name to a real employee, or leave it unassigned. A name matching nobody
+  // employed is dropped rather than shown: a wrong owner looks decided.
+  const card = answer.card
+    ? (() => {
+        const owner = roster.find((r) => r.name.toLowerCase() === (answer.card!.suggested_owner ?? "").toLowerCase()) ?? null;
+        return { ...answer.card, owner_id: owner?.id ?? null, owner_name: owner?.name ?? null };
+      })()
+    : null;
 
   return json({
-    draft: { ...draft, owner_id: owner?.id ?? null, owner_name: owner?.name ?? null },
+    outcome: answer.outcome,
+    says: answer.says,
+    page: answer.page ?? null,
+    draft: card,
     run_id: run.id,
     prompt_version: ASK_PROMPT_VERSION,
-    note: "Nothing has been created. Read it, change anything, then add it.",
+    note:
+      answer.outcome === "WORK"
+        ? "Nothing has been created. Read it, change anything, then add it."
+        : answer.outcome === "GO"
+          ? "This already exists — no work needed."
+          : "",
   });
+}
+
+/**
+ * Pull a task's screenshots back out of R2, as base64 ready for the model.
+ *
+ * WHY BASE64 AND NOT A URL. A hosted link would mean the provider fetching from us, which is an
+ * inbound path this system does not have and does not want. The bytes travel with the request,
+ * through the same governed boundary as everything else.
+ *
+ * A shot whose bytes have gone missing is skipped rather than failing the review — one viewport is
+ * a worse review than two, and no review at all is worse than both.
+ */
+async function loadShots(
+  env: Env,
+  taskId: string,
+): Promise<Array<{ viewport: string; width: number; height: number; base64: string }>> {
+  const rows = ((await env.WP_OS_DB.prepare(
+    "SELECT viewport, width, height, r2_key FROM browser_task_shot WHERE task_id = ?1 ORDER BY viewport DESC",
+  ).bind(taskId).all<{ viewport: string; width: number; height: number; r2_key: string }>()).results ?? []);
+
+  const bucket = env.WP_OS_DOCUMENTS;
+  if (!bucket) return [];
+
+  const out: Array<{ viewport: string; width: number; height: number; base64: string }> = [];
+  for (const row of rows) {
+    try {
+      const obj = await bucket.get(row.r2_key);
+      if (!obj) continue;
+      const bytes = new Uint8Array(await obj.arrayBuffer());
+      let binary = "";
+      // Chunked: String.fromCharCode with a few hundred thousand arguments blows the stack.
+      for (let i = 0; i < bytes.length; i += 8192) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      }
+      out.push({ viewport: row.viewport, width: row.width, height: row.height, base64: btoa(binary) });
+    } catch {
+      // This shot is unreadable. The others still stand.
+    }
+  }
+  return out;
 }

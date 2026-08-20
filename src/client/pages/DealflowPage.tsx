@@ -168,6 +168,10 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const [companyId, setCompanyId] = useState("");
   const [startsAt, setStartsAt] = useState("NEW");
   const [origin, setOrigin] = useState("UNRECORDED");
+  // Blank company id means "the name below is new". One form, both cases.
+  const [newName, setNewName] = useState("");
+  const [newSector, setNewSector] = useState("");
+  const [sleeve, setSleeve] = useState("EARLY_STAGE_PRIMARY");
 
   const deals = board.data?.deals ?? [];
 
@@ -188,16 +192,48 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const stalled = live.filter((d) => stallRead(d.status, d.in_stage_since)?.stalled);
   const readyToDecide = live.filter((d) => d.status === "IC_READY");
 
+  /**
+   * THE ONE DOOR INTO THE FUNNEL.
+   *
+   * There used to be two "Add a company" buttons that did different things, and neither did the
+   * whole job: this one could only pick a company that already existed, and the one on Companies
+   * created a company but no deal. So putting a new company into the pipeline meant visiting two
+   * pages in the right order, and getting it wrong left either a company with no deal or a deal you
+   * could not create.
+   *
+   * Now this creates whichever half is missing. Type a name that is not in the register and it is
+   * added; pick one that is and it is reused.
+   */
   async function create(e: React.FormEvent) {
     e.preventDefault();
-    if (!companyId) return;
-    const company = companies.data?.companies.find((c) => c.id === companyId);
+    let id = companyId;
+
+    // A new name means a new company. Done first, because the deal cannot exist without it.
+    if (!id) {
+      if (!newName.trim()) return;
+      const made = await api<{ id?: string; error?: string; detail?: string }>("/api/companies", {
+        method: "POST",
+        body: { canonical_name: newName.trim(), ...(newSector.trim() ? { sector: newSector.trim() } : {}) },
+      });
+      if (made.status !== 201 || !made.data?.id) {
+        setMessage(`Could not add ${newName.trim()}: ${made.data?.detail ?? made.data?.error ?? made.status}`);
+        return;
+      }
+      id = made.data.id;
+      companies.reload();
+    }
+
+    const company = companies.data?.companies.find((c) => c.id === id);
+    const name = company?.canonical_name ?? newName.trim();
     const created = await api<{ id?: string; error?: string; detail?: string }>("/api/opportunities", {
       method: "POST",
       body: {
-        company_id: companyId,
-        opportunity_type: "EARLY_STAGE_PRIMARY",
-        title: `${company?.canonical_name ?? "Opportunity"} — ${stage(startsAt)?.label ?? startsAt}`,
+        company_id: id,
+        // THE ONE QUESTION THAT ROUTES EVERYTHING DOWNSTREAM. A secondary is a different sleeve
+        // with its own approval keys and its own separation rule, and it appears on Secondaries
+        // from this answer alone — no second entry anywhere.
+        opportunity_type: sleeve,
+        title: `${name || "Opportunity"} — ${stage(startsAt)?.label ?? startsAt}`,
         relationship_origin: origin,
       },
     });
@@ -254,7 +290,8 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       <div className="home-section-head">
         <h2>Every deal</h2>
         <span className="muted small">sorted by what needs you soonest</span>
-        <button type="button" className="link-button" data-testid="dealflow-add-toggle" onClick={() => setAdding((a) => !a)}>
+        {/* THE ONLY WAY IN. Companies used to carry an identical button that did half of this. */}
+        <button type="button" className="btn-strong" data-testid="dealflow-add-toggle" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a company"}
         </button>
       </div>
@@ -266,10 +303,42 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           <label>
             Company{" "}
             <select data-testid="dealflow-company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
-              <option value="">— select —</option>
+              <option value="">— a company we have not recorded yet —</option>
               {(companies.data?.companies ?? []).map((c) => (
                 <option key={c.id} value={c.id}>{c.canonical_name}</option>
               ))}
+            </select>
+          </label>
+          {!companyId && (
+            <>
+              <label>
+                Its name{" "}
+                <input
+                  data-testid="dealflow-new-name"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Psyflo"
+                />
+              </label>
+              <label>
+                Sector{" "}
+                <input
+                  data-testid="dealflow-new-sector"
+                  value={newSector}
+                  onChange={(e) => setNewSector(e.target.value)}
+                  placeholder="optional"
+                />
+              </label>
+            </>
+          )}
+          {/* PRIMARY OR SECONDARY. One answer, and everything downstream follows it — the sleeve,
+              the approval keys, and whether it shows up on Secondaries. */}
+          <label>
+            What kind{" "}
+            <select data-testid="dealflow-sleeve" value={sleeve} onChange={(e) => setSleeve(e.target.value)}>
+              <option value="EARLY_STAGE_PRIMARY">Primary — we invest in the company</option>
+              <option value="SECONDARY_PURCHASE">Secondary — we buy someone else's shares</option>
+              <option value="SECONDARY_SALE">Secondary — we sell ours</option>
             </select>
           </label>
           <label>
@@ -291,6 +360,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           <button type="submit" className="btn-strong" data-testid="dealflow-add-submit">Add</button>
           <span className="muted small">
             Start it where it already is — everything arriving at “New” makes every clock lie.
+            {sleeve !== "EARLY_STAGE_PRIMARY" && " A secondary also appears on the Secondaries page; you do not enter it twice."}
           </span>
         </form>
       )}

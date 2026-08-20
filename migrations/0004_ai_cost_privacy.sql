@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS ai_employee (
 
 -- BEGIN GENERATED SEEDS (scripts/seed/generate-ai-employee-seed.mjs) — do not hand-edit
 -- Registry provenance: AI employee roster v4.0 (Revised v3.0 roster + Whitney, ADR-002).
--- All 17 rows seed INACTIVE; activation is human-reserved (ai_employee.activate), never seed-time.
+-- All 19 rows seed INACTIVE; activation is human-reserved (ai_employee.activate), never seed-time.
 INSERT OR IGNORE INTO ai_employee (id, name, role, layer, primary_machines_json, status, purpose) VALUES
   ('aie_walker', 'Walker', 'Scooter''s Chief of Staff', 'MP Support', '["command_center","mp_personal_office"]', 'INACTIVE', 'Scooter''s Chief of Staff'),
   ('aie_wren', 'Wren', 'Sequoia''s Chief of Staff', 'MP Support', '["command_center","mp_personal_office"]', 'INACTIVE', 'Sequoia''s Chief of Staff'),
@@ -63,7 +63,9 @@ INSERT OR IGNORE INTO ai_employee (id, name, role, layer, primary_machines_json,
   ('aie_parker', 'Parker', 'Event Marketing Coordinator', 'Portfolio & operations', '["west_peek_live_events","brand_sponsorship_revenue"]', 'INACTIVE', 'Event Marketing Coordinator'),
   ('aie_pippa', 'Pippa', 'Communications', 'Portfolio & operations', '["marketing_pr_content"]', 'INACTIVE', 'Communications'),
   ('aie_pax', 'Pax', 'Operations Manager', 'Portfolio & operations', '["continuity_maintenance"]', 'INACTIVE', 'Operations Manager'),
-  ('aie_preston', 'Preston', 'Finance & Fund Admin', 'Portfolio & operations', '["finance_fund_admin"]', 'INACTIVE', 'Finance & Fund Admin');
+  ('aie_preston', 'Preston', 'Finance & Fund Admin', 'Portfolio & operations', '["finance_fund_admin"]', 'INACTIVE', 'Finance & Fund Admin'),
+  ('aie_percy', 'Percy', 'UX Design & Growth', 'Portfolio & operations', '["marketing_pr_content","taste_layer"]', 'INACTIVE', 'UX Design & Growth'),
+  ('aie_whitney', 'Whitney', 'Professor, West Peek University', 'Learning', '["ic_learning_loop"]', 'INACTIVE', 'Professor, West Peek University');
 -- END GENERATED SEEDS
 
 -- ── AI employee lifecycle history (append-only; D15) ──

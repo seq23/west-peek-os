@@ -863,3 +863,73 @@ describe("pausing and resuming an employee", () => {
     for (const n of names) expect(activeNames.has(n)).toBe(true);
   });
 });
+
+/**
+ * IMAGES THROUGH THE BOUNDARY.
+ *
+ * Vision was added so an employee could look at a page rather than only read it. Every control in
+ * runAi was written for text — most importantly the credential scrubber, which reads strings and is
+ * simply blind to a screenshot of a page displaying an API key.
+ *
+ * That asymmetry is the whole reason images get their own gate, and these pin it. A future provider
+ * permitted a higher label for text must not silently inherit that permission for pictures.
+ */
+describe("images are gated separately from text", () => {
+  const shot = { mediaType: "image/jpeg", dataBase64: "/9j/4AAQSkZJRg==", label: "desktop" };
+
+  it("refuses images above INTERNAL, even though the same label is fine for text", async () => {
+    const stub = stubFetch();
+    // Text at RESTRICTED is a policy question answered elsewhere; an image at RESTRICTED is refused
+    // here, before any provider is consulted at all.
+    const { run: r } = await run(
+      { sensitivity: "RESTRICTED", images: [shot] },
+      { fetchImpl: stub.fetchImpl },
+    );
+    expect(r.status).not.toBe("COMPLETED");
+    expect(r.failure_reason).toContain("images_not_permitted_at_label");
+    // Nothing left the building.
+    expect(stub.calls.length).toBe(0);
+  });
+
+  it("allows an image at PUBLIC and at INTERNAL", async () => {
+    for (const label of ["PUBLIC", "INTERNAL"] as const) {
+      const stub = stubFetch();
+      const { run: r } = await run({ sensitivity: label, images: [shot] }, { fetchImpl: stub.fetchImpl });
+      expect(r.failure_reason ?? "").not.toContain("images_not_permitted_at_label");
+    }
+  });
+
+  it("caps how many images one run may carry", async () => {
+    const stub = stubFetch();
+    const { run: r } = await run(
+      { sensitivity: "PUBLIC", images: [shot, shot, shot, shot, shot] },
+      { fetchImpl: stub.fetchImpl },
+    );
+    expect(r.failure_reason).toContain("too_many_images");
+    expect(stub.calls.length).toBe(0);
+  });
+
+  it("refuses a media type nothing here produces", async () => {
+    // Anything but jpeg or png is either a mistake or an attempt to send something that is not a
+    // screenshot at all.
+    const stub = stubFetch();
+    const { run: r } = await run(
+      { sensitivity: "PUBLIC", images: [{ ...shot, mediaType: "application/pdf" }] },
+      { fetchImpl: stub.fetchImpl },
+    );
+    expect(r.failure_reason).toContain("unsupported_image_type");
+    expect(stub.calls.length).toBe(0);
+  });
+
+  it("counts images in the token estimate, so the budget check is not blind to them", async () => {
+    // The expensive half of a vision run is the pictures. A budget gate that only measured the
+    // prompt would wave through exactly the run it exists to catch.
+    const stub = stubFetch();
+    const withImage = await run({ sensitivity: "PUBLIC", images: [shot] }, { fetchImpl: stub.fetchImpl });
+    const stub2 = stubFetch();
+    const textOnly = await run({ sensitivity: "PUBLIC" }, { fetchImpl: stub2.fetchImpl });
+    const est = (r: { cost_estimate_json: string }) =>
+      Number(JSON.parse(r.cost_estimate_json || "{}").input_tokens ?? 0);
+    expect(est(withImage.run)).toBeGreaterThan(est(textOnly.run));
+  });
+});

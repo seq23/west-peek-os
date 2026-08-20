@@ -36,13 +36,53 @@ export interface WorkCardRow {
 export const WORK_CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"] as const;
 export type WorkCardState = (typeof WORK_CARD_STATES)[number];
 
+/**
+ * Which moves are legal.
+ *
+ * TWO RULES, AND THE SECOND ONE IS WHY THIS TABLE WAS WRONG. First: nothing is deleted, so every
+ * terminal state can be walked back — a card is a record of what the firm decided, and a decision
+ * gets revisited. Second, and the one that actually bit: **this table must permit every move the
+ * interface offers.** It did not. `CANCELLED` allowed nothing at all while the page rendered a
+ * "Put it back" button on exactly those cards, and `OPEN` did not allow `DONE` while every open
+ * card rendered a "Done" button. Both 409'd. The card sat there, the operator pressed the button,
+ * and nothing happened — the failure was a one-line notice under a legend most of the way up the
+ * page.
+ *
+ * Walking back always lands on OPEN rather than on whatever the card was before. What it was is
+ * history; what it is now is undecided, and reconstructing a prior state would be inventing one.
+ *
+ * `tests/work-cards.test.ts` asserts this table against the moves the page can offer, so the two
+ * cannot drift apart again in silence.
+ */
 const ALLOWED_TRANSITIONS: Readonly<Record<WorkCardState, readonly WorkCardState[]>> = {
-  OPEN: ["IN_PROGRESS", "BLOCKED", "CANCELLED"],
-  IN_PROGRESS: ["BLOCKED", "DONE", "CANCELLED"],
-  BLOCKED: ["OPEN", "IN_PROGRESS", "CANCELLED"],
-  DONE: ["OPEN"], // reopen
-  CANCELLED: [],
+  OPEN: ["IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"],
+  IN_PROGRESS: ["OPEN", "BLOCKED", "DONE", "CANCELLED"],
+  BLOCKED: ["OPEN", "IN_PROGRESS", "DONE", "CANCELLED"],
+  DONE: ["OPEN"], // reopened
+  CANCELLED: ["OPEN"], // put back — the decision not to act was revisited
 };
+
+/** Whether a move is legal. The single reader of the table above, so nothing consults it twice. */
+export function canTransition(from: WorkCardState, to: WorkCardState): boolean {
+  return ALLOWED_TRANSITIONS[from].includes(to);
+}
+
+/**
+ * The moves the Work page can put in front of somebody, as a function of the card's state.
+ *
+ * Kept beside the table it has to agree with, and exported so a test can hold them together. This
+ * is the honest shape of the coupling: the page decides which buttons exist, the server decides
+ * which moves are legal, and there is no reason for those two to be discovered as different at
+ * runtime by an operator pressing a button.
+ */
+export function offeredMoves(state: WorkCardState): readonly WorkCardState[] {
+  // A finished or dropped card is out of the live board and offers exactly one move: back to open.
+  // Everything else is live and offers the working moves.
+  if (state === "DONE" || state === "CANCELLED") return ["OPEN"];
+  const out: WorkCardState[] = ["DONE", "CANCELLED"];
+  if (state === "OPEN") out.unshift("IN_PROGRESS");
+  return out;
+}
 
 export class WorkCardError extends Error {
   constructor(
@@ -246,8 +286,7 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
   if (authz.decision !== "ALLOW") return json({ error: "forbidden", reason: authz.reason }, { status: 403 });
 
   if (input.state !== undefined && input.state !== card.state) {
-    const allowed = ALLOWED_TRANSITIONS[card.state as WorkCardState];
-    if (!allowed.includes(input.state)) {
+    if (!canTransition(card.state as WorkCardState, input.state)) {
       return json(
         { error: "illegal_transition", detail: `work card cannot transition ${card.state} → ${input.state}` },
         { status: 409 },

@@ -72,13 +72,17 @@ const { MANAGING_PARTNER_NAMES } = mps;
 /**
  * The roster size, asserted rather than assumed.
  *
- * It was 31 under ADR-002 and is 17 under roster v4.0, consolidated on operator direction: several
- * pairs were the same job wearing two titles, and thirty-one seats described a firm that does not
- * exist. The check stays because its real job is catching an ACCIDENTAL loss — a bad merge, a
- * deleted block — which a bare "whatever length the array is" would wave through. Changing this
- * number is a deliberate act and should arrive with the roster change that justifies it.
+ * It was 31 under ADR-002 and became 17 under roster v4.0, consolidated on operator direction:
+ * several pairs were the same job wearing two titles, and thirty-one seats described a firm that
+ * does not exist. It is 18 since Whitney was un-retired to teach in University (migrations 0069 and
+ * 0070) — the Market Intelligence Coach re-pointed at the partners' own understanding, rather than
+ * an eighteenth seat invented beside a retired coach who already did the job.
+ *
+ * The check stays because its real job is catching an ACCIDENTAL loss — a bad merge, a deleted
+ * block — which a bare "whatever length the array is" would wave through. Changing this number is a
+ * deliberate act and should arrive with the roster change that justifies it.
  */
-const EXPECTED_ROSTER_SIZE = 17;
+const EXPECTED_ROSTER_SIZE = 19;
 
 if (AI_EMPLOYEE_ROSTER.length !== EXPECTED_ROSTER_SIZE) {
   console.error(

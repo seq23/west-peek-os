@@ -75,6 +75,11 @@
 
   /* — Type. 2+1: one UI face, one mono for identifiers. */
   --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* A system serif, for the few places the firm publishes rather than operates —
+     the thesis today. No network request, no dependency, and a genuinely
+     different texture from the interface around it, which is the point: a
+     document should not look like the application that stores it. */
+  --font-serif: ui-serif, Charter, "Iowan Old Style", Georgia, "Times New Roman", serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
   --text-2xs: 0.6875rem;  /* 11px — uppercase micro-labels only */
@@ -2106,7 +2111,10 @@ hr {
   max-height: 22rem;
 }
 
-.work-card-row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-lg); }
+/* `.work-card-row` used to set a horizontal two-column flex here and lost to
+   `.work-card-grid > li` on specificity — dead code silently contradicting the
+   layout it looked like it controlled. The grid owns the layout; this owns only
+   the things the grid does not. */
 .work-card-body { min-width: 0; }
 
 /* ── Disclosures that have to LOOK like buttons ────────────────────────────────
@@ -2544,6 +2552,14 @@ hr {
   border: 1px solid var(--wp-line);
   border-radius: 8px;
   background: var(--wp-surface);
+  /* CONTAINMENT, AND IT IS NOT OPTIONAL.
+     A grid track sizes to its content unless it is told not to, so one long
+     unbroken string — a title, a URL, a wall of findings — widened the track and
+     the text rendered straight out through both card borders. `min-width: 0`
+     stops the track growing; `overflow: hidden` is the backstop that clips
+     anything that still tries. Both, because either alone has a hole in it. */
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* Blocked earns a visible edge: it is the only state where work has stopped and
@@ -2650,3 +2666,459 @@ hr {
 
 .ask-draft label { display: block; }
 .ask-draft input { width: 100%; }
+
+/* Ask examples: three columns, because the shape of the answer should be visible before typing. */
+.ask-examples-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem 1.5rem;
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--wp-line);
+}
+
+.ask-examples-grid ul { margin: 0.25rem 0 0; }
+.ask-examples-grid .link-button { text-align: left; }
+
+/* ── Work cards ────────────────────────────────────────────────────────────
+   Three lines at rest: a meta row, the title, then who is carrying it and what
+   happens next. That is the size where a card still reads as a card and six of
+   them still fit above the fold. One line was smaller and read as a chip. */
+.work-card-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+  /* A flex item defaults to min-width:auto — it refuses to shrink below its
+     content. That default is what let the title push out of the card. */
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.work-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+/* The chevron sits hard right, so every card in the grid has its control in the
+   same place regardless of how many badges the card happens to carry. */
+.work-card-meta > .work-card-chevron { margin-left: auto; }
+
+/* THE TITLE, INSIDE THE CARD.
+   This used `-webkit-box` with `-webkit-line-clamp`, which changes the box model
+   and sizes to content — so a long title rendered at its natural width and spilled
+   out of both sides of the card. It looked like a rendering fault because it was
+   one. Plain block, wrapping normally, clipped at three lines by height rather
+   than by a clamp that fights the layout. */
+.work-card-title {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  font-size: var(--text-md);
+  line-height: 1.3;
+  /* Three lines of the title, and no more — a card whose heading runs to six
+     breaks the rhythm that makes a board scannable. */
+  max-height: 3.9em;
+  overflow: hidden;
+  /* A URL or an unspaced string has no break opportunity; without this it is a
+     single unbreakable word as wide as it is long. */
+  overflow-wrap: anywhere;
+}
+
+.work-card-summary:hover .work-card-title { text-decoration: underline; }
+
+.work-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.work-card-next {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── The open card ────────────────────────────────────────────────────────
+   Everything below the summary is bounded and scrolls inside itself. An
+   employee working a card accumulates findings without limit — Wyatt's had
+   several thousand characters on it — and an unbounded body made one card
+   taller than the entire rest of the board. */
+.work-card-body { min-width: 0; }
+
+.work-card-longtext {
+  max-height: 11rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  background: var(--wp-paper);
+  border: 1px solid var(--wp-line);
+  border-radius: 4px;
+  padding: 0.55rem 0.7rem;
+  margin: 0.35rem 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.work-card-looks { min-width: 0; }
+.work-card-looks pre.browser-result { max-height: 9rem; }
+
+.work-card-chevron {
+  flex: 0 0 auto;
+  display: inline-block;
+  transition: transform 120ms ease;
+  color: var(--wp-orange);
+  font-weight: 700;
+}
+
+.work-card-chevron.is-open { transform: rotate(90deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .work-card-chevron { transition: none; }
+}
+
+.work-card-row.is-open .work-card-body {
+  border-top: 1px solid var(--wp-line);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+
+/* ── Owner chip ────────────────────────────────────────────────────────────
+   A face is the fastest way to read a board: you find Wyatt's cards by looking
+   for Wyatt, not by reading eight owner lines. */
+.owner-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  font-size: var(--text-sm);
+  color: var(--wp-muted);
+}
+
+.owner-chip-none { font-style: italic; }
+
+.owner-face {
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.owner-face-initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wp-orange);
+  color: var(--wp-orange-ink);
+  font-weight: 700;
+  font-size: 0.7rem;
+}
+
+.work-legend-wrap { margin: 0 0 0.9rem; }
+.work-legend-wrap > summary { cursor: pointer; }
+.work-legend-wrap > .work-legend { margin-top: 0.5rem; }
+
+/* ── Scheduled work: cards, not rows ───────────────────────────────────────
+   Two-up on anything wide enough, one-up below. The grid is the point: a
+   recurring job is a thing the firm owns, and a bullet list read as a log. */
+.job-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
+  gap: 1rem;
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+.job-card { display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* A running job carries the accent on its edge, so on/off reads before any text does. */
+.job-card.is-on { border-left: 3px solid var(--wp-accent); }
+
+.job-card-head { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.job-card-title { margin: 0.15rem 0 0; }
+.job-card-actions { margin-top: auto; padding-top: 0.5rem; }
+.job-byline { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+
+.job-deliverer { display: inline-flex; align-items: center; gap: 0.35rem; }
+
+.job-face {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.job-face-initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wp-accent);
+  color: var(--wp-paper);
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+
+.job-runs > summary { cursor: pointer; }
+.job-controls { margin-bottom: 1rem; }
+.job-controls > summary { cursor: pointer; }
+
+/* ── A named employee welcoming you to their page ──────────────────────────
+   Used where a page has an author rather than just a purpose: University's
+   professor, Research's analyst. Portrait left, their words right. */
+.professor-welcome {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.professor-welcome > div { min-width: 0; }
+.professor-welcome p { margin: 0 0 0.35rem; }
+.professor-welcome p:last-child { margin-bottom: 0; }
+
+.professor-face {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.professor-face-initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wp-accent);
+  color: var(--wp-paper);
+  font-weight: 700;
+  font-size: 1.6rem;
+}
+
+/* ── The thesis ────────────────────────────────────────────────────────────
+   The operator's direction: the thesis itself prominent at the top, the inputs
+   below it, and the statement set in something better than the interface font.
+
+   So the statement gets the accent as a FIELD rather than as a hairline. This is
+   the one place in the product where orange fills a whole block, and it earns it
+   by being the one sentence the entire firm turns on — everything else the
+   system does is downstream of it. Text on that field is --wp-orange-ink, never
+   white: white on this orange is 3.4:1 and fails. */
+.thesis-doc {
+  margin: 0 0 1.5rem;
+}
+
+.thesis-doc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.thesis-doc-firm {
+  margin: 0;
+  font-size: var(--text-sm);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--wp-orange-deep);
+}
+
+.thesis-doc-title {
+  margin: 0.2rem 0 0;
+  font-size: 1.55rem;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+/* THE BANNER. Serif, display size, on the accent. */
+.thesis-banner {
+  background: var(--wp-orange);
+  color: var(--wp-orange-ink);
+  border-radius: 6px;
+  padding: 2.25rem 2.5rem;
+}
+
+.thesis-banner-statement {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: clamp(1.4rem, 3.2vw, 2.1rem);
+  line-height: 1.28;
+  letter-spacing: -0.014em;
+  text-wrap: balance;
+  max-width: 32em;
+}
+
+/* The stamp sits inside the field, quiet against it. */
+.thesis-doc-stamp {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.25rem;
+  margin: 1.5rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--wp-orange-deeper);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  /* Deliberately not --wp-muted: a grey chosen for paper is invisible on orange. */
+  color: var(--wp-orange-deeper);
+}
+
+.thesis-banner-empty {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.2rem;
+  line-height: 1.4;
+}
+
+/* The specification, on paper under the banner. */
+.thesis-doc-grid {
+  margin: 0;
+  padding: 1.5rem 0 0;
+}
+
+.thesis-doc-actions { margin: 1.25rem 0 0; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+
+/* ── Printing the thesis ───────────────────────────────────────────────────
+   What gets handed to an LP is this page with the application removed. */
+@media print {
+  .app-shell nav,
+  .rail,
+  .nav-rail,
+  .page-purpose,
+  .how-this-works,
+  .thesis-doc-actions,
+  [data-testid="thesis-edit-toggle"],
+  [data-testid="thesis-history"],
+  [data-testid="thesis-message"] {
+    display: none !important;
+  }
+
+  .thesis-doc {
+    border: 0;
+    padding: 0;
+    /* A page break inside the spec table splits a term from its value. */
+    break-inside: avoid;
+  }
+
+  body { background: var(--wp-surface); }
+}
+
+/* ── The IC sequence ───────────────────────────────────────────────────────
+   Numbered because it genuinely IS a sequence — each step needs the one before
+   it, and the numbers carry that rather than decorating it. Always shown, in an
+   empty system as much as a busy one: "nothing has reached this stage" and
+   "this is broken" look identical unless the page says which. */
+.ic-flow {
+  list-style: none;
+  margin: 1rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.ic-step {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  padding-left: 0.15rem;
+}
+
+.ic-step-num {
+  flex: 0 0 auto;
+  width: 1.65rem;
+  height: 1.65rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--wp-line-control);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--wp-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The step you are actually at. The accent marks one thing on a page. */
+.ic-step.is-here > .ic-step-num {
+  background: var(--wp-orange);
+  border-color: var(--wp-orange);
+  color: var(--wp-orange-ink);
+}
+
+.ic-step.is-done > .ic-step-num {
+  background: var(--wp-good-tint);
+  border-color: var(--wp-good-line);
+  color: var(--wp-good);
+}
+
+/* Steps not yet reachable recede — present, legible, plainly not now. */
+.ic-step:not(.is-here):not(.is-done) .ic-step-body { opacity: 0.72; }
+
+.ic-step-body { min-width: 0; }
+.ic-step-body > p { margin: 0 0 0.25rem; }
+.ic-step-body > p:last-child { margin-bottom: 0; }
+
+.ic-step-title { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+
+/* ── Deliverables ──────────────────────────────────────────────────────────
+   Things an employee produced and handed over. Signed, with a face, and always
+   carrying the two things that make it yours to keep: download and email. */
+.deliverable-list {
+  list-style: none;
+  margin: 0.75rem 0 1.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.deliverable { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.deliverable-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.deliverable-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  text-align: left;
+  padding: 0;
+}
+
+/* The body as written, wrapped rather than scrolled sideways — it is prose, not code. */
+.deliverable-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 26rem;
+  overflow-y: auto;
+  background: var(--wp-paper);
+  border: 1px solid var(--wp-line);
+  border-radius: 4px;
+  padding: 0.85rem 1rem;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  margin: 0.35rem 0;
+}
+
+.deliverable-actions { margin-top: 0.15rem; }

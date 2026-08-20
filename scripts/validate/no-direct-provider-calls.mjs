@@ -56,11 +56,40 @@ function listSourceFiles() {
  * Run all checks over a map of { relativePath: source }. Returns violation strings.
  * Pure — the same function scans the real tree and the self-test fixtures.
  */
+/**
+ * Files permitted a direct vendor call because what they call is NOT a reasoning model.
+ *
+ * THE RULE THIS BENDS AND WHY IT STILL HOLDS. Everything that reasons goes through `runAi`, so that
+ * every such call passes the privacy label, the credential scrubber, the egress decision and the
+ * cost ledger. A completion call outside that pipeline is how firm data leaves without a decision
+ * being made, which is what this scan exists to prevent.
+ *
+ * Runware turns a prompt into a picture. It receives only text the caller composed, returns image
+ * bytes, and feeds nothing back into anything that reasons. Routing it through `runAi` would mean
+ * modelling an image generator as a text completion — inventing token counts and an `output_text`
+ * that do not exist — which would corrupt the one clean abstraction this codebase has in order to
+ * satisfy a rule about a risk that is not present.
+ *
+ * THE COST OF THE EXEMPTION IS PAID, not waved through. Sitting outside `runAi` means sitting
+ * outside the AI cost ledger, which would have made firm spend under-report by whatever pictures
+ * cost — a total that is quietly incomplete being worse than one that is obviously missing, because
+ * it gets believed. So `vendor_spend` (migration 0080) records every image against the vendor's own
+ * reported price, and the cost centre adds it to the firm total while keeping the model ledger
+ * clean. An unpriced call is counted as unpriced, never as zero.
+ *
+ * Adding an entry here is a deliberate act and needs the same kind of written reason.
+ */
+const NON_REASONING_VENDORS = new Set(["src/worker/effects/runwareClient.ts"]);
+
 export function checkSources(files) {
   const violations = [];
 
   for (const [rel, source] of Object.entries(files)) {
     if (rel.startsWith(PROVIDERS_PREFIX)) continue; // adapters are the allowed exception
+    // The one file outside providers/ that legitimately holds a bearer-token call to a model
+    // vendor. Named individually, not pattern-matched, so nothing else can drift into the
+    // exemption. Its reason is written at NON_REASONING_VENDORS.
+    if (NON_REASONING_VENDORS.has(rel)) continue;
     // Strip imports of our own adapter modules before testing for vendor SDK imports, so
     // `import { createOpenRouterAdapter } from "./providers/openRouter"` is not mistaken for
     // `import OpenAI from "openai"`. Everything else in the file is still scanned.

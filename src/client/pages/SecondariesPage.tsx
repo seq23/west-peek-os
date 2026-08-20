@@ -19,7 +19,7 @@ interface Opportunity {
   price_per_share: number | null; discount_premium: number | null; quantity: number | null;
 }
 
-export function SecondariesPage(): JSX.Element {
+export function SecondariesPage({ onNavigate }: { onNavigate: (k: string) => void }): JSX.Element {
   const state = useApi<{
     opportunities: Opportunity[]; purchases: number; sales: number; separation_rule: string;
   }>("/api/secondaries");
@@ -29,7 +29,15 @@ export function SecondariesPage(): JSX.Element {
   const sales = list.filter((o) => o.opportunity_type === "SECONDARY_SALE");
 
   function table(rows: Opportunity[], testid: string) {
-    if (rows.length === 0) return <p className="state-empty">Nothing here.</p>;
+    if (rows.length === 0) {
+      // "Nothing here." twice on a page told the operator nothing about how anything gets here.
+      return (
+        <p className="state-empty">
+          None yet. A secondary lands here the moment you mark a deal as one on Dealflow — there is
+          no separate entry on this page, and nothing to keep in step.
+        </p>
+      );
+    }
     return (
       <ul className="card-list small" data-testid={testid}>
         {rows.map((o) => (
@@ -53,6 +61,29 @@ export function SecondariesPage(): JSX.Element {
     <div className="page" data-testid="secondaries-page">
       <h2>Secondaries</h2>
       <p className="muted">Purchases and sales in the secondary sleeve.</p>
+
+      {/* WHERE THESE COME FROM, and where to go to price one. The page listed two empty tables and
+          a separation rule, and answered neither question. */}
+      <div className="form-row secondaries-doors">
+        <button type="button" className="btn-strong" data-testid="secondaries-add" onClick={() => onNavigate("investment")}>
+          Add a secondary
+        </button>
+        {/* The modelling dashboard is a separate product and deliberately not embedded — this is a
+            signpost, framed by what you would go there to do rather than as a bare address. */}
+        <a
+          className="link-button"
+          data-testid="secondaries-venturedeals"
+          href="https://venturedeals.joinwestpeek.com"
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          Model a secondary scenario →
+        </a>
+        <span className="muted small">
+          Pricing, discount to last round and what a block does to ownership are worked out in the
+          VentureDeals dashboard.
+        </span>
+      </div>
 
       <p className="notice" data-testid="secondaries-separation">
         {state.data?.separation_rule ?? "Secondaries run as a separate sleeve from early-stage primaries."}

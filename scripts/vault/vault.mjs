@@ -146,6 +146,27 @@ function parseEnvFile(text) {
 }
 
 async function promptSecret(name) {
+  /*
+   * NOT EVERY CALLER HAS A TERMINAL.
+   *
+   * The hidden prompt below needs raw mode, which needs a real TTY. Run from anywhere that is not
+   * one — a Claude Code `!` line, a script, CI — `setRawMode` throws or the prompt hangs waiting
+   * for a keystroke that never comes. The operator hit exactly that: "the command doesnt work".
+   *
+   * So when stdin is not a TTY, read the value from it instead. That makes the safe route work:
+   *
+   *   npm run vault:set RUNWARE_API_KEY < ~/Desktop/key.txt
+   *
+   * which keeps the secret out of shell history and out of any transcript, unlike passing it as an
+   * argument. Trailing newline is stripped because a file almost always has one and a secret almost
+   * never does.
+   */
+  if (!process.stdin.isTTY) {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    return Buffer.concat(chunks).toString("utf8").trim();
+  }
+
   const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
   process.stdout.write(`Enter value for ${name} (input hidden): `);
   const stdin = process.stdin;

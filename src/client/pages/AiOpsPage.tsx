@@ -43,7 +43,11 @@ interface CatalogResponse {
 interface CostResponse {
   period: string;
   firm_policy: { cost_mode: string; privacy_mode: string; daily_cap_usd: number; per_run_cap_usd: number; spent_today_usd: number };
-  all_time: { spent_usd: number; runs: number; since: string | null };
+  all_time: {
+    spent_usd: number; model_spent_usd: number; vendor_spent_usd: number;
+    runs: number; since: string | null; unpriced_vendor_calls: number;
+  };
+  by_vendor: Array<{ vendor: string; spent_usd: number; calls: number; unpriced: number; since: string }>;
   totals: {
     committed_usd: number;
     runs: number;
@@ -270,6 +274,26 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
               completed before cost recording was corrected on 19 Aug 2026 stored zero, so the true
               figure is a little higher than this.
             </p>
+
+            {/* THE TOTAL IS TWO LEDGERS. Model work goes through the AI boundary and is summed from
+                its runs; anything bought outside it — image generation — is summed separately and
+                added here. Split out rather than merged silently, because "what did the models
+                cost" and "what did the firm spend" are different questions. */}
+            {cost.data.all_time.vendor_spent_usd > 0 && (
+              <p className="muted small" data-testid="cost-vendor-split">
+                ${cost.data.all_time.model_spent_usd.toFixed(2)} on models · $
+                {cost.data.all_time.vendor_spent_usd.toFixed(2)} with other vendors
+                {(cost.data.by_vendor ?? []).length > 0 &&
+                  ` (${cost.data.by_vendor.map((v) => `${v.vendor}: ${v.calls}`).join(", ")})`}
+              </p>
+            )}
+            {cost.data.all_time.unpriced_vendor_calls > 0 && (
+              <p className="muted small">
+                {cost.data.all_time.unpriced_vendor_calls} vendor call
+                {cost.data.all_time.unpriced_vendor_calls === 1 ? "" : "s"} came back without a price.
+                That is real money of an unknown amount, counted here as unpriced rather than as zero.
+              </p>
+            )}
           </section>
 
           <section className="card" data-testid="cost-totals">

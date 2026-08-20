@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
+import { deliver } from "./deliverables";
+import { jointByline } from "../../shared/work/chiefOfStaff";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
@@ -299,6 +301,46 @@ export async function generateReview(
       .run();
   }
 
+  /*
+   * HAND THE AGENDA OVER, to both partners.
+   *
+   * SIGNED JOINTLY. The weekly review is one document two partners work through, so it is prepared
+   * by both Chiefs of Staff rather than by whichever of them happened to press the button — an
+   * agenda that appears to belong to one partner is one the other stops treating as theirs.
+   *
+   * DELIVERED TO BOTH, for the same reason: it is the firm's page, not a personal one, and it
+   * should be on both Home pages without either having to go and find it.
+   *
+   * Best effort, and re-generating updates the existing deliverable rather than stacking copies —
+   * the unique index on (source_type, source_id) does that, and the source is the review.
+   */
+  try {
+    const partners = ((await env.WP_OS_DB.prepare(
+      "SELECT id FROM firm_user WHERE firm_scope = ?1",
+    ).bind(firmScope).all<{ id: string }>()).results ?? []);
+
+    const items = ((await env.WP_OS_DB.prepare(
+      "SELECT heading, body, exit_type, source_type FROM weekly_review_item WHERE review_id = ?1 ORDER BY heading",
+    ).bind(reviewId).all<{ heading: string; body: string; exit_type: string; source_type: string | null }>()).results ?? []);
+
+    if (items.length > 0) {
+      for (const partner of partners) {
+        await deliver(env, actor, {
+          kind: "weekly_review",
+          title: `Weekly operating review — week of ${week}`,
+          body: renderAgenda(items),
+          preparedBy: jointByline(),
+          preparedFor: partner.id,
+          // Scoped per partner so each gets their own row; re-generation updates rather than stacks.
+          sourceType: "weekly_review",
+          sourceId: `${reviewId}:${partner.id}`,
+        });
+      }
+    }
+  } catch {
+    // The agenda stands. It simply has not been filed, which the page reports.
+  }
+
   await appendEvent(env, {
     eventType: "weekly_review.generated",
     actorType: actor.type === "HUMAN" ? "firm_user" : "system",
@@ -582,6 +624,58 @@ export async function handleRefileReviewItem(ctx: RouteContext): Promise<Respons
   return json(row);
 }
 
+/**
+ * DELETE /api/weekly-review/items/:id — take an item off the agenda.
+ *
+ * WHY DELETION IS ALLOWED AT ALL, on a page where nothing else is. Every other record here is
+ * evidence: a decision, an owner, a deadline. An agenda item is not evidence — it is a proposal
+ * about what to spend the meeting on, and a proposal you do not want to discuss should be
+ * removable. The operator's report was an item they could not place and could not remove.
+ *
+ * IT IS A REAL DELETE, and that is the right call here rather than the soft-delete used for work
+ * cards. A dropped work card records a DECISION not to do something, which is worth keeping. An
+ * agenda item removed before the meeting records nothing — it was never discussed. Keeping a
+ * tombstone would just move the clutter.
+ *
+ * The event ledger keeps the fact that it happened, including the item's text, so the deletion
+ * itself is on the record even though the row is not.
+ *
+ * A DERIVED ITEM COMES BACK. If the deal is still screening, next week's agenda raises it again —
+ * deleting it says "not this week", not "never". Only a typed item is gone for good, because
+ * nothing can re-derive a thought.
+ */
+export async function handleDeleteReviewItem(ctx: RouteContext): Promise<Response> {
+  const itemId = ctx.params.id;
+  if (!itemId) return json({ error: "invalid_input" }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "weekly_review.manage", {
+    objectType: "weekly_review_item",
+    objectId: itemId,
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM weekly_review_item WHERE id = ?1")
+    .bind(itemId)
+    .first<Record<string, unknown>>();
+  if (!row) return json({ error: "not_found" }, { status: 404 });
+
+  await ctx.env.WP_OS_DB.prepare("DELETE FROM weekly_review_item WHERE id = ?1").bind(itemId).run();
+
+  await appendEvent(ctx.env, {
+    eventType: "weekly_review.item_removed",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "weekly_review_item",
+    objectId: itemId,
+    firmScope: String(row.firm_scope ?? "west-peek"),
+    // The text goes in the payload so the ledger answers "what was removed", not just "something was".
+    payload: { heading: row.heading, body: row.body, source_type: row.source_type },
+  });
+
+  return json({ removed: itemId, was_typed: row.source_type === "operator" || row.source_type === "meeting_notes" });
+}
+
 const notesSchema = z.object({
   notes: z.string().trim().min(20).max(60_000),
   /**
@@ -656,4 +750,36 @@ export async function handleReviewNotes(ctx: RouteContext): Promise<Response> {
         ? "Nothing in those notes needed deciding or doing. That is a real answer, not a failure."
         : "Nothing has been added yet. Accept the ones that are right.",
   });
+}
+
+/**
+ * The agenda as a document.
+ *
+ * Grouped by heading, because that is how the meeting runs. Items already decided are marked as
+ * such rather than dropped — an agenda that hides what was settled makes it look like nothing
+ * happened last week.
+ */
+function renderAgenda(
+  items: readonly { heading: string; body: string; exit_type: string; source_type: string | null }[],
+): string {
+  const byHeading = new Map<string, typeof items[number][]>();
+  for (const i of items) {
+    const list = byHeading.get(i.heading) ?? [];
+    list.push(i);
+    byHeading.set(i.heading, list);
+  }
+
+  const out: string[] = [];
+  for (const h of REVIEW_HEADINGS) {
+    const rows = byHeading.get(h.key);
+    if (!rows?.length) continue;
+    out.push(`## ${h.label}`, "");
+    for (const r of rows) {
+      const settled = r.exit_type !== "UNRESOLVED" ? ` _(${r.exit_type.toLowerCase().replace(/_/g, " ")})_` : "";
+      const typed = r.source_type === "operator" ? " · you raised this" : "";
+      out.push(`- ${r.body}${settled}${typed}`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
 }

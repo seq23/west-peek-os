@@ -45,10 +45,6 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
   const register = useApi<{ companies: RegisterCompany[]; sectors: string[]; count: number }>("/api/companies/register");
   const [sector, setSector] = useState("ALL");
   const [query, setQuery] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [newSector, setNewSector] = useState("");
-  const [oneLiner, setOneLiner] = useState("");
   const [message, setMessage] = useState<string | null>(null);
 
   const all = register.data?.companies ?? [];
@@ -67,28 +63,6 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
 
   const owned = all.filter((c) => c.deal_status === "CLOSED");
 
-  async function create(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) return;
-    const res = await api<{ id?: string; error?: string; detail?: string }>("/api/companies", {
-      method: "POST",
-      body: {
-        canonical_name: name.trim(),
-        ...(newSector.trim() ? { sector: newSector.trim() } : {}),
-        ...(oneLiner.trim() ? { one_liner: oneLiner.trim() } : {}),
-      },
-    });
-    if (res.status !== 201) {
-      setMessage(`Not added: ${res.data?.detail ?? res.data?.error ?? res.status}`);
-      return;
-    }
-    setMessage(`${name.trim()} added to the register.`);
-    setName("");
-    setNewSector("");
-    setOneLiner("");
-    setAdding(false);
-    register.reload();
-  }
 
   if (register.loading && !register.data) return <p data-testid="companies-loading">Loading the register…</p>;
 
@@ -113,38 +87,27 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
           Find{" "}
           <input data-testid="companies-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="name, sector or what they do" />
         </label>
-        <button type="button" className="link-button" data-testid="companies-add-toggle" onClick={() => setAdding((a) => !a)}>
-          {adding ? "Cancel" : "Add a company"}
+        {/* THE DOOR MOVED, AND THIS SAYS WHERE.
+            Both this page and Dealflow carried an "Add a company" button, and they did different
+            things — this one created a company record and no deal, that one attached a deal to a
+            company that had to already exist. So the top of the funnel had two openings and neither
+            was complete. Dealflow now does both in one form and owns the only Add button.
+
+            The pointer stays rather than the button simply vanishing: somebody who has been adding
+            companies here for months should be told where it went, not left hunting. */}
+        <button type="button" className="link-button" data-testid="companies-add-toggle" onClick={() => onNavigate("investment")}>
+          Add a company →
         </button>
       </div>
 
+      <p className="muted small" data-testid="companies-register-note">
+        This is the register — everything the firm has recorded, whether or not it is a live deal.
+        Companies are added on <strong>Dealflow</strong>, because a company worth recording is
+        almost always a company you are looking at.
+      </p>
+
       {message && <p className="notice" data-testid="companies-message">{message}</p>}
 
-      {adding && (
-        <form className="card form-row" data-testid="companies-add-form" onSubmit={create}>
-          <label>
-            Name <input data-testid="companies-add-name" value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            Sector{" "}
-            <input
-              data-testid="companies-add-sector"
-              value={newSector}
-              onChange={(e) => setNewSector(e.target.value)}
-              placeholder="Ed tech"
-              list="known-sectors"
-            />
-            <datalist id="known-sectors">
-              {(register.data?.sectors ?? []).map((s) => <option key={s} value={s} />)}
-            </datalist>
-          </label>
-          <label>
-            What they do{" "}
-            <input data-testid="companies-add-oneliner" value={oneLiner} onChange={(e) => setOneLiner(e.target.value)} placeholder="Mental health care for youth, through schools" />
-          </label>
-          <button type="submit" className="btn-strong" data-testid="companies-add-submit">Add</button>
-        </form>
-      )}
 
       <div className="company-grid" data-testid="company-grid">
         {shown.map((c) => {

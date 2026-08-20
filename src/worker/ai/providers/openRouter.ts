@@ -51,7 +51,23 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
           model: req.model ?? options.model,
           messages: [
             { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
-            { role: "user", content: req.inputs.join("\n\n") },
+            {
+              role: "user",
+              // WITH IMAGES, the content becomes the multimodal array OpenRouter expects; without
+              // them it stays a plain string, which every model accepts and which keeps the
+              // overwhelming majority of runs byte-identical to what they were before vision existed.
+              content: req.images?.length
+                ? [
+                    { type: "text", text: req.inputs.join("\n\n") },
+                    ...req.images.map((img) => ({
+                      type: "image_url" as const,
+                      // Data URI rather than a link. A hosted URL would mean the provider reaching
+                      // back into us, which is an inbound path this system does not have.
+                      image_url: { url: `data:${img.mediaType};base64,${img.dataBase64}` },
+                    })),
+                  ]
+                : req.inputs.join("\n\n"),
+            },
           ],
           // ASK FOR THE BILL. Without this OpenRouter returns token counts and no cost, so every
           // run recorded cost_usd: 0 — which meant "spent today" was always zero and the firm's

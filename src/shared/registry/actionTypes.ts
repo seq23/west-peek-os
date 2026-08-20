@@ -35,6 +35,12 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "ai_employee.tool_scope.grant", name: "Grant AI tool scope", description: "Grant a tool to an AI employee. An employee can never grant scope to itself.", isExternalEffect: false },
   { key: "ai_output.accept", name: "Accept quarantined AI output", description: "Promote a quarantined external-provider AI output into governed state (human only).", isExternalEffect: false },
   // P5 — evidence/provenance substrate (D16).
+  { key: "image.generate", name: "Generate an image", description: "Turn a prompt into a picture and file it in Documents. Nothing leaves the firm but the prompt; publishing the result is a separate, approved act.", isExternalEffect: false },
+  { key: "deliverable.deliver", name: "Hand over a deliverable", description: "Record something an employee produced — a brief, a review, a research packet — and file a copy in Documents.", isExternalEffect: false },
+  // NOT an external effect, and the narrowness is the whole argument. It can only reach a firm_user
+  // row's registered address, enforced in the handler rather than described here, so there is no
+  // version of this that leaves the firm. A typed address is effect.email.send and is approved.
+  { key: "deliverable.email_self", name: "Email a deliverable to a partner", description: "Send a deliverable to a Managing Partner's own registered address. Cannot reach any address outside the firm.", isExternalEffect: false },
   { key: "document.upload", name: "Upload document", description: "Store a governed document binary in R2 with D1 metadata/provenance and a SHA-256 version row.", isExternalEffect: false },
   { key: "claim.create", name: "Create diligence claim", description: "Record a diligence claim with mandatory source provenance (source/date/location/method/confidence/status).", isExternalEffect: false },
   { key: "claim.extract", name: "Extract claims from document", description: "Run AI extraction over a document through the run_ai boundary; candidates land AI_INFERRED/UNVERIFIED, quarantined until human accept.", isExternalEffect: false },

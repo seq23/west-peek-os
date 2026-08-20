@@ -75,6 +75,47 @@ export function ThesisPage({ me }: { me: MeResponse }) {
 
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [writing, setWriting] = useState(false);
+
+  /**
+   * Compose the thesis sentence from the fields, and put it in the box for editing.
+   *
+   * Reads the DRAFT rather than the saved version, so it writes from what you have just typed —
+   * otherwise "add a sector then rewrite it" would silently ignore the sector.
+   */
+  async function writeStatement() {
+    setWriting(true);
+    setMessage(null);
+    const res = await api<{ statement?: string; needs?: string; detail?: string; error?: string }>(
+      "/api/thesis/statement",
+      {
+        method: "POST",
+        body: {
+          fund_name: fund?.name ?? "the fund",
+          sectors: draft.sectors ?? [],
+          stage: draft.stage ?? [],
+          geography: draft.geography ?? [],
+          cross_cutting_filter: draft.cross_cutting_filter ?? null,
+          check_min_usd: draft.check_size_usd?.min ?? null,
+          check_max_usd: draft.check_size_usd?.max ?? null,
+          target_ownership_pct: draft.target_ownership_pct ?? null,
+          target_positions: draft.target_positions ?? null,
+          open_question: draft.open_question ?? null,
+        },
+      },
+    );
+    setWriting(false);
+    if (res.status === 200 && res.data?.statement) {
+      setDraft({ ...draft, thesis_statement: res.data.statement });
+      setMessage("Written from the fields below. Edit it, then save it as a new version.");
+    } else if (res.data?.needs) {
+      // Declining is a real answer, and it names the field that would fix it.
+      setMessage(`Not enough to write from yet — ${res.data.needs}`);
+    } else {
+      setMessage(`Could not write it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    }
+  }
+
   const [draft, setDraft] = useState<Mandate>({});
 
   // Versions come back newest-first; the top row is what the firm is looking for today.
@@ -136,43 +177,71 @@ export function ThesisPage({ me }: { me: MeResponse }) {
     <section data-testid="thesis-page">
       <FundPicker selected={selected} />
       <p className="muted small">
-        What {fund.name} is looking for. This is the input the analyst searches against, so changing
-        it changes what gets brought to you. Editing never overwrites — it writes a new version and
-        keeps the old one, because “what were we looking for when we passed on that company” is a
-        question you will eventually need to answer.
+        This is what Wyatt searches against, so changing it changes what gets brought to you.
+        Amending never overwrites — it writes a new version and keeps the old one.
       </p>
 
       {message && <p className="notice" data-testid="thesis-message">{message}</p>}
 
-      <section className="card" data-testid="thesis-current">
-        <header className="module-card-head">
-          <h3>
-            The thesis{" "}
-            {latest && <span className="module-count" data-testid="thesis-version">v{latest.version_no}</span>}
-          </h3>
-          <button
-            type="button"
-            className="link-button"
-            data-testid="thesis-edit-toggle"
-            onClick={() => {
-              setMessage(null);
-              setEditing((e) => !e);
-            }}
-          >
-            {editing ? "Cancel" : "Edit"}
+      {/*
+        THE THESIS IS THE DOCUMENT, not a panel of settings for one.
+
+        This rendered as an <h3> over a definition list inside a card, at the same visual weight as
+        the version history beneath it — so the single most consequential statement the firm makes
+        about what it invests in read as a settings screen. The operator asked for the thing itself
+        to look official, and it should: this is what gets put in front of an LP.
+
+        Nothing about the data changed. Reading and editing were simply separated, and the reading
+        half was given document scale, a stamp, and print styles.
+      */}
+      <article className="thesis-doc" data-testid="thesis-current">
+        <header className="thesis-doc-head">
+          <div>
+            <p className="thesis-doc-firm">{fund.name}</p>
+            <h2 className="thesis-doc-title">Investment thesis</h2>
+          </div>
+          <button type="button" className="link-button" data-testid="thesis-print" onClick={() => window.print()}>
+            Print or save as PDF
           </button>
         </header>
 
-        {!latest && (
-          <p className="state-empty" data-testid="thesis-empty">
-            No mandate recorded yet. Press Edit to write version 1.
-          </p>
-        )}
+        {/*
+          THE STATEMENT, ON THE ACCENT, IN A SERIF.
 
-        {!editing && latest && (
+          The operator wanted the thesis itself at the top and the inputs beneath it, and they were
+          right that a toggle was the wrong shape — you edit a thesis while looking at it, not
+          instead of looking at it. So the banner is always the top of the page and the fields are
+          always below it, and saving updates what you are already reading.
+
+          This is the one block in the product where orange fills a whole field rather than marking
+          an edge. It earns that by being the one sentence everything else is downstream of.
+        */}
+        <div className="thesis-banner" data-testid="thesis-banner">
+          {current.thesis_statement ? (
+            <p className="thesis-banner-statement" data-testid="thesis-statement">
+              {current.thesis_statement}
+            </p>
+          ) : (
+            <p className="thesis-banner-empty" data-testid="thesis-empty">
+              No thesis written yet. Fill in the fields below and press <strong>Write it for me</strong>,
+              or type the sentence yourself — until it exists, nothing can be screened against it.
+            </p>
+          )}
+
+          {latest && (
+            <p className="thesis-doc-stamp" data-testid="thesis-version">
+              <span>Version {latest.version_no}</span>
+              <span>
+                Adopted{" "}
+                {new Date(latest.created_at).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })}
+              </span>
+            </p>
+          )}
+        </div>
+
+        {latest && (
           <>
-            {current.thesis_statement && <p data-testid="thesis-statement">{current.thesis_statement}</p>}
-            <dl className="thesis-grid">
+            <dl className="thesis-grid thesis-doc-grid">
               <div><dt>Sectors</dt><dd data-testid="thesis-sectors">{(current.sectors ?? []).join(" · ") || "—"}</dd></div>
               <div><dt>Stage</dt><dd>{(current.stage ?? []).join(" · ") || "—"}</dd></div>
               <div><dt>Applied across all sectors</dt><dd>{current.cross_cutting_filter ?? "—"}</dd></div>
@@ -211,8 +280,16 @@ export function ThesisPage({ me }: { me: MeResponse }) {
             )}
           </>
         )}
+      </article>
 
-        {editing && (
+      {/* THE INPUTS, ALWAYS VISIBLE. Amending writes a new version and keeps the old one. */}
+      <section className="card" data-testid="thesis-inputs">
+        <div className="home-section-head">
+          <h3>What it is built from</h3>
+          <span className="muted small">saving writes a new version — nothing is overwritten</span>
+        </div>
+
+        {(
           <form
             data-testid="thesis-form"
             onSubmit={(e) => {
@@ -317,6 +394,17 @@ export function ThesisPage({ me }: { me: MeResponse }) {
               <button type="submit" className="btn-strong" data-testid="thesis-save">
                 Save as new version
               </button>
+              {/* WRITE THE SENTENCE FROM THE FIELDS. It proposes into the box above rather than
+                  saving — the partner reads it, changes it, and saves a version like any other.
+                  A model quietly rewriting the mandate would show up in the history as theirs. */}
+              <button
+                type="button"
+                disabled={writing}
+                data-testid="thesis-write"
+                onClick={() => void writeStatement()}
+              >
+                {writing ? "Writing…" : "Write it for me"}
+              </button>
               <span className="muted small">
                 Signed as {me.fullName}. The current version is kept and stays readable.
               </span>
@@ -327,10 +415,17 @@ export function ThesisPage({ me }: { me: MeResponse }) {
 
       <ConstructionCard fundId={fund.id} />
 
-      <section className="card" data-testid="thesis-history">
-        <h3>History</h3>
+      {/* HISTORY IS REFERENCE, NOT THE PAGE. It sat at the same weight as the thesis itself, so
+          the document competed with its own changelog. Folded, and the summary carries the only
+          part you usually want — which version you are on. */}
+      <details className="card" data-testid="thesis-history">
+        <summary>
+          History <span className="muted small">{(versions.data?.versions ?? []).length} versions</span>
+        </summary>
         <p className="muted small">
-          Every version the firm has held, newest first. Nothing here is edited or removed.
+          Every version the firm has held, newest first. Nothing here is edited or removed —
+          “what were we looking for when we passed on that company” is a question you will
+          eventually need to answer.
         </p>
         <ul className="card-list">
           {(versions.data?.versions ?? []).map((v) => (
@@ -343,7 +438,7 @@ export function ThesisPage({ me }: { me: MeResponse }) {
             <li className="state-empty">No versions yet.</li>
           )}
         </ul>
-      </section>
+      </details>
     </section>
   );
 }

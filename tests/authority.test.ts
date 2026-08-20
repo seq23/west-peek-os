@@ -435,18 +435,30 @@ describe("8. approval card state machine rejects illegal transitions", () => {
     const card = (await created.json()) as { id: string; state: string };
     expect(card.state).toBe("OPEN");
 
-    // OPEN → DONE directly: illegal.
-    const skip = await handleRequest(req(`/api/work-cards/${card.id}`, MP, "PATCH", { state: "DONE" }), env);
-    expect(skip.status).toBe(409);
-    expect(((await skip.json()) as { error: string }).error).toBe("illegal_transition");
+    // OPEN → DONE directly: LEGAL, and this assertion was inverted until the operator found the
+    // button that proved it. The rule used to be "you must start something before you can finish
+    // it", which is process ceremony the product never observed: the Work page has offered "Done"
+    // on every open card since it was written, and every press returned the 409 this test was
+    // asserting. Plenty of work is noticed and done in the same moment.
+    expect((await handleRequest(req(`/api/work-cards/${card.id}`, MP, "PATCH", { state: "DONE" }), env)).status).toBe(200);
 
-    // OPEN → IN_PROGRESS → DONE: legal.
+    // Reopening it and taking the long way round is legal too.
+    expect((await handleRequest(req(`/api/work-cards/${card.id}`, MP, "PATCH", { state: "OPEN" }), env)).status).toBe(200);
     expect((await handleRequest(req(`/api/work-cards/${card.id}`, MP, "PATCH", { state: "IN_PROGRESS" }), env)).status).toBe(200);
     expect((await handleRequest(req(`/api/work-cards/${card.id}`, MP, "PATCH", { state: "DONE" }), env)).status).toBe(200);
 
-    // DONE → CANCELLED: illegal (only reopen is allowed).
+    // DONE → CANCELLED: still illegal, and this one is a real rule rather than ceremony. Something
+    // that was finished was not then decided against; the honest move is to reopen it.
     const cancel = await handleRequest(req(`/api/work-cards/${card.id}`, MP, "PATCH", { state: "CANCELLED" }), env);
     expect(cancel.status).toBe(409);
+    expect(((await cancel.json()) as { error: string }).error).toBe("illegal_transition");
+
+    // A dropped card comes back. This is the operator-reported bug: "Put it back" rendered on every
+    // dropped card and the transition table allowed nothing at all out of CANCELLED.
+    const second = await handleRequest(req("/api/work-cards", MP, "POST", { title: "drop and restore probe" }), env);
+    const dropped = (await second.json()) as { id: string };
+    expect((await handleRequest(req(`/api/work-cards/${dropped.id}`, MP, "PATCH", { state: "CANCELLED" }), env)).status).toBe(200);
+    expect((await handleRequest(req(`/api/work-cards/${dropped.id}`, MP, "PATCH", { state: "OPEN" }), env)).status).toBe(200);
   });
 });
 

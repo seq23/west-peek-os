@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
-import { LEARNING_MODES } from "@shared/university/professor";
+import { LEARNING_MODES, PROFESSOR } from "@shared/university/professor";
+import { personaFor } from "@shared/registry/aiEmployeePersonas";
+import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
 /**
  * West Peek University (P45).
@@ -66,9 +68,37 @@ export function UniversityPage(): JSX.Element {
   return (
     <div className="page" data-testid="university-page">
       <h2>West Peek University</h2>
-      <p className="muted">
-        Learn any venture topic through interactive coaching, examples, scenarios and teach-back.
-      </p>
+
+      {/*
+        THE PROFESSOR WELCOMES YOU, because a page that teaches ought to have somebody teaching on
+        it. This was a heading, a grey line of copy and a text box — the lesson then arrived from
+        "Professor", an unnamed role label. Everything else the firm produces is signed.
+
+        Whitney is a real seat on the roster, not decoration: she was the Market Intelligence Coach,
+        retired when that product was deferred, and brought back to teach. Her portrait has not been
+        generated yet, so this falls back to initials the same way any missing portrait does.
+      */}
+      <div className="card professor-welcome" data-testid="university-professor">
+        {portraitFor(PROFESSOR.name) ? (
+          <img
+            className="professor-face"
+            src={portraitFor(PROFESSOR.name)!}
+            alt={portraitAlt(PROFESSOR.name, PROFESSOR.role)}
+          />
+        ) : (
+          <span className="professor-face professor-face-initial" aria-hidden="true">{PROFESSOR.name.slice(0, 1)}</span>
+        )}
+        <div>
+          <p>
+            <strong>{PROFESSOR.name}</strong> <span className="muted small">{PROFESSOR.role}</span>
+          </p>
+          <p className="small">
+            Name anything in venture and I will teach it — explaining it, testing you on it, running
+            a deal past you, or listening to you teach it back. I will tell you when you are wrong.
+          </p>
+          <p className="muted small">{personaFor(PROFESSOR.name)?.voice ?? ""}</p>
+        </div>
+      </div>
 
       {!activeId && (
         <form className="card" onSubmit={start} data-testid="university-start-form">
@@ -84,7 +114,7 @@ export function UniversityPage(): JSX.Element {
           </div>
 
           <fieldset className="university-modes">
-            <legend className="muted small">How should the professor teach it?</legend>
+            <legend className="muted small">How should {PROFESSOR.name} teach it?</legend>
             {LEARNING_MODES.map((m) => (
               <label key={m.key} className={mode === m.key ? "mode-chip mode-chip-on" : "mode-chip"}>
                 <input
@@ -122,7 +152,7 @@ export function UniversityPage(): JSX.Element {
                 className={t.role === "LEARNER" ? "turn turn-mp" : t.state === "OK" ? "turn turn-ai" : "turn turn-blocked"}
                 data-testid={`university-turn-${t.turn_no}`}
               >
-                <span className="turn-who">{t.role === "LEARNER" ? "You" : t.role === "SYSTEM" ? "" : "Professor"}</span>
+                <span className="turn-who">{t.role === "LEARNER" ? "You" : t.role === "SYSTEM" ? "" : PROFESSOR.name}</span>
                 <span className="turn-body">{t.body}</span>
                 {t.role === "INSTRUCTOR" && t.state === "OK" && (
                   <button type="button" className="link-button" data-testid={`university-keep-${t.turn_no}`} onClick={() => keepIt(t.body)}>
@@ -174,13 +204,13 @@ export function UniversityPage(): JSX.Element {
       <HowThisWorks
         title="West Peek University"
         testId="university"
-        what="An interactive venture-capital professor. Name any topic and it teaches it — explaining, testing, running scenarios, or listening to you teach it back."
+        what={`${PROFESSOR.name} is the firm’s venture professor. Name any topic and she teaches it — explaining, testing, running scenarios, or listening to you teach it back.`}
         when="When you want to actually understand something rather than look up a definition."
         operatorDoes={["Name a topic.", "Pick how you want it taught.", "Answer the questions honestly — wrong answers are where the teaching happens.", "Keep anything worth remembering."]}
-        aiDoes={["Teaches from principles, marks you honestly, and re-explains what you missed rather than repeating itself."]}
+        aiDoes={[`${PROFESSOR.name} teaches from principles, marks you honestly, and re-explains what you missed rather than repeating herself.`]}
         requiresOperator={["Nothing here is a firm record. It is a lesson, not evidence."]}
         next="Sessions are saved to you alone and resume where you left them. Anything you keep goes to your diary."
-        blocked={["The professor teaches from principles and will not invent facts about real companies, funds or deals — for anything current, use Research, which works from sources the firm has gathered."]}
+        blocked={[`${PROFESSOR.name} teaches from principles and will not invent facts about real companies, funds or deals — for anything current, use Research, which works from sources the firm has gathered.`]}
       />
     </div>
   );

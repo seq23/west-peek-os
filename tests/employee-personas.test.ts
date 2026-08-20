@@ -97,13 +97,18 @@ describe("bios and outward-facing capability", () => {
     }
   });
 
-  it("consolidated to seventeen without losing a discipline", () => {
-    expect(AI_EMPLOYEE_ROSTER).toHaveLength(17);
+  it("consolidated to seventeen, plus the seats brought back, without losing a discipline", () => {
+    // Seventeen after the v4.0 consolidation. Nineteen since two RETIRED seats were re-pointed at
+    // questions the live roster could not answer — Whitney to teach in University, Percy to review
+    // design and growth — rather than new seats being invented beside people who already did the
+    // job. The number is asserted because the consolidation is a decision, and a roster silently
+    // growing back towards thirty-one is exactly the failure this guards.
+    expect(AI_EMPLOYEE_ROSTER).toHaveLength(19);
     // Every one of these still has somebody accountable for it after the merges.
     const layers = new Set(AI_EMPLOYEE_ROSTER.map((e) => e.layer));
     expect(layers.size).toBeGreaterThanOrEqual(4);
     const roles = AI_EMPLOYEE_ROSTER.map((e) => e.role).join(" ").toLowerCase();
-    for (const discipline of ["chief of staff", "compliance", "investment", "analyst", "lp", "portfolio", "finance", "communications", "operations"]) {
+    for (const discipline of ["chief of staff", "compliance", "investment", "analyst", "lp", "portfolio", "finance", "communications", "operations", "professor", "ux design"]) {
       expect(roles, `nobody covers ${discipline}`).toContain(discipline);
     }
   });

@@ -17,6 +17,33 @@
  * as no prompt field.
  */
 
+/**
+ * THREE HONEST OUTCOMES, because a request is not always work.
+ *
+ * The operator's instinct was that Ask should route rather than always produce a deliverable, and
+ * that some asks genuinely do produce one. Both are right, and the distinction is what the request
+ * IS:
+ *
+ *   GO   — the answer already exists on a page. "What have we spent?" is not work; it is a page
+ *          somebody has not found. Making a card for it would create a task to go and look at
+ *          something that is already there.
+ *   WORK — nobody has done this and somebody must. That is a card.
+ *   TELL — the system holds the answer and can just say it.
+ *
+ * Forcing everything into a card is how a board fills with items that were only ever questions.
+ */
+export type AskOutcome = "GO" | "WORK" | "TELL";
+
+export interface AskAnswer {
+  outcome: AskOutcome;
+  /** For GO: the nav key to send them to, and what they will find. */
+  page?: string | null;
+  /** One or two sentences: the answer, or why this page, or why this is work. */
+  says: string;
+  /** For WORK: the card to read and accept. */
+  card?: CardDraft | null;
+}
+
 export interface CardDraft {
   title: string;
   next_action: string | null;
@@ -32,8 +59,28 @@ export interface CardDraft {
 
 export const ASK_PROMPT_VERSION = "ask-to-card-v1";
 
-export function buildDraftPrompt(request: string, roster: Array<{ name: string; role: string }>): string {
+export function buildDraftPrompt(
+  request: string,
+  roster: Array<{ name: string; role: string }>,
+  pages: Array<{ key: string; purpose: string }>,
+): string {
   return [
+    "First decide WHICH OF THREE THINGS this request is. Getting this right matters more than the",
+    "rest: a board that fills with items which were only ever questions stops being read.",
+    "",
+    '  GO   — the answer already exists on a page of this system. Choose this whenever somebody is',
+    "         asking where something is, or for a figure or list a page already shows. Making work",
+    "         out of it would create a task to go and look at something already there.",
+    "",
+    '  WORK — nobody has done this and somebody has to. Finding something out, checking something,',
+    "         producing something that does not exist yet.",
+    "",
+    '  TELL — you can answer it outright from what is in the request and general knowledge, and no',
+    "         page and no work is involved. Use this sparingly; prefer GO when a page holds it.",
+    "",
+    "THE PAGES OF THIS SYSTEM:",
+    ...pages.map((p) => `  ${p.key} — ${p.purpose}`),
+    "",
     "You turn a Managing Partner's request at West Peek Ventures, an earliest-stage venture fund,",
     "into ONE work card they will read and approve before anything happens.",
     "",
@@ -65,10 +112,47 @@ export function buildDraftPrompt(request: string, roster: Array<{ name: string; 
     "THE REQUEST:",
     request,
     "",
-    "Return ONLY JSON:",
-    '{"title":"…","next_action":"…","prompt":"…","suggested_owner":"Name or null",',
-    ' "needs_browser":true,"reasoning":"one sentence on why this shape"}',
+    "Return ONLY JSON.",
+    'For GO:   {"outcome":"GO","page":"<one key from the list>","says":"what they will find there"}',
+    'For TELL: {"outcome":"TELL","says":"the answer"}',
+    'For WORK: {"outcome":"WORK","says":"one sentence on why this is work",',
+    '           "card":{"title":"…","next_action":"…","prompt":"…","suggested_owner":"Name or null",',
+    '                   "needs_browser":true,"reasoning":"why this shape"}}',
   ].join("\n");
+}
+
+/** Read the answer back, whichever of the three it is. */
+export function parseAnswer(raw: string, validPages: ReadonlySet<string>): AskAnswer | null {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const candidate = (fenced?.[1] ?? raw).trim();
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
+
+  let d: Record<string, unknown>;
+  try {
+    d = JSON.parse(candidate.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  const outcome = String(d.outcome ?? "").toUpperCase();
+  const says = typeof d.says === "string" ? d.says.trim().slice(0, 1200) : "";
+  if (!says) return null;
+
+  if (outcome === "GO") {
+    const page = typeof d.page === "string" ? d.page.trim() : "";
+    // A page that does not exist would send somebody nowhere, which is worse than saying so.
+    if (!validPages.has(page)) return null;
+    return { outcome: "GO", page, says };
+  }
+  if (outcome === "TELL") return { outcome: "TELL", says };
+  if (outcome === "WORK") {
+    const card = d.card && typeof d.card === "object" ? parseDraft(JSON.stringify(d.card)) : null;
+    if (!card) return null;
+    return { outcome: "WORK", says, card };
+  }
+  return null;
 }
 
 export function parseDraft(raw: string): CardDraft | null {

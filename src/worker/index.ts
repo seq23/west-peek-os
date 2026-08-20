@@ -21,6 +21,7 @@ import {
   handleCreateFund,
   handleCreateFundEntity,
   handleCreatePolicyVersion,
+  handleWriteThesisStatement,
   handleGetFund,
   handleGetPolicyVersion,
   handleListFundEntities,
@@ -121,7 +122,10 @@ import {
 } from "./services/icPortal";
 import { handleEvidenceLedger, handleListDecisions, handleWorkQueues } from "./services/ledgers";
 import { handleCompanyIntelligence, handleFollowOnCentre, handleSecondaries } from "./services/companyIntel";
-import { handleAddReviewItem, handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
+import { handleGenerateImage } from "./services/imageGeneration";
+import { handleDownloadDeliverable, handleEmailDeliverable, handleListDeliverables } from "./services/deliverables";
+import { handleAddReviewItem, handleDeleteReviewItem,
+  handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
 import { handleIngestTranscript } from "./services/captureAdapter";
 import { handleGenerateDailyReport, handleGetDailyReport, handleGetInterests, handleSetInterests } from "./services/dailyIntelligence";
 import { handleBuildPacket, handleExportPacket } from "./services/researchPacket";
@@ -539,6 +543,7 @@ const router = new Router()
   .get("/api/funds/:id", handleGetFund)
   .post("/api/funds/:id/entities", handleCreateFundEntity)
   .get("/api/funds/:id/entities", handleListFundEntities)
+  .post("/api/thesis/statement", handleWriteThesisStatement)
   .post("/api/funds/:id/policies/:kind", handleCreatePolicyVersion)
   .get("/api/funds/:id/policies/:kind", handleListPolicyVersions)
   .get("/api/funds/:id/policies/:kind/:versionNo", handleGetPolicyVersion)
@@ -557,6 +562,10 @@ const router = new Router()
   // P3 — work spine.
   .post("/api/work-cards", handleCreateWorkCard)
   // Literal before the :id that would swallow it.
+  .post("/api/images/generate", handleGenerateImage)
+  .get("/api/deliverables", handleListDeliverables)
+  .get("/api/deliverables/:id/download", handleDownloadDeliverable)
+  .post("/api/deliverables/:id/email", handleEmailDeliverable)
   .get("/api/work-cards/by-owner", handleWorkByOwner)
   .get("/api/work-cards", handleListWorkCards)
   .get("/api/work-cards/:id", handleGetWorkCard)
@@ -800,6 +809,7 @@ const router = new Router()
   // The capture box: put something on the agenda that no record knows about.
   .post("/api/weekly-review/notes", handleReviewNotes)
   .post("/api/weekly-review/items", handleAddReviewItem)
+  .post("/api/weekly-review/items/:id/remove", handleDeleteReviewItem)
   .post("/api/weekly-review/items/:id/heading", handleRefileReviewItem)
   .post("/api/weekly-review/items/:id/exit", handleSetItemExit)
   .get("/api/cross-office", handleListCrossOfficeConflicts)

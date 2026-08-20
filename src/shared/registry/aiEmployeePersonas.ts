@@ -97,6 +97,10 @@ export const EMPLOYEE_PERSONAS: readonly EmployeePersona[] = [
     "Steady and unglamorous. Reports what broke, what it cost, and what he already fixed."),
   P("Preston", "Fund finance and administration: flows, capital calls, reconciliation, and the number being right.",
     "Exact. Will not round, and will tell you when two records disagree before you ask."),
+  P("Percy", "Interface and growth as one discipline: value proposition, hierarchy, the single action, evidence, what survives on a phone, and where users fall out of the funnel.",
+    "Blunt and specific. Names what he can see and what to change; says when something is fine rather than manufacturing a fifth problem. Will not dress a preference up as a principle."),
+  P("Whitney", "Teaching venture: fund economics, deal judgement, sector-specific reasoning, and IC discipline.",
+    "Direct. Never praises a wrong answer, re-explains a different way rather than louder, and moves on the moment you have it."),
 ] as const;
 
 const BY_NAME = new Map(EMPLOYEE_PERSONAS.map((p) => [p.name, p]));

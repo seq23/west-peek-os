@@ -88,17 +88,26 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "Where more money might go — reviews already open, and companies where a tracked metric has improved.",
     youCan: ["See which reviews are pending", "Look at what is moving before deciding to open one"],
   },
+  // Merged into Fund strategy — the entry stays so an old link still gets an explanation rather
+  // than a blank block, and it says where the page went.
   allocation: {
-    purpose: "How capital is split across the fund's sleeves, and what moving it would mean.",
-    youCan: ["Compare allocation options", "See what a change requires before approving it"],
+    purpose: "Now part of Fund strategy, which answers the whole question in one place rather than half of it on each of two tabs.",
+    youCan: ["See how capital is split across the sleeves", "Compare allocation options", "See what a change requires before approving it"],
   },
   modeling: {
     purpose: "The team's venture deal dashboards — secondary deals, primary rounds and fund construction — with the firm's own numbers ready to carry across. The math there and the math on a deal here are the same code.",
     youCan: ["Open the dashboards to model a deal or a fund", "Copy the fund's current check, ownership and reserve figures", "See why a number modelled there matches one on a real deal"],
   },
   cockpit: {
-    purpose: "Fund strategy — construction scenarios and the assumptions behind them, stated so they can be argued with.",
-    youCan: ["Work through a scenario", "See which assumptions a finding rests on"],
+    purpose:
+      "Can we write this cheque, and what does it cost us later? What the portfolio is made of, " +
+      "what is going wrong in it, and what the next cheque would do to the shape of the fund.",
+    youCan: [
+      "See where the money has actually gone",
+      "Find the companies moving the wrong way",
+      "Model the next cheque before committing to it",
+      "See what it leaves for reserves and follow-ons",
+    ],
   },
   network: {
     purpose: "The firm's relationships, held in Network OS. This page shows what is synced and where the two systems disagree.",

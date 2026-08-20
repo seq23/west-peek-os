@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CARD_SOURCES, CARD_STATES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
 import { readFileSync } from "node:fs";
+import { WORK_CARD_STATES, canTransition, offeredMoves } from "../src/worker/services/workCards";
 
 /**
  * The operator's report was "I don't understand work cards, and there's no way to create them."
@@ -74,5 +75,37 @@ describe("triage", () => {
 
   it("misses cleanly on an unknown state", () => {
     expect(stateMeaning("NOT_A_STATE")).toBeNull();
+  });
+});
+
+/**
+ * THE PAGE AND THE SERVER HAVE TO AGREE ABOUT WHAT IS POSSIBLE.
+ *
+ * Two buttons shipped that the server refused: "Put it back" on a dropped card (CANCELLED allowed
+ * no transition at all) and "Done" on an open one (OPEN did not list DONE). Both rendered, both
+ * 409'd, and the only sign was a notice near the top of a long page. Nothing typechecked wrong —
+ * the coupling was between a React branch and a lookup table in another file, which is exactly the
+ * kind that drifts.
+ */
+describe("offered moves are all legal moves", () => {
+  it("permits every move the Work page can offer, for every state", () => {
+    const illegal: string[] = [];
+    for (const state of WORK_CARD_STATES) {
+      for (const target of offeredMoves(state)) {
+        if (!canTransition(state, target)) illegal.push(`${state} → ${target}`);
+      }
+    }
+    expect(illegal).toEqual([]);
+  });
+
+  it("lets a dropped card come back, because a decision not to act gets revisited", () => {
+    expect(canTransition("CANCELLED", "OPEN")).toBe(true);
+    expect(offeredMoves("CANCELLED")).toContain("OPEN");
+  });
+
+  it("lets an open card be finished without being started first", () => {
+    // Plenty of work is done in the moment it is noticed. Forcing a trip through IN_PROGRESS to
+    // record that is ceremony, and the page never offered it anyway.
+    expect(canTransition("OPEN", "DONE")).toBe(true);
   });
 });

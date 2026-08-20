@@ -161,6 +161,31 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
     await ctx.env.WP_OS_DB.prepare("SELECT * FROM cost_alert WHERE status = 'OPEN' ORDER BY created_at DESC LIMIT 50").all()
   ).results ?? [];
 
+  /*
+   * SPEND WITH VENDORS THAT ARE NOT REASONING MODELS.
+   *
+   * Everything above is summed from `ai_run`, which is the complete picture only for work that goes
+   * through the model boundary. Image generation deliberately does not — see the exemption in
+   * scripts/validate/no-direct-provider-calls.mjs — so it is summed here and added to the firm
+   * total. Two ledgers, one number, and the model ledger stays clean.
+   *
+   * `unpriced` is reported rather than hidden: calls the vendor did not price are real spend of an
+   * unknown amount, and rolling them in as zero would understate the total silently.
+   */
+  const vendors = ((await ctx.env.WP_OS_DB.prepare(
+    `SELECT vendor,
+            COALESCE(SUM(cost_usd), 0) AS spent,
+            COUNT(*)                   AS calls,
+            SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced,
+            MIN(created_at)            AS first_call
+       FROM vendor_spend
+      GROUP BY vendor
+      ORDER BY spent DESC`,
+  ).all<{ vendor: string; spent: number; calls: number; unpriced: number; first_call: string }>()).results ?? []);
+
+  const vendorTotal = vendors.reduce((sum, v) => sum + Number(v.spent ?? 0), 0);
+  const vendorUnpriced = vendors.reduce((sum, v) => sum + Number(v.unpriced ?? 0), 0);
+
   return json({
     /**
      * Since the very first run. Stated apart from the period totals because they answer different
@@ -169,10 +194,23 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
      * this. Understating is the honest direction for a number nobody should be surprised by.
      */
     all_time: {
-      spent_usd: Math.round(Number(allTime?.spent ?? 0) * 1_000_000) / 1_000_000,
+      // MODEL SPEND PLUS VENDOR SPEND. This used to be model spend alone and was labelled as the
+      // firm total, which made it wrong the moment anything was bought outside the AI boundary.
+      spent_usd: Math.round((Number(allTime?.spent ?? 0) + vendorTotal) * 1_000_000) / 1_000_000,
+      model_spent_usd: Math.round(Number(allTime?.spent ?? 0) * 1_000_000) / 1_000_000,
+      vendor_spent_usd: Math.round(vendorTotal * 1_000_000) / 1_000_000,
       runs: Number(allTime?.runs ?? 0),
       since: allTime?.first_run ?? null,
+      // How many charges the vendor did not price. Real money of an unknown amount, not zero.
+      unpriced_vendor_calls: vendorUnpriced,
     },
+    by_vendor: vendors.map((v) => ({
+      vendor: v.vendor,
+      spent_usd: Math.round(Number(v.spent ?? 0) * 1_000_000) / 1_000_000,
+      calls: Number(v.calls ?? 0),
+      unpriced: Number(v.unpriced ?? 0),
+      since: v.first_call,
+    })),
     period,
     since,
     firm_policy: {

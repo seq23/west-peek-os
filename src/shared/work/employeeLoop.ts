@@ -27,7 +27,16 @@
  * actually on it. Searching cannot answer the second kind, and a browser pointed at a search engine
  * gets a bot challenge rather than the first.
  */
-export const EMPLOYEE_ACTIONS = ["search", "visit", "note", "blocked", "done"] as const;
+/*
+ * SEEING IS A THIRD ACTION, not a flavour of visiting.
+ *
+ * `visit` reads a page and returns its text. That answers "does this page still list a VP of
+ * Sales" and cannot answer "is the hierarchy wrong", "is the call to action invisible", "does this
+ * look like a company you would give money to" — which is most of what anyone means by reviewing a
+ * design. Text and pixels are different evidence, and collapsing them would let an employee review
+ * a layout it never saw.
+ */
+export const EMPLOYEE_ACTIONS = ["search", "visit", "look_at", "note", "blocked", "done"] as const;
 export type EmployeeAction = (typeof EMPLOYEE_ACTIONS)[number];
 
 export interface EmployeeDecision {
@@ -84,13 +93,19 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     '  search — find something out when you do NOT know which page holds the answer. Give the',
     "           question. It is answered from live sources with citations. Do not pass a URL.",
     "",
+      '  look_at — SEE a page as a person sees it. Use this for anything about how a page LOOKS:',
+    "           layout, hierarchy, whether the main action is obvious, whether it reads as",
+    "           trustworthy, what happens on a phone. You get screenshots at desktop and mobile",
+    "           width, and you judge from those. Give start_url AND what you are judging.",
+    "           Do NOT use visit for a design question — page text cannot answer one.",
+    "",
     '  visit  — open a specific page and read what is actually on it. Use this when you know the',
     "           page: checking whether a company still lists a role, seeing how a pricing page reads",
     "           now, confirming a team page still names somebody, looking at how something is laid",
     "           out. Give start_url AND what you are looking for. Never a search engine address —",
     "           that is not a page and returns a bot challenge.",
     ctx.allows_browser
-      ? "           This card is permitted to open pages, so it happens immediately."
+      ? "           This card is permitted to open pages, so both visiting and looking happen immediately."
       : "           This card has NOT been permitted to open pages, so choosing this asks a person",
     ctx.allows_browser ? "" : "           for permission and the work pauses until they answer.",
     "",
@@ -115,6 +130,7 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     "Return ONLY a JSON object and nothing else:",
     '  {"action":"search","objective":"the question you want answered"}',
     '  {"action":"visit","start_url":"https://…","objective":"what to look for on it"}',
+    '  {"action":"look_at","start_url":"https://…","objective":"what to judge about how it looks"}',
     '  {"action":"note","finding":"…"}',
     '  {"action":"blocked","needs":"…"}',
     '  {"action":"done","finding":"…"}',
@@ -171,6 +187,8 @@ export function parseDecision(raw: string): EmployeeDecision | null {
   // A visit with no page is not a visit. Falling back to a search would silently answer a different
   // question from the one asked.
   if (d.action === "visit" && (!d.start_url || !d.objective)) return null;
+  // Seeing a page requires knowing which page. There is no searching your way into a look.
+  if (d.action === "look_at" && (!d.start_url || !d.objective)) return null;
   if (d.action === "done" && !d.finding) return null;
   if (d.action === "note" && !d.finding) return null;
   if (d.action === "blocked" && !d.needs) return null;

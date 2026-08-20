@@ -697,7 +697,31 @@ export async function handleListMeetings(ctx: RouteContext): Promise<Response> {
   const rows = companyId
     ? await ctx.env.WP_OS_DB.prepare(`SELECT * FROM meeting WHERE company_id = ?1 AND ${visibility} ORDER BY created_at DESC, id LIMIT 500`).bind(companyId).all<MeetingRow>()
     : await ctx.env.WP_OS_DB.prepare(`SELECT * FROM meeting WHERE ${visibility} ORDER BY created_at DESC, id LIMIT 500`).all<MeetingRow>();
-  return json({ meetings: rows.results ?? [] });
+  // WHERE THE FIRM IS IN THE IC SEQUENCE. Four counts, so the page can say "you are here" rather
+  // than showing four steps and leaving the operator to work out which one is blocked. Cheap
+  // aggregates, and the alternative is a page that cannot tell "nothing has reached this yet" from
+  // "this is broken" — which is exactly the confusion reported.
+  const count = async (sql: string): Promise<number> =>
+    Number((await ctx.env.WP_OS_DB.prepare(sql).first<{ n: number }>())?.n ?? 0);
+
+  const ic = {
+    // A deal far enough along that a committee is the next thing that happens to it.
+    ready_deals: await count(
+      "SELECT COUNT(*) AS n FROM investment_opportunity WHERE status IN ('DILIGENCE','IC_READY')",
+    ),
+    packets: await count("SELECT COUNT(*) AS n FROM ic_packet"),
+    // There is no 'IC' meeting_type in the schema — the committee meets against a packet rather
+    // than against a calendar entry, so the honest count of "has a committee sat" is decisions.
+    meetings: await count("SELECT COUNT(*) AS n FROM ic_decision"),
+    decisions: await count("SELECT COUNT(*) AS n FROM ic_decision"),
+    // Poppy runs this. If she is switched off, the packet does not get assembled and nobody records
+    // the dissent — which is a fact the page has to state rather than discover mid-meeting.
+    facilitator: await ctx.env.WP_OS_DB.prepare(
+      "SELECT name, status FROM ai_employee WHERE name = 'Poppy'",
+    ).first<{ name: string; status: string }>(),
+  };
+
+  return json({ meetings: rows.results ?? [], ic });
 }
 
 /** A meeting read carries consent state, notes, commitments, debriefs, and transcript history. */

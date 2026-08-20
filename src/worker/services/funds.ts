@@ -3,6 +3,9 @@ import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
+import { actorFromIdentity } from "./authorize";
+import { runAi } from "../ai/runAi";
+import { THESIS_PROMPT_VERSION, buildStatementPrompt, parseStatement } from "../../shared/thesis/statement";
 
 /**
  * Fund + policy substrate (P2).
@@ -218,4 +221,64 @@ export async function handleGetPolicyVersion(ctx: RouteContext): Promise<Respons
     .first();
   if (!row) return json({ error: "not_found" }, { status: 404 });
   return json(row);
+}
+
+const statementSchema = z.object({
+  fund_name: z.string().trim().min(1).max(120),
+  sectors: z.array(z.string().trim().max(80)).max(30).default([]),
+  stage: z.array(z.string().trim().max(80)).max(30).default([]),
+  geography: z.array(z.string().trim().max(80)).max(30).default([]),
+  cross_cutting_filter: z.string().trim().max(400).nullable().default(null),
+  check_min_usd: z.number().nullable().default(null),
+  check_max_usd: z.number().nullable().default(null),
+  target_ownership_pct: z.number().nullable().default(null),
+  target_positions: z.number().nullable().default(null),
+  open_question: z.string().trim().max(400).nullable().default(null),
+});
+
+/**
+ * POST /api/thesis/statement — write the thesis sentence from the fields.
+ *
+ * PROPOSES ONLY. Returns the sentence; the partner edits it and saves a version through the
+ * ordinary policy path. Nothing here writes to the mandate — a model quietly rewriting the firm's
+ * thesis would be putting words in two partners' mouths on the document an LP is most likely to
+ * read, and the version history would show it as theirs.
+ */
+export async function handleWriteThesisStatement(ctx: RouteContext): Promise<Response> {
+  const parsed = statementSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const input = parsed.data;
+
+  const { run } = await runAi(ctx.env, {
+    purpose: `writing the thesis statement for ${input.fund_name}`,
+    actor,
+    inputs: [
+      buildStatementPrompt({
+        fundName: input.fund_name,
+        sectors: input.sectors,
+        stage: input.stage,
+        geography: input.geography,
+        crossCuttingFilter: input.cross_cutting_filter,
+        checkMinUsd: input.check_min_usd,
+        checkMaxUsd: input.check_max_usd,
+        targetOwnershipPct: input.target_ownership_pct,
+        targetPositions: input.target_positions,
+        openQuestion: input.open_question,
+      }),
+    ],
+    // The mandate is firm-internal: it names sectors and cheque sizes the firm has not published.
+    sensitivity: "INTERNAL" as never,
+    budgetContext: { expectedOutputTokens: 300 },
+    routing: { category: "OPERATIONS", taskClass: "employee-work" },
+  });
+
+  if (run.status !== "COMPLETED" || !run.output_text) {
+    return json({ error: "write_failed", detail: run.failure_reason ?? `run ${run.status}`, run_id: run.id }, { status: 502 });
+  }
+
+  const result = parseStatement(run.output_text);
+  if (!result) return json({ error: "unreadable", run_id: run.id }, { status: 502 });
+  return json({ ...result, run_id: run.id, prompt_version: THESIS_PROMPT_VERSION });
 }

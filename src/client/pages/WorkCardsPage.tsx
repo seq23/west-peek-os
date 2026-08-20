@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
+import { portraitFor } from "../lib/employeePortraits";
 
 /**
  * Work cards — what the firm is actually doing, who owns it, and what happens next.
@@ -60,6 +61,28 @@ interface RecentRun {
   created_at: string;
 }
 
+/**
+ * Who is carrying a card, with their face.
+ *
+ * Reused across the board rather than inlined, because the same chip belongs anywhere a piece of
+ * work is attributed. Falls back to initials, and says "Nobody" rather than nothing — an unowned
+ * card is a real state and the one most worth spotting.
+ */
+function OwnerChip({ name }: { name: string | null }): JSX.Element {
+  if (!name) return <span className="owner-chip owner-chip-none">Nobody owns this</span>;
+  const src = portraitFor(name);
+  return (
+    <span className="owner-chip">
+      {src ? (
+        <img className="owner-face" src={src} alt="" loading="lazy" />
+      ) : (
+        <span className="owner-face owner-face-initial" aria-hidden="true">{name.slice(0, 1)}</span>
+      )}
+      {name}
+    </span>
+  );
+}
+
 export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; onChanged: () => void; onNavigate: (k: string) => void }) {
   const board = useApi<{
     cards: WorkCardRow[];
@@ -69,6 +92,24 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   const [message, setMessage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [looking, setLooking] = useState<string | null>(null);
+  /**
+   * WHICH CARDS ARE OPEN, by id. Collapsed is the default and that is the whole point: a board with
+   * twenty cards on it, each carrying a next action, an origin line, an owner line, an assignment
+   * control and four buttons, is several screens tall before you have read anything. You come to
+   * this page to see WHAT the firm is carrying; the detail of any one card is a second question.
+   *
+   * Opening a card is not stored anywhere. It is a reading position, not a preference, and a card
+   * you left open last Tuesday is not information.
+   */
+  const [openCards, setOpenCards] = useState<ReadonlySet<string>>(new Set());
+  /** Cards whose full look history has been asked for. Two are shown otherwise. */
+  const [showAllLooks, setShowAllLooks] = useState<ReadonlySet<string>>(new Set());
+  const toggleCard = (id: string) =>
+    setOpenCards((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const [lookObjective, setLookObjective] = useState("");
   const [lookUrl, setLookUrl] = useState("");
   const [title, setTitle] = useState("");
@@ -223,20 +264,24 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </button>
       </div>
 
-      {/* THE LEGEND BELONGS BEFORE THE THING IT EXPLAINS. It was a <details> at the very bottom of
-          the page, under every card and both archives — so the words telling you what "Blocked"
-          means sat below the blocked card you were trying to read. A legend read after the fact is
-          decoration. */}
-      <ul className="work-legend" data-testid="work-state-legend">
-        {STATE_MEANINGS.map((m) => (
-          <li key={m.key}>
-            <span className={m.key === "BLOCKED" ? "badge badge-bad" : m.key === "DONE" ? "badge badge-ok" : "badge"}>
-              {m.label}
-            </span>
-            <span className="muted small">{m.means}</span>
-          </li>
-        ))}
-      </ul>
+      {/* THE LEGEND BELONGS BEFORE THE THING IT EXPLAINS — it used to sit at the very bottom, under
+          every card, so the words telling you what "Blocked" means were below the blocked card you
+          were reading. But five rows of definitions expanded at the top pushed the cards themselves
+          off the screen, which is the opposite failure. So: before the cards, and closed, because a
+          legend is something you consult once and then never again. */}
+      <details className="work-legend-wrap" data-testid="work-state-legend">
+        <summary className="muted small">What the states mean</summary>
+        <ul className="work-legend">
+          {STATE_MEANINGS.map((m) => (
+            <li key={m.key}>
+              <span className={m.key === "BLOCKED" ? "badge badge-bad" : m.key === "DONE" ? "badge badge-ok" : "badge"}>
+                {m.label}
+              </span>
+              <span className="muted small">{m.means}</span>
+            </li>
+          ))}
+        </ul>
+      </details>
 
       {message && <p className="notice" data-testid="work-cards-message">{message}</p>}
 
@@ -334,28 +379,89 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
           <ul className="work-card-grid" data-testid={`work-card-list-${group.key}`}>
             {group.cards.map((c) => {
               const meaning = stateMeaning(c.state);
+              const isOpen = openCards.has(c.id);
               return (
-                <li key={c.id} className="card work-card-row" data-testid={`work-card-${c.id}`}>
+                <li key={c.id} className={isOpen ? "card work-card-row is-open" : "card work-card-row"} data-testid={`work-card-${c.id}`}>
+                  {/*
+                    THE CARD AT REST IS THREE LINES, not one and not fifteen.
+
+                    Collapsing it to a single line fixed the length and broke the form — a grid of
+                    one-line strips reads as a list of chips, and the operator's verdict was that
+                    they no longer looked like cards. Three lines is the size where a card is
+                    recognisably a card and six still fit above the fold: what state it is in, what
+                    it is, and who is carrying it with what happens next.
+
+                    The header is the toggle. A target you have to aim at is worse than the row you
+                    were already reading.
+                  */}
+                  <button
+                    type="button"
+                    className="work-card-summary"
+                    aria-expanded={isOpen}
+                    data-testid={`work-card-toggle-${c.id}`}
+                    onClick={() => toggleCard(c.id)}
+                  >
+                    <span className="work-card-meta">
+                      <span className={c.state === "BLOCKED" ? "badge badge-bad" : "badge"}>
+                        {meaning?.label ?? c.state}
+                      </span>
+                      {c.priority !== "NORMAL" && <span className="badge badge-gate">{c.priority.toLowerCase()}</span>}
+                      {/* Two facts survive the collapse because they change what you do next. */}
+                      {/* "12 looks" meant nothing to anybody — the operator's question was
+                          literally "what is a fucking look?". It is a web page this card opened
+                          and read. Say that. */}
+                      {(c.looks ?? []).length > 0 && (
+                        <span className="muted small" title="Web pages this card has opened and read">
+                          {c.looks!.length} page{c.looks!.length === 1 ? "" : "s"} read
+                        </span>
+                      )}
+                      {c.due_at && <span className="muted small">due {c.due_at.slice(0, 10)}</span>}
+                      <span className={`work-card-chevron${isOpen ? " is-open" : ""}`} aria-hidden="true">›</span>
+                    </span>
+
+                    <strong className="work-card-title">{c.title}</strong>
+
+                    {/* WHO, WITH A FACE. Every employee has a portrait now, and a face is the
+                        fastest way to read a board — you find Wyatt's cards by looking for Wyatt,
+                        not by reading eight owner lines. */}
+                    <span className="work-card-foot">
+                      <OwnerChip name={c.owner_type === "UNASSIGNED" ? null : c.owner_name ?? null} />
+                      {c.next_action && <span className="muted small work-card-next">{c.next_action}</span>}
+                    </span>
+                  </button>
+
+                  {isOpen && (
+                    <>
               <div className="work-card-body">
-                <div className="notification-head">
-                  <span className={c.state === "BLOCKED" ? "badge badge-bad" : "badge"}>
-                    {meaning?.label ?? c.state}
-                  </span>
-                  {c.priority !== "NORMAL" && <span className="badge badge-gate">{c.priority.toLowerCase()}</span>}
-                  <strong>{c.title}</strong>
-                </div>
                 {c.next_action ? (
-                  <p className="small">
-                    <span className="lbl">Next</span> {c.next_action}
-                  </p>
+                  <div>
+                    <p className="lbl">Next</p>
+                    {/* Usually one line. When an employee blocks, its whole question lands here,
+                        which is a paragraph — so this is bounded like the findings are. */}
+                    <div className="work-card-longtext">{c.next_action}</div>
+                  </div>
                 ) : (
                   <p className="muted small">No next action — nobody knows what to do with this yet.</p>
                 )}
-                {/* WHERE THIS CAME FROM. The description holds it — "Raised in the weekly review",
-                    "Routed from a capture" — and was never rendered, so a card that appeared after
-                    a meeting looked like it came from nowhere. Provenance is the first thing you
-                    want when you do not recognise a card. */}
-                {c.description && <p className="muted small work-card-origin">{c.description}</p>}
+                {/* WHAT IS IN THE DESCRIPTION, and why it needed a box of its own.
+                    Two different things land here: where the card came from ("Raised in the weekly
+                    review"), which is one line, and everything an employee has established while
+                    working it, which grows without limit — Wyatt's card had several thousand
+                    characters of search results in it, rendered inline, making one card taller
+                    than the rest of the board put together.
+                    Labelled so it is not confused with the pages-read count above it, and bounded
+                    so a card that has been worked hard is the same height as one that has not. */}
+                {c.description && (
+                  <div>
+                    <p className="lbl">
+                      {(c.owner_name ?? "Whoever is carrying this")}
+                      {c.description.length > 200 ? " has found so far" : ""}
+                    </p>
+                    <div className="work-card-longtext" data-testid={`work-card-findings-${c.id}`}>
+                      {c.description}
+                    </div>
+                  </div>
+                )}
                 <p className="muted small">
                   {c.owner_type === "UNASSIGNED"
                     ? "Nobody owns this"
@@ -429,10 +535,15 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                   {(c.looks ?? []).length > 0 && (
                     <details className="work-card-looks" data-testid={`work-card-looks-${c.id}`}>
                       <summary>
-                        {c.looks!.length} look{c.looks!.length === 1 ? "" : "s"}
+                        {c.looks!.length} page{c.looks!.length === 1 ? "" : "s"} opened and read
                         {c.looks!.some((l) => l.status === "SUCCEEDED") ? " · answered" : ""}
                       </summary>
-                      {c.looks!.map((l) => (
+                      {/* THE TWO MOST RECENT, AND NO MORE BY DEFAULT. A card that has been worked
+                          hard accumulated a dozen looks, each with up to 1,200 characters of page
+                          text, so one busy card was taller than the rest of the board put together.
+                          The older ones are still here — they are just not the first thing the card
+                          spends its height on. */}
+                      {(showAllLooks.has(c.id) ? c.looks! : c.looks!.slice(0, 2)).map((l) => (
                         <div key={l.id} className="work-look">
                           <p className="small"><strong>{l.objective}</strong></p>
                           <p className="muted small">{l.start_url} · {l.status.toLowerCase()}</p>
@@ -448,6 +559,16 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                           )}
                         </div>
                       ))}
+                      {c.looks!.length > 2 && !showAllLooks.has(c.id) && (
+                        <button
+                          type="button"
+                          className="link-button"
+                          data-testid={`work-card-all-looks-${c.id}`}
+                          onClick={() => setShowAllLooks((prev) => new Set(prev).add(c.id))}
+                        >
+                          Show all {c.looks!.length}
+                        </button>
+                      )}
                     </details>
                   )}
 
@@ -490,6 +611,8 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                       </div>
                     </form>
                   )}
+                    </>
+                  )}
                 </li>
               );
             })}
@@ -529,20 +652,23 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
             {finished.slice(0, 50).map((c) => (
               <li key={c.id}>
                 <span className="badge">{stateMeaning(c.state)?.label ?? c.state}</span> {c.title}
-                {/* CHANGING YOUR MIND HAS TO BE POSSIBLE. A dropped card is kept rather than
-                    deleted precisely because the decision might be revisited, and until now the
-                    record was kept and the reversal was not offered. Reopens as OPEN, not to
-                    whatever it was before: what it was is history, what it is now is undecided. */}
-                {c.state === "CANCELLED" && (
-                  <button
-                    type="button"
-                    className="link-button"
-                    data-testid={`work-card-undrop-${c.id}`}
-                    onClick={() => void move(c.id, "OPEN")}
-                  >
-                    Put it back
-                  </button>
-                )}
+                {/* CHANGING YOUR MIND HAS TO BE POSSIBLE. A dropped or finished card is kept
+                    rather than deleted precisely because the decision might be revisited. Reopens
+                    as OPEN, not to whatever it was before: what it was is history, what it is now
+                    is undecided.
+
+                    This button existed for dropped cards and did nothing — the server's transition
+                    table allowed no move at all out of CANCELLED, so every press returned a 409 the
+                    page reported as a small notice most of the way up. Finished cards were never
+                    offered it at all, though reopening one was always legal. */}
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid={`work-card-undrop-${c.id}`}
+                  onClick={() => void move(c.id, "OPEN")}
+                >
+                  {c.state === "CANCELLED" ? "Put it back" : "Reopen"}
+                </button>
               </li>
             ))}
           </ul>
