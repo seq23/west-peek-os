@@ -207,3 +207,43 @@ export function originLabel(key: string): string {
       return "Other";
   }
 }
+
+/**
+ * How the pipeline can be narrowed, defined next to the stages they depend on.
+ *
+ * WHY HERE AND NOT IN THE PAGE. The first version of this lived in the component and filtered on
+ * `status === "INVESTED"` — a key that does not exist. The stage is `CLOSED` and only its LABEL is
+ * "Invested", so the filter matched nothing and the page reported "Invested 0" beside a deal
+ * showing an Invested badge. Two contradictory facts on one screen, from guessing an enum.
+ *
+ * That is the third bug of exactly this shape in this codebase — `firm_scope` on a table without
+ * that column, `DAILY` where the value is `DAILY_AT`, and now this. A wrong string literal in
+ * TypeScript does not fail; it silently never matches. So these predicates sit beside the STAGES
+ * they read, where a rename breaks them visibly, and `tests/dealFilters.test.ts` asserts every one
+ * still matches a real stage.
+ */
+/**
+ * Every stage key, as VALUES rather than only as a type.
+ *
+ * A union type vanishes at runtime, so nothing could check a string literal against it — which is
+ * precisely how `"INVESTED"` got written into a filter and silently matched nothing. Derived from
+ * STAGES so it cannot drift from the stages themselves.
+ */
+export const STAGE_KEYS: readonly string[] = STAGES.map((s) => s.key);
+
+export interface DealFilter {
+  key: string;
+  label: string;
+  /** Which statuses this filter admits. Empty means everything. */
+  matches: (status: string) => boolean;
+}
+
+export const DEAL_FILTERS: readonly DealFilter[] = [
+  { key: "LIVE", label: "Live", matches: (s) => !stage(s)?.isExit },
+  // "Needs you" is about time in stage rather than the stage itself, so the page supplies that
+  // half; this entry exists so the filter list stays in one place.
+  { key: "NEEDS_YOU", label: "Needs you", matches: (s) => !stage(s)?.isExit },
+  { key: "INVESTED", label: "Invested", matches: (s) => s === "CLOSED" },
+  { key: "PASSED", label: "Passed", matches: (s) => s === "PASS" || s === "WITHDRAWN" },
+  { key: "ALL", label: "Everything", matches: () => true },
+];

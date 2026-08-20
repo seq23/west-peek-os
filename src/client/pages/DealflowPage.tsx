@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
-import { EXITS, SPINE, dealTypeLabel, originLabel, stage, stallRead } from "@shared/investment/pipeline";
+import { DEAL_FILTERS, EXITS, SPINE, dealTypeLabel, originLabel, stage, stallRead } from "@shared/investment/pipeline";
 
 /**
  * Dealflow — where every company stands, and what is stopping the next decision.
@@ -172,6 +172,15 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const [newName, setNewName] = useState("");
   const [newSector, setNewSector] = useState("");
   const [sleeve, setSleeve] = useState("EARLY_STAGE_PRIMARY");
+  /**
+   * WHERE A DEAL STANDS, as a filter.
+   *
+   * "Is there a way to filter for passed companies or invested or screening" — no, there was not.
+   * The list was everything, always, sorted by urgency, which works at three deals and stops
+   * working somewhere around fifteen. Passed deals are the ones most worth being able to isolate:
+   * they are the firm's own record of what it declined and why.
+   */
+  const [filter, setFilter] = useState<string>("LIVE");
 
   const deals = board.data?.deals ?? [];
 
@@ -187,6 +196,25 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       return (bs?.days ?? 0) - (as?.days ?? 0);
     });
   }, [deals]);
+
+  /**
+   * The filters, and why these five.
+   *
+   * "Live" is the working default — what is still moving. The rest exist because each answers a
+   * question somebody actually arrives with: what needs me, what did we back, what did we pass on,
+   * and everything. Passed is the one that was hardest to reach and is the firm's own record of
+   * what it declined.
+   */
+  const matchesFilter = (d: Deal, key: string): boolean => {
+    const f = DEAL_FILTERS.find((x) => x.key === key);
+    if (!f) return true;
+    // "Needs you" adds the only condition the stage registry cannot express: how long it has sat.
+    if (key === "NEEDS_YOU") return f.matches(d.status) && Boolean(stallRead(d.status, d.in_stage_since)?.stalled);
+    return f.matches(d.status);
+  };
+
+  const countFor = (key: string) => deals.filter((d) => matchesFilter(d, key)).length;
+  const shown = sorted.filter((d) => matchesFilter(d, filter));
 
   const live = deals.filter((d) => !stage(d.status)?.isExit);
   const stalled = live.filter((d) => stallRead(d.status, d.in_stage_since)?.stalled);
@@ -279,50 +307,66 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           3. DEAL RECORDS AND TOOLING — the stage spine, the staleness rule, the arithmetic. The
              machinery you consult occasionally, not the thing you came for.
       */}
-      <div className="home-section-head">
-        <h2>What we are looking for</h2>
-        <button type="button" className="link-button" data-testid="dealflow-thesis" onClick={() => onNavigate("thesis")}>
-          Open the thesis →
-        </button>
-      </div>
-      <p className="muted small">
-        Every screen below is a judgement against the firm's written mandate — sectors, stage,
-        cheque size, the tests that make something a fast no. Screening against instinct instead is
-        how a pipeline fills with companies that are interesting and out of mandate.
+      {/*
+        THE TOP OF THE FUNNEL, and it is the only one.
+
+        Every company the firm has enters here — the operator's instruction, and the reason
+        Companies stopped creating records. A door that every deal comes through should not be a
+        link-sized control tucked beside a heading, so this is the widest, heaviest thing on the
+        page: what we are looking for on one side, the way in on the other.
+      */}
+      <section className="funnel-mouth" data-testid="dealflow-mouth">
+        <div className="funnel-mouth-copy">
+          <h2>Top of the funnel</h2>
+          <p className="small">
+            Every company the firm records enters here, {me.fullName.split(" ")[0]} — primary or
+            secondary. Each one is screened against the written mandate, not against instinct,
+            which is how a pipeline fills with companies that are interesting and out of scope.
+          </p>
+          <button type="button" className="link-button" data-testid="dealflow-thesis" onClick={() => onNavigate("thesis")}>
+            What we are looking for →
+          </button>
+        </div>
+        <div className="funnel-mouth-action">
+          <button type="button" className="btn-strong btn-lg" data-testid="dealflow-add-toggle" onClick={() => setAdding((a) => !a)}>
+            {adding ? "Cancel" : "Add a company"}
+          </button>
+          <span className="muted small">the only way in</span>
+        </div>
+      </section>
+
+      {/* THE PIPELINE ITSELF, under the door it comes through.
+
+          This sat in a disclosure at the bottom while three stat cards — stalled, waiting on you,
+          live — held the top. The cards were counts of the same thing the spine already shows, in
+          a shape that says nothing about order or where a deal is stuck. The spine IS the funnel:
+          it belongs directly under the mouth, open, and the counts it carries make the cards
+          redundant rather than complementary. */}
+      <Spine counts={board.data?.counts ?? {}} />
+
+      <p className="muted small" data-testid="dealflow-staleness-note">
+        {board.data?.how_staleness_works}
       </p>
 
-      <div className="home-section-head">
-        <h2>Every deal</h2>
-        <span className="muted small">
-          Where each company stands, {me.fullName.split(" ")[0]}, and what is stopping the next decision
-        </span>
-      </div>
-
-      <div className="pipeline-stats">
-        <div className="stat-card stat-card-bad">
-          <div className="lbl">Stalled</div>
-          <div className="stat-number" data-testid="stat-stalled">{stalled.length}</div>
-          <div className="muted small">Sitting longer than the stage allows</div>
-        </div>
-        <div className="stat-card stat-card-accent">
-          <div className="lbl">Waiting on you</div>
-          <div className="stat-number" data-testid="stat-ready">{readyToDecide.length}</div>
-          <div className="muted small">Everything is in; only a decision is missing</div>
-        </div>
-        <div className="stat-card">
-          <div className="lbl">Live deals</div>
-          <div className="stat-number" data-testid="stat-live">{live.length}</div>
-          <div className="muted small">Still moving through the pipeline</div>
-        </div>
-      </div>
-
+      {/* THE PIPELINE, with a way to narrow it. Three companies fit on a screen; thirty do not,
+          and "show me what we passed on" is a question this page could not answer at all. */}
       <div className="home-section-head">
         <h3>The pipeline</h3>
         <span className="muted small">sorted by what needs you soonest</span>
-        {/* THE ONLY WAY IN. Companies used to carry an identical button that did half of this. */}
-        <button type="button" className="btn-strong" data-testid="dealflow-add-toggle" onClick={() => setAdding((a) => !a)}>
-          {adding ? "Cancel" : "Add a company"}
-        </button>
+        <span className="deal-filters" role="group" aria-label="Filter deals by where they stand">
+          {DEAL_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              className={filter === f.key ? "chip chip-on" : "chip"}
+              aria-pressed={filter === f.key}
+              data-testid={`dealflow-filter-${f.key}`}
+              onClick={() => setFilter(f.key)}
+            >
+              {f.label} <span className="muted">{countFor(f.key)}</span>
+            </button>
+          ))}
+        </span>
       </div>
 
       {message && <p className="notice" data-testid="dealflow-message">{message}</p>}
@@ -395,30 +439,18 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       )}
 
       <ul className="deal-list" data-testid="deal-list">
-        {sorted.map((d) => (
+        {shown.map((d) => (
           <DealRow key={d.id} deal={d} onChanged={board.reload} />
         ))}
-        {sorted.length === 0 && (
+        {shown.length === 0 && (
           <li className="state-empty" data-testid="dealflow-empty">
-            Nothing in the pipeline yet. Add a company above, or capture one as you meet them.
+            {deals.length === 0
+              ? "Nothing in the pipeline yet. Add a company above, or capture one as you meet them."
+              : `Nothing is ${DEAL_FILTERS.find((f) => f.key === filter)?.label.toLowerCase()}. The pipeline has ${deals.length} deal${deals.length === 1 ? "" : "s"} in other states.`}
           </li>
         )}
       </ul>
 
-      <div className="home-section-head">
-        <h2>Deal records and tooling</h2>
-        <span className="muted small">the machinery behind the list — consulted, not read</span>
-      </div>
-
-      <Spine counts={board.data?.counts ?? {}} />
-
-      <p className="muted small" data-testid="dealflow-staleness-note">
-        {board.data?.how_staleness_works}
-      </p>
-
-      <button type="button" className="link-button" onClick={() => onNavigate("thesis")}>
-        What we are looking for →
-      </button>
     </section>
   );
 }

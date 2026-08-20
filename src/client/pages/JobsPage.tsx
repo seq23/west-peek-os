@@ -104,43 +104,38 @@ export function JobsPage({ me }: { me: MeResponse }) {
           "The job's action is reserved and has no approval.",
         ]}
       />
-      {/* THE MACHINERY, FOLDED. The architecture note, the local-development caveat and the
-          reason box are all true and none of them is what you came for — they were the first three
-          things on the page, above every job. Operator controls that exist for the rare case belong
-          behind a disclosure, not in front of the common one. */}
-      <details className="card job-controls" data-testid="jobs-controls">
-        <summary className="muted small">Run everything that is due, and how this works underneath</summary>
-        <div className="form-row">
-          <input
-            data-testid="job-reason" aria-label="Why — recorded against this change"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Why (recorded against switching a job on or off)"
-            style={{ flex: 1, minWidth: "16rem" }}
-          />
-          <button
-            type="button"
-            data-testid="jobs-tick"
-            onClick={async () => {
-              const res = await api<{ ran: Array<{ job_key: string; status: string; summary: string }> }>("/api/jobs/tick", { method: "POST" });
-              const ran = res.data?.ran ?? [];
-              setMessage(
-                ran.length === 0
-                  ? "Nothing was due. No job ran."
-                  : ran.map((r) => `${r.job_key}: ${r.status} — ${r.summary}`).join(" · "),
-              );
-              jobs.reload();
-            }}
-          >
-            Run everything due now
-          </button>
-        </div>
-        <p className="muted small" data-testid="jobs-architecture">{jobs.data?.architecture}</p>
-        <p className="muted small">
-          A cron trigger cannot fire in local development. The button above runs the same code path
-          the trigger calls, which proves the path — not that Cloudflare fired it.
-        </p>
-      </details>
+      {/* THE BUTTON, WITHOUT A DRAWER AROUND IT.
+          This sat inside a disclosure called "Run everything that is due, and how this works
+          underneath", which put a control somebody occasionally needs behind a lid, and stapled a
+          paragraph of architecture to it — D1, cron triggers, no Queues. That belongs in the "how
+          this works" panel above if it belongs anywhere, and it does not: nobody switching a job
+          on needs to know which primitives it is built from. The control is the control. */}
+      <div className="form-row jobs-run-now">
+        <input
+          data-testid="job-reason"
+          aria-label="Why — recorded against switching a job on or off"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Why (optional — recorded against switching a job on or off)"
+          style={{ flex: 1, minWidth: "16rem" }}
+        />
+        <button
+          type="button"
+          data-testid="jobs-tick"
+          onClick={async () => {
+            const res = await api<{ ran: Array<{ job_key: string; status: string; summary: string }> }>("/api/jobs/tick", { method: "POST" });
+            const ran = res.data?.ran ?? [];
+            setMessage(
+              ran.length === 0
+                ? "Nothing was due. No job ran."
+                : ran.map((r) => `${r.job_key}: ${r.status} — ${r.summary}`).join(" · "),
+            );
+            jobs.reload();
+          }}
+        >
+          Run everything due now
+        </button>
+      </div>
 
       {message && <p className="notice" data-testid="jobs-message">{message}</p>}
 

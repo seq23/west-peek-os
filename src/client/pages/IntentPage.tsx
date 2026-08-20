@@ -1,315 +1,50 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { HowThisWorks } from "./HowThisWorks";
+import { DeliverableList } from "./DeliverableList";
 
 /**
- * Intent → Execution (P18; GAP-08, GAP-09).
+ * Ask — one page, one way.
  *
- * The governed path from a rough thought to executed work. The operator's own words stay
- * visible at the top of the packet at every step — enhancement adds columns beside them and
- * can never replace them (the database enforces that, not this page).
+ * WHAT THIS REPLACED, and why it was rebuilt rather than tidied. This page carried TWO products.
+ * The original was "work packets": you wrote a rough thought, the system derived ambiguities,
+ * assumptions, risks, acceptance criteria and a lens stack, and you executed the packet. Ask was
+ * built on top of it later and folded the packet flow into a disclosure — so the page had an old
+ * way and a new way, and the old one's vocabulary (packet, lens bench, blocking, acceptance
+ * criteria) sat in accordions underneath the new one.
  *
- * The lens bench is visible: which lenses are selected, which have run, what each found, and
- * which one can stop the work.
+ * Zero packets were ever created through that flow, in months. Not because the machinery was bad —
+ * the lens gate is genuinely good — but because no partner has ever thought in those words. The
+ * operator asked ten times for it to stop being a separate thing, and folding it away repeatedly
+ * was the wrong answer to the wrong question: a disclosure still means the page has two products,
+ * one of them hidden.
+ *
+ * So there is one way now. You describe what you need. The system decides which of four things it
+ * is and does that thing. What it has produced is listed on the page, not behind a control. What
+ * checks the work before it runs is explained on the page, in the same words.
+ *
+ * THE FOUR OUTCOMES, and the distinctions that make them worth separating:
+ *   GO    — the answer already exists on a page. A task to go and look at something already there
+ *           is not work; it is a wrong turn.
+ *   TELL  — answerable outright. No page, no work.
+ *   WORK  — somebody has to carry it. That is a card: an owner and a next action.
+ *   BRIEF — you want a document. Nobody carries a brief; you asked for it and you receive it.
+ *
+ * WORK vs BRIEF is the one that took longest to see, and it is the distinction the old packet flow
+ * never made: "check whether Psyflo still lists a VP of Sales" is one act and then it is over;
+ * "what are comparable seed valuations in devtools" needs gathering, weighing and writing up, and
+ * what you want at the end is a page you can read.
  */
 
-interface Packet {
-  id: string;
-  original_text: string;
-  enhancement_strength: string;
-  enhancement_origin: string;
-  interpretation: string;
-  ambiguities_json: string;
-  assumptions_json: string;
-  risks_json: string;
-  output_definition: string;
-  acceptance_criteria_json: string;
-  lens_stack_json: string;
-  recommended_employee_id: string | null;
-  machine_id: number | null;
-  capability_keys_json: string;
-  cost_basis: string;
-  status: string;
-  work_card_id: string | null;
-  ai_run_id: string | null;
-  created_at: string;
-}
-
-interface LensDef {
-  key: string;
-  name: string;
-  job: string;
-  produces: string;
-  blocking: boolean;
-}
-
-interface LensOutput {
-  id: string;
-  lens_key: string;
-  verdict: string;
-  critique: string;
-  summary: string;
-  produced_by_type: string;
-  created_at: string;
-}
-
-function statusBadge(status: string): string {
-  if (status === "COMPLETE") return "badge badge-ok";
-  if (status === "BLOCKED_BY_LENS" || status === "FAILED") return "badge badge-bad";
-  if (status === "EXECUTING") return "badge badge-gate";
-  return "badge";
-}
-
-function verdictBadge(v: string): string {
-  if (v === "PASS") return "badge badge-ok";
-  if (v === "ADVERSE") return "badge badge-bad";
-  return "badge badge-gate";
-}
-
-function list(jsonText: string): string[] {
-  try {
-    return JSON.parse(jsonText) as string[];
-  } catch {
-    return [];
-  }
-}
-
-function PacketDetail({ id, onChanged }: { id: string; onChanged: () => void }) {
-  const detail = useApi<{ packet: Packet; lens_outputs: LensOutput[]; revisions: Array<{ id: string; version_no: number; note: string }>; lens_bench: LensDef[]; note: string }>(
-    `/api/work-packets/${id}`,
-  );
-  const [message, setMessage] = useState<string | null>(null);
-  const [lensKey, setLensKey] = useState("TRUTH_COMPLIANCE_GATE");
-  const [verdict, setVerdict] = useState("PASS");
-  const [critique, setCritique] = useState("");
-
-  if (detail.loading && !detail.data) return <p>Loading packet…</p>;
-  if (!detail.data) return <p className="muted">Could not load this packet.</p>;
-  const p = detail.data.packet;
-  const stack = list(p.lens_stack_json);
-  const run = (key: string) => detail.data!.lens_outputs.find((o) => o.lens_key === key);
-
-  const refresh = () => {
-    detail.reload();
-    onChanged();
-  };
-
-  return (
-    <section className="card" data-testid={`packet-detail-${p.id}`}>
-      {/* THE ANSWER, IN OPERATOR LANGUAGE.
-          Canon §67.4 is explicit that ordinary work needs "no machinery displayed unless
-          requested". This page previously led with ambiguities, assumptions, lens benches and
-          routing — the system's reasoning about the request, rendered as the product. That asks a
-          Managing Partner to read like a systems designer, which is the exact thing the law
-          forbids. The machinery is all still here, one disclosure down, unchanged and auditable. */}
-      <h3>
-        What happens next <span className={statusBadge(p.status)}>{p.status}</span>
-      </h3>
-
-      <p className="ask-answer" data-testid="ask-plan">
-        {p.interpretation || p.original_text}
-      </p>
-
-      <ul className="ask-facts" data-testid="ask-facts">
-        <li>
-          <strong>Who:</strong>{" "}
-          {p.recommended_employee_id ?? "no employee assigned yet"}
-          {p.machine_id ? ` · machine ${p.machine_id}` : ""}
-        </li>
-        <li>
-          <strong>You&apos;ll get:</strong> {p.output_definition || "not yet defined"}
-        </li>
-        <li>
-          <strong>Approval:</strong> nothing external is sent without you.
-        </li>
-      </ul>
-
-      <details className="ask-machinery" data-testid="ask-machinery">
-        <summary>Show how this was framed</summary>
-
-        <section className="card" data-testid="packet-original">
-          <h4>What you wrote</h4>
-          <p>{p.original_text}</p>
-          <p className="muted small">
-            Preserved verbatim. Enhancement ({p.enhancement_strength}, {p.enhancement_origin}) adds the fields below and never
-            rewrites this.
-          </p>
-        </section>
-
-        <h4>Interpretation</h4>
-        <p className="small">{p.interpretation || "—"}</p>
-
-      <div className="module-grid">
-        <section className="module-card" data-testid="packet-ambiguities">
-          <h4>Ambiguities</h4>
-          <ul className="small">
-            {list(p.ambiguities_json).map((a) => (
-              <li key={a}>{a}</li>
-            ))}
-            {list(p.ambiguities_json).length === 0 && <li className="state-empty">None found.</li>}
-          </ul>
-        </section>
-        <section className="module-card" data-testid="packet-assumptions">
-          <h4>Assumptions</h4>
-          <ul className="small">
-            {list(p.assumptions_json).map((a) => (
-              <li key={a}>{a}</li>
-            ))}
-            {list(p.assumptions_json).length === 0 && <li className="state-empty">None recorded.</li>}
-          </ul>
-        </section>
-        <section className="module-card" data-testid="packet-risks">
-          <h4>Risks</h4>
-          <ul className="small">
-            {list(p.risks_json).map((r) => (
-              <li key={r}>{r}</li>
-            ))}
-          </ul>
-        </section>
-        <section className="module-card" data-testid="packet-acceptance">
-          <h4>Acceptance criteria</h4>
-          <ul className="small">
-            {list(p.acceptance_criteria_json).map((c) => (
-              <li key={c}>{c}</li>
-            ))}
-          </ul>
-        </section>
-      </div>
-
-      <h4>Routing</h4>
-      <p className="small" data-testid="packet-routing">
-        Output: {p.output_definition || "—"} · machine {p.machine_id ?? "none recommended"} · employee{" "}
-        {p.recommended_employee_id ?? "none assigned"} · capabilities{" "}
-        {list(p.capability_keys_json).join(", ") || "none"}
-      </p>
-      <p className="muted small">{p.cost_basis}</p>
-
-      </details>
-
-      <h4>Checks</h4>
-      <p className="muted small">{detail.data.note}</p>
-      <ul className="card-list small" data-testid="packet-lenses">
-        {stack.map((key) => {
-          const def = detail.data!.lens_bench.find((l) => l.key === key);
-          const output = run(key);
-          return (
-            <li key={key} data-testid={`packet-lens-${key}`}>
-              <strong>{def?.name ?? key}</strong> {def?.blocking && <span className="badge badge-gate">blocking</span>}{" "}
-              {output ? (
-                <>
-                  <span className={verdictBadge(output.verdict)}>{output.verdict}</span> — {output.critique}
-                  <br />
-                  <span className="muted">recorded by {output.produced_by_type}</span>
-                </>
-              ) : (
-                <span className="muted">not run yet{def?.blocking ? " — execution is refused until it does" : ""}</span>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-
-      {p.status !== "COMPLETE" && (
-        <form
-          data-testid="lens-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            const res = await api<{ error?: string; detail?: string }>(`/api/work-packets/${p.id}/lenses`, {
-              method: "POST",
-              body: { lens_key: lensKey, verdict, critique },
-            });
-            setMessage(res.status === 201 ? `${lensKey} recorded as ${verdict}.` : `Refused: ${res.data?.detail ?? res.data?.error ?? res.status}`);
-            setCritique("");
-            refresh();
-          }}
-        >
-          <div className="form-row">
-            <select data-testid="lens-key" aria-label="Which lens" value={lensKey} onChange={(e) => setLensKey(e.target.value)}>
-              {stack.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-            <select data-testid="lens-verdict" aria-label="Lens verdict" value={verdict} onChange={(e) => setVerdict(e.target.value)}>
-              {["PASS", "CONCERN", "ADVERSE"].map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <input
-              className="field-wide" data-testid="lens-critique" aria-label="What the lens found"
-              value={critique}
-              onChange={(e) => setCritique(e.target.value)}
-              placeholder="What did this lens find?"
-            />
-            <button type="submit" className="btn-strong" data-testid="lens-submit">
-              Record finding
-            </button>
-          </div>
-        </form>
-      )}
-
-      <div className="form-row">
-        <button
-          type="button"
-          data-testid="packet-execute"
-          disabled={p.status === "COMPLETE" || p.status === "EXECUTING"}
-          onClick={async () => {
-            const res = await api<{ packet?: Packet; run?: { status: string }; error?: string; detail?: string }>(
-              `/api/work-packets/${p.id}/execute`,
-              { method: "POST" },
-            );
-            setMessage(
-              res.status === 200
-                ? `Executed. Work card opened and the governed run finished ${res.data?.run?.status}.`
-                : `Refused: ${res.data?.detail ?? res.data?.error ?? res.status}`,
-            );
-            refresh();
-          }}
-        >
-          Execute packet
-        </button>
-      </div>
-      {message && <p className="notice" data-testid="packet-message">{message}</p>}
-
-      {p.work_card_id && (
-        <p className="muted small">
-          work card <code>{p.work_card_id}</code> · run <code>{p.ai_run_id}</code>
-        </p>
-      )}
-
-      <p className="muted small">{detail.data.revisions.length} revision(s) recorded (append-only).</p>
-    </section>
-  );
-}
-
-
-/**
- * EXAMPLES, BECAUSE A BLANK BOX IS A HARD QUESTION. "What do you need?" is answerable only by
- * somebody who already knows what the system can do, which is the opposite of who this page is for.
- * These are grouped by the three things an ask turns out to be, so the shape of the answer is
- * visible before anybody types.
- */
-const ASK_EXAMPLES: ReadonlyArray<{ group: string; note: string; items: readonly string[] }> = [
+/** What Ask can ask for, grouped by what comes back — so the shape of the answer is visible first. */
+const EXAMPLES: ReadonlyArray<{ group: string; note: string; items: readonly string[] }> = [
   {
     group: "Find something out",
     note: "becomes work somebody carries",
     items: [
-      "which accelerators in Texas back pre-seed B2B software",
       "check whether Psyflo still lists a VP of Sales",
       "review a portfolio founder's homepage and say what to fix",
-      "what are comparable seed valuations in devtools right now",
-    ],
-  },
-  {
-    group: "Where do I…",
-    note: "sends you to the page that already has it",
-    items: [
-      "what has the firm spent on AI so far",
-      "where do I see what is waiting on my approval",
-      "how do I connect my calendar",
-      "where is this week's agenda",
+      "which accelerators in Texas back pre-seed B2B software",
     ],
   },
   {
@@ -322,11 +57,25 @@ const ASK_EXAMPLES: ReadonlyArray<{ group: string; note: string; items: readonly
     ],
   },
   {
-    group: "Just tell me",
-    note: "answered here",
-    items: ["what is the difference between a work card and an approval"],
+    group: "Where do I…",
+    note: "sends you to the page that already has it",
+    items: [
+      "what has the firm spent on AI so far",
+      "where do I see what is waiting on my approval",
+      "where is this week's agenda",
+    ],
   },
 ];
+
+interface Draft {
+  title: string;
+  next_action: string | null;
+  prompt: string;
+  owner_id: string | null;
+  owner_name: string | null;
+  needs_browser: boolean;
+  reasoning: string;
+}
 
 interface BriefRequest {
   title: string;
@@ -345,33 +94,22 @@ interface AskResult {
   note?: string;
 }
 
-interface Draft {
-  title: string;
-  next_action: string | null;
-  prompt: string;
-  owner_id: string | null;
-  owner_name: string | null;
-  needs_browser: boolean;
-  reasoning: string;
+interface LensDef {
+  key: string;
+  name: string;
+  job: string;
+  blocking: boolean;
 }
 
-/**
- * Ask, as a front door to a work card.
- *
- * WHY THIS REPLACED THE PACKET FLOW AT THE TOP OF THE PAGE. Ask produced "work packets" with their
- * own lifecycle running beside work cards, so a request had two homes and neither was
- * authoritative — the operator's read was that Ask is superfluous if it does not lead anywhere.
- * It leads to a card now: you write a sentence, you get a card to read, you press Add.
- *
- * NOTHING IS CREATED BY ASKING. A front door that silently fills the board is one people stop
- * typing into.
- */
-function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string) => void }): JSX.Element {
+export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }): JSX.Element {
+  const bench = useApi<{ lenses: LensDef[]; storage_rule: string }>("/api/work-packets/lens-bench");
+
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [result, setResult] = useState<AskResult | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [result, setResult] = useState<AskResult | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [nonce, setNonce] = useState(0);
 
   async function ask(e: React.FormEvent) {
     e.preventDefault();
@@ -379,6 +117,7 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
     setBusy(true);
     setMsg(null);
     setResult(null);
+    setDraft(null);
     const res = await api<AskResult & { detail?: string; error?: string }>("/api/intent/draft", {
       method: "POST",
       body: { text: text.trim() },
@@ -393,37 +132,8 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
     }
   }
 
-  /**
-   * Commission the brief. Nothing is written until this is pressed — the draft above is a proposal
-   * about what to write, and the partner should be able to reject the shape before paying for it.
-   */
-  async function writeBrief() {
-    if (!result?.brief) return;
-    setBusy(true);
-    setMsg(null);
-    const res = await api<{ note?: string; title?: string; prepared_by?: string; detail?: string; error?: string }>(
-      "/api/intent/brief",
-      {
-        method: "POST",
-        body: {
-          title: result.brief.title,
-          question: result.brief.question,
-          ...(result.brief.suggested_author ? { author: result.brief.suggested_author } : {}),
-        },
-      },
-    );
-    setBusy(false);
-    if (res.status === 201) {
-      setResult(null);
-      setText("");
-      setMsg(res.data?.note ?? "Written and filed.");
-    } else {
-      setMsg(`Could not write it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
-    }
-  }
-
-  /** Create the card. Nothing existed until this is pressed. */
-  async function add() {
+  /** Create the card. Nothing exists until this is pressed — the draft above is a proposal. */
+  async function addCard() {
     if (!draft) return;
     setBusy(true);
     const res = await api<{ id?: string; detail?: string; error?: string }>("/api/work-cards", {
@@ -436,8 +146,8 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
         ...(draft.owner_id ? { owner_id: draft.owner_id } : {}),
       },
     });
-    // Permission granted as the card is made, so work that plainly needs the web is not blocked on
-    // a second thing to remember.
+    // Permission granted while the card is written, so work that plainly needs the web is not
+    // blocked on a second thing to remember.
     if (res.status === 201 && draft.needs_browser && res.data?.id) {
       await api(`/api/work-cards/${res.data.id}/browser-permission`, { method: "POST", body: { allows_browser: true } });
     }
@@ -452,262 +162,244 @@ function AskForACard({ me, onNavigate }: { me: MeResponse; onNavigate: (k: strin
     }
   }
 
-  return (
-    <section className="card ask-card" data-testid="ask-for-card">
-      <form onSubmit={ask}>
-        <label htmlFor="ask-text">
-          <strong>{me.fullName.split(" ")[0]}, what do you need?</strong>
-          <span className="muted small"> Write it however you think about it.</span>
-        </label>
-        <textarea
-          id="ask-text"
-          data-testid="ask-text" aria-label="What you need, in your own words"
-          rows={3}
-          style={{ width: "100%" }}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="find out which accelerators in Texas back pre-seed B2B software"
-        />
-        <div className="form-row">
-          <button type="submit" className="btn-strong" disabled={busy || text.trim().length < 8} data-testid="ask-submit">
-            {busy ? "Working it out…" : "Turn it into work"}
-          </button>
-        </div>
-      </form>
-
-      {/* Shown until the first ask, then out of the way. Hand-holding is for the first time. */}
-      {!result && (
-        <div className="ask-examples-grid" data-testid="ask-examples">
-          {ASK_EXAMPLES.map((g) => (
-            <div key={g.group}>
-              <p className="muted small">
-                <strong>{g.group}</strong> — {g.note}
-              </p>
-              <ul className="card-list small">
-                {g.items.map((ex) => (
-                  <li key={ex}>
-                    <button type="button" className="link-button" onClick={() => setText(ex)}>
-                      {ex}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {msg && <p className="notice small" data-testid="ask-message">{msg}</p>}
-
-      {/* GO — the answer already exists. Making a card would be a task to look at something that is
-          already there. */}
-      {result?.outcome === "GO" && result.page && (
-        <div className="ask-draft" data-testid="ask-go">
-          <p>{result.says}</p>
-          <div className="form-row">
-            <button type="button" className="btn-strong" onClick={() => onNavigate(result.page!)}>
-              Take me there
-            </button>
-            <span className="muted small">No work needed — this already exists.</span>
-          </div>
-        </div>
-      )}
-
-      {/* BRIEF — what they want back is a document, not a task somebody carries. This is what the
-          work-packet flow always was: same machinery, asked for the way a partner would actually
-          ask, and delivered the way everything else is — signed, filed, downloadable. */}
-      {result?.outcome === "BRIEF" && result.brief && (
-        <div className="ask-draft" data-testid="ask-brief">
-          <p>{result.says}</p>
-          <div className="card">
-            <h3>{result.brief.title}</h3>
-            <p className="small">
-              <span className="lbl">Answers</span> {result.brief.question}
-            </p>
-            <p className="muted small">
-              {result.brief.suggested_author ? `${result.brief.suggested_author} would write it` : "Whoever owns research would write it"}
-              {result.brief.needs_browser ? " · it will read live sources" : ""}
-            </p>
-            {result.brief.reasoning && <p className="muted small">{result.brief.reasoning}</p>}
-          </div>
-          <div className="form-row">
-            <button
-              type="button"
-              className="btn-strong"
-              disabled={busy}
-              data-testid="ask-brief-write"
-              onClick={() => void writeBrief()}
-            >
-              {busy ? "Writing…" : "Write it"}
-            </button>
-            <button type="button" onClick={() => { setResult(null); }}>Not that</button>
-            <span className="muted small">
-              You will get a document, signed, on your Home page and in Documents.
-            </span>
-          </div>
-        </div>
-      )}
-
-      {result?.outcome === "TELL" && (
-        <div className="ask-draft" data-testid="ask-tell">
-          <p>{result.says}</p>
-        </div>
-      )}
-
-      {draft && (
-        <div className="ask-draft" data-testid="ask-draft">
-          <p className="muted small">{draft.reasoning}</p>
-
-          <label>
-            The work{" "}
-            <input value={draft.title} data-testid="ask-draft-title" onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
-          </label>
-          <label>
-            Next action{" "}
-            <input
-              value={draft.next_action ?? ""}
-              data-testid="ask-draft-next"
-              onChange={(e) => setDraft({ ...draft, next_action: e.target.value })}
-            />
-          </label>
-
-          {/* THE PROMPT IS THE POINT. These employees are LLM-powered, and the instruction is
-              usually the difference between work done well and work done plausibly. Almost nobody
-              writes one from a blank field, so it arrives drafted and you edit it. */}
-          <label>
-            How it should be done <span className="muted small">— the instruction the employee reads</span>
-            <textarea
-              rows={8}
-              style={{ width: "100%" }}
-              value={draft.prompt}
-              data-testid="ask-draft-prompt"
-              onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
-            />
-          </label>
-
-          <p className="muted small">
-            {draft.owner_name ? <>Suggested owner: <strong>{draft.owner_name}</strong>. </> : "Nobody assigned. "}
-            {draft.needs_browser
-              ? "It will be allowed to search and read pages."
-              : "It does not need the web."}
-          </p>
-
-          <div className="form-row">
-            <button type="button" className="btn-strong" disabled={busy} onClick={() => void add()} data-testid="ask-draft-add">
-              {busy ? "…" : "Add to Work"}
-            </button>
-            <button type="button" onClick={() => setDraft(null)}>Discard</button>
-            <button type="button" className="link-button" onClick={() => onNavigate("work-cards")}>
-              Open Work
-            </button>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string) => void }) {
-  const packets = useApi<{ packets: Packet[]; lens_bench: LensDef[] }>("/api/work-packets");
-  const bench = useApi<{ lenses: LensDef[]; default_stack: string[]; storage_rule: string }>("/api/work-packets/lens-bench");
-  const [text, setText] = useState("");
-  const [strength, setStrength] = useState("STANDARD");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  /** Commission the brief. Nothing is written until this is pressed. */
+  async function writeBrief() {
+    if (!result?.brief) return;
+    setBusy(true);
+    setMsg(null);
+    const res = await api<{ note?: string; detail?: string; error?: string }>("/api/intent/brief", {
+      method: "POST",
+      body: {
+        title: result.brief.title,
+        question: result.brief.question,
+        ...(result.brief.suggested_author ? { author: result.brief.suggested_author } : {}),
+      },
+    });
+    setBusy(false);
+    if (res.status === 201) {
+      setResult(null);
+      setText("");
+      setMsg(res.data?.note ?? "Written and filed.");
+      setNonce((n) => n + 1);
+    } else {
+      setMsg(`Could not write it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    }
+  }
 
   return (
     <section data-testid="intent-page">
-      <p className="surface-lede">
-        Say what you need. It comes back as a piece of work you can read, change, and hand to
-        somebody — including the instruction they will actually follow.
-      </p>
-
-      <AskForACard me={me} onNavigate={onNavigate} />
-
-      {/* The packet flow, kept and folded. It is a different, heavier thing — a packet carries lenses
-          and revisions — and it stays available rather than being deleted out from under anyone
-          mid-use. Most requests want a card. */}
-
-      <details className="card">
-        <summary className="muted small">The older packet flow, with the lens bench</summary>
-        <p className="muted small">
-          This is the same idea as a brief, from before Ask could commission one — it exposes the
-          lens bench and the acceptance criteria directly. Nothing has ever been created through it.
-          Kept because it is not deleted out from under anyone mid-use.
+      {/* ── Asking ─────────────────────────────────────────────────────────────────────────── */}
+      <section className="card ask-card">
+        <h2>What do you need?</h2>
+        <p className="small">
+          In your own words, {me.fullName.split(" ")[0]}. Ask works out which of four things it is —
+          a page that already holds the answer, an answer it can give you outright, work somebody
+          has to carry, or a document to be written — and shows you the plan before anything happens.
         </p>
-      <form
-        data-testid="intent-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const res = await api<{ packet: Packet; error?: string }>("/api/work-packets", {
-            method: "POST",
-            body: { text, enhancement_strength: strength },
-          });
-          if (res.status === 201 && res.data) {
-            setMessage("Here is what I'd do. Run it, or change it first.");
-            setSelected(res.data.packet.id);
-            setText("");
-            packets.reload();
-          } else {
-            setMessage(`Refused: ${res.data?.error ?? res.status}`);
-          }
-        }}
-      >
-        <div className="form-row">
-          <textarea
-            className="field-wide" data-testid="intent-text" aria-label="What you need, in your own words"
-            rows={3}
-            style={{ width: "100%" }}
+
+        <form className="form-row" onSubmit={ask} data-testid="ask-form">
+          <input
+            className="field-wide"
+            data-testid="ask-text"
+            aria-label="What you need, in your own words"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="e.g. prep me for the Acme founder call on Thursday"
+            placeholder="e.g. what are comparable seed valuations in devtools right now"
           />
-        </div>
-        <div className="form-row">
-          <label>
-            Enhancement{" "}
-            <select data-testid="intent-strength" title="How much framing to add before work starts" value={strength} onChange={(e) => setStrength(e.target.value)}>
-              {["NONE", "LIGHT", "STANDARD", "DEEP"].map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="submit" data-testid="intent-submit">
-            Open one the old way
+          <button type="submit" className="btn-strong" disabled={busy || text.trim().length < 8} data-testid="ask-submit">
+            {busy ? "Working it out…" : "Ask"}
           </button>
+        </form>
+
+        {/* Shown until the first ask. A blank box is a hard question for anyone who does not
+            already know what the system can do — which is exactly who this is for. */}
+        {!result && (
+          <div className="ask-examples-grid" data-testid="ask-examples">
+            {EXAMPLES.map((g) => (
+              <div key={g.group}>
+                <p className="muted small">
+                  <strong>{g.group}</strong> — {g.note}
+                </p>
+                <ul className="card-list small">
+                  {g.items.map((ex) => (
+                    <li key={ex}>
+                      <button type="button" className="link-button" onClick={() => setText(ex)}>
+                        {ex}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {msg && <p className="notice small" data-testid="ask-message">{msg}</p>}
+
+        {/* ── GO: the answer already exists ─────────────────────────────────────────────── */}
+        {result?.outcome === "GO" && result.page && (
+          <div className="ask-answer" data-testid="ask-go">
+            <p>{result.says}</p>
+            <div className="form-row">
+              <button type="button" className="btn-strong" onClick={() => onNavigate(result.page!)}>
+                Take me there
+              </button>
+              <span className="muted small">No work needed — this already exists.</span>
+            </div>
+          </div>
+        )}
+
+        {/* ── TELL: answerable outright ─────────────────────────────────────────────────── */}
+        {result?.outcome === "TELL" && (
+          <div className="ask-answer" data-testid="ask-tell">
+            <p>{result.says}</p>
+          </div>
+        )}
+
+        {/* ── WORK: somebody has to carry it ────────────────────────────────────────────── */}
+        {result?.outcome === "WORK" && draft && (
+          <div className="ask-answer" data-testid="ask-draft">
+            <p>{result.says}</p>
+            <div className="card">
+              <h3>{draft.title}</h3>
+              {draft.next_action && (
+                <p className="small">
+                  <span className="lbl">Next</span> {draft.next_action}
+                </p>
+              )}
+              <p className="muted small">
+                {draft.owner_name ? `${draft.owner_name} would carry it` : "Nobody assigned yet"}
+                {draft.needs_browser ? " · it may need to read pages on the web" : ""}
+              </p>
+              {draft.reasoning && <p className="muted small">{draft.reasoning}</p>}
+
+              <label className="ask-prompt">
+                <span className="lbl">What they will be told to do</span>
+                <textarea
+                  rows={8}
+                  aria-label="The instruction the employee will work from"
+                  data-testid="ask-draft-prompt"
+                  value={draft.prompt}
+                  onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
+                />
+              </label>
+              <p className="muted small">
+                Written for you because these employees are language models — a vague instruction is
+                the difference between an answer and a paragraph of hedging. Change anything.
+              </p>
+            </div>
+
+            <div className="form-row">
+              <button type="button" className="btn-strong" disabled={busy} onClick={() => void addCard()} data-testid="ask-draft-add">
+                {busy ? "…" : "Add to Work"}
+              </button>
+              <button type="button" onClick={() => { setDraft(null); setResult(null); }}>Not that</button>
+              <span className="muted small">Nothing exists until you add it.</span>
+            </div>
+          </div>
+        )}
+
+        {/* ── BRIEF: you want a document ────────────────────────────────────────────────── */}
+        {result?.outcome === "BRIEF" && result.brief && (
+          <div className="ask-answer" data-testid="ask-brief">
+            <p>{result.says}</p>
+            <div className="card">
+              <h3>{result.brief.title}</h3>
+              <p className="small">
+                <span className="lbl">Answers</span> {result.brief.question}
+              </p>
+              <p className="muted small">
+                {result.brief.suggested_author ? `${result.brief.suggested_author} would write it` : "Whoever owns research would write it"}
+                {result.brief.needs_browser ? " · reading live sources" : ""}
+              </p>
+              {result.brief.reasoning && <p className="muted small">{result.brief.reasoning}</p>}
+            </div>
+            <div className="form-row">
+              <button type="button" className="btn-strong" disabled={busy} onClick={() => void writeBrief()} data-testid="ask-brief-write">
+                {busy ? "Writing…" : "Write it"}
+              </button>
+              <button type="button" onClick={() => setResult(null)}>Not that</button>
+              <span className="muted small">Signed, filed, and on your Home page when it is done.</span>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ── What this page has produced ────────────────────────────────────────────────────
+          On the page, not behind a control. A page that produces documents and then hides them
+          reads as a page that does nothing. */}
+      <section data-testid="ask-produced">
+        <div className="home-section-head">
+          <h2>What you have asked for</h2>
+          <span className="muted small">every brief this page has written, newest first</span>
         </div>
-      </form>
-      </details>
-      {message && <p className="notice" data-testid="intent-message">{message}</p>}
+        <DeliverableList
+          kind="ask_brief"
+          limit={10}
+          onNavigate={onNavigate}
+          key={nonce}
+          emptyNote="Nothing yet. Ask for something above — if what you want back is a document rather than a task, it lands here, signed and filed."
+        />
+      </section>
 
-      {selected && <PacketDetail id={selected} onChanged={packets.reload} />}
+      {/* ── What checks the work ───────────────────────────────────────────────────────────
+          Also on the page. The lens gate is the most valuable thing the old flow had and the least
+          understood — "weird and no one understands it" — because it was named rather than
+          explained, in a drawer, in its own vocabulary. */}
+      <section data-testid="ask-lenses">
+        <div className="home-section-head">
+          <h2>What checks it before it runs</h2>
+          <span className="muted small">the same checks, whatever you ask for</span>
+        </div>
+        <p className="small">
+          A <strong>check</strong> reads the work before it is allowed to happen and returns a
+          verdict — does this claim have evidence behind it, does it cross a compliance line, does
+          it commit the firm to something only a partner can commit to.
+        </p>
+        <p className="small">
+          A check marked <strong>can stop the work</strong> does exactly that: an adverse verdict
+          means the request does not run. Neither does it run if that check was never applied —
+          silence is not a pass, because the expensive mistakes are the ones nobody looked for.
+        </p>
+        <ul className="card-list small" data-testid="lens-bench">
+          {(bench.data?.lenses ?? []).map((l) => (
+            <li key={l.key}>
+              <strong>{l.name}</strong>{" "}
+              {l.blocking && <span className="badge badge-gate">can stop the work</span>} — {l.job}
+            </li>
+          ))}
+          {!bench.loading && (bench.data?.lenses ?? []).length === 0 && (
+            <li className="state-empty">No checks are configured, so nothing is being gated.</li>
+          )}
+        </ul>
+        {bench.data?.storage_rule && (
+          <p className="muted small" data-testid="lens-storage-rule">{bench.data.storage_rule}</p>
+        )}
+      </section>
 
-      <h3>Lens bench</h3>
-      <p className="muted small" data-testid="lens-storage-rule">
-        {bench.data?.storage_rule}
-      </p>
-      <ul className="card-list small" data-testid="lens-bench">
-        {(bench.data?.lenses ?? []).map((l) => (
-          <li key={l.key}>
-            <strong>{l.name}</strong> {l.blocking && <span className="badge badge-gate">blocking</span>} — {l.job}
-          </li>
-        ))}
-      </ul>
-
-      <h3>Packets</h3>
-      <ul className="card-list small" data-testid="packet-list">
-        {(packets.data?.packets ?? []).map((p) => (
-          <li key={p.id}>
-            <span className={statusBadge(p.status)}>{p.status}</span>{" "}
-            <button type="button" className="link-button" data-testid={`packet-open-${p.id}`} onClick={() => setSelected(p.id)}>
-              {p.original_text.slice(0, 80)}
-            </button>
-          </li>
-        ))}
-        {!packets.loading && (packets.data?.packets ?? []).length === 0 && <li className="state-empty">No packets yet. Write the rough thought above — the text is stored verbatim and immutable, and the derived fields sit beside it.</li>}
-      </ul>
+      <HowThisWorks
+        title="Ask"
+        testId="ask"
+        what="Describe what you need in your own words. Ask works out whether the answer already exists, whether it can just tell you, whether somebody has to carry it, or whether you want a document — and shows you the plan before anything happens."
+        when="Whenever you are not sure which part of the firm owns something, or you want a written answer rather than a task."
+        operatorDoes={[
+          "Say what you need, in a sentence.",
+          "Read what comes back and change it if the shape is wrong.",
+          "Press the button. Nothing is created or written until you do.",
+        ]}
+        aiDoes={[
+          "Decides which of the four things your request is, and says why.",
+          "Writes the instruction the employee will work from, or writes the brief itself.",
+        ]}
+        requiresOperator={[
+          "Creating the card. Writing the brief. Neither happens without you pressing it.",
+        ]}
+        next="A card goes to Work and whoever owns it picks it up. A brief is written, signed, filed in Documents, and appears on your Home page."
+        blocked={[
+          "A check that can stop the work returned an adverse verdict, or was never applied — silence is not a pass.",
+          "No AI employee is switched on, so nobody can write anything.",
+        ]}
+      />
     </section>
   );
 }

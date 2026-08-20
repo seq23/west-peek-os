@@ -1643,35 +1643,43 @@ hr {
 
 /* — Page purpose block. Quiet by design: it orients a first-time reader and should be skimmable
      past in a second by everyone else, so it is tinted rather than boxed and sets no heading. */
-/* One quiet line at the top of a page, not a block. It is read once and skimmed
-   past several hundred times, so it takes the space that ratio deserves. */
+/* ── The orientation line ──────────────────────────────────────────────────
+   Two lines, both full width. The sentence runs across and the help link is
+   floated to its end, so text flows underneath rather than being squeezed into
+   a narrow column beside it. The list of what you can do sits beneath, smaller.
+
+   The link is never hidden: "How everything works" is the way into the help
+   system from any page, and putting it behind a disclosure meant nobody found
+   it from anywhere. */
 .page-purpose {
-  border-left: 2px solid var(--wp-line);
-  padding: 0 0 0 var(--space-xs);
+  padding: 0 0 var(--space-2xs);
   margin-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--wp-line);
   font-size: var(--text-sm);
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
-.page-purpose > summary {
-  cursor: pointer;
+.page-purpose-line {
+  margin: 0;
   color: var(--wp-muted);
-  /* The marker is the only thing saying there is more; without it this reads as
-     a caption and nobody discovers what the page can do. */
-  list-style-position: outside;
 }
 
-.page-purpose > summary strong { color: var(--wp-ink); font-weight: 600; }
-.page-purpose[open] > summary { margin-bottom: var(--space-2xs); }
-.page-purpose-what { color: var(--wp-muted); }
+.page-purpose-line strong { color: var(--wp-ink); font-weight: 600; }
+
+/* Floated, so the sentence wraps beneath it instead of stopping short of it. */
+.page-purpose-help {
+  float: right;
+  margin-left: var(--space-sm);
+  white-space: nowrap;
+}
 
 .page-purpose-can {
-  display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-sm);
-  list-style: none; padding: 0; margin: 0 0 var(--space-2xs);
+  margin: 0.15rem 0 0;
+  font-size: var(--text-xs);
   color: var(--wp-muted);
+  clear: both;
 }
-.page-purpose-can li::before { content: "· "; }
-.page-purpose-can li:first-child::before { content: ""; }
+
 
 /* — Signed-out surfaces. Centred and narrow: these are the only screens with a single job, so
      nothing competes with it. */
@@ -3269,4 +3277,165 @@ tbody tr.is-selected > td {
   background: var(--wp-good-tint);
   border-color: var(--wp-good-line);
   color: var(--wp-good);
+}
+
+/* ── The mouth of the funnel ───────────────────────────────────────────────
+   Every company the firm records enters through one door, and a door that
+   everything comes through should not be a link-sized control beside a
+   heading. This is the widest and heaviest thing on Dealflow: what we are
+   looking for on one side, the way in on the other. */
+.funnel-mouth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: 1.25rem 1.5rem;
+  margin: 0 0 var(--space-md);
+  background: var(--wp-surface);
+  border: 1px solid var(--wp-line-strong);
+  border-left: 4px solid var(--wp-orange);
+  border-radius: 8px;
+}
+
+.funnel-mouth-copy { flex: 1 1 26rem; min-width: 0; }
+.funnel-mouth-copy h2 { margin: 0 0 0.35rem; letter-spacing: -0.02em; }
+.funnel-mouth-copy p { margin: 0 0 0.5rem; max-width: 46em; }
+
+.funnel-mouth-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+}
+
+/* The one control on the page that earns extra size. */
+.btn-lg {
+  font-size: var(--text-md);
+  padding: 0.7rem 1.4rem;
+}
+
+/* ── Filter chips ──────────────────────────────────────────────────────────
+   "Show me what we passed on" was a question this page could not answer. The
+   selected chip carries the accent; the rest stay quiet so the row does not
+   compete with the funnel above it. */
+.deal-filters { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-left: auto; }
+
+.chip {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--wp-line-control);
+  border-radius: 999px;
+  background: var(--wp-surface);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  color: inherit;
+}
+
+.chip:hover { border-color: var(--wp-ink); }
+
+.chip-on {
+  background: var(--wp-orange);
+  border-color: var(--wp-orange);
+  color: var(--wp-orange-ink);
+}
+
+/* Inside a selected chip the muted count would vanish against the accent. */
+.chip-on .muted { color: var(--wp-orange-deeper); }
+
+.dealflow-tooling > summary { cursor: pointer; }
+
+/* ── Ask ───────────────────────────────────────────────────────────────────
+   One page, one way. The answer appears under the box it was asked from, so
+   the question and what came back read as one exchange rather than two blocks. */
+.ask-card { margin-bottom: var(--space-md); }
+.ask-card h2 { margin: 0 0 0.35rem; }
+
+.ask-answer {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--wp-line);
+}
+
+.ask-prompt { display: block; margin-top: 0.6rem; }
+.ask-prompt textarea { width: 100%; font-family: var(--font-ui); }
+
+/* ── Health dot ────────────────────────────────────────────────────────────
+   Green when the firm is actually working this hour. It pulses, quietly, because
+   a static dot reads as decoration and the point is that something is live —
+   but never as the only cue: the word beside it says the same thing, and the
+   animation is dropped entirely for anyone who has asked for reduced motion. */
+.duty-heading { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+
+.health-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  display: inline-block;
+}
+
+.health-ok {
+  background: var(--wp-good);
+  box-shadow: 0 0 0 0 var(--wp-good-line);
+  animation: health-pulse 2.4s ease-out infinite;
+}
+
+.health-warn { background: var(--wp-warn); }
+
+@keyframes health-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--wp-good-line); }
+  70%  { box-shadow: 0 0 0 0.4rem transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .health-ok { animation: none; }
+}
+
+.jobs-run-now { margin-bottom: var(--space-sm); }
+
+/* ── The community mix ─────────────────────────────────────────────────────
+   Bars rather than a pie: the question is "how many of each, and which is
+   biggest", which lengths answer at a glance and angles do not. Each row is a
+   control — the chart narrows the list beneath it. */
+.mix-bars { list-style: none; margin: 0.5rem 0 var(--space-md); padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+
+.mix-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.mix-row:hover { background: var(--wp-paper); }
+.mix-row.is-on { border-color: var(--wp-orange); background: var(--wp-tint); }
+
+.mix-label { flex: 0 0 6.5rem; font-size: var(--text-sm); }
+
+.mix-track {
+  flex: 1 1 auto;
+  height: 0.65rem;
+  background: var(--wp-line);
+  border-radius: 999px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.mix-fill { display: block; height: 100%; background: var(--wp-orange); border-radius: 999px; }
+
+/* Tabular figures so the counts line up as a column down the right. */
+.mix-count {
+  flex: 0 0 4.5rem;
+  text-align: right;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }

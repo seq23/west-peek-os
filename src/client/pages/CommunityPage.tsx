@@ -32,6 +32,21 @@ const STATUSES = ["PROSPECT", "ACTIVE", "LAPSED", "REMOVED"] as const;
 const SEGMENTS = ["UNSEGMENTED", "CORE", "CONTRIBUTOR", "AMBASSADOR", "SCOUT", "LAPSING", "OBSERVER"] as const;
 const ENGAGEMENT = ["UNKNOWN", "HIGH", "STEADY", "FADING", "DORMANT"] as const;
 
+/**
+ * The kinds of member, in the order a partner would ask about them.
+ *
+ * Mirrors the member_type enum the API accepts. Listed here rather than derived from the data so a
+ * kind with nobody in it still shows as zero — "we have no operators" is a finding, and a chart
+ * that silently omits empty categories cannot report it.
+ */
+const MEMBER_KINDS = [
+  { key: "FOUNDER", label: "Founders" },
+  { key: "OPERATOR", label: "Operators" },
+  { key: "INVESTOR", label: "Investors" },
+  { key: "ALUMNI", label: "Alumni" },
+  { key: "MEMBER", label: "Members" },
+] as const;
+
 export function CommunityPage(): JSX.Element {
   const state = useApi<{ members: MemberRow[]; counts: Record<string, number> }>("/api/community/members");
   const [name, setName] = useState("");
@@ -42,7 +57,10 @@ export function CommunityPage(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const members = state.data?.members ?? [];
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const allMembers = state.data?.members ?? [];
+  const members = allMembers;
+  const listed = typeFilter ? allMembers.filter((m) => m.member_type === typeFilter) : allMembers;
   const counts = state.data?.counts ?? {};
 
   async function save(e: React.FormEvent) {
@@ -72,7 +90,10 @@ export function CommunityPage(): JSX.Element {
           surface that is empty most months — deliberately, because the matcher is tuned to be rare
           — alongside the things that always have something waiting. Community is who the members
           are; introductions is what the firm does about them. One subject, one page. */}
-      <IntroductionsPage />
+      {/* EMBEDDED, so it does not bring its own "how this works" panel. Introductions moved onto
+          this page and kept rendering its own, which is why Community had two — one explaining
+          the page and one explaining a section of it, stacked. The prop exists for exactly this. */}
+      <IntroductionsPage embedded />
 
       <div className="home-section-head behind-the-brief">
         <h3>The members themselves</h3>
@@ -132,11 +153,27 @@ export function CommunityPage(): JSX.Element {
             {STATUSES.filter((s) => counts[s]).map((s) => `${counts[s]} ${s.toLowerCase()}`).join(" · ") || "none yet"}
           </span>
         </h3>
-        {members.length === 0 ? (
-          <p className="state-empty" data-testid="community-empty">No members recorded yet.</p>
+        {/* Narrowed by whichever kind is selected in the mix above — the chart is a control, not a
+            picture, because seeing that a third of the room is operators is only useful if you can
+            then look at them. */}
+        {typeFilter && (
+          <p className="muted small">
+            Showing {listed.length} {typeFilter.toLowerCase()}
+            {listed.length === 1 ? "" : "s"}.{" "}
+            <button type="button" className="link-button" onClick={() => setTypeFilter(null)}>
+              show everyone
+            </button>
+          </p>
+        )}
+        {listed.length === 0 ? (
+          <p className="state-empty" data-testid="community-empty">
+            {allMembers.length === 0
+              ? "No members recorded yet."
+              : `Nobody in the room is recorded as ${typeFilter?.toLowerCase()}.`}
+          </p>
         ) : (
           <ul className="card-list small" data-testid="community-list">
-            {members.map((m) => (
+            {listed.map((m) => (
               <li key={m.id} data-testid={`community-member-${m.id}`}>
                 <span className={m.status === "ACTIVE" ? "help-tag help-tag-good" : "help-tag help-tag-muted"}>
                   {m.status.toLowerCase()}
@@ -148,6 +185,55 @@ export function CommunityPage(): JSX.Element {
                 </span>
               </li>
             ))}
+          </ul>
+        )}
+      </section>
+
+      {/* WHO THIS COMMUNITY ACTUALLY IS.
+          The page listed members as rows and left the shape of the room to be worked out by
+          counting. A community is a mix, and the mix is the thing you form a view about — whether
+          it is mostly founders, whether the operators who make it useful are actually there.
+
+          A bar per kind rather than a pie: the question is "how many of each, and which is
+          biggest", which lengths answer at a glance and angles do not. Numbers are stated as well
+          as drawn, so nothing depends on reading a bar, and each row is a filter — seeing that a
+          third of the room is operators is only useful if you can then look at them. */}
+      <section data-testid="community-mix">
+        <div className="home-section-head">
+          <h3>Who is in the room</h3>
+          <span className="muted small">
+            {members.length} member{members.length === 1 ? "" : "s"} the firm has recorded
+          </span>
+        </div>
+        {members.length === 0 ? (
+          <p className="state-empty">
+            Nobody recorded yet. Add the people who actually turn up — the mix is what tells you
+            whether a room is worth convening.
+          </p>
+        ) : (
+          <ul className="mix-bars" data-testid="community-mix-bars">
+            {MEMBER_KINDS.map((k) => {
+              const n = members.filter((m) => m.member_type === k.key).length;
+              const pct = members.length === 0 ? 0 : Math.round((n / members.length) * 100);
+              return (
+                <li key={k.key} data-testid={`mix-${k.key}`}>
+                  <button
+                    type="button"
+                    className={typeFilter === k.key ? "mix-row is-on" : "mix-row"}
+                    aria-pressed={typeFilter === k.key}
+                    onClick={() => setTypeFilter(typeFilter === k.key ? null : k.key)}
+                  >
+                    <span className="mix-label">{k.label}</span>
+                    <span className="mix-track">
+                      <span className="mix-fill" style={{ width: `${pct}%` }} />
+                    </span>
+                    <span className="mix-count">
+                      {n} <span className="muted">{pct}%</span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

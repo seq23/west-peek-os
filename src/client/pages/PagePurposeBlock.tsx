@@ -26,33 +26,41 @@ export function PagePurposeBlock({
 
   return (
     /*
-     * ONE LINE, NOT FOUR BLOCKS.
+     * ONE LINE ACROSS THE PAGE. Not a block, and not an accordion either.
      *
-     * This was a paragraph at body size, then a wrapped list of everything you can do, then a link
-     * — on every page, above everything, every time. The operator reads it once and then scrolls
-     * past it several hundred times, and it was pushing the actual page down by a third of a screen.
+     * It started as a paragraph, a wrapped list and a link stacked above every page — a third of a
+     * screen, read once and scrolled past hundreds of times. Folding it into a <details> fixed the
+     * height and broke something worse: "How everything works" is the way into the help system from
+     * anywhere, and hiding it behind a disclosure means nobody finds it.
      *
-     * So: the sentence stays, at small size, because a page that does not say what it is for is the
-     * failure this was built to fix. Everything else goes behind the same line — a <details> whose
-     * summary IS the sentence, so opening it costs one click and closing it costs nothing.
+     * So everything stays visible and gets smaller instead. The sentence and what you can do run
+     * together on one line at small size; the help link is pushed to the far right by the line's
+     * own width, which is where the eye already ends up.
      */
-    <details className="page-purpose" data-testid={`page-purpose-${navKey}`}>
-      <summary>
-        <strong>{label}.</strong> <span className="page-purpose-what">{p.purpose}</span>
-      </summary>
-      <ul className="page-purpose-can">
-        {p.youCan.map((c) => (
-          <li key={c}>{c}</li>
+    <div className="page-purpose" data-testid={`page-purpose-${navKey}`}>
+      {/* Line one runs the full width and ends with the way into the help system, which is where
+          the eye already finishes. Line two is what you can do, smaller and quieter — present,
+          because a page that cannot say what you do on it is not oriented, but never competing
+          with the page itself. */}
+      <p className="page-purpose-line">
+        <strong>{label}.</strong> {p.purpose}
+        <button
+          type="button"
+          className="link-button page-purpose-help"
+          data-testid={`page-purpose-help-${navKey}`}
+          onClick={() => onNavigate("help")}
+        >
+          How everything works →
+        </button>
+      </p>
+      <p className="page-purpose-can">
+        {p.youCan.map((c, i) => (
+          <span key={c}>
+            {i > 0 && " · "}
+            {c}
+          </span>
         ))}
-      </ul>
-      <button
-        type="button"
-        className="link-button"
-        data-testid={`page-purpose-help-${navKey}`}
-        onClick={() => onNavigate("help")}
-      >
-        How everything works →
-      </button>
-    </details>
+      </p>
+    </div>
   );
 }

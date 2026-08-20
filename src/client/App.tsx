@@ -4236,17 +4236,20 @@ export function App() {
           {authed && active === "investment" && (
             <>
               <DealflowPage me={me.data!} onNavigate={navigate} />
-              {/* The old surface keeps its deal-math packets, IC assembly and company 360 — real
-                  tooling that belongs to a single deal rather than to the board. Folded away
-                  rather than deleted or left as a second page competing with the pipeline. */}
-              <details className="card" data-testid="deal-records">
-                <summary>Deal records and tooling</summary>
+              {/* A SECTION, NOT A DRAWER. This was folded away, so the deal math, the IC assembly
+                  and the company record — the tools you reach for once a deal is real — were
+                  behind a disclosure most people never opened. A heading and the tool beneath it
+                  is what a person expects; hiding working machinery is how it stops being used. */}
+              <section data-testid="deal-records">
+                <div className="home-section-head">
+                  <h2>Deal records and tooling</h2>
+                  <span className="muted small">acts on one deal you pick, not on the pipeline above</span>
+                </div>
                 <p className="muted small">
-                  Deal math, IC packets and the full record behind one company. Everything here acts
-                  on a deal you pick, not on the pipeline above.
+                  Deal math, IC packets and the full record behind a single company.
                 </p>
                 <InvestmentPage me={me.data!} />
-              </details>
+              </section>
             </>
           )}
           {authed && active === "meetings" && (

@@ -932,8 +932,21 @@ function OnDutyPanel() {
   return (
     <section className="card" data-testid="on-duty">
       <header className="module-card-head">
-        <h3>
+        <h3 className="duty-heading">
           On duty now <span className="module-count">{d.label}</span>
+          {/* IS ANYTHING ACTUALLY RUNNING. The heading named the shift and said nothing about
+              whether the firm is working — green means somebody is on point this hour, amber means
+              the rota named people and none of them are switched on. That second state is the one
+              worth catching, because the page looks identical either way.
+
+              Never colour alone: the word beside the dot carries the same meaning, and the dot is
+              aria-hidden so a screen reader gets the word once rather than twice. */}
+          <span
+            className={d.onDuty.length > 0 ? "health-dot health-ok" : "health-dot health-warn"}
+            data-testid="duty-health"
+            aria-hidden="true"
+          />
+          <span className="muted small">{d.onDuty.length > 0 ? "working" : "nobody on"}</span>
         </h3>
         {pinned.length > 0 && (
           <button type="button" className="link-button" data-testid="on-duty-clear-pins" onClick={() => setPinned([])}>
