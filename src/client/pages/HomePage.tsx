@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttention";
+import { attentionSignature } from "@shared/setup/attentionKey";
 import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
 import { DeliverableList } from "./DeliverableList";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
@@ -405,6 +406,27 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       : {}),
   });
 
+  /*
+   * Silencing is matched on the item's key AND the words it was showing. An item whose headline
+   * changes has become a different thing to be told about, so it comes back — see the attention
+   * service for the reasoning. Nothing is filtered while the silence list is still loading, because
+   * hiding an alert on the strength of data you do not have yet is the wrong way round.
+   */
+  const silenced = useApi<{ silenced: Array<{ item_key: string; signature: string }> }>("/api/attention/silenced");
+  const silencedKeys = new Set((silenced.data?.silenced ?? []).map((r) => attentionSignature(r.item_key, r.signature)));
+  const visibleAttention = attention.filter((a) => !silencedKeys.has(attentionSignature(a.key, a.headline)));
+  const silencedCount = attention.length - visibleAttention.length;
+
+  async function silence(key: string, signature: string, kind: "ACKNOWLEDGED" | "DISMISSED") {
+    await api(`/api/attention/${encodeURIComponent(key)}/dismiss`, { method: "POST", body: { signature, kind } });
+    silenced.reload();
+  }
+
+  async function unsilence() {
+    await api("/api/attention/silenced/clear", { method: "POST", body: {} });
+    silenced.reload();
+  }
+
   return (
     <section data-testid="home-page">
       {/* SETUP SITS ABOVE THE DATE, folded to one line. It was a full screen of settings between
@@ -471,11 +493,16 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           (17 Aug 2026): it restated what the modules already showed, so it cost a screenful of
           Home to tell the operator something they were about to read anyway. The derivation
           survives on the API as one_thing_to_watch for anything that still wants it. */}
-      {attention.length > 0 && (
+      {(visibleAttention.length > 0 || silencedCount > 0) && (
         <section className="card" data-testid="home-attention">
           <h2>Needs your attention</h2>
+          {visibleAttention.length === 0 && (
+            <p className="muted small">
+              Nothing outstanding. {silencedCount} {silencedCount === 1 ? "item is" : "items are"} silenced.
+            </p>
+          )}
           <ul className="card-list small">
-            {attention.map((a) => (
+            {visibleAttention.map((a) => (
               <li key={a.key} data-testid={`home-attention-${a.key}`}>
                 <span
                   className={
@@ -491,10 +518,43 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                 <strong>{a.headline}</strong> {a.action}{" "}
                 <button type="button" className="link-button" onClick={() => onNavigate(a.link)}>
                   Open
+                </button>{" "}
+                {/* Two different things, and the labels say which is which. "I know" leaves it on
+                    the record as seen and still true; "Stop telling me" is the one that means the
+                    alert was not useful. Either way it comes back if the situation changes, and
+                    both lapse after a week — see the attention service for why. */}
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid={`home-attention-ack-${a.key}`}
+                  onClick={() => void silence(a.key, a.headline, "ACKNOWLEDGED")}
+                >
+                  I know
+                </button>{" "}
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid={`home-attention-dismiss-${a.key}`}
+                  onClick={() => void silence(a.key, a.headline, "DISMISSED")}
+                >
+                  Stop telling me
                 </button>
               </li>
             ))}
           </ul>
+          {silencedCount > 0 && (
+            <p className="muted small">
+              {silencedCount} silenced for up to a week.{" "}
+              <button
+                type="button"
+                className="link-button"
+                data-testid="home-attention-unsilence"
+                onClick={() => void unsilence()}
+              >
+                Bring them back
+              </button>
+            </p>
+          )}
         </section>
       )}
 

@@ -86,6 +86,14 @@ describe("every control can be announced", () => {
          */
         const id = tag.match(/\bid="([^"]+)"/)?.[1];
         if (id && src.includes(`htmlFor="${id}"`)) continue;
+        /*
+         * An id built from an expression is still an id. A list that renders one form per row
+         * needs `id={`fb-note-${d.id}`}`, and the label beside it carries the identical expression
+         * in htmlFor. Matching only double-quoted literals reported both as nameless and would have
+         * pushed the fix toward an aria-label nobody can see, over a visible label already there.
+         */
+        const exprId = tag.match(/\bid=\{([^}]*\}?[^}]*)\}/)?.[1];
+        if (exprId && src.includes(`htmlFor={${exprId}}`)) continue;
         nameless.push(`${f.split("/client/")[1]}: ${tag.replace(/\s+/g, " ").slice(0, 70)}`);
       }
     }
@@ -140,5 +148,40 @@ describe("structure and reach", () => {
     const css = readFileSync(new URL("../src/client/styles.css", import.meta.url).pathname, "utf8");
     expect(css).toContain(".skip-link");
     expect(readFileSync(new URL("../src/client/App.tsx", import.meta.url).pathname, "utf8")).toContain("skip-link");
+  });
+});
+
+/*
+ * NO INVISIBLE CHARACTERS IN SOURCE.
+ *
+ * A NUL byte reached a template literal used as a map key on the server while the client built the
+ * same key with a space. Nothing matched, dismissing an alert silently did nothing, and the two
+ * lines looked identical in every diff, editor and code review — because the difference was a
+ * character with no glyph. It took a debugger and twenty minutes.
+ *
+ * Tab, newline and carriage return are the only control characters a source file has any business
+ * containing. This is cheap, runs on every file, and would have caught it instantly.
+ */
+describe("source files contain no invisible characters", () => {
+  it("has no control characters other than tab, newline and carriage return", () => {
+    const offenders: string[] = [];
+    const roots = [new URL("../src/", import.meta.url).pathname, new URL("../tests/", import.meta.url).pathname];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = `${dir}/${e.name}`;
+        if (e.isDirectory()) walk(full);
+        else if (/\.(ts|tsx|css|sql)$/.test(e.name)) {
+          const text = readFileSync(full, "utf8");
+          // eslint-disable-next-line no-control-regex
+          const found = text.match(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
+          if (found) {
+            const at = text.indexOf(found[0]);
+            offenders.push(`${full.split("/west-peek-os/")[1] ?? full}: U+${found[0].charCodeAt(0).toString(16).padStart(4, "0")} near "${text.slice(Math.max(0, at - 30), at + 10).replace(/\s+/g, " ")}"`);
+          }
+        }
+      }
+    };
+    for (const r of roots) walk(r);
+    expect(offenders).toEqual([]);
   });
 });

@@ -68,6 +68,11 @@ import { handleListActivity } from "./services/activity";
 import { handleCreateGovernanceUpdate, handleListGovernanceUpdates } from "./services/governance";
 import { handleApprovalVolume } from "./services/diagnostics";
 import { handleSystemHealth } from "./services/health";
+import {
+  handleClearSilencedAttention,
+  handleDismissAttention,
+  handleListSilencedAttention,
+} from "./services/attention";
 import { handleListDomains, handleListMachines } from "./services/registry";
 import {
   handleCreateEffectRequest,
@@ -129,7 +134,15 @@ import {
   handleUnretireEmployee,
 } from "./services/workforce";
 import { handleGenerateImage } from "./services/imageGeneration";
-import { handleDownloadDeliverable, handleEmailDeliverable, handleListDeliverables } from "./services/deliverables";
+import {
+  handleAcknowledgeDeliverable,
+  handleDeliverableFeedback,
+  handleDismissDeliverable,
+  handleDownloadDeliverable,
+  handleEmailDeliverable,
+  handleListDeliverableFeedback,
+  handleListDeliverables,
+} from "./services/deliverables";
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
 import { handleIngestTranscript } from "./services/captureAdapter";
@@ -591,6 +604,10 @@ const router = new Router()
   .get("/api/deliverables", handleListDeliverables)
   .get("/api/deliverables/:id/download", handleDownloadDeliverable)
   .post("/api/deliverables/:id/email", handleEmailDeliverable)
+  .post("/api/deliverables/:id/acknowledge", handleAcknowledgeDeliverable)
+  .post("/api/deliverables/:id/dismiss", handleDismissDeliverable)
+  .get("/api/deliverables/:id/feedback", handleListDeliverableFeedback)
+  .post("/api/deliverables/:id/feedback", handleDeliverableFeedback)
   .get("/api/work-cards/by-owner", handleWorkByOwner)
   .get("/api/work-cards", handleListWorkCards)
   .get("/api/work-cards/:id", handleGetWorkCard)
@@ -612,6 +629,9 @@ const router = new Router()
   .get("/api/governance/updates", handleListGovernanceUpdates)
   // P3 — diagnostics (observational only, D7).
   .get("/api/diagnostics/health", handleSystemHealth)
+  .get("/api/attention/silenced", handleListSilencedAttention)
+  .post("/api/attention/silenced/clear", handleClearSilencedAttention)
+  .post("/api/attention/:key/dismiss", handleDismissAttention)
   .get("/api/diagnostics/approval-volume", handleApprovalVolume)
   // P3 — registry reference data (read-only).
   .get("/api/machines", handleListMachines)

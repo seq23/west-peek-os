@@ -205,3 +205,126 @@ describe("the filing half, which had never run anywhere", () => {
     expect(ev!.n).toBeGreaterThan(0);
   });
 });
+
+// ── Answering something that was prepared for you ────────────────────────────
+//
+// THE COMPLAINT THIS CAME FROM: three identical "Weekly operating brief" entries, one of them
+// addressed to a service account, and no way to say "read it", "not this", or "do it differently
+// next time". These tests hold each of those three verbs to its actual meaning — in particular
+// that dismissing HIDES and never destroys, and that feedback reaches the employee's next prompt
+// rather than sitting in a table nobody reads.
+
+import { handleRequest } from "../src/worker/index";
+import { recentFeedbackFor } from "../src/worker/services/deliverables";
+
+const AS_MP = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
+
+function apiReq(path: string, method = "GET", body?: unknown): Request {
+  return new Request(`https://test.local${path}`, {
+    method,
+    headers: body === undefined ? AS_MP : { ...AS_MP, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+async function listDeliverables(query = ""): Promise<Array<Record<string, unknown>>> {
+  const res = await handleRequest(apiReq(`/api/deliverables?limit=50${query}`), env);
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { deliverables: Array<Record<string, unknown>> }).deliverables;
+}
+
+describe("answering a deliverable", () => {
+  async function make(title: string): Promise<string> {
+    const row = await deliver(env, ACTOR, {
+      kind: "weekly_review",
+      title,
+      body: "the agenda",
+      preparedBy: "Walker",
+      preparedFor: "fu_sequoia_taylor",
+    });
+    return row.id;
+  }
+
+  it("marks one as read without moving it off the page", async () => {
+    const id = await make("read me");
+    expect((await handleRequest(apiReq(`/api/deliverables/${id}/acknowledge`, "POST", {}), env)).status).toBe(200);
+
+    const rows = await listDeliverables();
+    const row = rows.find((r) => r.id === id);
+    expect(row, "an acknowledged deliverable must still be listed").toBeTruthy();
+    expect(row!.acknowledged_at).toBeTruthy();
+    expect(row!.acknowledged_by).toBe("fu_sequoia_taylor");
+  });
+
+  it("hides a dismissed one and gives it back — it is never destroyed", async () => {
+    const id = await make("put me away");
+    expect((await handleRequest(apiReq(`/api/deliverables/${id}/dismiss`, "POST", {}), env)).status).toBe(200);
+
+    expect((await listDeliverables()).some((r) => r.id === id), "dismissed must leave the default view").toBe(false);
+    expect((await listDeliverables("&dismissed=1")).some((r) => r.id === id), "and must be findable").toBe(true);
+
+    // The row itself still exists in full — this is the assertion that separates hiding from deleting.
+    const still = await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(id).first<{ body: string }>();
+    expect(still?.body).toBe("the agenda");
+
+    expect((await handleRequest(apiReq(`/api/deliverables/${id}/dismiss?restore=1`, "POST", {}), env)).status).toBe(200);
+    expect((await listDeliverables()).some((r) => r.id === id), "restoring must bring it back").toBe(true);
+  });
+
+  it("carries feedback to the employee who signed it, and into their next prompt", async () => {
+    const id = await make("too long");
+    const res = await handleRequest(
+      apiReq(`/api/deliverables/${id}/feedback`, "POST", { note: "Half this length and lead with private markets.", verdict: "TOO_LONG" }),
+      env,
+    );
+    expect(res.status).toBe(201);
+
+    // The whole point: it reaches the next run's prompt, not just a table.
+    const block = await recentFeedbackFor(env, "Walker");
+    expect(block).toContain("Half this length");
+    expect(block).toContain("too long");
+
+    // And it is addressed — another employee's prompt must not carry it.
+    expect(await recentFeedbackFor(env, "Wyatt")).toBe("");
+  });
+
+  /*
+   * The weekly review is signed "Walker and Wren". Storing feedback against that string means
+   * neither of them ever sees it — the note goes to an employee who does not exist.
+   */
+  it("reaches BOTH employees when the piece was signed jointly", async () => {
+    const row = await deliver(env, ACTOR, {
+      kind: "weekly_review",
+      title: "joint",
+      body: "the agenda",
+      preparedBy: "Walker and Wren",
+      preparedFor: "fu_sequoia_taylor",
+    });
+    const res = await handleRequest(
+      apiReq(`/api/deliverables/${row.id}/feedback`, "POST", { note: "Cut the preamble.", verdict: "TOO_LONG" }),
+      env,
+    );
+    expect(res.status).toBe(201);
+
+    expect(await recentFeedbackFor(env, "Walker")).toContain("Cut the preamble");
+    expect(await recentFeedbackFor(env, "Wren")).toContain("Cut the preamble");
+    // And never stored against the byline as though it were a person.
+    const ghost = await env.WP_OS_DB.prepare(
+      "SELECT COUNT(*) AS n FROM deliverable_feedback WHERE to_employee = 'Walker and Wren'",
+    ).first<{ n: number }>();
+    expect(ghost?.n).toBe(0);
+  });
+
+  it("refuses empty feedback rather than sending an employee a blank note", async () => {
+    const id = await make("blank");
+    const res = await handleRequest(apiReq(`/api/deliverables/${id}/feedback`, "POST", { note: "   " }), env);
+    expect(res.status).toBe(400);
+  });
+
+  it("says not_found for a deliverable that does not exist, on every verb", async () => {
+    for (const path of ["acknowledge", "dismiss", "feedback"]) {
+      const res = await handleRequest(apiReq(`/api/deliverables/dlv_nope/${path}`, "POST", { note: "x" }), env);
+      expect(res.status, path).toBe(404);
+    }
+  });
+});

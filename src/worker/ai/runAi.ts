@@ -4,7 +4,7 @@ import type { Actor } from "../services/authorize";
 import type { PrivacyLabel } from "../../shared/privacy";
 import { createMockLocalAdapter, MOCK_LOCAL_MODEL } from "./providers/mockLocal";
 import type { ProviderAdapter } from "./providers/types";
-import { scrubInputs } from "./scrub";
+import { redactInputs, scrubInputs } from "./scrub";
 import {
   adapterFor,
   checkScopedBudgets,
@@ -126,6 +126,16 @@ export interface RunAiInput {
   aiEmployeeId?: string;
   /** P16 routing/attribution. Optional; absence preserves P4 behaviour exactly. */
   routing?: RunAiRoutingContext;
+  /**
+   * What to do when the input looks like it contains a credential.
+   *
+   * "block" is the default and the behaviour everything had before this existed: the run is
+   * refused. Use "redact" ONLY for input the firm did not author and cannot correct — gathered
+   * third-party text, where a false positive costs a day's output and fixing the source is not
+   * available to anybody here. The secret never reaches a provider under either setting; what
+   * differs is whether a suspicious span or the whole run is discarded.
+   */
+  onCredentialLike?: "block" | "redact";
 }
 
 export interface RunAiImage {
@@ -636,7 +646,14 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     surge_applied: surge !== null,
   };
 
-  const baseRec: Omit<RunRecordInput, "status" | "estimate" | "failureReason" | "providerId" | "model"> = {
+  /*
+   * MUTABLE BECAUSE REDACTION HAPPENS AFTER THIS IS BUILT. The record carries the input that is
+   * handed to the provider adapter, and the credential scrub runs further down; leaving this
+   * `const` meant a redacting run would have redacted a local copy and sent the original — a
+   * safety feature that reported success while doing nothing. It is rebuilt in place there, and
+   * `blocked()` closes over the binding rather than the value so it always sees the current one.
+   */
+  let baseRec: Omit<RunRecordInput, "status" | "estimate" | "failureReason" | "providerId" | "model"> = {
     input,
     firmScope,
     privacyMode: policy.privacy_mode,
@@ -723,9 +740,38 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   }
 
   // 2. Credential scrub: no credentials in LLM context, ever.
+  //
+  // Two ways to honour that. Blocking refuses the run; redacting removes the span and proceeds.
+  // Neither lets the matched text reach a provider, and redaction is available only to callers
+  // that asked for it — see RunAiInput.onCredentialLike for when that is the right trade.
+  let effectiveInputs = input.inputs;
   const scrub = scrubInputs(input.inputs);
   if (scrub.blocked) {
-    return { run: await blocked("EGRESS_BLOCKED", `credential_like_content:${scrub.matches.join(",")}`) };
+    if (input.onCredentialLike !== "redact") {
+      return { run: await blocked("EGRESS_BLOCKED", `credential_like_content:${scrub.matches.join(",")}`) };
+    }
+    const cut = redactInputs(input.inputs);
+    effectiveInputs = cut.inputs;
+    // The record is what reaches the adapter. Rebuilding it here is the entire point of redacting.
+    baseRec = { ...baseRec, input: { ...input, inputs: effectiveInputs } };
+    // Recorded, because altering what a model was shown and not saying so would make the run
+    // record a description of a call that did not happen.
+    await appendEvent(env, {
+      eventType: "ai.input_redacted",
+      actorType: "system",
+      actorId: "system",
+      objectType: "ai_run",
+      objectId: input.purpose,
+      payload: { purpose: input.purpose, patterns: cut.redacted, spans: cut.count },
+    });
+    /*
+     * BELT AND BRACES. If redaction somehow left something matching, the run is refused as it
+     * would have been before. Redaction is a narrowing of the blast radius, never a way past
+     * the gate.
+     */
+    if (scrubInputs(effectiveInputs).blocked) {
+      return { run: await blocked("EGRESS_BLOCKED", `credential_like_content:${scrub.matches.join(",")}`) };
+    }
   }
 
   /*

@@ -41,6 +41,10 @@ export interface DeliverableRow {
   privacy_label: string;
   firm_scope: string;
   created_at: string;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+  dismissed_at: string | null;
+  dismissed_by: string | null;
 }
 
 export interface DeliverInput {
@@ -165,19 +169,172 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
   const kind = url.searchParams.get("kind");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 20), 100);
   const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
+  /*
+   * DISMISSED IS HIDDEN, NOT GONE. The default view is what still wants attention; `?dismissed=1`
+   * is how you get the rest back. Deleting was the obvious alternative and the wrong one — a
+   * partner clearing a busy page should not be able to destroy the week's work with one click.
+   */
+  const dismissed = url.searchParams.get("dismissed") === "1";
+  const dismissClause = dismissed ? "dismissed_at IS NOT NULL" : "dismissed_at IS NULL";
 
   // BOTH PARTNERS SEE EACH OTHER'S. Research is INTERNAL by default, and the operator's question was
   // explicitly "if scooter requests research i can find it". Anything labelled more sensitive is
   // filtered by the visibility clause, which is where that decision belongs.
   const rows = kind
     ? await ctx.env.WP_OS_DB.prepare(
-        `SELECT * FROM deliverable WHERE kind = ?1 AND ${visibility} ORDER BY created_at DESC LIMIT ?2`,
+        `SELECT * FROM deliverable WHERE kind = ?1 AND ${dismissClause} AND ${visibility} ORDER BY created_at DESC LIMIT ?2`,
       ).bind(kind, limit).all<DeliverableRow>()
     : await ctx.env.WP_OS_DB.prepare(
-        `SELECT * FROM deliverable WHERE ${visibility} ORDER BY created_at DESC LIMIT ?1`,
+        `SELECT * FROM deliverable WHERE ${dismissClause} AND ${visibility} ORDER BY created_at DESC LIMIT ?1`,
       ).bind(limit).all<DeliverableRow>();
 
   return json({ deliverables: rows.results ?? [] });
+}
+
+/*
+ * ── Answering something that was prepared for you ────────────────────────────
+ *
+ * Three verbs, and the difference between them is the whole design.
+ *
+ * ACKNOWLEDGE says "I read it". The piece stays exactly where it is; it simply stops being one of
+ * the things waiting on you. This is the common case and it is deliberately one click with no
+ * dialogue — anything heavier and nobody does it, and an unacknowledged pile is the state we were
+ * already in.
+ *
+ * DISMISS says "I did not want this". It leaves the page. It does NOT leave the database, and the
+ * page carries a way back, because the first question the operator asked about dismissing was
+ * "should I bring it back?" — and a feature whose answer to that is "no, it's gone" is one people
+ * learn not to use.
+ *
+ * FEEDBACK is the one that changes anything. A note addressed to the employee who signed the piece,
+ * kept against their name, so their next run can be told what the partner thought of the last one.
+ * Without it the other two are filing; with it they are management.
+ */
+const feedbackSchema = z.object({
+  note: z.string().trim().min(1).max(2000),
+  verdict: z.enum(["GOOD", "NOT_WHAT_I_WANTED", "TOO_LONG", "WRONG_FOCUS", "NOTE"]).default("NOTE"),
+});
+
+export async function handleAcknowledgeDeliverable(ctx: RouteContext): Promise<Response> {
+  const row = await loadVisible(ctx, ctx.params.id!);
+  if (!row) return json({ error: "not_found" }, { status: 404 });
+  await ctx.env.WP_OS_DB.prepare(
+    `UPDATE deliverable SET acknowledged_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), acknowledged_by = ?2 WHERE id = ?1`,
+  )
+    .bind(row.id, ctx.identity!.id)
+    .run();
+  await appendEvent(ctx.env, {
+    eventType: "deliverable.acknowledged",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "deliverable",
+    objectId: row.id,
+    firmScope: row.firm_scope,
+    payload: { kind: row.kind, title: row.title },
+  });
+  return json({ ok: true, acknowledged: true });
+}
+
+export async function handleDismissDeliverable(ctx: RouteContext): Promise<Response> {
+  const row = await loadVisible(ctx, ctx.params.id!);
+  if (!row) return json({ error: "not_found" }, { status: 404 });
+  // Idempotent both ways: dismissing a dismissed row and restoring a live one are both fine, and
+  // neither is an error worth showing a partner.
+  const restore = new URL(ctx.request.url).searchParams.get("restore") === "1";
+  await ctx.env.WP_OS_DB.prepare(
+    restore
+      ? "UPDATE deliverable SET dismissed_at = NULL, dismissed_by = NULL WHERE id = ?1"
+      : "UPDATE deliverable SET dismissed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), dismissed_by = ?2 WHERE id = ?1",
+  )
+    .bind(...(restore ? [row.id] : [row.id, ctx.identity!.id]))
+    .run();
+  await appendEvent(ctx.env, {
+    eventType: restore ? "deliverable.restored" : "deliverable.dismissed",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "deliverable",
+    objectId: row.id,
+    firmScope: row.firm_scope,
+    payload: { kind: row.kind, title: row.title },
+  });
+  return json({ ok: true, dismissed: !restore });
+}
+
+export async function handleDeliverableFeedback(ctx: RouteContext): Promise<Response> {
+  const row = await loadVisible(ctx, ctx.params.id!);
+  if (!row) return json({ error: "not_found" }, { status: 404 });
+  const parsed = feedbackSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  /*
+   * A JOINT BYLINE IS TWO EMPLOYEES, NOT A NAME.
+   *
+   * The weekly operating review is signed "Walker and Wren", and the first cut of this stored the
+   * feedback against that whole string. `recentFeedbackFor("Walker")` matches on the employee's
+   * name, so the note would have reached neither of them — a feedback feature that silently posts
+   * into a void is worse than none, because the partner believes they have been heard.
+   *
+   * One row per named employee. Both are told, both carry it into their next run, and the note
+   * itself is identical because it was one piece of work.
+   */
+  const recipients = row.prepared_by.split(/\s+and\s+/i).map((n) => n.trim()).filter(Boolean);
+  const ids: string[] = [];
+  for (const to of recipients.length > 0 ? recipients : [row.prepared_by]) {
+    const id = `dfb_${crypto.randomUUID()}`;
+    ids.push(id);
+    await ctx.env.WP_OS_DB.prepare(
+      `INSERT INTO deliverable_feedback (id, deliverable_id, to_employee, from_user_id, note, verdict, firm_scope)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    )
+      .bind(id, row.id, to, ctx.identity!.id, parsed.data.note, parsed.data.verdict, row.firm_scope)
+      .run();
+  }
+  const id = ids[0]!;
+
+  await appendEvent(ctx.env, {
+    eventType: "deliverable.feedback_left",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "deliverable",
+    objectId: row.id,
+    firmScope: row.firm_scope,
+    payload: { to_employees: recipients, verdict: parsed.data.verdict },
+  });
+  return json({ ok: true, id }, { status: 201 });
+}
+
+export async function handleListDeliverableFeedback(ctx: RouteContext): Promise<Response> {
+  const row = await loadVisible(ctx, ctx.params.id!);
+  if (!row) return json({ error: "not_found" }, { status: 404 });
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    "SELECT * FROM deliverable_feedback WHERE deliverable_id = ?1 ORDER BY created_at DESC",
+  )
+    .bind(row.id)
+    .all();
+  return json({ feedback: rows.results ?? [] });
+}
+
+/**
+ * What a partner has said about this employee's recent work, for their next run's prompt.
+ *
+ * THE POINT OF THE WHOLE FEATURE. Feedback that only a human ever reads is a comment box. This is
+ * the function that makes it management: an employee about to write another brief is told what the
+ * partner thought of the last three, in the partner's own words.
+ */
+export async function recentFeedbackFor(env: Env, employeeName: string, limit = 3): Promise<string> {
+  const rows = await env.WP_OS_DB.prepare(
+    "SELECT note, verdict, created_at FROM deliverable_feedback WHERE to_employee = ?1 ORDER BY created_at DESC LIMIT ?2",
+  )
+    .bind(employeeName, limit)
+    .all<{ note: string; verdict: string; created_at: string }>()
+    .catch(() => ({ results: [] }));
+  const notes = rows.results ?? [];
+  if (notes.length === 0) return "";
+  return [
+    "WHAT THE PARTNERS SAID ABOUT YOUR LAST PIECES — take this seriously, it is the point of doing this again:",
+    ...notes.map((n) => `  · (${n.verdict.toLowerCase().replace(/_/g, " ")}) ${n.note}`),
+    "",
+  ].join("\n");
 }
 
 async function loadVisible(ctx: RouteContext, id: string): Promise<DeliverableRow | null> {

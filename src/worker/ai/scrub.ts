@@ -51,3 +51,48 @@ export function scrubInputs(inputs: string[]): ScrubResult {
   }
   return { blocked: matches.size > 0, matches: [...matches] };
 }
+
+/** What a redacting scrub did, so the caller can say so rather than quietly shipping altered text. */
+export interface RedactResult {
+  inputs: string[];
+  /** Pattern class names only — never the matched content. */
+  redacted: string[];
+  count: number;
+}
+
+/**
+ * Cut the secret-shaped spans out and keep going.
+ *
+ * WHY THIS EXISTS, AND WHY IT IS NOT THE DEFAULT. Blocking is the right answer when the firm wrote
+ * the input: a credential in something we authored is a mistake worth stopping for, and the block
+ * is how anyone finds out. It is the wrong answer for text the firm did not write and cannot fix.
+ * The morning brief is assembled from third-party headlines and URLs, and on 19 August a single
+ * key-shaped slug in somebody else's news URL blocked the entire run — one partner got no brief
+ * at all, over a string nobody at this firm typed and nobody could edit.
+ *
+ * Redaction keeps the security property exactly: the matched span never reaches a provider. What
+ * changes is the blast radius — a suspicious twenty characters is removed instead of a day's
+ * intelligence being withheld. It is opt-in per call, so nothing else in the system moves.
+ *
+ * The marker is deliberately visible in the prompt. A model that sees [REDACTED:vendor_api_key]
+ * knows something was removed there and does not treat the gap as content.
+ */
+export function redactInputs(inputs: string[]): RedactResult {
+  const redacted = new Set<string>();
+  let count = 0;
+  const out = inputs.map((input) => {
+    let text = input;
+    for (const { name, pattern } of SECRET_PATTERNS) {
+      // The stored patterns are unanchored and un-flagged; replacing every occurrence needs a
+      // global copy, and building it here keeps the shared list free of state.
+      const global = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+      text = text.replace(global, () => {
+        redacted.add(name);
+        count += 1;
+        return `[REDACTED:${name}]`;
+      });
+    }
+    return text;
+  });
+  return { inputs: out, redacted: [...redacted], count };
+}

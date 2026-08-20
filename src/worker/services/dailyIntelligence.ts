@@ -22,6 +22,7 @@ import { readMarket } from "./liveSearch";
 import { deliver } from "./deliverables";
 import { machineForKey } from "./attribution";
 import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
+import { recentFeedbackFor } from "./deliverables";
 import { z } from "zod";
 
 /** Local body reader, matching the one in intelligence.ts: a malformed body is null, never a throw. */
@@ -252,6 +253,14 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
     // number is what the affordability check and the cost centre reason about; leaving it at the
     // old 2000 would have understated every brief by a factor of four.
     budgetContext: { expectedOutputTokens: 8000 },
+    /*
+     * THE BRIEF IS BUILT FROM OTHER PEOPLE'S WORDS, so a credential-shaped span in it is somebody
+     * else's URL slug, not a mistake this firm can correct. On 19 August one such span blocked the
+     * whole run and a partner got no brief at all. Redacting cuts the span and keeps the day's
+     * intelligence; the span still never reaches a provider. This is the only caller in the system
+     * that asks for this, and it asks because it is the only one assembling text nobody here wrote.
+     */
+    onCredentialLike: "redact",
     // NAMING A TASK CLASS IS WHAT MAKES A ROUTING POLICY POSSIBLE. Without it the router falls back
     // to "cheapest adequate priced model", which chose a flash-tier model and produced a report
     // containing "the 30-year U.S. tax at 19 year high" and a corrupted copy of its own event ids.
@@ -385,13 +394,25 @@ export async function generateForPartner(
     events: packetEvents,
   };
 
+  /*
+   * WHAT THE PARTNER SAID LAST TIME, in front of the model before it writes.
+   *
+   * This is what makes the feedback buttons on a brief worth having. A partner who says "too long,
+   * and stop leading with macro" and then reads an identical brief the next morning has learned
+   * that the feature is decoration. The chief of staff who signs this brief is told what was said
+   * about their last three, in the partner's own words, and it sits above the evidence so it is
+   * read as an instruction about how to write rather than as more material to summarise.
+   */
+  const bylineFor = chiefOfStaffFor(user?.full_name ?? "");
+  const feedback = await recentFeedbackFor(env, bylineFor);
+
   // ── Synthesis: one governed call. ──
   await setStatus(env, id, "GENERATING");
   let output = "";
   let aiRunId: string | null = null;
   let model: string | null = null;
   try {
-    const result = await synthesise(env, actor, buildSynthesisPrompt(packet), reportDate, firmUserId);
+    const result = await synthesise(env, actor, `${feedback}${buildSynthesisPrompt(packet)}`, reportDate, firmUserId);
     aiRunId = result.aiRunId;
     failedRunId = result.aiRunId;
     model = result.model;
@@ -401,8 +422,38 @@ export async function generateForPartner(
     return await fail("synthesis_error", err instanceof Error ? err.message : String(err));
   }
 
-  const parsed = parseReport(output);
-  if (!parsed) return await fail("unparseable", "the model did not return a usable report");
+  /*
+   * ONE RETRY WHEN THE REPLY CANNOT BE READ.
+   *
+   * A brief that fails to parse has already cost the gathering, the ranking, the market pass and a
+   * full-length generation; throwing all of it away over a formatting slip and waiting for
+   * tomorrow is the worst available trade. Both partners lost their brief this way on 18 August.
+   *
+   * The retry is ONE, and it is not a loop: a model that cannot produce the format twice is not
+   * going to on the third attempt, and a retry loop on a paid generation is how a bad morning
+   * becomes an expensive one. The second attempt is told plainly what went wrong, because
+   * repeating an identical prompt and hoping is not a strategy.
+   */
+  let parsed = parseReport(output);
+  if (!parsed) {
+    const retry = await synthesise(
+      env,
+      actor,
+      `${feedback}${buildSynthesisPrompt(packet)}\n\nYOUR PREVIOUS REPLY COULD NOT BE READ. It must use the ===SECTION / ===END delimited format exactly as described above, with no JSON and no commentary before the first ===SECTION line.`,
+      reportDate,
+      firmUserId,
+    );
+    if (retry.aiRunId) {
+      aiRunId = retry.aiRunId;
+      failedRunId = retry.aiRunId;
+    }
+    if (retry.model) model = retry.model;
+    if (!retry.failure && retry.output) {
+      output = retry.output;
+      parsed = parseReport(output);
+    }
+  }
+  if (!parsed) return await fail("unparseable", "the model did not return a usable report, twice");
 
   // Citations first, verification second. Models abbreviate UUIDs, and an id shortened to its first
   // block resolves to exactly one event or to none — the former is the id it meant, the latter
@@ -562,6 +613,13 @@ export async function runDailyForAll(
       WHERE u.status = 'ACTIVE'`,
   ).all<{ id: string; enabled: number; timezone: string; weekends: number }>();
 
+  // Before starting anything: close out yesterday's casualties. A row still marked GENERATING from
+  // a run that died hours ago is not in progress, and leaving it that way hides today's real state.
+  await closeAbandonedReports(env, now).catch(async (err) => {
+    await recordSwallowed(env, "dailyIntelligence.closeAbandonedReports", err);
+    return 0;
+  });
+
   let generated = 0;
   let failed = 0;
   for (const p of partners.results ?? []) {
@@ -581,11 +639,61 @@ export async function runDailyForAll(
             .run();
         });
       } else failed += 1;
-    } catch {
+    } catch (err) {
+      /*
+       * A THROW HERE USED TO VANISH. This catch was bare — `catch { failed += 1 }` — so when
+       * generation threw part-way through, three things happened and none of them were visible:
+       * the report row stayed at whatever stage it had reached, the error was discarded, and the
+       * only trace was a number in a return value nobody reads. Sequoia's brief sat at VERIFYING
+       * for four hours that way, with no error recorded, while the operator was told the system
+       * was healthy.
+       *
+       * The row is now closed out as FAILED carrying the real error, and the swallow goes on the
+       * ledger, so the same failure is findable from Activity and turns the health board red.
+       */
       failed += 1;
+      await env.WP_OS_DB.prepare(
+        `UPDATE intelligence_report
+            SET status = 'FAILED', error_code = 'generation_threw', error_message = ?2,
+                completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE firm_scope = ?3 AND firm_user_id = ?1 AND status NOT IN ('READY','FAILED')`,
+      )
+        .bind(p.id, (err instanceof Error ? err.message : String(err)).slice(0, 400), firmScope)
+        .run()
+        .catch(() => undefined);
+      await recordSwallowed(env, "dailyIntelligence.generateForPartner", err, { firm_user_id: p.id });
     }
   }
   return { generated, failed };
+}
+
+/**
+ * Close out reports that stopped mid-flight.
+ *
+ * THE CATCH ABOVE CANNOT COVER EVERY CASE, and pretending otherwise is how a row stays stuck. If
+ * the isolate is evicted — CPU limit, a deploy landing mid-run, the platform reclaiming it — no
+ * code of ours runs at all, so nothing marks the row and nothing is caught. It simply stops, in
+ * GATHERING or GENERATING or VERIFYING, and stays there.
+ *
+ * A row that has been mid-flight for half an hour is not running; the whole pipeline takes about
+ * five minutes. Closing it as FAILED is what makes it visible on the health board and what lets a
+ * retry be told apart from a run still in progress. `abandoned` is a distinct error code precisely
+ * so it is never confused with a run that got far enough to fail on its merits.
+ */
+export const STALE_AFTER_MINUTES = 30;
+
+export async function closeAbandonedReports(env: Env, now: Date = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - STALE_AFTER_MINUTES * 60_000).toISOString();
+  const res = await env.WP_OS_DB.prepare(
+    `UPDATE intelligence_report
+        SET status = 'FAILED', error_code = 'abandoned',
+            error_message = 'The run stopped part-way through and never finished. Build it again.',
+            completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE status NOT IN ('READY','FAILED') AND started_at < ?1`,
+  )
+    .bind(cutoff)
+    .run();
+  return res.meta?.changes ?? 0;
 }
 
 // ── Route handlers ───────────────────────────────────────────────────────────

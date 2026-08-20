@@ -184,3 +184,121 @@ describe("quiet days and weekends", () => {
     expect(after!.n).toBe(before!.n);
   });
 });
+
+// ── The three ways a brief actually died in production ───────────────────────
+//
+// Every case below is a real failure from the 18th to the 20th of August, found by reading the
+// intelligence_report table rather than by imagining what might go wrong. Two partners lost briefs
+// to a formatting slip, one lost a brief to a credential-shaped span in somebody else's news URL,
+// and one sat at VERIFYING for four hours with no error recorded and nothing anywhere saying so.
+
+import { closeAbandonedReports, STALE_AFTER_MINUTES } from "../src/worker/services/dailyIntelligence";
+
+/** The delimited format the prompt actually asks for, which parses. */
+const GOOD_OUTPUT = [
+  "===SECTION executive_summary",
+  "Two developments matter this morning.",
+  "===END",
+  "===SECTION capital_markets",
+  "An acquisition was announced in the payments stack.",
+  "===END",
+].join("\n");
+
+describe("a reply that cannot be read", () => {
+  it("is retried once rather than losing the whole morning", async () => {
+    let calls = 0;
+    const flakyThenGood: Synthesise = async () => {
+      calls += 1;
+      return { output: calls === 1 ? "I'm afraid I can't help with that." : GOOD_OUTPUT, aiRunId: null, model: "fake-test-model" };
+    };
+
+    const out = await generateForPartner(env, MP, "fu_sequoia_taylor", new Date("2026-08-18T09:00:00Z"), flakyThenGood);
+    expect(calls, "the first unreadable reply must be retried").toBe(2);
+    expect(out.status).toBe("READY");
+  });
+
+  it("gives up after the second attempt — a retry is one, not a loop", async () => {
+    let calls = 0;
+    const neverParses: Synthesise = async () => {
+      calls += 1;
+      return { output: "still not a report", aiRunId: null, model: "fake-test-model" };
+    };
+
+    const out = await generateForPartner(env, MP, "fu_sequoia_taylor", new Date("2026-08-18T15:00:00Z"), neverParses);
+    expect(out.status).toBe("FAILED");
+    expect(calls, "two attempts, never three — a paid generation is not something to loop on").toBe(2);
+
+    const row = await env.WP_OS_DB.prepare(
+      "SELECT error_code, error_message FROM intelligence_report WHERE firm_user_id = ?1 AND report_date = ?2",
+    )
+      .bind("fu_sequoia_taylor", "2026-08-18")
+      .first<{ error_code: string; error_message: string }>();
+    expect(row?.error_code).toBe("unparseable");
+    expect(row?.error_message).toContain("twice");
+  });
+});
+
+describe("a run that stopped part-way through", () => {
+  /*
+   * THE ONE THAT WAS INVISIBLE. Sequoia's brief sat at VERIFYING with completed_at NULL and no
+   * error, because the scheduled runner caught the throw with a bare `catch { failed += 1 }`. The
+   * row was never closed, the error was discarded, and the operator was told the firm was healthy.
+   */
+  it("is closed out as FAILED, not left mid-flight forever", async () => {
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope, started_at)
+       VALUES ('dir_stuck', 'fu_sequoia_taylor', '2026-08-01', 'VERIFYING', 'v-test', 'west-peek', ?1)`,
+    )
+      .bind(new Date(Date.now() - (STALE_AFTER_MINUTES + 5) * 60_000).toISOString())
+      .run();
+
+    const closed = await closeAbandonedReports(env);
+    expect(closed).toBeGreaterThan(0);
+
+    const row = await env.WP_OS_DB.prepare("SELECT status, error_code, completed_at FROM intelligence_report WHERE id = 'dir_stuck'")
+      .first<{ status: string; error_code: string; completed_at: string }>();
+    expect(row?.status).toBe("FAILED");
+    expect(row?.error_code, "abandoned is distinct from a run that failed on its merits").toBe("abandoned");
+    expect(row?.completed_at).toBeTruthy();
+  });
+
+  it("leaves a run that is genuinely still going alone", async () => {
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope, started_at)
+       VALUES ('dir_running', 'fu_sequoia_taylor', '2026-08-02', 'GENERATING', 'v-test', 'west-peek', ?1)`,
+    )
+      .bind(new Date(Date.now() - 60_000).toISOString())
+      .run();
+
+    await closeAbandonedReports(env);
+    const row = await env.WP_OS_DB.prepare("SELECT status FROM intelligence_report WHERE id = 'dir_running'")
+      .first<{ status: string }>();
+    expect(row?.status, "a minute old is not abandoned").toBe("GENERATING");
+  });
+
+  /*
+   * A throw from the FIRST synthesis call is caught inside generateForPartner and becomes a clean
+   * FAILED row — that path already worked. The backstop exists for a throw from anywhere else, and
+   * the retry call is exactly such a place: it runs after the inner try has closed. So that is what
+   * this throws from, rather than picking a spot the inner handler would have caught anyway.
+   */
+  it("a throw the inner handler does not catch still closes the row and lands on the ledger", async () => {
+    let calls = 0;
+    const explodes: Synthesise = async () => {
+      calls += 1;
+      if (calls === 1) return { output: "not a report at all", aiRunId: null, model: "fake-test-model" };
+      throw new Error("provider exploded mid-retry");
+    };
+    await runDailyForAll(env, MP, new Date("2026-08-18T18:00:00Z"), explodes);
+
+    const stranded = await env.WP_OS_DB.prepare(
+      "SELECT COUNT(*) AS n FROM intelligence_report WHERE status NOT IN ('READY','FAILED') AND report_date = '2026-08-18'",
+    ).first<{ n: number }>();
+    expect(stranded?.n, "no row may be left mid-flight after a throw").toBe(0);
+
+    const swallowed = await env.WP_OS_DB.prepare(
+      "SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'system.swallowed_failure' AND object_id = 'dailyIntelligence.generateForPartner'",
+    ).first<{ n: number }>();
+    expect(swallowed?.n, "and the swallow must be on the ledger, not discarded").toBeGreaterThan(0);
+  });
+});

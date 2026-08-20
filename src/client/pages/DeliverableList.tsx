@@ -24,7 +24,18 @@ interface Deliverable {
   prepared_for: string;
   document_id: string | null;
   created_at: string;
+  acknowledged_at: string | null;
+  dismissed_at: string | null;
 }
+
+/** The one-word reads a partner can leave without writing a sentence. */
+const VERDICTS: { value: string; label: string }[] = [
+  { value: "GOOD", label: "This was good" },
+  { value: "NOT_WHAT_I_WANTED", label: "Not what I wanted" },
+  { value: "TOO_LONG", label: "Too long" },
+  { value: "WRONG_FOCUS", label: "Wrong focus" },
+  { value: "NOTE", label: "Just a note" },
+];
 
 export function DeliverableList({
   kind,
@@ -37,12 +48,43 @@ export function DeliverableList({
   emptyNote: string;
   onNavigate?: (k: string) => void;
 }): JSX.Element {
+  // The default view is what still wants attention. Dismissed pieces are one toggle away, never
+  // more than that, because "where did it go" is the question dismissing usually creates.
+  const [showDismissed, setShowDismissed] = useState(false);
   const list = useApi<{ deliverables: Deliverable[] }>(
-    `/api/deliverables?limit=${limit}${kind ? `&kind=${kind}` : ""}`,
+    `/api/deliverables?limit=${limit}${kind ? `&kind=${kind}` : ""}${showDismissed ? "&dismissed=1" : ""}`,
   );
   const [open, setOpen] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [feedbackFor, setFeedbackFor] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const [verdict, setVerdict] = useState("NOTE");
+
+  async function act(id: string, path: string, label: string) {
+    setBusy(id);
+    const res = await api(`/api/deliverables/${id}/${path}`, { method: "POST", body: {} });
+    setBusy(null);
+    setMessage(res.status === 200 ? label : `That did not work (HTTP ${res.status}).`);
+    list.reload();
+  }
+
+  async function sendFeedback(d: Deliverable) {
+    setBusy(d.id);
+    const res = await api<{ error?: string }>(`/api/deliverables/${d.id}/feedback`, {
+      method: "POST",
+      body: { note, verdict },
+    });
+    setBusy(null);
+    if (res.status === 201) {
+      setMessage(`Passed on to ${d.prepared_by}. It will be in front of them the next time they write one.`);
+      setFeedbackFor(null);
+      setNote("");
+      setVerdict("NOTE");
+    } else {
+      setMessage(`Could not send that: ${res.data?.error ?? res.status}`);
+    }
+  }
 
   const rows = list.data?.deliverables ?? [];
 
@@ -64,8 +106,26 @@ export function DeliverableList({
     );
   }
 
+  const dismissedToggle = (
+    <button
+      type="button"
+      className="link-button small"
+      data-testid="deliverables-toggle-dismissed"
+      onClick={() => setShowDismissed(!showDismissed)}
+    >
+      {showDismissed ? "← Back to current" : "Show what I put away"}
+    </button>
+  );
+
   if (!list.loading && rows.length === 0) {
-    return <p className="state-empty" data-testid="deliverables-empty">{emptyNote}</p>;
+    return (
+      <>
+        <p className="state-empty" data-testid="deliverables-empty">
+          {showDismissed ? "Nothing has been put away." : emptyNote}
+        </p>
+        {dismissedToggle}
+      </>
+    );
   }
 
   return (
@@ -76,7 +136,11 @@ export function DeliverableList({
           const def = kindDef(d.kind);
           const isOpen = open === d.id;
           return (
-            <li key={d.id} className="card deliverable" data-testid={`deliverable-${d.id}`}>
+            <li
+              key={d.id}
+              className={d.acknowledged_at ? "card deliverable deliverable-read" : "card deliverable"}
+              data-testid={`deliverable-${d.id}`}
+            >
               <div className="deliverable-head">
                 {/* SIGNED. Everything the firm produces arrives from somebody, with their face on
                     it — the whole point of the delivery model. */}
@@ -90,6 +154,11 @@ export function DeliverableList({
                 </span>
                 <span className="badge">{def?.label ?? d.kind}</span>
                 <span className="muted small">{new Date(d.created_at).toLocaleDateString()}</span>
+                {/* Read is a state, and it is said in words as well as in colour. */}
+                {d.acknowledged_at && !d.dismissed_at && (
+                  <span className="badge badge-quiet" data-testid={`deliverable-read-${d.id}`}>read</span>
+                )}
+                {d.dismissed_at && <span className="badge badge-quiet">put away</span>}
               </div>
 
               <button
@@ -130,10 +199,95 @@ export function DeliverableList({
                   </span>
                 )}
               </div>
+
+              {/* ── Answering it ──
+                  Acknowledge is one click and says so. Putting it away is reversible and the button
+                  says where it goes, because "dismiss" on its own reads as delete. Feedback is the
+                  one that changes next week's version, so it names who receives it. */}
+              <div className="form-row deliverable-answer">
+                {d.dismissed_at ? (
+                  <button
+                    type="button"
+                    className="link-button"
+                    disabled={busy === d.id}
+                    data-testid={`deliverable-restore-${d.id}`}
+                    onClick={() => void act(d.id, "dismiss?restore=1", "Back on the page.")}
+                  >
+                    Put it back
+                  </button>
+                ) : (
+                  <>
+                    {!d.acknowledged_at && (
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={busy === d.id}
+                        data-testid={`deliverable-ack-${d.id}`}
+                        onClick={() => void act(d.id, "acknowledge", "Marked as read.")}
+                      >
+                        Mark as read
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="link-button"
+                      disabled={busy === d.id}
+                      data-testid={`deliverable-dismiss-${d.id}`}
+                      onClick={() => void act(d.id, "dismiss", "Put away. It is under \u201cShow what I put away\u201d.")}
+                    >
+                      Put it away
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid={`deliverable-feedback-${d.id}`}
+                  onClick={() => setFeedbackFor(feedbackFor === d.id ? null : d.id)}
+                >
+                  {feedbackFor === d.id ? "Never mind" : `Tell ${d.prepared_by} what you think`}
+                </button>
+              </div>
+
+              {feedbackFor === d.id && (
+                <div className="deliverable-feedback" data-testid={`deliverable-feedback-form-${d.id}`}>
+                  <label htmlFor={`fb-verdict-${d.id}`}>How was it?</label>
+                  <select
+                    id={`fb-verdict-${d.id}`}
+                    value={verdict}
+                    onChange={(e) => setVerdict(e.target.value)}
+                  >
+                    {VERDICTS.map((v) => (
+                      <option key={v.value} value={v.value}>{v.label}</option>
+                    ))}
+                  </select>
+                  <label htmlFor={`fb-note-${d.id}`}>What should they do differently?</label>
+                  <textarea
+                    id={`fb-note-${d.id}`}
+                    rows={3}
+                    value={note}
+                    placeholder="Lead with the private-market read, not macro. And half this length."
+                    onChange={(e) => setNote(e.target.value)}
+                  />
+                  <p className="muted small">
+                    {d.prepared_by} is shown this before writing the next one.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={busy === d.id || !note.trim()}
+                    data-testid={`deliverable-feedback-send-${d.id}`}
+                    onClick={() => void sendFeedback(d)}
+                  >
+                    Send it to {d.prepared_by}
+                  </button>
+                </div>
+              )}
             </li>
           );
         })}
       </ul>
+      {dismissedToggle}
     </>
   );
 }

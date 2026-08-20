@@ -4,6 +4,7 @@ import { ago, summarise, worstOf, type HealthCheck } from "../../shared/health/c
 // The browser and the cheap tier are platform bindings that do not carry the WP_OS_ prefix.
 // Reading them through their owning module keeps the one cast in the one file that owns it.
 import { browserConfigured } from "../effects/browserClient";
+import { STALE_AFTER_MINUTES } from "./dailyIntelligence";
 import { workersAiConfigured } from "../ai/runAi";
 
 /**
@@ -63,37 +64,82 @@ export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
     remedy: (docs?.n ?? 0) === 0 ? "Bound, but nothing has ever been written to it. A brief or an image would prove it works." : undefined,
   });
 
-  // ── The morning brief: the firm's most visible daily output ──
-  const brief = await one<{ status: string; report_date: string; error_message: string | null }>("intelligence_report", "SELECT status, report_date, error_message FROM intelligence_report ORDER BY report_date DESC, started_at DESC LIMIT 1",
-  );
-  const briefFails = await one<{ n: number }>("intelligence_report", "SELECT COUNT(*) AS n FROM intelligence_report WHERE status = 'FAILED' AND report_date >= date('now','-3 day')",
-  );
-  checks.push({
-    key: "daily_brief",
-    label: "Morning brief",
+  /*
+   * ── The morning brief, PER PARTNER ──
+   *
+   * The first cut of this read one global "Morning brief" and turned red because three runs had
+   * failed in three days. Both facts were true and the conclusion was wrong: the failures were
+   * spread across two partners with entirely independent briefs, and on most of those days one
+   * partner's brief landed perfectly well. The operator had been reading her brief while this page
+   * called the brief broken.
+   *
+   * There are two briefs. A board that averages them tells neither partner what happened to theirs.
+   */
+  const briefs = ((await env.WP_OS_DB.prepare(
+    `SELECT u.id, u.full_name,
+            (SELECT status FROM intelligence_report r
+              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS status,
+            (SELECT report_date FROM intelligence_report r
+              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS report_date,
+            (SELECT error_message FROM intelligence_report r
+              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS error_message,
+            (SELECT started_at FROM intelligence_report r
+              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS started_at,
+            (SELECT COUNT(*) FROM intelligence_report r
+              WHERE r.firm_user_id = u.id AND r.status = 'FAILED' AND r.report_date >= date('now','-7 day')) AS fails
+       FROM firm_user u
+       JOIN firm_user_role fr ON fr.firm_user_id = u.id AND fr.role_id = 'role_managing_partner'
+      WHERE u.status = 'ACTIVE'
+      ORDER BY u.full_name`,
+  ).all<{ id: string; full_name: string; status: string | null; report_date: string | null; error_message: string | null; started_at: string | null; fails: number }>()
+    .catch(() => {
+      unreadable.push("intelligence_report");
+      return { results: [] };
+    })).results ?? []);
+
+  const TERMINAL = new Set(["READY", "FAILED"]);
+  for (const b of briefs) {
+    const firstName = b.full_name.split(" ")[0] ?? b.full_name;
     /*
-     * A RUN OF FAILURES OUTRANKS TODAY'S STATUS. The first live reading of this board found the
-     * brief mid-flight at VERIFYING with three failures behind it in three days, and called that
-     * amber — "needs a look" for a daily output that has not landed since Monday. Whatever today
-     * is doing, a brief that keeps failing is broken.
+     * Mid-flight is normal for a few minutes and stuck after that. The threshold is the pipeline's
+     * own — the same STALE_AFTER_MINUTES the sweeper closes rows out on — so the board and the
+     * sweeper can never disagree about whether a run is still going.
      */
-    state:
-      !brief ? "DEGRADED"
-      : (briefFails?.n ?? 0) >= 2 ? "DOWN"
-      : brief.status === "READY" ? "OK"
-      : brief.status === "FAILED" ? "DOWN"
-      : "DEGRADED",
-    reading: brief
-      ? `latest ${brief.report_date} · ${brief.status.toLowerCase()}${(briefFails?.n ?? 0) > 0 ? ` · ${briefFails!.n} failed in 3 days` : ""}`
-      : "none has ever been built",
-    remedy:
-      (briefFails?.n ?? 0) >= 2
-        ? `It has failed ${briefFails!.n} times in three days. Building it again from Home will show the error.`
-        : brief?.status === "FAILED"
-          ? (brief.error_message ?? "It failed. Build it again from Home.")
-          : undefined,
-    page: "home",
-  });
+    const ageMinutes = b.started_at ? (Date.now() - new Date(b.started_at).getTime()) / 60_000 : 0;
+    const stuck = b.status !== null && !TERMINAL.has(b.status) && ageMinutes > STALE_AFTER_MINUTES;
+    checks.push({
+      key: `daily_brief_${b.id}`,
+      label: `${firstName}'s brief`,
+      state:
+        !b.status ? "DEGRADED"
+        : b.status === "READY" ? "OK"
+        : b.status === "FAILED" || stuck ? "DOWN"
+        : "DEGRADED",
+      reading: b.status
+        ? `${b.report_date} · ${
+            b.status === "READY" ? "delivered"
+            : stuck ? `stopped part-way, ${ago(b.started_at)}`
+            : b.status.toLowerCase()
+          }${b.fails > 0 ? ` · ${b.fails} failed this week` : ""}`
+        : "none has ever been built",
+      remedy:
+        b.status === "FAILED"
+          ? (b.error_message ?? "It failed. Build it again from Home.")
+          : stuck
+            ? "It stopped part-way through and never finished. Build it again from Home."
+            : undefined,
+      page: "home",
+    });
+  }
+  if (briefs.length === 0) {
+    checks.push({
+      key: "daily_brief",
+      label: "Morning brief",
+      state: "DEGRADED",
+      reading: "no active managing partner to write one for",
+      page: "employees",
+    });
+  }
 
   // ── Scheduled work, and the specific silent failure: on, with its employee off ──
   const jobs = ((await env.WP_OS_DB.prepare(

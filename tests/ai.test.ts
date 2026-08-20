@@ -40,14 +40,19 @@ function req(path: string, headers: Record<string, string> = {}, method = "GET",
 /** Fetch stub that records every call and returns a canned provider response. */
 function stubFetch(responseText = "stubbed provider output", costUsd = 0.001) {
   const calls: string[] = [];
-  const fetchImpl = (async (url: unknown) => {
+  // What was actually SENT, not just where. A test that asserts on the URL cannot tell a redaction
+  // that reached the provider from one that redacted a copy and sent the original.
+  const bodies: string[] = [];
+  const fetchImpl = (async (url: unknown, init?: unknown) => {
     calls.push(String(url));
+    const body = (init as { body?: unknown } | undefined)?.body;
+    bodies.push(typeof body === "string" ? body : body === undefined ? "" : String(body));
     return new Response(
       JSON.stringify({ text: responseText, model: "stub-model", usage: { input_tokens: 10, output_tokens: 20, cost_usd: costUsd } }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }) as unknown as typeof fetch;
-  return { calls, fetchImpl };
+  return { calls, bodies, fetchImpl };
 }
 
 const throwingFetch = (async () => {
@@ -286,6 +291,42 @@ describe("4. credential-shaped input is blocked before any provider call", () =>
       expect(r.failure_reason).not.toContain("sk-a1b2c3d4e5f6g7h8");
       expect(r.failure_reason).not.toContain("021000021");
     }
+  });
+
+  /*
+   * REDACTION IS OPT-IN, AND IT MUST ACTUALLY REACH THE PROVIDER.
+   *
+   * The first cut of this got it wrong in the most dangerous way available: it redacted a local
+   * copy and sent the original, so the run recorded a redaction that had not happened. These
+   * tests read what the provider was actually handed, not what the run claims.
+   */
+  it("redacts rather than blocking when the caller asked, and the secret never leaves", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    await setAllProviders(1);
+    const stub = stubFetch();
+    const { run: r } = await run(
+      { inputs: ["headline about a fund\nsource https://news.test/a/sk-live-4eC39HqLyjWDarjtT1zdp7dc"], onCredentialLike: "redact" },
+      { fetchImpl: stub.fetchImpl },
+    );
+
+    expect(r.status).not.toBe("EGRESS_BLOCKED");
+    expect(stub.calls.length).toBeGreaterThan(0);
+
+    // What the provider was actually sent.
+    const sent = stub.bodies.join("\n");
+    expect(sent).not.toContain("sk-live-4eC39HqLyjWDarjtT1zdp7dc");
+    expect(sent).toContain("REDACTED:vendor_api_key");
+    // The rest of the input survived — redaction removes a span, not the work.
+    expect(sent).toContain("headline about a fund");
+  });
+
+  it("still blocks by default, so nothing else in the system moved", async () => {
+    await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
+    await setAllProviders(1);
+    const stub = stubFetch();
+    const { run: r } = await run({ inputs: ["sk-live-4eC39HqLyjWDarjtT1zdp7dc"] }, { fetchImpl: stub.fetchImpl });
+    expect(r.status).toBe("EGRESS_BLOCKED");
+    expect(stub.calls).toHaveLength(0);
   });
 
   it("the scrub also blocks the local path (no credentials in LLM context, ever)", async () => {

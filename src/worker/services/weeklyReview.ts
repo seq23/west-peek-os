@@ -326,8 +326,26 @@ export async function generateReview(
      * executed, inside a catch that reported nothing. The scoping this was reaching for lives on
      * the review itself; every firm user is a partner of this firm.
      */
+    /*
+     * ONE REVIEW, NOT ONE PER HEAD.
+     *
+     * This asked for every ACTIVE firm user and wrote each of them an identical copy. By 20 August
+     * that was three: both partners and `fu_browser_agent`, the read-only identity the browser
+     * employees sign in as — so the operator opened her page and found three identical weekly
+     * operating reviews, one of them addressed to a service account.
+     *
+     * The weekly operating review is ONE document two partners work through together; that is what
+     * the joint byline says and it should have been what the filing said too. It is now prepared
+     * once, for the senior partner on the roster, and both partners can see it — deliverables are
+     * INTERNAL and the list is deliberately shared. Copies-per-reader was never what "prepared
+     * jointly" meant.
+     */
     const partners = ((await env.WP_OS_DB.prepare(
-      "SELECT id FROM firm_user WHERE status = 'ACTIVE'",
+      `SELECT u.id FROM firm_user u
+         JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
+        WHERE u.status = 'ACTIVE'
+        ORDER BY u.id
+        LIMIT 1`,
     ).all<{ id: string }>()).results ?? []);
 
     const items = ((await env.WP_OS_DB.prepare(
@@ -342,9 +360,9 @@ export async function generateReview(
           body: renderAgenda(items),
           preparedBy: jointByline(),
           preparedFor: partner.id,
-          // Scoped per partner so each gets their own row; re-generation updates rather than stacks.
+          // One row per review, so re-generating updates it rather than stacking another copy.
           sourceType: "weekly_review",
-          sourceId: `${reviewId}:${partner.id}`,
+          sourceId: reviewId,
         });
       }
     }
@@ -497,10 +515,17 @@ export async function handleSetItemExit(ctx: RouteContext): Promise<Response> {
       )
         .bind(itemId, workCardId)
         .run();
-    } catch {
-      // The exit stands even if the card could not be raised. Losing the decision because the
-      // follow-through failed would be the wrong way round.
+    } catch (err) {
+      /*
+       * The exit stands even if the card could not be raised — losing the decision because the
+       * follow-through failed would be the wrong way round. That policy is right and unchanged.
+       *
+       * What was wrong was the silence. A partner decides "this becomes a work card", the card is
+       * never created, and the review reports success; the only trace was a comment. This is the
+       * fifth write path of exactly this shape and the reason recordSwallowed exists.
+       */
       workCardId = null;
+      await recordSwallowed(ctx.env, "weekly_review.raise_work_card", err, { item_id: itemId });
     }
   }
 

@@ -3577,3 +3577,48 @@ body {
   padding-left: 0.6rem;
   border-left: 2px solid var(--wp-line-strong);
 }
+
+/* ── Answering something prepared for you ────────────────────────────────────
+   A piece you have read stays on the page but stops shouting: the accent bar goes
+   quiet and the card sits back. It is never colour alone — the card also carries
+   the word "read". */
+.deliverable-read { opacity: 0.82; }
+.deliverable-read .deliverable-title { font-weight: 500; }
+
+.badge-quiet {
+  background: var(--wp-surface-3);
+  color: var(--wp-muted);
+  border-color: var(--wp-line);
+}
+
+.deliverable-answer {
+  gap: var(--space-sm);
+  align-items: center;
+  flex-wrap: wrap;
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--wp-line);
+  margin-top: var(--space-xs);
+}
+
+.deliverable-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: var(--space-sm);
+  padding: var(--space-sm);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-md);
+  background: var(--wp-surface-2);
+}
+.deliverable-feedback label { font-weight: 600; font-size: var(--text-xs); }
+.deliverable-feedback textarea {
+  font: inherit;
+  padding: 0.5rem;
+  border: 1px solid var(--wp-line-strong);
+  border-radius: var(--radius-md);
+  background: var(--wp-surface);
+  color: var(--wp-ink);
+  resize: vertical;
+}
+.deliverable-feedback select { max-width: 20rem; }
+.deliverable-feedback .btn-primary { align-self: flex-start; }
