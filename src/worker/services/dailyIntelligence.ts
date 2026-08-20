@@ -631,13 +631,42 @@ export async function handleGetDailyReport(ctx: RouteContext): Promise<Response>
   return json({ report, sections: sections.results ?? [], citations: items.results ?? [], date });
 }
 
-/** POST /api/daily-intelligence/generate — build (or rebuild) today's report. */
+/**
+ * POST /api/daily-intelligence/generate — build (or rebuild) today's report.
+ *
+ * `for_firm_user_id` builds another partner's brief. The operator's question was "can you run his
+ * brief without him being logged in", and until now the answer was no: this only ever built for
+ * the caller, so a failing brief could not be diagnosed or re-run by the partner sitting next to
+ * the one it belongs to.
+ *
+ * MANAGING PARTNER TO MANAGING PARTNER ONLY. The two partners are peers and the brief is firm work,
+ * so one re-running the other's is ordinary. Anything else is refused — this must not become a way
+ * for a role-less identity to generate, read, or spend against somebody else's profile.
+ */
 export async function handleGenerateDailyReport(ctx: RouteContext): Promise<Response> {
   const actor = actorFromIdentity(ctx.identity!);
   const authz = await authorize(ctx.env, actor, "ai.run", { objectType: "intelligence_report", firmScope: actor.firmScopes[0] });
   if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const body = (await ctx.request.json().catch(() => ({}))) as { for_firm_user_id?: unknown };
+  let target = actor.firmUserId!;
+  if (typeof body.for_firm_user_id === "string" && body.for_firm_user_id !== target) {
+    if (!ctx.identity!.roles.includes("MANAGING_PARTNER")) {
+      return json({ error: "forbidden", detail: "only a Managing Partner may build another partner's brief" }, { status: 403 });
+    }
+    const other = await ctx.env.WP_OS_DB.prepare(
+      `SELECT u.id FROM firm_user u
+         JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
+        WHERE u.id = ?1 AND u.status = 'ACTIVE'`,
+    ).bind(body.for_firm_user_id).first<{ id: string }>();
+    if (!other) {
+      return json({ error: "not_a_partner", detail: "briefs can only be built for an active Managing Partner" }, { status: 400 });
+    }
+    target = other.id;
+  }
+
   try {
-    const out = await generateForPartner(ctx.env, actor, actor.firmUserId!, new Date());
+    const out = await generateForPartner(ctx.env, actor, target, new Date());
     if (out.status === "READY") await deliverReport(ctx.env, out.report_id).catch(() => undefined);
     return json(out, { status: 201 });
   } catch (err) {
