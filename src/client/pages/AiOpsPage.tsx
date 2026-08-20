@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { readableDate, shortDate } from "../lib/dates";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { SPEND_POSTURES, postureDef, postureFor } from "@shared/ai/spendPosture";
 import { PrivacyModePanel } from "./PrivacyModePanel";
@@ -353,7 +354,7 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
             </div>
             <p className="muted small">
               Across {cost.data.all_time.runs} completed run{cost.data.all_time.runs === 1 ? "" : "s"}
-              {cost.data.all_time.since ? ` since ${cost.data.all_time.since.slice(0, 10)}` : ""}. Runs
+              {cost.data.all_time.since ? ` since ${readableDate(cost.data.all_time.since)}` : ""}. Runs
               completed before cost recording was corrected on 19 Aug 2026 stored zero, so the true
               figure is a little higher than this.
             </p>

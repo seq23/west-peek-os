@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { readableDate, shortDate } from "../lib/dates";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
 import { portraitFor } from "../lib/employeePortraits";
@@ -415,7 +416,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                           {c.looks!.length} page{c.looks!.length === 1 ? "" : "s"} read
                         </span>
                       )}
-                      {c.due_at && <span className="muted small">due {c.due_at.slice(0, 10)}</span>}
+                      {c.due_at && <span className="muted small">due {shortDate(c.due_at)}</span>}
                       <span className={`work-card-chevron${isOpen ? " is-open" : ""}`} aria-hidden="true">›</span>
                     </span>
 
@@ -467,7 +468,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                     ? "Nobody owns this"
                     : `Owned by ${c.owner_name ?? c.owner_id ?? c.owner_type.toLowerCase()}`}
                   {c.capture_id ? " · from something you captured" : ""}
-                  {c.due_at ? ` · due ${c.due_at.slice(0, 10)}` : ""}
+                  {c.due_at ? ` · due ${shortDate(c.due_at)}` : ""}
                 </p>
               </div>
 

@@ -84,7 +84,7 @@ export function UniversityPage(): JSX.Element {
             className="professor-face"
             src={portraitFor(PROFESSOR.name)!}
             alt={portraitAlt(PROFESSOR.name, PROFESSOR.role)}
-          />
+          loading="lazy" />
         ) : (
           <span className="professor-face professor-face-initial" aria-hidden="true">{PROFESSOR.name.slice(0, 1)}</span>
         )}

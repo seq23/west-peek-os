@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { readableDate, shortDate } from "./lib/dates";
 import { api, getDevUser, signOut, useApi, type MeResponse } from "./lib/api";
 import { HomePage } from "./pages/HomePage";
 import { IntelligencePage } from "./pages/IntelligencePage";
@@ -1204,7 +1205,7 @@ function GovernancePage({ me }: { me: MeResponse }) {
               <strong>{u.title}</strong>{" "}
               <span className="badge">{governanceType(u.update_type)?.label ?? u.update_type}</span>
               {governanceType(u.update_type)?.binds && <span className="badge">binding</span>}{" "}
-              <span className="muted small">issued {u.created_at.slice(0, 10)}</span>
+              <span className="muted small">issued {readableDate(u.created_at)}</span>
             </p>
             <p>{u.body}</p>
           </li>
@@ -2825,7 +2826,7 @@ function UnresolvedPeople(): JSX.Element | null {
             <strong>{p.full_name}</strong>
             {p.organization ? ` — ${p.organization}` : ""}
             {p.email ? ` · ${p.email}` : ""}
-            <span className="muted small"> · met {p.resolved_at.slice(0, 10)}</span>
+            <span className="muted small"> · met {readableDate(p.resolved_at)}</span>
           </li>
         ))}
       </ul>

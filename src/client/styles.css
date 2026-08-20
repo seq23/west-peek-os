@@ -1662,6 +1662,11 @@ hr {
 .page-purpose-line {
   margin: 0;
   color: var(--wp-muted);
+  /* Paragraphs carry a global reading measure, which is right for prose and wrong here: this is a
+     header line, not something anybody reads top to bottom, and constraining it wrapped the
+     sentence at two-thirds width while leaving the rest of the row empty — and pulled the help
+     link into the middle of the page rather than its right edge. */
+  max-width: none;
 }
 
 .page-purpose-line strong { color: var(--wp-ink); font-weight: 600; }
@@ -1675,6 +1680,7 @@ hr {
 
 .page-purpose-can {
   margin: 0.15rem 0 0;
+  max-width: none;
   font-size: var(--text-xs);
   color: var(--wp-muted);
   clear: both;
@@ -3438,4 +3444,38 @@ tbody tr.is-selected > td {
   text-align: right;
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Touch and safe areas ──────────────────────────────────────────────────
+   Two things a desktop-built interface always forgets, both only visible on a
+   phone. `manipulation` removes the ~300ms wait browsers spend deciding whether
+   a tap was a double-tap-to-zoom — on every control in the product that delay
+   is the difference between responsive and sluggish. Zoom itself is untouched:
+   disabling it would be an accessibility failure, and this does not. */
+button,
+a,
+summary,
+input,
+select,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+/* The tap flash, chosen rather than inherited. The default translucent black
+   square is nobody's design decision. */
+:root {
+  -webkit-tap-highlight-color: color-mix(in oklab, var(--wp-orange) 22%, transparent);
+}
+
+/* Notches and home indicators. The shell runs full-bleed, so without these the
+   nav rail sits under the camera cutout and the footer under the home bar. */
+.app-shell,
+.rail,
+.nav-rail {
+  padding-left: env(safe-area-inset-left);
+}
+
+body {
+  padding-bottom: env(safe-area-inset-bottom);
 }

@@ -302,7 +302,7 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
     <section data-testid="research-page">
       <div className="card professor-welcome" data-testid="research-analyst">
         {portraitFor(ANALYST.name) ? (
-          <img className="professor-face" src={portraitFor(ANALYST.name)!} alt={portraitAlt(ANALYST.name, ANALYST.role)} />
+          <img className="professor-face" src={portraitFor(ANALYST.name)!} alt={portraitAlt(ANALYST.name, ANALYST.role)} loading="lazy" />
         ) : (
           <span className="professor-face professor-face-initial" aria-hidden="true">{ANALYST.name.slice(0, 1)}</span>
         )}
