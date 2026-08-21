@@ -879,7 +879,9 @@ describe("7. opportunity lifecycle and the event spine", () => {
     expect(skip.status).toBe(409);
 
     for (const to of ["SCREENING", "DILIGENCE", "PASS"]) {
-      const res = await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to });
+      // A pass carries its reason now — see "a pass is a decision, and closing is a partner's".
+      const body = to === "PASS" ? { to, reason: "team split before we could diligence it" } : { to };
+      const res = await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", body);
       expect(res.status).toBe(200);
     }
     // A pass is reversible but not a free pass: the only way out of it is back to screening.
@@ -904,7 +906,8 @@ describe("7. opportunity lifecycle and the event spine", () => {
     const company = await createCompany("Reconsidered Co");
     const opp = await createOpportunityApi(company, { title: "reconsider" });
     for (const to of ["SCREENING", "DILIGENCE", "PASS"]) {
-      expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to })).status).toBe(200);
+      const body = to === "PASS" ? { to, reason: "too early for us at the time, worth revisiting" } : { to };
+      expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", body)).status).toBe(200);
     }
 
     const reopened = await call<{ status: string }>(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "SCREENING" });
@@ -930,7 +933,16 @@ describe("7. opportunity lifecycle and the event spine", () => {
   it("a withdrawn deal can also be brought back", async () => {
     const company = await createCompany("Returned Co");
     const opp = await createOpportunityApi(company, { title: "returned" });
-    expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "WITHDRAWN" })).status).toBe(200);
+    // Withdrawing carries a reason for the same purpose a pass does: the firm wants to know why
+    // when the company comes back.
+    expect(
+      (
+        await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", {
+          to: "WITHDRAWN",
+          reason: "founder paused the raise to finish an enterprise pilot",
+        })
+      ).status,
+    ).toBe(200);
     expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to: "SCREENING" })).status).toBe(200);
   });
 
@@ -942,7 +954,10 @@ describe("7. opportunity lifecycle and the event spine", () => {
       expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to })).status).toBe(200);
     }
     for (const to of ["SCREENING", "PASS", "WITHDRAWN", "DILIGENCE"]) {
-      expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", { to })).status).toBe(409);
+      // A reason is supplied deliberately, so the 409 is proven to come from the lifecycle being
+      // terminal rather than from the reason check in front of it.
+      const body = { to, reason: "a reason that should not rescue an illegal transition" };
+      expect((await call(`/api/opportunities/${opp.id}/transition`, MP, "POST", body)).status).toBe(409);
     }
   });
 
@@ -1256,5 +1271,82 @@ describe("values recorded as placeholders", () => {
     const payload = JSON.parse(events.results![0]!.payload_json);
     expect(payload.confirmed).toEqual(["price_per_share"]);
     expect(payload.still_provisional).toEqual(["quantity"]);
+  });
+});
+
+/*
+ * The fund could say yes and could not say no, and yes was the ungated one.
+ *
+ * The lifecycle allowed PASS and WITHDRAWN from every live stage — the machine was right. Nothing
+ * in the interface could reach it, so the "Passed" filter on Dealflow was permanently zero and the
+ * firm had no record of what it had declined, which for a venture fund is half the value of a
+ * pipeline. Meanwhile CLOSED — the transition that says the fund's money is in — was a single
+ * unconfirmed click, because `opportunity.transition` is not a reserved action.
+ */
+describe("a pass is a decision, and closing is a partner's", () => {
+  async function liveDeal(): Promise<string> {
+    const company = await t.db.prepare("SELECT id FROM canonical_company LIMIT 1").first<{ id: string }>();
+    const created = await call<{ id: string }>("/api/opportunities", MP, "POST", {
+      company_id: company!.id,
+      opportunity_type: "EARLY_STAGE_PRIMARY",
+      title: "A deal to decline",
+    });
+    return created.body.id;
+  }
+
+  it("refuses a pass with no reason, because a pass without one is worth nothing later", async () => {
+    const id = await liveDeal();
+    const res = await call(`/api/opportunities/${id}/transition`, MP, "POST", { to: "PASS" });
+    expect(res.status).toBe(400);
+    expect((res.body as { error: string }).error).toBe("reason_required");
+  });
+
+  it("refuses a reason too short to tell a future reader anything", async () => {
+    const id = await liveDeal();
+    const res = await call(`/api/opportunities/${id}/transition`, MP, "POST", { to: "PASS", reason: "no" });
+    expect(res.status).toBe(400);
+  });
+
+  it("records the pass and keeps the reason on the deal and on the spine", async () => {
+    const id = await liveDeal();
+    const reason = "second founder had already left and nobody would say why";
+    const res = await call(`/api/opportunities/${id}/transition`, MP, "POST", { to: "PASS", reason });
+    expect(res.status).toBe(200);
+
+    const row = await t.db
+      .prepare("SELECT status, exit_reason FROM investment_opportunity WHERE id = ?1")
+      .bind(id)
+      .first<{ status: string; exit_reason: string }>();
+    expect(row?.status).toBe("PASS");
+    expect(row?.exit_reason).toBe(reason);
+
+    const ev = await t.db
+      .prepare(
+        "SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'investment.opportunity_transitioned' ORDER BY created_at DESC LIMIT 1",
+      )
+      .bind(id)
+      .first<{ payload_json: string }>();
+    expect(ev!.payload_json).toContain("second founder");
+  });
+
+  it("does not ask for a reason on an ordinary forward move", async () => {
+    const id = await liveDeal();
+    const res = await call(`/api/opportunities/${id}/transition`, MP, "POST", { to: "SCREENING" });
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses to record the fund as invested for somebody who is not a Managing Partner", async () => {
+    const id = await liveDeal();
+    for (const to of ["SCREENING", "DILIGENCE", "IC_READY", "IC_DECIDED"]) {
+      await call(`/api/opportunities/${id}/transition`, MP, "POST", { to });
+    }
+    const res = await call(
+      `/api/opportunities/${id}/transition`,
+      { "x-wpos-dev-user": "browser-agent@westpeek.ventures" },
+      "POST",
+      { to: "CLOSED" },
+    );
+    // Closing means money is in. That is a partner's call, not a single unconfirmed click.
+    expect([401, 403]).toContain(res.status);
   });
 });
