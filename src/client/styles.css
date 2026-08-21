@@ -206,7 +206,7 @@ a {
 
 a:hover { color: var(--wp-orange-deeper); }
 
-/* type-scale-exempt: relative optical correction — monospace renders larger than the body face at the same nominal size, so this shrinks it to MATCH whatever step its context is on rather than setting a step of its own */
+/* design-token-exempt: relative optical correction — monospace renders larger than the body face at the same nominal size, so this shrinks it to MATCH whatever step its context is on rather than setting a step of its own */
 code,
 kbd,
 samp,
@@ -216,7 +216,7 @@ pre {
 }
 
 code {
-  padding: 1px var(--space-2xs);
+  padding: var(--space-3xs) var(--space-2xs);
   border-radius: var(--radius-xs);
   background: var(--wp-surface-2);
   border: 1px solid var(--wp-line);
@@ -321,7 +321,7 @@ hr {
 }
 
 .rail-context {
-  margin: 1px 0 0;
+  margin: var(--space-3xs) 0 0;
   color: var(--wp-shell-ink-2);
   font-size: var(--text-2xs);
   text-transform: uppercase;
@@ -413,7 +413,7 @@ hr {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: var(--space-3xs);
 }
 
 /* An explicit `display` beats the [hidden] attribute's UA `display: none`, so a collapsed group
@@ -734,7 +734,7 @@ hr {
   font: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
-  line-height: 1.2;
+  line-height: var(--lh-tight);
   white-space: nowrap;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
@@ -1057,7 +1057,7 @@ hr {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3xs);
-  padding: 1px var(--space-xs);
+  padding: var(--space-3xs) var(--space-xs);
   border: 1px solid var(--wp-line-strong);
   border-radius: var(--radius-pill);
   background: var(--wp-neutral-tint);
@@ -1065,7 +1065,7 @@ hr {
   font-size: var(--text-2xs);
   font-weight: 700;
   letter-spacing: 0.02em;
-  line-height: 1.6;
+  line-height: var(--lh-normal);
   white-space: nowrap;
   vertical-align: baseline;
 }
@@ -1350,7 +1350,7 @@ hr {
   padding: 0 var(--space-sm);
   color: var(--wp-shell-ink-2);
   font-size: var(--text-2xs);
-  line-height: 1.4;
+  line-height: var(--lh-snug);
 }
 
 /* — "How this works": present on every operational page, quiet until asked. */
@@ -1395,7 +1395,7 @@ hr {
   margin: var(--space-2xs) 0 0;
   color: var(--wp-ink-2);
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: var(--lh-normal);
 }
 .hint-list ul { margin: 0; padding-left: var(--space-md); }
 .hint-none { color: var(--wp-muted); font-style: italic; }
@@ -1406,7 +1406,7 @@ hr {
   margin: 0 0 var(--space-md);
   color: var(--wp-ink-2);
   font-size: var(--text-md);
-  line-height: 1.55;
+  line-height: var(--lh-normal);
 }
 .help-legend {
   display: flex;
@@ -1416,7 +1416,7 @@ hr {
 }
 .help-tag {
   display: inline-block;
-  padding: 2px var(--space-2xs);
+  padding: var(--space-3xs) var(--space-2xs);
   border: 1px solid var(--wp-line);
   border-radius: var(--radius-xs);
   background: var(--wp-surface);
@@ -1481,7 +1481,7 @@ hr {
   flex-wrap: wrap;
   margin: 0 0 var(--space-xs);
 }
-.help-topic p, .help-topic li { color: var(--wp-ink-2); line-height: 1.55; }
+.help-topic p, .help-topic li { color: var(--wp-ink-2); line-height: var(--lh-normal); }
 .help-glossary dt { margin-top: var(--space-xs); font-weight: 700; color: var(--wp-ink); }
 .help-glossary dd { margin: 0 0 0 var(--space-md); color: var(--wp-ink-2); }
 
@@ -1509,7 +1509,7 @@ hr {
 
 /* — The Daily Brief: prose is the product. Measured line length, generous leading. */
 .brief-prose { max-width: 68ch; margin: var(--space-sm) 0; }
-.brief-prose p { margin: 0 0 var(--space-sm); color: var(--wp-ink); line-height: 1.6; }
+.brief-prose p { margin: 0 0 var(--space-sm); color: var(--wp-ink); line-height: var(--lh-normal); }
 .brief-prose h5 {
   margin: var(--space-md) 0 var(--space-2xs);
   font-size: var(--text-sm);
@@ -1518,7 +1518,7 @@ hr {
   color: var(--wp-muted);
 }
 .brief-prose ul { margin: 0 0 var(--space-sm); padding-left: var(--space-md); }
-.brief-prose li { margin-bottom: var(--space-2xs); color: var(--wp-ink); line-height: 1.55; }
+.brief-prose li { margin-bottom: var(--space-2xs); color: var(--wp-ink); line-height: var(--lh-normal); }
 .brief-sources { margin: var(--space-sm) 0; }
 .brief-sources summary {
   cursor: pointer;
@@ -1541,7 +1541,7 @@ hr {
   padding: var(--space-2xs) 0;
   border-bottom: 1px solid var(--wp-line);
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: var(--lh-normal);
 }
 .turn-who { color: var(--wp-muted); font-weight: 600; font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-label); }
 .turn-mp .turn-body { color: var(--wp-ink); font-weight: 500; }
@@ -1563,7 +1563,7 @@ hr {
 .live-help-quick button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* — Ask: the answer reads first; the framing is available, not imposed. */
-.ask-answer { max-width: 66ch; margin: 0 0 var(--space-sm); color: var(--wp-ink); font-size: var(--text-md); line-height: 1.55; }
+.ask-answer { max-width: 66ch; margin: 0 0 var(--space-sm); color: var(--wp-ink); font-size: var(--text-md); line-height: var(--lh-normal); }
 .ask-facts { list-style: none; margin: 0 0 var(--space-md); padding: 0; }
 .ask-facts li { margin-bottom: var(--space-2xs); color: var(--wp-ink-2); font-size: var(--text-sm); }
 .ask-machinery { margin: 0 0 var(--space-md); }
@@ -1624,7 +1624,7 @@ hr {
 /* — Meeting close-out. The source quote is indented and quiet: it is evidence for the line above
      it, not a second thing to read. */
 .closeout h5 { margin: var(--space-sm) 0 var(--space-2xs); font-size: var(--text-base); }
-.closeout-quote { border-left: 2px solid var(--wp-line); padding-left: var(--space-xs); margin-top: 2px; font-style: italic; }
+.closeout-quote { border-left: 2px solid var(--wp-line); padding-left: var(--space-xs); margin-top: var(--space-3xs); font-style: italic; }
 
 /* — IC Decision Portal. Tabs are a horizontal scroller on narrow screens rather than wrapping into
      a block that pushes the content off-screen. */
@@ -1674,7 +1674,7 @@ hr {
   margin-bottom: var(--space-sm);
   border-bottom: 1px solid var(--wp-line);
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: var(--lh-normal);
 }
 
 .page-purpose-line {
@@ -1714,7 +1714,7 @@ hr {
    same size". It is now one size, and the three parts are told apart by weight and colour
    instead. */
 .page-purpose-can {
-  margin: 0.15rem 0 0;
+  margin: var(--space-3xs) 0 0;
   max-width: none;
   font-size: inherit;
   color: var(--wp-muted);
@@ -1744,8 +1744,8 @@ hr {
      the mode is the most consequential choice on the page. */
 .university-modes { border: none; padding: 0; margin: var(--space-sm) 0; display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
 .mode-chip {
-  display: flex; flex-direction: column; gap: 2px; cursor: pointer;
-  border: 1px solid var(--wp-line); border-radius: 4px;
+  display: flex; flex-direction: column; gap: var(--space-3xs); cursor: pointer;
+  border: 1px solid var(--wp-line); border-radius: var(--radius-sm);
   padding: var(--space-2xs) var(--space-xs); min-height: 44px; justify-content: center;
   flex: 1 1 13rem;
 }
@@ -1761,7 +1761,7 @@ hr {
 .mkt-panel { border: 1px solid var(--wp-line); padding: var(--space-xs); background: var(--wp-surface-2); }
 .mkt-panel h4 { margin: 0 0 var(--space-2xs); font-size: var(--text-md); }
 .mkt-tiles { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2xs); }
-.mkt-tile { background: var(--wp-surface); border: 1px solid var(--wp-line); padding: var(--space-2xs); display: flex; flex-direction: column; gap: 1px; }
+.mkt-tile { background: var(--wp-surface); border: 1px solid var(--wp-line); padding: var(--space-2xs); display: flex; flex-direction: column; gap: var(--space-3xs); }
 .mkt-tile-ours { border-left: 3px solid var(--wp-orange); }
 
 /* — Approval context. Indented under the card head so the decision controls stay the focus and the
@@ -1774,8 +1774,8 @@ hr {
 .thesis-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 14px 24px;
-  margin: 16px 0;
+  gap: var(--space-md) var(--space-xl);
+  margin: var(--space-lg) 0;
 }
 .thesis-grid > div { min-width: 0; }
 .thesis-grid dt {
@@ -1783,7 +1783,7 @@ hr {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   opacity: 0.65;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-3xs);
 }
 .thesis-grid dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 
@@ -2024,9 +2024,9 @@ hr {
   gap: var(--space-2xl);
   margin: var(--space-lg) 0;
 }
-/* type-scale-exempt: text drawn inside an SVG ring, sized to the geometry of the graphic rather than to a document scale */
+/* design-token-exempt: text drawn inside an SVG ring, sized to the geometry of the graphic rather than to a document scale */
 .ring-total { font-size: 15px; font-weight: 700; fill: var(--wp-ink); font-variant-numeric: tabular-nums; }
-/* type-scale-exempt: as .ring-total — inside the drawn ring */
+/* design-token-exempt: as .ring-total — inside the drawn ring */
 .ring-caption { font-size: 7px; fill: var(--wp-muted); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 
 .allocation-legend { list-style: none; margin: 0; padding: 0; flex: 1 1 320px; min-width: 0; }
@@ -2203,10 +2203,10 @@ hr {
 .summary-button > summary {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.45rem 0.9rem;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
   border: 1px solid var(--wp-orange);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--wp-orange);
   color: var(--wp-orange-ink);
   font-weight: 600;
@@ -2241,7 +2241,7 @@ hr {
 }
 
 /* The revealed form needs separating from the button that opened it. */
-.summary-button[open] > summary { margin-bottom: 0.75rem; }
+.summary-button[open] > summary { margin-bottom: var(--space-md); }
 
 /* ── Brief: markets table, traffic lights ─────────────────────────────────────
  * Both exist because the reference brief the operator supplied reads in two
@@ -2252,7 +2252,7 @@ hr {
  */
 .brief-table-wrap {
   overflow-x: auto;              /* levels tables get wide; the page must not. */
-  margin: 0.75rem 0;
+  margin: var(--space-md) 0;
 }
 
 .brief-table {
@@ -2264,7 +2264,7 @@ hr {
 .brief-table th,
 .brief-table td {
   text-align: left;
-  padding: 0.4rem 0.75rem 0.4rem 0;
+  padding: var(--space-xs) var(--space-md) var(--space-xs) 0;
   border-bottom: 1px solid var(--wp-line);
 }
 
@@ -2283,17 +2283,17 @@ hr {
 
 .brief-lights {
   list-style: none;
-  margin: 0.75rem 0;
+  margin: var(--space-md) 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-xs);
 }
 
 .brief-lights li {
   display: flex;
   align-items: baseline;
-  gap: 0.55rem;
+  gap: var(--space-sm);
   flex-wrap: wrap;
 }
 
@@ -2326,7 +2326,7 @@ hr {
   width: 1px;
   height: 1px;
   padding: 0;
-  margin: -1px;
+  margin: var(--space-3xs);
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
@@ -2339,13 +2339,13 @@ hr {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.15rem;
+  gap: var(--space-3xs);
   width: 100%;
   text-align: left;
-  margin-top: 0.5rem;
-  padding: 0.6rem 0.9rem;
+  margin-top: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
   border: 1px solid var(--wp-orange);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--wp-orange);
   color: var(--wp-orange-ink);
   font-weight: 600;
@@ -2371,21 +2371,21 @@ hr {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: var(--space-xs);
   padding: 0;
-  margin: 0.4rem 0 1rem;
+  margin: var(--space-xs) 0 var(--space-lg);
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.2rem 0.6rem;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-sm);
   border: 1px solid var(--wp-line-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--wp-surface);
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: var(--lh-normal);
 }
 
 /* Firm-level: reads as a statement rather than a control. */
@@ -2398,7 +2398,7 @@ hr {
 .chip > button {
   border: 0;
   background: none;
-  padding: 0 0.1rem;
+  padding: 0 var(--space-3xs);
   font-size: var(--text-md);
   line-height: 1;
   cursor: pointer;
@@ -2421,13 +2421,13 @@ hr {
   color: var(--wp-orange-ink);
 }
 
-.suggestion-group { margin-bottom: 0.5rem; }
-.suggestion-group .chip-row { margin-top: 0.2rem; }
+.suggestion-group { margin-bottom: var(--space-sm); }
+.suggestion-group .chip-row { margin-top: var(--space-2xs); }
 
 /* A quieter divider for reference material below the thing a page is actually for. */
 .behind-the-brief {
-  margin-top: 2rem;
-  padding-top: 0.75rem;
+  margin-top: var(--space-2xl);
+  padding-top: var(--space-md);
   border-top: 1px solid var(--wp-line);
 }
 
@@ -2440,8 +2440,8 @@ hr {
 /* Team headings in the lounge. Quieter than a page heading — they divide a list, they do not
    introduce a new subject — but heavy enough to scan down and stop at the right one. */
 .team-head {
-  margin-top: 1.75rem;
-  padding-bottom: 0.3rem;
+  margin-top: var(--space-xl);
+  padding-bottom: var(--space-2xs);
   border-bottom: 1px solid var(--wp-line);
 }
 
@@ -2450,41 +2450,41 @@ hr {
   margin: 0;
 }
 
-.team-head:first-of-type { margin-top: 0.75rem; }
+.team-head:first-of-type { margin-top: var(--space-md); }
 
 /* The connect explainer. Each capability is its own block with a rule above it, because the whole
    point is that they are SEPARATE things — running them together as one list is what made "email"
    ambiguous in the first place. */
 .connect-help .connect-fact {
   border-top: 1px solid var(--wp-line);
-  padding-top: 0.85rem;
-  margin-top: 1rem;
+  padding-top: var(--space-md);
+  margin-top: var(--space-lg);
 }
 
 .connect-help .connect-fact:first-of-type {
   border-top: 0;
-  margin-top: 0.4rem;
+  margin-top: var(--space-xs);
 }
 
 .connect-help h4 {
-  margin: 0 0 0.3rem;
+  margin: 0 0 var(--space-2xs);
   font-size: var(--text-md);
 }
 
 .connect-help ul,
 .connect-help ol {
-  margin: 0.2rem 0 0.7rem;
-  padding-left: 1.15rem;
+  margin: var(--space-2xs) 0 var(--space-md);
+  padding-left: var(--space-lg);
 }
 
-.connect-help li { margin-bottom: 0.25rem; }
+.connect-help li { margin-bottom: var(--space-2xs); }
 
 
 /* The setup strip. A header, not a card: quiet enough to sit above the date without competing with
    it, and one line tall until somebody wants the rest. */
 .connect-strip {
-  padding: 0.5rem 0.9rem;
-  margin-bottom: 1rem;
+  padding: var(--space-sm) var(--space-lg);
+  margin-bottom: var(--space-lg);
   background: var(--wp-neutral-tint);
   border: 1px solid var(--wp-line);
 }
@@ -2492,7 +2492,7 @@ hr {
 .connect-strip > summary {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   cursor: pointer;
   list-style: none;
 }
@@ -2511,7 +2511,7 @@ hr {
 }
 
 .connect-strip[open] > summary::after { transform: rotate(-135deg); }
-.connect-strip[open] > summary { margin-bottom: 0.9rem; }
+.connect-strip[open] > summary { margin-bottom: var(--space-lg); }
 
 @media (prefers-reduced-motion: reduce) {
   .connect-strip > summary::after { transition: none; }
@@ -2522,12 +2522,12 @@ hr {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.9rem;
+  gap: var(--space-lg);
   flex-wrap: wrap;
   border: 1px solid var(--wp-line);
-  border-radius: 6px;
-  padding: 0.6rem 0.8rem;
-  margin: 0.6rem 0 0 0;
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-sm) 0 0 0;
   background: var(--wp-surface);
 }
 
@@ -2542,12 +2542,12 @@ hr {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--space-lg);
   flex-wrap: wrap;
-  padding: 0.7rem 0.9rem;
-  margin: 0.5rem 0 1rem;
+  padding: var(--space-md) var(--space-lg);
+  margin: var(--space-sm) 0 var(--space-lg);
   border: 1px solid var(--wp-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--wp-neutral-tint);
 }
 
@@ -2557,17 +2557,17 @@ hr {
 
 .review-capture label {
   display: block;
-  margin-bottom: 0.45rem;
+  margin-bottom: var(--space-sm);
 }
 
 .review-capture .form-row {
-  margin-bottom: 0.35rem;
+  margin-bottom: var(--space-xs);
 }
 
 /* A deferred badge should read as age, not as an error — the item is fine, its
    having survived three meetings is the finding. */
 .card-list .badge-gate {
-  margin-left: 0.4rem;
+  margin-left: var(--space-xs);
 }
 
 /* ── Nav sections read as sections ────────────────────────────────────────────
@@ -2600,7 +2600,7 @@ hr {
   padding: 0 var(--space-sm);
   color: var(--wp-shell-ink-2);
   font-size: var(--text-2xs);
-  line-height: 1.35;
+  line-height: var(--lh-snug);
   opacity: 0.72;
 }
 
@@ -2611,20 +2611,20 @@ hr {
  */
 .work-card-grid {
   list-style: none;
-  margin: 0 0 1.5rem;
+  margin: 0 0 var(--space-xl);
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
-  gap: 0.75rem;
+  gap: var(--space-md);
 }
 
 .work-card-grid > li {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.85rem;
+  gap: var(--space-sm);
+  padding: var(--space-md);
   border: 1px solid var(--wp-line);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--wp-surface);
   /* CONTAINMENT, AND IT IS NOT OPTIONAL.
      A grid track sizes to its content unless it is told not to, so one long
@@ -2643,15 +2643,15 @@ hr {
 .work-card-grid .notification-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: var(--space-xs);
   margin-top: auto;
-  padding-top: 0.5rem;
+  padding-top: var(--space-sm);
   border-top: 1px solid var(--wp-line);
 }
 
 /* Where a card came from, set apart from what it says to do. */
 .work-card-origin {
-  padding-left: 0.6rem;
+  padding-left: var(--space-sm);
   border-left: 2px solid var(--wp-line-strong);
 }
 
@@ -2660,24 +2660,24 @@ hr {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.3rem 1.1rem;
-  margin: 0 0 1.25rem;
-  padding: 0.6rem 0.9rem;
+  gap: var(--space-2xs) var(--space-lg);
+  margin: 0 0 var(--space-lg);
+  padding: var(--space-sm) var(--space-lg);
   border: 1px solid var(--wp-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--wp-neutral-tint);
 }
 
 .work-legend li {
   display: flex;
   align-items: baseline;
-  gap: 0.4rem;
+  gap: var(--space-xs);
 }
 
 /* Marks where the scheduled half of the page begins. */
 .work-scheduled-head {
-  margin-top: 2.5rem;
-  padding-top: 0.9rem;
+  margin-top: var(--space-2xl);
+  padding-top: var(--space-lg);
   border-top: 2px solid var(--wp-line-strong);
 }
 
@@ -2685,7 +2685,7 @@ hr {
   display: inline-block;
   width: 0.5rem;
   height: 0.5rem;
-  margin-right: 0.35rem;
+  margin-right: var(--space-xs);
   border-right: 2px solid var(--wp-muted);
   border-bottom: 2px solid var(--wp-muted);
   transform: rotate(45deg) translateY(-2px);
@@ -2695,11 +2695,11 @@ hr {
 .work-card-look {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  margin-top: 0.5rem;
-  padding: 0.6rem;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+  padding: var(--space-sm);
   border: 1px dashed var(--wp-orange);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--wp-surface);
 }
 
@@ -2711,7 +2711,7 @@ hr {
 .work-card-look label {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: var(--space-2xs);
 }
 
 /* What the firm has spent, all time. A number somebody asks for first deserves to be readable
@@ -2730,12 +2730,12 @@ hr {
 .ask-card { border-left: 3px solid var(--wp-orange); }
 
 .ask-draft {
-  margin-top: 0.9rem;
-  padding-top: 0.9rem;
+  margin-top: var(--space-lg);
+  padding-top: var(--space-lg);
   border-top: 1px solid var(--wp-line);
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: var(--space-sm);
 }
 
 .ask-draft label { display: block; }
@@ -2745,13 +2745,13 @@ hr {
 .ask-examples-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  gap: 0.75rem 1.5rem;
-  margin-top: 0.9rem;
-  padding-top: 0.9rem;
+  gap: var(--space-md) var(--space-xl);
+  margin-top: var(--space-lg);
+  padding-top: var(--space-lg);
   border-top: 1px solid var(--wp-line);
 }
 
-.ask-examples-grid ul { margin: 0.25rem 0 0; }
+.ask-examples-grid ul { margin: var(--space-2xs) 0 0; }
 .ask-examples-grid .link-button { text-align: left; }
 
 /* ── Work cards ────────────────────────────────────────────────────────────
@@ -2761,7 +2761,7 @@ hr {
 .work-card-summary {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--space-xs);
   width: 100%;
   /* A flex item defaults to min-width:auto — it refuses to shrink below its
      content. That default is what let the title push out of the card. */
@@ -2779,7 +2779,7 @@ hr {
 .work-card-meta {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-xs);
   width: 100%;
 }
 
@@ -2798,7 +2798,7 @@ hr {
   width: 100%;
   min-width: 0;
   font-size: var(--text-md);
-  line-height: 1.3;
+  line-height: var(--lh-snug);
   /* Three lines of the title, and no more — a card whose heading runs to six
      breaks the rhythm that makes a board scannable. */
   max-height: 3.9em;
@@ -2813,7 +2813,7 @@ hr {
 .work-card-foot {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   width: 100%;
   min-width: 0;
 }
@@ -2839,11 +2839,11 @@ hr {
   overflow-wrap: anywhere;
   background: var(--wp-paper);
   border: 1px solid var(--wp-line);
-  border-radius: 4px;
-  padding: 0.55rem 0.7rem;
-  margin: 0.35rem 0 0;
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-xs) 0 0;
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: var(--lh-normal);
   white-space: pre-wrap;
 }
 
@@ -2866,8 +2866,8 @@ hr {
 
 .work-card-row.is-open .work-card-body {
   border-top: 1px solid var(--wp-line);
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
 }
 
 /* ── Owner chip ────────────────────────────────────────────────────────────
@@ -2876,7 +2876,7 @@ hr {
 .owner-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-xs);
   flex: 0 0 auto;
   font-size: var(--text-sm);
   color: var(--wp-muted);
@@ -2902,9 +2902,9 @@ hr {
   font-size: var(--text-2xs);
 }
 
-.work-legend-wrap { margin: 0 0 0.9rem; }
+.work-legend-wrap { margin: 0 0 var(--space-lg); }
 .work-legend-wrap > summary { cursor: pointer; }
-.work-legend-wrap > .work-legend { margin-top: 0.5rem; }
+.work-legend-wrap > .work-legend { margin-top: var(--space-sm); }
 
 /* ── Scheduled work: cards, not rows ───────────────────────────────────────
    Two-up on anything wide enough, one-up below. The grid is the point: a
@@ -2912,23 +2912,23 @@ hr {
 .job-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
-  gap: 1rem;
+  gap: var(--space-lg);
   list-style: none;
-  margin: 1rem 0 0;
+  margin: var(--space-lg) 0 0;
   padding: 0;
 }
 
-.job-card { display: flex; flex-direction: column; gap: 0.4rem; }
+.job-card { display: flex; flex-direction: column; gap: var(--space-xs); }
 
 /* A running job carries the accent on its edge, so on/off reads before any text does. */
 .job-card.is-on { border-left: 3px solid var(--wp-accent); }
 
-.job-card-head { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
-.job-card-title { margin: 0.15rem 0 0; }
-.job-card-actions { margin-top: auto; padding-top: 0.5rem; }
-.job-byline { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.job-card-head { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; }
+.job-card-title { margin: var(--space-3xs) 0 0; }
+.job-card-actions { margin-top: auto; padding-top: var(--space-sm); }
+.job-byline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
 
-.job-deliverer { display: inline-flex; align-items: center; gap: 0.35rem; }
+.job-deliverer { display: inline-flex; align-items: center; gap: var(--space-xs); }
 
 .job-face {
   width: 1.5rem;
@@ -2949,7 +2949,7 @@ hr {
 }
 
 .job-runs > summary { cursor: pointer; }
-.job-controls { margin-bottom: 1rem; }
+.job-controls { margin-bottom: var(--space-lg); }
 .job-controls > summary { cursor: pointer; }
 
 /* ── A named employee welcoming you to their page ──────────────────────────
@@ -2957,12 +2957,12 @@ hr {
    professor, Research's analyst. Portrait left, their words right. */
 .professor-welcome {
   display: flex;
-  gap: 1rem;
+  gap: var(--space-lg);
   align-items: flex-start;
 }
 
 .professor-welcome > div { min-width: 0; }
-.professor-welcome p { margin: 0 0 0.35rem; }
+.professor-welcome p { margin: 0 0 var(--space-xs); }
 .professor-welcome p:last-child { margin-bottom: 0; }
 
 .professor-face {
@@ -2993,7 +2993,7 @@ hr {
    system does is downstream of it. Text on that field is --wp-orange-ink, never
    white: white on this orange is 3.4:1 and fails. */
 .thesis-doc {
-  margin: 0 0 1.5rem;
+  margin: 0 0 var(--space-xl);
 }
 
 .thesis-doc-head {
@@ -3002,7 +3002,7 @@ hr {
   align-items: flex-start;
   gap: var(--space-lg);
   flex-wrap: wrap;
-  margin-bottom: 0.75rem;
+  margin-bottom: var(--space-md);
 }
 
 .thesis-doc-firm {
@@ -3014,26 +3014,26 @@ hr {
 }
 
 .thesis-doc-title {
-  margin: 0.2rem 0 0;
+  margin: var(--space-2xs) 0 0;
   font-size: var(--text-2xl);
   letter-spacing: -0.02em;
-  line-height: 1.1;
+  line-height: var(--lh-tight);
 }
 
 /* THE BANNER. Serif, display size, on the accent. */
 .thesis-banner {
   background: var(--wp-orange);
   color: var(--wp-orange-ink);
-  border-radius: 6px;
-  padding: 2.25rem 2.5rem;
+  border-radius: var(--radius-md);
+  padding: var(--space-2xl) var(--space-2xl);
 }
 
-/* type-scale-exempt: the fund's mandate rendered as a statement, and the one piece of display type in the product; fluid by design, and deliberately above the --text-2xl ceiling the rest of the OS keeps to */
+/* design-token-exempt: the fund's mandate rendered as a statement, and the one piece of display type in the product; fluid by design, and deliberately above the --text-2xl ceiling the rest of the OS keeps to */
 .thesis-banner-statement {
   margin: 0;
   font-family: var(--font-serif);
   font-size: clamp(1.4rem, 3.2vw, 2.1rem);
-  line-height: 1.28;
+  line-height: var(--lh-snug);
   letter-spacing: -0.014em;
   text-wrap: balance;
   max-width: 32em;
@@ -3043,9 +3043,9 @@ hr {
 .thesis-doc-stamp {
   display: flex;
   flex-wrap: wrap;
-  gap: 0 1.25rem;
-  margin: 1.5rem 0 0;
-  padding-top: 0.75rem;
+  gap: 0 var(--space-lg);
+  margin: var(--space-xl) 0 0;
+  padding-top: var(--space-md);
   border-top: 1px solid var(--wp-orange-deeper);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -3058,16 +3058,16 @@ hr {
   margin: 0;
   font-family: var(--font-serif);
   font-size: var(--text-lg);
-  line-height: 1.4;
+  line-height: var(--lh-snug);
 }
 
 /* The specification, on paper under the banner. */
 .thesis-doc-grid {
   margin: 0;
-  padding: 1.5rem 0 0;
+  padding: var(--space-xl) 0 0;
 }
 
-.thesis-doc-actions { margin: 1.25rem 0 0; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+.thesis-doc-actions { margin: var(--space-lg) 0 0; display: flex; gap: var(--space-lg); flex-wrap: wrap; align-items: center; }
 
 /* ── Printing the thesis ───────────────────────────────────────────────────
    What gets handed to an LP is this page with the application removed. */
@@ -3101,18 +3101,18 @@ hr {
    "this is broken" look identical unless the page says which. */
 .ic-flow {
   list-style: none;
-  margin: 1rem 0;
+  margin: var(--space-lg) 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: var(--space-lg);
 }
 
 .ic-step {
   display: flex;
-  gap: 0.85rem;
+  gap: var(--space-md);
   align-items: flex-start;
-  padding-left: 0.15rem;
+  padding-left: var(--space-3xs);
 }
 
 .ic-step-num {
@@ -3147,29 +3147,29 @@ hr {
 .ic-step:not(.is-here):not(.is-done) .ic-step-body { opacity: 0.72; }
 
 .ic-step-body { min-width: 0; }
-.ic-step-body > p { margin: 0 0 0.25rem; }
+.ic-step-body > p { margin: 0 0 var(--space-2xs); }
 .ic-step-body > p:last-child { margin-bottom: 0; }
 
-.ic-step-title { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+.ic-step-title { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 
 /* ── Deliverables ──────────────────────────────────────────────────────────
    Things an employee produced and handed over. Signed, with a face, and always
    carrying the two things that make it yours to keep: download and email. */
 .deliverable-list {
   list-style: none;
-  margin: 0.75rem 0 1.5rem;
+  margin: var(--space-md) 0 var(--space-xl);
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--space-md);
 }
 
-.deliverable { display: flex; flex-direction: column; gap: 0.4rem; }
+.deliverable { display: flex; flex-direction: column; gap: var(--space-xs); }
 
 .deliverable-head {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   flex-wrap: wrap;
 }
 
@@ -3188,15 +3188,15 @@ hr {
   overflow-y: auto;
   background: var(--wp-paper);
   border: 1px solid var(--wp-line);
-  border-radius: 4px;
-  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  padding: var(--space-md) var(--space-lg);
   font-family: inherit;
   font-size: var(--text-sm);
-  line-height: 1.55;
-  margin: 0.35rem 0;
+  line-height: var(--lh-normal);
+  margin: var(--space-xs) 0;
 }
 
-.deliverable-actions { margin-top: 0.15rem; }
+.deliverable-actions { margin-top: var(--space-3xs); }
 
 /* The row you opened. Without this the only feedback for pressing "Open" was a
    panel appearing below forty-five rows of table, off the bottom of the screen. */
@@ -3212,24 +3212,24 @@ tbody tr.is-selected > td {
    the first time the cheap tier was switched on. */
 .posture-list {
   list-style: none;
-  margin: 0.75rem 0 0;
+  margin: var(--space-md) 0 0;
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  gap: 0.6rem;
+  gap: var(--space-sm);
 }
 
 .posture-pick {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: var(--space-2xs);
   width: 100%;
   height: 100%;
   text-align: left;
-  padding: 0.8rem 0.9rem;
+  padding: var(--space-md) var(--space-lg);
   background: var(--wp-surface);
   border: 1px solid var(--wp-line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font: inherit;
   color: inherit;
@@ -3264,12 +3264,12 @@ tbody tr.is-selected > td {
 .posture-label {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-xs);
   font-weight: 600;
 }
 
-.posture-tradeoff { border-top: 1px solid var(--wp-line); padding-top: 0.35rem; margin-top: 0.15rem; }
-.spend-lever { margin-bottom: 1rem; }
+.posture-tradeoff { border-top: 1px solid var(--wp-line); padding-top: var(--space-xs); margin-top: var(--space-3xs); }
+.spend-lever { margin-bottom: var(--space-lg); }
 
 /* ── Touch targets ─────────────────────────────────────────────────────────
    `.link-button` is the most-used interactive element in the product — sixty-four
@@ -3305,30 +3305,30 @@ tbody tr.is-selected > td {
    They have faces again — all thirty-one portraits are committed — because the
    page whose job is making the workforce feel like people should not show a
    grey initial to somebody you are considering bringing back. */
-.retired-list { list-style: none; margin: 0.75rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.retired-list { list-style: none; margin: var(--space-md) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-sm); }
 
 .retired-person {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: var(--space-sm);
   flex-wrap: wrap;
-  padding-bottom: 0.6rem;
+  padding-bottom: var(--space-sm);
   border-bottom: 1px solid var(--wp-line);
 }
 .retired-person:last-child { border-bottom: 0; padding-bottom: 0; }
 
 .retired-who { flex: 1 1 12rem; min-width: 0; }
-.retired-actions { display: flex; gap: 0.75rem; flex: 0 0 auto; }
+.retired-actions { display: flex; gap: var(--space-md); flex: 0 0 auto; }
 
 /* The advisor's verdict. Colour is never the only cue — the verdict word is in
    the badge — but the edge lets you scan several at once. */
 .unretire-advice {
   flex: 1 1 100%;
   border-left: 3px solid var(--wp-line-strong);
-  padding: 0.5rem 0 0.5rem 0.8rem;
-  margin-top: 0.35rem;
+  padding: var(--space-sm) 0 var(--space-sm) var(--space-md);
+  margin-top: var(--space-xs);
 }
-.unretire-advice p { margin: 0 0 0.3rem; }
+.unretire-advice p { margin: 0 0 var(--space-2xs); }
 .unretire-advice p:last-child { margin-bottom: 0; }
 .unretire-advice.verdict-bring_back { border-left-color: var(--wp-good); }
 .unretire-advice.verdict-re_point { border-left-color: var(--wp-orange); }
@@ -3352,42 +3352,42 @@ tbody tr.is-selected > td {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-md);
-  padding: 1.25rem 1.5rem;
+  padding: var(--space-lg) var(--space-xl);
   margin: 0 0 var(--space-md);
   background: var(--wp-surface);
   border: 1px solid var(--wp-line-strong);
   border-left: 4px solid var(--wp-orange);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .funnel-mouth-copy { flex: 1 1 26rem; min-width: 0; }
-.funnel-mouth-copy h2 { margin: 0 0 0.35rem; letter-spacing: -0.02em; }
-.funnel-mouth-copy p { margin: 0 0 0.5rem; max-width: 46em; }
+.funnel-mouth-copy h2 { margin: 0 0 var(--space-xs); letter-spacing: -0.02em; }
+.funnel-mouth-copy p { margin: 0 0 var(--space-sm); max-width: 46em; }
 
 .funnel-mouth-action {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.3rem;
+  gap: var(--space-2xs);
   flex: 0 0 auto;
 }
 
 /* The one control on the page that earns extra size. */
 .btn-lg {
   font-size: var(--text-md);
-  padding: 0.7rem 1.4rem;
+  padding: var(--space-md) var(--space-xl);
 }
 
 /* ── Filter chips ──────────────────────────────────────────────────────────
    "Show me what we passed on" was a question this page could not answer. The
    selected chip carries the accent; the rest stay quiet so the row does not
    compete with the funnel above it. */
-.deal-filters { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-left: auto; }
+.deal-filters { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-left: auto; }
 
 .chip {
-  padding: 0.2rem 0.6rem;
+  padding: var(--space-2xs) var(--space-sm);
   border: 1px solid var(--wp-line-control);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--wp-surface);
   font-size: var(--text-sm);
   cursor: pointer;
@@ -3411,7 +3411,7 @@ tbody tr.is-selected > td {
    One page, one way. The answer appears under the box it was asked from, so
    the question and what came back read as one exchange rather than two blocks. */
 .ask-card { margin-bottom: var(--space-md); }
-.ask-card h2 { margin: 0 0 0.35rem; }
+.ask-card h2 { margin: 0 0 var(--space-xs); }
 
 .ask-answer {
   margin-top: var(--space-sm);
@@ -3419,7 +3419,7 @@ tbody tr.is-selected > td {
   border-top: 1px solid var(--wp-line);
 }
 
-.ask-prompt { display: block; margin-top: 0.6rem; }
+.ask-prompt { display: block; margin-top: var(--space-sm); }
 .ask-prompt textarea { width: 100%; font-family: var(--font-ui); }
 
 /* ── Health dot ────────────────────────────────────────────────────────────
@@ -3427,7 +3427,7 @@ tbody tr.is-selected > td {
    a static dot reads as decoration and the point is that something is live —
    but never as the only cue: the word beside it says the same thing, and the
    animation is dropped entirely for anyone who has asked for reduced motion. */
-.duty-heading { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.duty-heading { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 
 .health-dot {
   width: 0.55rem;
@@ -3461,17 +3461,17 @@ tbody tr.is-selected > td {
    Bars rather than a pie: the question is "how many of each, and which is
    biggest", which lengths answer at a glance and angles do not. Each row is a
    control — the chart narrows the list beneath it. */
-.mix-bars { list-style: none; margin: 0.5rem 0 var(--space-md); padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.mix-bars { list-style: none; margin: var(--space-sm) 0 var(--space-md); padding: 0; display: flex; flex-direction: column; gap: var(--space-2xs); }
 
 .mix-row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-md);
   width: 100%;
-  padding: 0.35rem 0.5rem;
+  padding: var(--space-xs) var(--space-sm);
   background: none;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font: inherit;
   color: inherit;
   cursor: pointer;
@@ -3487,12 +3487,12 @@ tbody tr.is-selected > td {
   flex: 1 1 auto;
   height: 0.65rem;
   background: var(--wp-line);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   overflow: hidden;
   min-width: 0;
 }
 
-.mix-fill { display: block; height: 100%; background: var(--wp-orange); border-radius: 999px; }
+.mix-fill { display: block; height: 100%; background: var(--wp-orange); border-radius: var(--radius-pill); }
 
 /* Tabular figures so the counts line up as a column down the right. */
 .mix-count {
@@ -3556,7 +3556,7 @@ body {
 .health-headline {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   border: 1px solid var(--wp-line);
   border-radius: var(--radius-md);
@@ -3580,13 +3580,13 @@ body {
   background: var(--wp-surface);
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: var(--space-2xs);
 }
 .health-card[data-state="OK"] { border-left-color: var(--wp-good); }
 .health-card[data-state="DEGRADED"] { border-left-color: var(--wp-warn); }
 .health-card[data-state="DOWN"] { border-left-color: var(--wp-danger); }
 
-.health-card-top { display: flex; align-items: center; gap: 0.45rem; }
+.health-card-top { display: flex; align-items: center; gap: var(--space-sm); }
 .health-card-label { font-weight: 600; }
 .health-card-state {
   margin-left: auto;
@@ -3608,7 +3608,7 @@ body {
 .capture-box-label {
   display: block;
   font-weight: 600;
-  margin-bottom: 0.4rem;
+  margin-bottom: var(--space-xs);
 }
 
 .capture-box {
@@ -3616,7 +3616,7 @@ body {
   padding: var(--space-sm);
   font: inherit;
   font-size: var(--text-md);
-  line-height: 1.5;
+  line-height: var(--lh-normal);
   border: 1px solid var(--wp-line-strong);
   border-radius: var(--radius-md);
   background: var(--wp-surface);
@@ -3626,12 +3626,12 @@ body {
 .capture-box::placeholder { color: var(--wp-muted); }
 
 .capture-choices { margin-top: var(--space-sm); gap: var(--space-sm); flex-wrap: wrap; }
-.capture-choices label { display: flex; flex-direction: column; gap: 0.25rem; font-weight: 600; }
+.capture-choices label { display: flex; flex-direction: column; gap: var(--space-2xs); font-weight: 600; }
 .capture-choices select { font-weight: 400; max-width: 22rem; }
 
 .capture-hint {
-  margin: 0.35rem 0 var(--space-sm);
-  padding-left: 0.6rem;
+  margin: var(--space-xs) 0 var(--space-sm);
+  padding-left: var(--space-sm);
   border-left: 2px solid var(--wp-line-strong);
 }
 
@@ -3660,7 +3660,7 @@ body {
 .deliverable-feedback {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-xs);
   margin-top: var(--space-sm);
   padding: var(--space-sm);
   border: 1px solid var(--wp-line);
@@ -3670,7 +3670,7 @@ body {
 .deliverable-feedback label { font-weight: 600; font-size: var(--text-xs); }
 .deliverable-feedback textarea {
   font: inherit;
-  padding: 0.5rem;
+  padding: var(--space-sm);
   border: 1px solid var(--wp-line-strong);
   border-radius: var(--radius-md);
   background: var(--wp-surface);
