@@ -1694,6 +1694,11 @@ hr {
   white-space: nowrap;
 }
 
+/* The sentence's last word and the link wrap as one unit, so the link is never a line by itself. */
+.page-purpose-tail {
+  white-space: nowrap;
+}
+
 /* ONE SIZE ACROSS THE WHOLE BLOCK.
    The sentence and the help link sat at --text-sm and this line at --text-xs — a single pixel
    apart, which is the worst possible gap: too small to read as a deliberate hierarchy, large

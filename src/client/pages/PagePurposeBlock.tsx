@@ -24,6 +24,12 @@ export function PagePurposeBlock({
   // Help itself does not need a block explaining Help.
   if (!p || navKey === "help") return null;
 
+  // Split the sentence so its last word can be tied to the link. `lastIndexOf` rather than a
+  // split/join round trip: the purpose text is prose and must survive verbatim, whitespace and all.
+  const cut = p.purpose.lastIndexOf(" ");
+  const lead = cut === -1 ? "" : p.purpose.slice(0, cut);
+  const tail = cut === -1 ? p.purpose : p.purpose.slice(cut + 1);
+
   return (
     /*
      * ONE LINE ACROSS THE PAGE. Not a block, and not an accordion either.
@@ -57,15 +63,22 @@ export function PagePurposeBlock({
         get wrong and no line for it to be orphaned on.
       */}
       <p className="page-purpose-line">
-        <strong>{label}.</strong> {p.purpose}{" "}
-        <button
-          type="button"
-          className="link-button page-purpose-help"
-          data-testid={`page-purpose-help-${navKey}`}
-          onClick={() => onNavigate("help")}
-        >
-          How everything works →
-        </button>
+        <strong>{label}.</strong> {lead}{lead ? " " : ""}
+        {/* The final word and the link travel together — a widow guard. Inline is right, but on a
+            page whose sentence happens to fill the line the link would drop to a line of its own,
+            which reads as an orphan rather than as the end of a sentence. Bound to the last word it
+            can never sit alone: either both fit, or both wrap. */}
+        <span className="page-purpose-tail">
+          {tail}{" "}
+          <button
+            type="button"
+            className="link-button page-purpose-help"
+            data-testid={`page-purpose-help-${navKey}`}
+            onClick={() => onNavigate("help")}
+          >
+            How everything works →
+          </button>
+        </span>
       </p>
       <p className="page-purpose-can">
         {p.youCan.map((c, i) => (
