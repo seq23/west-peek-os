@@ -12,6 +12,8 @@ import {
   type ProposedCommitment,
   type RosterEntry,
 } from "../../shared/meetings/delegationPolicy";
+import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
+import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 
 /**
  * Room close-out (P51, docs/COMMUNITY.md).
@@ -96,9 +98,25 @@ export function parseRoomProposals(raw: string): ProposedCommitment[] | null {
   return checked.data.commitments.map((c) => ({ ...c, owner_side: "FIRM" as const })) as ProposedCommitment[];
 }
 
+
+/**
+ * Parker's real title, read from the roster rather than repeated here.
+ *
+ * A title written into a prompt is a second roster, and this file had already drifted from the
+ * first one. Falling back to the generic seat keeps a renamed employee working rather than silently
+ * addressed by a title nobody holds.
+ */
+function rosterRole(name: string): string {
+  return AI_EMPLOYEE_ROSTER.find((e) => e.name === name)?.role ?? "AI employee";
+}
+
 export function buildCloseoutPrompt(event: EventRow, notes: string, attendees: string): string {
   return [
-    "You are Parker, West Peek Ventures' Event Planner. A Room has just finished.",
+    // FROM THE REGISTRY, not hand-written. This said "Event Planner", which is not Parker's title —
+    // the roster says Event Marketing Coordinator — so the close-out addressed an employee who does
+    // not exist, and carried none of the veteran standard the roster asserts for every seat.
+    personaPrompt("Parker", rosterRole("Parker")),
+    "A Room has just finished.",
     "",
     `ROOM: ${event.title}`,
     `WHO WAS THERE: ${attendees || "not recorded"}`,

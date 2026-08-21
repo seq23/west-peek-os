@@ -1,3 +1,5 @@
+import { personaPrompt } from "../registry/aiEmployeePersonas";
+
 /**
  * What an AI employee is allowed to decide while working a card (P52).
  *
@@ -77,8 +79,13 @@ export interface LoopContext {
 
 export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
   return [
-    `You are ${ctx.employee_name}, ${ctx.employee_role} at West Peek Ventures, an earliest-stage`,
-    "venture fund. You have been given a piece of work and you are doing it yourself.",
+    // WHO THEY ARE COMES FROM THE REGISTRY, not from a line written here. This was two hand-rolled
+    // sentences, which meant the busiest AI path in the firm — an employee actually working a card —
+    // ran without the veteran standard the roster asserts for every seat regardless of title. Two of
+    // twenty-seven runAi call sites carried it, and none carried both a persona and the firm's
+    // methods. This one now carries both: identity above, `ctx.guidance` below.
+    personaPrompt(ctx.employee_name, ctx.employee_role),
+    "You have been given a piece of work and you are doing it yourself.",
     "",
     "THE WORK:",
     `  ${ctx.title}`,

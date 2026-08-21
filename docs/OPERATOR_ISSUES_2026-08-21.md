@@ -91,10 +91,71 @@ watched succeeding in production on consecutive days.
 
 ## Operator notes filed 21 Aug 2026, not yet built
 
-**Machines tab should show each machine's Claude skills.** The operator wants to see, per machine,
-the skills its employees adhere to. Under investigation; nothing built yet.
+**Machines: show, and EDIT, each machine's skills.** Surveyed 21 Aug 2026.
 
-**West Peek Rooms is the flagship events product.** Its goal is community, brand, and money. There
+*What exists:* a real skill library — `src/shared/skills/library.ts`, 11 skills across 7 of the 45
+machines, attached to machines and inherited by employees through `primaryMachineKeys`. The Machines
+page already renders it firm-wide (`MachinesPage.tsx:361-406`). What it does **not** do is show a
+machine's methods inside that machine's own detail panel, which is where the operator looked.
+
+*What does not exist, and the correction worth stating plainly:* **skills cannot be edited, and not
+because the UI is confusing — there is no skill table.** `grep -in skill migrations/` returns zero
+hits across all 88 migrations. The library is code, so adding a skill today means a code change and
+a deploy.
+
+*The operator's ask:* write a new skill in plain English and have the system translate it into the
+technical prompt the machine's employees follow.
+
+*What that needs, honestly:* a `skill` table; a write path; an AI translation step (plain English →
+the structured guidance lines the library already uses); and a decision about governance. A skill
+changes how **every employee on that machine behaves on every run**, which makes it closer to a
+policy change than a note. The shape that fits this system: the operator writes it plainly, an
+employee drafts the technical version, **the operator reads the drafted version and approves it
+before it takes effect** — never a plain-English sentence silently becoming a live instruction
+nobody reviewed.
+
+*Capabilities are the mirror image.* The `capability` and `capability_assignment` tables exist with
+four working routes (`index.ts:1017-1020`) and **zero client callers**, so the page teaches what
+Active/Bench/Archive mean and offers no way to move anything between them.
+
+*Also worth knowing:* skills exist for 7 of 45 machines, and 9 of the 19 roster employees sit on a
+machine with no methods written down at all — Porter, Waverly, Wells, Willow, Walter, Parker, Pax,
+Preston and Whitney. Writing those is authorship, not engineering.
+
+**West Peek Rooms — the ethos document was found, and the generator ignores most of it.**
+`docs/COMMUNITY.md` is the source of truth and says so: *"Where the code and this document disagree,
+this document is right and the code is a bug."* It is already mirrored into
+`src/shared/events/programme.ts` with a test that fails if the wording drifts.
+
+*What it specifies:* Rooms are curated experiences — dinners, salons, workshops, deep-work sessions,
+operator roundtables, excursions, regional gatherings. A four-row rhythm: **weekly** (The Office),
+**monthly** (Mastermind and one Room), **quarterly** (regional gatherings, curated dinners,
+workshops), **annually** (Summit, Council). Rooms are *"the primary monetization layer"*; sponsors
+underwrite experiences and **never purchase access to members**. The pilot Zero-to-One Room is
+modelled at $30–45k from one presenting partner, one supporting partner and one in-kind partner —
+*"do not start with six logos."*
+
+*What the generator actually does:* proposes only the monthly Room — the other three rows of the
+rhythm exist as prose and as executable behaviour nowhere. City is hardcoded to New York; the job's
+configured city payload is never read, so it is dead config that looks live. It proposes for the
+CURRENT month while its own description promises next month's. The venue brief is hardcoded to *"a
+seated working dinner"*, so the candidate list is dinner venues before the model sees anything, and
+an unrecognised format silently becomes DINNER. **Every packet ever generated reports a sponsor
+target of exactly $27,500–$37,500** — arithmetic on a constant, not a judgement about whether this
+Room can attract a sponsor or which category fits it. `scheduleRoom` stamps `cadence='MONTHLY'` on
+every Room, so the one column that could carry per-type rhythm carries a constant.
+
+*The operator's clause that has no home yet:* an event should either model how it makes money, or
+say up front that it deliberately does not. Nothing in the schema or the verifier expresses that.
+The nearest thing is an advisory `no_sponsor_thesis` flag — a packet with no sponsor thesis and a
+phantom $37,500 revenue line still saves, still gets approved, still becomes a Room. Given the
+document calls Rooms the primary monetization layer, this is the largest hole.
+
+*Not found anywhere:* the "West Peek Rooms internal decision deck" that the canonical master plan
+lists as a source input. Not in the repo, the parent directory, sibling repos, or Drive. If a richer
+ethos exists, that is where it is, and its contents are not being guessed at.
+
+**Superseded note.** **West Peek Rooms is the flagship events product.** Its goal is community, brand, and money. There
 is an ethos document that sets out the event TYPES and the CADENCE at which each should be
 proposed — the proposing employee should follow it rather than defaulting to monthly. Every
 proposal should model how the event makes money (sponsorship and so on) unless it is explicitly a
