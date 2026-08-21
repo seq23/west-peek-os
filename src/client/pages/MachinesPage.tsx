@@ -66,7 +66,142 @@ function testedBadge(state: string): string {
   return "badge badge-bad";
 }
 
-function MachineDetail({ machine, onChanged }: { machine: MachineRow; onChanged: () => void }) {
+
+interface WrittenSkill {
+  id: string;
+  title: string;
+  when: string;
+  guidance: string[];
+  status: "DRAFT" | "ADOPTED";
+  source_text: string;
+}
+
+/**
+ * The methods one machine's employees follow, from both sources, and a way to add another.
+ *
+ * TWO SOURCES, NEVER BLENDED. Reviewed methods live in the repository and change through a pull
+ * request; written ones were typed here by a partner. Both are followed. A reader who cannot tell
+ * them apart cannot judge either, so each is labelled and the reviewed ones link out to the file.
+ *
+ * A DRAFT IS NOT IN USE, and the page says so on the row rather than in a legend somewhere. A
+ * method is read by every employee on this machine on every run; a sentence that became a live
+ * instruction without anybody reading it in final form is the failure this state exists to prevent.
+ */
+function MachineMethods({ machineKey, canAdopt }: { machineKey: string; canAdopt: boolean }) {
+  const reviewed = skillsForMachines([machineKey]);
+  const written = useApi<{ machines: Array<{ machine_key: string; written: WrittenSkill[] }> }>("/api/firm-skills");
+  const [plain, setPlain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const mine = written.data?.machines.find((m) => m.machine_key === machineKey)?.written ?? [];
+
+  async function draft() {
+    if (plain.trim().length < 12) {
+      setMessage("Write a sentence or two about how you want this done.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    const res = await api<{ skill?: { title: string }; detail?: string }>("/api/firm-skills/draft", {
+      method: "POST",
+      body: { machine_key: machineKey, plain_english: plain.trim() },
+    });
+    setBusy(false);
+    if (res.status !== 201) {
+      setMessage(res.data?.detail ?? `That did not work (HTTP ${res.status}).`);
+      return;
+    }
+    setPlain("");
+    setMessage(`Drafted "${res.data?.skill?.title}". Read it below — nothing follows it until you adopt it.`);
+    written.reload();
+  }
+
+  async function adopt(id: string) {
+    const res = await api<{ detail?: string }>(`/api/firm-skills/${id}/adopt`, { method: "POST" });
+    setMessage(res.status === 200 ? "Adopted. Every employee on this machine reads it before working now." : res.data?.detail ?? `Refused (HTTP ${res.status}).`);
+    written.reload();
+  }
+
+  return (
+    <div data-testid={`machine-methods-${machineKey}`}>
+      {reviewed.length === 0 && mine.length === 0 && (
+        <p className="muted small">
+          No methods are written down for this machine yet. Its employees work from their own judgement and the
+          firm's general standards.
+        </p>
+      )}
+
+      {reviewed.length > 0 && (
+        <>
+          {/* Shown in full right here rather than linked out. A hardcoded repository URL is one
+              more thing to rot, and the method is three lines — there is nothing to go and read. */}
+          <p className="muted small">Reviewed — these live in the repository and change through a pull request.</p>
+          <ul className="card-list small">
+            {reviewed.map((sk) => (
+              <li key={sk.key}>
+                <strong>{sk.title}</strong> — {sk.when}
+                <ul>
+                  {sk.guidance.map((g, i) => (
+                    <li key={i} className="muted">{g}</li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {mine.length > 0 && (
+        <>
+          <p className="muted small">Written by the partners</p>
+          <ul className="card-list small">
+            {mine.map((sk) => (
+              <li key={sk.id} data-testid={`written-skill-${sk.id}`}>
+                <strong>{sk.title}</strong> — {sk.when}{" "}
+                {sk.status === "DRAFT" && <span className="badge badge-gate">draft — not in use</span>}
+                <ul>
+                  {sk.guidance.map((g, i) => (
+                    <li key={i} className="muted">{g}</li>
+                  ))}
+                </ul>
+                <p className="muted small">You wrote: “{sk.source_text}”</p>
+                {sk.status === "DRAFT" && canAdopt && (
+                  <button type="button" data-testid={`adopt-skill-${sk.id}`} onClick={() => adopt(sk.id)}>
+                    This is what I meant — adopt it
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <details>
+        <summary>Add a method for this machine</summary>
+        <p className="muted small">
+          Write plainly how you want this work done. An employee turns it into the method the others follow, and
+          you read that before it is used. Your words are kept exactly as you wrote them.
+        </p>
+        <textarea
+          data-testid={`skill-plain-${machineKey}`}
+          aria-label="How you want this work done"
+          rows={3}
+          style={{ width: "100%" }}
+          value={plain}
+          onChange={(e) => setPlain(e.target.value)}
+          placeholder="e.g. Before screening any company, find out who actually pays for it today."
+        />
+        <button type="button" data-testid={`skill-draft-${machineKey}`} disabled={busy} onClick={draft}>
+          {busy ? "Drafting…" : "Draft it"}
+        </button>
+        {message && <p className="notice small" role="status">{message}</p>}
+      </details>
+    </div>
+  );
+}
+
+function MachineDetail({ machine, onChanged, canAdopt }: { machine: MachineRow; onChanged: () => void; canAdopt: boolean }) {
   const [message, setMessage] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [memo, setMemo] = useState("");
@@ -96,6 +231,17 @@ function MachineDetail({ machine, onChanged }: { machine: MachineRow; onChanged:
       <p className="small">
         {machine.employees.length > 0 ? machine.employees.map((e) => `${e.name} (${e.status})`).join(", ") : "none assigned"}
       </p>
+
+      {/*
+        THE METHODS THIS MACHINE'S EMPLOYEES FOLLOW, on the machine itself.
+        The firm-wide library card lower down already listed every method, which answered "what does
+        West Peek know" and not "what does THIS machine work by" — and the second is the question
+        somebody has when they have opened a machine. Both sources appear, marked, because a method
+        reviewed in a pull request and a method a partner wrote on Tuesday are both followed and a
+        reader should never have to guess which they are reading.
+      */}
+      <h4>Methods its employees follow</h4>
+      <MachineMethods machineKey={machine.key} canAdopt={canAdopt} />
 
       <h4>Queue</h4>
       <ul className="card-list small" data-testid={`machine-queue-${machine.id}`}>
@@ -505,7 +651,13 @@ export function MachinesPage({ me }: { me: MeResponse }) {
       {/* Scrolled to on open, so the answer to "did that do anything" is that you are looking at
           it. `smooth` is skipped for anyone who has asked for reduced motion. */}
       <div ref={detailRef}>
-        {selectedMachine && <MachineDetail machine={selectedMachine} onChanged={fleet.reload} />}
+        {selectedMachine && (
+          <MachineDetail
+            machine={selectedMachine}
+            onChanged={fleet.reload}
+            canAdopt={me.roles.includes("MANAGING_PARTNER")}
+          />
+        )}
       </div>
 
       <CapabilityPanel me={me} />

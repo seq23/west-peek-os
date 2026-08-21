@@ -471,6 +471,12 @@ import {
   handleSetBudgetScope,
 } from "./services/costCenter";
 import {
+  handleAdoptFirmSkill,
+  handleDraftFirmSkill,
+  handleListFirmSkills,
+  handleRetireFirmSkill,
+} from "./services/firmSkills";
+import {
   handleCreatePersonalEntry,
   handleGetPersonalProfile,
   handleListPersonalEntries,
@@ -1015,6 +1021,11 @@ const router = new Router()
   .get("/api/capabilities", handleListCapabilities)
   .post("/api/capabilities", handleRegisterCapability)
   .post("/api/capabilities/:id/state", handleTransitionCapability)
+  // The firm's own methods: read both sources, write plain English, adopt what came back.
+  .get("/api/firm-skills", handleListFirmSkills)
+  .post("/api/firm-skills/draft", handleDraftFirmSkill)
+  .post("/api/firm-skills/:id/adopt", handleAdoptFirmSkill)
+  .post("/api/firm-skills/:id/retire", handleRetireFirmSkill)
   .post("/api/capabilities/:id/assignments", handleAssignCapability)
   .post("/api/capabilities/:id/after-actions", handleRecordAfterAction)
   .post("/api/capabilities/:id/build-vs-buy", handleBuildVsBuy)
