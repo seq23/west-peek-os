@@ -15,7 +15,7 @@ import {
   type EvidenceEvent, type EvidencePacket,
 } from "../../shared/intelligence/reportSchema";
 import {
-  SOURCE_AUTHORITY, classify, dedupe, isWeekend, localReportDate, rank,
+  SOURCE_AUTHORITY, classify, dedupe, isAfterLocalTime, isWeekend, localReportDate, rank,
   type NormalisedItem, type PartnerLens, type SourceType,
 } from "../../shared/intelligence/pipeline";
 import { readMarket } from "./liveSearch";
@@ -597,21 +597,39 @@ export async function deliverReport(env: Env, reportId: string): Promise<{ deliv
  * Every enabled partner. One partner failing is caught and recorded so the others still get a
  * report — the brief calls this out and it is the difference between one bad morning and none.
  */
+/**
+ * ONE PARTNER PER TICK, because a cron invocation gets ten milliseconds of CPU.
+ *
+ * This used to loop every partner in one invocation. On the Workers Free plan a Cron Trigger gets
+ * 10 ms of CPU (Paid gets 30 s), and a brief is two AI calls and a report build per partner — so
+ * the loop never reached its second partner, and usually died before its first. Four of the last
+ * eight briefs failed that way, all of them the scheduled ones; every brief that succeeded was a
+ * human pressing the button, which runs a DIFFERENT path that generates for one partner only.
+ *
+ * So: take the first partner who has no finished report for today, do that one, and say how many
+ * are left. The next tick takes the next. `UNIQUE (firm_scope, firm_user_id, report_date)` plus the
+ * report status IS the cursor — no new column, no new table, no new Cloudflare product. Fifteen
+ * minutes between ticks means both partners are done inside half an hour.
+ *
+ * `limit` exists so the manual path can still do everyone in one go: a human pressing the button is
+ * not on the cron's CPU budget, and making them press it once per partner would be absurd.
+ */
 export async function runDailyForAll(
   env: Env,
   actor: Actor,
   now: Date,
   synthesise: Synthesise = defaultSynthesise,
-): Promise<{ generated: number; failed: number }> {
+  limit = Number.POSITIVE_INFINITY,
+): Promise<{ generated: number; failed: number; remaining: number }> {
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const partners = await env.WP_OS_DB.prepare(
     `SELECT u.id, COALESCE(p.enabled, 1) AS enabled, COALESCE(p.timezone,'America/Chicago') AS timezone,
-            COALESCE(p.weekends, 0) AS weekends
+            COALESCE(p.weekends, 0) AS weekends, COALESCE(p.deliver_at_local,'06:45') AS deliver_at_local
        FROM firm_user u
        LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
        JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
       WHERE u.status = 'ACTIVE'`,
-  ).all<{ id: string; enabled: number; timezone: string; weekends: number }>();
+  ).all<{ id: string; enabled: number; timezone: string; weekends: number; deliver_at_local: string }>();
 
   // Before starting anything: close out yesterday's casualties. A row still marked GENERATING from
   // a run that died hours ago is not in progress, and leaving it that way hides today's real state.
@@ -620,11 +638,41 @@ export async function runDailyForAll(
     return 0;
   });
 
+  /*
+   * WHO STILL NEEDS ONE TODAY. A partner with a READY or FAILED report for today is finished:
+   * READY means they have their brief, FAILED means it was tried and recorded, and re-running a
+   * failure inside the same day is the retry decision made in jobs.ts, not here.
+   */
+  // Keyed by partner AND date, because "today" is the partner's own local date — the report_date on
+  // the row comes from `localReportDate(now, profile.timezone)`, and two partners in different
+  // timezones can legitimately be on different days at the same instant.
+  const done = new Set(
+    (
+      (
+        await env.WP_OS_DB.prepare(
+          "SELECT firm_user_id, report_date FROM intelligence_report WHERE firm_scope = ?1 AND status IN ('READY','FAILED') AND report_date >= ?2",
+        )
+          .bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10))
+          .all<{ firm_user_id: string; report_date: string }>()
+      ).results ?? []
+    ).map((r) => `${r.firm_user_id}:${r.report_date}`),
+  );
+
+  const due = (partners.results ?? []).filter(
+    (p) =>
+      p.enabled === 1 &&
+      (p.weekends === 1 || !isWeekend(now, p.timezone)) &&
+      // Their own hour, in their own timezone. The job now fires all day, so this is the gate the
+      // 06:00 schedule used to be — without it a brief gets built at midnight local and is stale
+      // by the time anybody reads it.
+      isAfterLocalTime(now, p.timezone, p.deliver_at_local) &&
+      !done.has(`${p.id}:${localReportDate(now, p.timezone)}`),
+  );
+
   let generated = 0;
   let failed = 0;
-  for (const p of partners.results ?? []) {
-    if (p.enabled !== 1) continue;
-    if (p.weekends !== 1 && isWeekend(now, p.timezone)) continue;
+  for (const p of due) {
+    if (generated + failed >= limit) break;
     try {
       const out = await generateForPartner(env, actor, p.id, now, synthesise);
       if (out.status === "READY") {
@@ -664,7 +712,9 @@ export async function runDailyForAll(
       await recordSwallowed(env, "dailyIntelligence.generateForPartner", err, { firm_user_id: p.id });
     }
   }
-  return { generated, failed };
+  // What the tick reports upward, so a partner can see the brief is still being built rather than
+  // being told nothing happened.
+  return { generated, failed, remaining: Math.max(0, due.length - (generated + failed)) };
 }
 
 /**

@@ -289,6 +289,37 @@ export function localReportDate(now: Date, timezone: string): string {
   }
 }
 
+/**
+ * Has the partner's local clock reached the hour they asked to be briefed at?
+ *
+ * WHY THIS IS NEEDED NOW. The brief used to be built by a job that fired once, at 06:00 UTC, so
+ * the schedule WAS the gate. Chunking a partner per tick means the job fires all day, and without
+ * this a brief would be built at midnight local and be stale by breakfast.
+ *
+ * `hhmm` is the profile's `deliver_at_local`, "HH:MM". An unparseable value is treated as due,
+ * because a partner with a mistyped preference should still get their brief and see the mistake
+ * rather than silently never receive one.
+ */
+export function isAfterLocalTime(now: Date, timezone: string, hhmm: string): boolean {
+  const target = /^(\d{2}):(\d{2})$/.exec(hhmm.trim());
+  if (!target) return true;
+  let local: string;
+  try {
+    local = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(now);
+  } catch {
+    return true;
+  }
+  const current = /^(\d{2}):(\d{2})$/.exec(local);
+  if (!current) return true;
+  const mins = (h: string, m: string) => Number(h) * 60 + Number(m);
+  return mins(current[1]!, current[2]!) >= mins(target[1]!, target[2]!);
+}
+
 /** Weekday check in the partner's timezone, for the weekends-off default. */
 export function isWeekend(now: Date, timezone: string): boolean {
   let day: string;

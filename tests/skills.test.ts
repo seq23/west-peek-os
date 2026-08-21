@@ -141,8 +141,12 @@ describe("the event marketer works from the firm's community scaffolding", () =>
     expect(all).toMatch(/quarterly/i);
     // The rule that outranks the money.
     expect(all).toContain("never purchase access to members");
-    // The operator's clause, which had no home anywhere in the system before this.
-    expect(all).toMatch(/deliberately not revenue-generating/i);
+    // The operator's clause, which had no home anywhere in the system before this: aim for money,
+    // but surface a good Room that has none and say what it buys instead.
+    expect(all).toMatch(/does not pay for itself/i);
+    expect(all).toMatch(/\$10,000/);
+    // And the parts of the rhythm that are free by design must not be made to earn.
+    expect(all).toMatch(/free by design/i);
   });
 
   it("puts those methods into the proposal prompt, above the formatting rules", async () => {

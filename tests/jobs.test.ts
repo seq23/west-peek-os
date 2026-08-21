@@ -208,14 +208,23 @@ describe("the scheduled tick is idempotent and produces artifacts", () => {
   });
 
   it("a second tick inside the same window replays instead of running twice", async () => {
-    const now = new Date("2026-08-12T09:00:00.000Z");
-    const again = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "SCHEDULED", now });
+    /*
+     * `daily_intelligence` now runs on the tick rather than once a day, because a Cron Trigger gets
+     * 10 ms of CPU on the Workers Free plan and the whole sweep plus every partner's brief does not
+     * fit inside one invocation. So the occurrence is a fifteen-minute WINDOW, not a date — a tick
+     * three hours later is a different occurrence and is supposed to run.
+     *
+     * What stops duplicate work now is the per-partner report guard, not the occurrence key: a
+     * partner with a terminal report for their local date today is skipped. That is asserted in
+     * the daily-intelligence suite; here we only check that the same window does not run twice.
+     */
+    const withinSameWindow = new Date("2026-08-12T06:31:00.000Z");
+    const again = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "SCHEDULED", now: withinSameWindow });
     expect(again.replayed).toBe(true);
 
-    const runs = await t.db
-      .prepare("SELECT COUNT(*) AS n FROM job_run WHERE idempotency_key = 'daily_intelligence:2026-08-12'")
-      .first<{ n: number }>();
-    expect(runs!.n).toBe(1);
+    const laterWindow = new Date("2026-08-12T09:00:00.000Z");
+    const next = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "SCHEDULED", now: laterWindow });
+    expect(next.replayed).toBe(false);
   });
 
   it("runDueJobs is the same path the cron trigger calls", async () => {
