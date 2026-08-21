@@ -65,8 +65,19 @@ export const PAGE_HOSTS: Readonly<Record<string, PageHost>> = {
   record: { employee: "Wells", because: "Keeps the firm's memory: what was decided, claimed and evidenced." },
 
   // ── Learn ──
-  research: { employee: "Wyatt", because: "Does the digging and says how much each source can be trusted." },
-  university: { employee: "Whitney", because: "Teaches any venture topic and marks your reasoning honestly." },
+  research: {
+    employee: "Wyatt",
+    because:
+      "Research runs through me. Open a project with the question you actually want answered and I will gather the " +
+      "sources, say how reliable each one is, and come back with findings — this is not a search box, and the answer " +
+      "arrives after the work rather than instead of it.",
+  },
+  university: {
+    employee: "Whitney",
+    because:
+      "Name anything in venture and I will teach it — explaining it, testing you on it, running a deal past you, or " +
+      "listening to you teach it back. I will tell you when you are wrong.",
+  },
   documents: { employee: "Wells", because: "Files what the firm produces and keeps its versions straight." },
 };
 

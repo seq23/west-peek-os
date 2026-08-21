@@ -190,8 +190,26 @@ h4 { font-size: var(--text-base); }
 h5,
 h6 { font-size: var(--text-sm); }
 
+/*
+ * NO GLOBAL READING MEASURE, and this was costing half of every panel.
+ *
+ * `p { max-width: 72ch }` applied to all prose, everywhere. In a document that is correct. In a UI
+ * panel it is not: a two-line blurb inside an 1190px card wrapped at 650px and left the other 45%
+ * of the card empty, on every card, on every page. Operator, 21 Aug 2026: "make sure the pages are
+ * looking good and space isnt being wasted."
+ *
+ * The measure now belongs to the surfaces that are actually READ top to bottom — the brief, an Ask
+ * answer, a University turn, the funnel copy — each of which already declares its own. UI copy
+ * fills the panel it is in, which also costs it a line of height it never needed.
+ */
 p {
   margin: 0 0 var(--space-md);
+}
+
+/* Long-form reading. Applied where a person reads paragraph after paragraph, not where a panel
+   explains itself in a sentence. */
+.prose-measure,
+.prose-measure p {
   max-width: var(--measure);
 }
 
@@ -889,6 +907,26 @@ hr {
   color: var(--wp-ink-2);
   font-size: var(--text-xs);
   font-weight: 600;
+}
+
+/*
+ * A TEXT FIELD FILLS THE ROW IT IS IN.
+ *
+ * Every text input sat at the browser default of roughly 180px regardless of the space beside it —
+ * so Companies offered a "Find" box a fifth of the width of its own row with a thousand pixels of
+ * nothing to the right, and every filter and entry row in the product did the same. Operator,
+ * 21 Aug 2026: "space isnt being wasted."
+ *
+ * Only free-text fields grow. A select is as wide as its longest option and a date field has a
+ * fixed shape, so both keep their natural size and the text field takes what is left. Where a row
+ * holds several text fields they share the width evenly, which is also what you want.
+ */
+.form-row > label:has(> input[type="text"]),
+.form-row > label:has(> input[type="search"]),
+.form-row > label:has(> input[type="email"]),
+.form-row > label:has(> input[type="url"]),
+.form-row > label:has(> input:not([type])) {
+  flex: 1 1 16rem;
 }
 
 /* A checkbox/radio label is a row, not a stack. */
@@ -1729,6 +1767,22 @@ hr {
 /* — Daily brief. Reading width, because this is the one thing on the page meant to be read
      start to finish rather than scanned. */
 .daily-brief .brief-section { margin-top: var(--space-md); max-width: 44rem; }
+
+/*
+ * THE BRIEF KEEPS ITS MEASURE AND ITS MARGIN, and a two-column version was tried and pulled.
+ *
+ * The body is capped for a readable measure, which leaves empty card to its right on a wide screen.
+ * Flowing it into two columns fixed that on paper and froze Chrome's renderer in practice: a tall
+ * multicol whose every child carries `break-inside: avoid` makes the column balancer do quadratic
+ * work, and the tab stopped responding to screenshots entirely. Recorded here so it is not tried
+ * again as an obvious idea.
+ *
+ * A document having margins is not wasted space — it is what makes it readable. The waste that DID
+ * matter was the same 72ch cap applied to UI copy in panels, and that is fixed at the `p` rule
+ * above. Widening this instead would push a briefing past 100 characters a line, which is harder to
+ * read, not denser.
+ */
+}
 .daily-brief .brief-section h4 { margin-bottom: var(--space-2xs); }
 .brief-sources { border-top: 1px solid var(--wp-line); padding-top: var(--space-2xs); margin-top: var(--space-2xs); }
 

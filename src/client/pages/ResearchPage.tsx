@@ -300,25 +300,10 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
 
   return (
     <section data-testid="research-page">
-      <div className="card professor-welcome" data-testid="research-analyst">
-        {portraitFor(ANALYST.name) ? (
-          <img className="professor-face" src={portraitFor(ANALYST.name)!} alt={portraitAlt(ANALYST.name, ANALYST.role)} loading="lazy" />
-        ) : (
-          <span className="professor-face professor-face-initial" aria-hidden="true">{ANALYST.name.slice(0, 1)}</span>
-        )}
-        <div>
-          <p>
-            <strong>{ANALYST.name}</strong> <span className="muted small">{ANALYST.role}</span>
-          </p>
-          <p className="small">
-            Research runs through me. Open a project with the question you actually want answered and
-            I will gather the sources, say how reliable each one is, and come back with findings —
-            this is not a search box, and the answer arrives after the work rather than instead of it.
-          </p>
-          <p className="muted small">{personaFor(ANALYST.name)?.voice ?? ""}</p>
-        </div>
-      </div>
-
+      {/* The host card is rendered once by the shell for every Deals / Firm / Learn page.
+          A second, hand-written one here printed the same name, portrait and voice line
+          directly under it — the page introduced its host twice. The sentence that was
+          worth keeping now lives in PAGE_HOSTS, so there is one card and one source. */}
       {/*
         WHAT WYATT HAS ALREADY DELIVERED.
 

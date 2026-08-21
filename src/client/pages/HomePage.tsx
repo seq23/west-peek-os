@@ -454,10 +454,16 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
         {/* The byline used to live here, floating in the corner, nowhere near the thing it
             described. It now sits ON the briefing, the way a byline sits on an article. */}
         <div className="home-signed">
-          <div className="muted small">
-            {deliveries.filter((m) => m.items.length > 0).length + (waiting && waiting.items.length > 0 ? 1 : 0)} of your
-            team have something for you
-          </div>
+          {/* "1 of your team have something" — the verb has to agree with the count, and one
+              colleague is singular. Small, but it is the first line on the page every morning. */}
+          {(() => {
+            const n = deliveries.filter((m) => m.items.length > 0).length + (waiting && waiting.items.length > 0 ? 1 : 0);
+            return (
+              <div className="muted small">
+                {n === 1 ? "One of your team has something for you" : `${n} of your team have something for you`}
+              </div>
+            );
+          })()}
         </div>
       </header>
 

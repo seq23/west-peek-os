@@ -78,28 +78,10 @@ export function UniversityPage(): JSX.Element {
         retired when that product was deferred, and brought back to teach. Her portrait has not been
         generated yet, so this falls back to initials the same way any missing portrait does.
       */}
-      <div className="card professor-welcome" data-testid="university-professor">
-        {portraitFor(PROFESSOR.name) ? (
-          <img
-            className="professor-face"
-            src={portraitFor(PROFESSOR.name)!}
-            alt={portraitAlt(PROFESSOR.name, PROFESSOR.role)}
-          loading="lazy" />
-        ) : (
-          <span className="professor-face professor-face-initial" aria-hidden="true">{PROFESSOR.name.slice(0, 1)}</span>
-        )}
-        <div>
-          <p>
-            <strong>{PROFESSOR.name}</strong> <span className="muted small">{PROFESSOR.role}</span>
-          </p>
-          <p className="small">
-            Name anything in venture and I will teach it — explaining it, testing you on it, running
-            a deal past you, or listening to you teach it back. I will tell you when you are wrong.
-          </p>
-          <p className="muted small">{personaFor(PROFESSOR.name)?.voice ?? ""}</p>
-        </div>
-      </div>
-
+      {/* The host card is rendered once by the shell for every Deals / Firm / Learn page.
+          A second, hand-written one here printed the same name, portrait and voice line
+          directly under it — the page introduced its host twice. The sentence that was
+          worth keeping now lives in PAGE_HOSTS, so there is one card and one source. */}
       {!activeId && (
         <form className="card" onSubmit={start} data-testid="university-start-form">
           <h3>What do you want to learn?</h3>
