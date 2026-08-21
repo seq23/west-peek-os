@@ -57,6 +57,15 @@ interface LoungeEmployee {
  * who holds the approval role, because they are the person who would have approved it. Anyone else
  * pressing this files the request and is told so.
  */
+/** A reason worth showing: one a person typed, not one the system wrote about itself. */
+function humanReason(change: { by: string; reason: string | null }): string | null {
+  const r = change.reason?.trim();
+  if (!r) return null;
+  if (r.includes("apc_") || r.includes("receipt")) return null;
+  if (change.by && r.toLowerCase().includes(change.by.toLowerCase())) return null;
+  return r;
+}
+
 function EmploymentSwitch({
   employee,
   onChanged,
@@ -148,7 +157,14 @@ function EmploymentSwitch({
         />
       )}
 
-      {/* Who did it and when — read back from the same history the server writes. */}
+      {/* Who did it and when — read back from the same history the server writes.
+
+          THE REASON IS ONLY SHOWN WHEN A PERSON WROTE ONE. Every historical row carries a reason
+          the system generated for itself — "activation completed by Sequoia Taylor against approved
+          receipt apc_56ea1214-538b-…" — which restates the name the line has already said and then
+          prints an id nobody can act on. Three lines of noise under every card, which is how a trail
+          stops being read. A machine-written reason is recognisable (it names the actor, or quotes
+          the receipt), and those are dropped; anything typed in the box survives verbatim. */}
       {employee.last_status_change && (
         <p className="muted small" data-testid={`employee-trail-${employee.id}`}>
           {employee.last_status_change.to_status === "ACTIVE" ? "Employed" : employee.last_status_change.to_status.toLowerCase()}{" "}
@@ -157,7 +173,7 @@ function EmploymentSwitch({
             dateStyle: "medium",
             timeStyle: "short",
           })}
-          {employee.last_status_change.reason ? ` — ${employee.last_status_change.reason}` : ""}
+          {humanReason(employee.last_status_change) ? ` — ${humanReason(employee.last_status_change)}` : ""}
         </p>
       )}
     </div>

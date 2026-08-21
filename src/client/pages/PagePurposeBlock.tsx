@@ -43,17 +43,21 @@ export function PagePurposeBlock({
           because a page that cannot say what you do on it is not oriented, but never competing
           with the page itself. */}
       {/*
-        THE HELP LINK IS A SIBLING OF THE SENTENCE, NOT INSIDE IT.
-        It used to be a float inside the paragraph, declared after the text — so it attached to the
-        right edge of whichever line it happened to wrap into, landing in the middle of a sentence
-        break. Operator report, 21 Aug 2026: "the 'how everything works' is in the line break, it
-        looks weird." As a flex sibling it sits on the first line's right edge on every page, and
-        the sentence wraps in its own column without ever running into it.
+        THE HELP LINK JUST FOLLOWS THE SENTENCE. No float, no flex row, no right edge.
+
+        It was `float: right` declared after the text, so it attached to the right edge of whichever
+        line it wrapped into — landing mid-paragraph. Making it a flex sibling fixed that and bought
+        a worse problem: space-between pushed it to the far right of a row whose sentence ends
+        wherever it ends, so the gap between them was the width of half the page, and it aligned to
+        the sentence's last line rather than its first. Operator, twice: "it looks weird", then "why
+        is there a huge fucking space and why is the last sentence on a new line".
+
+        Both attempts were trying to POSITION it. It is a link at the end of a sentence, so it goes
+        at the end of the sentence — inline, one space after the full stop. There is then no gap to
+        get wrong and no line for it to be orphaned on.
       */}
-      <div className="page-purpose-head">
-        <p className="page-purpose-line">
-          <strong>{label}.</strong> {p.purpose}
-        </p>
+      <p className="page-purpose-line">
+        <strong>{label}.</strong> {p.purpose}{" "}
         <button
           type="button"
           className="link-button page-purpose-help"
@@ -62,7 +66,7 @@ export function PagePurposeBlock({
         >
           How everything works →
         </button>
-      </div>
+      </p>
       <p className="page-purpose-can">
         {p.youCan.map((c, i) => (
           <span key={c}>

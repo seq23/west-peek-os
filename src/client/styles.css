@@ -1689,21 +1689,8 @@ hr {
 
 .page-purpose-line strong { color: var(--wp-ink); font-weight: 600; }
 
-/* The sentence and the way into help are a row, aligned on the first baseline. Wrapping is allowed
-   so the link drops to its own line on a narrow screen rather than crushing the sentence. */
-.page-purpose-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0 var(--space-sm);
-}
-
-.page-purpose-head .page-purpose-line { flex: 1 1 24rem; }
-
+/* Inline, immediately after the sentence it belongs to. Nothing positions it. */
 .page-purpose-help {
-  flex: 0 0 auto;
-  margin-left: auto;
   white-space: nowrap;
 }
 

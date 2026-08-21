@@ -61,7 +61,9 @@ export function PageHostCard({ navKey }: { navKey: string }) {
         */}
         {status && !working && (
           <p className="notice notice-gate small" data-testid={`page-host-idle-${navKey}`}>
-            {host.name} is {status.toLowerCase()}, so nobody is working this page. Employ them on Employees to change that.
+            {host.name} is {status.toLowerCase()}, so nobody is working this page.{" "}
+            {/* On Employees itself, "go to Employees" is nonsense — the control is on the page. */}
+            {navKey === "employees" ? "Their card is below; one press employs them." : "Employ them on Employees to change that."}
           </p>
         )}
         {!status && !lounge.loading && (
