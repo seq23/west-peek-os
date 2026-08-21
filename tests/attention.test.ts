@@ -114,3 +114,66 @@ describe("silencing an attention item", () => {
     expect(res.status).toBe(401);
   });
 });
+
+/*
+ * "I know" and "Stop telling me" wrote the same row and both lapsed after a week, so the two
+ * buttons were synonyms with different labels. The operator noticed. They now mean what they say.
+ */
+describe("the two buttons do different things", () => {
+  it("keeps a DISMISSED item silenced past the week an acknowledgement lapses in", async () => {
+    await handleRequest(
+      req("/api/attention/jobs-paused/dismiss", "POST", { signature: "2 scheduled job(s) are paused.", kind: "DISMISSED" }),
+      env,
+    );
+    // Age it well past the acknowledgement lifetime.
+    await t.db
+      .prepare(
+        `UPDATE attention_dismissal SET created_at = ?1 WHERE item_key = 'jobs-paused'`,
+      )
+      .bind(new Date(Date.now() - (DISMISSAL_LIFETIME_DAYS + 30) * 86_400_000).toISOString())
+      .run();
+
+    const silenced = await silencedAttention(env);
+    expect([...silenced].some((s) => s.startsWith("jobs-paused"))).toBe(true);
+  });
+
+  it("lets an ACKNOWLEDGED item come back after the week, because 'I know' was about that week", async () => {
+    await handleRequest(
+      req("/api/attention/setup-incomplete/dismiss", "POST", {
+        signature: "2 recommended AI employee(s) are not activated.",
+        kind: "ACKNOWLEDGED",
+      }),
+      env,
+    );
+    await t.db
+      .prepare(`UPDATE attention_dismissal SET created_at = ?1 WHERE item_key = 'setup-incomplete'`)
+      .bind(new Date(Date.now() - (DISMISSAL_LIFETIME_DAYS + 1) * 86_400_000).toISOString())
+      .run();
+
+    const silenced = await silencedAttention(env);
+    expect([...silenced].some((s) => s.startsWith("setup-incomplete"))).toBe(false);
+  });
+
+  it("still speaks up when the same problem arrives with different wording", async () => {
+    // This is what makes a permanent option safe: silencing "3 jobs failed" for ever must not also
+    // silence "9 jobs failed". A different fact deserves to be said.
+    await handleRequest(
+      req("/api/attention/jobs-refused/dismiss", "POST", { signature: "3 scheduled job(s) recently failed", kind: "DISMISSED" }),
+      env,
+    );
+    const silenced = await silencedAttention(env);
+    expect(silenced.has(attentionSignature("jobs-refused", "3 scheduled job(s) recently failed"))).toBe(true);
+    expect(silenced.has(attentionSignature("jobs-refused", "9 scheduled job(s) recently failed"))).toBe(false);
+  });
+
+  it("says plainly which kind of silence the operator just chose", async () => {
+    const res = await handleRequest(
+      req("/api/attention/no-provider/dismiss", "POST", { signature: "No AI provider is enabled.", kind: "DISMISSED" }),
+      env,
+    );
+    const body = (await res.json()) as { permanent: boolean; note?: string; silenced_for_days?: number };
+    expect(body.permanent).toBe(true);
+    expect(body.note).toContain("will not come back");
+    expect(body.silenced_for_days).toBeUndefined();
+  });
+});

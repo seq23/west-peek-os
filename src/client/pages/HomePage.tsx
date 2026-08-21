@@ -523,14 +523,17 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                 <button type="button" className="link-button" onClick={() => onNavigate(a.link)}>
                   Open
                 </button>{" "}
-                {/* Two different things, and the labels say which is which. "I know" leaves it on
-                    the record as seen and still true; "Stop telling me" is the one that means the
-                    alert was not useful. Either way it comes back if the situation changes, and
-                    both lapse after a week — see the attention service for why. */}
+                {/* TWO DIFFERENT ACTS, and until 21 Aug 2026 they were the same one: both wrote the
+                    same row and both lapsed after a week, which the operator noticed and asked to be
+                    fixed. "I know" means seen, still true, living with it — quiet for a week, because
+                    somebody who said it last Tuesday has not said it about today. "Stop telling me"
+                    is permanent. Both are still keyed to the exact wording, so the same problem
+                    described differently is a different item and will be said. */}
                 <button
                   type="button"
                   className="link-button"
                   data-testid={`home-attention-ack-${a.key}`}
+                  title="Seen, still true. Quiet for a week."
                   onClick={() => void silence(a.key, a.headline, "ACKNOWLEDGED")}
                 >
                   I know
@@ -539,16 +542,17 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                   type="button"
                   className="link-button"
                   data-testid={`home-attention-dismiss-${a.key}`}
+                  title="Permanent. This exact item will not come back."
                   onClick={() => void silence(a.key, a.headline, "DISMISSED")}
                 >
-                  Stop telling me
+                  Stop telling me, for good
                 </button>
               </li>
             ))}
           </ul>
           {silencedCount > 0 && (
             <p className="muted small">
-              {silencedCount} silenced for up to a week.{" "}
+              {silencedCount} silenced — acknowledged ones return after a week, dismissed ones do not.{" "}
               <button
                 type="button"
                 className="link-button"
