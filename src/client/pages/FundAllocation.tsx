@@ -137,15 +137,15 @@ export function Composition() {
 }
 
 export function FundAllocation({ fundId }: { fundId: string | null }) {
-  const mandate = useApi<{ versions: Array<{ mandate_json?: string }> }>(
+  const mandate = useApi<{ versions: Array<{ mandate_json?: string }>; current: { mandate_json?: string } | null }>(
     fundId ? `/api/funds/${fundId}/policies/mandate` : null,
     [fundId],
   );
-  const sleeve = useApi<{ versions: Array<{ sleeve_json?: string }> }>(
+  const sleeve = useApi<{ versions: Array<{ sleeve_json?: string }>; current: { sleeve_json?: string } | null }>(
     fundId ? `/api/funds/${fundId}/policies/sleeve` : null,
     [fundId],
   );
-  const reserve = useApi<{ versions: Array<{ reserve_json?: string }> }>(
+  const reserve = useApi<{ versions: Array<{ reserve_json?: string }>; current: { reserve_json?: string } | null }>(
     fundId ? `/api/funds/${fundId}/policies/reserve` : null,
     [fundId],
   );
@@ -158,11 +158,12 @@ export function FundAllocation({ fundId }: { fundId: string | null }) {
         return {} as T;
       }
     };
-    const m = read<{ target_size_usd?: number }>(mandate.data?.versions?.[0]?.mandate_json);
+    // `current`, not `[0]`: the ring drew the first mandate ever written, not the one in force.
+    const m = read<{ target_size_usd?: number }>(mandate.data?.current?.mandate_json);
     const s = read<{ estimated_fees_usd?: number; estimated_expenses_usd?: number; sleeves?: Array<{ key: string; target_usd?: number }> }>(
-      sleeve.data?.versions?.[0]?.sleeve_json,
+      sleeve.data?.current?.sleeve_json,
     );
-    const r = read<{ reserve_usd?: number }>(reserve.data?.versions?.[0]?.reserve_json);
+    const r = read<{ reserve_usd?: number }>(reserve.data?.current?.reserve_json);
     return { fundSize: m.target_size_usd ?? 0, sleeveDoc: s, reserveUsd: r.reserve_usd ?? 0 };
   }, [mandate.data, sleeve.data, reserve.data]);
 

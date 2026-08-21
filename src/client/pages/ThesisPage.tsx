@@ -68,7 +68,7 @@ const toList = (s: string): string[] => s.split(/[\n,]/).map((x) => x.trim()).fi
 export function ThesisPage({ me }: { me: MeResponse }) {
   const selected = useSelectedFund();
   const fund = selected.fund;
-  const versions = useApi<{ versions: PolicyVersion[] }>(
+  const versions = useApi<{ versions: PolicyVersion[]; current: PolicyVersion | null }>(
     fund ? `/api/funds/${fund.id}/policies/mandate` : null,
     [fund?.id],
   );
@@ -119,7 +119,9 @@ export function ThesisPage({ me }: { me: MeResponse }) {
   const [draft, setDraft] = useState<Mandate>({});
 
   // Versions come back newest-first; the top row is what the firm is looking for today.
-  const latest = versions.data?.versions?.[0] ?? null;
+  // `current` from the API, never an index. This read `[0]` from an oldest-first list, so the
+  // page showed version 1 for ever and amending the mandate appeared to do nothing.
+  const latest = versions.data?.current ?? null;
   let current: Mandate = {};
   try {
     current = latest?.mandate_json ? (JSON.parse(latest.mandate_json) as Mandate) : {};
@@ -457,8 +459,8 @@ export function ThesisPage({ me }: { me: MeResponse }) {
  * different until the follow-on you cannot fund.
  */
 function ConstructionCard({ fundId }: { fundId: string }) {
-  const reserve = useApi<{ versions: PolicyVersion[] }>(`/api/funds/${fundId}/policies/reserve`, [fundId]);
-  const concentration = useApi<{ versions: PolicyVersion[] }>(`/api/funds/${fundId}/policies/concentration`, [fundId]);
+  const reserve = useApi<{ versions: PolicyVersion[]; current: PolicyVersion | null }>(`/api/funds/${fundId}/policies/reserve`, [fundId]);
+  const concentration = useApi<{ versions: PolicyVersion[]; current: PolicyVersion | null }>(`/api/funds/${fundId}/policies/concentration`, [fundId]);
 
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -476,8 +478,8 @@ function ConstructionCard({ fundId }: { fundId: string }) {
     }
   };
 
-  const latestReserve = reserve.data?.versions?.[0];
-  const latestConc = concentration.data?.versions?.[0];
+  const latestReserve = reserve.data?.current ?? undefined;
+  const latestConc = concentration.data?.current ?? undefined;
   const currentReserve = parse(latestReserve).reserve_pct as number | undefined;
   const currentMax = parse(latestConc).max_single_company_pct as number | undefined;
 

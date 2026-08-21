@@ -224,3 +224,57 @@ describe("referential integrity", () => {
     ).rejects.toThrow(/UNIQUE/i);
   });
 });
+
+/*
+ * Amending the mandate said "Saved as version 2" and changed nothing on screen.
+ *
+ * `handleListPolicyVersions` returns versions oldest-first, which is right for a history. Seven
+ * call sites then took `versions[0]` believing it was the newest, and one took `.at(-1)` believing
+ * the opposite — so the Thesis page, Deal Math and the fund allocation ring displayed version 1 for
+ * ever while the allocation model pinned the latest. Only one version had ever existed in
+ * production, which is why nobody saw it; it would have fired the first time a partner did the
+ * thing the Thesis page exists for.
+ *
+ * The fix is to name the current one rather than answer the indexing question seven times.
+ */
+describe("the mandate in force is named, not indexed", () => {
+  it("returns versions oldest-first and names the newest as current", async () => {
+    const fund = await t.db.prepare("SELECT id FROM fund LIMIT 1").first<{ id: string }>();
+
+    // Two versions, so the two ends of the list are different rows.
+    await t.db
+      .prepare(
+        `INSERT INTO investment_mandate_version (id, fund_id, version_no, mandate_json, effective_from, created_by)
+         VALUES (?1, ?2, 99, ?3, '2026-08-21', 'fu_scooter_taylor')`,
+      )
+      .bind(`imv_${crypto.randomUUID()}`, fund!.id, JSON.stringify({ statement: "the newest one" }))
+      .run();
+
+    const raw = await handleRequest(req(`/api/funds/${fund!.id}/policies/mandate`), env);
+    expect(raw.status).toBe(200);
+    const body = (await raw.json()) as {
+      versions: Array<{ version_no: number }>;
+      current: { version_no: number; mandate_json: string } | null;
+      note: string;
+    };
+    const list = body.versions;
+    expect(list.length).toBeGreaterThan(1);
+
+    // Oldest first — the history order, deliberately kept.
+    expect(list[0]!.version_no).toBeLessThan(list[list.length - 1]!.version_no);
+
+    // And `current` is the newest, which is what every surface should read.
+    expect(body.current?.version_no).toBe(list[list.length - 1]!.version_no);
+    expect(body.current?.mandate_json).toContain("the newest one");
+
+    // The reader is told not to index, so this does not come back.
+    expect(body.note).toContain("do not index");
+  });
+
+  it("names nothing as current when a fund has no versions of that policy", async () => {
+    const fund = await t.db.prepare("SELECT id FROM fund LIMIT 1").first<{ id: string }>();
+    const raw = await handleRequest(req(`/api/funds/${fund!.id}/policies/concentration`), env);
+    const body = (await raw.json()) as { versions: unknown[]; current: unknown };
+    if ((body.versions ?? []).length === 0) expect(body.current).toBeNull();
+  });
+});

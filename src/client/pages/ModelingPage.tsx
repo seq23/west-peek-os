@@ -50,16 +50,17 @@ interface Mandate {
 export function ModelingPage({ me }: { me: MeResponse }) {
   const selected = useSelectedFund();
   const fund = selected.fund;
-  const mandateVersions = useApi<{ versions: Array<{ mandate_json?: string; version_no: number }> }>(
+  const mandateVersions = useApi<{ versions: Array<{ mandate_json?: string; version_no: number }>; current: { mandate_json?: string; version_no: number } | null }>(
     fund ? `/api/funds/${fund.id}/policies/mandate` : null,
     [fund?.id],
   );
-  const reserveVersions = useApi<{ versions: Array<{ reserve_json?: string }> }>(
+  const reserveVersions = useApi<{ versions: Array<{ reserve_json?: string }>; current: { reserve_json?: string } | null }>(
     fund ? `/api/funds/${fund.id}/policies/reserve` : null,
     [fund?.id],
   );
 
-  const latest = mandateVersions.data?.versions?.[0];
+  // See ThesisPage: `[0]` on an oldest-first list showed version 1 for ever.
+  const latest = mandateVersions.data?.current;
   const mandate = useMemo<Mandate>(() => {
     try {
       return JSON.parse(latest?.mandate_json ?? "{}") as Mandate;
@@ -70,7 +71,7 @@ export function ModelingPage({ me }: { me: MeResponse }) {
 
   const reservePct = useMemo<number | undefined>(() => {
     try {
-      return (JSON.parse(reserveVersions.data?.versions?.[0]?.reserve_json ?? "{}") as { reserve_pct?: number })
+      return (JSON.parse(reserveVersions.data?.current?.reserve_json ?? "{}") as { reserve_pct?: number })
         .reserve_pct;
     } catch {
       return undefined;

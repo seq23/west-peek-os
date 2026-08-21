@@ -201,7 +201,27 @@ export async function handleListPolicyVersions(ctx: RouteContext): Promise<Respo
   )
     .bind(fund.id)
     .all();
-  return json({ versions: rows.results ?? [] });
+  const versions = (rows.results ?? []) as Array<Record<string, unknown>>;
+
+  /*
+   * `current` IS RETURNED SO NOBODY HAS TO INDEX.
+   *
+   * Versions come back oldest-first, which is right for a history. Seven call sites then took
+   * `versions[0]` believing it was the newest, and one took `.at(-1)` believing the opposite — so
+   * the Thesis page, Deal Math and the fund allocation ring all displayed version 1 for ever while
+   * the allocation model pinned the latest. Amending the mandate said "Saved as version 2" and
+   * changed nothing on screen.
+   *
+   * Only one version has ever existed in production, which is why nobody saw it. It would have
+   * fired the first time the operator did the thing the Thesis page exists for.
+   *
+   * Naming the current one removes the question rather than answering it seven times.
+   */
+  return json({
+    versions,
+    current: versions.length > 0 ? versions[versions.length - 1] : null,
+    note: "versions is oldest-first, for history. Use `current` for what is in force — do not index.",
+  });
 }
 
 export async function handleGetPolicyVersion(ctx: RouteContext): Promise<Response> {
