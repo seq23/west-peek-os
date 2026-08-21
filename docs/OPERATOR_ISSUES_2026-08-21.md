@@ -196,8 +196,14 @@ is the IC Facilitator and the IC lives inside Meetings, which Walter hosts.
 
 Ordered by consequence. These are not optional extras; the first two outrank most of the 22.
 
-1. **The fund cannot record that it owns anything.** Positions come only from executed transactions;
-   all five transaction routes are unreachable. `position = 0` and structurally always will be.
+1. **The fund cannot record that it owns anything** · **FIXED 21 Aug 2026.** A position is created in
+   exactly one place — when a transaction is executed — and every route in that lifecycle was built,
+   authorized and tested with nothing able to reach it. There is now a panel on the deal record that
+   walks the real ladder: a share class, a draft that commits nothing, submission that raises an
+   approval card a partner decides on Approvals, and execution carrying the receipt, which is the
+   step that books the position. Nothing shortcuts the governance — the ladder was already right and
+   simply had no rungs. **Not yet exercised against production data**; the server loop has long been
+   tested, the interface has not been used in anger.
 2. **The fund can say yes but not no** · **HALF FIXED 21 Aug 2026.** A pass is now reachable from any
    live deal and carries a required reason, kept on the deal and on the event spine — "we passed in
    August" is a fact; "we passed because the second founder had already left and nobody would say
