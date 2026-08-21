@@ -192,6 +192,54 @@ is the IC Facilitator and the IC lives inside Meetings, which Walter hosts.
 
 ---
 
+## Item 7 — how a company enters the funnel · operator spec, 21 Aug 2026
+
+**Four routes in, and they are not the same axis as "where deals come from".** That section today
+shows `relationship_origin` — Community intro, Network — which is *how the firm knew them*. An
+intake route is *how the record entered the system*. A company has both, and conflating them loses
+the more useful one.
+
+1. **Manual** — type it, as today.
+2. **Upload a deck** — the page's host employee parses it and fills the record in. Wyatt hosts
+   Companies and Research; parsing a deck is his work.
+3. **Email to `os@westpeek.ventures`** with a hashtag trigger.
+4. **The analyst's own sourcing** — Wyatt finds it, per his method "check what the firm has already
+   touched before opening a database everybody else reads".
+5. **Airtable** — founder inbound from the website or an affiliated site such as a pitch competition.
+
+**The hashtags already exist in the family.** `network.joinwestpeek.com` uses `#wpdealflow` to add
+dealflow and `#wpnetwork` to add people. This is integration, not invention, and the same words
+should mean the same thing in both places.
+
+**The constraint that shapes all of it, from BACKLOG.md on 17 Aug 2026:** *"a hashtag trigger inside
+the email cannot authorise anything, because the sender controls it. Authorisation has to come from
+an authenticated partner, and a `From:` header is not authentication."*
+
+That decision stands and the operator's ask survives it, because the hashtag **routes** rather than
+authorises. `#wpdealflow` says "this is a company for the funnel"; it does not put one there. The
+company arrives as something the analyst proposes and a partner confirms — which is also the
+operator's stated email posture: inbound accepted and fenced, employees may parse it and assign work
+to each other, nothing starts and no money is spent without approval. A stranger can write
+`#wpdealflow`. What they cannot do is enter your pipeline.
+
+**Network OS is authoritative for people and relationships**; this app mirrors it. That is already
+the architecture and it is written into Porter's methods — "when our copy disagrees, our copy is the
+suspect". Dealflow is this app's own. So `#wpnetwork` belongs to Network OS and flows here;
+`#wpdealflow` belongs here. Worth knowing before building: the sync has genuinely run
+(`network.sync_completed`, 18 Aug) while `network_external_mapping` and `person` are both zero, so
+nothing has actually come across yet — and the Integrations page claims no client is configured,
+which is false.
+
+## Item 9 addendum — Deal records and tooling is a discoverability failure
+
+The operator: *"I never realised it was the way to enter real numbers for Sensori — this is a UI
+problem."* Exactly right. Sensori's card warns "2 values are placeholders" on the pipeline, and the
+control that fixes them is three steps away behind a company dropdown in a section headed "acts on
+one deal you pick". The warning and the remedy are on different screens. The fix is to make the
+warning itself the way in.
+
+---
+
 ## Found by the review, not on the list
 
 Ordered by consequence. These are not optional extras; the first two outrank most of the 22.
