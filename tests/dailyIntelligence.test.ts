@@ -302,3 +302,76 @@ describe("a run that stopped part-way through", () => {
     expect(swallowed?.n, "and the swallow must be on the ledger, not discarded").toBeGreaterThan(0);
   });
 });
+
+/*
+ * WHY THE BRIEF IS CHUNKED.
+ *
+ * A Cron Trigger gets 10 ms of CPU on the Workers Free plan; the Paid plan gets 30 seconds. Sweeping
+ * every source and then building a brief for every partner in one invocation is far past that, so
+ * the invocation was killed mid-flight — which is why four of the last eight briefs failed, all of
+ * them the scheduled ones, and every brief that succeeded was a human pressing the button. That
+ * button runs a different path which generates for ONE partner.
+ *
+ * So the job now fires on the tick and takes one partner at a time. Two things have to hold: a
+ * partner who already has today's brief is skipped, and a partner whose local morning has not
+ * arrived is not briefed early.
+ */
+describe("the brief is built one partner at a time, across ticks", () => {
+  it("takes at most the limit it is given and says how many are left", async () => {
+    const partners = await t.db
+      .prepare(
+        `SELECT u.id FROM firm_user u
+           JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
+          WHERE u.status = 'ACTIVE'`,
+      )
+      .all<{ id: string }>();
+    const count = (partners.results ?? []).length;
+    expect(count).toBeGreaterThan(1); // otherwise this test proves nothing
+
+    // A weekday nothing else in this suite has touched, so every partner is naturally due and no
+    // report has to be deleted — the rows have children and deleting them trips a foreign key.
+    const now = new Date("2026-09-16T16:00:00.000Z");
+
+    const first = await runDailyForAll(env, MP, now, fakeModel, 1);
+    expect(first.generated + first.failed).toBe(1);
+    expect(first.remaining).toBe(count - 1);
+
+    // The next tick picks up whoever is left rather than repeating the first.
+    const second = await runDailyForAll(env, MP, now, fakeModel, 1);
+    expect(second.generated + second.failed).toBe(1);
+    expect(second.remaining).toBe(count - 2);
+
+    // And once everybody has one, a later tick does nothing at all.
+    const third = await runDailyForAll(env, MP, now, fakeModel, 1);
+    expect(third.generated + third.failed).toBe(0);
+    expect(third.remaining).toBe(0);
+  });
+
+  it("does not brief a partner before their own local morning", async () => {
+    const partner = await t.db
+      .prepare(
+        `SELECT u.id FROM firm_user u
+           JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
+          WHERE u.status = 'ACTIVE' LIMIT 1`,
+      )
+      .first<{ id: string }>();
+
+    await t.db
+      .prepare(
+        `INSERT INTO partner_intelligence_profile (firm_user_id, timezone, deliver_at_local, weekends)
+         VALUES (?1, 'America/New_York', '07:00', 1)
+         ON CONFLICT (firm_user_id) DO UPDATE SET timezone = 'America/New_York', deliver_at_local = '07:00', weekends = 1`,
+      )
+      .bind(partner!.id)
+      .run();
+
+    // 09:00 UTC is 05:00 in New York — before their 07:00. The job fires all day now, so without
+    // this gate a brief would be built at five in the morning and be stale by breakfast.
+    const tooEarly = await runDailyForAll(env, MP, new Date("2026-09-17T09:00:00.000Z"), fakeModel, 1);
+    expect(tooEarly.generated).toBe(0);
+
+    // 12:00 UTC is 08:00 in New York, which is past it.
+    const due = await runDailyForAll(env, MP, new Date("2026-09-17T12:00:00.000Z"), fakeModel, 1);
+    expect(due.generated + due.failed).toBe(1);
+  });
+});

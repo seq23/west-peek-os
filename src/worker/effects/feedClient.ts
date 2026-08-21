@@ -26,7 +26,20 @@ import type { AcquiredItem } from "../services/intelligence";
 
 /** Hard caps so a hostile or broken feed cannot exhaust the Worker. */
 const FETCH_TIMEOUT_MS = 8_000;
-const MAX_BYTES = 2 * 1024 * 1024;
+/*
+ * 256 KB, down from 2 MB, and the number is about CPU rather than memory.
+ *
+ * Every byte read here is scanned twice by the two global matchAll passes in `parseFeed`, and a
+ * Cron Trigger on the Workers Free plan gets 10 ms of CPU total — for the sweep AND the brief that
+ * follows it. A 2 MB feed could consume that budget on its own, which is how the scheduled brief
+ * came to die before it ever reached the brief.
+ *
+ * The cap is a truncation, not a rejection, and only the tail is lost: feeds are newest-first, and
+ * `MAX_ITEMS_PER_SOURCE` already discards everything past the first twenty-five items. 256 KB
+ * comfortably contains far more than twenty-five entries of any real feed, so in practice this
+ * drops material that was being parsed and then thrown away.
+ */
+const MAX_BYTES = 256 * 1024;
 const MAX_ITEMS_PER_SOURCE = 25;
 
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
@@ -101,8 +114,28 @@ function stripTags(s: string): string {
   return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 }
 
+/*
+ * COMPILED ONCE, NOT ONCE PER TAG PER ITEM.
+ *
+ * `tag()` is called about seven times for every item, and this built a fresh RegExp on each call —
+ * so a single feed of twenty-five items compiled roughly a hundred and seventy five identical
+ * patterns. That is pure CPU, and CPU is the budget that kills this job: a Cron Trigger gets 10 ms
+ * on the Workers Free plan. The set of tag names is small, fixed and known, so each one compiles
+ * once for the lifetime of the isolate and every later feed reuses it.
+ */
+const TAG_PATTERNS = new Map<string, RegExp>();
+
+function tagPattern(name: string): RegExp {
+  let re = TAG_PATTERNS.get(name);
+  if (!re) {
+    re = new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, "i");
+    TAG_PATTERNS.set(name, re);
+  }
+  return re;
+}
+
 function tag(block: string, name: string): string | undefined {
-  const m = new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, "i").exec(block);
+  const m = tagPattern(name).exec(block);
   return m ? decodeEntities(m[1]!) : undefined;
 }
 

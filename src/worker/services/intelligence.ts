@@ -354,7 +354,20 @@ async function acquireInternal(env: Env, now: Date): Promise<AcquiredItem[]> {
 export async function runIntelligence(
   env: Env,
   actor: Actor,
-  input: { idempotencyKey: string; triggerKind: "MANUAL" | "SCHEDULED"; sourceKeys?: string[] },
+  input: {
+    idempotencyKey: string;
+    triggerKind: "MANUAL" | "SCHEDULED";
+    sourceKeys?: string[];
+    /**
+     * How many sources this pass may read, oldest-checked first.
+     *
+     * A Cron Trigger gets 10 ms of CPU on the Workers Free plan, and parsing one feed is the most
+     * CPU-expensive thing in this codebase. Sweeping every source in one invocation is what killed
+     * the scheduled brief before it ever reached the brief. Undefined means all of them, which is
+     * what the manual path wants: a human pressing the button is not on the cron's budget.
+     */
+    maxSources?: number;
+  },
   deps: IntelligenceRunDeps = {},
 ): Promise<{ run: IntelligenceRunRow; items: IntelligenceItemRow[]; replayed: boolean }> {
   const authz = await authorize(env, actor, "intelligence_run.execute", { objectType: "intelligence_run" });
@@ -380,9 +393,22 @@ export async function runIntelligence(
     .bind(runId, input.triggerKind, input.idempotencyKey, actor.type, actor.firmUserId ?? actor.aiEmployeeId ?? "system", firmScope)
     .run();
 
-  // Sources in scope.
-  const allSources = await env.WP_OS_DB.prepare("SELECT * FROM intelligence_source WHERE enabled = 1 ORDER BY rowid").all<IntelligenceSourceRow>();
-  const sources = (allSources.results ?? []).filter((s) => !input.sourceKeys || input.sourceKeys.includes(s.source_key));
+  /*
+   * Sources in scope, LEAST RECENTLY CHECKED FIRST.
+   *
+   * Order used to be `rowid`, which meant a capped pass would read the same first sources every
+   * tick and never reach the rest. `last_checked_at` already exists and is written on every pass,
+   * so ordering by it makes a capped sweep rotate through every source on its own — the ones read
+   * longest ago go first. NULLs sort first in SQLite, so a source never read yet is picked up
+   * before any that has been.
+   */
+  const allSources = await env.WP_OS_DB.prepare(
+    "SELECT * FROM intelligence_source WHERE enabled = 1 ORDER BY last_checked_at ASC, rowid",
+  ).all<IntelligenceSourceRow>();
+  const inScope = (allSources.results ?? []).filter((s) => !input.sourceKeys || input.sourceKeys.includes(s.source_key));
+  const sources =
+    input.maxSources !== undefined && input.maxSources > 0 ? inScope.slice(0, input.maxSources) : inScope;
+  const sourcesRemaining = Math.max(0, inScope.length - sources.length);
 
   // Preferences + watchlists drive the deterministic score.
   const watchRows = await env.WP_OS_DB.prepare(

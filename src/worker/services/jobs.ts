@@ -165,6 +165,17 @@ async function checkPreconditions(env: Env, job: ScheduledJobRow): Promise<strin
   return null;
 }
 
+/**
+ * How much one tick may take on, given ten milliseconds of CPU.
+ *
+ * These are the numbers that turn a job which cannot finish into one that finishes across a few
+ * ticks of the cron that already runs. They are deliberately small: the cost of being too
+ * conservative is that a brief lands twenty minutes later, and the cost of being too ambitious is
+ * that it never lands at all — which is the state this is fixing.
+ */
+const SOURCES_PER_TICK = 2;
+const PARTNERS_PER_TICK = 1;
+
 async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runId: string, now: Date): Promise<RunOutcome> {
   const artifacts: RunOutcome["artifacts"] = [];
 
@@ -203,10 +214,22 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   if (job.kind === "INTELLIGENCE") {
+    /*
+     * A BOUNDED SWEEP, because this tick has ten milliseconds of CPU.
+     *
+     * Parsing a feed is the most CPU-expensive thing this codebase does, and sweeping every source
+     * in one invocation is what killed the scheduled brief before it ever reached the brief. Two
+     * sources per tick, least recently checked first, rotates through all of them on the existing
+     * fifteen-minute cron without any tick doing enough work to be killed.
+     *
+     * Kept out of the argument list deliberately: `tests/feed-client.test.ts` proves every call
+     * site injects `feedFetch` by scanning a window from `await runIntelligence(`, and a comment
+     * inside the arguments pushes the deps object out of it.
+     */
     const result = await runIntelligence(
       env,
       actor,
-      { idempotencyKey: `job:${runId}`, triggerKind: "SCHEDULED" },
+      { idempotencyKey: `job:${runId}`, triggerKind: "SCHEDULED", maxSources: SOURCES_PER_TICK },
       {
         now,
         // The SECOND call site. P29 wired the feed client into the manual sweep only, so a
@@ -232,8 +255,12 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     if (result.run.status !== "FAILED") {
       try {
         const { runDailyForAll } = await import("./dailyIntelligence");
-        const brief = await runDailyForAll(env, actor, now);
-        briefingNote = ` Briefings: ${brief.generated} generated${brief.failed ? `, ${brief.failed} failed` : ""}.`;
+        // ONE PARTNER PER TICK, same reason. Two partners on a fifteen-minute cron means both
+        // briefs are built within half an hour, and neither tick does enough to be killed.
+        const brief = await runDailyForAll(env, actor, now, undefined, PARTNERS_PER_TICK);
+        briefingNote =
+          ` Briefings: ${brief.generated} generated${brief.failed ? `, ${brief.failed} failed` : ""}` +
+          `${brief.remaining > 0 ? `, ${brief.remaining} still to build` : ""}.`;
         artifacts.push({ kind: "DAILY_BRIEFING", note: `${brief.generated} partner briefing(s)` });
       } catch (err) {
         briefingNote = ` Briefing step failed: ${err instanceof Error ? err.message : String(err)}`;
