@@ -103,6 +103,14 @@ on a job named "Monthly" that is configured to run DAILY at 13:00, defaults the 
 and the month to the current one because the client posts an empty body, and reports "Venue $0–$0 /
 Net $23,900–$33,900" whenever a venue carries no price. Under investigation.
 
+**University and Research should cover industries, not just craft.** University is pre-programmed to
+teach a novice VC the trade. The operator wants it to also teach a specific INDUSTRY on demand — AI
+inference was the example, deliberately chosen as esoteric — with Whitney bringing a partner up to
+speed fast and plainly, without pretending the subject is simple. Paired with it: the research
+employee should produce a real report on a sector — the companies, the players, who is doing what.
+These are two halves of one need (teach me this market / map this market) and they already have the
+right owners: Whitney hosts University, Wyatt hosts Research. Feeds items 18 and 19.
+
 **Who hosts nothing.** With hosting scoped to Deals, Firm and Learn: Percy, Piper, Pippa, Poppy,
 Porter, Walker, Willow, Wren. Not a defect by itself — a Chief of Staff and a compliance seat should
 not need a page — but it is one honest input to the cull in item 17. Poppy is worth a decision: she
