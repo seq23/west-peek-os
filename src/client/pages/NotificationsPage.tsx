@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { api, useApi, type MeResponse } from "../lib/api";
+import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 
 /**
  * Notifications — what needs you, then what happened, then what you have already dealt with.
@@ -84,7 +84,10 @@ function NotificationRow({
             type="button"
             data-testid={`notification-read-${n.id}`}
             onClick={async () => {
-              await api(`/api/notifications/${n.id}/read`, { method: "POST" });
+              // Dismiss used to swallow its result while Acknowledge, on the same row, checked it.
+              // Two buttons an inch apart behaving differently is worse than either behaviour.
+              const failed = mutationError(await api(`/api/notifications/${n.id}/read`, { method: "POST" }));
+              if (failed) { onMessage(failed); return; }
               onChanged();
             }}
           >

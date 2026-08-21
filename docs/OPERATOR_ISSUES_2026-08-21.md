@@ -41,7 +41,7 @@ already has is a green suite over a product nobody exercised.
 |---|---|---|---|
 | 1 | Fold Today into Home; brief runs at 7am ET without a button | IN PROGRESS | Abandoned-run sweeper landed, so a brief that dies now reports failure instead of appearing to still be running. The job still cannot finish inside one cron invocation — see below. Merge the surfaces only after that. |
 | 2 | "I know" and "Stop telling me" do the same thing; one should delete | TODO | Both hide and both lapse after 7 days. Needs a permanent dismissal distinct from acknowledgement. |
-| 3 | Approvals: cards, reject/block/send-back/draft, state change after decision; hostile review | TODO | Every decision button currently discards its result, so a 403 looks like success. Fix that first. Operator proposed a stacked-deck card treatment — card tops must carry state. |
+| 3 | Approvals: cards, reject/block/send-back/draft, state change after decision; hostile review | IN PROGRESS | **Correction:** Approve, Request revision and Reject all exist — they render only for a `pending_review` card, and production has none, so the queue looked actionless. Decisions no longer swallow their result (a 403 said nothing before). Still missing: changing state *after* a decision, a block distinct from reject, and the card treatment. |
 | 4 | Work under Approvals; drop the checkmark | TODO | Lands with the nav work. |
 | 5 | Nav group titles carry no more weight than their items | TODO | Diagnosed: group headings are same colour and weight as children, smaller, and dimmed to 0.72 opacity. Fix is to give them one axis of dominance, not size. |
 | 6 | Thesis formatting | TODO | Formatting is the least of it — the page renders the **oldest** mandate version. Amending appears to do nothing. Six call sites take `[0]` from an ascending list; one takes `.at(-1)`. |
@@ -60,7 +60,7 @@ already has is a green suite over a product nobody exercised.
 | 19 | University does not work | **DONE (undeployed)** | Root cause: the Workers AI adapter read a field the model does not return, so the whole cheap tier had never once succeeded. Fixed, proven against the live service, and University pinned to a capable model. **Still broken in production until this ships.** |
 | 20 | Delete documents with a trail; stop filing morning briefs | TODO | No delete route exists for anyone. 6 of 8 stored documents are machine noise. |
 | 21 | Cockpit overhaul; text fits; deterministic adjustable budgets; explain the two blocks | IN PROGRESS | Overflow **fixed** — the four posture cards rendered on top of one another. Remaining: "Best available" writes a policy identical to "Balanced"; spend has three definitions that disagree by 28%; 51 quarantined outputs cannot be accepted because the button does not exist. |
-| 22 | Fix the three red diagnostics; decide the interval; escalate to MPs; show what was escalated | TODO | Corrected by the browser pass: Diagnostics **does** detect — it reports "Broken — Scooter's brief". It never tells anyone, and Home says "Nothing outstanding" at the same moment. Two cards are green while wrong. |
+| 22 | Fix the three red diagnostics; decide the interval; escalate to MPs; show what was escalated | IN PROGRESS | Corrected by the browser pass: Diagnostics **does** detect — it reports "Broken — Scooter's brief". It never tells anyone, and Home says "Nothing outstanding" at the same moment. Two cards are green while wrong. |
 
 ---
 
@@ -114,6 +114,17 @@ Ordered by consequence. These are not optional extras; the first two outrank mos
    while tables are clipped; collapse state tracks page age, not importance.
 
 ---
+
+## Landed and deployed
+
+- **Error visibility.** `stateMessage` had the bug it existed to prevent: `useApi` records status 0
+  when fetch rejects, and the test was `status >= 400`, so a dead connection rendered the *empty*
+  text. Fixed, joined by `isFailure`, `failureText` and `mutationError`, and `api()` now returns
+  status 0 instead of rejecting — an offline click produced an unhandled rejection and a page that
+  did nothing. Adopted first where a silent refusal costs most: approval decisions, the whole
+  weekly review, intelligence feedback, notification dismissal. Eleven tests.
+- **Abandoned runs are closed out** on every tick rather than left RUNNING for ever inflating
+  committed spend.
 
 ## Landed on this branch
 

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, useApi } from "../lib/api";
+import { api, mutationError, useApi } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
 import { EXIT_TYPES, headingLabel, REFRESH_READS, isTyped, sourceWords } from "@shared/review/weeklyAgenda";
 import { jointByline } from "@shared/work/chiefOfStaff";
@@ -71,6 +71,7 @@ function shortDate(iso: string): string {
 export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => void }): JSX.Element {
   const state = useApi<Payload>("/api/weekly-review");
   const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
 
   /**
    * Take an item off the agenda. Confirmed only when it cannot come back — a derived item removed
@@ -100,16 +101,25 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
     byHeading.get(i.heading)!.push(i);
   }
 
+  /*
+   * EVERY HANDLER ON THIS PAGE READS ITS RESULT NOW.
+   *
+   * All five weekly-review routes gate on `weekly_review.manage` and can answer 403. Written as a
+   * bare `await api(...)` they were silent about it, so the page a partner runs the operating
+   * meeting from could refuse every action and look exactly like a quiet week.
+   */
   async function generate() {
     setBusy(true);
-    await api("/api/weekly-review/generate", { method: "POST", body: {} });
+    const failed = mutationError(await api("/api/weekly-review/generate", { method: "POST", body: {} }));
     setBusy(false);
-    state.reload();
+    setFailure(failed);
+    if (!failed) state.reload();
   }
 
   async function setExit(id: string, exit_type: string) {
-    await api(`/api/weekly-review/items/${id}/exit`, { method: "POST", body: { exit_type } });
-    state.reload();
+    const failed = mutationError(await api(`/api/weekly-review/items/${id}/exit`, { method: "POST", body: { exit_type } }));
+    setFailure(failed);
+    if (!failed) state.reload();
   }
 
   /** Put a thought on the agenda. Heading omitted on purpose — the server guesses it. */
@@ -158,17 +168,26 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
   }
 
   /** Put one proposal on the agenda. Nothing is written until this is pressed. */
+  /*
+   * THE PROPOSAL IS ONLY REMOVED IF IT WAS ACTUALLY SAVED. Previously it was filtered out of the
+   * list regardless, so a refused item vanished from the screen and never reached the agenda —
+   * the operator saw it accepted and it did not exist.
+   */
   async function accept(p: Proposal, index: number) {
-    await api("/api/weekly-review/items", {
-      method: "POST",
-      body: {
-        body: p.body,
-        heading: p.heading,
-        from_notes: true,
-        ...(p.owner_id ? { owner_id: p.owner_id } : {}),
-        ...(p.deadline ? { deadline: p.deadline } : {}),
-      },
-    });
+    const failed = mutationError(
+      await api("/api/weekly-review/items", {
+        method: "POST",
+        body: {
+          body: p.body,
+          heading: p.heading,
+          from_notes: true,
+          ...(p.owner_id ? { owner_id: p.owner_id } : {}),
+          ...(p.deadline ? { deadline: p.deadline } : {}),
+        },
+      }),
+    );
+    setFailure(failed);
+    if (failed) return;
     setProposals((prev) => (prev ? prev.filter((_, n) => n !== index) : prev));
     state.reload();
   }
@@ -176,6 +195,11 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
   return (
     <div className="page" data-testid="weekly-review-page">
       <h2>Weekly review</h2>
+      {failure && (
+        <p className="notice notice-gate small" data-testid="weekly-review-failed" role="alert">
+          {failure}
+        </p>
+      )}
 
       {/* THE HEADER ANSWERS THE THREE QUESTIONS SOMEBODY OPENS THIS PAGE WITH: which week, how much
           is outstanding, and what has been sitting here too long. */}

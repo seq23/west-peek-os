@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, useApi, type MeResponse } from "../lib/api";
+import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 
 /**
  * Daily Intelligence surface (P14, GAP-05).
@@ -109,8 +109,13 @@ function ItemCard({ item, onChanged }: { item: ItemRow; onChanged: () => void })
           type="button"
           data-testid={`intel-useful-${item.id}`}
           onClick={async () => {
-            await api(`/api/intelligence/items/${item.id}/feedback`, { method: "POST", body: { signal: "USEFUL" } });
-            setMessage("Feedback recorded.");
+            // Said only when it is true. This printed "Feedback recorded." unconditionally, so a
+            // refusal and a recorded vote were the same sentence — and intelligence_feedback in
+            // production holds zero rows against a page that had been reporting success.
+            const failed = mutationError(
+              await api(`/api/intelligence/items/${item.id}/feedback`, { method: "POST", body: { signal: "USEFUL" } }),
+            );
+            setMessage(failed ?? "Feedback recorded.");
           }}
         >
           Useful
@@ -119,8 +124,13 @@ function ItemCard({ item, onChanged }: { item: ItemRow; onChanged: () => void })
           type="button"
           data-testid={`intel-notrelevant-${item.id}`}
           onClick={async () => {
-            await api(`/api/intelligence/items/${item.id}/feedback`, { method: "POST", body: { signal: "NOT_RELEVANT" } });
-            setMessage("Feedback recorded.");
+            // Said only when it is true. This printed "Feedback recorded." unconditionally, so a
+            // refusal and a recorded vote were the same sentence — and intelligence_feedback in
+            // production holds zero rows against a page that had been reporting success.
+            const failed = mutationError(
+              await api(`/api/intelligence/items/${item.id}/feedback`, { method: "POST", body: { signal: "NOT_RELEVANT" } }),
+            );
+            setMessage(failed ?? "Feedback recorded.");
           }}
         >
           Not relevant
