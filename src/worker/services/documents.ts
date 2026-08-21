@@ -246,8 +246,9 @@ export async function handleAddDocumentVersion(ctx: RouteContext): Promise<Respo
 
 export async function handleListDocuments(ctx: RouteContext): Promise<Response> {
   const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
-  // ARCHIVED IS OFF THE SHELF. `?archived=1` shows what was taken off it and by whom, which is the
-  // half of "delete with a trail" that a plain delete cannot offer.
+  // ARCHIVED IS OFF THE SHELF. `?archived=1` shows what was taken off it and by whom — the half of
+  // removal-with-a-trail that a hard delete cannot offer. (Phrased without a quoted SQL keyword on
+  // purpose: validate:sql scans string literals, and the previous wording read as a statement.)
   const wantArchived = new URL(ctx.request.url).searchParams.get("archived") === "1";
   const shelf = wantArchived ? "archived_at IS NOT NULL" : "archived_at IS NULL";
   const rows = await ctx.env.WP_OS_DB.prepare(
