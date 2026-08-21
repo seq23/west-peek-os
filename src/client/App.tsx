@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { readableDate, shortDate } from "./lib/dates";
-import { api, getDevUser, signOut, useApi, type MeResponse } from "./lib/api";
+import { api, getDevUser, mutationError, signOut, useApi, type MeResponse } from "./lib/api";
 import { HomePage } from "./pages/HomePage";
 import { IntelligencePage } from "./pages/IntelligencePage";
 import { EmployeesPage } from "./pages/EmployeesPage";
@@ -992,6 +992,7 @@ function WorkCardsPage({ me, onChanged }: { me: MeResponse; onChanged: () => voi
 
 function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeResponse; onDecided: () => void }) {
   const [note, setNote] = useState("");
+  const [failure, setFailure] = useState<string | null>(null);
   const detail = useApi<ApprovalCardRow>(`/api/approvals/${card.id}`);
   const decisions = detail.data?.decisions ?? [];
   const requiredRoles: string[] = (() => {
@@ -1006,8 +1007,25 @@ function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeRe
   const whoRequested =
     card.requested_by_id === me.id ? "you" : card.requested_by_type === "HUMAN" ? "your partner" : card.requested_by_id;
 
+  /*
+   * THE RESULT IS READ, and that is not a refinement.
+   *
+   * This used to `await api(...)` and discard the status. `handleDecideApproval` answers 400, 403
+   * and 409 as JSON — a card that expired, a role the reader does not hold, a decision someone
+   * else already made — and every one of them looked identical to success: the card reloaded
+   * unchanged and nothing was said. On the page where the firm records its binding decisions, a
+   * refusal that presents as a completed act is the worst failure this client can have.
+   */
   const decide = async (decision: "approved" | "rejected" | "revise_requested") => {
-    await api(`/api/approvals/${card.id}/decide`, { method: "POST", body: { decision, note: note || undefined } });
+    setFailure(null);
+    const failed = mutationError(
+      await api(`/api/approvals/${card.id}/decide`, { method: "POST", body: { decision, note: note || undefined } }),
+      [200, 201],
+    );
+    if (failed) {
+      setFailure(failed);
+      return; // The note is kept: the operator wrote it and the decision did not happen.
+    }
     setNote("");
     onDecided();
   };
@@ -1051,6 +1069,11 @@ function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeRe
           {card.state !== "pending_review"
             ? `Nothing to decide — this is ${approvalStateWords(card.state).label.toLowerCase()}. ${approvalStateWords(card.state).means}`
             : `This needs ${requiredRoles.map(roleWords).join(" or ")}, and you do not hold that role.`}
+        </p>
+      )}
+      {failure && (
+        <p className="notice notice-gate small" data-testid={`decision-failed-${card.id}`} role="alert">
+          {failure}
         </p>
       )}
       {card.state === "pending_review" && (
