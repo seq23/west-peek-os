@@ -3196,6 +3196,23 @@ tbody tr.is-selected > td {
   color: inherit;
 }
 
+/*
+ * A CARD-SHAPED BUTTON HOLDS SENTENCES, and the shared rule does not expect that.
+ *
+ * `.surface-body button` sets `white-space: nowrap; display: inline-flex` — correct for an
+ * ordinary button, which should never wrap mid-label. It is a class plus an element, so it
+ * outranks the bare `.posture-pick` above no matter which is written first.
+ *
+ * The result was not subtle: all four postures rendered their body text as single unwrapped
+ * lines across one another and off the right edge of the page, on the section where a partner
+ * decides what the firm may spend. Fixed by winning the specificity here rather than by
+ * weakening the shared rule, which is doing its job everywhere else.
+ */
+.surface-body .posture-pick {
+  display: flex;
+  white-space: normal;
+}
+
 .posture-pick:hover { border-color: var(--wp-line-control); }
 
 /* The one in force. The accent marks exactly one thing on a page. */

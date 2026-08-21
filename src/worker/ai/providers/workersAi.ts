@@ -21,13 +21,63 @@ import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types
  * see the spend-posture handling in runAi for how the two are kept apart.
  */
 
-/** The slice of the Workers AI binding this uses. Narrow on purpose — it is also the test seam. */
+/**
+ * The slice of the Workers AI binding this uses. Narrow on purpose — it is also the test seam.
+ *
+ * TWO SHAPES, NOT ONE, and assuming one is what broke the cheap tier. Workers AI's older text
+ * models answer with `{ response }`. The newer ones answer in the OpenAI chat-completion shape —
+ * `{ choices: [{ message: { content } }] }` — and carry no `response` field at all. Of the three
+ * models this firm registered in `0081_workers_ai_cheap_tier.sql`, granite-4.0-h-micro is
+ * new-shape-only and qwen3-30b returns both. Reading only `response` therefore failed granite
+ * 100% of the time, and because routing picks the CHEAPEST capable model and granite is the
+ * cheapest, every run that reached this provider failed. Two runs, two failures, zero successes,
+ * from the day the tier was added until this was fixed.
+ */
 export interface WorkersAiBinding {
   run(
     model: string,
     input: Record<string, unknown>,
-  ): Promise<{ response?: string; usage?: { prompt_tokens?: number; completion_tokens?: number } }>;
+  ): Promise<{
+    response?: string;
+    choices?: Array<{ message?: { content?: string | null } | null } | null> | null;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  }>;
 }
+
+/**
+ * The generated text, from whichever shape the model answered in.
+ *
+ * Returns null when neither shape carried text, which the caller reports differently from text
+ * that arrived and was empty. That distinction is not pedantry: "the field is missing" and "the
+ * model said nothing" have different causes and different fixes, and collapsing them into one
+ * message is what made the original failure take a production database query to diagnose.
+ */
+function generatedText(result: {
+  response?: string;
+  choices?: Array<{ message?: { content?: string | null } | null } | null> | null;
+}): string | null {
+  if (typeof result?.response === "string") return result.response;
+  const content = result?.choices?.[0]?.message?.content;
+  return typeof content === "string" ? content : null;
+}
+
+/**
+ * Workers AI models that can actually see.
+ *
+ * A allowlist rather than a capability flag on the request, because the adapter is handed a model
+ * NAME and nothing else. Kept here beside the code that depends on it so the two cannot drift:
+ * adding a vision model to the catalogue without adding it here fails closed with a refusal, which
+ * is the safe direction. `@cf/meta/llama-3.2-11b-vision-instruct` required a one-time
+ * acceptance of Meta's community licence, submitted by a Managing Partner on 21 Aug 2026; before that
+ * every call returned error 5016.
+ *
+ * `moondream3.1-9B-A2B` is the account's other vision model and is deliberately NOT here. It needs
+ * no licence, but it answers this content-array shape with an empty object and its own form wants
+ * raw image bytes rather than a data URI — a third shape, which is more than a second vision option
+ * is worth today. Adding it to the catalogue without adding it here refuses images rather than
+ * sending them somewhere that returns nothing, which is the point of the list.
+ */
+const VISION_MODELS = new Set(["@cf/meta/llama-3.2-11b-vision-instruct"]);
 
 export interface WorkersAiOptions {
   binding: WorkersAiBinding;
@@ -41,26 +91,50 @@ export function createWorkersAiAdapter(options: WorkersAiOptions): ProviderAdapt
       const model = req.model ?? options.model;
 
       /*
-       * VISION IS NOT WIRED THROUGH HERE, and refusing is the only honest answer.
+       * VISION, AND WHY THIS REFUSES PER MODEL RATHER THAN OUTRIGHT.
        *
-       * Workers AI has exactly one vision model and its message shape differs from the text one.
-       * An adapter that quietly dropped the images would hand a design review to a model that
-       * never saw the page — the precise failure the vision guard in runAi exists to prevent. So
-       * this refuses, loudly, and the run fails rather than fabricating.
+       * This used to refuse every image unconditionally, on the grounds that the vision message
+       * shape differs from the text one and an adapter that quietly dropped the images would hand
+       * a design review to a model that never saw the page. The reasoning was right; the blanket
+       * refusal was broader than it needed to be. Workers AI's vision model takes the same
+       * multimodal content array OpenRouter does — text part first, then image parts as data URIs —
+       * so the shape is supported here now, mirroring `openRouter.ts` deliberately.
+       *
+       * The refusal survives for every OTHER model, because most Workers AI models cannot see and
+       * handing them an image array produces a confident answer about nothing. Dropping images
+       * silently is the failure being guarded against, and it is still guarded against — the guard
+       * is now "this model cannot see" instead of "this provider cannot see".
        */
-      if (req.images?.length) {
+      if (req.images?.length && !VISION_MODELS.has(model)) {
         throw new Error("workers_ai_no_vision");
       }
 
       const result = await options.binding.run(model, {
         messages: [
           { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
-          { role: "user", content: req.inputs.join("\n\n") },
+          {
+            role: "user",
+            // Without images this stays a plain string, which every model accepts and which keeps
+            // the overwhelming majority of runs byte-identical to what they were before.
+            content: req.images?.length
+              ? [
+                  { type: "text", text: req.inputs.join("\n\n") },
+                  ...req.images.map((img) => ({
+                    type: "image_url" as const,
+                    // Data URI, never a hosted link: Cloudflare rejects HTTP URLs here, and a link
+                    // would mean the provider reaching back into us — an inbound path this system
+                    // does not have.
+                    image_url: { url: `data:${img.mediaType};base64,${img.dataBase64}` },
+                  })),
+                ]
+              : req.inputs.join("\n\n"),
+          },
         ],
       });
 
-      const text = result.response;
-      if (typeof text !== "string" || text.length === 0) throw new Error("provider_malformed_response");
+      const text = generatedText(result);
+      if (text === null) throw new Error("provider_malformed_response");
+      if (text.length === 0) throw new Error("provider_empty_response");
 
       return {
         text,

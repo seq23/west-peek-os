@@ -116,6 +116,52 @@ Note for whoever picks this up: the `west-peek-community` repository is the **ma
 
 ## Would improve what exists
 
+### What cannot actually run — no way to see it · API only
+Added 21 Aug 2026, queued for the Home/attention work.
+
+The catalogue can list a model, price it, and present it as available while it cannot run at all.
+That is not hypothetical: `@cf/meta/llama-3.2-11b-vision-instruct` was registered in
+`0081_workers_ai_cheap_tier.sql` with a price and a context window, and answers every call with
+error 5016 because Meta's licence was never accepted. Nothing anywhere told the operator. The same
+blindness covers a connector with no credential and a provider whose key has lapsed.
+
+`operatorAttention()` in `src/shared/setup/operatorAttention.ts` is the right surface and already
+has the shape for it, but it computes only from inputs the caller holds and deliberately invents
+nothing — so this needs a **model-level block record** first: an append-only row written when a run
+or health check comes back with a licence refusal, a missing credential, or an unsupported
+capability, carrying the human action that resolves it.
+
+`provider_health_check` cannot carry this as it stands: it is keyed to `provider_id`, and the
+failure here is per-model. Workers AI the provider is healthy; one model on it is gated.
+
+**Deferred deliberately** so it is designed alongside the other "Needs your attention" items rather
+than bolted on, per the review-first sequencing agreed 21 Aug 2026.
+
+### A second vision model — moondream needs a third shape · deferred
+Added 21 Aug 2026.
+
+`@cf/moondream/moondream3.1-9B-A2B` runs on this account, needs no licence, and would give routing
+a second pair of eyes. It is not wired, and the reason is shape: it answers the OpenAI content-array
+form with an **empty object**, and its own `prompt` + `image` form wants raw image bytes rather than
+a data URI. Supporting it means a third input and output shape in one adapter.
+
+`@cf/meta/llama-3.2-11b-vision-instruct` works, was licensed by a Managing Partner on 21 Aug 2026,
+and is proven end to end against a real image. One working vision model is enough until something
+needs a fallback.
+
+### Meeting capture — the recording bot is not ours
+Added 21 Aug 2026.
+
+In-browser capture was chosen for meetings because employees need to talk to the partners during
+the meeting, and it needs no vendor: chunks go to Workers AI Whisper on the binding this Worker
+already has. Its limits are real, though — the tab must stay open, audio quality is whatever the
+laptop hears, and nothing appears in the call for the counterparty to see, so consent rests
+entirely on the partner asking for it.
+
+Later, in this order: a purpose-built West Peek recording bot that joins Zoom and Meet as a visible
+participant, and true streaming transcription so employees can react mid-sentence rather than
+per chunk.
+
 ### Deal provenance — capture is live, history is empty
 `relationship_origin` and `relationship_started_at` are captured on the opportunity create form and
 backfillable from the Investment page. **Existing opportunities are all UNRECORDED** and the panel

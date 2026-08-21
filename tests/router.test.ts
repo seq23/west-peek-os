@@ -7,6 +7,7 @@ import { runAi } from "../src/worker/ai/runAi";
 import { periodStart, scopeApplies, type BudgetScopeRow } from "../src/worker/ai/routing";
 import { createOpenRouterAdapter } from "../src/worker/ai/providers/openRouter";
 import { createFireworksAdapter } from "../src/worker/ai/providers/fireworks";
+import { createWorkersAiAdapter, type WorkersAiBinding } from "../src/worker/ai/providers/workersAi";
 
 /**
  * P16 — Provider/model router + AI Cost Command Center (GAP-02, GAP-03).
@@ -165,6 +166,113 @@ describe("the catalogue is honest about credentials, pricing, and health", () =>
     });
     expect(promoted.status).toBe(200);
     expect(promoted.body.status).toBe("ACTIVE");
+  });
+});
+
+/*
+ * WHY THIS BLOCK EXISTS. The Workers AI adapter shipped with no test of any kind, and the bug that
+ * followed was not subtle: it read `response`, the cheapest registered model answers only in the
+ * OpenAI chat-completion shape, and so every run routed to the cheap tier failed from the day the
+ * tier was added. The fixtures below are the two real shapes, recorded from live calls to
+ * granite-4.0-h-micro and qwen3-30b-a3b-fp8 on 21 Aug 2026 — not invented.
+ */
+describe("the Workers AI adapter reads both response shapes", () => {
+  const bindingReturning = (value: unknown): WorkersAiBinding => ({
+    run: async () => value as Awaited<ReturnType<WorkersAiBinding["run"]>>,
+  });
+
+  it("reads the OpenAI chat-completion shape, which granite answers in and carries no response field", async () => {
+    const adapter = createWorkersAiAdapter({
+      binding: bindingReturning({
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "A capital call is a demand for committed capital." } }],
+        usage: { prompt_tokens: 34, completion_tokens: 38 },
+      }),
+      model: "@cf/ibm-granite/granite-4.0-h-micro",
+    });
+
+    const result = await adapter.complete({ purpose: "p", inputs: ["i"], model: null });
+    expect(result.text).toBe("A capital call is a demand for committed capital.");
+    expect(result.usage.inputTokens).toBe(34);
+    expect(result.usage.outputTokens).toBe(38);
+  });
+
+  it("still reads the legacy response field, which qwen answers with alongside choices", async () => {
+    const adapter = createWorkersAiAdapter({
+      binding: bindingReturning({
+        response: "Legacy shape.",
+        choices: [{ message: { content: "Ignored — response wins when both are present." } }],
+        usage: { prompt_tokens: 10, completion_tokens: 3 },
+      }),
+      model: "@cf/qwen/qwen3-30b-a3b-fp8",
+    });
+
+    await expect(adapter.complete({ purpose: "p", inputs: ["i"], model: null })).resolves.toMatchObject({
+      text: "Legacy shape.",
+    });
+  });
+
+  it("separates a response that never arrived from one that arrived empty", async () => {
+    const missing = createWorkersAiAdapter({ binding: bindingReturning({ usage: {} }), model: "m" });
+    await expect(missing.complete({ purpose: "p", inputs: ["i"], model: null })).rejects.toThrow(
+      "provider_malformed_response",
+    );
+
+    const empty = createWorkersAiAdapter({ binding: bindingReturning({ response: "" }), model: "m" });
+    await expect(empty.complete({ purpose: "p", inputs: ["i"], model: null })).rejects.toThrow(
+      "provider_empty_response",
+    );
+  });
+
+  const anImage = { mediaType: "image/png", dataBase64: "AAA", label: "a screenshot of the page" };
+
+  it("refuses images for a model that cannot see, rather than dropping them and answering anyway", async () => {
+    const adapter = createWorkersAiAdapter({
+      binding: bindingReturning({ response: "text" }),
+      model: "@cf/ibm-granite/granite-4.0-h-micro",
+    });
+    await expect(
+      adapter.complete({ purpose: "p", inputs: ["i"], model: null, images: [anImage] }),
+    ).rejects.toThrow("workers_ai_no_vision");
+  });
+
+  it("sends images to the vision model as data-URI content parts", async () => {
+    let sent: Record<string, unknown> | null = null;
+    const adapter = createWorkersAiAdapter({
+      binding: {
+        run: async (_model, input) => {
+          sent = input;
+          return { response: "I can see the page." } as Awaited<ReturnType<WorkersAiBinding["run"]>>;
+        },
+      },
+      model: "@cf/meta/llama-3.2-11b-vision-instruct",
+    });
+
+    const result = await adapter.complete({ purpose: "p", inputs: ["what is wrong here?"], model: null, images: [anImage] });
+    expect(result.text).toBe("I can see the page.");
+
+    const messages = (sent as unknown as { messages: Array<{ role: string; content: unknown }> }).messages;
+    expect(messages[1]?.content).toEqual([
+      { type: "text", text: "what is wrong here?" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AAA" } },
+    ]);
+  });
+
+  it("keeps a text-only run's content a plain string, exactly as before vision existed", async () => {
+    let sent: Record<string, unknown> | null = null;
+    const adapter = createWorkersAiAdapter({
+      binding: {
+        run: async (_model, input) => {
+          sent = input;
+          return { response: "ok" } as Awaited<ReturnType<WorkersAiBinding["run"]>>;
+        },
+      },
+      model: "@cf/ibm-granite/granite-4.0-h-micro",
+    });
+
+    await adapter.complete({ purpose: "p", inputs: ["a", "b"], model: null });
+    const messages = (sent as unknown as { messages: Array<{ role: string; content: unknown }> }).messages;
+    expect(messages[1]?.content).toBe("a\n\nb");
   });
 });
 

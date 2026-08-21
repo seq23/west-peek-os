@@ -257,7 +257,9 @@ export async function handleBuildPacket(ctx: RouteContext): Promise<Response> {
     inputs: [buildPrompt(`${project.title} — ${project.question}`, promptEvents)],
     sensitivity: "INTERNAL" as never,
     budgetContext: { expectedOutputTokens: 1800 },
-    routing: { category: "INTELLIGENCE" },
+    // Pinned: this synthesis is the research product itself, grounded against source ids and
+    // read by a partner as findings. The cheap tier is for small frequent work, not this.
+    routing: { category: "INTELLIGENCE", taskClass: "research-packet" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) {
     return json({ error: "synthesis_failed", detail: run.failure_reason ?? run.status }, { status: 502 });
