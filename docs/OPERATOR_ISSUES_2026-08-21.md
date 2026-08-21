@@ -46,7 +46,7 @@ already has is a green suite over a product nobody exercised.
 | 5 | Nav group titles carry no more weight than their items | TODO | Diagnosed: group headings are same colour and weight as children, smaller, and dimmed to 0.72 opacity. Fix is to give them one axis of dominance, not size. |
 | 6 | Thesis formatting | TODO | Formatting is the least of it — the page renders the **oldest** mandate version. Amending appears to do nothing. Six call sites take `[0]` from an ascending list; one takes `.at(-1)`. |
 | 7 | Three routes into the funnel: manual/deck upload, Airtable, scout | TODO | Four uncontrolled routes already exist while the page claims "the only way in". Consolidate before adding. |
-| 8 | A host AI employee on every Deals / Firm / Learn page | TODO | Build once, before the page rebuilds, so they inherit it. Home already shows bylines for INACTIVE employees — gate on employment status as part of this. |
+| 8 | A host AI employee on every Deals / Firm / Learn page | IN PROGRESS | Registry and rule landed: 17 pages across Deals, Firm and Learn have a named owner joined to the roster and its machines. Admin deliberately has none — it is machinery, not a room somebody runs. Personal surfaces are already signed by their deliverer. Card component and chat still to build; gate the card on live employment status. |
 | 9 | Edit a company; working History; link deal ↔ company; record a dropped "no" | TODO | `PATCH /api/companies/:id` exists with no caller, no authorization and no event. Needs a `company.update` action key. The pass path does not exist anywhere. |
 | 10 | Sectors derived from the thesis, plus a Misc catch-all | TODO | Currently free text, already diverging from the mandate's own vocabulary. |
 | 11 | Meetings + IC rebuilt | TODO | Spine kept (see decisions). Delete the legacy form on the same route first — it files every meeting as FOUNDER. |
@@ -86,6 +86,27 @@ now makes the failure visible; it does not make the job finish. Before 7am autom
 trusted the brief has to stop depending on completing inside a single invocation — chunked across
 ticks, or moved to a durable execution path. Do not close item 1 until a scheduled brief has been
 watched succeeding in production on consecutive days.
+
+---
+
+## Operator notes filed 21 Aug 2026, not yet built
+
+**Machines tab should show each machine's Claude skills.** The operator wants to see, per machine,
+the skills its employees adhere to. Under investigation; nothing built yet.
+
+**West Peek Rooms is the flagship events product.** Its goal is community, brand, and money. There
+is an ethos document that sets out the event TYPES and the CADENCE at which each should be
+proposed — the proposing employee should follow it rather than defaulting to monthly. Every
+proposal should model how the event makes money (sponsorship and so on) unless it is explicitly a
+non-revenue event, which must be stated up front. Today's generator does none of this: it proposes
+on a job named "Monthly" that is configured to run DAILY at 13:00, defaults the city to New York
+and the month to the current one because the client posts an empty body, and reports "Venue $0–$0 /
+Net $23,900–$33,900" whenever a venue carries no price. Under investigation.
+
+**Who hosts nothing.** With hosting scoped to Deals, Firm and Learn: Percy, Piper, Pippa, Poppy,
+Porter, Walker, Willow, Wren. Not a defect by itself — a Chief of Staff and a compliance seat should
+not need a page — but it is one honest input to the cull in item 17. Poppy is worth a decision: she
+is the IC Facilitator and the IC lives inside Meetings, which Walter hosts.
 
 ---
 
