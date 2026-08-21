@@ -342,8 +342,32 @@ export async function runJob(
     opts.idempotencyKey ??
     (opts.trigger === "SCHEDULED" ? occurrenceKey(job, now) : `${job.job_key}:manual:${crypto.randomUUID()}`);
 
-  const existing = await env.WP_OS_DB.prepare("SELECT * FROM job_run WHERE idempotency_key = ?1").bind(key).first<Record<string, unknown>>();
-  if (existing) return { run: existing, replayed: true };
+  /*
+   * A REPLAY IS A FINISHED OCCURRENCE, NOT ANY OCCURRENCE.
+   *
+   * `occurrenceKey` for a DAILY_AT job is `job_key:YYYY-MM-DD`, and this used to return `replayed`
+   * for a row with that key whatever its status. So the first failure of the day claimed the key
+   * and every later tick answered "already ran" — which made the max_attempts and DEAD_LETTER
+   * machinery below unreachable code for every daily job in the firm. The morning brief failed at
+   * 06:00 and was never retried, not because retrying was refused but because nothing asked.
+   *
+   * A run that SUCCEEDED or was REFUSED is genuinely done and must not repeat. One that FAILED or
+   * was abandoned should be retried, up to max_attempts. The sweeper does not help here: a swept
+   * row is FAILED and still holds the key.
+   */
+  const existing = await env.WP_OS_DB.prepare(
+    "SELECT * FROM job_run WHERE idempotency_key = ?1 ORDER BY started_at DESC LIMIT 1",
+  )
+    .bind(key)
+    .first<Record<string, unknown>>();
+  if (existing && (existing.status === "SUCCEEDED" || existing.status === "REFUSED")) {
+    return { run: existing, replayed: true };
+  }
+  if (existing && (existing.status === "RUNNING" || existing.status === "QUEUED")) {
+    // Somebody else holds this occurrence right now. The sweeper releases a dead one after
+    // ABANDONED_AFTER_MINUTES; until then, leave it alone rather than running it twice.
+    return { run: existing, replayed: true };
+  }
 
   const refusal = await checkPreconditions(env, job);
   const runId = `jrun_${crypto.randomUUID()}`;
@@ -358,7 +382,29 @@ export async function runJob(
     `INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, attempt, requested_by, firm_scope)
      VALUES (?1, ?2, ?3, ?4, 'RUNNING', ?5, ?6, ?7)`,
   )
-    .bind(runId, job.id, key, opts.trigger, attempt, actor.firmUserId ?? actor.aiEmployeeId ?? "system", job.firm_scope)
+    .bind(
+      runId,
+      job.id,
+      // The occurrence key is UNIQUE, so a retry of the same occurrence carries its attempt number.
+      // The occurrence is still identifiable by its prefix; the row is no longer a collision.
+      attempt > 1 ? `${key}#${attempt}` : key,
+      opts.trigger,
+      attempt,
+      actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+      job.firm_scope,
+    )
+    .run();
+
+  /*
+   * THE CLOCK MOVES WHEN THE WORK IS CLAIMED, NOT WHEN IT FINISHES.
+   *
+   * `next_run_at` used to advance only on the completion path. A run that died mid-flight never
+   * reached it, so the job stayed permanently due — production had daily_intelligence pinned at
+   * 06:00 for thirteen hours while every tick declined to re-run it. Advancing here means a job
+   * that dies is due again tomorrow rather than wedged in yesterday.
+   */
+  await env.WP_OS_DB.prepare("UPDATE scheduled_job SET last_run_at = ?2, next_run_at = ?3 WHERE id = ?1")
+    .bind(job.id, now.toISOString(), computeNextRun(job, now))
     .run();
 
   if (refusal) {
@@ -400,9 +446,8 @@ export async function runJob(
   }
 
   await finishRun(env, runId, finalStatus, outcome.summary, outcome.error ?? null, outcome.aiRunId ?? null);
-  await env.WP_OS_DB.prepare("UPDATE scheduled_job SET last_run_at = ?2, next_run_at = ?3 WHERE id = ?1")
-    .bind(job.id, now.toISOString(), computeNextRun(job, now))
-    .run();
+  // The schedule already advanced when this run was claimed. Advancing again here would skip a day
+  // every time a job completed normally.
 
   if (finalStatus === "DEAD_LETTER") {
     await notifyQuietly(env, {
@@ -482,7 +527,10 @@ const ABANDONED_AFTER_MINUTES = 30;
  * `closeAbandonedReports` already uses: "this stopped part-way" and "this ran and failed on its
  * merits" are different facts and a reader should not have to guess which happened.
  */
-export async function closeAbandonedRuns(env: Env, now: Date = new Date()): Promise<{ jobRuns: number; aiRuns: number }> {
+export async function closeAbandonedRuns(
+  env: Env,
+  now: Date = new Date(),
+): Promise<{ jobRuns: number; aiRuns: number; rescheduled: number }> {
   const cutoff = new Date(now.getTime() - ABANDONED_AFTER_MINUTES * 60_000).toISOString();
 
   const jobs = await env.WP_OS_DB.prepare(
@@ -507,7 +555,44 @@ export async function closeAbandonedRuns(env: Env, now: Date = new Date()): Prom
     .bind(cutoff)
     .run();
 
-  return { jobRuns: jobs.meta?.changes ?? 0, aiRuns: ai.meta?.changes ?? 0 };
+  /*
+   * RELEASING THE RUN IS NOT ENOUGH; THE SCHEDULE HAS TO BE REPAIRED TOO.
+   *
+   * A job whose run died before the claim-time advance existed still has `next_run_at` in the past.
+   * Closing the run without moving the clock leaves it permanently due and re-attempted on every
+   * tick for ever. Any job still overdue after its runs were swept is moved to its next real
+   * occurrence.
+   */
+  // ONLY THE JOBS WHOSE RUNS WERE JUST REAPED. Rescheduling every overdue job would push a healthy
+  // one — one that is merely due and waiting for this very tick to run it — into tomorrow, and the
+  // job would never run again. Caught by `runDueJobs is the same path the cron trigger calls`,
+  // which is exactly the kind of thing that test exists for.
+  const overdue =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT j.* FROM scheduled_job j
+          WHERE j.status = 'ACTIVE'
+            AND j.next_run_at IS NOT NULL
+            AND j.next_run_at < ?1
+            AND EXISTS (
+              SELECT 1 FROM job_run r
+               WHERE r.job_id = j.id
+                 AND r.error = 'abandoned: the run stopped part-way through and never finished'
+            )`,
+      )
+        .bind(cutoff)
+        .all<ScheduledJobRow>()
+    ).results ?? [];
+  let rescheduled = 0;
+  for (const job of overdue) {
+    const next = computeNextRun(job, now);
+    if (next && next > now.toISOString()) {
+      await env.WP_OS_DB.prepare("UPDATE scheduled_job SET next_run_at = ?2 WHERE id = ?1").bind(job.id, next).run();
+      rescheduled += 1;
+    }
+  }
+
+  return { jobRuns: jobs.meta?.changes ?? 0, aiRuns: ai.meta?.changes ?? 0, rescheduled };
 }
 
 export async function runDueJobs(env: Env, now: Date): Promise<Array<{ job_key: string; status: string; summary: string }>> {
@@ -537,11 +622,11 @@ export async function runDueJobs(env: Env, now: Date): Promise<Array<{ job_key: 
 
   // Reported rather than done quietly: a tick that closed abandoned work is a fact the operator
   // wants, and a tick that closes some every time is a symptom rather than housekeeping.
-  if (swept.jobRuns > 0 || swept.aiRuns > 0 || sweptReports > 0) {
+  if (swept.jobRuns > 0 || swept.aiRuns > 0 || sweptReports > 0 || swept.rescheduled > 0) {
     results.push({
       job_key: "_sweep",
       status: "SWEPT",
-      summary: `closed ${swept.jobRuns} abandoned job run(s), ${swept.aiRuns} AI run(s), ${sweptReports} report(s)`,
+      summary: `closed ${swept.jobRuns} abandoned job run(s), ${swept.aiRuns} AI run(s), ${sweptReports} report(s); rescheduled ${swept.rescheduled} overdue job(s)`,
     });
   }
   for (const job of due) {

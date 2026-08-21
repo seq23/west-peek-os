@@ -49,8 +49,11 @@ describe("what an employee is actually told", () => {
   it("says nothing at all for a department with no methods written down", () => {
     // An employee told "HOW THIS FIRM DOES THIS WORK:" followed by nothing has been told something
     // false about the firm. Empty means the section is omitted entirely.
-    expect(guidanceBlock(["continuity_maintenance"])).toBe("");
-    expect(skillsForMachines(["continuity_maintenance"])).toEqual([]);
+    // `approval_center` is deliberately unseated — no employee declares it in primaryMachineKeys —
+    // so methods there would be read by nobody. It was `continuity_maintenance` until Pax's seat
+    // got methods of its own, which is this test doing exactly what it exists to do.
+    expect(guidanceBlock(["approval_center"])).toBe("");
+    expect(skillsForMachines(["approval_center"])).toEqual([]);
   });
 
   it("frames them as guidelines and says the rules live elsewhere", () => {

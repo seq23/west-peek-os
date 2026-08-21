@@ -448,3 +448,78 @@ describe("work whose invocation died is closed out rather than left running", ()
     expect(row?.status).toBe("RUNNING");
   });
 });
+
+/*
+ * The morning brief failed at 06:00 and was never retried — not because retrying was refused, but
+ * because nothing asked. `occurrenceKey` for a DAILY_AT job is `job_key:YYYY-MM-DD`, and any row
+ * with that key returned `replayed` whatever its status. So the day's first failure claimed the key
+ * and every later tick answered "already ran", which made the max_attempts and DEAD_LETTER
+ * machinery in this same file unreachable code for every daily job the firm has.
+ *
+ * Separately, `next_run_at` advanced only on the completion path, so a run that died never moved
+ * the clock: production had daily_intelligence pinned at 06:00 for thirteen hours.
+ */
+describe("a failed occurrence can be tried again, and a dead one does not wedge the clock", () => {
+  it("advances the schedule when the work is CLAIMED, so a run that dies is due again tomorrow", async () => {
+    await call("/api/jobs/weekly_mp_review/status", MP, "POST", { status: "ACTIVE", reason: "on for this test" });
+    const before = await t.db
+      .prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'")
+      .first<{ next_run_at: string }>();
+
+    const now = new Date("2026-09-02T12:30:00.000Z");
+    await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+
+    const after = await t.db
+      .prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'")
+      .first<{ next_run_at: string }>();
+    expect(after!.next_run_at).not.toBe(before!.next_run_at);
+    expect(after!.next_run_at > now.toISOString()).toBe(true);
+  });
+
+  it("treats a SUCCEEDED occurrence as done and refuses to run it twice", async () => {
+    const now = new Date("2026-09-03T12:30:00.000Z");
+    const first = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    expect(first.replayed).toBe(false);
+
+    const second = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    expect(second.replayed).toBe(true);
+  });
+
+  it("lets a FAILED occurrence be attempted again on a later tick of the same day", async () => {
+    const job = await t.db.prepare("SELECT * FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ id: string; firm_scope: string }>();
+    // A failure earlier today, holding the day's occurrence key — the exact production shape.
+    await t.db
+      .prepare(
+        `INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, attempt, started_at, finished_at, error, requested_by, firm_scope)
+         VALUES (?1, ?2, 'weekly_mp_review:2026-09-04', 'SCHEDULED', 'FAILED', 1, ?3, ?3, 'it fell over', 'system', ?4)`,
+      )
+      .bind(`jrun_${crypto.randomUUID()}`, job!.id, "2026-09-04T12:00:00.000Z", job!.firm_scope)
+      .run();
+
+    const retry = await runJob(env, MP_ACTOR, "weekly_mp_review", {
+      trigger: "SCHEDULED",
+      now: new Date("2026-09-04T12:30:00.000Z"),
+    });
+
+    // Before this change it answered "already ran" and the day was lost.
+    expect(retry.replayed).toBe(false);
+    expect(retry.run.attempt).toBe(2);
+  });
+
+  it("leaves an occurrence alone while somebody is still running it", async () => {
+    const job = await t.db.prepare("SELECT * FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ id: string; firm_scope: string }>();
+    await t.db
+      .prepare(
+        `INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, attempt, started_at, requested_by, firm_scope)
+         VALUES (?1, ?2, 'weekly_mp_review:2026-09-05', 'SCHEDULED', 'RUNNING', 1, ?3, 'system', ?4)`,
+      )
+      .bind(`jrun_${crypto.randomUUID()}`, job!.id, new Date().toISOString(), job!.firm_scope)
+      .run();
+
+    const concurrent = await runJob(env, MP_ACTOR, "weekly_mp_review", {
+      trigger: "SCHEDULED",
+      now: new Date("2026-09-05T12:30:00.000Z"),
+    });
+    expect(concurrent.replayed).toBe(true);
+  });
+});
