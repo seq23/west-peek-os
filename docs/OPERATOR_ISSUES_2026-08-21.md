@@ -89,6 +89,47 @@ watched succeeding in production on consecutive days.
 
 ---
 
+## Operator notes filed 21 Aug 2026 and closed the same day
+
+### Employing someone is one press · **DONE**
+
+> "making an employee active shouldnt be so hard. it should just be one button press and an audit
+> trail of who did it and at one time. with the option to put a reason in the box for turning on or
+> off"
+
+It took five steps across two surfaces: open the detail panel, press "Request activation", leave for
+Approvals, approve the card, come back, press a second and differently-named button. Worse, the
+on/off toggle on the card only rendered for someone already ACTIVE or PAUSED — which was one of
+thirty-one employees — so for almost the entire roster the card carried no hire control at all.
+
+`POST /api/ai/employees/:id/employ` now does the whole chain in one call, and writes every record
+the long way round wrote: an approval card, a decision on it by a named human, a consumed receipt, a
+status-history row and an event. Nothing is skipped and nothing is faked. **The collapse applies
+only when the person pressing holds the approval role** — they are the person who would have
+approved it — and that is checked here and then independently again inside `decideApproval`. Anyone
+else pressing it still only files the request and is told so, with a 202.
+
+The reason box is optional and hidden behind "say why". A required box is a box people fill with
+"x"; left empty the trail still records who and when, which is the part that cannot be reconstructed
+afterwards. Typed, it travels to the card summary, the decision note and the history row.
+
+The trail is now read back onto the card — `last_status_change` on the lounge, joined to the
+person's real name rather than `fu_scooter_taylor`, because an audit trail nobody can read is not
+one. RESTRICTED and RETIRED are excluded on purpose: both are decisions somebody made, and a switch
+must not quietly undo one.
+
+### "How everything works" sat inside a line break · **DONE**
+
+> "its fine that its printed twice like that. im talking about how the 'how everything works' is in
+> the line break it looks weird"
+
+The help link was `float: right` inside the purpose paragraph and declared after the text, so it
+attached to the right edge of whichever line it happened to wrap into — landing mid-sentence. It is
+now a flex sibling of the sentence, baseline-aligned on the first line, wrapping to its own line on
+a narrow screen. It renders on all 38 pages, which is why it was visible on several tabs.
+
+---
+
 ## Operator notes filed 21 Aug 2026, not yet built
 
 **Machines: show, and EDIT, each machine's skills.** Surveyed 21 Aug 2026.

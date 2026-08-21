@@ -166,6 +166,7 @@ import {
 } from "./services/crossOffice";
 import {
   handleActivateAiEmployee,
+  handleEmployEmployee,
   handleGetAiEmployee,
   handleGrantToolScope,
   handleListAiEmployees,
@@ -655,6 +656,9 @@ const router = new Router()
   .get("/api/ai/employees/:id", handleGetAiEmployee)
   .post("/api/ai/employees/:id/request-activation", handleRequestActivation)
   .post("/api/ai/employees/:id/activate", handleActivateAiEmployee)
+  // One press. Requests, approves (when the presser holds the authority) and activates in a
+  // single call, writing every record the long way round wrote.
+  .post("/api/ai/employees/:id/employ", handleEmployEmployee)
   .post("/api/ai/employees/:id/running", handleSetEmployeeRunning)
   .post("/api/ai/employees/:id/tools", handleGrantToolScope)
   // P4 — provider registry governance (reserved governance.policy_change + receipt).

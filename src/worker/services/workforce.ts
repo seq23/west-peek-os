@@ -88,6 +88,17 @@ export interface LoungeEmployee {
   blocked_runs_30d: number;
   cost_30d_usd: number;
   latest_snapshot_id: string | null;
+  /**
+   * The last time somebody employed or stood down this employee, and why.
+   *
+   * Operator direction, 21 Aug 2026: employing someone should be one press "and an audit trail of
+   * who did it and at one time". The trail already existed on `ai_employee_status_history`; it had
+   * simply never been read back out to the surface where the decision is made, so the card showed a
+   * status with no memory of who chose it.
+   */
+  last_status_change: { to_status: string; at: string; by: string; reason: string | null } | null;
+  /** Employed at least once, so turning them on again needs no second approval. */
+  ever_employed: boolean;
 }
 
 function costOfRun(row: { cost_estimate_json: string; actual_usage_json: string | null }): number {
@@ -130,6 +141,19 @@ export async function listLounge(env: Env): Promise<{ employees: LoungeEmployee[
     ).all<{ ai_employee_id: string; id: string }>()
   ).results ?? [];
 
+  // Newest first, so the first row matched per employee is the current one. The actor is joined to
+  // a name here rather than in the client: `fu_sequoia_taylor` is an id, and an audit trail a
+  // partner has to decode is not one they will read.
+  const changes = (
+    await env.WP_OS_DB.prepare(
+      `SELECT h.ai_employee_id, h.to_status, h.created_at, h.reason,
+              COALESCE(u.full_name, h.actor_id) AS by_name
+         FROM ai_employee_status_history h
+         LEFT JOIN firm_user u ON u.id = h.actor_id
+        ORDER BY h.created_at DESC`,
+    ).all<{ ai_employee_id: string; to_status: string; created_at: string; reason: string | null; by_name: string }>()
+  ).results ?? [];
+
   const out: LoungeEmployee[] = employees.map((e) => {
     const myRuns = runs.filter((r) => r.ai_employee_id === e.id);
     let primaryMachines: string[] = [];
@@ -161,6 +185,11 @@ export async function listLounge(env: Env): Promise<{ employees: LoungeEmployee[
       blocked_runs_30d: myRuns.filter((r) => r.status !== "COMPLETED").length,
       cost_30d_usd: Math.round(myRuns.reduce((sum, r) => sum + costOfRun(r), 0) * 10_000) / 10_000,
       latest_snapshot_id: snapshots.find((s) => s.ai_employee_id === e.id)?.id ?? null,
+      last_status_change: (() => {
+        const c = changes.find((h) => h.ai_employee_id === e.id);
+        return c ? { to_status: c.to_status, at: c.created_at, by: c.by_name, reason: c.reason } : null;
+      })(),
+      ever_employed: Boolean(e.activated_at),
     };
   });
 

@@ -6,6 +6,7 @@ import { resolveDuty } from "@shared/workforce/dutyRoster";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import { changeLifecycle, computeScorecard, decideHandoff, postRoomMessage, proposeHandoff } from "../src/worker/services/workforce";
+import { employEmployee } from "../src/worker/services/aiEmployees";
 import { runAi } from "../src/worker/ai/runAi";
 
 /**
@@ -199,6 +200,98 @@ describe("the D10 activation law survives the new surface", () => {
   it("still enforces the ≤5 ACTIVE cap through the reserved path", async () => {
     const lounge = await call<{ active_count: number; max_active: number }>("/api/workforce/lounge", MP);
     expect(lounge.body.active_count).toBeLessThanOrEqual(lounge.body.max_active);
+  });
+});
+
+describe("employing someone is one press, and the trail says who", () => {
+  /**
+   * Operator direction, 21 Aug 2026: one button, an audit trail of who and when, and an optional
+   * reason. The governance question this has to answer is whether collapsing five steps into one
+   * skipped any of them — so these assert on the RECORDS, not on the response.
+   */
+  it("employs a never-hired employee in a single call, and writes the whole chain", async () => {
+    const before = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM approval_card WHERE action_key = 'ai_employee.activate' AND object_id = 'aie_wren'")
+      .first<{ n: number }>();
+    expect(before!.n).toBe(0);
+
+    const res = await call<{ outcome: string; note: string }>("/api/ai/employees/aie_wren/employ", MP, "POST", {
+      employed: true,
+      reason: "needed on the LP work",
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.outcome).toBe("EMPLOYED");
+
+    // An approval card exists, was decided by a named human, and was consumed. Nothing was faked.
+    const card = await t.db
+      .prepare(
+        `SELECT state, decided_by, summary FROM approval_card
+          WHERE action_key = 'ai_employee.activate' AND object_id = 'aie_wren'`,
+      )
+      .first<{ state: string; decided_by: string; summary: string }>();
+    expect(card!.decided_by).toBe("fu_scooter_taylor");
+    expect(card!.summary).toBe("needed on the LP work");
+
+    const decision = await t.db
+      .prepare("SELECT decision, decided_by FROM approval_decision WHERE approval_card_id = (SELECT id FROM approval_card WHERE object_id = 'aie_wren' LIMIT 1)")
+      .first<{ decision: string; decided_by: string }>();
+    expect(decision!.decision).toBe("approved");
+    expect(decision!.decided_by).toBe("fu_scooter_taylor");
+
+    // The trail: who, when, why, and against which receipt.
+    const history = await t.db
+      .prepare("SELECT to_status, actor_id, reason, approval_receipt_id FROM ai_employee_status_history WHERE ai_employee_id = 'aie_wren' ORDER BY created_at DESC LIMIT 1")
+      .first<{ to_status: string; actor_id: string; reason: string; approval_receipt_id: string | null }>();
+    expect(history!.to_status).toBe("ACTIVE");
+    expect(history!.actor_id).toBe("fu_scooter_taylor");
+    expect(history!.reason).toBe("needed on the LP work");
+    expect(history!.approval_receipt_id).toBeTruthy();
+  });
+
+  it("reads the trail back onto the surface where the decision is made", async () => {
+    const lounge = await call<{ employees: Array<{ id: string; ever_employed: boolean; last_status_change: { by: string; reason: string | null } | null }> }>(
+      "/api/workforce/lounge",
+      MP,
+    );
+    const walker = lounge.body.employees.find((e) => e.id === "aie_wren")!;
+    expect(walker.ever_employed).toBe(true);
+    // The name, not the id — an audit trail nobody can read is not one.
+    expect(walker.last_status_change!.by).not.toBe("fu_scooter_taylor");
+    expect(walker.last_status_change!.reason).toBe("needed on the LP work");
+  });
+
+  it("turns someone off and back on without a second approval, reason optional throughout", async () => {
+    const off = await call<{ outcome: string }>("/api/ai/employees/aie_wren/employ", MP, "POST", { employed: false });
+    expect(off.status).toBe(200);
+    expect(off.body.outcome).toBe("PAUSED");
+
+    const on = await call<{ outcome: string }>("/api/ai/employees/aie_wren/employ", MP, "POST", { employed: true });
+    expect(on.status).toBe(200);
+    expect(on.body.outcome).toBe("RESUMED");
+
+    // Exactly one activation card ever, however many times they go on and off.
+    const cards = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM approval_card WHERE action_key = 'ai_employee.activate' AND object_id = 'aie_wren'")
+      .first<{ n: number }>();
+    expect(cards!.n).toBe(1);
+  });
+
+  it("only requests, for somebody who could not have approved it", async () => {
+    const res = await call<{ outcome: string; note: string }>("/api/ai/employees/aie_winter/employ", MEMBER, "POST", {
+      employed: true,
+      reason: "we need a scout",
+    });
+    // 202: filed, not done. The one-press collapse is available only to the person who holds the
+    // authority — for everyone else the governance is exactly as it was.
+    expect(res.status).toBe(202);
+    expect(res.body.outcome).toBe("AWAITING_APPROVAL");
+
+    const pierce = await t.db.prepare("SELECT status FROM ai_employee WHERE id = 'aie_winter'").first<{ status: string }>();
+    expect(pierce!.status).not.toBe("ACTIVE");
+  });
+
+  it("an AI employee can never employ anybody, including itself", async () => {
+    await expect(employEmployee(env, AI_ACTOR, "aie_wren", true, "promoting myself")).rejects.toThrow(/only a person/);
   });
 });
 

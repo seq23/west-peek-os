@@ -1683,10 +1683,21 @@ hr {
 
 .page-purpose-line strong { color: var(--wp-ink); font-weight: 600; }
 
-/* Floated, so the sentence wraps beneath it instead of stopping short of it. */
+/* The sentence and the way into help are a row, aligned on the first baseline. Wrapping is allowed
+   so the link drops to its own line on a narrow screen rather than crushing the sentence. */
+.page-purpose-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 var(--space-sm);
+}
+
+.page-purpose-head .page-purpose-line { flex: 1 1 24rem; }
+
 .page-purpose-help {
-  float: right;
-  margin-left: var(--space-sm);
+  flex: 0 0 auto;
+  margin-left: auto;
   white-space: nowrap;
 }
 
@@ -3651,3 +3662,15 @@ body {
 }
 .deliverable-feedback select { max-width: 20rem; }
 .deliverable-feedback .btn-primary { align-self: flex-start; }
+
+/* — Employing someone. One press, an optional reason, and the trail underneath it.
+     The reason input only exists once asked for, so the common case is a single button and the
+     box never becomes another empty field to skip past. */
+.employment-switch { margin: var(--space-2xs) 0 var(--space-xs); }
+.employment-switch .form-row { align-items: center; gap: var(--space-xs); margin: 0; }
+.employment-reason {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2xs);
+  font-size: var(--text-sm);
+}

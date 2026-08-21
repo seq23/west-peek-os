@@ -42,8 +42,18 @@ export function PagePurposeBlock({
           the eye already finishes. Line two is what you can do, smaller and quieter — present,
           because a page that cannot say what you do on it is not oriented, but never competing
           with the page itself. */}
-      <p className="page-purpose-line">
-        <strong>{label}.</strong> {p.purpose}
+      {/*
+        THE HELP LINK IS A SIBLING OF THE SENTENCE, NOT INSIDE IT.
+        It used to be a float inside the paragraph, declared after the text — so it attached to the
+        right edge of whichever line it happened to wrap into, landing in the middle of a sentence
+        break. Operator report, 21 Aug 2026: "the 'how everything works' is in the line break, it
+        looks weird." As a flex sibling it sits on the first line's right edge on every page, and
+        the sentence wraps in its own column without ever running into it.
+      */}
+      <div className="page-purpose-head">
+        <p className="page-purpose-line">
+          <strong>{label}.</strong> {p.purpose}
+        </p>
         <button
           type="button"
           className="link-button page-purpose-help"
@@ -52,7 +62,7 @@ export function PagePurposeBlock({
         >
           How everything works →
         </button>
-      </p>
+      </div>
       <p className="page-purpose-can">
         {p.youCan.map((c, i) => (
           <span key={c}>

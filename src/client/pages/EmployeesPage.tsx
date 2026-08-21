@@ -32,6 +32,136 @@ interface LoungeEmployee {
   blocked_runs_30d: number;
   cost_30d_usd: number;
   latest_snapshot_id: string | null;
+  last_status_change: { to_status: string; at: string; by: string; reason: string | null } | null;
+  ever_employed: boolean;
+}
+
+/**
+ * Employing someone, and standing them down. One press.
+ *
+ * Operator direction, 21 Aug 2026: "making an employee active shouldn't be so hard. it should just
+ * be one button press and an audit trail of who did it and at one time. with the option to put a
+ * reason in the box for turning on or off."
+ *
+ * WHAT WAS HERE BEFORE only appeared for someone already hired — ACTIVE or PAUSED. Thirty of
+ * thirty-one employees were neither, so for almost the whole roster this card had no hire control
+ * at all: you opened the detail panel, pressed "Request activation", left for Approvals, approved
+ * it, came back, and pressed a second, differently-named button. The button now appears for
+ * everyone and says what it will do to THIS employee in THIS state.
+ *
+ * THE REASON IS OPTIONAL AND THAT IS DELIBERATE. A required box is a box people fill with "x". Left
+ * empty, the trail still records who and when, which is the part that cannot be reconstructed
+ * later; typed, it travels to the approval card, the decision note and the status-history row.
+ *
+ * Nothing here is a bypass. The server decides whether one press is enough — it is, for a partner
+ * who holds the approval role, because they are the person who would have approved it. Anyone else
+ * pressing this files the request and is told so.
+ */
+function EmploymentSwitch({
+  employee,
+  onChanged,
+  onMessage,
+}: {
+  employee: LoungeEmployee;
+  onChanged: () => void;
+  onMessage: (m: string) => void;
+}): JSX.Element {
+  const [reason, setReason] = useState("");
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const working = employee.status === "ACTIVE";
+  const retired = employee.status === "RETIRED";
+  const restricted = employee.status === "RESTRICTED";
+
+  async function press() {
+    setBusy(true);
+    const res = await api<{ note?: string; error?: string; detail?: string }>(
+      `/api/ai/employees/${employee.id}/employ`,
+      { method: "POST", body: { employed: !working, ...(reason.trim() ? { reason: reason.trim() } : {}) } },
+    );
+    setBusy(false);
+    onMessage(
+      res.status === 200 || res.status === 202
+        ? res.data?.note ?? `${employee.name} updated.`
+        : `Could not change ${employee.name}: ${res.data?.detail ?? res.data?.error ?? `HTTP ${res.status}`}`,
+    );
+    if (res.status === 200 || res.status === 202) {
+      setReason("");
+      setOpen(false);
+    }
+    onChanged();
+  }
+
+  const label = working
+    ? "Working — turn off"
+    : employee.ever_employed
+      ? "Off — turn on"
+      : "Employ";
+
+  return (
+    <div className="employment-switch">
+      <div className="form-row">
+        {/* RESTRICTED and RETIRED are decisions somebody made about this person. A one-press
+            control must not quietly undo either, so it says so rather than pretending. */}
+        {retired || restricted ? (
+          <span className="muted small" data-testid={`employee-switch-locked-${employee.id}`}>
+            {employee.name} is {employee.status.toLowerCase()}. That was a deliberate decision and it
+            is undone in the detail panel, not with a switch.
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              className={working ? "" : "btn-strong"}
+              disabled={busy}
+              data-testid={`employee-toggle-${employee.id}`}
+              aria-pressed={working}
+              onClick={() => void press()}
+            >
+              {busy ? "…" : label}
+            </button>
+            <button
+              type="button"
+              className="link-button small"
+              data-testid={`employee-reason-open-${employee.id}`}
+              aria-expanded={open}
+              onClick={() => setOpen((v) => !v)}
+            >
+              {open ? "never mind" : "say why"}
+            </button>
+          </>
+        )}
+      </div>
+
+      {open && !retired && !restricted && (
+        <input
+          className="employment-reason"
+          aria-label={`Why ${employee.name} is being turned ${working ? "off" : "on"}`}
+          data-testid={`employee-reason-${employee.id}`}
+          value={reason}
+          onChange={(ev) => setReason(ev.target.value)}
+          placeholder={working ? "Why are they coming off?" : "Why are they going on?"}
+          onKeyDown={(ev) => {
+            if (ev.key === "Enter" && !busy) void press();
+          }}
+        />
+      )}
+
+      {/* Who did it and when — read back from the same history the server writes. */}
+      {employee.last_status_change && (
+        <p className="muted small" data-testid={`employee-trail-${employee.id}`}>
+          {employee.last_status_change.to_status === "ACTIVE" ? "Employed" : employee.last_status_change.to_status.toLowerCase()}{" "}
+          by {employee.last_status_change.by} on{" "}
+          {new Date(employee.last_status_change.at).toLocaleString(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+          })}
+          {employee.last_status_change.reason ? ` — ${employee.last_status_change.reason}` : ""}
+        </p>
+      )}
+    </div>
+  );
 }
 
 interface LoungeResponse {
@@ -716,37 +846,7 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
               </h4>
               <span className={statusBadge(e.status)}>{e.status}</span>
             </header>
-            {/* The on/off switch. Only shown once an employee has been employed at least once —
-                before that, ACTIVE is a governed step and a toggle here would be a lie about what
-                the button does. Pausing needs no approval; resuming an already-approved employee
-                needs no second one. */}
-            {(e.status === "ACTIVE" || e.status === "PAUSED") && (
-              <button
-                type="button"
-                className={e.status === "ACTIVE" ? "btn-strong" : ""}
-                data-testid={`employee-toggle-${e.id}`}
-                aria-pressed={e.status === "ACTIVE"}
-                onClick={async () => {
-                  const turningOn = e.status !== "ACTIVE";
-                  const res = await api<{ error?: string; detail?: string }>(
-                    `/api/ai/employees/${e.id}/running`,
-                    {
-                      method: "POST",
-                      body: {
-                        running: turningOn,
-                        reason: `${turningOn ? "resumed" : "paused"} by ${me.fullName}`,
-                      },
-                    },
-                  );
-                  if (res.status !== 200) {
-                    setMessage(`Could not change ${e.name}: ${res.data?.detail ?? res.data?.error ?? res.status}`);
-                  }
-                  lounge.reload();
-                }}
-              >
-                {e.status === "ACTIVE" ? "Working — turn off" : "Paused — turn on"}
-              </button>
-            )}
+            <EmploymentSwitch employee={e} onChanged={() => lounge.reload()} onMessage={setMessage} />
             <p className="module-answers">{e.role}</p>
             {/* P32: the lounge should show who someone IS. Title + brief described a job slot;
                 expertise and voice describe a colleague you might choose to confer with. */}

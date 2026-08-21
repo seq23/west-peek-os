@@ -4,7 +4,7 @@ import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
-import { ApprovalError, consumeApprovalCard, requestApproval } from "./approvals";
+import { ApprovalError, consumeApprovalCard, decideApproval, requestApproval } from "./approvals";
 import { MANAGING_PARTNER_NAMES } from "../../shared/registry/managingPartners";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { resolveDuty } from "../../shared/workforce/dutyRoster";
@@ -367,6 +367,136 @@ export async function handleGetAiEmployee(ctx: RouteContext): Promise<Response> 
     .bind(employee.id)
     .all();
   return json({ ...employee, status_history: history.results ?? [], tool_scope: tools.results ?? [] });
+}
+
+/**
+ * EMPLOYING SOMEONE IS ONE BUTTON. This is the operator-facing door, and the whole point of it is
+ * that a partner should not have to know which of four routes their employee's current state
+ * requires.
+ *
+ * Operator direction, 21 Aug 2026: "making an employee active shouldn't be so hard. it should just
+ * be one button press and an audit trail of who did it and at one time, with the option to put a
+ * reason in the box."
+ *
+ * What it was: request activation → leave the page → find the card on Approvals → approve it →
+ * come back → press a second, differently-named button. Five steps and two surfaces to hire one
+ * employee, and thirty of thirty-one employees had never been hired.
+ *
+ * WHAT IS COLLAPSED, AND WHAT IS NOT. Every record the long way round wrote is still written: an
+ * approval card, a decision on it by a named human, a consumed receipt, a status-history row, and
+ * an event. Nothing is skipped and nothing is faked. The only thing removed is the WALK between
+ * them, and only when the person pressing is a person who could have approved it anyway — that is
+ * checked here by role and then checked AGAIN, independently, inside `decideApproval`, which
+ * refuses any decider who does not hold the required role.
+ *
+ * A NON-APPROVER PRESSING THIS STILL ONLY REQUESTS. They get the card, and a plain sentence saying
+ * a Managing Partner has to decide it. The governance is unchanged; what changed is that the
+ * partner who holds the authority no longer has to re-enact it as a scavenger hunt.
+ *
+ * The reason travels the whole way. Typed once, it lands on the approval card's summary, on the
+ * decision note, and on the status-history row — so the trail says who, when and why in each of
+ * the three places somebody might later look.
+ */
+export type EmployResult =
+  | { outcome: "EMPLOYED" | "RESUMED" | "PAUSED"; employee: AIEmployeeRow; note: string }
+  | { outcome: "AWAITING_APPROVAL"; approval_card_id: string; note: string };
+
+export async function employEmployee(
+  env: Env,
+  actor: Actor,
+  employeeId: string,
+  employed: boolean,
+  reason: string | undefined,
+): Promise<EmployResult> {
+  if (actor.type !== "HUMAN") {
+    throw new AiRouteError(403, "forbidden", "only a person may employ or stand down an employee");
+  }
+  const employee = await getEmployee(env, employeeId);
+  if (!employee) throw new AiRouteError(404, "not_found");
+
+  const who = actor.firmUserId ?? "unknown";
+  const why = reason?.trim() || null;
+
+  // ── Turning someone off ────────────────────────────────────────────────────
+  // Always allowed, never needs approval, and PAUSED rather than RETIRED: standing somebody down
+  // for the afternoon must not be the same act as ending their employment for good.
+  if (!employed) {
+    if (employee.status !== "ACTIVE") {
+      throw new AiRouteError(409, "not_active", `${employee.name} is ${employee.status}, so there is nothing to turn off`);
+    }
+    const row = await setEmployeeRunning(env, actor, employee.id, false, why ?? `turned off by ${who}`);
+    return { outcome: "PAUSED", employee: row, note: `${employee.name} is off. Turning them back on needs no approval.` };
+  }
+
+  // ── Turning someone back on ────────────────────────────────────────────────
+  // Already approved once, so there is nothing to decide — this is the toggle half.
+  if (employee.status === "PAUSED" && employee.activated_at) {
+    const row = await setEmployeeRunning(env, actor, employee.id, true, why ?? `turned back on by ${who}`);
+    return { outcome: "RESUMED", employee: row, note: `${employee.name} is working again.` };
+  }
+
+  if (employee.status === "ACTIVE") {
+    throw new AiRouteError(409, "already_active", `${employee.name} is already working`);
+  }
+  if (employee.status === "RETIRED") {
+    throw new AiRouteError(
+      409,
+      "retired",
+      `${employee.name} was retired. Un-retiring is a separate, deliberate decision — this button will not undo it quietly.`,
+    );
+  }
+
+  // ── First employment ───────────────────────────────────────────────────────
+  const card = await requestApproval(env, actor, {
+    action_key: "ai_employee.activate",
+    object_type: "ai_employee",
+    object_id: employee.id,
+    title: `Employ ${employee.name} (${employee.role})`,
+    summary: why ?? `Employed by ${who} from the Employees page.`,
+    payload: { employee_id: employee.id, name: employee.name, reason: why },
+    submit: true,
+  });
+
+  const required = JSON.parse(card.required_approver_roles_json) as string[];
+  if (!required.some((r) => actor.roles.includes(r))) {
+    return {
+      outcome: "AWAITING_APPROVAL",
+      approval_card_id: card.id,
+      note: `Asked for ${employee.name} to be employed. One of ${required.join(" or ")} decides it on Approvals.`,
+    };
+  }
+
+  // The presser holds the authority, so they exercise it here rather than walking to another page
+  // to press it again. `decideApproval` re-checks the role itself; this is not the only guard.
+  await decideApproval(env, actor, card.id, "approved", why ?? `Employed directly by ${who}.`);
+  const row = await activateAiEmployee(env, actor, employee.id, card.id, why ?? `Employed by ${who}.`);
+  return {
+    outcome: "EMPLOYED",
+    employee: row,
+    note: `${employee.name} is employed and working. Approved by you, recorded against card ${card.id}.`,
+  };
+}
+
+const employSchema = z.object({
+  employed: z.boolean(),
+  reason: z.string().trim().max(500).optional(),
+});
+
+export async function handleEmployEmployee(ctx: RouteContext): Promise<Response> {
+  const parsed = employSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    const result = await employEmployee(
+      ctx.env,
+      actorFromIdentity(ctx.identity!),
+      ctx.params.id!,
+      parsed.data.employed,
+      parsed.data.reason,
+    );
+    return json(result, { status: result.outcome === "AWAITING_APPROVAL" ? 202 : 200 });
+  } catch (err) {
+    return errorResponse(err);
+  }
 }
 
 const requestActivationSchema = z.object({
