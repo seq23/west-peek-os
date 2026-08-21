@@ -184,6 +184,29 @@ h6 {
   min-width: 0;
 }
 
+/*
+ * A HEADING THAT FOLLOWS SOMETHING NEEDS AIR ABOVE IT.
+ *
+ * Headings carried `margin: 0 0 8px` — space underneath, none above — so every heading that opened
+ * a new section sat flush against the paragraph or empty state that ended the last one. On LP,
+ * "No LP records visible to you." and the "LP claims" heading below it touched. The eye then has
+ * nothing telling it a new section started, and the page reads as one undifferentiated run.
+ *
+ * Space above a heading belongs to the heading; space below it belongs to what it introduces, and
+ * the first is the larger of the two. `:not(:first-child)` so a card whose first element is its own
+ * title still starts flush with the card's padding.
+ */
+h2:not(:first-child),
+h3:not(:first-child) {
+  margin-top: var(--space-xl);
+}
+
+h4:not(:first-child),
+h5:not(:first-child),
+h6:not(:first-child) {
+  margin-top: var(--space-lg);
+}
+
 h2 { font-size: var(--text-2xl); }
 h3 { font-size: var(--text-lg); }
 h4 { font-size: var(--text-base); }

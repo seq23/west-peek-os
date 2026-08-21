@@ -1177,8 +1177,12 @@ function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNonce: num
       </ul>
       {!approvals.loading && (approvals.data?.approvals ?? []).length === 0 && (
         <p className="state-message" data-testid="approvals-empty">
-          No approval cards in state {stateFilter}. Cards arrive here when a reserved action is requested — from a work
-          card, a transaction, an LP claim, an allocation option, or a policy change. Nothing executes without one.
+          {/* The dropdown two lines above already turns `pending_review` into "Waiting on you"; this
+              sentence printed the raw enum instead, so the page named the same state two ways in
+              one screen and one of them was a database value. */}
+          Nothing is {approvalStateWords(stateFilter).label.toLowerCase()}. Cards arrive here when a reserved action is
+          requested — from a work card, a transaction, an LP claim, an allocation option, or a policy change. Nothing
+          executes without one.
         </p>
       )}
     </section>
