@@ -449,7 +449,81 @@ async function finishRun(
  * `scheduled()` handler in deployed environments; callable directly in tests, which is how the
  * whole path is proven offline (a Cron Trigger cannot fire in local `wrangler dev`).
  */
+/**
+ * How long a RUNNING row may plausibly still be running.
+ *
+ * A Worker invocation — cron or request — is bounded far below this. A row still marked RUNNING
+ * half an hour later is therefore not slow; the invocation that owned it is gone and will never
+ * come back to write a terminal state. Thirty minutes is deliberately generous: the cost of
+ * reaping late is a stale row for a few extra minutes, and the cost of reaping early would be
+ * marking live work dead.
+ */
+const ABANDONED_AFTER_MINUTES = 30;
+
+/**
+ * Close out work whose invocation died mid-flight.
+ *
+ * WHY THIS EXISTS. `daily_intelligence` takes roughly four and a half minutes and `runDueJobs`
+ * runs jobs one after another inside a single `ctx.waitUntil`. The invocation ends before the job
+ * does, so nothing ever writes the closing row — and the evidence is in production: scheduled
+ * `job_run` rows sitting in RUNNING with no error and an empty summary, one of them from the
+ * previous day, alongside `ai_run` rows RUNNING for over twenty-four hours.
+ *
+ * That is not only untidy. A RUNNING ai_run counts as COMMITTED spend at its estimate for as long
+ * as it exists, so an abandoned row inflates the firm's committed total and eats the daily cap
+ * permanently. And a job that never finishes never reports failure, which is why four of the last
+ * eight morning briefs failed on the cron and nothing anywhere said so.
+ *
+ * This is the sweeper, not the cure. The cure is that the brief should not need to finish inside
+ * one invocation at all — recorded in BACKLOG.md. Until then the firm at least learns that it
+ * failed instead of believing it ran.
+ *
+ * `abandoned` is kept as a distinct reason from an ordinary failure, matching the vocabulary
+ * `closeAbandonedReports` already uses: "this stopped part-way" and "this ran and failed on its
+ * merits" are different facts and a reader should not have to guess which happened.
+ */
+export async function closeAbandonedRuns(env: Env, now: Date = new Date()): Promise<{ jobRuns: number; aiRuns: number }> {
+  const cutoff = new Date(now.getTime() - ABANDONED_AFTER_MINUTES * 60_000).toISOString();
+
+  const jobs = await env.WP_OS_DB.prepare(
+    `UPDATE job_run
+        SET status = 'FAILED',
+            finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            error = 'abandoned: the run stopped part-way through and never finished',
+            outcome_summary = CASE WHEN outcome_summary = '' THEN 'FAILED: abandoned part-way' ELSE outcome_summary END
+      WHERE status IN ('QUEUED','RUNNING') AND started_at < ?1`,
+  )
+    .bind(cutoff)
+    .run();
+
+  // Left RUNNING, an ai_run is counted as committed spend for ever — see costCenter.
+  const ai = await env.WP_OS_DB.prepare(
+    `UPDATE ai_run
+        SET status = 'FAILED',
+            completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            failure_reason = 'abandoned: the invocation ended before this call returned'
+      WHERE status IN ('QUEUED','RUNNING') AND created_at < ?1`,
+  )
+    .bind(cutoff)
+    .run();
+
+  return { jobRuns: jobs.meta?.changes ?? 0, aiRuns: ai.meta?.changes ?? 0 };
+}
+
 export async function runDueJobs(env: Env, now: Date): Promise<Array<{ job_key: string; status: string; summary: string }>> {
+  /*
+   * SWEEP BEFORE RUNNING, every tick. `closeAbandonedReports` was already written and correct, but
+   * its only caller was the top of the once-daily brief — so a brief that died at 06:00 stayed
+   * "still generating" until the next morning, and Home showed a half-finished report as though it
+   * were the whole thing. Running the sweep on the tick that already exists costs two statements
+   * and closes that window to fifteen minutes.
+   */
+  const swept = await closeAbandonedRuns(env, now);
+  // Dynamic, matching the runDailyForAll import below — dailyIntelligence reaches back into this
+  // module, and a top-level import here would close that cycle at load time.
+  const { closeAbandonedReports } = await import("./dailyIntelligence");
+  const sweptReports = await closeAbandonedReports(env, now);
+
   const due = (
     await env.WP_OS_DB.prepare(
       "SELECT * FROM scheduled_job WHERE status = 'ACTIVE' AND (next_run_at IS NULL OR next_run_at <= ?1)",
@@ -460,6 +534,16 @@ export async function runDueJobs(env: Env, now: Date): Promise<Array<{ job_key: 
 
   const systemActor: Actor = { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] };
   const results: Array<{ job_key: string; status: string; summary: string }> = [];
+
+  // Reported rather than done quietly: a tick that closed abandoned work is a fact the operator
+  // wants, and a tick that closes some every time is a symptom rather than housekeeping.
+  if (swept.jobRuns > 0 || swept.aiRuns > 0 || sweptReports > 0) {
+    results.push({
+      job_key: "_sweep",
+      status: "SWEPT",
+      summary: `closed ${swept.jobRuns} abandoned job run(s), ${swept.aiRuns} AI run(s), ${sweptReports} report(s)`,
+    });
+  }
   for (const job of due) {
     try {
       const { run } = await runJob(env, systemActor, job.id, { trigger: "SCHEDULED", now });
