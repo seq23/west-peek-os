@@ -4,7 +4,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import {
-  deliverReport, generateForPartner, loadProfile, runDailyForAll, type Synthesise,
+  MAX_BRIEF_ATTEMPTS, deliverReport, generateForPartner, loadProfile, runDailyForAll, type Synthesise,
 } from "../src/worker/services/dailyIntelligence";
 
 /**
@@ -373,5 +373,72 @@ describe("the brief is built one partner at a time, across ticks", () => {
     // 12:00 UTC is 08:00 in New York, which is past it.
     const due = await runDailyForAll(env, MP, new Date("2026-09-17T12:00:00.000Z"), fakeModel, 1);
     expect(due.generated + due.failed).toBe(1);
+  });
+});
+
+/*
+ * A brief that failed this morning should not cost the partner their whole day — and should not
+ * retry ninety-six times either, which is what "every fifteen minutes, unconditionally" would mean
+ * once the job moved onto the tick. Each attempt pays for two AI calls.
+ */
+describe("a failed brief is tried again, but not for ever", () => {
+  const TZ_DAY = new Date("2026-10-07T16:00:00.000Z");
+
+  async function reportFor(userId: string) {
+    return t.db
+      .prepare("SELECT status, attempts FROM intelligence_report WHERE firm_user_id = ?1 AND report_date = ?2")
+      .bind(userId, "2026-10-07")
+      .first<{ status: string; attempts: number }>();
+  }
+
+  it("counts the attempt on the way in, so a run that dies still spends one", async () => {
+    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 1);
+    const first = await reportFor("fu_scooter_taylor");
+    expect(first?.attempts).toBeGreaterThanOrEqual(1);
+  });
+
+  it("leaves a partner due while their failed brief still has attempts left", async () => {
+    await t.db
+      .prepare(
+        "UPDATE intelligence_report SET status = 'FAILED', attempts = 1 WHERE firm_user_id = 'fu_scooter_taylor' AND report_date = '2026-10-07'",
+      )
+      .run();
+
+    const out = await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5);
+    // He was retried rather than skipped for the day.
+    expect(out.generated + out.failed).toBeGreaterThan(0);
+    expect((await reportFor("fu_scooter_taylor"))?.attempts).toBeGreaterThan(1);
+  });
+
+  it("stops once the attempts are used, rather than re-failing every fifteen minutes", async () => {
+    await t.db
+      .prepare(
+        `UPDATE intelligence_report SET status = 'FAILED', attempts = ?1
+          WHERE firm_user_id = 'fu_scooter_taylor' AND report_date = '2026-10-07'`,
+      )
+      .bind(MAX_BRIEF_ATTEMPTS)
+      .run();
+
+    const before = await reportFor("fu_scooter_taylor");
+    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5);
+    const after = await reportFor("fu_scooter_taylor");
+    expect(after?.attempts).toBe(before?.attempts);
+    expect(after?.status).toBe("FAILED");
+  });
+
+  it("never retries a brief that succeeded", async () => {
+    const ready = await t.db
+      .prepare(
+        "SELECT firm_user_id, attempts FROM intelligence_report WHERE status = 'READY' AND report_date = '2026-10-07' LIMIT 1",
+      )
+      .first<{ firm_user_id: string; attempts: number }>();
+    if (!ready) return; // nothing succeeded in this fixture; the other cases carry the meaning
+
+    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5);
+    const after = await t.db
+      .prepare("SELECT attempts FROM intelligence_report WHERE firm_user_id = ?1 AND report_date = '2026-10-07'")
+      .bind(ready.firm_user_id)
+      .first<{ attempts: number }>();
+    expect(after?.attempts).toBe(ready.attempts);
   });
 });

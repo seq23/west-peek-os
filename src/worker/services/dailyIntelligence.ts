@@ -303,7 +303,10 @@ export async function generateForPartner(
      VALUES (?1, ?2, ?3, 'GATHERING', ?4, ?5)
      ON CONFLICT (firm_scope, firm_user_id, report_date)
        DO UPDATE SET status = 'GATHERING', started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-                     error_code = NULL, error_message = NULL, prompt_version = excluded.prompt_version`,
+                     error_code = NULL, error_message = NULL, prompt_version = excluded.prompt_version,
+                     -- Counted on the way IN, so a run that dies mid-flight still spends its
+                     -- attempt. Counting on success would let a crash loop retry for ever.
+                     attempts = intelligence_report.attempts + 1`,
   )
     .bind(reportId, firmUserId, reportDate, PROMPT_VERSION, firmScope)
     .run();
@@ -598,6 +601,14 @@ export async function deliverReport(env: Env, reportId: string): Promise<{ deliv
  * report — the brief calls this out and it is the difference between one bad morning and none.
  */
 /**
+ * How many times a partner's brief may be attempted on one date.
+ *
+ * Three across a morning survives a provider blip and a bad feed. A fourth would be the system
+ * insisting rather than trying, and every attempt pays for two AI calls.
+ */
+export const MAX_BRIEF_ATTEMPTS = 3;
+
+/**
  * ONE PARTNER PER TICK, because a cron invocation gets ten milliseconds of CPU.
  *
  * This used to loop every partner in one invocation. On the Workers Free plan a Cron Trigger gets
@@ -650,7 +661,17 @@ export async function runDailyForAll(
     (
       (
         await env.WP_OS_DB.prepare(
-          "SELECT firm_user_id, report_date FROM intelligence_report WHERE firm_scope = ?1 AND status IN ('READY','FAILED') AND report_date >= ?2",
+          /*
+           * READY is finished. FAILED is finished only once it has used its attempts.
+           *
+           * Treating any FAILED report as finished meant one transient failure at 06:45 cost the
+           * partner their entire day — which is exactly what happened to Scooter on 21 Aug 2026.
+           * Retrying unconditionally is the opposite mistake: the job fires every fifteen minutes,
+           * so that is ninety-six attempts a day, each paying for two AI calls to fail again.
+           */
+          `SELECT firm_user_id, report_date FROM intelligence_report
+            WHERE firm_scope = ?1 AND report_date >= ?2
+              AND (status = 'READY' OR (status = 'FAILED' AND attempts >= ${MAX_BRIEF_ATTEMPTS}))`,
         )
           .bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10))
           .all<{ firm_user_id: string; report_date: string }>()
