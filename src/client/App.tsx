@@ -3528,8 +3528,11 @@ function AllocationPage({ me }: { me: MeResponse }) {
           // Pin the CURRENT latest version of each policy at scenario-open time.
           const pins: Record<string, string> = {};
           for (const kind of ["mandate", "sleeve", "reserve", "concentration"]) {
-            const { data } = await api<{ versions: Array<{ id: string }> }>(`/api/funds/${fundId}/policies/${kind}`);
-            const latest = (data?.versions ?? []).at(-1);
+            const { data } = await api<{ versions: Array<{ id: string }>; current: { id: string } | null }>(`/api/funds/${fundId}/policies/${kind}`);
+            // `current` from the API. This was the ONE call site that took `.at(-1)` while six
+            // others took `[0]`, so the allocation model pinned a different policy version from
+            // the one every display showed.
+            const latest = data?.current;
             if (!latest) {
               setMessage(`Scenario refused: fund has no ${kind} policy version yet.`);
               return;

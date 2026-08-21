@@ -565,7 +565,45 @@ export async function handleWriteBrief(ctx: RouteContext): Promise<Response> {
   const parsed = writeBriefSchema.safeParse(await ctx.request.json().catch(() => null));
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
 
-  const actor = actorFromIdentity(ctx.env ? ctx.identity! : ctx.identity!);
+  const actor = actorFromIdentity(ctx.identity!);
+
+  /*
+   * THIS HANDLER HAD NO AUTHORIZATION CHECK AT ALL.
+   *
+   * Every sibling has one — `handleDraftCard` gates on `work_card.create`, `handleWorkCard` on
+   * `ai.run` — and `runAi` does not authorize either, so nothing stood between any authenticated
+   * identity and an unbounded AI run that files a document signed in an employee's name. That
+   * includes `fu_browser_agent`, the read-only service account with no roles, which the browser
+   * automation presents.
+   *
+   * `ai.run` is the right key: what this does is commission a model call and keep the output. The
+   * governing rule is one authorization choke point and no exceptions, and this was an exception.
+   */
+  const authz = await authorize(ctx.env, actor, "ai.run", { objectType: "deliverable", firmScope: actor.firmScopes[0] });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  /*
+   * AND A ROLE GATE, because the choke point alone does not close this.
+   *
+   * `ai.run` is neither reserved nor an external effect, so `authorize` allows it for any
+   * authenticated identity — including `fu_browser_agent`, the read-only service account with no
+   * roles that a Cloudflare Access service token resolves to. The choke point above is still right
+   * and belongs there; it is simply not a role check, and this handler needs one.
+   *
+   * What it commissions is an unbounded model call whose output is FILED as a firm document signed
+   * in an employee's name. The prompt below says so in its own words — "A Managing Partner has
+   * asked for a written brief" — and that should be true rather than assumed.
+   */
+  if (!actor.roles.includes("MANAGING_PARTNER")) {
+    return json(
+      {
+        error: "forbidden",
+        detail: "A brief is commissioned by a Managing Partner. It spends money and is filed as a firm document signed by an employee.",
+      },
+      { status: 403 },
+    );
+  }
+
   const input = parsed.data;
 
   const roster = ((await ctx.env.WP_OS_DB.prepare(

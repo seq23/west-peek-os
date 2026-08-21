@@ -358,3 +358,32 @@ describe("answering a deliverable", () => {
     }
   });
 });
+
+/*
+ * `POST /api/intent/brief` had no authorization check at all.
+ *
+ * Every sibling handler has one — draft-a-card gates on `work_card.create`, work-a-card on
+ * `ai.run` — and `runAi` does not authorize either. So nothing stood between any authenticated
+ * identity and an unbounded AI run that files a document signed in an employee's name. That
+ * includes `fu_browser_agent`: the read-only service account with no roles, which is what the
+ * browser automation presents and what a Cloudflare Access service token resolves to.
+ *
+ * The governing rule is one authorization choke point and no exceptions. This was an exception.
+ */
+describe("commissioning a brief passes the authorization choke point", () => {
+  it("refuses the read-only service account, which holds no roles", async () => {
+    const res = await handleRequest(
+      new Request("https://test.local/api/intent/brief", {
+        method: "POST",
+        headers: { "x-wpos-dev-user": "browser-agent@westpeek.ventures", "content-type": "application/json" },
+        body: JSON.stringify({ title: "Something expensive", question: "What would this cost the firm?" }),
+      }),
+      env,
+    );
+    // Refused outright. `ai.run` is neither reserved nor an external effect, so the choke point
+    // alone allows any authenticated identity — the role gate is what closes this.
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { detail: string };
+    expect(body.detail).toContain("Managing Partner");
+  });
+});

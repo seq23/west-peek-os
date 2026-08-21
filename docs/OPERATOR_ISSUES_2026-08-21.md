@@ -44,7 +44,7 @@ already has is a green suite over a product nobody exercised.
 | 3 | Approvals: cards, reject/block/send-back/draft, state change after decision; hostile review | IN PROGRESS | **Correction:** Approve, Request revision and Reject all exist — they render only for a `pending_review` card, and production has none, so the queue looked actionless. Decisions no longer swallow their result (a 403 said nothing before). Still missing: changing state *after* a decision, a block distinct from reject, and the card treatment. |
 | 4 | Work under Approvals; drop the checkmark | TODO | Lands with the nav work. |
 | 5 | Nav group titles carry no more weight than their items | **DONE** | They were quieter on every axis at once — same colour token, same weight, smaller, dimmed to 0.72. Now brighter and heavier, deliberately still small: a signpost should not compete on SIZE with the things it points at, or the eye scans categories instead of destinations. Verified on screen. |
-| 6 | Thesis formatting | TODO | Formatting is the least of it — the page renders the **oldest** mandate version. Amending appears to do nothing. Six call sites take `[0]` from an ascending list; one takes `.at(-1)`. |
+| 6 | Thesis formatting | **DONE** | The real defect was not formatting: the page rendered the **oldest** mandate version, so amending said "Saved as version 2" and changed nothing. The API now names `current` explicitly and all eight call sites read it — removing the indexing question rather than answering it eight times. |
 | 7 | Three routes into the funnel: manual/deck upload, Airtable, scout | TODO | Four uncontrolled routes already exist while the page claims "the only way in". Consolidate before adding. |
 | 8 | A host AI employee on every Deals / Firm / Learn page | IN PROGRESS | Registry and rule landed: 17 pages across Deals, Firm and Learn have a named owner joined to the roster and its machines. Admin deliberately has none — it is machinery, not a room somebody runs. Personal surfaces are already signed by their deliverer. Card component and chat still to build; gate the card on live employment status. |
 | 9 | Edit a company; working History; link deal ↔ company; record a dropped "no" | TODO | `PATCH /api/companies/:id` exists with no caller, no authorization and no event. Needs a `company.update` action key. The pass path does not exist anywhere. |
@@ -201,8 +201,13 @@ Ordered by consequence. These are not optional extras; the first two outrank mos
 2. **The fund can say yes but not no, and yes is the ungated one.** No pass control exists; the IC UI
    submits only APPROVE; "Move to invested" is one unconfirmed click that bypasses the reserved
    `investment.approve` key.
-3. **`POST /api/intent/brief` has no authorization check at all** — any firm identity, including the
-   read-only service account, can commission unbounded AI spend and file a signed firm document.
+3. ~~**`POST /api/intent/brief` has no authorization check at all**~~ · **FIXED 21 Aug 2026.** It now
+   passes the choke point AND carries a role gate. The choke point alone was not enough: `ai.run` is
+   neither reserved nor an external effect, so `authorize` allows any authenticated identity —
+   including the read-only service account a Cloudflare Access service token resolves to. What it
+   commissions is an unbounded model call filed as a firm document signed in an employee's name, and
+   the prompt says "A Managing Partner has asked for a written brief", which should be true rather
+   than assumed.
 4. **The kill switch manufactures its own approval** — creates a card and approves it on the next
    line, then cites the receipt as evidence a human reviewed it.
 5. **"Nothing is wrong" and "the server failed" render identically** across most surfaces. The helper
