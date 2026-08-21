@@ -179,6 +179,9 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "firm_skill.draft", name: "Draft a method from plain English", description: "Turn what a partner wrote into a method the machine's employees follow.", isExternalEffect: false },
   { key: "firm_skill.adopt", name: "Adopt a drafted method", description: "Put a drafted method into use for every employee on that machine.", isExternalEffect: false },
   { key: "firm_skill.retire", name: "Retire a method", description: "Stop a method being read by the employees on that machine.", isExternalEffect: false },
+  // Removing a document from view. Not a delete: the row, its versions and its bytes stay, and the
+  // archive carries who did it, when, and why. An append-only spine cannot honestly offer more.
+  { key: "document.archive", name: "Archive a document", description: "Take a document out of the shelf, keeping the record of who removed it and why.", isExternalEffect: false },
   { key: "capability.assign", name: "Assign a capability", description: "Assign a capability to an AI employee or a machine.", isExternalEffect: false },
   { key: "capability_after_action.record", name: "Record capability after-action", description: "Record what actually happened when a capability was used.", isExternalEffect: false },
   { key: "build_vs_buy.decide", name: "Record a build-vs-buy decision", description: "Record a build, buy, or defer decision for a capability with its rationale.", isExternalEffect: false },

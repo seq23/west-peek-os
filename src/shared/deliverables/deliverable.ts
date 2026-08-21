@@ -30,6 +30,20 @@ export interface DeliverableKindDef {
   page: string;
   /** doc_type used when it is filed in Documents. */
   docType: string;
+  /**
+   * Whether a copy is archived in Documents at all.
+   *
+   * Operator direction, 21 Aug 2026: "Morning briefs should not be saved to docs, that is noise.
+   * Only the weekly operating reviews and whatever other docs the ai employees produce for the MPs
+   * including research and market maps."
+   *
+   * The distinction is durability. A weekly review, a research packet and a written answer are
+   * things the firm refers back to. A morning brief is read once, on the morning it is about, and
+   * is superseded the next day — filing three hundred and sixty-five of them a year turns the
+   * archive into a place nobody looks. The brief still exists in full on Home and in
+   * `intelligence_report`; only the second copy stops being made.
+   */
+  file: boolean;
 }
 
 export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, DeliverableKindDef>> = {
@@ -39,6 +53,8 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     blurb: "What moved overnight, read and synthesised rather than listed.",
     page: "home",
     docType: "BRIEF",
+    // Read once, superseded tomorrow, and kept in full on Home. Filing it is noise.
+    file: false,
   },
   weekly_review: {
     key: "weekly_review",
@@ -46,6 +62,7 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     blurb: "The Wednesday agenda, built from what actually happened.",
     page: "weekly-review",
     docType: "REVIEW",
+    file: true,
   },
   research_packet: {
     key: "research_packet",
@@ -53,6 +70,7 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     blurb: "A question, the sources that answered it, and what they support.",
     page: "research",
     docType: "RESEARCH",
+    file: true,
   },
   ask_brief: {
     key: "ask_brief",
@@ -60,6 +78,8 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     blurb: "A written answer to something you asked for.",
     page: "intent",
     docType: "BRIEF",
+    // Something a partner asked for and will want to find again.
+    file: true,
   },
 };
 

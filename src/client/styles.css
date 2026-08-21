@@ -354,13 +354,25 @@ hr {
   padding: var(--space-3xs) var(--space-sm);
   border: 0;
   background: transparent;
-  color: var(--wp-shell-ink-2);
+  /*
+   * A HEADING HAS TO OUTRANK ITS OWN CHILDREN SOMEWHERE.
+   *
+   * Operator direction, 21 Aug 2026: the group titles "need to show up better, not have same
+   * visual weight as the things within each". They were quieter on every axis at once — same
+   * colour token as a destination, same weight, smaller, and dimmed to 0.72 — so nothing marked
+   * them as structure and every child outranked its own parent.
+   *
+   * The original instinct was right and is kept: a signpost should not compete on SIZE with the
+   * things it points at, or the eye scans categories instead of destinations. So the dominance is
+   * spent on contrast and weight, and the type stays small and uppercase. Two axes up, one
+   * deliberately not.
+   */
+  color: var(--wp-shell-ink);
   font: inherit;
   font-size: var(--text-2xs);
-  font-weight: 500;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
-  opacity: 0.72;
 }
 
 .rail-group:first-child { margin-top: 0; }
@@ -374,8 +386,8 @@ hr {
   transition: opacity var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
-.rail-group-toggle:hover { opacity: 1; color: var(--wp-shell-ink); }
-.rail-group-toggle:focus-visible { outline: 2px solid var(--wp-orange); outline-offset: -2px; opacity: 1; }
+.rail-group-toggle:hover { color: var(--wp-shell-ink-max); }
+.rail-group-toggle:focus-visible { outline: 2px solid var(--wp-orange); outline-offset: -2px; }
 .rail-group-mark { font-size: var(--text-xs); opacity: 0.7; }
 
 /* — Dividers only where the KIND of thing changes: above Admin, and above the footer. A line
