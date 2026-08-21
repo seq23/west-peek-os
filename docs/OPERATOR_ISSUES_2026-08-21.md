@@ -39,7 +39,7 @@ already has is a green suite over a product nobody exercised.
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 1 | Fold Today into Home; brief runs at 7am ET without a button | TODO | The scheduled brief already exists and **fails on the cron** — 4 of the last 8. Fix the job before merging the surfaces, or Home inherits a broken brief. |
+| 1 | Fold Today into Home; brief runs at 7am ET without a button | IN PROGRESS | Abandoned-run sweeper landed, so a brief that dies now reports failure instead of appearing to still be running. The job still cannot finish inside one cron invocation — see below. Merge the surfaces only after that. |
 | 2 | "I know" and "Stop telling me" do the same thing; one should delete | TODO | Both hide and both lapse after 7 days. Needs a permanent dismissal distinct from acknowledgement. |
 | 3 | Approvals: cards, reject/block/send-back/draft, state change after decision; hostile review | TODO | Every decision button currently discards its result, so a 403 looks like success. Fix that first. Operator proposed a stacked-deck card treatment — card tops must carry state. |
 | 4 | Work under Approvals; drop the checkmark | TODO | Lands with the nav work. |
@@ -61,6 +61,31 @@ already has is a green suite over a product nobody exercised.
 | 20 | Delete documents with a trail; stop filing morning briefs | TODO | No delete route exists for anyone. 6 of 8 stored documents are machine noise. |
 | 21 | Cockpit overhaul; text fits; deterministic adjustable budgets; explain the two blocks | IN PROGRESS | Overflow **fixed** — the four posture cards rendered on top of one another. Remaining: "Best available" writes a policy identical to "Balanced"; spend has three definitions that disagree by 28%; 51 quarantined outputs cannot be accepted because the button does not exist. |
 | 22 | Fix the three red diagnostics; decide the interval; escalate to MPs; show what was escalated | TODO | Corrected by the browser pass: Diagnostics **does** detect — it reports "Broken — Scooter's brief". It never tells anyone, and Home says "Nothing outstanding" at the same moment. Two cards are green while wrong. |
+
+---
+
+## Morning brief — operator spec, 21 Aug 2026
+
+Stated by the operator; recorded here so the rebuild is not designed from guesswork.
+
+- **Automated at 7am ET**, every day, with no button pressed.
+- **A manual "run my brief" button** for whoever is up earlier. Running it manually satisfies that
+  day: the automated run must know it has already happened and skip, then resume automatically the
+  next morning. One brief per person per day, however it was triggered.
+- **No manual sweeping, ever.** The sweep is part of producing the brief, not a separate chore the
+  partner performs first.
+- **MPs may add sources by hand** on Sources & sweeps. This is currently impossible:
+  `POST /api/intelligence/sources` and `PATCH /api/intelligence/sources/:id` are built, authorized
+  and reachable from no button, on the page whose entire stated purpose is where material comes
+  from. Building that UI is part of this item.
+
+**Known blocker.** `daily_intelligence` takes roughly four and a half minutes and `runDueJobs` runs
+jobs sequentially inside one `ctx.waitUntil`. A cron invocation ends long before that, which is why
+scheduled briefs die and manual ones succeed — the manual path holds a request open. The sweeper
+now makes the failure visible; it does not make the job finish. Before 7am automation can be
+trusted the brief has to stop depending on completing inside a single invocation — chunked across
+ticks, or moved to a durable execution path. Do not close item 1 until a scheduled brief has been
+watched succeeding in production on consecutive days.
 
 ---
 

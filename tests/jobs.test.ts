@@ -376,3 +376,75 @@ describe("an employee addressed by name, which is what the rows hold", () => {
     expect(created.status, "matching on either form must not make every name valid").toBe(404);
   });
 });
+
+/*
+ * WHY THIS BLOCK EXISTS. Four of the last eight morning briefs failed on the cron and nothing
+ * anywhere said so. The cause was not that they failed — it was that they never finished: the
+ * invocation ended mid-job and no closing row was ever written, so production held scheduled
+ * job_run rows in RUNNING with no error and an empty summary, one of them from the previous day,
+ * alongside ai_run rows RUNNING for over twenty-four hours. A RUNNING ai_run is counted as
+ * committed spend at its estimate for as long as it exists, so each one ate the daily cap for ever.
+ */
+describe("work whose invocation died is closed out rather than left running", () => {
+  const longAgo = new Date(Date.UTC(2026, 7, 20, 6, 0, 0)).toISOString();
+  const justNow = new Date().toISOString();
+
+  it("closes an abandoned job run and says it was abandoned, not that it failed on its merits", async () => {
+    const job = await t.db.prepare("SELECT id FROM scheduled_job LIMIT 1").first<{ id: string }>();
+    await t.db
+      .prepare(
+        `INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, started_at, requested_by)
+         VALUES (?1, ?2, ?3, 'SCHEDULED', 'RUNNING', ?4, 'system')`,
+      )
+      .bind("jrun_abandoned", job!.id, `abandoned_${crypto.randomUUID()}`, longAgo)
+      .run();
+
+    const { closeAbandonedRuns } = await import("../src/worker/services/jobs");
+    const swept = await closeAbandonedRuns(env, new Date());
+    expect(swept.jobRuns).toBeGreaterThanOrEqual(1);
+
+    const row = await t.db
+      .prepare("SELECT status, error, finished_at FROM job_run WHERE id = 'jrun_abandoned'")
+      .first<{ status: string; error: string; finished_at: string }>();
+    expect(row?.status).toBe("FAILED");
+    expect(row?.error).toContain("abandoned");
+    expect(row?.finished_at).toBeTruthy();
+  });
+
+  it("closes an abandoned AI run, because a RUNNING one is charged as committed spend for ever", async () => {
+    await t.db
+      .prepare(
+        `INSERT INTO ai_run (id, purpose, actor_type, actor_id, sensitivity, privacy_mode, cost_mode, status, input_hash, trace_id, created_at, firm_scope)
+         VALUES (?1, 'stuck brief', 'SYSTEM', 'system', 'INTERNAL', 'FRONTIER', 'NORMAL', 'RUNNING', 'h', 'tr_abandoned', ?2, 'west-peek')`,
+      )
+      .bind("air_abandoned", longAgo)
+      .run();
+
+    const { closeAbandonedRuns } = await import("../src/worker/services/jobs");
+    await closeAbandonedRuns(env, new Date());
+
+    const row = await t.db
+      .prepare("SELECT status, failure_reason, completed_at FROM ai_run WHERE id = 'air_abandoned'")
+      .first<{ status: string; failure_reason: string; completed_at: string }>();
+    expect(row?.status).toBe("FAILED");
+    expect(row?.failure_reason).toContain("abandoned");
+    expect(row?.completed_at).toBeTruthy();
+  });
+
+  it("leaves work that only just started alone — reaping early would mark live work dead", async () => {
+    const job = await t.db.prepare("SELECT id FROM scheduled_job LIMIT 1").first<{ id: string }>();
+    await t.db
+      .prepare(
+        `INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, started_at, requested_by)
+         VALUES (?1, ?2, ?3, 'SCHEDULED', 'RUNNING', ?4, 'system')`,
+      )
+      .bind("jrun_live", job!.id, `live_${crypto.randomUUID()}`, justNow)
+      .run();
+
+    const { closeAbandonedRuns } = await import("../src/worker/services/jobs");
+    await closeAbandonedRuns(env, new Date());
+
+    const row = await t.db.prepare("SELECT status FROM job_run WHERE id = 'jrun_live'").first<{ status: string }>();
+    expect(row?.status).toBe("RUNNING");
+  });
+});
