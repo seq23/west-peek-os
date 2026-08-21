@@ -198,9 +198,12 @@ Ordered by consequence. These are not optional extras; the first two outrank mos
 
 1. **The fund cannot record that it owns anything.** Positions come only from executed transactions;
    all five transaction routes are unreachable. `position = 0` and structurally always will be.
-2. **The fund can say yes but not no, and yes is the ungated one.** No pass control exists; the IC UI
-   submits only APPROVE; "Move to invested" is one unconfirmed click that bypasses the reserved
-   `investment.approve` key.
+2. **The fund can say yes but not no** · **HALF FIXED 21 Aug 2026.** A pass is now reachable from any
+   live deal and carries a required reason, kept on the deal and on the event spine — "we passed in
+   August" is a fact; "we passed because the second founder had already left and nobody would say
+   why" is what you want when they come back raising. And recording the fund as invested is now a
+   Managing Partner's decision rather than a single unconfirmed click. **Still open:** the IC UI
+   submits only APPROVE, and a REJECT there routes to a state from which PASS is unreachable.
 3. ~~**`POST /api/intent/brief` has no authorization check at all**~~ · **FIXED 21 Aug 2026.** It now
    passes the choke point AND carries a role gate. The choke point alone was not enough: `ai.run` is
    neither reserved nor an external effect, so `authorize` allows any authenticated identity —

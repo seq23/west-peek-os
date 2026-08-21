@@ -86,15 +86,17 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  // Only forward moves are offered here. Passing is a decision with a reason attached and belongs
-  // on the deal itself, not behind a dropdown that makes it as cheap as a typo.
+  // Forward moves and one backward one. Passing is a decision with a reason attached, which is why
+  // it is its own control and not a value in a dropdown that makes it as cheap as a typo — but it
+  // has to EXIST, and until 21 Aug 2026 it did not: the lifecycle allowed PASS from every live
+  // stage and nothing in the interface could reach it, so the firm could say yes and not no.
   const next = s && s.order !== null ? SPINE.find((x) => (x.order ?? 0) === (s.order ?? 0) + 1) : null;
 
-  async function moveTo(to: string) {
+  async function moveTo(to: string, reason?: string) {
     setBusy(true);
     const res = await api<{ error?: string; detail?: string }>(`/api/opportunities/${deal.id}/transition`, {
       method: "POST",
-      body: { to },
+      body: reason === undefined ? { to } : { to, reason },
     });
     setBusy(false);
     if (res.status !== 200) setMessage(res.data?.detail ?? res.data?.error ?? `Could not move it (HTTP ${res.status}).`);
@@ -150,6 +152,30 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
             onClick={() => void moveTo(next.key)}
           >
             {busy ? "…" : `Move to ${next.label.toLowerCase()}`}
+          </button>
+        )}
+        {/* SAYING NO. Offered on any live deal, because a fund declines far more than it backs and
+            the record of what it declined is half the value of the pipeline. The reason is asked
+            for, not optional: "we passed in August" is a fact, "we passed because the second
+            founder had already left and nobody would say why" is what you want in front of you when
+            they come back raising. */}
+        {s && s.order !== null && (
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={busy}
+            data-testid={`deal-pass-${deal.id}`}
+            onClick={() => {
+              const reason = window.prompt(`Why is the firm passing on ${deal.company_name}?`);
+              if (reason === null) return;
+              if (reason.trim().length < 12) {
+                setMessage("Say why in a sentence — a pass with no reason is worth nothing when they come back.");
+                return;
+              }
+              void moveTo("PASS", reason.trim());
+            }}
+          >
+            Pass on this
           </button>
         )}
         {/* A pass is reversible, and the button says what it costs: the deal comes back at screening

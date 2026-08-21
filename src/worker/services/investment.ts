@@ -162,6 +162,8 @@ export async function createSecurityClass(
 
 export interface OpportunityRow {
   id: string;
+  /** Why the firm passed or withdrew. Null while the deal is live. */
+  exit_reason?: string | null;
   company_id: string;
   opportunity_type: string;
   title: string;
@@ -349,7 +351,16 @@ export async function updateOpportunity(
   return (await getOpportunity(env, id))!;
 }
 
-export async function transitionOpportunity(env: Env, actor: Actor, id: string, to: OpportunityStatus): Promise<OpportunityRow> {
+/** Leaving the pipeline without investing. Both are decisions and both want a reason. */
+const EXIT_STATUSES: readonly OpportunityStatus[] = ["PASS", "WITHDRAWN"];
+
+export async function transitionOpportunity(
+  env: Env,
+  actor: Actor,
+  id: string,
+  to: OpportunityStatus,
+  reason?: string,
+): Promise<OpportunityRow> {
   const row = await getOpportunity(env, id);
   if (!row) throw new InvestmentError(404, "not_found");
   await mustAuthorize(env, actor, "opportunity.transition", "investment_opportunity", id, row.firm_scope);
@@ -357,7 +368,43 @@ export async function transitionOpportunity(env: Env, actor: Actor, id: string, 
   if (!allowed.includes(to)) {
     throw new InvestmentError(409, "illegal_transition", `opportunity cannot transition ${row.status} → ${to}`);
   }
-  await env.WP_OS_DB.prepare("UPDATE investment_opportunity SET status = ?2 WHERE id = ?1").bind(id, to).run();
+
+  /*
+   * A PASS CARRIES ITS REASON, and the minimum length is deliberate. "no" or "pass" satisfies a
+   * non-empty check and tells a future reader nothing — the same reasoning the backfill lane
+   * already applies. For a fund the record of what it declined is half the value of the pipeline,
+   * and the reason is the whole of that half: "we passed in August" is a fact, "we passed because
+   * the second founder had already left and nobody would say why" is what you want in front of you
+   * when they come back raising.
+   */
+  const trimmed = (reason ?? "").trim();
+  if (EXIT_STATUSES.includes(to) && trimmed.length < 12) {
+    throw new InvestmentError(
+      400,
+      "reason_required",
+      "Say why the firm is passing, in a sentence. A pass with no reason is worth nothing when they come back.",
+    );
+  }
+
+  /*
+   * CLOSED MEANS MONEY IS IN, and that is a partner's call.
+   *
+   * `opportunity.transition` is not a reserved action, so every stage move is ungated — right for
+   * screening to diligence, wrong for the one that says the fund invested. The governance was
+   * inverted: the decision that spends capital was a single unconfirmed click while the decision
+   * that spends nothing was impossible.
+   */
+  if (to === "CLOSED" && !actor.roles.includes("MANAGING_PARTNER")) {
+    throw new InvestmentError(
+      403,
+      "partner_decision",
+      "Recording the fund as invested is a Managing Partner's decision.",
+    );
+  }
+
+  await env.WP_OS_DB.prepare("UPDATE investment_opportunity SET status = ?2, exit_reason = ?3 WHERE id = ?1")
+    .bind(id, to, EXIT_STATUSES.includes(to) ? trimmed.slice(0, 600) : row.exit_reason ?? null)
+    .run();
   const { actorType, actorId } = eventActor(actor);
   await appendEvent(env, {
     eventType: "investment.opportunity_transitioned",
@@ -366,7 +413,7 @@ export async function transitionOpportunity(env: Env, actor: Actor, id: string, 
     objectType: "investment_opportunity",
     objectId: id,
     firmScope: row.firm_scope,
-    payload: { from: row.status, to },
+    payload: { from: row.status, to, ...(trimmed ? { reason: trimmed.slice(0, 600) } : {}) },
   });
   return (await getOpportunity(env, id))!;
 }
@@ -1725,14 +1772,20 @@ export async function handleUpdateOpportunity(ctx: RouteContext): Promise<Respon
   }
 }
 
-const transitionOpportunitySchema = z.object({ to: z.enum(OPPORTUNITY_STATUSES) });
+const transitionOpportunitySchema = z.object({
+  to: z.enum(OPPORTUNITY_STATUSES),
+  /** Required when leaving the pipeline. Long enough to be worth reading later. */
+  reason: z.string().trim().max(600).optional(),
+});
 
 export async function handleTransitionOpportunity(ctx: RouteContext): Promise<Response> {
   const body = await parseJsonBody(ctx.request);
   const parsed = transitionOpportunitySchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   try {
-    return json(await transitionOpportunity(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data.to));
+    return json(
+      await transitionOpportunity(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data.to, parsed.data.reason),
+    );
   } catch (err) {
     return errorResponse(err);
   }
