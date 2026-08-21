@@ -351,6 +351,75 @@ export async function updateOpportunity(
   return (await getOpportunity(env, id))!;
 }
 
+/**
+ * Take a deal record off the board.
+ *
+ * NOT A PASS AND NOT A WITHDRAWAL. Those are decisions about a real company and the firm keeps them
+ * for ever — what it declined is half the value of a pipeline. This says the ROW was wrong: a
+ * duplicate, a typo, the same company entered twice under two spellings.
+ *
+ * Archive rather than delete, for the same reason documents are: transactions, deal math packets,
+ * IC packets and the event spine all reference an opportunity by id. Destroying it would break
+ * those references and erase the history the archive exists to preserve.
+ */
+export async function archiveOpportunity(
+  env: Env,
+  actor: Actor,
+  id: string,
+  reason: string,
+): Promise<OpportunityRow> {
+  const row = await getOpportunity(env, id);
+  if (!row) throw new InvestmentError(404, "not_found");
+  await mustAuthorize(env, actor, "opportunity.archive", "investment_opportunity", id, row.firm_scope);
+
+  const trimmed = reason.trim();
+  if (trimmed.length < 8) {
+    throw new InvestmentError(
+      400,
+      "reason_required",
+      "Say why this record should not exist — a duplicate, a typo, entered twice. Six months from now the reason is the only part that still helps.",
+    );
+  }
+
+  /*
+   * A BOOKED HOLDING IS NOT A MISTAKEN ROW. If the fund has executed a transaction against this
+   * deal it owns something, and taking the record off the board would hide a real position. That
+   * is a reversal, which is what `void` on the transaction is for, and it is MP-reserved.
+   */
+  const booked = await env.WP_OS_DB.prepare(
+    'SELECT COUNT(*) AS n FROM "transaction" WHERE opportunity_id = ?1 AND status = \'EXECUTED\'',
+  )
+    .bind(id)
+    .first<{ n: number }>();
+  if ((booked?.n ?? 0) > 0) {
+    throw new InvestmentError(
+      409,
+      "has_booked_transactions",
+      "The fund has executed a transaction against this deal, so the record is not a mistake. Void the transaction first if it was booked in error.",
+    );
+  }
+
+  await env.WP_OS_DB.prepare(
+    `UPDATE investment_opportunity
+        SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), archived_by = ?2, archive_reason = ?3
+      WHERE id = ?1`,
+  )
+    .bind(id, actor.firmUserId ?? actor.aiEmployeeId ?? "system", trimmed.slice(0, 600))
+    .run();
+
+  const { actorType, actorId } = eventActor(actor);
+  await appendEvent(env, {
+    eventType: "investment.opportunity_archived",
+    actorType,
+    actorId,
+    objectType: "investment_opportunity",
+    objectId: id,
+    firmScope: row.firm_scope,
+    payload: { reason: trimmed.slice(0, 600), status_when_archived: row.status },
+  });
+  return (await getOpportunity(env, id))!;
+}
+
 /** Leaving the pipeline without investing. Both are decisions and both want a reason. */
 const EXIT_STATUSES: readonly OpportunityStatus[] = ["PASS", "WITHDRAWN"];
 
@@ -1737,6 +1806,9 @@ export async function handleListOpportunities(ctx: RouteContext): Promise<Respon
     clauses.push(`status = ?${binds.length + 1}`);
     binds.push(status);
   }
+  // Archived records are off the board. `?archived=1` shows what was taken off it and why, so the
+  // removal is auditable rather than a disappearance.
+  clauses.push(url.searchParams.get("archived") === "1" ? "archived_at IS NOT NULL" : "archived_at IS NULL");
   const rows = await ctx.env.WP_OS_DB.prepare(`SELECT * FROM investment_opportunity WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC, id LIMIT 500`)
     .bind(...binds)
     .all<OpportunityRow>();
@@ -1801,6 +1873,23 @@ const backfillOpportunitySchema = z.object({
   reason: z.string().trim().min(12),
   as_of_date: z.string().trim().min(1).optional(),
 });
+
+const archiveOpportunitySchema = z.object({ reason: z.string().trim().min(8).max(600) });
+
+export async function handleArchiveOpportunity(ctx: RouteContext): Promise<Response> {
+  const parsed = archiveOpportunitySchema.safeParse(await parseJsonBody(ctx.request));
+  if (!parsed.success) {
+    return json(
+      { error: "reason_required", detail: "Say why this record should not exist — a duplicate, a typo, entered twice." },
+      { status: 400 },
+    );
+  }
+  try {
+    return json(await archiveOpportunity(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data.reason));
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
 
 export async function handleBackfillOpportunity(ctx: RouteContext): Promise<Response> {
   const body = await parseJsonBody(ctx.request);

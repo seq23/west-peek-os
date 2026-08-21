@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { api, useApi, type MeResponse } from "../lib/api";
+import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 import { DEAL_FILTERS, EXITS, SPINE, dealTypeLabel, originLabel, stage, stallRead } from "@shared/investment/pipeline";
 
 /**
@@ -80,6 +80,19 @@ function Spine({ counts }: { counts: Record<string, number> }) {
 }
 
 /** One deal. Every card answers the same four things in the same places. */
+/*
+ * The stages a deal can still be passed on, mirroring OPPORTUNITY_TRANSITIONS on the server.
+ *
+ * The first version of this offered the pass wherever a deal sat on the spine, which included
+ * Invested — the operator caught it. The lifecycle would have refused with a 409, so nothing could
+ * have gone wrong; but offering to decline a company the fund already owns is nonsense on its face,
+ * and a control that exists only to be refused teaches people to distrust the ones that work.
+ *
+ * IC_DECIDED is deliberately absent too. Once the committee has ruled, the honest exit is a
+ * withdrawal rather than a pass, and the server agrees: it allows only CLOSED or WITHDRAWN there.
+ */
+const PASSABLE: readonly string[] = ["NEW", "SCREENING", "DILIGENCE", "IC_READY"];
+
 function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
   const s = stage(deal.status);
   const stall = stallRead(deal.status, deal.in_stage_since);
@@ -159,7 +172,7 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
             for, not optional: "we passed in August" is a fact, "we passed because the second
             founder had already left and nobody would say why" is what you want in front of you when
             they come back raising. */}
-        {s && s.order !== null && (
+        {PASSABLE.includes(deal.status) && (
           <button
             type="button"
             className="btn-ghost"
@@ -178,6 +191,35 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
             Pass on this
           </button>
         )}
+        {/* REMOVING A RECORD THAT SHOULD NOT EXIST — a duplicate, a typo, the same company entered
+            twice. Distinct from a pass, which is a decision about a real company and is kept for
+            ever. Offered on every stage, including Invested, because a mistaken row can be created
+            at any point; the server refuses if the fund has actually booked a transaction against
+            it, which makes it a reversal rather than a correction. */}
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy}
+          data-testid={`deal-archive-${deal.id}`}
+          onClick={async () => {
+            const reason = window.prompt(`Why should the record for ${deal.company_name} not exist? (a duplicate, a typo — this is not a pass)`);
+            if (reason === null) return;
+            if (reason.trim().length < 8) {
+              setMessage("Say why in a few words — the reason is the only part that still helps later.");
+              return;
+            }
+            setBusy(true);
+            const failed = mutationError(
+              await api(`/api/opportunities/${deal.id}/archive`, { method: "POST", body: { reason: reason.trim() } }),
+              200,
+            );
+            setBusy(false);
+            setMessage(failed ?? "Off the board. Nothing was destroyed — the record keeps who removed it and why.");
+            if (!failed) onChanged();
+          }}
+        >
+          Remove this record
+        </button>
         {/* A pass is reversible, and the button says what it costs: the deal comes back at screening
             rather than where it left, because the reason it was passed on has to be looked at again. */}
         {(deal.status === "PASS" || deal.status === "WITHDRAWN") && (

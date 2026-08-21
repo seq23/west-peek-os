@@ -182,6 +182,11 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // Removing a document from view. Not a delete: the row, its versions and its bytes stay, and the
   // archive carries who did it, when, and why. An append-only spine cannot honestly offer more.
   { key: "document.archive", name: "Archive a document", description: "Take a document out of the shelf, keeping the record of who removed it and why.", isExternalEffect: false },
+  // Removing a deal record that should not exist — a duplicate, or one created by mistake. Not a
+  // pass and not a withdrawal, which are DECISIONS about a real company; this says the row itself
+  // was wrong. Archive rather than delete: transactions, deal math packets and the event spine all
+  // reference an opportunity by id.
+  { key: "opportunity.archive", name: "Archive a deal record", description: "Take a deal record off the board, keeping who removed it and why.", isExternalEffect: false },
   { key: "capability.assign", name: "Assign a capability", description: "Assign a capability to an AI employee or a machine.", isExternalEffect: false },
   { key: "capability_after_action.record", name: "Record capability after-action", description: "Record what actually happened when a capability was used.", isExternalEffect: false },
   { key: "build_vs_buy.decide", name: "Record a build-vs-buy decision", description: "Record a build, buy, or defer decision for a capability with its rationale.", isExternalEffect: false },

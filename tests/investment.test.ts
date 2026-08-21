@@ -1350,3 +1350,64 @@ describe("a pass is a decision, and closing is a partner's", () => {
     expect([401, 403]).toContain(res.status);
   });
 });
+
+/*
+ * A pass is a decision about a real company and is kept for ever. Removing a RECORD is a different
+ * act: the row was wrong — a duplicate, a typo, the same company entered twice under two spellings.
+ */
+describe("a deal record that should not exist can be taken off the board", () => {
+  it("refuses without a reason, and keeps who and why when given one", async () => {
+    const company = await createCompany("Duplicate Co");
+    const opp = await createOpportunityApi(company, { title: "entered twice" });
+
+    expect((await call(`/api/opportunities/${opp.id}/archive`, MP, "POST", { reason: "dup" })).status).toBe(400);
+
+    const ok = await call(`/api/opportunities/${opp.id}/archive`, MP, "POST", {
+      reason: "duplicate of the record created the same morning",
+    });
+    expect(ok.status).toBe(200);
+
+    const row = await t.db
+      .prepare("SELECT archived_at, archived_by, archive_reason FROM investment_opportunity WHERE id = ?1")
+      .bind(opp.id)
+      .first<{ archived_at: string; archived_by: string; archive_reason: string }>();
+    expect(row?.archived_at).toBeTruthy();
+    expect(row?.archived_by).toBeTruthy();
+    expect(row?.archive_reason).toContain("duplicate");
+
+    // Off the board, and findable again deliberately.
+    const board = await call<{ opportunities: Array<{ id: string }> }>(`/api/opportunities?company_id=${company}`, MP);
+    expect(board.body.opportunities.some((o) => o.id === opp.id)).toBe(false);
+    const archived = await call<{ opportunities: Array<{ id: string }> }>(
+      `/api/opportunities?company_id=${company}&archived=1`,
+      MP,
+    );
+    expect(archived.body.opportunities.some((o) => o.id === opp.id)).toBe(true);
+  });
+
+  it("refuses to archive a deal the fund has actually booked — that is a reversal, not a correction", async () => {
+    const company = await createCompany("Really Owned Co");
+    const opp = await createOpportunityApi(company, { title: "genuinely invested" });
+
+    const cls = await call<{ id: string }>("/api/security-classes", MP, "POST", {
+      company_id: company,
+      class_name: "Series A Preferred",
+    });
+    const txn = await call<{ id: string }>("/api/transactions", MP, "POST", {
+      company_id: company,
+      opportunity_id: opp.id,
+      transaction_type: "PRIMARY_INVESTMENT",
+      security_class_id: cls.body.id,
+      quantity: 1000,
+      price_per_share: 10,
+      transaction_date: "2026-08-21",
+    });
+    await t.db.prepare(`UPDATE "transaction" SET status = 'EXECUTED' WHERE id = ?1`).bind(txn.body.id).run();
+
+    const res = await call(`/api/opportunities/${opp.id}/archive`, MP, "POST", {
+      reason: "trying to tidy away something the fund owns",
+    });
+    expect(res.status).toBe(409);
+    expect((res.body as { error: string }).error).toBe("has_booked_transactions");
+  });
+});
