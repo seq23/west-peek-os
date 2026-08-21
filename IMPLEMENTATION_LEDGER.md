@@ -3658,3 +3658,71 @@ locally implementable gap remains open. Ready for P6 host packaging. `LOCAL_ARTI
 the approved production-readiness contract and this repository's local proof surface — it is not
 approval of the unrelated user work carried in the tree, which this task never scoped, and it is not a
 deployment.
+
+---
+
+## 21 Aug 2026 — The cheap tier had never once worked
+
+Opened from the operator's 22-item issues list, item 19: "The university tab doesnt work. It says
+'university instructor couldn't respond.'"
+
+### What it actually was
+
+Not University. `src/worker/services/university.ts:125` shows the operator a fixed message and
+stores the real reason on the turn, so production answered the question directly:
+`provider_failure:provider_malformed_response`, twice, both University attempts.
+
+Both hypotheses carried into the investigation were wrong, and are recorded because being wrong
+cheaply is the point of checking. (1) The credential was NOT missing — `OPENROUTER_API_KEY` is bound
+to the production Worker. (2) The spend gate was NOT refusing — `ai_run` shows 70 COMPLETED runs.
+AI worked in production; one provider did not.
+
+**Root cause.** Workers AI models answer in two different shapes. The older ones return
+`{ response }`. The newer ones return the OpenAI chat-completion shape, `{ choices: [{ message:
+{ content } }] }`, with no `response` field at all. `providers/workersAi.ts` read only `response`.
+
+Of the three models registered by `0081_workers_ai_cheap_tier.sql`:
+
+| model | shape | outcome |
+|---|---|---|
+| `granite-4.0-h-micro` | OpenAI only | failed 100% |
+| `qwen3-30b-a3b-fp8` | both | worked |
+| `llama-3.2-11b-vision-instruct` | n/a | error 5016, licence never accepted |
+
+Routing selects the cheapest capable model. Granite is the cheapest. So **every run that reached
+Workers AI failed, from the day the tier was added until this fix** — two runs, two failures, zero
+successes. The migration's own header asks "did we survey the best open source models?" The survey
+registered 3 of the 24 free models that actually work, and defaulted to the broken one.
+
+The adapter had **no test of any kind** anywhere in the repo. That is how a 100%-failure bug shipped.
+
+### What changed
+
+- `providers/workersAi.ts` reads both shapes, and separates "the field never arrived"
+  (`provider_malformed_response`) from "the model returned nothing" (`provider_empty_response`).
+  Collapsing those cost a production database query to tell apart.
+- Vision is supported for models that can see, instead of refused for the whole provider. The guard
+  survives as a per-model allowlist, so a catalogue entry without an allowlist entry refuses images
+  rather than sending them where they are ignored.
+- `tests/router.test.ts` gains 6 tests built from shapes RECORDED from live calls, not invented.
+
+### Proven, not asserted
+
+Every claim here was checked against the live service, not inferred:
+
+- Granite and Qwen both return correct text through the fixed adapter (`wrangler dev`, real `AI` binding).
+- All 31 text and vision models on the account were scanned. One is licence-gated; five are blocked
+  by the Workers **Free** plan (`deepseek-v4-flash`, `deepseek-v4-pro`, `kimi-k2.6`,
+  `kimi-k2.7-code`, `glm-5.2`); one (`llava-1.5`) needs a different input form; 24 work today.
+- `@cf/meta/llama-3.2-11b-vision-instruct`: **a Managing Partner accepted Meta's Llama 3.2 Community
+  License and Acceptable Use Policy on 21 Aug 2026**, including the representation that the firm is
+  not domiciled in, and has no principal place of business in, the European Union. Cloudflare
+  confirmed. The model then described a generated test image correctly through the real adapter.
+- Full surface green: `tsc --noEmit`, 1271 tests across 85 files, and all four validators with their
+  self-tests.
+
+### Still UNPROVEN
+
+Not deployed. This fix is on branch `fix/workers-ai-cheap-tier` and has not reached production, so
+University in production is still broken until it ships. The re-survey of the 24 working free models,
+and surfacing unusable models to the partners, are recorded in `BACKLOG.md` rather than done here.
