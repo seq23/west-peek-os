@@ -113,7 +113,11 @@ const defaultTeach: Teach = async (env, actor, system, exchange, purpose) => {
     // it is never raised, and nothing about a live deal belongs in a teaching prompt.
     sensitivity: "PUBLIC" as never,
     budgetContext: { expectedOutputTokens: 1200 },
-    routing: { category: "INTELLIGENCE" },
+    // PINNED, and the pin is the whole point of this line. Without a taskClass no routing_policy
+    // matches, selection falls to "cheapest priced capable model", and a first-time GP is taught
+    // fund mechanics by the smallest open model the firm has. A lesson costs about a penny at
+    // frontier rates against a $25 daily cap; being taught something wrong costs more than that.
+    routing: { category: "INTELLIGENCE", taskClass: "university" },
   });
   return {
     text: run.output_text ?? "",
