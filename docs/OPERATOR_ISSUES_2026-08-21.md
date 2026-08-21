@@ -114,6 +114,19 @@ employee drafts the technical version, **the operator reads the drafted version 
 before it takes effect** — never a plain-English sentence silently becoming a live instruction
 nobody reviewed.
 
+*Operator revised the ask, 21 Aug 2026 — simpler, and it avoids the governance problem entirely:*
+no editing of installed skills. Just **see** them per machine, with a link out to the source file on
+GitHub to read in full; and **add** a new capability or skill by writing plain English, which gets
+translated into the right technical terms and collected in one catch-all markdown file.
+
+*One constraint that shapes it:* the Worker cannot write to the GitHub repository. There is no token
+and no path. So the catch-all file is either (a) held in D1 and rendered as markdown for the
+operator to copy or download and commit, or (b) written through the GitHub API with a token, which
+is a new outward-facing credential and an external effect that would pass through the effect
+executor. (a) is smaller, needs no credential, and keeps the repo the single source of truth —
+recommended. Viewing needs no approval at all, which is why the revised ask is much cheaper than
+the original.
+
 *Capabilities are the mirror image.* The `capability` and `capability_assignment` tables exist with
 four working routes (`index.ts:1017-1020`) and **zero client callers**, so the page teaches what
 Active/Bench/Archive mean and offers no way to move anything between them.
