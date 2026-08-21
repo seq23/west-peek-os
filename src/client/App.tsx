@@ -2474,7 +2474,22 @@ function InvestmentPage({ me }: { me: MeResponse }) {
             <PlaceholderPanel opportunity={o} onConfirmed={() => opportunities.reload()} />
           </li>
         ))}
-        {(opportunities.data?.opportunities ?? []).length === 0 && <li className="state-empty" data-testid="no-opportunities">No opportunities. Create one against a canonical company to start the investment record.</li>}
+        {/*
+          "No opportunities" was said whether the firm had none or the reader had simply not picked
+          a company yet — and the second is the usual case, because the list is not fetched at all
+          until one is chosen. So this block read "No opportunities" directly beneath a pipeline
+          showing three, on the same screen. Absence and "not asked yet" are different facts.
+        */}
+        {!companyId && (
+          <li className="state-empty" data-testid="no-company-picked">
+            Pick a company above to see its deal record — the deal math, the IC packet, and what the fund owns of it.
+          </li>
+        )}
+        {companyId && (opportunities.data?.opportunities ?? []).length === 0 && (
+          <li className="state-empty" data-testid="no-opportunities">
+            Nothing recorded against this company yet. Create one to start its investment record.
+          </li>
+        )}
       </ul>
 
       {selected && (
