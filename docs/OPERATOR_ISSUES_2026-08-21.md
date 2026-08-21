@@ -215,8 +215,15 @@ Ordered by consequence. These are not optional extras; the first two outrank mos
    line, then cites the receipt as evidence a human reviewed it.
 5. **"Nothing is wrong" and "the server failed" render identically** across most surfaces. The helper
    written to prevent this, `stateMessage()`, is imported by no file.
-6. **Five pages render their own replaced predecessor** in a disclosure below them, each still
-   containing the bug its rewrite fixed, sharing test ids.
+6. **Five pages render their own replaced predecessor** · **PARTLY FIXED 21 Aug 2026.** Deleting them
+   outright would destroy real capability — identity merges, deal math, meeting notes and close-out
+   all live in the older components and have no home in the newer surfaces. So the BUGS inside them
+   were killed instead: the legacy meeting form that hardcoded every meeting as FOUNDER is gone
+   (close-out delegation reads the type to decide who follows up, so an LP call filed as a founder
+   meeting routed its commitments to the wrong person), taking a duplicate `meeting-create-form`
+   test id with it; and the deal-math panel no longer submits an invented $1M cheque into a $20M
+   pre-money for whatever company is selected. Still open: the legacy company create form, which
+   makes a company with no deal attached.
 7. **Consequential controls fabricate their inputs** — deal math, scenarios, the graduation rate, the
    metric bands, the reporting period.
 8. **You can assign work to an employee and never make them do it** — the endpoint that makes an

@@ -2355,6 +2355,23 @@ function InvestmentPage({ me }: { me: MeResponse }) {
   const [relStartedAt, setRelStartedAt] = useState("");
   const [selected, setSelected] = useState<OpportunityRow | null>(null);
   const [packet, setPacket] = useState<DealMathPacketRow | null>(null);
+  /*
+   * THE DEAL'S OWN NUMBERS, TYPED. This panel used to submit a hardcoded $1M cheque into a $20M
+   * pre-money with a $500M exit — for whatever company happened to be selected — and then display
+   * valuation, ownership and MOIC computed from them. A partner had no way to know the arithmetic
+   * had nothing to do with the company on screen, and the firm's own stated cheque is $500-750K,
+   * not $1M. Empty by default: an unanswered field is visibly unanswered, where a prefilled one is
+   * a number nobody chose that looks like one somebody did.
+   */
+  const [math, setMath] = useState({
+    check_size: "",
+    round_size: "",
+    pre_money: "",
+    exit_value: "",
+    future_dilution_pct: "",
+    hold_years: "",
+    fund_size: "",
+  });
   const [icPacketId, setIcPacketId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -2462,25 +2479,57 @@ function InvestmentPage({ me }: { me: MeResponse }) {
       {selected && (
         <div data-testid="opportunity-detail">
           <h4>{selected.title} — deal math and IC</h4>
+          <div className="form-row" data-testid="deal-math-inputs">
+            {(
+              [
+                ["check_size", "Our cheque"],
+                ["round_size", "Round size"],
+                ["pre_money", "Pre-money"],
+                ["exit_value", "Exit value"],
+                ["future_dilution_pct", "Future dilution %"],
+                ["hold_years", "Hold years"],
+                ["fund_size", "Fund size"],
+              ] as const
+            ).map(([key, label]) => {
+              // Computed here rather than inline: a template literal with an interpolation inside a
+              // JSX attribute defeats the brace tracking in tests/accessibility.test.ts, which then
+              // reads past the tag and reports a duplicate label that does not exist.
+              const testId = "deal-math-" + key.split("_").join("-");
+              return (
+                <label key={key}>
+                  {label}{" "}
+                  <input
+                    data-testid={testId}
+                    inputMode="decimal"
+                    value={math[key]}
+                    onChange={(e) => setMath((m) => ({ ...m, [key]: e.target.value }))}
+                  />
+                </label>
+              );
+            })}
+          </div>
           <div className="form-row">
             <button
               type="button"
               data-testid="deal-math-create"
               onClick={async () => {
+                // Every field is required, and none is invented. A packet built on a number nobody
+                // entered is worse than no packet: it is arithmetic presented as belonging to this
+                // deal. (Written without an apostrophe on purpose — the tag scanner in
+                // tests/accessibility.test.ts treats one in a comment as an unclosed string.)
+                const missing = Object.entries(math).filter(([, v]) => v.trim() === "" || !Number.isFinite(Number(v)));
+                if (missing.length > 0) {
+                  setMessage(`Fill in the numbers for this deal first — missing: ${missing.map(([k]) => k.replace(/_/g, " ")).join(", ")}.`);
+                  return;
+                }
                 // Manual entry is ALWAYS available (D6); the CALCULATED path is a separate step.
                 const { status, data } = await api<DealMathPacketRow & { error?: string }>(`/api/opportunities/${selected.id}/deal-math`, {
                   method: "POST",
                   body: {
                     deal_type: selected.opportunity_type,
-                    source_inputs: {
-                      check_size: 1000000,
-                      round_size: 5000000,
-                      pre_money: 20000000,
-                      exit_value: 500000000,
-                      future_dilution_pct: 30,
-                      hold_years: 7,
-                      fund_size: 30000000,
-                    },
+                    source_inputs: Object.fromEntries(
+                      Object.entries(math).map(([k, v]) => [k, Number(v)]),
+                    ),
                   },
                 });
                 setPacket(status === 201 ? data : null);
@@ -2701,41 +2750,19 @@ function MeetingsPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="meetings-page">
-      <form
-        className="form-row"
-        data-testid="meeting-create-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const { status, data } = await api<MeetingListRow & { error?: string }>("/api/meetings", {
-            method: "POST",
-            body: { title, meeting_type: "FOUNDER", company_id: companyId || undefined, occurred_at: new Date().toISOString() },
-          });
-          setMessage(status === 201 ? `Meeting ${data!.id} recorded.` : `Create refused: ${data?.error ?? status}`);
-          if (status === 201) {
-            setTitle("");
-            meetings.reload();
-          }
-        }}
-      >
-        <label>
-          Title <input data-testid="meeting-title" value={title} onChange={(e) => setTitle(e.target.value)} />
-        </label>
-        <label>
-          Company{" "}
-          <select data-testid="meeting-company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
-            <option value="">— none —</option>
-            {(companies.data?.companies ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.canonical_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" className="btn-strong" data-testid="meeting-create-submit">
-          Record meeting
-        </button>
-        {message && <span data-testid="meetings-message">{message}</span>}
-      </form>
+      {/*
+        THE CREATE FORM IS GONE FROM HERE, and that is the fix rather than a tidy-up.
+        It hardcoded `meeting_type: "FOUNDER"` on every meeting it recorded. That is not cosmetic:
+        close-out delegation READS the type to decide who follows up, so an LP call filed as a
+        founder meeting routes its commitments to the wrong person. The surface above this one has
+        a proper type picker with per-type seating suggestions, and it is the one door.
+
+        What stays is the reason this component still exists — prep packets, notes, consent,
+        transcripts, debriefs and close-out, which belong to one meeting rather than to the list.
+        Removing the form also removes a duplicate `meeting-create-form` test id that made every
+        selector on this surface ambiguous.
+      */}
+      {message && <p className="notice small" data-testid="meetings-message">{message}</p>}
 
       <ul className="card-list" data-testid="meeting-list">
         {(meetings.data?.meetings ?? []).map((m) => (
