@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { readableDate, shortDate } from "./lib/dates";
 import { api, getDevUser, mutationError, signOut, useApi, type MeResponse } from "./lib/api";
+import { RecordInvestment } from "./pages/RecordInvestment";
 import { HomePage } from "./pages/HomePage";
 import { IntelligencePage } from "./pages/IntelligencePage";
 import { EmployeesPage } from "./pages/EmployeesPage";
@@ -2479,6 +2480,19 @@ function InvestmentPage({ me }: { me: MeResponse }) {
       {selected && (
         <div data-testid="opportunity-detail">
           <h4>{selected.title} — deal math and IC</h4>
+          {/*
+            THE MISSING RUNG. A `position` is created only when a transaction is executed, and every
+            route in that lifecycle was built, authorized and tested with nothing able to reach it.
+            Production held zero positions and always would have, while the pipeline said the fund
+            had money in. This is where the ladder gets its rungs.
+          */}
+          <RecordInvestment
+            companyId={selected.company_id}
+            companyName={selected.title}
+            opportunityId={selected.id}
+            me={me}
+            onRecorded={() => opportunities.reload()}
+          />
           <div className="form-row" data-testid="deal-math-inputs">
             {(
               [
