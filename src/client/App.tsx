@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { readableDate, shortDate } from "./lib/dates";
 import { api, getDevUser, mutationError, signOut, useApi, type MeResponse } from "./lib/api";
 import { RecordInvestment } from "./pages/RecordInvestment";
+import { PageHostCard } from "./pages/PageHostCard";
 import { HomePage } from "./pages/HomePage";
 import { IntelligencePage } from "./pages/IntelligencePage";
 import { EmployeesPage } from "./pages/EmployeesPage";
@@ -4469,6 +4470,11 @@ export function App() {
               an anonymous visitor sees the login prompt, and explaining a page they cannot open
               would be noise. */}
           {authed && <PagePurposeBlock navKey={active} label={activeItem.label} onNavigate={navigate} />}
+          {/* WHO RUNS THIS PAGE, directly under what the page is for — the operator asked for the
+              host's picture, name and title to be among the first things you see. Renders nothing on
+              Admin and on the personal surfaces: `pageHost` returns null there, because Admin is
+              machinery rather than a room somebody runs and Home is already signed by its deliverer. */}
+          {authed && <PageHostCard navKey={active} />}
           {!authed && !me.loading && active !== "help" && (
             signedOut ? (
               <SignedOutPage onSignIn={() => setSignedOut(false)} />
