@@ -61,3 +61,60 @@ describe("what an employee is actually told", () => {
     expect(block).toContain("the rules are enforced elsewhere");
   });
 });
+
+/*
+ * An employee is who the roster says they are, in every prompt that speaks as them.
+ *
+ * The survey that prompted this found 27 `runAi` call sites in the worker: two carried the veteran
+ * standard, two carried the firm's methods, and NONE carried both. The busiest path of all — an
+ * employee actually working a card — opened with two hand-written sentences, so the depth the
+ * roster asserts for every seat regardless of title never reached the model. Personality was
+ * displayed on the Employees page and absent from the work.
+ */
+describe("an employee brings their persona and their firm's methods to the work", () => {
+  it("puts the veteran standard and the employee's own voice into the work-card prompt", async () => {
+    const { buildStepPrompt } = await import("../src/shared/work/employeeLoop");
+    const { personaFor } = await import("../src/shared/registry/aiEmployeePersonas");
+    const { guidanceBlock } = await import("../src/shared/skills/library");
+
+    const wyatt = personaFor("Wyatt")!;
+    const prompt = buildStepPrompt(
+      {
+        employee_name: "Wyatt",
+        employee_role: "Analyst & Scout",
+        title: "Look at three seed-stage inference companies",
+        next_action: "Start with who is actually shipping",
+        description: null,
+        prompt: null,
+        guidance: guidanceBlock(["research_intelligence"]),
+        history: [],
+      } as never,
+      3,
+    );
+
+    expect(prompt).toContain("You are Wyatt");
+    expect(prompt).toContain(wyatt.voice);
+    expect(prompt).toContain(wyatt.expertise);
+    // The standard itself, asserted by a phrase from it rather than the whole block.
+    expect(prompt).toMatch(/twenty years|evidence from inference|never invent/i);
+    // And the firm's own methods, which the loop already carried.
+    expect(prompt).toContain("research_intelligence".split("_")[0]!);
+  });
+
+  it("addresses Parker by the title the roster actually holds, not one written into a prompt", async () => {
+    const { buildCloseoutPrompt } = await import("../src/worker/services/roomCloseout");
+    const { AI_EMPLOYEE_ROSTER } = await import("../src/shared/registry/aiEmployees");
+
+    const parker = AI_EMPLOYEE_ROSTER.find((e) => e.name === "Parker")!;
+    const prompt = buildCloseoutPrompt(
+      { title: "The Zero-to-One Room" } as never,
+      "Notes from the evening.",
+      "12 founders",
+    );
+
+    expect(prompt).toContain("You are Parker");
+    expect(prompt).toContain(parker.role);
+    // The drift this replaced: the file called Parker an "Event Planner", a title nobody holds.
+    expect(prompt).not.toContain("Event Planner");
+  });
+});
