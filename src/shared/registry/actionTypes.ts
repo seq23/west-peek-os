@@ -172,6 +172,13 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "machine_memory.append", name: "Append machine memory", description: "Append a durable operating note to a machine's memory.", isExternalEffect: false },
   { key: "capability.register", name: "Register a capability", description: "Register an internal firm capability with its maturity, dependencies, and tested state.", isExternalEffect: false },
   { key: "capability.transition", name: "Move a capability between Active, Bench, and Archive", description: "Change a capability's operating state.", isExternalEffect: false },
+  // The firm writing down its own methods. Drafting is an AI run; adopting is the partner deciding
+  // that the drafted method is what they meant. Adoption is gated to a Managing Partner by role in
+  // the service rather than by a reserved-action receipt: the budget-policy path was deliberately
+  // reformed away from cards that approve themselves, and this is the same shape of act.
+  { key: "firm_skill.draft", name: "Draft a method from plain English", description: "Turn what a partner wrote into a method the machine's employees follow.", isExternalEffect: false },
+  { key: "firm_skill.adopt", name: "Adopt a drafted method", description: "Put a drafted method into use for every employee on that machine.", isExternalEffect: false },
+  { key: "firm_skill.retire", name: "Retire a method", description: "Stop a method being read by the employees on that machine.", isExternalEffect: false },
   { key: "capability.assign", name: "Assign a capability", description: "Assign a capability to an AI employee or a machine.", isExternalEffect: false },
   { key: "capability_after_action.record", name: "Record capability after-action", description: "Record what actually happened when a capability was used.", isExternalEffect: false },
   { key: "build_vs_buy.decide", name: "Record a build-vs-buy decision", description: "Record a build, buy, or defer decision for a capability with its rationale.", isExternalEffect: false },

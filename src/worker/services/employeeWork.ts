@@ -9,6 +9,7 @@ import { searchQuestion } from "./liveSearch";
 import { machineForEmployee } from "./attribution";
 import { deliver } from "./deliverables";
 import { guidanceBlock } from "../../shared/skills/library";
+import { writtenGuidance } from "./firmSkills";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { buildDesignReviewPrompt } from "../../shared/design/reviewRubric";
 import { z } from "zod";
@@ -162,7 +163,16 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       prompt: card.prompt,
       // Resolved from where this employee sits, so nothing is assigned by hand and nothing is
       // maintained twice — the roster already says which machines they work.
-      guidance: guidanceBlock(rosterEntry?.primaryMachineKeys ?? []),
+      //
+      // BOTH SOURCES. The reviewed library from the repository, and whatever the partners have
+      // since written down and adopted for these machines. A method that is displayed on a page and
+      // never reaches a prompt is decoration; this is the line that makes it real.
+      guidance: [
+        guidanceBlock(rosterEntry?.primaryMachineKeys ?? []),
+        await writtenGuidance(env, rosterEntry?.primaryMachineKeys ?? [], actor.firmScopes[0] ?? "west-peek"),
+      ]
+        .filter((block) => block.length > 0)
+        .join("\n"),
       history: await historyFor(env, card.id),
     };
 
@@ -590,8 +600,10 @@ export async function handleWriteBrief(ctx: RouteContext): Promise<Response> {
         `THE QUESTION IT ANSWERS: ${input.question}`,
         "",
         // The department's own methods, so a brief reflects how this firm works rather than how
-        // any firm works. See shared/skills/library.ts.
+        // any firm works. See shared/skills/library.ts, plus anything the partners have written
+        // down and adopted since.
         guidanceBlock(rosterEntry?.primaryMachineKeys ?? []),
+        await writtenGuidance(ctx.env, rosterEntry?.primaryMachineKeys ?? [], actor.firmScopes[0] ?? "west-peek"),
         "HOW TO WRITE IT:",
         "- Answer the question in the first two sentences. Everything after that is support.",
         "- Say plainly what you do NOT know. An absence you name is a finding; one you skip past",
