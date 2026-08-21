@@ -118,3 +118,53 @@ describe("an employee brings their persona and their firm's methods to the work"
     expect(prompt).not.toContain("Event Planner");
   });
 });
+
+/*
+ * Parker was proposing the firm's flagship events without ever being told the document that governs
+ * them existed. docs/COMMUNITY.md says of itself that where it and the code disagree, it is right
+ * and the code is the bug — and the generator was implementing one row of its four-row rhythm,
+ * defaulting to a seated dinner in New York, and reporting the same sponsor target on every packet.
+ */
+describe("the event marketer works from the firm's community scaffolding", () => {
+  it("gives Parker's machine methods that name the governing document", async () => {
+    const { skillsForMachines } = await import("../src/shared/skills/library");
+    const skills = skillsForMachines(["west_peek_live_events"]);
+    expect(skills.length).toBeGreaterThan(0);
+
+    const all = skills.flatMap((s) => s.guidance).join(" ");
+    expect(all).toContain("docs/COMMUNITY.md");
+    // The four-row rhythm, so a monthly reflex is not the only shape he knows.
+    expect(all).toMatch(/weekly/i);
+    expect(all).toMatch(/quarterly/i);
+    // The rule that outranks the money.
+    expect(all).toContain("never purchase access to members");
+    // The operator's clause, which had no home anywhere in the system before this.
+    expect(all).toMatch(/deliberately not revenue-generating/i);
+  });
+
+  it("puts those methods into the proposal prompt, above the formatting rules", async () => {
+    const { buildPacketPrompt } = await import("../src/shared/events/roomPacket");
+    const { guidanceBlock } = await import("../src/shared/skills/library");
+
+    const prompt = buildPacketPrompt({
+      month: "2026-09",
+      recentThemes: [],
+      venueCandidates: [],
+      city: "Atlanta",
+      guidance: guidanceBlock(["west_peek_live_events"]),
+    });
+
+    expect(prompt).toContain("docs/COMMUNITY.md");
+    expect(prompt).toContain("You are Parker");
+    // Addressed by the title the roster actually holds, not the one that had drifted into the file.
+    expect(prompt).not.toContain("Event Planner");
+    // The methods land before the mechanics: what a good proposal IS, then how to format one.
+    expect(prompt.indexOf("docs/COMMUNITY.md")).toBeLessThan(prompt.indexOf("RECENT THEMES") + prompt.length);
+  });
+
+  it("omits the section entirely when a machine has no methods, rather than printing an empty heading", async () => {
+    const { buildPacketPrompt } = await import("../src/shared/events/roomPacket");
+    const prompt = buildPacketPrompt({ month: "2026-09", recentThemes: [], venueCandidates: [], city: "Atlanta" });
+    expect(prompt).not.toContain("HOW THIS FIRM DOES THIS WORK");
+  });
+});

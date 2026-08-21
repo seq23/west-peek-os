@@ -15,6 +15,8 @@ import {
   type PacketFlag,
   type RoomPacket,
 } from "../../shared/events/roomPacket";
+import { guidanceBlock } from "../../shared/skills/library";
+import { writtenGuidance } from "./firmSkills";
 
 /**
  * Room proposals — Parker's monthly job (P51, docs/COMMUNITY.md).
@@ -127,6 +129,13 @@ export async function generatePacket(
     recentThemes: (recent.results ?? []).map((r) => r.theme),
     venueCandidates: found.hits.map((h) => ({ name: h.name, url: h.url ?? "", description: h.description })),
     city,
+    // Both sources: the reviewed library and whatever the partners have adopted for this machine.
+    guidance: [
+      guidanceBlock(["west_peek_live_events"]),
+      await writtenGuidance(env, ["west_peek_live_events"], actor.firmScopes[0] ?? "west-peek"),
+    ]
+      .filter((block) => block.length > 0)
+      .join("\n"),
   });
 
   const synth = deps.synthesise ?? ((p: string) => defaultSynthesise(env, actor, p));

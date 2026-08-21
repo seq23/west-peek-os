@@ -208,6 +208,58 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
       },
     ],
   },
+  {
+    /*
+     * PARKER'S MACHINE, and the first method in this library that names a governing DOCUMENT.
+     *
+     * docs/COMMUNITY.md is the firm's community and events scaffolding, and it says of itself:
+     * "Where the code and this document disagree, this document is right and the code is a bug."
+     * Parker was proposing events without ever being told it existed — which is how a generator
+     * ended up implementing one row of a four-row rhythm, proposing a dinner in New York every
+     * time, and reporting the same sponsor target on every packet it has ever produced.
+     *
+     * The rhythm and the ethos are also machine-readable in `src/shared/events/programme.ts`, kept
+     * byte-faithful to the document by `tests/programme.test.ts`. This method points at both: the
+     * prose for judgement, the module for the parts code should read rather than re-type.
+     */
+    machineKey: "west_peek_live_events",
+    skills: [
+      {
+        key: "read_the_scaffolding_first",
+        title: "The community scaffolding governs every event",
+        when: "Before proposing, pricing, scheduling or closing out any Room, Office session, Mastermind or Summit.",
+        guidance: [
+          "docs/COMMUNITY.md is the source document for this work. Where it and the code disagree, it is right and the code is the bug.",
+          "West Peek curates and convenes. It is not an event organiser, not an influencer, and not there to teach — stay visible without becoming the centre of attention.",
+          "Conversation is the product, not presentations. A programme built around someone speaking at the room is the wrong shape.",
+          "The output is early inclusion, not engagement. Success is being in the room before something is public, not attendance numbers.",
+        ],
+      },
+      {
+        key: "propose_on_the_firm_rhythm",
+        title: "Propose on the firm's rhythm, not on a monthly reflex",
+        when: "Deciding what to propose next, and how often.",
+        guidance: [
+          "The rhythm has four tiers: weekly The Office, monthly Mastermind and one Room, quarterly regional gatherings and curated dinners and workshops, annually the Summit and Council experiences.",
+          "Match the proposal to the tier. A quarterly regional gathering is not a monthly Room with a different city typed into it.",
+          "Rooms take many shapes — dinners, salons, workshops, deep-work sessions, operator roundtables, excursions. Choose the shape the topic needs; do not default to a seated dinner.",
+          "Vary the city deliberately against where members actually are, and say why this city now.",
+        ],
+      },
+      {
+        key: "every_event_states_its_money",
+        title: "Every proposal states how it makes money, or that it deliberately does not",
+        when: "Writing any event proposal.",
+        guidance: [
+          "Rooms are the primary monetisation layer. A proposal with no funding story and no explanation is unfinished, not neutral.",
+          "Name the sponsor category the theme actually fits and the ask you would make, with reasoning. Do not restate a standard target as though it were a judgement about this event.",
+          "Do not start with six logos. One presenting partner, one supporting partner, one in-kind partner is the shape that works.",
+          "If an event is deliberately not revenue-generating, say so at the top and say what it buys instead — community, brand, a relationship, a debt repaid.",
+          "Sponsors underwrite the experience. They never purchase access to members, and a proposal that implies otherwise is wrong however much money it raises.",
+        ],
+      },
+    ],
+  },
 ];
 
 /** Every skill that applies to an employee sitting on these machines. */

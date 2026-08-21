@@ -1,3 +1,5 @@
+import { personaPrompt } from "../registry/aiEmployeePersonas";
+import { AI_EMPLOYEE_ROSTER } from "../registry/aiEmployees";
 /**
  * The Room packet — Parker's monthly proposal (docs/COMMUNITY.md).
  *
@@ -119,7 +121,22 @@ export function buildPacketPrompt(input: {
   recentThemes: readonly string[];
   venueCandidates: readonly { name: string; url: string; description?: string | null }[];
   city: string;
+  /**
+   * The firm's own methods for events, from the skill library and anything the partners have
+   * adopted since. Empty string when a machine has none, in which case the section is omitted
+   * entirely rather than printed as an empty heading.
+   *
+   * WHY THIS IS A PARAMETER RATHER THAN AN IMPORT. This module is pure and shared; the written
+   * half lives in the database and only the worker can read it. The caller composes both.
+   */
+  guidance?: string;
 }): string {
+  // THE FIRM'S METHODS COME FIRST, because they say what a good proposal IS. Everything below is
+  // how to format one. Parker was proposing events without ever being told docs/COMMUNITY.md
+  // existed, which is how a generator came to implement one row of a four-row rhythm and report
+  // the same sponsor target on every packet it ever produced.
+  const methods = input.guidance && input.guidance.trim().length > 0 ? `\n${input.guidance}\n` : "";
+
   const avoid = input.recentThemes.length
     ? `\nRECENT THEMES — propose something different:\n${input.recentThemes.map((t) => `- ${t}`).join("\n")}`
     : "";
@@ -131,7 +148,12 @@ export function buildPacketPrompt(input: {
     : "(none found — return an empty venues array rather than inventing any)";
 
   return [
-    `You are Parker, West Peek Ventures' Event Planner. Propose ONE Room for ${input.month} in ${input.city}.`,
+    // Identity from the registry — "Event Planner" is a title nobody holds; the roster says Event
+    // Marketing Coordinator. A title written into a prompt is a second roster, and this one had
+    // drifted from the first.
+    personaPrompt("Parker", AI_EMPLOYEE_ROSTER.find((e) => e.name === "Parker")?.role ?? "AI employee"),
+    `Propose ONE Room for ${input.month} in ${input.city}.`,
+    methods,
     "",
     "A Room is a curated experience — a dinner, salon, workshop or roundtable — built around a",
     "single important question. 25–35 people: strong operators, first-time founders, startup",
