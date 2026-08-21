@@ -46,7 +46,7 @@ const dismissSchema = z.object({
 /** Signatures currently silenced, as `key::signature` strings. */
 export async function silencedAttention(env: Env, firmScope = "west-peek"): Promise<Set<string>> {
   const rows = await env.WP_OS_DB.prepare(
-    "SELECT item_key, signature FROM attention_dismissal WHERE firm_scope = ?1 AND created_at >= ?2",
+    "SELECT item_key, signature FROM attention_dismissal WHERE firm_scope = ?1 AND (permanent = 1 OR created_at >= ?2)",
   )
     .bind(firmScope, cutoffIso())
     .all<{ item_key: string; signature: string }>();
@@ -58,11 +58,23 @@ export async function handleDismissAttention(ctx: RouteContext): Promise<Respons
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   const key = ctx.params.key!;
 
+  /*
+   * THE TWO BUTTONS NOW MEAN DIFFERENT THINGS, which they always claimed to.
+   *
+   * "I know" is ACKNOWLEDGED: seen, still true, living with it — quiet for a week, because an
+   * operator who said "I know" last Tuesday has not said it about today. "Stop telling me" is
+   * DISMISSED, and it is permanent.
+   *
+   * It is still keyed to the exact wording. Silencing "3 scheduled job(s) recently failed" for ever
+   * must not silence "9 scheduled job(s) recently failed" — a different fact deserves to be said.
+   * That is what makes offering a permanent option safe at all.
+   */
+  const permanent = parsed.data.kind === "DISMISSED" ? 1 : 0;
   await ctx.env.WP_OS_DB.prepare(
-    `INSERT INTO attention_dismissal (id, item_key, signature, kind, dismissed_by, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    `INSERT INTO attention_dismissal (id, item_key, signature, kind, permanent, dismissed_by, firm_scope)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
   )
-    .bind(`atd_${crypto.randomUUID()}`, key, parsed.data.signature, parsed.data.kind, ctx.identity!.id, "west-peek")
+    .bind(`atd_${crypto.randomUUID()}`, key, parsed.data.signature, parsed.data.kind, permanent, ctx.identity!.id, "west-peek")
     .run();
 
   await appendEvent(ctx.env, {
@@ -75,14 +87,20 @@ export async function handleDismissAttention(ctx: RouteContext): Promise<Respons
     payload: { signature: parsed.data.signature },
   });
 
-  return json({ ok: true, silenced_for_days: DISMISSAL_LIFETIME_DAYS });
+  return json({
+    ok: true,
+    permanent: permanent === 1,
+    ...(permanent === 1
+      ? { note: "This will not come back. If the same problem returns with different wording, that is a different item and you will be told." }
+      : { silenced_for_days: DISMISSAL_LIFETIME_DAYS }),
+  });
 }
 
 /** GET — what is currently silenced, so the page can say so and offer it back. */
 export async function handleListSilencedAttention(ctx: RouteContext): Promise<Response> {
   const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT item_key, signature, kind, created_at FROM attention_dismissal
-      WHERE firm_scope = 'west-peek' AND created_at >= ?1
+    `SELECT item_key, signature, kind, permanent, created_at FROM attention_dismissal
+      WHERE firm_scope = 'west-peek' AND (permanent = 1 OR created_at >= ?1)
       ORDER BY created_at DESC`,
   )
     .bind(cutoffIso())
