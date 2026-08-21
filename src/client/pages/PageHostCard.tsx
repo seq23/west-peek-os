@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useApi } from "../lib/api";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { pageHost } from "@shared/help/pageHosts";
@@ -28,6 +29,9 @@ interface LoungeEmployee {
 }
 
 export function PageHostCard({ navKey }: { navKey: string }) {
+  // A portrait that fails to load must fall back to initials, not to a hole. Hiding the image left
+  // an empty column the width of a face, which reads as a broken card rather than a missing photo.
+  const [portraitFailed, setPortraitFailed] = useState(false);
   const host = pageHost(navKey);
   // One request, cached by the hook per path — every hosted page reads the same roster.
   const lounge = useApi<{ employees: LoungeEmployee[] }>(host ? "/api/workforce/lounge" : null, [navKey]);
@@ -41,8 +45,14 @@ export function PageHostCard({ navKey }: { navKey: string }) {
 
   return (
     <section className="card professor-welcome" data-testid={`page-host-${navKey}`}>
-      {portrait ? (
-        <img className="professor-face" src={portrait} alt={portraitAlt(host.name, host.role)} loading="lazy" />
+      {portrait && !portraitFailed ? (
+        <img
+          className="professor-face"
+          src={portrait}
+          alt={portraitAlt(host.name, host.role)}
+          loading="lazy"
+          onError={() => setPortraitFailed(true)}
+        />
       ) : (
         <span className="professor-face professor-face-initial" aria-hidden="true">
           {host.name.slice(0, 1)}

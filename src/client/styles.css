@@ -1788,12 +1788,21 @@ hr {
 
 /* — University. Modes as chips so all six are visible at once; a dropdown hides five of them and
      the mode is the most consequential choice on the page. */
-.university-modes { border: none; padding: 0; margin: var(--space-sm) 0; display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
+/* Grid with auto-FILL, not flex-wrap and not auto-fit. Both of those stretch whatever lands alone
+   on the last row, so the sixth teaching mode rendered as a full-width banner beside five normal
+   tiles. auto-fill keeps the empty tracks, so every tile is the same width whatever the count. */
+.university-modes {
+  border: none;
+  padding: 0;
+  margin: var(--space-sm) 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: var(--space-2xs);
+}
 .mode-chip {
   display: flex; flex-direction: column; gap: var(--space-3xs); cursor: pointer;
   border: 1px solid var(--wp-line); border-radius: var(--radius-sm);
   padding: var(--space-2xs) var(--space-xs); min-height: 44px; justify-content: center;
-  flex: 1 1 13rem;
 }
 .mode-chip-on { border-color: var(--wp-orange); background: var(--wp-tint); }
 .mode-chip input { position: absolute; opacity: 0; width: 0; height: 0; }
