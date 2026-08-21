@@ -246,8 +246,76 @@ export async function handleAddDocumentVersion(ctx: RouteContext): Promise<Respo
 
 export async function handleListDocuments(ctx: RouteContext): Promise<Response> {
   const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
-  const rows = await ctx.env.WP_OS_DB.prepare(`SELECT * FROM document WHERE ${visibility} ORDER BY created_at DESC, id LIMIT 200`).all<DocumentRow>();
-  return json({ documents: rows.results ?? [] });
+  // ARCHIVED IS OFF THE SHELF. `?archived=1` shows what was taken off it and by whom, which is the
+  // half of "delete with a trail" that a plain delete cannot offer.
+  const wantArchived = new URL(ctx.request.url).searchParams.get("archived") === "1";
+  const shelf = wantArchived ? "archived_at IS NOT NULL" : "archived_at IS NULL";
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    `SELECT * FROM document WHERE ${visibility} AND ${shelf} ORDER BY created_at DESC, id LIMIT 200`,
+  ).all<DocumentRow>();
+  return json({
+    documents: rows.results ?? [],
+    archived: wantArchived,
+    note: wantArchived
+      ? "Archived documents. Nothing was destroyed — each one records who took it off the shelf and why."
+      : "The shelf. Archived documents are kept and readable at ?archived=1.",
+  });
+}
+
+/**
+ * Take a document off the shelf.
+ *
+ * NOT A DELETE, and the difference is the point. The event spine is append-only, deliverables
+ * reference documents by id, and the bytes live in R2 — destroying the row would break those
+ * references and erase the history the operator asked to keep. So the document leaves every list
+ * and the record of its removal survives: who, when, and why.
+ *
+ * A reason is required. "Deleted by Sequoia" answers nothing six months later; "duplicate of the
+ * 19 Aug review" answers it completely, and the cost of asking is one sentence.
+ */
+export async function handleArchiveDocument(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "document.archive", { objectType: "document", objectId: ctx.params.id! });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const body = (await ctx.request.json().catch(() => null)) as { reason?: unknown } | null;
+  const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+  if (reason.length < 3) {
+    return json(
+      { error: "reason_required", detail: "Say why in a few words. Six months from now the reason is the only part that still helps." },
+      { status: 400 },
+    );
+  }
+
+  const doc = await ctx.env.WP_OS_DB.prepare("SELECT * FROM document WHERE id = ?1").bind(ctx.params.id!).first<DocumentRow>();
+  if (!doc) return json({ error: "not_found" }, { status: 404 });
+  if ((doc as unknown as { archived_at: string | null }).archived_at) {
+    return json({ error: "already_archived", detail: "This is already off the shelf." }, { status: 409 });
+  }
+
+  await ctx.env.WP_OS_DB.prepare(
+    `UPDATE document
+        SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), archived_by = ?2, archive_reason = ?3
+      WHERE id = ?1`,
+  )
+    .bind(doc.id, actor.firmUserId ?? "system", reason.slice(0, 400))
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: "document.archived",
+    actorType: "firm_user",
+    actorId: actor.firmUserId ?? "system",
+    objectType: "document",
+    objectId: doc.id,
+    firmScope: actor.firmScopes[0] ?? "west-peek",
+    payload: { title: doc.title, reason: reason.slice(0, 400) },
+  });
+
+  return json({
+    id: doc.id,
+    archived: true,
+    note: "Off the shelf. Nothing was destroyed — it is readable under archived documents, with your reason attached.",
+  });
 }
 
 export async function handleGetDocument(ctx: RouteContext): Promise<Response> {

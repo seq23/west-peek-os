@@ -110,7 +110,13 @@ export async function deliver(env: Env, actor: Actor, input: DeliverInput): Prom
     .bind(...(input.sourceType && input.sourceId ? [input.sourceType, input.sourceId] : [id]))
     .first<DeliverableRow>())!;
 
-  if (!row.document_id) {
+  /*
+   * NOT EVERYTHING IS WORTH FILING. A morning brief is read once, on the morning it is about, and
+   * superseded the next day — three hundred and sixty-five of them a year turns Documents into a
+   * place nobody looks, which is what the operator found there. The brief is not lost: it lives in
+   * full on Home and in `intelligence_report`. Only the second copy stops being made.
+   */
+  if (!row.document_id && kindDef(row.kind)?.file !== false) {
     try {
       const markdown = renderMarkdown(toExport(row, input.preparedFor));
       const { document } = await uploadDocument(env, actor, {

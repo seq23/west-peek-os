@@ -2026,10 +2026,31 @@ function DocumentsPage() {
             <strong>{d.title}</strong> — {d.doc_type} · {d.privacy_label}{" "}
             <button type="button" data-testid={`download-${d.id}`} onClick={() => download(d.id, d.title)}>
               Download
+            </button>{" "}
+            {/* OFF THE SHELF, NOT DESTROYED. There was no removal of any kind before this — five
+                document routes and none of them removed anything — so six of the eight documents
+                here were machine noise nobody could clear. A reason is required because six months
+                from now the reason is the only part that still helps. */}
+            <button
+              type="button"
+              className="link-button"
+              data-testid={`doc-archive-${d.id}`}
+              onClick={async () => {
+                const reason = window.prompt(`Why are you taking "${d.title}" off the shelf?`);
+                if (!reason || reason.trim().length < 3) return;
+                const failed = mutationError(
+                  await api(`/api/documents/${d.id}/archive`, { method: "POST", body: { reason: reason.trim() } }),
+                  200,
+                );
+                setMessage(failed ?? `Archived. It is kept, with your reason attached.`);
+                documents.reload();
+              }}
+            >
+              Archive
             </button>
           </li>
         ))}
-        {(documents.data?.documents ?? []).length === 0 && <li className="state-empty">No documents yet. Upload one above — it is stored in R2 with a SHA-256 that must match on download.</li>}
+        {(documents.data?.documents ?? []).length === 0 && <li className="state-empty">Nothing on the shelf. Morning briefs are not filed here on purpose — they live on Home and are superseded each day.</li>}
       </ul>
     </section>
   );
