@@ -73,6 +73,12 @@ Parent authorities (IMMUTABLE — never modify, move, or rewrite):
   document is intact, colour is declared only in the token block, no stale orange, no blue/purple/cyan
   product colour, and the approved mark is wired into the shell. The family convention — every other
   West Peek repo ships the same scan.
+- `npm run validate:type-scale` — type-scale scan plus its 6-fixture self-test: every `font-size` in
+  `styles.css` is one of the eight declared steps (or `inherit`), and no component sets two ADJACENT
+  steps on text of the same register. It exists because the purpose block on all 38 pages ran its
+  sentence at 13px and the line beneath it at 12px — one pixel apart, which reads as a mistake rather
+  than a hierarchy — and nothing was checking. Text inside a drawn graphic may carry
+  `/* type-scale-exempt: why */`, and the reason is required.
 - `npm run validate:authority` / `validate:ai-boundary` / `validate:network-boundary` — static boundary
   scans plus their own self-tests and seed-freshness checks. If a scan legitimately needs narrowing,
   narrow it precisely AND add a self-test fixture proving it still catches what it exists to catch

@@ -206,6 +206,7 @@ a {
 
 a:hover { color: var(--wp-orange-deeper); }
 
+/* type-scale-exempt: relative optical correction — monospace renders larger than the body face at the same nominal size, so this shrinks it to MATCH whatever step its context is on rather than setting a step of its own */
 code,
 kbd,
 samp,
@@ -388,7 +389,7 @@ hr {
 
 .rail-group-toggle:hover { color: var(--wp-shell-ink-max); }
 .rail-group-toggle:focus-visible { outline: 2px solid var(--wp-orange); outline-offset: -2px; }
-.rail-group-mark { font-size: var(--text-xs); opacity: 0.7; }
+.rail-group-mark { font-size: var(--text-2xs); opacity: 0.7; }  /* same register as .rail-group-blurb */
 
 /* — Dividers only where the KIND of thing changes: above Admin, and above the footer. A line
      between every group would turn a forty-item rail into a spreadsheet, and the spacing already
@@ -898,7 +899,9 @@ hr {
   gap: var(--space-xs);
   min-height: 34px;
   color: var(--wp-ink);
-  font-size: var(--text-sm);
+  /* Same size as any other label in the row. It read one step larger, which made a checkbox look
+     more important than the field beside it purely by accident of layout. */
+  font-size: var(--text-xs);
   font-weight: 500;
 }
 
@@ -1031,7 +1034,10 @@ hr {
 .surface-body .mono,
 .surface-body td.mono {
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  /* Reads at the table's own size. Monospace is optically larger than the body face at the same
+     nominal size, so a step up made ids shout over the data beside them — and it landed one step
+     from the column heading, which reads as a mistake rather than a rank. */
+  font-size: inherit;
   color: var(--wp-ink-2);
 }
 
@@ -1617,7 +1623,7 @@ hr {
 
 /* — Meeting close-out. The source quote is indented and quiet: it is evidence for the line above
      it, not a second thing to read. */
-.closeout h5 { margin: var(--space-sm) 0 var(--space-2xs); font-size: 0.9rem; }
+.closeout h5 { margin: var(--space-sm) 0 var(--space-2xs); font-size: var(--text-base); }
 .closeout-quote { border-left: 2px solid var(--wp-line); padding-left: var(--space-xs); margin-top: 2px; font-style: italic; }
 
 /* — IC Decision Portal. Tabs are a horizontal scroller on narrow screens rather than wrapping into
@@ -1701,12 +1707,17 @@ hr {
   white-space: nowrap;
 }
 
+/* ONE SIZE ACROSS THE WHOLE BLOCK.
+   The sentence and the help link sat at --text-sm and this line at --text-xs — a single pixel
+   apart, which is the worst possible gap: too small to read as a deliberate hierarchy, large
+   enough to read as a mistake. Operator report, 21 Aug 2026: "why is the font not the fucking
+   same size". It is now one size, and the three parts are told apart by weight and colour
+   instead. */
 .page-purpose-can {
   margin: 0.15rem 0 0;
   max-width: none;
-  font-size: var(--text-xs);
+  font-size: inherit;
   color: var(--wp-muted);
-  clear: both;
 }
 
 
@@ -1719,8 +1730,8 @@ hr {
   padding-bottom: var(--space-sm); margin-bottom: var(--space-sm);
   border-bottom: 1px solid var(--wp-line);
 }
-.auth-wordmark { margin: 0; font-weight: 700; letter-spacing: -0.02em; font-size: 1.15rem; }
-.auth-tagline { margin: 0; color: var(--wp-muted); font-size: 0.85rem; }
+.auth-wordmark { margin: 0; font-weight: 700; letter-spacing: -0.02em; font-size: var(--text-lg); }
+.auth-tagline { margin: 0; color: var(--wp-muted); font-size: var(--text-sm); }
 .auth-foot { border-top: 1px solid var(--wp-line); padding-top: var(--space-xs); margin-top: var(--space-sm); }
 
 /* — Daily brief. Reading width, because this is the one thing on the page meant to be read
@@ -1748,7 +1759,7 @@ hr {
      for sorting, which a landscape is bad at. */
 .mkt-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--space-sm); }
 .mkt-panel { border: 1px solid var(--wp-line); padding: var(--space-xs); background: var(--wp-surface-2); }
-.mkt-panel h4 { margin: 0 0 var(--space-2xs); font-size: 0.95rem; }
+.mkt-panel h4 { margin: 0 0 var(--space-2xs); font-size: var(--text-md); }
 .mkt-tiles { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2xs); }
 .mkt-tile { background: var(--wp-surface); border: 1px solid var(--wp-line); padding: var(--space-2xs); display: flex; flex-direction: column; gap: 1px; }
 .mkt-tile-ours { border-left: 3px solid var(--wp-orange); }
@@ -1756,7 +1767,7 @@ hr {
 /* — Approval context. Indented under the card head so the decision controls stay the focus and the
      supporting material reads as supporting. */
 .approval-context { border-left: 2px solid var(--wp-line); padding-left: var(--space-sm); margin: var(--space-xs) 0; }
-.approval-context h5 { margin: var(--space-xs) 0 var(--space-2xs); font-size: 0.85rem; }
+.approval-context h5 { margin: var(--space-xs) 0 var(--space-2xs); font-size: var(--text-sm); }
 
 /* Thesis: label/value pairs that stay readable at any width. Auto-fit rather than a fixed
    column count so a long sector list does not force a scrollbar on a narrow screen. */
@@ -1768,7 +1779,7 @@ hr {
 }
 .thesis-grid > div { min-width: 0; }
 .thesis-grid dt {
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   opacity: 0.65;
@@ -2013,7 +2024,9 @@ hr {
   gap: var(--space-2xl);
   margin: var(--space-lg) 0;
 }
+/* type-scale-exempt: text drawn inside an SVG ring, sized to the geometry of the graphic rather than to a document scale */
 .ring-total { font-size: 15px; font-weight: 700; fill: var(--wp-ink); font-variant-numeric: tabular-nums; }
+/* type-scale-exempt: as .ring-total — inside the drawn ring */
 .ring-caption { font-size: 7px; fill: var(--wp-muted); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 
 .allocation-legend { list-style: none; margin: 0; padding: 0; flex: 1 1 320px; min-width: 0; }
@@ -2245,7 +2258,7 @@ hr {
 .brief-table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 0.92rem;
+  font-size: var(--text-base);
 }
 
 .brief-table th,
@@ -2258,7 +2271,9 @@ hr {
 .brief-table th {
   font-weight: 600;
   color: var(--wp-muted);
-  font-size: 0.8rem;
+  /* Two steps below the body, not one: a column heading should read as a different KIND of text,
+     not as the same text slightly smaller. */
+  font-size: var(--text-xs);
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -2369,7 +2384,7 @@ hr {
   border: 1px solid var(--wp-line-strong);
   border-radius: 999px;
   background: var(--wp-surface);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -2384,7 +2399,7 @@ hr {
   border: 0;
   background: none;
   padding: 0 0.1rem;
-  font-size: 1rem;
+  font-size: var(--text-md);
   line-height: 1;
   cursor: pointer;
   color: var(--wp-muted);
@@ -2418,7 +2433,7 @@ hr {
 
 .behind-the-brief h3 {
   color: var(--wp-muted);
-  font-size: 0.95rem;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 
@@ -2431,7 +2446,7 @@ hr {
 }
 
 .team-head h3 {
-  font-size: 1.02rem;
+  font-size: var(--text-md);
   margin: 0;
 }
 
@@ -2453,7 +2468,7 @@ hr {
 
 .connect-help h4 {
   margin: 0 0 0.3rem;
-  font-size: 0.98rem;
+  font-size: var(--text-md);
 }
 
 .connect-help ul,
@@ -2702,7 +2717,7 @@ hr {
 /* What the firm has spent, all time. A number somebody asks for first deserves to be readable
    from across the room rather than mixed into a sentence. */
 .cost-alltime-figure {
-  font-size: 2rem;
+  font-size: var(--text-2xl);
   font-weight: 600;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
@@ -2884,7 +2899,7 @@ hr {
   background: var(--wp-orange);
   color: var(--wp-orange-ink);
   font-weight: 700;
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
 }
 
 .work-legend-wrap { margin: 0 0 0.9rem; }
@@ -2930,7 +2945,7 @@ hr {
   background: var(--wp-accent);
   color: var(--wp-paper);
   font-weight: 700;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .job-runs > summary { cursor: pointer; }
@@ -2965,7 +2980,7 @@ hr {
   background: var(--wp-accent);
   color: var(--wp-paper);
   font-weight: 700;
-  font-size: 1.6rem;
+  font-size: var(--text-2xl);
 }
 
 /* ── The thesis ────────────────────────────────────────────────────────────
@@ -3000,7 +3015,7 @@ hr {
 
 .thesis-doc-title {
   margin: 0.2rem 0 0;
-  font-size: 1.55rem;
+  font-size: var(--text-2xl);
   letter-spacing: -0.02em;
   line-height: 1.1;
 }
@@ -3013,6 +3028,7 @@ hr {
   padding: 2.25rem 2.5rem;
 }
 
+/* type-scale-exempt: the fund's mandate rendered as a statement, and the one piece of display type in the product; fluid by design, and deliberately above the --text-2xl ceiling the rest of the OS keeps to */
 .thesis-banner-statement {
   margin: 0;
   font-family: var(--font-serif);
@@ -3041,7 +3057,7 @@ hr {
 .thesis-banner-empty {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 1.2rem;
+  font-size: var(--text-lg);
   line-height: 1.4;
 }
 
@@ -3548,7 +3564,7 @@ body {
   margin-bottom: var(--space-md);
 }
 .health-headline .health-dot { width: 0.75rem; height: 0.75rem; }
-.health-headline strong { font-size: 1.05rem; }
+.health-headline strong { font-size: var(--text-md); }
 
 .health-grid {
   display: grid;
@@ -3574,13 +3590,14 @@ body {
 .health-card-label { font-weight: 600; }
 .health-card-state {
   margin-left: auto;
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--wp-muted);
 }
-.health-card-reading { font-size: 0.9rem; color: var(--wp-ink); font-variant-numeric: tabular-nums; }
-.health-card-remedy { font-size: 0.85rem; color: var(--wp-muted); }
+.health-card-reading { font-size: var(--text-base); color: var(--wp-ink); font-variant-numeric: tabular-nums; }
+/* Two steps under the reading, so the number and its remedy read as different things. */
+.health-card-remedy { font-size: var(--text-xs); color: var(--wp-muted); }
 
 /* ── Capture ─────────────────────────────────────────────────────────────────
    The box is the page. It was a four-row textarea below three unlabelled inputs,
@@ -3598,7 +3615,7 @@ body {
   width: 100%;
   padding: var(--space-sm);
   font: inherit;
-  font-size: 1.05rem;
+  font-size: var(--text-md);
   line-height: 1.5;
   border: 1px solid var(--wp-line-strong);
   border-radius: var(--radius-md);
