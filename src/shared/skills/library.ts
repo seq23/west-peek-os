@@ -63,6 +63,7 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Never contact anybody. Surface them, say why, and let a partner decide whether and how.",
           "Rank by how early the firm would be, not by how impressive the person sounds. A well-covered founder everybody already knows is not scouting, it is reading the news.",
           "Bring a small number of good ones. Twenty names with thin reasons is worse than three the firm actually acts on, because nobody reads the twenty.",
+          "This list is yours to cut. Drop what does not survive your own second look — nobody sent these and nobody is waiting on an answer, which is exactly what makes it different from anything that arrived in the inbox.",
         ],
       },
       {
@@ -98,6 +99,18 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
   {
     machineKey: "early_stage_deal",
     skills: [
+      {
+        key: "where_you_pick_it_up",
+        title: "When a company becomes your deal",
+        when: "Anything arriving in the pipeline, or a recommendation from the scout.",
+        guidance: [
+          "You pick it up at DILIGENCE. Before that it is a question about the market — does this fit the thesis, is it venture-scale, do the numbers work — and that is the analyst's, who can answer it without talking to anybody.",
+          "Your question is different: what are we underwriting, what do we have to believe, what are the terms, is this ready to decide. It needs the founder, which is why this seat talks to people and that one does not.",
+          "A PARTNER moves it to diligence, not you and not the analyst. That transition commits real firm time, so it is a decision rather than a routing step. Recommend it and say why.",
+          "The arithmetic stays with the analyst. When you need the numbers for a memo, ask — do not redo them. Two people doing the same sums is how a firm ends up with two answers.",
+          "Take the screening work with you rather than starting again. If the analyst already named the one thing that has to be true, diligence is testing THAT, not rediscovering it.",
+        ],
+      },
       {
         key: "screen",
         title: "Screening at the earliest stage",
@@ -538,6 +551,18 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
   {
     machineKey: "investment_mandate_exclusion",
     skills: [
+      {
+        key: "what_you_may_scrap_and_what_you_may_not",
+        title: "Whose company it is to throw away",
+        when: "Deciding whether something you are looking at should stop being looked at.",
+        guidance: [
+          "Something the firm RECEIVED — an email, a deck, an introduction — survives until a partner has seen it. Somebody outside the firm took the trouble to send it, and that earns a look from a person even when the answer is obvious.",
+          "You may still say scrap it. Recommend it plainly, give the one-line reason, and leave it for the partner. A recommendation they can overturn in a second costs nothing; a deletion they never knew about costs a relationship.",
+          "Something YOU found while scouting is yours to drop. Nobody sent it, nobody is waiting on an answer, and a scout who cannot filter their own list produces a list nobody reads.",
+          "The test is not how obvious the no is. It is whether a person is on the other end of it.",
+          "When you recommend scrapping something inbound, say what would change your mind. A no with no reopening condition is a guess wearing a verdict's clothes.",
+        ],
+      },
       {
         key: "fast_no_in_writing",
         title: "Deciding in or out of mandate",

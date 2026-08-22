@@ -132,3 +132,24 @@ describe("what happens to it", () => {
     expect(card!.description).toContain("founder@helios.example");
   });
 });
+
+describe("what an employee may throw away", () => {
+  /**
+   * Operator rule, 21 Aug 2026: "every arrival survives until i've seen it but it comes with a
+   * recommendation to scrap it. however his proactive scout work he is allowed to scrap things on
+   * his own. but never scrap our inbound stuff without our input."
+   *
+   * The test is not how obvious the no is — it is whether a person is on the other end of it.
+   */
+  it("tells the analyst plainly that an arrival is not his to close", async () => {
+    const res = await intakeDealFromEmail(env, {
+      company: "Obvious Pass Co", sector: null, one_liner: null, website: null,
+      from: "someone@example.com", isDeck: false, raw: "",
+    });
+    const card = await t.db.prepare("SELECT prompt FROM work_card WHERE id = ?1").bind(res.work_card_id).first<{ prompt: string }>();
+    expect(card!.prompt).toContain("never close it yourself");
+    expect(card!.prompt).toContain("recommend");
+    // And the distinction is on the card, not only in a method he may not re-read.
+    expect(card!.prompt).toContain("scouting");
+  });
+});

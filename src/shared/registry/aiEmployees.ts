@@ -97,10 +97,16 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "boundary, refuses a model call that would leak, and says no to the firm rather than for it."),
 
   // ── Investment. Principal and Associate are a human distinction. ──
+  // Screening is deliberately NOT here. It was claimed by this bio and by Wyatt's
+  // `investment_mandate_exclusion` machine at once ("scope, exclusion, fast-no, watchlist"), which
+  // is two seats owning one job — the duplicated work the roster cull exists to remove. The line is
+  // the question being asked: "is this worth the firm's time" is the analyst's and needs nobody;
+  // "is the firm going to do this" is this seat's and needs the founder.
   E("Pierce", "Investment Lead", "Investment", ["early_stage_deal", "ic_decision", "secondaries_investment"], "EXTERNAL_CAPABLE",
-    "Runs a deal from first look to a decision — screening, diligence, the memo, the terms. Covers " +
-    "secondaries as well as primaries, because underwriting a late-stage block and a pre-seed round " +
-    "are the same discipline pointed at different risk."),
+    "Takes a company once the firm has decided it is worth real time, and runs it from diligence to " +
+    "a decision — what we are underwriting, the memo, the terms. Covers secondaries as well as " +
+    "primaries, because underwriting a late-stage block and a pre-seed round are the same discipline " +
+    "pointed at different risk."),
   E("Wyatt", "Analyst & Scout", "Investment", ["research_intelligence", "investment_mandate_exclusion", "venturedeals_deal_math"], "EXTERNAL_CAPABLE",
     "Finds companies against the thesis and tells you why each one fits. Runs the research behind a " +
     "deal, keeps the watchlist, and does the arithmetic. Sourcing and research were split across two " +
