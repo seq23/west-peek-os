@@ -176,6 +176,12 @@ const violations = checkSources(scanRealTree());
 if (violations.length > 0) {
   console.error("AI BOUNDARY SCAN FAILED — direct-provider-call violations:");
   for (const v of violations) console.error(`  ✗ ${v}`);
+  // What to do about it. A scan that names the breach and not the fix costs more than it saves:
+  // the reader who trips this is usually the one who least knows where the boundary is.
+  console.error("\nEvery model call goes through run_ai(src/worker/ai/runAi.ts), which applies the");
+  console.error("privacy mode, the cost mode, the egress rules and the spend record. If the provider");
+  console.error("is genuinely new, add an adapter under src/worker/ai/providers/ and reach it from");
+  console.error("run_ai — never from a service. A call that skips run_ai skips all four of those.");
   process.exit(1);
 }
 console.log("AI BOUNDARY SCAN PASSED: no provider SDK imports, model API hostnames, or bearer-token model calls outside src/worker/ai/providers/.");

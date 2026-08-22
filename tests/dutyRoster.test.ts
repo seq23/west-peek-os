@@ -32,8 +32,13 @@ describe("duty roster", () => {
   });
 
   it("never rosters someone who is not available", () => {
-    const only = ["Willow", "Wilson"];
+    // Two REAL seats. This read `["Willow", "Wilson"]`, and Wilson has never been on the roster —
+    // `resolveDuty` reads AI_EMPLOYEE_ROSTER internally, so the second name contributed nothing and
+    // the test was really only proving the one-name case while looking like it proved two. The
+    // suite has been bitten by invented employees before ("Paige", "Priya"); no fixture uses one.
+    const only = [AI_EMPLOYEE_ROSTER[0]!.name, AI_EMPLOYEE_ROSTER[1]!.name];
     const duty = resolveDuty(9, 5, { available: only });
+    expect(duty.onDuty.length).toBeGreaterThan(0);
     for (const d of duty.onDuty) expect(only).toContain(d.name);
   });
 

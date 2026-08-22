@@ -1,4 +1,8 @@
 import { expect, test } from "@playwright/test";
+// The Help Center renders its numbers from this module; reading it here is what stops the page and
+// the spec drifting apart. `helpFacts` derives the roster from the registry and pins the cap with
+// its own unit test, so there is exactly one place either number can be wrong.
+import { AI_EMPLOYEE_ROSTER, MAX_ACTIVE_AI_EMPLOYEES_DOC } from "../src/client/lib/helpFacts";
 import { gotoSurface } from "./support/nav";
 
 /**
@@ -19,7 +23,9 @@ const SYSTEM_DESTINATIONS = [
   "Activity",
   "Governance",
   "Cross-office",
-  "AI",
+  // "AI" named nothing — the surface holds the provider kill switches, the spend ceiling and the
+  // outbound-email switches, which are controls rather than a subject.
+  "AI controls",
   "Machines",
   "Integrations",
   "Diagnostics",
@@ -135,9 +141,16 @@ test("the Help Center is reachable, searchable, and honest about what is unprove
   await expect(page.getByTestId("help-topic-blocked")).toBeVisible();
   await expect(page.getByTestId("help-topic-glossary")).toBeVisible();
 
-  // The cap and roster size are stated, and they are the real ones (pinned by help-facts.test.ts).
-  await expect(page.getByTestId("help-topic-employees")).toContainText("31 AI employee roles");
-  await expect(page.getByTestId("help-topic-employees")).toContainText("5 may be active");
+  /*
+   * The cap and roster size are stated, and they are the REAL ones.
+   *
+   * Read from `src/client/lib/helpFacts.ts` — the module the page itself renders from — rather than
+   * typed here. The numbers moved (31/5 → the current roster and cap) and a help page that states a
+   * cap the server does not enforce is worse than one that states none, so what matters is that the
+   * page and the constant cannot drift apart, not what today's figure happens to be.
+   */
+  await expect(page.getByTestId("help-topic-employees")).toContainText(`${AI_EMPLOYEE_ROSTER} AI employee roles`);
+  await expect(page.getByTestId("help-topic-employees")).toContainText(`${MAX_ACTIVE_AI_EMPLOYEES_DOC} may be active`);
 
   // Integrations must NOT claim to work; it must defer to the readiness surface.
   const integrations = page.getByTestId("help-topic-integrations");
@@ -198,22 +211,27 @@ test("no help topic is left unaudited, and each states its evidence", async ({ p
 test("nav groups fold, and the rail remembers what you closed", async ({ page }) => {
   await signIn(page);
 
+  /*
+   * "Investment" is not a destination any more — the pipeline and the deal record became one
+   * component on Dealflow. Any member of the Deals group proves the fold; Dealflow is the one that
+   * group exists for.
+   */
   const deals = page.getByTestId("nav-group-deals");
   await expect(deals).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("button", { name: "Investment", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dealflow", exact: true })).toBeVisible();
 
   await deals.click();
   await expect(deals).toHaveAttribute("aria-expanded", "false");
   // Genuinely hidden, not painted out of view — assistive tech and a sighted operator agree.
-  await expect(page.getByRole("button", { name: "Investment", exact: true })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Dealflow", exact: true })).toBeHidden();
 
   // The rail should learn the operator's shape rather than resetting to the designer's.
   await page.reload();
   await expect(page.getByTestId("nav-group-deals")).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByRole("button", { name: "Investment", exact: true })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Dealflow", exact: true })).toBeHidden();
 
   await page.getByTestId("nav-group-deals").click();
-  await expect(page.getByRole("button", { name: "Investment", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dealflow", exact: true })).toBeVisible();
 });
 
 test("Home and Ask carry icons; the rest do not", async ({ page }) => {

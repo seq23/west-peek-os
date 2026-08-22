@@ -55,14 +55,44 @@ export interface NotifyInput {
 }
 
 interface QuietHours {
+  /** Hours 0–23 **in `timezone`**, not in UTC. See `hourIn` for why that distinction matters. */
   start?: number;
   end?: number;
+  /** An IANA zone, e.g. "America/New_York". Absent means the hours are UTC (rows written before
+   *  22 Aug 2026), which is preserved so an old preference does not silently change meaning. */
+  timezone?: string;
+}
+
+/**
+ * The hour it is, right now, where the reader says they are.
+ *
+ * WHY A ZONE AND NOT AN OFFSET, which is the actual bug this fixes. Quiet hours were stored as a UTC
+ * hour computed from the browser's offset, so "hold everything from 9 PM" drifted by an hour twice a
+ * year at daylight saving — and moved by five hours the moment a partner opened the app in London.
+ * Operator, 22 Aug 2026: "i could be traveling on diff time zone so let me select time zone for
+ * quiet hours."
+ *
+ * A NAMED ZONE survives both. 9 PM in New York is 9 PM in New York in February and in July, and it
+ * stays 9 PM in New York while she is in London — which is what somebody means by "don't wake me".
+ *
+ * Falls back to UTC on an unknown zone rather than throwing: a bad string in a preference row must
+ * not be able to stop a notification being delivered.
+ */
+function hourIn(now: Date, timezone: string | undefined): number {
+  if (!timezone) return now.getUTCHours();
+  try {
+    const hour = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hour12: false, timeZone: timezone }).format(now);
+    const parsed = Number(hour);
+    return Number.isFinite(parsed) ? parsed % 24 : now.getUTCHours();
+  } catch {
+    return now.getUTCHours();
+  }
 }
 
 /** Is `now` inside the user's quiet window? Handles windows that cross midnight. */
 export function inQuietHours(quiet: QuietHours, now: Date): boolean {
   if (quiet.start === undefined || quiet.end === undefined) return false;
-  const hour = now.getUTCHours();
+  const hour = hourIn(now, quiet.timezone);
   if (quiet.start === quiet.end) return false;
   if (quiet.start < quiet.end) return hour >= quiet.start && hour < quiet.end;
   return hour >= quiet.start || hour < quiet.end;
@@ -274,7 +304,26 @@ export async function handleAckNotification(ctx: RouteContext): Promise<Response
 }
 
 const preferenceSchema = z.object({
-  quiet_hours: z.object({ start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }).optional(),
+  quiet_hours: z
+    .object({
+      start: z.number().int().min(0).max(23),
+      end: z.number().int().min(0).max(23),
+      // Validated as a real zone by trying it, rather than against a list that would go stale.
+      timezone: z
+        .string()
+        .trim()
+        .min(1)
+        .refine((tz) => {
+          try {
+            new Intl.DateTimeFormat("en-GB", { timeZone: tz });
+            return true;
+          } catch {
+            return false;
+          }
+        }, "not a timezone this system recognises")
+        .optional(),
+    })
+    .optional(),
   kinds: z
     .record(z.object({ enabled: z.boolean().optional(), min_severity: z.enum(["INFO", "WARNING", "CRITICAL"]).optional() }))
     .optional(),

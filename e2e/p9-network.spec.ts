@@ -37,7 +37,17 @@ test("P9 Network OS journey: contract → live pull fails closed → fixture con
   await page.getByTestId("fixture-owner").fill("Scooter");
   await page.getByTestId("fixture-pull").click();
   await expect(page.getByTestId("network-message")).toContainText("Fixture pull ok (LOCAL_FIXTURE)");
-  await expect(page.getByTestId("cursor-contact")).toContainText("OK");
+  /*
+   * A FIXTURE PULL DOES NOT MAKE THE SYNC LOOK HEALTHY, and the assertion is inverted deliberately.
+   *
+   * This line used to expect OK here — the fixture moved the cursor, so a run against local test
+   * data made the surface say the firm was in sync with Network OS. `networkAdapter.ts` now guards
+   * the cursor write behind `if (!opts.isFixture)`: "a fixture that transformed its own records
+   * correctly has proven nothing about Network OS." So the cursor still carries the refusal from
+   * the live pull above, which is the truth. Asserting OK would be asserting the lie back.
+   */
+  await expect(page.getByTestId("cursor-contact")).toContainText("DEGRADED_READ_ONLY");
+  await expect(page.getByTestId("cursor-contact")).toContainText("adapter_unconfigured");
   await expect(page.getByTestId("no-conflicts")).toBeVisible();
 
   // Fixture pull #2 diverges → conflict + resolver card, never an overwrite.

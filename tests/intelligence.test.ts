@@ -108,9 +108,12 @@ describe("relevance is a stated heuristic, not a judgement", () => {
       now,
     );
     expect(stacked.score).toBe(1);
-    expect(stacked.reason).toContain("category SECONDARIES is in briefing preferences");
-    expect(stacked.reason).toContain("names a tracked canonical company");
-    expect(stacked.reason).toContain("published within 3 days");
+    // A score arrives with the reasons that produced it, and the reason names EVERY factor that
+    // contributed — matched on the nouns rather than on the sentence, which has been reworded twice.
+    expect(stacked.reason).toMatch(/SECONDARIES/);
+    expect(stacked.reason).toMatch(/briefing preference/i);
+    expect(stacked.reason).toMatch(/tracked|canonical compan/i);
+    expect(stacked.reason).toMatch(/published within 3 days/i);
   });
 
   it("does not credit recency for a stale item", () => {
@@ -573,15 +576,23 @@ describe("home preferences are versioned, never edited in place", () => {
 });
 
 describe("MP home aggregates without widening access", () => {
-  it("answers the ten Managing Partner questions from real modules", async () => {
+  it("gives every module a destination and a question it answers", async () => {
+    /*
+     * The ten-question COUNT and the "nothing is left unanswered" rule are held once, in
+     * `tests/cockpit.test.ts` ("answers every §4 question once the workforce module is enabled"),
+     * which enables every module and asserts ZERO unanswered. This asserted the same count from the
+     * same angle and then settled for `answered.length > 0`, which the stronger test already covers.
+     *
+     * What is left here is the part cockpit does not hold: every module the surface returns has
+     * somewhere to go and says what it answers. Non-empty, not merely a string — an empty `answers`
+     * renders a module with a blank heading, which is the failure worth catching.
+     */
     const home = await call<{ modules: any[]; questions: any[]; one_thing_to_watch: any }>("/api/mp-home", SCOOTER);
     expect(home.status).toBe(200);
-    expect(home.body.questions).toHaveLength(10);
-    const answered = home.body.questions.filter((q: any) => q.module !== null);
-    expect(answered.length).toBeGreaterThan(0);
+    expect(home.body.modules.length).toBeGreaterThan(0);
     for (const m of home.body.modules) {
-      expect(typeof m.link).toBe("string");
-      expect(typeof m.answers).toBe("string");
+      expect(String(m.link ?? ""), `${m.key} has no destination`).not.toHaveLength(0);
+      expect(String(m.answers ?? ""), `${m.key} says nothing about what it answers`).not.toHaveLength(0);
     }
   });
 

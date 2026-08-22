@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createTestDb, type TestDb } from "./helpers/db";
+import { createTestDb, disposeTestDb, type TestDb } from "./helpers/db";
 
 /**
  * The guarantees that live in SQLite rather than in TypeScript (migration 0044).
@@ -21,7 +21,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await t.mf.dispose();
+  await disposeTestDb(t);
 });
 
 const insertVenue = (id: string, source: string) =>

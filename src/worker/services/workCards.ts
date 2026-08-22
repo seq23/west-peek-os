@@ -163,6 +163,115 @@ export interface CreateWorkCardInput {
 }
 
 /** Shared creation path (HTTP handler and capture routing). Authorizes internally. */
+/**
+ * How many cards one employee may open before the firm treats it as a malfunction.
+ *
+ * NOT A PERMISSION — a health signal. Decided 22 Aug 2026; reasoning in
+ * `docs/APPROVAL_AND_WORK_DESIGN.md`. An employee opening forty cards in an hour is not exercising
+ * judgement the partners need to review, it is looping, and the right answer is to stop that
+ * employee and tell them — not to queue forty approvals, which delivers the flood to the partners
+ * instead of stopping it.
+ *
+ * THE NUMBERS ARE NOT DELICATE, which is the point of choosing them this way. A working employee on
+ * a real queue opens something like five to fifteen cards a day; a loop produces hundreds in an
+ * hour. The gap is two orders of magnitude, so the threshold does not need tuning — it needs to sit
+ * in the canyon between the two. Twenty in an hour is roughly a day's honest work arriving at once,
+ * which is the earliest point at which "this is not normal" is certainly true.
+ */
+export const CARDS_PER_HOUR_TRIP = 20;
+
+/** Nobody works sixty things. A standing ceiling, independent of rate. */
+export const OPEN_CARDS_CEILING = 60;
+
+/** The states in which a card is still somebody's problem. */
+const LIVE_STATES = "('OPEN','IN_PROGRESS','BLOCKED')";
+
+/**
+ * The card this one would duplicate, if there is one.
+ *
+ * A CORRECTNESS RULE, ALWAYS ON, NOT A THRESHOLD. The same employee opening the same card twice is
+ * never intended: it is a retry, a re-read of the same inbox, or a job that ran twice. So this is
+ * uniqueness rather than volume — at most one live card per (machine, object, owner).
+ *
+ * Deliberately NOT a UNIQUE index. The caller must be able to JOIN the existing card rather than
+ * fail: an employee told "denied, duplicate" will reword the title and file it anyway, which turns a
+ * clean duplicate into a dirty one. A constraint could only refuse.
+ *
+ * THE OBJECT IS THE THIRD TERM AND IT WAS MISSING. The rule above says (machine, object, owner); the
+ * query matched only (machine, owner), which is a different and much larger claim — "this employee
+ * may hold one live card per machine". Deal intake found it the hard way: Wyatt owns the top of the
+ * funnel and every arrival runs on the early-stage deal machine, so the SECOND company emailed in
+ * joined the FIRST company's card and vanished. A firm cannot lose an inbound deal to a dedupe rule.
+ *
+ * Which column is the object depends on where the card came from. A capture-derived card IS about
+ * its capture, and its title is whatever the router wrote, so `capture_id` decides. A card opened
+ * directly has only its title to name what it is about — "Deal flow: Northwind Robotics" — so the
+ * title decides, compared case- and whitespace-insensitively because a retry regenerates it and a
+ * stray space is not a second piece of work.
+ */
+async function duplicateOf(
+  env: Env,
+  input: CreateWorkCardInput,
+  firmScope: string,
+): Promise<WorkCardRow | null> {
+  // Nothing to match on means nothing to duplicate. A card with no machine and no capture is a
+  // one-off somebody typed, and two of those are two different thoughts.
+  if (input.machine_id == null && !input.capture_id) return null;
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT * FROM work_card
+      WHERE firm_scope = ?1
+        AND state IN ${LIVE_STATES}
+        AND IFNULL(owner_id, '') = IFNULL(?2, '')
+        AND IFNULL(machine_id, -1) = IFNULL(?3, -1)
+        /*
+         * THE SAME CAPTURE, OR THE SAME SUBJECT. Either makes it the same piece of work.
+         *
+         * Capture alone was too narrow and title alone too broad. Two emails about one company —
+         * an intro on Monday, an updated deck on Thursday — arrive as two captures, so a
+         * capture-only rule opened a second card for a company Wyatt was already working. The title
+         * is what actually names the subject ("Deal flow: Sensori"), so it is checked as well, and
+         * matching on either is what "one live card per machine, subject and owner" always meant.
+         */
+        AND (
+          (IFNULL(?4, '') <> '' AND capture_id = ?4)
+          OR lower(trim(title)) = lower(trim(?5))
+        )
+      ORDER BY created_at ASC LIMIT 1`,
+  )
+    .bind(firmScope, input.owner_id ?? null, input.machine_id ?? null, input.capture_id ?? null, input.title)
+    .first<WorkCardRow>();
+  return row ?? null;
+}
+
+/**
+ * Whether this owner has stopped working and started looping.
+ *
+ * Returns the reason when tripped, so the caller can say which limit and by how much rather than
+ * "too many". Only counts an OWNER — a partner opening cards by hand is not rate-limited, because a
+ * human doing something forty times is a human who means it.
+ */
+async function rateTrip(env: Env, ownerId: string | null | undefined, firmScope: string): Promise<string | null> {
+  if (!ownerId) return null;
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM work_card
+         WHERE firm_scope = ?1 AND owner_id = ?2
+           AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hour')) AS last_hour,
+       (SELECT COUNT(*) FROM work_card
+         WHERE firm_scope = ?1 AND owner_id = ?2 AND state IN ${LIVE_STATES}) AS open_now`,
+  )
+    .bind(firmScope, ownerId)
+    .first<{ last_hour: number; open_now: number }>();
+  if (!row) return null;
+  if (row.last_hour >= CARDS_PER_HOUR_TRIP) {
+    return `${ownerId} has opened ${row.last_hour} work cards in the last hour, past the ${CARDS_PER_HOUR_TRIP} that means something is looping rather than working.`;
+  }
+  if (row.open_now >= OPEN_CARDS_CEILING) {
+    return `${ownerId} is holding ${row.open_now} open work cards, past the ceiling of ${OPEN_CARDS_CEILING}. Nobody works sixty things.`;
+  }
+  return null;
+}
+
 export async function createWorkCardInternal(
   env: Env,
   identity: FirmUserIdentity,
@@ -172,6 +281,69 @@ export async function createWorkCardInternal(
   const actor = actorFromIdentity(identity);
   const authz = await authorize(env, actor, "work_card.create", { objectType: "work_card", firmScope });
   if (authz.decision !== "ALLOW") throw new WorkCardError(403, "forbidden", authz.reason);
+
+  /*
+   * A DUPLICATE JOINS THE EXISTING CARD. It does not fail, and it does not open a second one.
+   * Returning the original is what keeps the pipeline honest: the second caller gets a real card id
+   * and carries on, and the firm has one place where that piece of work lives.
+   */
+  /*
+   * AN AI OWNER IS STORED BY ID, NEVER BY NAME — resolved here so no caller can get it wrong.
+   *
+   * The bug this closes was live in production and silent. `DEAL_INTAKE_EMPLOYEE` is the string
+   * "Wyatt", used for display, and the intake path wrote it straight into `owner_id` while other
+   * paths wrote `aie_wyatt`. Two formats in one column. `runEmployeeWork` looks the owner up with
+   * `ai_employee WHERE id = ?`, so every card the email intake created answered **"That employee
+   * does not exist" and could never be worked** — the whole route from an email to Wyatt doing
+   * something died at the last step, and nothing said so. `validate:value-shapes` found it.
+   *
+   * Resolved rather than rejected: a caller naming a real colleague means something obvious, and
+   * refusing would only move the failure. A name that matches nobody still falls through unchanged
+   * and fails loudly at the foreign key.
+   */
+  let ownerId = input.owner_id ?? null;
+  if (input.owner_type === "AI" && ownerId && !ownerId.startsWith("aie_")) {
+    const seat = await env.WP_OS_DB.prepare("SELECT id FROM ai_employee WHERE name = ?1")
+      .bind(ownerId)
+      .first<{ id: string }>();
+    if (seat) ownerId = seat.id;
+  }
+
+  /*
+   * RESOLVED BEFORE THE DUPLICATE CHECK, and the order is the bug. Doing it after meant the check
+   * compared the raw "Wyatt" against a stored "aie_wyatt" and never matched, so the guard silently
+   * stopped guarding for exactly the route it was written for.
+   */
+  const existing = await duplicateOf(env, { ...input, owner_id: ownerId ?? undefined }, firmScope);
+  if (existing) {
+    await appendEvent(env, {
+      eventType: "work_card.duplicate_joined",
+      actorType: "firm_user",
+      actorId: identity.id,
+      objectType: "work_card",
+      objectId: existing.id,
+      payload: { title: input.title, machine_id: input.machine_id ?? null, capture_id: input.capture_id ?? null },
+    });
+    return existing;
+  }
+
+  /*
+   * A LOOPING EMPLOYEE IS STOPPED HERE AND THE PARTNERS ARE TOLD — the card is refused, but the
+   * refusal is the alarm rather than the point. Escalation goes through the health spine, which
+   * already reports only what persists, tells both partners once, and announces recovery.
+   */
+  const tripped = await rateTrip(env, input.owner_id, firmScope);
+  if (tripped) {
+    await appendEvent(env, {
+      eventType: "work_card.rate_limited",
+      actorType: "firm_user",
+      actorId: identity.id,
+      objectType: "ai_employee",
+      objectId: input.owner_id ?? "unknown",
+      payload: { detail: tripped },
+    });
+    throw new WorkCardError(429, "opening_too_fast", tripped);
+  }
 
   const id = `wc_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
@@ -188,7 +360,8 @@ export async function createWorkCardInternal(
       input.domain_id ?? null,
       input.machine_id ?? null,
       input.owner_type ?? "UNASSIGNED",
-      input.owner_id ?? null,
+      // The RESOLVED id, not the raw input — see the note above.
+      ownerId,
       input.priority ?? "NORMAL",
       input.privacy_label ?? DEFAULT_PRIVACY_LABEL,
       firmScope,
@@ -409,4 +582,67 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
       "Cards are work somebody owns over time. Runs are single acts that already happened. They are " +
       "kept apart on purpose — turning every run into a card would make this a log.",
   });
+}
+
+/**
+ * A partner telling an employee something while the work is being done.
+ *
+ * Operator, 22 Aug 2026: "can the MPs give feedback on a work card that we want the ai employee to
+ * acknowledge while they are doing the work?"
+ *
+ * NOT AN APPROVAL, and deliberately not routed through one. Approving is a decision at a moment;
+ * this is steering something already in motion, and it must not stop the work to wait for a round
+ * trip. The note lands in the employee's prompt on their next step — see `employeeLoop.ts`, where it
+ * is placed ABOVE the original brief because it was said later and while watching the work.
+ */
+export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response> {
+  const body = (await ctx.request.json().catch(() => null)) as { body?: unknown } | null;
+  const text = typeof body?.body === "string" ? body.body.trim() : "";
+  if (text.length < 2) return json({ error: "invalid_input", detail: "Say what you want them to do differently." }, { status: 400 });
+
+  const card = await ctx.env.WP_OS_DB.prepare("SELECT id, state FROM work_card WHERE id = ?1")
+    .bind(ctx.params.id!)
+    .first<{ id: string; state: string }>();
+  if (!card) return json({ error: "not_found" }, { status: 404 });
+
+  // A note on finished work would never be read: the loop only re-reads notes on a card it is
+  // still working. Refusing plainly beats accepting it into a void.
+  if (!["OPEN", "IN_PROGRESS", "BLOCKED"].includes(card.state)) {
+    return json(
+      { error: "not_in_flight", detail: "This work is finished, so nobody will read a note on it. Reopen the card first." },
+      { status: 409 },
+    );
+  }
+
+  const id = `wcn_${crypto.randomUUID()}`;
+  await ctx.env.WP_OS_DB.prepare(
+    "INSERT INTO work_card_note (id, work_card_id, author_id, body) VALUES (?1, ?2, ?3, ?4)",
+  )
+    .bind(id, card.id, ctx.identity!.id, text)
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: "work_card.note_left",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "work_card",
+    objectId: card.id,
+    payload: { note_id: id },
+  });
+
+  return json({ id, waiting: true }, { status: 201 });
+}
+
+/** What has been said on this card, and what came back. */
+export async function handleListWorkCardNotes(ctx: RouteContext): Promise<Response> {
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    `SELECT n.id, n.body, n.response, n.acknowledged_at, n.created_at, fu.full_name AS author
+       FROM work_card_note n
+       LEFT JOIN firm_user fu ON fu.id = n.author_id
+      WHERE n.work_card_id = ?1
+      ORDER BY n.created_at ASC`,
+  )
+    .bind(ctx.params.id!)
+    .all<Record<string, unknown>>();
+  return json({ notes: rows.results ?? [] });
 }

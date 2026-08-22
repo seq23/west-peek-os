@@ -22,9 +22,11 @@ let employeeId = "";
 beforeAll(async () => {
   t = await createTestDb();
   env = makeTestEnv(t.db);
-  // A freshly migrated database has every employee INACTIVE — activation is an approved action,
-  // not a default. Activating one directly here keeps this test about revocation rather than
-  // about the activation path, which has its own suite.
+  // The seat is set ACTIVE here rather than found that way, which keeps this suite about REVOCATION
+  // rather than about the activation path — that has its own suite. (The comment used to say a
+  // freshly migrated database has everybody INACTIVE. Migration 0136 employed the whole roster, so
+  // that is no longer true; nothing here depended on it, but a false comment is a trap for the next
+  // reader, who would take it as licence to delete the line below.)
   const row = await env.WP_OS_DB.prepare("SELECT id FROM ai_employee ORDER BY id LIMIT 1").first<{ id: string }>();
   employeeId = row?.id ?? "";
   await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = ?1").bind(employeeId).run();

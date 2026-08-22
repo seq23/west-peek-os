@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface, openDisclosure } from "./support/nav";
 import { openNavIfCollapsed } from "./support/nav";
 
 /**
@@ -38,24 +39,44 @@ test("an approval raises a notification the operator can read and acknowledge", 
 
   await page.getByTestId("status-notifications").click();
   await expect(page.getByTestId("notifications-page")).toBeVisible();
-  await expect(page.getByTestId("notification-list")).toContainText("Journey approval for the notification centre");
-  await expect(page.getByTestId("notifications-note")).toContainText("held notifications still appear here");
+  /*
+   * The centre sorts by what it wants FROM you. An approval waiting on a decision is "Needs you";
+   * "Worth knowing" and "Handled" are the other two lists. There is no single `notification-list`
+   * any more, and asserting the right list is stronger than asserting the page: a decision filed
+   * under "worth knowing" is a decision nobody makes.
+   */
+  await expect(page.getByTestId("notifications-needs-you")).toContainText("Journey approval for the notification centre");
+  // Dismiss and Take responsibility are different acts, and the page says so where the buttons are.
+  await expect(page.getByTestId("notifications-ack-explainer")).toContainText("puts");
 
   const item = page.locator('li[data-testid^="notification-ntf_"]', { hasText: "Journey approval" }).first();
   await item.locator('[data-testid^="notification-ack-"]').click();
-  await expect(page.getByTestId("notifications-message")).toContainText("recorded on the audit spine");
+  // The confirmation says what acknowledging COSTS you — your name and the time against it —
+  // rather than naming the table it landed in.
+  await expect(page.getByTestId("notifications-message")).toContainText("Your name and the time are on the record");
 });
 
 test("quiet hours can be set and are described honestly", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Notifications", exact: true }).click();
+  await gotoSurface(page, "Notifications");
+  // Quiet hours and the rules that survive them live behind the settings disclosure — in the DOM
+  // and invisible until it is opened, which is why this used to time out on `quiet-start`.
+  await openDisclosure(page, "notifications-settings");
   await expect(page.getByTestId("notification-rules")).toContainText("CRITICAL notifications are never held");
   await expect(page.getByTestId("notification-rules")).toContainText("recorded UNAVAILABLE");
 
-  await page.getByTestId("quiet-start").fill("22");
-  await page.getByTestId("quiet-end").fill("6");
+  // Two dropdowns reading as a sentence — "Hold everything from … until …" — rather than two boxes
+  // and a unit nobody thinks in. So they are SELECTED, not typed into.
+  await page.getByTestId("quiet-start").selectOption("22");
+  await page.getByTestId("quiet-end").selectOption("6");
+  /*
+   * The window is described in the operator's own terms before she saves it, and pressing Save now
+   * says so — "previously pressing Save did nothing visible at all". Both are asserted: the honesty
+   * about what quiet hours do NOT hold back, and that the control acknowledges the press.
+   */
+  await expect(page.getByTestId("quiet-hours-plain")).toContainText("Anything critical still comes through");
   await page.getByTestId("quiet-submit").click();
-  await expect(page.getByTestId("notifications-message")).toContainText("Critical notifications are still delivered");
+  await expect(page.getByTestId("quiet-saved")).toBeVisible();
 });
 
 test("the app is installable and works at a phone width", async ({ page, request }) => {

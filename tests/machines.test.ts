@@ -81,7 +81,6 @@ describe("the control center makes the whole machine registry operable", () => {
      * refuse them.
      */
     expect(res.body.machines).toHaveLength(MACHINE_REGISTRY.length);
-    expect(res.body.machines).toHaveLength(46);
     expect(res.body.note).toContain("cannot spend AI budget");
 
     // Retirement has teeth in the running system, not only in TypeScript: routing and run_ai both

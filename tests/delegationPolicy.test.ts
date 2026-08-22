@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 import {
   assignmentLabel,
   isAssigned,
@@ -17,11 +18,24 @@ import { buildDigest, parseProposals } from "../src/worker/services/meetingDeleg
  * is handing work to a person.
  */
 
-const ROSTER: RosterEntry[] = [
-  { id: "aie_walker", name: "Walker", role: "Chief of Staff", status: "ACTIVE" },
-  { id: "aie_pierce", name: "Priya", role: "Investment Associate", status: "ACTIVE" },
-  { id: "aie_wesley", name: "Wesley", role: "LP Relations", status: "ACTIVE" },
-];
+/*
+ * BUILT FROM THE ROSTER, not typed out beside it.
+ *
+ * This fixture used to pair the real id `aie_pierce` with the name "Priya" — a seat that was
+ * retired in the v4.0 consolidation and has not existed since. The name and the id disagreed, so
+ * any bug where the product resolved one and reported the other would have been AGREED WITH by the
+ * fixture rather than caught by it. That is the same failure as the hand-typed employee list that
+ * invented "Paige": a fixture that has its own opinion about who works here proves nothing.
+ *
+ * `resolveAssignment` takes the roster as an argument, so a small slice is right — it just has to
+ * be a slice of the real thing, where every name goes with its own id.
+ */
+const seat = (name: string): RosterEntry => {
+  const entry = AI_EMPLOYEE_ROSTER.find((e) => e.name === name);
+  if (!entry) throw new Error(`${name} is not on AI_EMPLOYEE_ROSTER — fix the fixture, not the roster`);
+  return { id: `aie_${entry.name.toLowerCase()}`, name: entry.name, role: entry.role, status: "ACTIVE" };
+};
+const ROSTER: RosterEntry[] = [seat("Walker"), seat("Pierce"), seat("Wesley")];
 const FALLBACK = ROSTER[0]!;
 
 const propose = (over: Partial<ProposedCommitment> = {}): ProposedCommitment => ({
@@ -39,7 +53,7 @@ describe("assignment defaults to AI employees", () => {
   });
 
   it("honours a named employee the model suggested", () => {
-    const r = resolveAssignment(propose({ suggested_employee_name: "Priya" }), ROSTER, FALLBACK);
+    const r = resolveAssignment(propose({ suggested_employee_name: "Pierce" }), ROSTER, FALLBACK);
     expect(r.ai_employee_id).toBe("aie_pierce");
   });
 
@@ -84,7 +98,7 @@ describe("human work is recommended, never assigned", () => {
 
   it("still recommends even when the model suggested an employee for it", () => {
     const r = resolveAssignment(
-      propose({ commitment_text: "Sign the term sheet", suggested_employee_name: "Priya" }),
+      propose({ commitment_text: "Sign the term sheet", suggested_employee_name: "Pierce" }),
       ROSTER,
       FALLBACK,
     );
@@ -169,7 +183,7 @@ describe("extraction parsing", () => {
 
 describe("the digest tells the operator who has what", () => {
   const resolved = [
-    resolveAssignment(propose({ commitment_text: "Send the updated data room index", suggested_employee_name: "Priya" }), ROSTER, FALLBACK),
+    resolveAssignment(propose({ commitment_text: "Send the updated data room index", suggested_employee_name: "Pierce" }), ROSTER, FALLBACK),
     resolveAssignment(propose({ commitment_text: "Draft an intro to a design partner" }), ROSTER, FALLBACK),
     resolveAssignment(propose({ commitment_text: "Sign the SAFE" }), ROSTER, FALLBACK),
     resolveAssignment(propose({ commitment_text: "Founder will send the cap table", owner_side: "COUNTERPARTY" }), ROSTER, FALLBACK),
@@ -177,7 +191,7 @@ describe("the digest tells the operator who has what", () => {
   const digest = buildDigest({ title: "Acme seed call" }, resolved, ROSTER);
 
   it("names the employee holding each assigned task", () => {
-    expect(digest).toContain("Priya — Send the updated data room index");
+    expect(digest).toContain("Pierce — Send the updated data room index");
   });
 
   it("separates recommendations from assignments", () => {

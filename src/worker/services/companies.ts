@@ -143,6 +143,16 @@ const updateCompanySchema = z
     description: z.string().nullable().optional(),
     sector: z.string().trim().min(1).nullable().optional(),
     one_liner: z.string().trim().min(1).nullable().optional(),
+    /*
+     * THE FIRM'S OWN JUDGEMENT, and the one field nothing automatic may touch.
+     *
+     * Operator, 22 Aug 2026: an updated deck SHOULD correct what the company says about itself —
+     * sector, one-liner, website are the company's own facts and a newer deck is a more recent
+     * statement from the same source. What must survive is what WE think, which is a different kind
+     * of thing entirely. A database trigger holds that guarantee rather than this file remembering:
+     * a rule enforced only in TypeScript survives until somebody adds a service.
+     */
+    mp_notes: z.string().nullable().optional(),
     privacy_label: privacyLabelSchema.optional(),
     // Identity fields are explicitly NOT updatable here:
     canonical_name: z.never().optional(),
@@ -390,7 +400,7 @@ export async function handleUpdateCompany(ctx: RouteContext): Promise<Response> 
   const parsed = updateCompanySchema.safeParse(body);
   if (!parsed.success) {
     return json(
-      { error: "invalid_input", detail: "only non-identity fields (legal_name, website, description, sector, one_liner, privacy_label) are updatable", issues: parsed.error.issues },
+      { error: "invalid_input", detail: "only non-identity fields (legal_name, website, description, sector, one_liner, mp_notes, privacy_label) are updatable", issues: parsed.error.issues },
       { status: 400 },
     );
   }
@@ -401,7 +411,7 @@ export async function handleUpdateCompany(ctx: RouteContext): Promise<Response> 
   // thing that changed impossible to find in it.
   const changes: Record<string, { from: unknown; to: unknown }> = {};
   const before = company as unknown as Record<string, unknown>;
-  for (const field of ["legal_name", "website", "description", "privacy_label", "sector", "one_liner"] as const) {
+  for (const field of ["legal_name", "website", "description", "privacy_label", "sector", "one_liner", "mp_notes"] as const) {
     if (input[field] !== undefined && input[field] !== before[field]) {
       sets.push(`${field} = ?${binds.length + 2}`);
       binds.push(input[field]);
@@ -409,6 +419,27 @@ export async function handleUpdateCompany(ctx: RouteContext): Promise<Response> 
     }
   }
   if (sets.length === 0) return json({ error: "invalid_input", detail: "no updatable fields provided" }, { status: 400 });
+
+  /*
+   * WRITING `mp_notes` MEANS NAMING WHO WROTE IT. The database trigger refuses the write otherwise,
+   * and that is deliberate: `mp_notes_by` being NULL is exactly what distinguishes a partner from an
+   * automatic process, since no job has a firm_user to put there. So the guarantee holds even if a
+   * future service forgets — it simply cannot write that column.
+   */
+  if (changes.mp_notes) {
+    if (actor.type !== "HUMAN" || !actor.firmUserId) {
+      return json(
+        {
+          error: "not_yours_to_write",
+          detail: "These notes are the partners' own. Nothing automatic may write them — that is the point of the field.",
+        },
+        { status: 403 },
+      );
+    }
+    sets.push(`mp_notes_by = ?${binds.length + 2}`);
+    binds.push(actor.firmUserId);
+    sets.push("mp_notes_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+  }
 
   await env.WP_OS_DB.prepare(
     `UPDATE canonical_company SET ${sets.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
@@ -929,12 +960,33 @@ export async function handleCompanyHistory(ctx: RouteContext): Promise<Response>
        * it before" — so the answer is written out rather than left as JSON for them to read.
        */
       const changes = payload.changes as Record<string, { from: unknown; to: unknown }> | undefined;
+
+      /*
+       * A PIPELINE MOVE HAS TO CARRY ITS REASON, and this line was dropping it.
+       *
+       * `investment.opportunity_transitioned` records `from`, `to` and `reason` on the spine, and
+       * this mapper read none of them — so the history said "Moved along the pipeline" without
+       * naming the stages, and **a pass lost the reason the firm said no**. That reason is the whole
+       * point of the visible pass pile: the operator's rule is that a passed company keeps its
+       * history, and a trail that records the pass without the why keeps the fact and loses the
+       * thinking. Months later "why did we pass on them" is the only question anybody asks.
+       */
+      const stageMove =
+        r.event_type === "investment.opportunity_transitioned"
+          ? [
+              payload.from && payload.to ? `${String(payload.from).split("_").join(" ").toLowerCase()} → ${String(payload.to).split("_").join(" ").toLowerCase()}` : null,
+              payload.reason ? String(payload.reason) : null,
+            ]
+              .filter(Boolean)
+              .join(" — ")
+          : null;
+
       const said =
         r.event_type === "company.updated" && changes
           ? Object.entries(changes)
               .map(([f, c]) => `${f.split("_").join(" ")}: ${c.from ?? "(blank)"} → ${c.to ?? "(blank)"}`)
               .join("; ")
-          : null;
+          : (stageMove || null);
       return {
         id: r.id,
         at: r.created_at,

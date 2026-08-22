@@ -45,3 +45,41 @@ export function provisionLocalD1(sql: string, attempts = 5): void {
 
   throw new Error(`local D1 provisioning failed after ${attempts} attempts.\n${lastDetail}`);
 }
+
+/**
+ * Read rows back out of the SAME local D1, for the handful of facts no route exposes.
+ *
+ * USED SPARINGLY AND ONLY WHERE THERE IS NO SURFACE. `pending_deck` is the case it exists for: the
+ * deck queue records WHY a deck could not be read — "the reason is stored, not swallowed", because
+ * "the deck said nothing about revenue" and "nobody read the deck" look identical on a company card
+ * unless one of them is written down — and nothing serves that row over HTTP. A journey that could
+ * not see it would have to stop one step before the property worth proving.
+ *
+ * Same retry reasoning as `provisionLocalD1`: this opens the miniflare SQLite in a second workerd
+ * process while `wrangler dev` still holds it, and the two contend.
+ */
+export function queryLocalD1<T = Record<string, unknown>>(sql: string, attempts = 5): T[] {
+  let lastDetail = "";
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const out = execFileSync(
+        "npx",
+        ["wrangler", "d1", "execute", "WP_OS_DB", "--local", "--json", "--command", sql],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      );
+      // wrangler prints an array of statement results; each carries its own `results`.
+      const parsed = JSON.parse(out.slice(out.indexOf("["))) as Array<{ results?: T[] }>;
+      return parsed.flatMap((r) => r.results ?? []);
+    } catch (error) {
+      const e = error as { stderr?: Buffer; stdout?: Buffer; message?: string };
+      lastDetail = [e.stderr?.toString(), e.stdout?.toString(), e.message]
+        .filter((part) => part && part.trim().length > 0)
+        .join("\n")
+        .trim();
+      if (attempt < attempts) execFileSync("sleep", [String(attempt)]);
+    }
+  }
+
+  throw new Error(`local D1 read failed after ${attempts} attempts.\n${lastDetail}`);
+}

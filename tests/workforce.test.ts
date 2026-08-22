@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
 import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
+import { ACTIVE_MACHINES, MACHINE_REGISTRY } from "@shared/registry/machines";
 import { resolveDuty } from "@shared/workforce/dutyRoster";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
@@ -52,7 +53,21 @@ async function call<T = any>(path: string, headers: Record<string, string>, meth
 }
 
 /** Activate an employee through the ONLY governed path: reserved card → approval → receipt. */
+/**
+ * Make sure this seat is employed — and since migration 0136 employed the whole roster, that is
+ * usually already true.
+ *
+ * The helper's contract is "this employee is ACTIVE when I return", not "I was the one who did it".
+ * Insisting on performing the activation made every test that used it depend on the roster starting
+ * empty, which stopped being the case the day the partners employed everybody.
+ */
 async function activate(employeeId: string): Promise<void> {
+  const already = await t.db
+    .prepare("SELECT status FROM ai_employee WHERE id = ?1")
+    .bind(employeeId)
+    .first<{ status: string }>();
+  if (already?.status === "ACTIVE") return;
+
   const card = await call<{ id: string }>(`/api/ai/employees/${employeeId}/request-activation`, MP, "POST", { reason: "P15 test" });
   expect(card.status).toBe(201);
   await call(`/api/approvals/${card.body.id}/decide`, MP, "POST", { decision: "approved", note: "approved for test" });
@@ -62,6 +77,23 @@ async function activate(employeeId: string): Promise<void> {
   });
   expect(activated.status).toBe(200);
   expect(activated.body.status).toBe("ACTIVE");
+}
+
+/**
+ * Make sure this seat is NOT employed — the mirror of `activate`, and needed for the same reason.
+ *
+ * Migration 0136 employed the whole roster, so "an employee who is not ACTIVE" stopped being
+ * something a test could find lying around. A test that needs an unemployed seat has to CREATE that
+ * precondition; one that inherits it from the seed is testing the seed as much as the mechanism,
+ * and breaks the day the seed changes — which is exactly what happened here.
+ *
+ * The status history is deliberately NOT cleaned up afterwards, and cannot be:
+ * `ai_employee_status_history` refuses DELETE at the database because it is append-only by design.
+ * A test is not entitled to an exception, so anything that cares about the trail asserts what a call
+ * ADDS rather than what the table holds.
+ */
+async function standDown(employeeId: string, status: "INACTIVE" | "PAUSED" = "INACTIVE"): Promise<void> {
+  await t.db.prepare("UPDATE ai_employee SET status = ?2 WHERE id = ?1").bind(employeeId, status).run();
 }
 
 let seq = 0;
@@ -148,7 +180,13 @@ describe("the lounge turns the roster into an operating surface", () => {
     expect(walker.department).toBe("MP Support");
     expect(walker.avatar_initials).toBe("WA");
     expect(walker.primary_machines).toContain("command_center");
-    expect(walker.status).toBe("INACTIVE");
+    /*
+     * ACTIVE since migration 0136. Employment and DUTY were one number and are not any more:
+     * everyone on the roster is employed, and `dutyRoster.ts` governs who is actually covering the
+     * hours. Asserting INACTIVE here pinned the old conflation, where hiring somebody was the only
+     * way to hear from them and firing them was the only way to get quiet.
+     */
+    expect(walker.status).toBe("ACTIVE");
     expect(Array.isArray(walker.current_work)).toBe(true);
     expect(typeof walker.cost_30d_usd).toBe("number");
   });
@@ -190,16 +228,21 @@ describe("profile and machine assignment are human acts", () => {
     expect(res.status).toBe(400);
   });
 
-  it("assigns a machine from the 45-machine registry and refuses an unknown one", async () => {
-    const ok = await call<{ machine_id: number }>("/api/workforce/employees/aie_wyatt/machines", MP, "POST", { machine_id: 23 });
-    expect(ok.status).toBe(201);
-    expect(ok.body.machine_id).toBe(23);
+  it("assigns a machine that is in the registry and refuses one that is not", async () => {
+    // Both ids come FROM the registry — a real row, and one past the end of it. Naming the fleet
+    // size in the title dated this test twice already (45 → 46 when `venture_teaching` was added).
+    const real = ACTIVE_MACHINES[Math.floor(ACTIVE_MACHINES.length / 2)]!.id;
+    const unknown = Math.max(...MACHINE_REGISTRY.map((m) => m.id)) + 1;
 
-    const bad = await call("/api/workforce/employees/aie_wyatt/machines", MP, "POST", { machine_id: 999 });
+    const ok = await call<{ machine_id: number }>("/api/workforce/employees/aie_wyatt/machines", MP, "POST", { machine_id: real });
+    expect(ok.status).toBe(201);
+    expect(ok.body.machine_id).toBe(real);
+
+    const bad = await call("/api/workforce/employees/aie_wyatt/machines", MP, "POST", { machine_id: unknown });
     expect(bad.status).toBe(404);
 
     const lounge = await call<{ employees: any[] }>("/api/workforce/lounge", MP);
-    expect(lounge.body.employees.find((e: any) => e.id === "aie_wyatt")!.assigned_machine_ids).toContain(23);
+    expect(lounge.body.employees.find((e: any) => e.id === "aie_wyatt")!.assigned_machine_ids).toContain(real);
   });
 });
 
@@ -242,10 +285,14 @@ describe("the D10 activation law survives the new surface", () => {
     await expect(changeLifecycle(env, AI_ACTOR, "aie_pierce", "RESTRICTED", "self-service")).rejects.toThrow(/human-reserved/);
   });
 
-  it("still enforces the ≤5 ACTIVE cap through the reserved path", async () => {
-    const lounge = await call<{ active_count: number; max_active: number }>("/api/workforce/lounge", MP);
-    expect(lounge.body.active_count).toBeLessThanOrEqual(lounge.body.max_active);
-  });
+  /*
+   * REMOVED, 22 Aug 2026: "still enforces the ≤5 ACTIVE cap through the reserved path". Its title
+   * had been false since the cap became the whole roster, and its body only asserted
+   * `active_count <= max_active` — true of any two numbers the same query produced, so it could
+   * not fail. The cap that CAN fail is asserted where it means something: `max_active` equals the
+   * registry length in the lounge test above, and `tests/ai.test.ts` proves a refused activation
+   * is atomic.
+   */
 });
 
 describe("employing someone is one press, and the trail says who", () => {
@@ -255,6 +302,14 @@ describe("employing someone is one press, and the trail says who", () => {
    * skipped any of them — so these assert on the RECORDS, not on the response.
    */
   it("employs a never-hired employee in a single call, and writes the whole chain", async () => {
+    /*
+     * The precondition is CREATED rather than assumed. Migration 0136 employed the whole roster, so
+     * "a never-hired employee" no longer exists by default — and a test that depended on the roster
+     * happening to start empty was testing the seed as much as the mechanism. Setting the state it
+     * needs makes it prove the same thing on any starting roster.
+     */
+    await standDown("aie_wren");
+
     const before = await t.db
       .prepare("SELECT COUNT(*) AS n FROM approval_card WHERE action_key = 'ai_employee.activate' AND object_id = 'aie_wren'")
       .first<{ n: number }>();
@@ -322,6 +377,11 @@ describe("employing someone is one press, and the trail says who", () => {
   });
 
   it("only requests, for somebody who could not have approved it", async () => {
+    // Same precondition discipline as above: the seat has to be unemployed for "employ them" to be
+    // a request at all, and since 0136 nobody is unemployed by default. Stand them down first so
+    // the test proves the AUTHORITY rule rather than inheriting a starting roster.
+    await standDown("aie_winter");
+
     const res = await call<{ outcome: string; note: string }>("/api/ai/employees/aie_winter/employ", MEMBER, "POST", {
       employed: true,
       reason: "we need a scout",
@@ -331,8 +391,8 @@ describe("employing someone is one press, and the trail says who", () => {
     expect(res.status).toBe(202);
     expect(res.body.outcome).toBe("AWAITING_APPROVAL");
 
-    const pierce = await t.db.prepare("SELECT status FROM ai_employee WHERE id = 'aie_winter'").first<{ status: string }>();
-    expect(pierce!.status).not.toBe("ACTIVE");
+    const winter = await t.db.prepare("SELECT status FROM ai_employee WHERE id = 'aie_winter'").first<{ status: string }>();
+    expect(winter!.status).not.toBe("ACTIVE");
   });
 
   it("an AI employee can never employ anybody, including itself", async () => {
@@ -415,11 +475,15 @@ describe("handoffs move real work and stay human-decided", () => {
   });
 
   it("refuses to hand work to an employee who is not ACTIVE", async () => {
+    // The precondition is CREATED. Pointing at whoever happened to be switched off made this pass
+    // by accident until migration 0136 employed the roster and there was nobody switched off left.
+    await standDown("aie_parker", "PAUSED");
+
     const cardId = await makeWorkCard();
     const res = await call("/api/workforce/handoffs", MP, "POST", {
       work_card_id: cardId,
-      to_employee_id: "aie_walker",
-      reason: "she is inactive",
+      to_employee_id: "aie_parker",
+      reason: "she is not on",
     });
     expect(res.status).toBe(409);
     expect((res.body as any).error).toBe("target_not_active");

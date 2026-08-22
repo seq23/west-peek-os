@@ -7,7 +7,8 @@ import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { ApprovalError, consumeApprovalCard, decideApproval, requestApproval } from "./approvals";
 import { MANAGING_PARTNER_NAMES } from "../../shared/registry/managingPartners";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
-import { resolveDuty } from "../../shared/workforce/dutyRoster";
+import { readableHour, resolveDuty } from "../../shared/workforce/dutyRoster";
+import { loadDutyOverrides } from "./dutyOverrides";
 import { AiRouteError } from "./aiRuns";
 
 /**
@@ -574,10 +575,14 @@ export async function handleGrantToolScope(ctx: RouteContext): Promise<Response>
 /**
  * Who is on duty, right now — the "most important five", chosen by the hour rather than by a model.
  *
- * The rota itself is pure (`shared/workforce/dutyRoster.ts`). This adds the only two facts it
- * cannot know: which employees are actually ACTIVE, and who the operator has pinned. Passing the
- * available set matters — a rota that names someone who is switched off is promising help that
- * will not arrive.
+ * The rota itself is pure (`shared/workforce/dutyRoster.ts`). This adds the only three facts it
+ * cannot know: which employees are actually ACTIVE, who the operator has pinned, and what she has
+ * permanently changed. Passing the available set matters — a rota that names someone who is
+ * switched off is promising help that will not arrive.
+ *
+ * THE OVERRIDES ARE NOT OPTIONAL HERE. This panel and the admin surface must never show different
+ * answers: two rotas that disagree is the one failure the whole design is arranged to prevent, and
+ * "the Employees page forgot to load the overrides" is how that failure would actually happen.
  *
  * The hour comes from the request rather than the server clock, because a Worker runs in UTC and
  * the partner does not. `?hour=` is the caller's local hour; without it, UTC is used and the
@@ -605,17 +610,21 @@ export async function handleDutyRoster(ctx: RouteContext): Promise<Response> {
 
   const all = rows.results ?? [];
   const available = all.filter((r) => r.status === "ACTIVE").map((r) => r.name);
-  const roster = resolveDuty(hour, size, { available, pinned });
+  const { overrides } = await loadDutyOverrides(ctx.env);
+  const roster = resolveDuty(hour, size, { available, pinned, overrides });
 
   return json({
     ...roster,
     hour,
+    hour_label: readableHour(hour),
     hour_source: usingLocal ? "caller" : "utc",
     active_count: available.length,
     roster_size: all.length,
+    override_count: overrides.length,
     /** Stated so the screen never has to explain the rota in its own words. */
     how_it_works:
       "Everyone active stays available all day. This is who the firm is leaning on at this hour, " +
-      "chosen by a fixed rota rather than by a model, so it is predictable and you can overrule it.",
+      "chosen by a fixed rota rather than by a model, so it is predictable and you can overrule it. " +
+      "Change it for good under AI controls.",
   });
 }

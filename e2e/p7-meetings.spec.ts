@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P7 browser journey against local `wrangler dev`:
@@ -23,7 +24,7 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await page.getByTestId("meeting-title").fill(`${marker} founder call`);
   await page.getByTestId("meeting-create-submit").click();
-  await expect(page.getByTestId("meetings-message")).toContainText("recorded");
+  await expect(page.getByTestId("meetings-message")).toContainText("Recorded as mtg_");
   await page.locator('button[data-testid^="meeting-open-"]', { hasText: `${marker} founder call` }).click();
   await expect(page.getByTestId("meeting-detail")).toBeVisible();
   await expect(page.getByTestId("meeting-recording")).toHaveText("NOT ACTIVATED");
@@ -85,8 +86,12 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   await page.locator('button[data-testid^="commitment-convert-"]').first().click();
   await expect(page.getByTestId("commitment-list")).toContainText("CONVERTED");
 
-  await page.getByRole("button", { name: "Work cards", exact: true }).click();
-  await expect(page.getByTestId("work-card-list")).toContainText(`${marker}: send the diligence question list`);
+  await gotoSurface(page, "Work");
+  // The board is a list of card ROWS; there is no single list container to assert against, and the
+  // row is the thing that has to exist. Same locator the P3 journey uses.
+  await expect(
+    page.locator('li[data-testid^="work-card-"]').filter({ hasText: `${marker}: send the diligence question list` }).first(),
+  ).toBeVisible();
 
   // Revoking consent re-closes the gate for any further import.
   await page.getByRole("button", { name: "Meetings", exact: true }).click();

@@ -40,7 +40,7 @@ test("integrations state what is connected, what is gated, and what has never ru
   await expect(page.getByTestId("network-os-authority")).toContainText("never overwrites it");
 
   // The specialist lane is labelled honestly.
-  await expect(page.getByTestId("specialist-status")).toContainText("never been called");
+  await expect(page.getByTestId("specialist-status")).toContainText("has ever been called");
   await expect(page.getByTestId("specialist-gate")).toContainText("have never been called");
   await expect(page.getByTestId("specialist-providers")).toContainText("0 kinds of firm information may leave");
 

@@ -72,17 +72,39 @@ describe("the provider kill switch", () => {
 
 describe("activating an AI employee", () => {
   it("cannot be done without an approval receipt", async () => {
-    // D10. Whitney and Percy are both back on the roster and both INACTIVE precisely because a
-    // migration cannot carry a receipt — an earlier one tried and the governance suite caught it.
+    // D10. A migration cannot carry a receipt — an earlier one tried to activate Whitney and Percy
+    // outright and the governance suite caught it. (Migration 0136 later employed the whole roster
+    // deliberately, and its history rows name the human who decided that; the receipt rule on THIS
+    // route is unchanged, which is what is asserted here.)
     const res = await call("/api/ai/employees/aie_whitney/activate", MP, "POST", {});
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(JSON.stringify(res.body)).toMatch(/receipt|approval|invalid_input/i);
   });
 
-  it("leaves the employee inactive when the activation is refused", async () => {
-    // The important half: a refused activation must not half-apply.
+  it("leaves the employee where it found them when the activation is refused", async () => {
+    /*
+     * The important half: a refused activation must not half-apply.
+     *
+     * Both the precondition and the refusal now happen INSIDE this test. It used to read the status
+     * left behind by the `it` above and assume a fresh database had nobody employed — two kinds of
+     * borrowed state at once, so it went red when migration 0136 employed the roster without any of
+     * the behaviour it guards having changed.
+     */
+    await t.db.prepare("UPDATE ai_employee SET status = 'INACTIVE' WHERE id = 'aie_whitney'").run();
+    const before = (
+      await t.db.prepare("SELECT COUNT(*) AS n FROM ai_employee_status_history WHERE ai_employee_id = 'aie_whitney'").first<{ n: number }>()
+    )!.n;
+
+    const res = await call("/api/ai/employees/aie_whitney/activate", MP, "POST", {});
+    expect(res.status).toBeGreaterThanOrEqual(400);
+
     const row = await t.db.prepare("SELECT status FROM ai_employee WHERE id = 'aie_whitney'").first<{ status: string }>();
-    expect(row?.status).not.toBe("ACTIVE");
+    expect(row?.status).toBe("INACTIVE");
+    // Nothing half-applied: no status-history row was written for a change that did not happen.
+    const after = (
+      await t.db.prepare("SELECT COUNT(*) AS n FROM ai_employee_status_history WHERE ai_employee_id = 'aie_whitney'").first<{ n: number }>()
+    )!.n;
+    expect(after).toBe(before);
   });
 });
 

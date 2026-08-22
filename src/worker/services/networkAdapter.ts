@@ -8,6 +8,8 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { consumeApprovalCard } from "./approvals";
 import { createWorkCardInternal } from "./workCards";
+// Item 7: a company pushed across is one of four routes, and they all converge on `openIntoFunnel`.
+import { openIntoFunnel, type FunnelEntry } from "./dealIntake";
 
 /**
  * Network OS integration (P9).
@@ -927,6 +929,74 @@ export async function handleWriteBack(ctx: RouteContext): Promise<Response> {
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   try {
     return json(await writeBack(ctx.env, actorFromIdentity(ctx.identity!), parsed.data, configuredClient(ctx.env)), { status: 201 });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+// ── A company pushed across from Network OS · route 3 of 4 (item 7) ──
+
+/**
+ * Network OS proposing a company for our funnel.
+ *
+ * WHY THIS IS AN ADAPTER FUNCTION AND NOT A SYNC. Everything else in this file mirrors a record
+ * Network OS OWNS — contacts, relationships, touches — and the boundary law is that our copy is the
+ * suspect when they disagree. Dealflow is the opposite: this app owns it, `#wpdealflow` belongs
+ * here, and Network OS raising a company is a PROPOSAL about our own record. So it gets no mapping
+ * row, no cursor and no conflict: it goes through the same door as the other three routes and comes
+ * out as a work card for the analyst.
+ *
+ * WHY IT DOES NOT WRITE THE FUNNEL. Same reason a hashtag cannot: the far system is not a partner of
+ * this firm and cannot make its decisions. Operator, item 7: "its about opening a work card for
+ * Wyatt to route it appropriately." A push that wrote straight into the pipeline would also make
+ * Network OS a second writer of a record it does not own, which is the exact failure the whole
+ * boundary exists to prevent.
+ */
+export interface NetworkCompanyPush {
+  company: string;
+  sector?: string | null;
+  one_liner?: string | null;
+  website?: string | null;
+  /** Their key for it, kept so the same push twice is recognisable as one arrival. */
+  external_id?: string | null;
+  /** Who over there sent it. Provenance, and the only thing that makes a push reviewable. */
+  pushed_by?: string | null;
+  /** Whatever context came with it. */
+  note?: string | null;
+  /** When it happened over there, not when we read it. */
+  received_at?: string | null;
+}
+
+export async function intakeCompanyFromNetworkOs(env: Env, push: NetworkCompanyPush): Promise<FunnelEntry> {
+  return openIntoFunnel(env, {
+    route: "NETWORK_OS",
+    company: push.company,
+    sector: push.sector ?? null,
+    one_liner: push.one_liner ?? null,
+    website: push.website ?? null,
+    source: push.pushed_by ?? "Network OS",
+    external_ref: push.external_id ?? null,
+    received_at: push.received_at ?? undefined,
+    raw: push.note ?? "",
+  });
+}
+
+const networkCompanyPushSchema = z.object({
+  company: z.string().trim().min(2),
+  sector: z.string().trim().min(1).optional(),
+  one_liner: z.string().trim().min(1).optional(),
+  website: z.string().trim().min(1).optional(),
+  external_id: z.string().trim().min(1).optional(),
+  pushed_by: z.string().trim().min(1).optional(),
+  note: z.string().optional(),
+  received_at: z.string().trim().max(40).optional(),
+});
+
+export async function handleNetworkCompanyPush(ctx: RouteContext): Promise<Response> {
+  const parsed = networkCompanyPushSchema.safeParse(await parseJsonBody(ctx.request));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    return json(await intakeCompanyFromNetworkOs(ctx.env, parsed.data), { status: 201 });
   } catch (err) {
     return errorResponse(err);
   }

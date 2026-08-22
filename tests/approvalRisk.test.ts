@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { assessRisk, expiryHours, isStale, queueRank, recommendApprover } from "../src/shared/approvals/risk";
 
@@ -80,8 +81,20 @@ describe("staleness", () => {
   });
 
   it("is advisory only — nothing here decides", () => {
-    // Auto-approving on expiry lets silence approve an external send; auto-rejecting lets silence
-    // kill a deal. This module returns a boolean and takes no action, by design.
-    expect(typeof isStale("2026-01-01T00:00:00Z", now)).toBe("boolean");
+    /*
+     * Auto-approving on expiry lets silence approve an external send; auto-rejecting lets silence
+     * kill a deal. Either would break "silence is never approval" (D7), which is why this module
+     * reports and never acts.
+     *
+     * This used to assert `typeof isStale(...) === "boolean"` — a function TypeScript already
+     * declares as returning a boolean, so the assertion could not fail while the file compiled and
+     * said nothing whatsoever about deciding. What it should have been checking is that the module
+     * has no way to decide anything: no writes, and no reach into the approvals service.
+     */
+    const src = readFileSync(new URL("../src/shared/approvals/risk.ts", import.meta.url), "utf8");
+    expect(src, "a risk module that writes is a risk module that decides").not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
+    expect(src, "risk reports; deciding belongs to the approvals service").not.toMatch(/decideApproval|consumeApprovalCard|WP_OS_DB/);
+    // And it still answers the question it exists to answer.
+    expect(isStale("2026-01-01T00:00:00Z", now)).toBe(true);
   });
 });

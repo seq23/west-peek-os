@@ -180,6 +180,13 @@ const violations = checkSources(scanRealTree());
 if (violations.length > 0) {
   console.error("NETWORK BOUNDARY SCAN FAILED — cross-repo coupling violations:");
   for (const v of violations) console.error(`  ✗ ${v}`);
+  // What to do about it, for the same reason as the AI-boundary scan: the breach is only half the
+  // message. D5 forbids one system reaching into another's storage or filesystem, not the crossing
+  // itself — so the fix is nearly always "go through the adapter", not "give up on the data".
+  console.error("\nAnything West Peek OS needs from another West Peek system crosses through the");
+  console.error("declared Network OS adapter and its injected NetworkOsClient — an HTTP contract with");
+  console.error("a named owner on both sides. Never a partner repo path, never another system's");
+  console.error("database file, never a binding that is not WP_OS_*.");
   process.exit(1);
 }
 console.log("NETWORK BOUNDARY SCAN PASSED: no partner-repo paths, foreign DB files, foreign bindings, or Network OS hosts outside the declared adapter.");

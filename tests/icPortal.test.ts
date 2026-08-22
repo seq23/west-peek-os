@@ -5,6 +5,9 @@ import {
   restrictedSectionIds,
   type AnswerRow,
 } from "../src/worker/services/icPortal";
+// Counted from the framework, never typed in. The core set and the closing six are both edited
+// from time to time, and a literal here reads as a rule when it is only today's arithmetic.
+import { CLOSING_SIX, CORE_SECTIONS } from "@shared/ic/diligenceFramework";
 
 /**
  * IC readiness and the anti-bias rule (P34).
@@ -33,13 +36,13 @@ describe("expected sections", () => {
     expect(ids).toContain("kill_case");
     expect(ids).toContain("closing_6");
     expect(ids.filter((i) => i.startsWith("sector_"))).toEqual([]);
-    expect(ids).toHaveLength(11 + 6);
+    expect(ids).toHaveLength(CORE_SECTIONS.length + CLOSING_SIX.length);
   });
 
   it("adds exactly one sector section for a sector deal", () => {
     const ids = expectedSectionIds("AI");
     expect(ids).toContain("sector_ai");
-    expect(ids).toHaveLength(11 + 1 + 6);
+    expect(ids).toHaveLength(CORE_SECTIONS.length + 1 + CLOSING_SIX.length);
   });
 });
 
@@ -47,7 +50,7 @@ describe("readiness", () => {
   it("reports every section open when nothing is answered", () => {
     const r = icReadiness("OTHER", []);
     expect(r.complete).toBe(false);
-    expect(r.open).toHaveLength(17);
+    expect(r.open).toHaveLength(expectedSectionIds("OTHER").length);
     expect(r.answered).toEqual([]);
   });
 
@@ -56,7 +59,7 @@ describe("readiness", () => {
       .filter((id) => id !== "kill_case")
       .map((id) => answer(id, "ANSWERED"));
     const r = icReadiness("OTHER", answers);
-    // 16 of 17 done. A percentage would say 94% and read as ready.
+    // All but one done. A percentage would say 94% and read as ready.
     expect(r.open).toEqual(["kill_case"]);
     expect(r.complete).toBe(false);
     expect(r).not.toHaveProperty("score");

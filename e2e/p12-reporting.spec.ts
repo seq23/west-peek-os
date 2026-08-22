@@ -1,19 +1,33 @@
 import { expect, test } from "@playwright/test";
+import { approvalStateWords } from "@shared/help/actionNames";
 import { gotoSurface } from "./support/nav";
 
 /**
- * P12 browser journey against local `wrangler dev`:
- * dev-header login as Scooter (MP) → open a reporting period and draft its packet →
- * distribution refused with reviews outstanding → record the finance, compliance, and
- * MP reviews → packet reads APPROVED but still does not ship → distribution refused
- * without the reserved send receipt → approve the card in Approvals → distribute →
- * then import an administrator export that disagrees with our NAV → the discrepancy
- * becomes a visible EXCEPTION showing BOTH figures → a human escalates it to the
- * administrator, and the administrator's reported value is unchanged.
+ * P12: an LP report does not ship until three people have read it, and then only behind a receipt.
  *
- * Runs fully offline: local D1 (miniflare), no credentials. The import is a FIXTURE:
- * no live administrator system is read, and none is ever written. Nothing here claims
- * accounting, valuation, or financial correctness.
+ * The gates: distribution refused while reviews are outstanding; refused again after finance alone;
+ * APPROVED once finance, compliance and a Managing Partner have each recorded a review — and STILL
+ * not sent, because sending to LPs is a reserved external communication with its own receipt. Then
+ * the administrator's export disagrees with our NAV, and the disagreement becomes a visible
+ * EXCEPTION showing BOTH figures rather than a correction to either.
+ *
+ * ── WHERE THIS NOW RUNS ─────────────────────────────────────────────────────────────────────────
+ *
+ * "Reporting" is no longer a destination. It folded into **LP** — "an LP is somebody who gave the
+ * fund money and whom the fund owes an account of it" (App.tsx) — and the surface that came with it
+ * is the half a partner actually uses: opening a period, and checking the administrator against our
+ * own numbers. The PACKET machinery (submit, the three reviews, distribute, the certification
+ * banner) has no interface at all: `certification-state`, `packet-distribute` and `review-FINANCE`
+ * exist nowhere in `src/client/`, while every route behind them is still mounted and still governed
+ * (`/api/reporting/packets/*`).
+ *
+ * So the review-and-receipt gates are proved through the API, the reserved decision is made by a
+ * person in the browser, and the period and the reconciliation are driven on the page that now holds
+ * them. The missing surface is asserted at the bottom of this file rather than quietly dropped.
+ *
+ * Runs fully offline: local D1 (miniflare), no credentials. The import is a FIXTURE: no live
+ * administrator system is read, and none is ever written. Nothing here claims accounting,
+ * valuation, or financial correctness.
  */
 
 const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
@@ -21,46 +35,71 @@ const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
 test("P12 reporting journey: review gates → receipted distribution → reconciliation exception, no overwrite", async ({ page, request }) => {
   const marker = `E2E-P12-${Date.now()}`;
 
-  const fund = await (await request.post("/api/funds", { headers: MP, data: { name: `${marker} Fund` } })).json();
+  const fund = (await (await request.post("/api/funds", { headers: MP, data: { name: `${marker} Fund` } })).json()) as { id: string };
 
   await page.goto("/");
   await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
   await page.getByTestId("dev-login-submit").click();
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
 
-  await page.getByRole("button", { name: "Reporting", exact: true }).click();
-  await expect(page.getByTestId("certification-state")).toContainText("NO FINANCIAL, ACCOUNTING, OR VALUATION CORRECTNESS IS CERTIFIED");
+  // The period is opened on the page a partner actually has. "Q1 2026" is enough — the surface
+  // derives the dates, deliberately, because typing two ISO dates to say "Q1" is the kind of small
+  // tax that stops a thing being used.
+  await gotoSurface(page, "LP");
+  await page.getByTestId("period-fund").selectOption(fund.id);
+  await page.getByTestId("period-label").fill(`${marker} Q1 2026`);
+  await page.getByTestId("period-open").click();
+  await expect(page.getByTestId("period-list")).toContainText(`${marker} Q1 2026`);
 
-  await page.getByTestId("reporting-fund").selectOption({ label: `${marker} Fund` });
-  await page.getByTestId("period-label").fill(`${marker} Q1`);
-  await page.getByTestId("period-create").click();
-  await expect(page.getByTestId("reporting-message")).toContainText("Packet ok");
+  const periods = (await (await request.get(`/api/reporting/periods?fund_id=${fund.id}`, { headers: MP })).json()) as {
+    periods: Array<{ id: string; label: string }>;
+  };
+  const period = periods.periods.find((p) => p.label === `${marker} Q1 2026`)!;
+
+  const packet = await request.post(`/api/reporting/periods/${period.id}/packets`, {
+    headers: MP,
+    data: { title: `${marker} Q1 letter` },
+  });
+  expect(packet.status(), await packet.text()).toBe(201);
+  const packetId = ((await packet.json()) as { id: string }).id;
 
   // Nothing ships before the reviews exist, let alone before they pass.
-  await page.getByTestId("packet-distribute").click();
-  await expect(page.getByTestId("reporting-message")).toContainText("reviews_incomplete");
+  const recipients = [{ recipient_label: `${marker} Family Office` }];
+  const tooEarly = await request.post(`/api/reporting/packets/${packetId}/distribute`, { headers: MP, data: { recipients } });
+  expect(tooEarly.status()).not.toBe(200);
+  expect(await tooEarly.text()).toContain("reviews_incomplete");
 
-  await page.getByTestId("packet-submit").click();
-  await expect(page.getByTestId("packet-outstanding")).toContainText("FINANCE");
-  await expect(page.getByTestId("review-FINANCE")).toContainText("PENDING");
+  const submitted = await request.post(`/api/reporting/packets/${packetId}/submit`, { headers: MP, data: {} });
+  expect(submitted.status(), await submitted.text()).toBe(200);
 
-  // Partial review is still not enough.
-  await page.getByTestId("review-record-FINANCE").click();
-  await expect(page.getByTestId("review-FINANCE")).toContainText("COMPLETED");
-  await page.getByTestId("packet-distribute").click();
-  await expect(page.getByTestId("reporting-message")).toContainText("reviews_incomplete");
+  // Partial review is still not enough — which is the whole point of naming three reviewers.
+  const review = async (role: string) =>
+    request.post(`/api/reporting/packets/${packetId}/reviews`, {
+      headers: MP,
+      data: { review_type: role, status: "COMPLETED", note: `${marker} reviewed` },
+    });
+  expect((await review("FINANCE")).status()).toBe(200);
+  const stillShort = await request.post(`/api/reporting/packets/${packetId}/distribute`, { headers: MP, data: { recipients } });
+  expect(await stillShort.text()).toContain("reviews_incomplete");
 
-  await page.getByTestId("review-record-COMPLIANCE").click();
-  await page.getByTestId("review-record-MANAGING_PARTNER").click();
-  await expect(page.getByTestId("packet-outstanding")).toContainText("none");
-  await expect(page.getByTestId("packet-status")).toContainText("APPROVED");
+  expect((await review("COMPLIANCE")).status()).toBe(200);
+  expect((await review("MANAGING_PARTNER")).status()).toBe(200);
 
-  // Reviewed is not sent: the reserved LP-communication receipt is a separate gate.
-  await page.getByTestId("packet-distribute").click();
-  await expect(page.getByTestId("reporting-message")).toContainText("approval_required");
+  const reviewed = (await (await request.get(`/api/reporting/packets/${packetId}`, { headers: MP })).json()) as {
+    status: string;
+    outstanding: string[];
+    all_complete: boolean;
+  };
+  expect(reviewed.outstanding, "with all three reviews in, nothing is outstanding").toHaveLength(0);
+  expect(reviewed.all_complete).toBe(true);
+  expect(reviewed.status).toBe("APPROVED");
 
-  const packetId = await page.getByTestId("packet-select").inputValue();
-  const card = await (
+  // Reviewed is NOT sent: the reserved LP-communication receipt is a separate gate.
+  const noReceipt = await request.post(`/api/reporting/packets/${packetId}/distribute`, { headers: MP, data: { recipients } });
+  expect(noReceipt.status()).not.toBe(200);
+  expect(await noReceipt.text()).toContain("approval_required");
+
+  const card = (await (
     await request.post("/api/approvals", {
       headers: MP,
       data: {
@@ -71,54 +110,92 @@ test("P12 reporting journey: review gates → receipted distribution → reconci
         submit: true,
       },
     })
-  ).json();
+  ).json()) as { id: string };
 
-  await page.getByRole("button", { name: "Approvals", exact: true }).click();
-  const approvalCard = page.locator(`li[data-testid="approval-card-${card.id}"]`);
-  await expect(approvalCard).toContainText("pending_review");
-  // Targeted by testid, not by role: an approval card now also carries evidence and comment
-  // inputs (canon §24.2 context), so "the textbox" is ambiguous.
-  await approvalCard.locator('[data-testid^="decision-note-"]').fill("reviewed by finance, compliance, and the MP — E2E");
-  await approvalCard.getByRole("button", { name: "Approve" }).click();
+  // The decision itself is a person's, and it is made in the browser.
+  await gotoSurface(page, "Approvals");
+  const approvalCard = page.getByTestId(`approval-card-${card.id}`);
+  await expect(approvalCard).toBeVisible();
+  await expect(approvalCard).toContainText(approvalStateWords("pending_review").label);
+  await approvalCard.getByTestId(`decision-note-${card.id}`).fill("reviewed by finance, compliance, and the MP — E2E");
+  await approvalCard.getByTestId(`approve-${card.id}`).click();
   await expect
-    .poll(async () => (await (await request.get(`/api/approvals/${card.id}`, { headers: MP })).json()).state)
+    .poll(async () => ((await (await request.get(`/api/approvals/${card.id}`, { headers: MP })).json()) as { state: string }).state)
     .toBe("approved");
 
-  await page.getByRole("button", { name: "Reporting", exact: true }).click();
-  await page.getByTestId("packet-select").selectOption(packetId);
-  await page.getByTestId("distribute-receipt").fill(card.id);
-  await page.getByTestId("packet-distribute").click();
-  await expect(page.getByTestId("reporting-message")).toContainText("Distribution ok");
-  await expect(page.getByTestId("packet-status")).toContainText("DISTRIBUTED");
+  const distributed = await request.post(`/api/reporting/packets/${packetId}/distribute`, {
+    headers: MP,
+    data: { recipients, approval_receipt_id: card.id },
+  });
+  expect(distributed.status(), await distributed.text()).toBe(200);
+  const after = (await (await request.get(`/api/reporting/packets/${packetId}`, { headers: MP })).json()) as {
+    status: string;
+    distribution_receipts: unknown[];
+  };
+  expect(after.status).toBe("DISTRIBUTED");
+  // Who it went to is recorded. A distribution with no record of its recipients is a send nobody
+  // can answer for later.
+  expect(after.distribution_receipts.length).toBeGreaterThan(0);
 
-  // Reconciliation: the administrator says one thing, our records say another.
-  await expect(page.getByTestId("reconciliation-source-state")).toContainText("UNPROVEN");
-  await expect(page.getByTestId("reconciliation-source-state")).toContainText("FUND-ADMIN SOURCE CONTRACT GATE");
-  await page.getByTestId("reconciliation-fund").selectOption({ label: `${marker} Fund` });
+  // ── Reconciliation, on the page that holds it ────────────────────────────────────────────────
+  await gotoSurface(page, "LP");
+  await page.getByTestId("reconciliation-fund").selectOption(fund.id);
   await page.getByTestId("admin-nav").fill("31500000");
-  await page.getByTestId("internal-nav").fill("31000000");
+  await page.getByTestId("our-nav").fill("31000000");
   await page.getByTestId("reconciliation-run").click();
-  await expect(page.getByTestId("reporting-message")).toContainText("Reconciliation ok");
+  await expect(page.getByTestId("reconciliation-message")).toContainText("Compared");
 
-  // The discrepancy is an exception showing BOTH figures — not a correction.
+  /*
+   * THE DISCREPANCY IS AN EXCEPTION SHOWING BOTH FIGURES — never a correction to either.
+   *
+   * "Telling investors a figure the administrator disagrees with is the most expensive mistake
+   * available on this page", and the answer to a disagreement is to show it, not to pick a side.
+   */
   const exception = page.locator('li[data-testid^="exception-"]').first();
-  await expect(exception).toContainText("VALUE_MISMATCH");
+  await expect(exception).toBeVisible();
   await expect(exception).toContainText("31500000");
   await expect(exception).toContainText("31000000");
-  await expect(exception).toContainText("difference -500000");
+  await expect(exception).toContainText("apart");
+
   const exceptionId = (await exception.getAttribute("data-testid"))!.replace("exception-", "");
+  const escalated = await request.post(`/api/reconciliation/exceptions/${exceptionId}/resolve`, {
+    headers: MP,
+    data: { resolution: "ESCALATE_TO_ADMINISTRATOR", note: `${marker}: raised with the administrator` },
+  });
+  // 201: the resolution is a new row against the exception, not an edit to it.
+  expect(escalated.status(), await escalated.text()).toBe(201);
 
-  await page.getByTestId(`exception-escalate-${exceptionId}`).click();
-  await expect(page.getByTestId("reporting-message")).toContainText("Escalation ok");
-  await expect(page.getByTestId(`exception-status-${exceptionId}`)).toContainText("ESCALATED");
-
-  // The administrator's reported figure is exactly what they reported.
-  const exceptions = await (await request.get("/api/reconciliation/exceptions", { headers: MP })).json();
-  const stored = exceptions.exceptions.find((e: { id: string }) => e.id === exceptionId);
+  // The administrator's reported figure is exactly what they reported. Nothing overwrote it.
+  const exceptions = (await (await request.get("/api/reconciliation/exceptions", { headers: MP })).json()) as {
+    exceptions: Array<{ id: string; administrator_value: string; internal_value: string; status: string }>;
+  };
+  const stored = exceptions.exceptions.find((e) => e.id === exceptionId)!;
   expect(stored.administrator_value).toBe("31500000");
   expect(stored.internal_value).toBe("31000000");
+  expect(stored.status).toBe("ESCALATED");
 
   await gotoSurface(page, "Activity");
   await expect(page.locator('[data-testid="activity-event-reporting.packet_distributed"]').first()).toBeVisible();
   await expect(page.locator('[data-testid="activity-event-reconciliation.exception_resolved"]').first()).toBeVisible();
+});
+
+/*
+ * THE MISSING SURFACE, ASSERTED RATHER THAN ONLY MENTIONED.
+ *
+ * A quarterly LP letter cannot be reviewed or sent from anywhere in the interface. `packet-submit`,
+ * `review-record-FINANCE`, `packet-distribute` and the certification banner that states "NO
+ * FINANCIAL, ACCOUNTING, OR VALUATION CORRECTNESS IS CERTIFIED" are gone from `src/client/`, while
+ * `/api/reporting/packets/*` is live and enforcing all four gates. The disclaimer in particular was
+ * a promise made to whoever reads the numbers, and it is now made to nobody.
+ *
+ * Left as the behaviour that should hold, marked expected-to-fail. Remove `test.fail()` when the LP
+ * surface carries the packet again.
+ */
+test("the LP surface states what it does not certify, and lets a reviewed packet be sent", async ({ page }) => {
+  test.fail();
+  await page.goto("/");
+  await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
+  await page.getByTestId("dev-login-submit").click();
+  await gotoSurface(page, "LP");
+  await expect(page.getByTestId("certification-state")).toContainText("NO FINANCIAL, ACCOUNTING, OR VALUATION CORRECTNESS IS CERTIFIED");
 });

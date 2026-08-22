@@ -26,7 +26,7 @@ test("journey 1 — MP Home → intelligence item → its source → follow-up r
   await signIn(page);
 
   // Intelligence: run the engine on an operator-supplied item with a real citation.
-  await page.getByRole("button", { name: "Sweeps", exact: true }).click();
+  await gotoSurface(page, "Sources & sweeps");
   const headline = `Journey-1 secondaries pricing signal ${Date.now()}`;
   // Adding an item by hand now sits behind its own disclosure: the sweep button and the manual
   // fields were one undifferentiated form, which is why "Run a sweep" read as ambiguous.
@@ -36,12 +36,23 @@ test("journey 1 — MP Home → intelligence item → its source → follow-up r
   await page.getByTestId("intel-run-submit").click();
   await expect(page.getByTestId("intel-run-message")).toContainText("kept");
 
-  // The item reaches Home, ranked, with the rule that ranked it.
+  /*
+   * Home carries the module, and the module is the way through to the item.
+   *
+   * It does NOT assert this headline is on Home. The module deliberately shows the top two items
+   * and nothing more — a brief that lists everything is a brief nobody reads — so which two appear
+   * depends on what else the firm has gathered, and every spec in this suite shares one database.
+   * Pinning a headline here made this journey pass or fail on the order of the file list, which is
+   * not what it is about. What it is about is the DRILL: Home names the subject, and pressing Open
+   * lands on the surface that owns the records, where the item and its provenance are.
+   */
   await page.getByRole("button", { name: "Home", exact: true }).click();
-  await expect(page.getByTestId("home-module-intelligence")).toContainText(headline);
+  const module = page.getByTestId("home-module-intelligence");
+  await expect(module).toBeVisible();
+  await expect(module).toContainText("What moved overnight");
 
-  // Drill into the item and read its provenance.
-  await page.getByTestId("home-module-intelligence").getByRole("button", { name: "Open" }).click();
+  // Drill into the module and read the item's provenance on the surface that owns it.
+  await module.getByRole("button", { name: "Open" }).click();
   const card = page.locator('[data-testid^="intel-item-"]', { hasText: headline });
   await card.locator('[data-testid^="intel-detail-"]').click();
   await expect(card.locator('[data-testid^="intel-citations-"]')).toContainText("Broker call, journey 1");
@@ -55,47 +66,80 @@ test("journey 1 — MP Home → intelligence item → its source → follow-up r
   await expect(page.getByTestId("research-rule")).toContainText("no separate evidence store");
 });
 
-test("journey 2 — capture → work packet → lens gate → governed execution", async ({ page }) => {
-  await signIn(page);
-  await page.getByRole("button", { name: "Ask", exact: true }).click();
-  await page.getByTestId("intent-text").fill("Summarise open portfolio alerts for the partner meeting");
-  await page.getByTestId("intent-submit").click();
-  await expect(page.getByTestId("intent-message")).toContainText("Here is what");
+test("journey 2 — work packet → lens gate → governed execution", async ({ page, request }) => {
+  /*
+   * The packet workbench came off the Ask page when it was rebuilt (see `e2e/p18-intent.spec.ts`
+   * for the full note and for the expected-to-fail test that holds the missing surface open). The
+   * GATE is what this journey is about and it is unchanged, so it is driven where it lives.
+   */
+  const created = await request.post("/api/work-packets", {
+    headers: HEADERS,
+    data: { text: "Summarise open portfolio alerts for the partner meeting", enhancement_strength: "STANDARD" },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { packet } = (await created.json()) as { packet: { id: string } };
 
   // Execution refused until the blocking lens runs.
-  await page.getByTestId("packet-execute").click();
-  await expect(page.getByTestId("packet-message")).toContainText("TRUTH_COMPLIANCE_GATE");
+  const refused = await request.post(`/api/work-packets/${packet.id}/execute`, { headers: HEADERS, data: {} });
+  expect(await refused.text()).toContain("TRUTH_COMPLIANCE_GATE");
 
-  await page.getByTestId("lens-key").selectOption("TRUTH_COMPLIANCE_GATE");
-  await page.getByTestId("lens-verdict").selectOption("PASS");
-  await page.getByTestId("lens-critique").fill("Internal summary of records we already hold.");
-  await page.getByTestId("lens-submit").click();
-  await page.getByTestId("packet-execute").click();
-  await expect(page.getByTestId("packet-message")).toContainText("Work card opened");
+  expect(
+    (await request.post(`/api/work-packets/${packet.id}/lenses`, {
+      headers: HEADERS,
+      data: {
+        lens_key: "TRUTH_COMPLIANCE_GATE",
+        verdict: "PASS",
+        critique: "Internal summary of records we already hold.",
+      },
+    })).status(),
+  ).toBe(201);
+
+  const executed = await request.post(`/api/work-packets/${packet.id}/execute`, { headers: HEADERS, data: {} });
+  expect(executed.status(), await executed.text()).toBe(200);
+
+  // A real card, on the board a person reads.
+  const after = (await (await request.get(`/api/work-packets/${packet.id}`, { headers: HEADERS })).json()) as {
+    packet: { work_card_id: string | null };
+  };
+  expect(after.packet.work_card_id).toBeTruthy();
+  await signIn(page);
+  await gotoSurface(page, "Work");
+  await expect(page.getByTestId(`work-card-${after.packet.work_card_id}`)).toBeVisible();
 });
 
-test("journey 3 — employee lounge → scorecard → operator control", async ({ page }) => {
+test("journey 3 — employee lounge → scorecard → operator control", async ({ page, request }) => {
+  /*
+   * Whichever employee is currently WORKING, rather than a name pinned here. `aie_priya` is not on
+   * the roster any more, and the roster is all ACTIVE since migration 0136 — so a fixed name is
+   * both wrong now and would make this spec fail on a second run once it had paused somebody.
+   */
+  const roster = (await (await request.get("/api/ai/employees", { headers: HEADERS })).json()) as {
+    employees: Array<{ id: string; status: string }>;
+  };
+  const id = roster.employees.find((e) => e.status === "ACTIVE")!.id;
+
   await signIn(page);
   await page.getByRole("button", { name: "Employees", exact: true }).click();
-  await page.getByTestId("employee-open-aie_priya").click();
-  await page.getByTestId("employee-compute-aie_priya").click();
-  await expect(page.getByTestId("employee-message-aie_priya")).toContainText("Scorecard computed");
-  await page.getByTestId("employee-lifecycle-paused-aie_priya").click();
-  await expect(page.getByTestId("employee-message-aie_priya")).toContainText("Now PAUSED");
+  await page.getByTestId(`employee-open-${id}`).click();
+  await page.getByTestId(`employee-compute-${id}`).click();
+  await expect(page.getByTestId(`employee-message-${id}`)).toContainText("Scorecard computed");
+  await page.getByTestId(`employee-lifecycle-paused-${id}`).click();
+  await expect(page.getByTestId(`employee-message-${id}`)).toContainText("Now PAUSED");
 });
 
 test("journey 4 — machine → scheduled run → artifact → notification → audit", async ({ page, request }) => {
   await signIn(page);
 
   // Switch the daily intelligence job on and run it.
-  await page.getByRole("button", { name: "Scheduled work", exact: true }).click();
+  await gotoSurface(page, "Work");
   await page.getByTestId("job-reason").fill("journey 4");
   // The toggle's own label is the reliable signal: the card body also carries run history, which
   // may legitimately mention an earlier PAUSED refusal from another spec.
   const toggle = page.getByTestId("job-toggle-daily_intelligence");
   if ((await toggle.textContent())?.includes("Switch on")) {
     await toggle.click();
-    await expect(toggle).toContainText("Pause");
+    // "Switch off" is what the control says once the job is running; it used to read "Pause".
+    await expect(toggle).toContainText("Switch off");
   }
   await page.getByTestId("job-run-daily_intelligence").click();
   await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
@@ -198,9 +242,22 @@ test("journeys 7 and 8 are driven to their external boundary and stop there, hon
   // Journey 7 — meeting prep: the queue is real; the calendar and transcription connectors are not.
   await gotoSurface(page, "Integrations");
   await expect(page.getByTestId("prep-note")).toContainText("No calendar is connected");
-  await expect(page.getByTestId("connector-transcription")).toContainText("NOT_CONFIGURED");
+  /*
+   * "Not set up" is the state in the operator's words; the enum came off the card. What must
+   * survive the rewording is the honesty: no provider, and TWO independent gates in front of it —
+   * an MP/compliance-reserved recording policy and the counterparty's own consent.
+   */
+  await expect(page.getByTestId("connector-transcription")).toContainText("Not set up");
+  await expect(page.getByTestId("connector-transcription")).toContainText("No transcription provider is configured");
+  await expect(page.getByTestId("connector-transcription")).toContainText("counterparty consent is a second, independent gate");
 
   // Journey 8 — LP reporting/reconciliation: the workflow exists; the administrator source does not.
-  await expect(page.getByTestId("lp-ops-sources")).toContainText("NO_CONTRACT");
-  await expect(page.getByTestId("lp-ops-gates")).toContainText("SOURCE CONTRACT GATE");
+  // Same rewording, same honesty: no agreement, nothing ever imported, and no code path that could
+  // write back to an administrator even if one were connected.
+  await expect(page.getByTestId("lp-ops-sources")).toContainText("no agreement yet");
+  await expect(page.getByTestId("lp-ops-sources")).toContainText("no code path that writes to an administrator");
+  // The gates, named in full sentences rather than as a banner. The last one is the one that keeps
+  // this journey honest: distribution proves routing and review, and actual delivery has never run.
+  await expect(page.getByTestId("lp-ops-gates")).toContainText("The fund administrator");
+  await expect(page.getByTestId("lp-ops-gates")).toContainText("Actual delivery is an external effect that has never run");
 });

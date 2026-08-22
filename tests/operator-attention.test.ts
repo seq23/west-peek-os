@@ -67,7 +67,9 @@ describe("Home's attention strip only reports what it can prove", () => {
       aiProviderConfigured: false,
       jobs: [{ job_key: "a", name: "A", status: "ACTIVE", dead_letters: 1 }],
       unactivatedRecommendations: ["Wren"],
-      blockedActiveEmployees: [{ name: "Paige", reason: "machine paused" }],
+      // A real seat. "Paige" was here, and she has never been on the roster — the repo has already
+      // been bitten once by a fixture that invented an employee, so no fixture uses a made-up name.
+      blockedActiveEmployees: [{ name: "Winter", reason: "machine paused" }],
     });
     expect(out.length).toBeGreaterThan(3);
     for (const i of out) {

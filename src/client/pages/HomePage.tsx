@@ -577,33 +577,6 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
         </section>
       )}
 
-      {/* The brief, at the top, because it is the thing that ARRIVED. It used to render on the
-          Sources page while a list of ranked sweep items sat here called "Daily Brief" — two
-          things named almost identically and neither where you would look. */}
-      {/* Above the brief, because it is the reason the brief cannot yet see your day. Collapses to
-          a single line once both are connected. */}
-
-      <section className="card brief-delivery" data-testid="home-brief-delivery">
-        <header className="brief-byline">
-          <Face name={chiefOfStaff.name} role={chiefOfStaff.role} size={40} />
-          <div className="brief-byline-who">
-            {/* SAYS WHAT IS TRUE, not what usually is. This read "Wren delivered your morning
-                briefing" unconditionally, directly above a panel saying "No brief for today yet"
-                — so the page claimed a delivery and then denied it in the next breath. Home does
-                not hold the brief (the panel below fetches it), so the line is written to be
-                honest either way: whose briefing it is, not a claim that it arrived. */}
-            <div className="brief-byline-line">
-              <strong>{chiefOfStaff.name}</strong> — your morning briefing
-            </div>
-            <div className="muted small">
-              {chiefOfStaff.role} ·{" "}
-              {new Date(data.generated_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-            </div>
-          </div>
-        </header>
-        <DailyBriefPanel compact />
-      </section>
-
       {/* Waiting on you: lifted out of the grid because it is the only group where something is
           blocked on the reader rather than the other way round. A decision waiting three days
           should not be one card among twelve. */}
@@ -646,11 +619,50 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
         Filed and exportable from here, so the answer to "can I send this to Scooter" is on the page
         you were already reading rather than three clicks into an archive.
       */}
+      {/*
+        ONE SECTION, NOT THREE. Operator, 22 Aug 2026: "why is prepared for you and from your team
+        different? maybe it belongs that way but tell me why? and the morning brief should just
+        default be inside the prepare for you section."
+
+        The distinction WAS real and it was the wrong cut. "Prepared for you" held artifacts — briefs,
+        research packets, the weekly review, things you open and keep. "From your team" held people —
+        each named colleague's card saying what they currently have. Two headings splitting one
+        question, *what is new for me*, along an implementation seam rather than anything a partner
+        would think.
+
+        So they are one section now, ordered by how finished the thing is: the brief that arrived
+        this morning, then everything else produced for you, then the colleagues who have something
+        but have not produced a document yet. The brief leads because it is the thing you came here
+        to read.
+      */}
       <section data-testid="home-deliverables">
         <div className="home-section-head">
           <h3>Prepared for you</h3>
-          <span className="muted small">briefs, reviews and research — yours to keep</span>
+          <span className="muted small">this morning's brief, then everything else waiting to be read</span>
         </div>
+
+  <section className="card brief-delivery" data-testid="home-brief-delivery">
+          <header className="brief-byline">
+            <Face name={chiefOfStaff.name} role={chiefOfStaff.role} size={40} />
+            <div className="brief-byline-who">
+              {/* SAYS WHAT IS TRUE, not what usually is. This read "Wren delivered your morning
+                  briefing" unconditionally, directly above a panel saying "No brief for today yet"
+                  — so the page claimed a delivery and then denied it in the next breath. Home does
+                  not hold the brief (the panel below fetches it), so the line is written to be
+                  honest either way: whose briefing it is, not a claim that it arrived. */}
+              <div className="brief-byline-line">
+                <strong>{chiefOfStaff.name}</strong> — your morning briefing
+              </div>
+              <div className="muted small">
+                {chiefOfStaff.role} ·{" "}
+                {new Date(data.generated_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+              </div>
+            </div>
+          </header>
+          <DailyBriefPanel compact />
+        </section>
+
+        <h4>Also finished for you</h4>
         <DeliverableList
           limit={4}
           onNavigate={onNavigate}
@@ -659,17 +671,13 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           // chief of staff — under a heading promising these were yours.
           mine
           meId={me.id}
-          emptyNote="Nothing has been prepared for you yet. Research packets, briefs and the weekly review all arrive here once somebody produces one."
+          emptyNote="Nothing else has been prepared for you yet. Research packets and the weekly review arrive here once somebody produces one."
         />
-      </section>
 
-      <section data-testid="home-deliveries">
-        <div className="home-section-head">
-          <h3>From your team</h3>
-          <span className="muted small">
-            {deliveries.filter((m) => m.items.length > 0).length} of {deliveries.length} have something for you
-          </span>
-        </div>
+        <h4>Who has something for you</h4>
+        <p className="muted small">
+          {deliveries.filter((m) => m.items.length > 0).length} of {deliveries.length} have something
+        </p>
         {/* Anyone with something to say first; everyone else stays on the page, quieter. Silence
             from a named colleague is information — an absent card is just a gap. */}
         <ul className="delivery-list">

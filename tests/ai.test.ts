@@ -509,8 +509,8 @@ describe("9. every run leaves a complete ai_run row", () => {
 // ── 10. AI employee lifecycle authority ──
 
 describe("10. activation governance (D10)", () => {
-  it("seeds exactly the roster, all INACTIVE, no Managing Partner names — and keeps the retired rows", async () => {
-    const rows = await t.db.prepare("SELECT name, status FROM ai_employee").all<{ name: string; status: string }>();
+  it("seeds exactly the roster, nobody employed without a trail, no Managing Partner names — and keeps the retired rows", async () => {
+    const rows = await t.db.prepare("SELECT id, name, status FROM ai_employee").all<{ id: string; name: string; status: string }>();
     const employees = rows.results ?? [];
 
     /*
@@ -527,9 +527,28 @@ describe("10. activation governance (D10)", () => {
     expect(live).toHaveLength(AI_EMPLOYEE_ROSTER.length);
     expect(new Set(live.map((e) => e.name))).toEqual(new Set(AI_EMPLOYEE_ROSTER.map((e) => e.name)));
 
+    /*
+     * D10 HELD AS THE RULE, NOT AS THE STARTING NUMBER.
+     *
+     * This used to assert every seeded row was INACTIVE, which was a true statement about the seed
+     * and a fragile way to hold the law. Migration 0136 employed the whole roster on the partners'
+     * direction, so the literal assertion went red while nothing about D10 had changed.
+     *
+     * The law is that nobody is employed WITHOUT A NAMED HUMAN DECISION. So: for every seat that is
+     * not INACTIVE, a status-history row has to exist saying who moved it and why. A seed or a
+     * migration that quietly pre-staffed the roster with no trail still fails here, which is the
+     * thing the old assertion was actually guarding.
+     */
     for (const e of live) {
-      // Still INACTIVE: activation is human-reserved and never happens at seed time (D10).
-      expect(e.status).toBe("INACTIVE");
+      if (e.status === "INACTIVE") continue;
+      const trail = await t.db
+        .prepare("SELECT actor_type, actor_id, reason FROM ai_employee_status_history WHERE ai_employee_id = ?1 ORDER BY created_at DESC LIMIT 1")
+        .bind(e.id)
+        .first<{ actor_type: string; actor_id: string | null; reason: string | null }>();
+      expect(trail, `${e.name} is ${e.status} with no record of who decided that`).not.toBeNull();
+      expect(trail!.actor_type, `${e.name} was employed by something that is not a person`).toBe("HUMAN");
+      expect(trail!.actor_id, `${e.name} was employed by nobody in particular`).toBeTruthy();
+      expect(trail!.reason, `${e.name} was employed for no stated reason`).toBeTruthy();
     }
     for (const e of employees) {
       expect(MANAGING_PARTNER_NAMES.map((n) => n.toLowerCase())).not.toContain(e.name.toLowerCase());
@@ -537,6 +556,20 @@ describe("10. activation governance (D10)", () => {
   });
 
   it("activation requires an approval receipt; the approved receipt activates with history + event", async () => {
+    /*
+     * The precondition is CREATED rather than inherited. Migration 0136 employed the whole roster,
+     * so a seat that has never been activated no longer exists by default and `request-activation`
+     * answered `already_active` before this test reached the thing it is about. Standing the seat
+     * down first makes it prove the receipt law on any starting roster.
+     *
+     * The history is NOT cleared, and cannot be: `ai_employee_status_history` refuses DELETE at the
+     * database because it is append-only. So the assertions below count what this call ADDS.
+     */
+    await t.db.prepare("UPDATE ai_employee SET status = 'INACTIVE', activated_at = NULL, activated_by = NULL WHERE id = 'aie_walker'").run();
+    const historyBefore = (
+      await t.db.prepare("SELECT COUNT(*) AS n FROM ai_employee_status_history WHERE ai_employee_id = 'aie_walker'").first<{ n: number }>()
+    )!.n;
+
     // No receipt → 409 approval_required (no silent activation).
     const noReceipt = await handleRequest(req("/api/ai/employees/aie_walker/activate", MP, "POST", {}), env);
     expect(noReceipt.status).toBe(409);
@@ -565,10 +598,11 @@ describe("10. activation governance (D10)", () => {
     expect(employee.status).toBe("ACTIVE");
     expect(employee.activated_by).toBe("fu_scooter_taylor");
 
+    // Exactly ONE row was added, and it is this activation against this receipt.
     const history = await t.db
-      .prepare("SELECT * FROM ai_employee_status_history WHERE ai_employee_id = 'aie_walker'")
+      .prepare("SELECT * FROM ai_employee_status_history WHERE ai_employee_id = 'aie_walker' ORDER BY created_at DESC")
       .all<{ from_status: string; to_status: string; approval_receipt_id: string }>();
-    expect(history.results).toHaveLength(1);
+    expect(history.results).toHaveLength(historyBefore + 1);
     expect(history.results![0]).toMatchObject({ from_status: "INACTIVE", to_status: "ACTIVE", approval_receipt_id: card.id });
 
     const event = await t.db

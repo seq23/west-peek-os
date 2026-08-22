@@ -54,7 +54,12 @@ test("UI shell loads at / with nav, dev login, and the diagnostics health panel"
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "West Peek OS" })).toBeVisible();
   // Two tiers since P26. Everyday work is on show without asking for it...
-  for (const label of ["Today", "Capture", "Work cards", "Approvals", "Help"]) {
+  //
+  // "Today" and "Work cards" were here until the nav merge: Today folded into Home and the card
+  // queue is now "Work", both resolved for old links by `MERGED_ROUTES` in App.tsx. The labels are
+  // read from the live nav rather than retyped from memory — this loop had been asserting two
+  // buttons that had not existed for days, and it is the first thing a reader of this suite sees.
+  for (const label of ["Home", "Capture", "Work", "Approvals", "Help"]) {
     await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
   }
   // ...and administration is one disclosure away, not gone. Asserting both halves is the point:
@@ -72,7 +77,14 @@ test("UI shell loads at / with nav, dev login, and the diagnostics health panel"
   await page.getByTestId("dev-login-submit").click();
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
 
-  // Diagnostics exposes the live health panel with the applied schema version.
+  /*
+   * Diagnostics reads the live system, and the applied schema version is one of the readings.
+   *
+   * It used to be a single `health-panel`; the surface is now a grid of one card per check, and the
+   * database card carries the schema. Asserting the CARD rather than the old container keeps the
+   * property this test exists for — the page states a measured fact rather than a configured one —
+   * without pinning the layout that happens to carry it today.
+   */
   await gotoSurface(page, "Diagnostics");
-  await expect(page.getByTestId("health-panel")).toContainText(latestMigrationName());
+  await expect(page.getByTestId("health-database")).toContainText(latestMigrationName());
 });

@@ -1,5 +1,9 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
+// The same words the pipeline uses for the same enum. Sentence-casing the stored value here gave
+// "Community intro" on one surface and "Community intro" on the other only by luck; the registry
+// is the one place either of them should be reading.
+import { originLabel } from "@shared/investment/pipeline";
 
 /**
  * Where deals come from (P51, docs/COMMUNITY.md).
@@ -44,9 +48,6 @@ const ORIGINS = [
 /** Community-sourced origins, for the one-line answer to "is this working?". */
 const COMMUNITY_ORIGINS = new Set(["ROOM", "MASTERMIND", "OFFICE", "COUNCIL", "COMMUNITY_INTRO"]);
 
-const label = (origin: string): string =>
-  origin.charAt(0) + origin.slice(1).toLowerCase().replace(/_/g, " ");
-
 function leadTime(days: number | null): string {
   if (days === null) return "—";
   if (days < 45) return `${days} days`;
@@ -74,11 +75,21 @@ export function DealProvenance(): JSX.Element {
     state.reload();
   }
 
-  if (state.loading) return <section className="panel"><p className="muted">Loading…</p></section>;
+  /*
+   * THE SECTION ALWAYS ANNOUNCES ITSELF, in every state.
+   *
+   * Operator: "the last section is incomplete and not consistent in size heading." Two separate
+   * defects, both here. It rendered `<section className="panel">` — a class the stylesheet has no
+   * rule for, so it drew no card while every other section on this page did, and its heading sat
+   * at a different weight from theirs for no reason a reader could name. And while loading, or on
+   * a refusal, it replaced the whole thing — heading included — with the word "Loading…", so the
+   * page's last section could vanish entirely and read as something that had failed.
+   *
+   * Now the heading and the card are drawn first and always, and the state goes inside them, in
+   * the same shape as every other section of the record above.
+   */
   const d = state.data;
-  if (!d) return <section className="panel"><p className="muted">Could not load provenance.</p></section>;
-
-  const recorded = d.byOrigin.filter((r) => r.origin !== "UNRECORDED");
+  const recorded = (d?.byOrigin ?? []).filter((r) => r.origin !== "UNRECORDED");
   const community = recorded.filter((r) => COMMUNITY_ORIGINS.has(r.origin));
   const communityDeals = community.reduce((n, r) => n + r.deals, 0);
   const bestLead = community.reduce<number | null>(
@@ -87,88 +98,97 @@ export function DealProvenance(): JSX.Element {
   );
 
   return (
-    <section className="panel" data-testid="deal-provenance">
+    <>
       <h3>Where deals come from</h3>
-      <p className="muted">
-        Not how busy the community is — how early it puts us in the room. The number that matters is
-        how long we knew someone before the deal existed.
-      </p>
-
-      {d.total === 0 ? (
-        <p className="muted">No opportunities yet.</p>
-      ) : (
-        <>
-          {d.unrecordedCount > 0 && (
-            <p className="warn" data-testid="provenance-gap">
-              <strong>{d.unrecordedCount} of {d.total}</strong> deals have no recorded origin
-              {d.unrecordedCount / d.total > 0.4 && " — enough that the rest of this table should not be read as a conclusion"}.
-              Set them below while someone still remembers.
-            </p>
-          )}
-
-          {communityDeals > 0 ? (
-            <p data-testid="community-verdict">
-              <strong>{communityDeals}</strong> deal{communityDeals === 1 ? "" : "s"} trace back to the
-              community
-              {bestLead !== null && <> — the longest relationship started <strong>{leadTime(bestLead)}</strong> before the deal did</>}.
-            </p>
-          ) : (
-            <p className="muted" data-testid="community-verdict">
-              No deal traces back to a Room, a Mastermind or the Council yet. That is expected early;
-              if it is still true in eighteen months, the community is not doing the job it exists for.
-            </p>
-          )}
-
-          {recorded.length > 0 && (
-            <table className="small">
-              <thead>
-                <tr><th>Origin</th><th>Deals</th><th>Average lead time</th></tr>
-              </thead>
-              <tbody>
-                {recorded.map((r) => (
-                  <tr key={r.origin} data-testid={`origin-${r.origin}`}>
-                    <td>{COMMUNITY_ORIGINS.has(r.origin) ? <strong>{label(r.origin)}</strong> : label(r.origin)}</td>
-                    <td>{r.deals}</td>
-                    <td>
-                      {leadTime(r.avgLeadDays)}
-                      {r.dated < r.deals && (
-                        <span className="muted"> (from {r.dated} of {r.deals})</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </>
-      )}
-
-      {/*
-        THE SECTION HAS AN END. Operator: "the last section is incomplete." With every deal already
-        carrying an origin the page simply stopped after the table — no line saying the queue was
-        empty, so it read as something that had failed to load rather than something finished.
-      */}
-      {d.total > 0 && d.unrecorded.length === 0 && (
-        <p className="state-empty" data-testid="provenance-complete">
-          Every deal on the board says where it came from. Nothing to fill in.
+      <section className="card" data-testid="deal-provenance">
+        <p className="muted small">
+          Not how busy the community is — how early it puts us in the room. The number that matters
+          is how long we knew someone before the deal existed.
         </p>
-      )}
 
-      {d.unrecorded.length > 0 && (
-        <>
-          <h4>Set an origin</h4>
-          <p className="muted">
-            Where did the relationship start, and roughly when? The date is the useful half — it is
-            the difference between meeting someone early and meeting them with everyone else.
+        {state.loading && <p className="state-empty">Working out where the pipeline came from…</p>}
+        {!state.loading && !d && (
+          <p className="state-empty">
+            This could not be read just now. Nothing is wrong with the deals themselves; reload the
+            page and it will try again.
           </p>
-          <ul className="card-list">
-            {d.unrecorded.map((o) => (
-              <UnrecordedDeal key={o.id} deal={o} saving={saving === o.id} onSet={setOrigin} />
-            ))}
-          </ul>
-        </>
-      )}
-    </section>
+        )}
+
+        {d && d.total === 0 && (
+          <p className="state-empty">
+            There are no deals yet, so there is nothing to trace. Every company added at the top of
+            this page is asked where it came from, and the answers gather here.
+          </p>
+        )}
+
+        {d && d.total > 0 && (
+          <>
+            {d.unrecordedCount > 0 && (
+              <p className="notice notice-gate small" data-testid="provenance-gap">
+                <strong>{d.unrecordedCount} of {d.total}</strong> deals have no recorded origin
+                {d.unrecordedCount / d.total > 0.4 && " — enough that the rest of this should not be read as a conclusion"}.
+                Set them below while someone still remembers.
+              </p>
+            )}
+
+            {communityDeals > 0 ? (
+              <p data-testid="community-verdict">
+                <strong>{communityDeals}</strong> deal{communityDeals === 1 ? "" : "s"} trace back to the
+                community
+                {bestLead !== null && <> — the longest relationship started <strong>{leadTime(bestLead)}</strong> before the deal did</>}.
+              </p>
+            ) : (
+              <p className="muted" data-testid="community-verdict">
+                No deal traces back to a Room, a Mastermind or the Council yet. That is expected early;
+                if it is still true in eighteen months, the community is not doing the job it exists for.
+              </p>
+            )}
+
+            {recorded.length > 0 && (
+              /* A wide table scrolls inside its own box rather than pushing the page sideways —
+                 the same wrapper every other table in the product uses. */
+              <div className="tablewrap">
+                <table className="surface-body small">
+                  <thead>
+                    <tr><th>Where we met them</th><th className="num">Deals</th><th>How long we knew them first</th></tr>
+                  </thead>
+                  <tbody>
+                    {recorded.map((r) => (
+                      <tr key={r.origin} data-testid={`origin-${r.origin}`}>
+                        <td>{COMMUNITY_ORIGINS.has(r.origin) ? <strong>{originLabel(r.origin)}</strong> : originLabel(r.origin)}</td>
+                        <td className="num">{r.deals}</td>
+                        <td>
+                          {leadTime(r.avgLeadDays)}
+                          {r.dated < r.deals && (
+                            <span className="muted"> (from {r.dated} of {r.deals})</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <h4>Set an origin</h4>
+            <p className="muted small">
+              Where did the relationship start, and roughly when? The date is the useful half — it is
+              the difference between meeting someone early and meeting them with everyone else.
+            </p>
+            <ul className="card-list">
+              {d.unrecorded.map((o) => (
+                <UnrecordedDeal key={o.id} deal={o} saving={saving === o.id} onSet={setOrigin} />
+              ))}
+              {d.unrecorded.length === 0 && (
+                <li className="state-empty" data-testid="provenance-complete">
+                  Every deal on the board says where it came from. Nothing to fill in.
+                </li>
+              )}
+            </ul>
+          </>
+        )}
+      </section>
+    </>
   );
 }
 
@@ -194,7 +214,7 @@ function UnrecordedDeal(props: {
       <div className="card-body row">
         <select value={origin} onChange={(e) => setOrigin(e.target.value)} aria-label={`Origin for ${props.deal.title}`}>
           <option value="">Where did we meet them…</option>
-          {ORIGINS.map((o) => <option key={o} value={o}>{label(o)}</option>)}
+          {ORIGINS.map((o) => <option key={o} value={o}>{originLabel(o)}</option>)}
         </select>
         <input
           type="date"

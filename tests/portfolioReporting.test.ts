@@ -263,7 +263,21 @@ describe("4. an emailed update opens a job, never a figure", () => {
 
     expect(String(card!.title)).toContain(UPDATE_CARD_PREFIX);
     expect(card!.owner_type).toBe("AI");
-    expect(card!.owner_id).toBe(PORTFOLIO_UPDATE_EMPLOYEE);
+    /*
+     * THE OWNER IS STORED BY ID, and this assertion is the one `validate:value-shapes` was written
+     * about. `PORTFOLIO_UPDATE_EMPLOYEE` is the display NAME "Winter"; the column holds `aie_winter`.
+     * Two formats in one column was a live production bug — `runEmployeeWork` looks an owner up by
+     * id, so every card the email intake created answered "that employee does not exist" and could
+     * never be worked. `createWorkCardInternal` now resolves a name to its seat id, and asserting
+     * the raw constant here would demand the broken shape back.
+     */
+    const seat = await t.db
+      .prepare("SELECT id FROM ai_employee WHERE name = ?1")
+      .bind(PORTFOLIO_UPDATE_EMPLOYEE)
+      .first<{ id: string }>();
+    expect(seat, `${PORTFOLIO_UPDATE_EMPLOYEE} must be a real seat, not a name nobody answers to`).not.toBeNull();
+    expect(card!.owner_id).toBe(seat!.id);
+    expect(String(card!.owner_id)).toMatch(/^aie_/);
     expect(card!.machine_id).toBe(PORTFOLIO_PERFORMANCE_MACHINE);
     expect(card!.state).toBe("OPEN");
     // The message survives, because the numbers in it are the point of the card.

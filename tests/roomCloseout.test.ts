@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createTestDb, type TestDb } from "./helpers/db";
+import { createTestDb, disposeTestDb, type TestDb } from "./helpers/db";
 import {
   buildCloseoutPrompt,
   buildRoomDigest,
@@ -40,7 +40,7 @@ beforeAll(async () => {
   ).run();
 });
 
-afterAll(async () => { await t.mf.dispose(); });
+afterAll(async () => { await disposeTestDb(t); });
 
 const env = () => ({ WP_OS_DB: t.db } as never);
 

@@ -7,6 +7,8 @@ import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } fro
 import { consumeApprovalCard, requestApproval } from "./approvals";
 import { computePrimaryDeal, computeSecondaryStructure, premiumDiscount, safeDiv, xirr, type CarryBasis } from "../../shared/dealmath";
 import { privacyLabelSchema } from "../../shared/privacy";
+// Item 7: the manual route is one of four, and they all converge on `openIntoFunnel`.
+import { manualArrival, openIntoFunnel } from "./dealIntake";
 
 /**
  * Investment workflow (P6): opportunities, security classes, block links,
@@ -484,6 +486,22 @@ export async function transitionOpportunity(
     firmScope: row.firm_scope,
     payload: { from: row.status, to, ...(trimmed ? { reason: trimmed.slice(0, 600) } : {}) },
   });
+
+  /*
+   * REACHING THE COMMITTEE IS A STAGE MOVE AND NOTHING ELSE (ADR-019).
+   *
+   * The operator asked how a deal gets through the pipeline to IC and what happens to it when it
+   * arrives. The answer is this line: entering IC_READY opens an ic_packet in DRAFT and a work card
+   * for Poppy to assemble it. Nothing auto-decides, nothing auto-answers, and re-entering the stage
+   * finds the open packet rather than minting a second one.
+   *
+   * Imported lazily because ic.ts imports this module — a static import both ways is a cycle.
+   */
+  if (to === "IC_READY") {
+    const { openIcStage } = await import("./ic");
+    await openIcStage(env, actor, id);
+  }
+
   return (await getOpportunity(env, id))!;
 }
 
@@ -1780,12 +1798,30 @@ const createOpportunitySchema = z.object({
   relationship_started_at: z.string().trim().max(40).optional(),
 });
 
+/**
+ * THE MANUAL DOOR — a partner pressing "Add a company", and route 1 of 4 (item 7).
+ *
+ * It goes through `openIntoFunnel` like every other route rather than calling `createOpportunity`
+ * itself. What that buys is not the write, which was always correct here: it is that the arrival is
+ * MATCHED and RECORDED by the same code as the other three, so "where did this deal come from" has
+ * one answer for the whole pipeline instead of an answer for three routes and a blank for the door
+ * partners actually use. The record it opens is unchanged — same schema, same authorization, same
+ * 201 body — because this is the one route with an authenticated human behind it and it has never
+ * needed anyone's permission to write.
+ */
 export async function handleCreateOpportunity(ctx: RouteContext): Promise<Response> {
   const body = await parseJsonBody(ctx.request);
   const parsed = createOpportunitySchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  const company = await ctx.env.WP_OS_DB.prepare("SELECT canonical_name FROM canonical_company WHERE id = ?1")
+    .bind(parsed.data.company_id)
+    .first<{ canonical_name: string }>();
+  if (!company) {
+    return errorResponse(new InvestmentError(400, "unknown_company", `canonical_company '${parsed.data.company_id}' does not exist`));
+  }
   try {
-    return json(await createOpportunity(ctx.env, actorFromIdentity(ctx.identity!), parsed.data), { status: 201 });
+    const entry = await openIntoFunnel(ctx.env, manualArrival(ctx.identity!, { ...parsed.data, company: company.canonical_name }));
+    return json(entry.opportunity, { status: 201 });
   } catch (err) {
     return errorResponse(err);
   }

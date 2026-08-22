@@ -4213,3 +4213,640 @@ than a wrong answer, and passes in 18/18 alone.
 run with seven agents in the tree. Several specs were UPDATED to match new copy — `p51-rooms`,
 `p17-machines`, `p16-ai-ops`, `p25-journeys`, `p22-24-integrations`, `p14-mp-home`, `p6-investment`,
 `p7-meetings` — and NOT executed. The browser layer of this deploy is reasoned, not watched.
+
+## 22 Aug 2026 — Standing authority, work-card guards, and the notification flow
+
+### Standing authority (ADR-018, `docs/APPROVAL_AND_WORK_DESIGN.md`)
+
+Operator: a way to approve something and stop being asked again for this task, today, or this week,
+with the design decided rather than put to her.
+
+**Framed as delegated authority, which decides everything else.** An LPA lets a GP act within stated
+limits; a board delegates spend to a threshold; a desk sets a daily limit. Each carries a scope, a
+limit and an expiry. Authority is delegable; judgment is not.
+
+**The integration point was wrong at first, and the mistake is the useful part.** The check began
+inside `authorize()`, where it was INERT wherever it was safe — only reserved actions and external
+effects return REQUIRE_APPROVAL there, and neither is delegable — and DANGEROUS where it was not: it
+would have satisfied a role-gated RESTRICTED action for **any identity at all, including the
+read-only service account**, which is precisely the gate it was meant to respect. My own test caught
+it. Delegating an approval is about the QUEUE, so it moved to `submitApproval`: a covered card is
+written, attributed, auto-approved with the grant named in its note, and lands on the spine. It
+simply does not sit there waiting. A delegation that made the record disappear would be a blind spot
+rather than authority.
+
+**All three bounds are required at creation** — `ends_at` NOT NULL, `max_uses` CHECKed above zero,
+scope always an action key. A database trigger refuses to widen a live grant: raising a ceiling after
+the fact is how a bounded permission quietly becomes an unbounded one. Uses are append-only and
+recorded individually, so a grant can be audited rather than only counted.
+
+**Reserved and external can never be covered**, refused at creation AND unreachable at the seam. A
+test plants a forged grant row over `investment.approve` and proves it is still not honoured.
+
+### Work-card guards
+
+**Duplicates JOIN the existing card** rather than failing — an employee told "denied, duplicate"
+rewords the title and files it anyway, turning a clean duplicate into a dirty one. Deliberately not a
+UNIQUE index, which could only refuse.
+
+**Volume is a health signal, not a permission.** 20 cards per employee per rolling hour, 60 open.
+The numbers are not delicate: real work is 5–15 a day and a loop is hundreds an hour, so the
+threshold only has to sit in the canyon between them. A permission gate here would have delivered a
+runaway to the partners as forty approvals instead of stopping it.
+
+**A long approval queue is now a bug report.** Diagnostics reports a queue over ten as DEGRADED and
+names the action keys generating it, because past about ten a queue gets skimmed rather than read and
+the fix is to stop those needing a decision — not to get through them faster.
+
+### Notifications
+
+**Acknowledge earns its place and now says why.** Operator: "what is the purpose of acknowledge?"
+Dismiss is *seen, take it off my list*. Acknowledge — relabelled **Take responsibility** — puts a
+partner's name and the time on the audit trail, which is only worth anything where being able to
+show it matters. That is why it appears on CRITICAL and WARNING and nowhere else: offering it on a
+routine notice trains a partner to click it unread, destroying the only value it has. The pair is
+explained in one line where both buttons appear.
+
+**Quiet hours stored a UTC hour, which is a real bug and not only a usability one.** 02:00 UTC is
+9 PM in New York in January and 10 PM in July, so the setting drifted an hour twice a year — and
+moved five hours the moment the app was opened in London. Now stored as the reader's own hour plus a
+NAMED IANA ZONE she picks, so 9 PM in New York stays 9 PM in New York wherever she is. Rows without a
+zone keep their old UTC meaning rather than silently changing.
+
+Two further defects in the same control: the pickers **defaulted to 9 PM–7 AM regardless of what was
+saved**, so the page showed a setting that was not the setting and pressing Save overwrote the real
+one with the default; and failure read `Refused (HTTP 500)`. Save now moves Save → Saving… → Saved,
+and a failure says plainly that nothing changed.
+
+## 22 Aug 2026 — Item 7 (second half): the four routes converge on one door
+
+**"Consolidate before adding" is done.** The Dealflow page stopped claiming to be the only way in
+yesterday; the four routes underneath it now share ONE implementation. The entry point is
+`openIntoFunnel(env, arrival: FunnelArrival): Promise<FunnelEntry>` in
+`src/worker/services/dealIntake.ts`, and every route reaches the funnel through it:
+
+| route | caller | what it does differently, and why that difference is real |
+| --- | --- | --- |
+| `MANUAL` | `handleCreateOpportunity` (`POST /api/opportunities`) | The only route that WRITES the pipeline, and the only one with an authenticated partner behind it. No work card — raising one would be asking an employee to confirm a decision a Managing Partner just made. |
+| `EMAIL` | `intakeDealFromEmail` ← `handleInboundEmail` | A hashtag is a public word: it routes, it never authorises. Lands as a card for Wyatt. Mail whose company nobody can read still goes one rung down to Porter via `openRoutingCard`, which is deliberately NOT a funnel entry — there is no company to open. |
+| `NETWORK_OS` | `intakeCompanyFromNetworkOs` / `POST /api/network/dealflow` | Network OS owns PEOPLE; this app owns DEALFLOW. A push is a proposal about our own record, so it gets a card and no mapping row, no cursor, no conflict. Letting it write would make the far system a second writer of a record it does not own. |
+| `SCOUT` | `intakeScoutedCompany` / `POST /api/dealflow/scouted` | Identical work, one real difference: nobody outside the firm is waiting, so this list is Wyatt's to cut. The card says so, and says the opposite about inbound. What he drops still shows on the pass pile. |
+
+The differences are declared once, in `ROUTE_POLICY`, rather than living in four functions — who
+owns the card, which machine, whether the route may open the record, whether the finder may scrap it,
+and the standing instruction. `openIntoFunnel` always does the same four things in the same order:
+**match, decide, act, record.** The route only chooses which branch of "act" runs.
+
+**One lookup, used by all four.** `matchFunnelCompany` checks canonical names AND aliases,
+case- and punctuation-insensitively, and reports how it matched. Three copies of a matching rule is
+three chances for the register to grow a second Sensori, which is the one thing D3 exists to prevent.
+
+**Provenance on every route without exception.** Each arrival appends one `dealflow.arrival` event
+carrying route, source, `received_at`, the far system's own key, the match and what came of it; the
+manual route additionally stamps `source_channel` on the row. It was previously recorded on the two
+machine routes and left blank on the door partners actually use, which makes "is our sourcing
+repeatable" unanswerable for most of the pipeline.
+
+**No migration and no new action key.** The routes authorize through the keys that already mean
+exactly the right thing — `opportunity.create` for the route that writes, `work_card.create` for the
+three that raise work — so `0132` is still the head and `validate:authority` reports seeds up to date
+(241 action types). Nothing needs regenerating.
+
+**Found on the way: the work-card duplicate guard was losing inbound deals.** The rule is written as
+"at most one live card per (machine, object, owner)" and the query matched only (machine, owner). Every
+funnel arrival shares Wyatt and the early-stage deal machine, so the SECOND company emailed in JOINED
+THE FIRST COMPANY'S CARD and was never seen again — with a `work_card.duplicate_joined` event
+recorded as if that were correct. The object term is now the `capture_id` where there is one and the
+title otherwise, which is the only thing a directly-opened card carries that names what it is about.
+Two tests hold it: two companies get two cards, the same company twice gets one.
+
+`npx tsc --noEmit` green for every file touched; `tests/dealIntake.test.ts` replaced (25 tests, one
+block per route plus a convergence block); `validate:authority` and `validate:network-boundary` both
+PASSED with self-tests.
+
+**Not proven, and it is the honest gap: the Dealflow page's own button.** `POST /api/opportunities`
+runs through the door, so the manual route converges at the server — but `DealflowPage.tsx` still
+creates the company with a separate `POST /api/companies` call first, and that page is owned by
+another agent this session. Repointing it at the one door is the remaining step. `validate:sql` was
+not run (it hits production); no deploy, no commit.
+
+## 22 Aug 2026 — Steering work in flight, Home reordered, and why cards got wider
+
+### A partner can tell an employee something while the work is running
+
+Operator: "can the MPs give feedback on a work card that we want the ai employee to acknowledge
+while they are doing the work?"
+
+**What makes it real is that the note reaches the PROMPT.** `employeeWork.ts` already carried the
+rule — *a method displayed on a page and never reaching a prompt is decoration* — and a feedback box
+that only rendered would have been exactly that. Unanswered notes are re-read on every step and
+placed ABOVE the original brief, because a partner interrupting a job in progress is correcting the
+brief rather than adding to it.
+
+**Acknowledgement is not a checkbox.** The employee must say what the note changes — or say plainly
+that it changes nothing and why, which is a real answer and more useful than silent compliance. The
+table's CHECK makes acknowledged and answered the same event, so a note cannot be marked seen without
+a response. A flag alone would let an employee dismiss a partner's instruction without it ever
+touching the work, which is the failure the feature exists to prevent.
+
+A note on finished work is refused rather than accepted into a void — nobody re-reads a closed card.
+
+### Home, reordered on operator direction
+
+Ask → Needs your attention → **Waiting on you** → **Prepared for you** → the explainer.
+
+**"Prepared for you" and "From your team" merged.** She asked why they were different and to be told
+if the split was right. It was not: one held artifacts (briefs, packets, the weekly review — things
+you open and keep), the other held people (each colleague's card). Two headings splitting one
+question — *what is new for me* — along an implementation seam rather than anything a partner would
+think. Now one section ordered by how finished the thing is: this morning's brief, then everything
+else produced for you, then who has something but has not produced a document yet. The colleague
+cards stay visible when empty, because silence from a named colleague is information and an absent
+card is only a gap.
+
+### Wider cards make a SHORTER page
+
+Operator: "make sure cards are as long and wide as they need to be… without a lot of scrolling. are
+[we] going to stack them almost like a deck with the tops exposed and pullable?"
+
+**A deck was refused, with reasons.** It hides content behind a gesture — the same pattern this
+review has been removing from Rooms, Machines, Sources & sweeps and Meetings. It fights the ranking
+that makes a queue useful: the card three down may be the one that has waited three days. And
+pulling is a drag interaction, slow on a trackpad and hostile to keyboard and screen readers.
+
+The real cause was density, and it is counterintuitive: at a 19rem column minimum, `auto-fill` packs
+four skinny columns onto a wide screen, so a sentence that sits on two lines at 30rem wraps over four
+— every card gets TALLER and the page gets longer. Raised to 26–30rem and switched to `auto-fit`, so
+a single card fills the row instead of sitting in a strip beside three empty tracks. No card has a
+fixed height and none scrolls inside itself.
+
+### Why there is no brief today
+
+Operator: "my brief was not in my home page today at 7am ET." Diagnosed against production: the
+pipeline was healthy, both profiles enabled, America/New_York, 06:15 earliest, weekends OFF — and it
+was a Saturday. It behaved exactly as configured.
+
+**The bug is that she had to work that out.** A blank where a brief should be reads as broken, and a
+partner who believes the morning brief is broken stops relying on it. Home now carries the reason the
+schedule gives — "No brief on a Saturday — weekends are off in your settings" — computed from the
+reader's own weekday in her own timezone, because at 02:00 UTC on a Monday it is still Sunday in New
+York and the schedule runs on the partner's calendar rather than on UTC's.
+
+## 22 Aug 2026 — Item 7 closed, and a duplicate guard that swallowed real work
+
+**All four routes into the funnel converge on `openIntoFunnel()`** — match, decide, act, record, in
+that order. What differs per route is declared once in an exported `ROUTE_POLICY` table rather than
+living in four functions: who owns the card, which machine, whether the route may write the pipeline
+directly, and whether the finder may cut their own list. `createOpportunity` now has exactly one
+production caller.
+
+Only MANUAL writes the pipeline, because it is the only route with an authenticated partner behind
+it — raising a work card there would ask an employee to confirm a decision an MP had just made. The
+other three open a card and nothing else. Every arrival records a `dealflow.arrival` event with the
+route, source, time and how it matched; that had been recorded on the machine routes and left blank
+on the door the partners actually use.
+
+### The bug I shipped this morning, found by the agent working the route above
+
+My duplicate guard's own comment said *"at most one live card per (machine, object, owner)"* and the
+query matched only **(machine, owner)**. Every funnel arrival shares Wyatt and the early-stage deal
+machine — so **the second company emailed in joined the first company's card and was never seen
+again**, with a `work_card.duplicate_joined` event recorded as though that were correct.
+
+The class is worth naming because it is the worst kind: **a comment that describes a stricter rule
+than the code implements.** The documentation was right, the guard was wrong, and the event log
+asserted the wrong behaviour was intended. Anyone reading the file would have believed it worked.
+The object term is now `capture_id` where there is one and the title otherwise, with two tests
+holding it.
+
+### And a CHECK constraint that did not constrain
+
+`work_card_note` was written with
+`CHECK (... OR (acknowledged_at IS NOT NULL AND length(trim(response)) > 0))`. **SQLite passes a
+CHECK that evaluates to NULL** — only an explicit FALSE fails it — so against a NULL response the
+comparison yielded NULL and the constraint silently allowed a note to be marked acknowledged with no
+answer, which is precisely what it existed to prevent. Caught by its own test setting
+`acknowledged_at` alone and watching the write succeed. Fixed with `IFNULL(...)`; every three-valued
+comparison inside a CHECK needs the same treatment.
+
+## 22 Aug 2026 — The deal record: one record per company, opening when the company is picked
+
+Operator: *"the deal flow tab is still not good enough UI and UX wise. you need to fix it once we
+pick a company and all the stuff comes out"*, and before that *"there should be 1 deal record for
+every company with all fields in it — price per share and # of shares should be in the deal record
+and it should open once u select a company"*, and *"i dont underestand why it cant be simple like
+the lp page."*
+
+**Picking a company did not open anything.** The company name on a pipeline row navigated to the
+Companies register. The record lived in a SECOND component on the same route (`InvestmentPage`,
+rendered under a heading called "Deal records and tooling") whose first control was another company
+picker, then a list of that company's deals, then a click to pick one of them. So "pick a company"
+meant picking it twice, on two surfaces, and the second one was the only one that showed anything.
+
+**Price per share and the number of shares were on no surface at all.** The columns have existed on
+`investment_opportunity` since migration 0006 and the only route to either was the transaction
+ladder — which books a position, and is a different act from recording what a round is priced at.
+A field marked as a placeholder could be corrected through the placeholder door; a field nobody had
+marked could not be entered anywhere.
+
+**What it is now.** `DealflowPage` owns the record. One company, one record, opening from the row
+you pressed, laid out as a flat sequence of `h3` sections in the order the questions get asked:
+where this stands · the deal itself · what we know and how we know it · what is still open · where
+this deal stands with the committee · its history · add a second deal. Every section always renders
+with an empty state that says what would fill it. The second deal is the only thing behind a
+disclosure, which is what the operator asked for and nothing else got.
+
+`tests/dealRecordLayout.test.ts` holds the shape: the section order, `h3`/`h4` only and no `h5`
+anywhere in the client, exactly one `<details>` and which one it is, an empty state per section, no
+identifier or enum printed on screen, and money formatted as money.
+
+**Two gaps this leaves, both reported rather than papered over.**
+
+1. `GET /api/companies/:id/history` returns the event key, the actor and the time, and the changed
+   fields only for `company.updated`. So a pipeline move reads "Moved along the pipeline" without
+   naming the stages, and a pass does not carry its reason into the trail even though the event
+   payload holds both. The endpoint would need to pass `from`/`to`/`reason` through.
+2. **A deal has no owner.** Nothing in the schema records who is carrying one, so "who owns it"
+   is answered with the person who last acted on it, and the record says in as many words that
+   that is what it is showing.
+
+**And one capability is temporarily unreachable.** Assembling an IC packet and recording an IC
+decision were reachable only from `InvestmentPage`, which this route no longer renders. The
+committee section of the record is a commented placeholder for the agent bringing that across from
+the meetings side; until it lands there is no UI route to IC assembly. `InvestmentPage` and the
+three panels it alone used remain in `App.tsx`, unrendered, so that work has something to read.
+
+## Item 11 — Meetings and the IC flow (ADR-019)
+
+**The page.** `MeetingsPage.tsx` is now the whole surface: five flat `h3` sections, each always
+rendered with its own empty state — what is coming up · what happened and what came out of it ·
+start a meeting now · where a deal stands with the committee · how a meeting becomes work. The
+explainer is last. `App.tsx` used to define a SECOND meetings page and mount it underneath the
+first; both emitted `meeting-list` and `meeting-${id}`, so every selector on the surface was
+ambiguous and opening a meeting in one had no effect on the other. That block is gone.
+`tests/meetingsLayout.test.ts` holds the section order, the rank rule, an empty state per section,
+and the one-page property.
+
+**The IC flow, end to end.** `DILIGENCE → IC_READY` on the Dealflow spine now opens an `ic_packet` in
+DRAFT and a work card for **Poppy** (owner_type AI, machine 18). The packet's gaps are named as
+questions in `ic_open_question` rather than written as prose, each carrying what was looked at and
+who owes the answer; the bear case is always one of them and is never owed by the champion. The
+committee section shows packet state, the open questions, the derived seats and the decision, and
+carries submit + decide because `InvestmentPage` is no longer rendered. A REJECT now sends the deal
+to **PASS** with the decision's own rationale — `IC_DECIDED` could only move on to `CLOSED` or
+`WITHDRAWN`, so a rejected deal's only forward move said the fund had invested in it.
+
+**Capture — UNPROVEN, and the button says so.** In-browser `MediaRecorder`, a complete recording per
+minute, posted to Workers AI Whisper (`@cf/openai/whisper-large-v3-turbo`) on the existing `AI`
+binding. **The model has never been called.** There is no `AI` binding under miniflare and nothing
+was deployed, so the capability is probed at runtime and the start button is DISABLED with the
+reason on screen wherever the binding is absent — never live-looking and inert. What IS proven
+offline: the response-shape handling, the refusal when the shape carries no text, the model's own
+error passing through unchanged, and every gate refusing in sentences rather than error codes
+(`tests/icStage.test.ts`). Transcription minutes sit outside the AI model ledger, which is stated
+rather than papered over.
+
+**Consent.** The machinery existed and had never been asked for. The prompt is now in front of
+capture, carries the words to say out loud, records both a yes and a no through the existing
+append-only `consent_record`, and is re-armed every time recording stops — a remembered consent is a
+record of something that did not happen.
+
+**Fireflies — PROVEN as an import, not as an integration.** Paste or upload an export; it parses
+into the same transcript turns Whisper produces and lands through the same two gates.
+`transcript_import.provider_name` names the vendor, the page says the firm did not make that
+recording, and importing writes no consent row. The parser never guesses who spoke: an unattributed
+line is kept and marked. The Fireflies **API** route is designed and deferred (credential, network
+boundary, vendor decision) — ADR-019.
+
+**Deliberately not built.** The shared live room for both Managing Partners, which is the only thing
+here that would justify a Durable Object. Designed in ADR-019 and deferred: it is the one piece that
+adds a new coordination primitive and a second failure surface, and shipping it alongside the
+rebuild would make every problem on this page ambiguous between the two.
+
+**Needs regenerating, not run here.** `ic_packet.question.raise` and `ic_packet.question.answer`
+were added to `src/shared/registry/actionTypes.ts` and are compensated in migration `0131`. The
+generated `0003` seed block has NOT been regenerated, so `npm run validate:authority`
+(`generate-machine-seed.mjs --check`) will fail until somebody runs the generator.
+
+## 22 Aug 2026 — The Sensori deck, and three bugs of mine found by a live email
+
+Operator: "we got an updated deck for sensori overnight to os@joinwestpeek.com."
+
+It had arrived at 03:29, been logged `inbound_email.rejected` — `too_large`, 7,093,115 bytes — and
+been **discarded silently.** She found out by asking. Two defects, both mine:
+
+**The cap contradicted a feature the firm had asked for.** `MAX_BODY_BYTES` was 256KB with the
+comment *"real submissions are prose and a link, not megabytes"* — written before `#wpdeck` shipped,
+whose entire purpose is megabyte decks. A limit that predated the thing it now blocked.
+
+**And the drop said nothing.** Inbound deal flow vanishing without a word is the worst failure this
+mailbox has, because the firm cannot miss what it never learns about.
+
+**The fix rests on an asymmetry: storing is I/O, parsing is CPU.** A Worker gets 10ms of CPU, so
+reading seven megabytes is impossible — but `R2.put` takes the stream without decoding it and costs
+almost nothing. So an oversized message now streams whole to R2, routes from its HEADERS (already
+parsed, free — `#wpdealflow Sensori` in the subject IS the routing decision), and opens a card
+saying how big it was, which trigger it carried, and where the bytes are kept.
+
+**Asked whether senders should zip: no.** Any rule depending on outsiders remembering something
+fails the first time one forgets, and then the firm loses the deal rather than the attachment.
+
+### Two more of mine, found by `validate:value-shapes` and by a test
+
+**Work-card owners were stored in two formats.** `DEAL_INTAKE_EMPLOYEE` is the display string
+"Wyatt", written straight into `owner_id`, while other paths wrote `aie_wyatt`. `runEmployeeWork`
+resolves an owner with `ai_employee WHERE id = ?`, so **every card the email intake created answered
+"That employee does not exist" and could never be worked** — the whole route from an email to Wyatt
+acting on it died at the last step, in silence. Names are now resolved to ids centrally in
+`createWorkCardInternal`, so no caller can get it wrong.
+
+**And the fix I wrote for it broke the duplicate guard, in the same way, ten minutes later.** The
+resolution ran AFTER the duplicate check, so the check compared a raw "Wyatt" against a stored
+"aie_wyatt" and never matched — the guard silently stopped guarding for the exact route it was
+written for. Resolution now happens first. Two bugs, one root: **a field with two permitted shapes
+will be compared in the wrong one.**
+
+The dedupe rule also became *same capture OR same subject*. Capture alone was too narrow: an intro on
+Monday and an updated deck on Thursday are two captures about one company, so a capture-only rule
+opened a second card for a company already being worked — which is precisely what happened to
+Sensori's first arrival.
+
+## 22 Aug 2026 — A deck now gets read, and every email reaches a person
+
+### The middle of the deck journey was missing entirely
+
+Operator: "the whole point is if we snd a deck the employee extracts all relevant info and fills in
+gaps in the deal flow tab's company card. if its a new company they create a new one. if existing
+they update it."
+
+`deckReader.ts` could read a PDF and had been able to since it shipped. `#wpdeck` routed mail meaning
+*the substance is in the attachment*. **Nothing extracted an attachment.** Wyatt's own prompt told
+him to read a deck he was never handed. The only working path was uploading one by hand.
+
+Built: `mimeAttachments.ts` (small and deliberately not a MIME library — a Worker has 10ms of CPU and
+a general parser walking a multi-megabyte tree would not finish), `pending_deck` as a queue, and a
+`deck_reading` job every fifteen minutes so a deck that arrives overnight is on the record before the
+morning brief.
+
+**It writes, and that is a decided change.** `handleReadCompanyDeck` deliberately wrote nothing —
+*"a deck is the company's own account of itself; accept what you believe."* That is right about
+CLAIMS and wrong about BLANKS: a company with no sector recorded is not protected by staying blank,
+it is merely unusable. So blanks are filled and **every filled field is stamped `source: deck,
+verified: false`**, which keeps the distinction the original rule protected while giving the operator
+the filled-in card she asked for. A field a person typed is KEPT and recorded as kept — a deck is
+newer, not more authoritative. Operator's ruling: *"fill blanks auto but stamp them."*
+
+### No inbound email fails silently
+
+Operator: "no inbound emails to os@joinwestpeek.com should silently fail. the employee responsible
+for routing should surface that an email came in the needs attention box."
+
+One path still did. A `#wpnetwork` message whose person could not be read, or whose relay was
+refused, recorded the failure and told nobody — **so somebody deliberately tagged a person for the
+firm's network, the firm quietly did not add them, and it looked exactly like it had worked.**
+
+And the attention count was changed from *untagged emails* to **open routing cards**. Counting the
+one failure mode we knew about would keep missing the ones we did not; counting what the handler
+hands to a person cannot miss a new one, because handing it over IS opening a card.
+
+### The whole roster is employed
+
+Operator: "letes just turn all employees on to active then to start. all employees on and they can go
+on and off duty as you wish with various rotating hours."
+
+Migration `0136`. **Employment and duty were one number.** Employment is whether a seat exists and may
+be given work; duty is who is covering the hours. Conflating them meant hiring somebody just to hear
+from them and firing them to get quiet — which is why the workforce had exactly one employee who had
+ever run anything. `dutyRoster.ts` already modelled shifts; this stops employment competing with it.
+
+RETIRED seats stay retired, and anything already PAUSED is left alone: a partner who paused somebody
+yesterday did it on purpose. The migration failed loudly on its first run — `actor_type` must be
+HUMAN/AI/SYSTEM and it said `firm_user` — which is exactly why these no longer use `INSERT OR IGNORE`.
+
+## 22 Aug 2026 — Cadence, and the base64 round-trip it exposed
+
+Operator: "are we sure every 15 min is the right cadence to read the email for decks and stuff?"
+
+**Email is not on a cadence.** Cloudflare Email Workers are push: the handler fires the moment a
+message lands, so routing, the company match and the work card happen in seconds. The Sensori deck
+was SEEN at 03:29 — it was rejected, not missed. The fifteen minutes applies only to the model
+reading the PDF, and it is the floor rather than a preference: the cron is `*/15`, chosen in ADR-017
+over adding Queues for a workload of a few jobs a day. Nothing blocks on the deck read, and an idle
+tick costs one COUNT.
+
+**The question found a real defect.** `deck_reading` was storing the MIME base64, decoding it to
+bytes for R2, then re-encoding those bytes to base64 for the model — two conversions over megabytes,
+against a **10ms CPU** budget. On a five-megabyte deck the job would have exhausted its budget and
+failed **in a way that looked like an unreadable deck rather than a coding mistake**, which is the
+same signature as everything else this review has dug out.
+
+MIME hands us base64 and Workers AI wants base64; the bytes in between were nobody's requirement.
+Stored as-is, read back as text: one R2 read and one model call, both I/O, no CPU. That is also what
+makes three-per-tick safe — the cap exists for the $0.50 AI budget, not for CPU, because an uncapped
+loop could spend the day's allowance on one bad night's mail before the partners are awake.
+
+### The link that would have made the deck journey a convincing no-op
+
+Tracing the chain end to end before claiming it worked found `intakeDealFromEmail` — a five-line
+adapter between the email handler and `openIntoFunnel` — silently dropping `attachments` and `notes`.
+The PDF would have been pulled out of the MIME tree and **discarded one function later**, with every
+other link present and correct: extraction built, R2 store built, queue built, job built, blanks-and-
+stamping built, and nothing ever stored.
+
+Worth naming because of where it was. **A thin pass-through is the easiest place in a chain to lose
+something, because it reads like plumbing rather than logic** — nobody reviews an adapter for missing
+fields. The same shape as the duplicate guard whose comment was stricter than its query: the parts
+that look too simple to be wrong.
+
+### Two more silent paths, and one claim withdrawn
+
+**A refused job was invisible to the health check.** `runJob` records `job_run.refused` and returns —
+no notification — and the `scheduled_work` check looked only for FAILED and DEAD_LETTER, so REFUSED
+fell through both. Production holds two from 20 Aug nobody was told about. Now DEGRADED rather than
+DOWN, deliberately: a refusal is usually legitimate and transient (a spend ceiling reached, an
+employee paused), so **the job is not broken, it is not happening**, and those need different words.
+
+**A claim withdrawn.** The oversized-mail work card told the partner the message "is still in the
+inbox". `os@joinwestpeek.com` routes to this Worker and whether a mailbox copy also exists depends on
+a routing rule the code cannot see. Telling a partner her deck is somewhere it may not be is worse
+than telling her it is gone, so the card now says plainly that this system kept no copy and to get it
+from the sender's sent mail.
+
+**On the Sensori deck specifically:** the rejection returned before anything was stored, so nothing of
+that message exists here. It has to be sent again once this deploys. The chain up to `readDeck` is
+deterministic and testable; the reading itself needs the live AI binding, so the honest proof is
+watching it run in production on the real deck — the same "watched working" standard this repo exists
+to enforce.
+
+### Overruled on the deck rule, and the operator was right
+
+I had built blanks-only: a deck fills empty fields and never touches one a human typed. Operator,
+22 Aug 2026: *"i think the updated deck should overwrite us....coming from the company. overwriting
+us is fine. maybe each company card has a field for MP notes that cannot be overwritten."*
+
+**The original rule was split on the wrong axis.** It asked "did a human type it" when the question
+is **whose fact is it**. Sector, one-liner and website are things the COMPANY is the authority on —
+our copy is a transcription of something they told us earlier, and a newer deck is a more recent
+statement from the same source. Keeping a stale transcription because a person typed it is how a
+register slowly stops describing reality. What must never be touched is what the FIRM believes, and
+that is a different kind of thing entirely; conflating the two produced a rule that protected the
+wrong half.
+
+So: a deck corrects the company's own facts, with the previous value carried on the event beside the
+new one — an overwrite nobody can undo is not a correction. And `mp_notes` holds the firm's judgement,
+guarded by a database TRIGGER rather than by a service remembering: `mp_notes_by` NULL is precisely
+what separates a partner from an automatic process, because no job has a `firm_user` to put there. A
+rule enforced only in TypeScript survives until somebody adds a service.
+
+## 22 Aug 2026 — What actually arrives in this mailbox
+
+Operator, describing real use: *"most of the emails to this inbox will be forwards and the important
+info will be in the original email below since its a fwd or an attachment"*, *"some will have
+#wpdeck #wpdealflow #wpnetwork all 3 triggers just b/c we ar busy and moving fast"*, and *"what is
+the difference in wpdeck and wpdealflow? i think they should do the same but idk."*
+
+**Forwards were recording the wrong sender.** The envelope is whoever forwarded it, so every
+forwarded deck would have entered the register as having come FROM A PARTNER — saying Scooter
+introduced Sensori when Scooter forwarded it. That is not cosmetic: Porter's own method is that
+provenance is recorded at arrival or never, because deal-flow provenance is the only evidence a
+Fund I has that its sourcing is repeatable, and a register where every row says "a partner sent it"
+answers nothing at LP diligence. `forwardedOrigin()` recovers the original sender and subject from
+the three forward shapes that actually arrive (Gmail, Apple Mail, Outlook), and **both are kept** —
+a partner vouching for something is worth knowing, it is just not who it came from.
+
+**`Fwd: FW: Re: Sensori` opened a company called "FW: Re: Sensori".** The subject cleaner stripped a
+single `re|fwd` and did not know `FW:` at all. A twice-forwarded deck therefore produced a name that
+could never match the company already on the board — exactly how a register grows a second row for a
+company the firm has already screened.
+
+**`#wpdeck` and `#wpdealflow` are now synonyms, decided by looking.** The split existed only because
+nothing could extract an attachment, so the sender had to say where the substance was. The system
+looks now, and asking a busy partner to pick the right word is the same mistake as asking founders to
+zip a deck — a rule that depends on a human remembering, which fails the first time one does not.
+Both tags keep working; a PDF present means the deck is read whichever was typed. `isDeck` is set
+from the attachments ALONE and never OR'd with the tag, because it drives a prompt saying "the
+substance is in the attachment" and saying that about a message with none sends the analyst hunting
+for something that does not exist.
+
+**Three triggers at once already behaved correctly** and was verified rather than assumed:
+`wantsDeal` is an OR, so `#wpdeck` and `#wpdealflow` together open ONE deal, and `#wpnetwork` is
+handled separately — one company in the funnel, one person proposed to Network OS, nothing in
+Capture. Capture stays the partners' own deliberate list, per the operator's earlier ruling that the
+top of the funnel is the Dealflow tab.
+
+**One deck per scheduled tick, and that number came from production.** Three `ai_run` rows there died
+with *"abandoned: the invocation ended before this call returned"* — the Worker torn down mid-call,
+one of them Scooter's daily brief on 21 Aug. Stacking three model calls into one scheduled invocation
+is precisely that failure mode, and the symptom would have been a deck marked FAILED with a reason
+that reads as though the PDF were bad.
+
+## 22 Aug 2026 — The operator changes the rota, and the default stays the default
+
+Operator: *"what is dutyroster's flow? i want a default flow and one that i can change in the admin
+section ---i should be able to adj hours for an employee"*
+
+**The code default STAYS, and the database holds only differences.** `dutyRoster.ts` warns in its own
+docstring that "a second roster is a second source of truth", so copying `SHIFT_PREFERENCE` into D1
+was never on the table: two rotas able to disagree, with nothing able to say which is wrong. Storing
+only the DIFFERENCES buys four things a copied table would have cost — the default keeps working with
+its hand-written `WHY_ON_SHIFT` reasons intact; a newly seated employee inherits a shift with nobody
+remembering to add them anywhere; the page can say "this is the default" against "you changed this,
+on this date, because"; and **reverting is deleting a row** rather than restoring a remembered value,
+which is the failure mode of every save-the-old-value design. The test suite proves the last one by
+setting an override, reverting it, and comparing the whole day byte for byte against what it was.
+
+**Precedence is stated once and read once.** `DUTY_PRECEDENCE = [PINNED, CUSTOM_HOURS,
+SHIFT_OVERRIDE, CODE_DEFAULT]`, and `decideFor` walks that array — the first source with an opinion
+about a person governs them. The same order decides who is listed first, so what a reader sees on the
+page IS the rule rather than a second statement of it. Three sources silently competing is how a rota
+becomes unarguable, which the module says is the one property it must not have.
+
+**Still pure.** The overrides are passed IN. `src/shared/` cannot import `src/worker/`, and more to
+the point the purity is WHY a partner can predict the rota; a resolver that reached for a database
+would be predictable only to whoever last looked at the database. `handleDutyPicture` reads rows and
+hands them over; it decides nothing.
+
+**Custom hours ask a different question of the day than of the moment.** 6am–8pm does not cover 10pm,
+so "on now" is false — but it touches the evening shift, so "covers the evening" is true. Collapsing
+the two would have quietly dropped people off the day view; both are tested.
+
+**On AI controls, not on Employees.** She said the admin section, and AI controls is the one Admin
+surface whose subject is controls over how the firm's AI behaves rather than a record you read. The
+"On duty now" panel stays on Employees as a readout, and now loads the same overrides through the
+same resolver — two surfaces that disagree is the exact failure this design exists to prevent.
+
+Migration `0137_the_operator_changes_the_rota.sql`. Action keys `duty_override.set` and
+`duty_override.clear` (ordinary, human-only in the service: the rota is the firm's, not an
+employee's). **`scripts/seed/generate-machine-seed.mjs` needs re-running** — the 0003 generated block
+is stale against the registry, and `validate:authority` reports STALE until it is.
+
+### One email, two records, and the link between them kept
+
+Operator's call, 22 Aug 2026: when a message carries both a company and a person, record that the
+founder belongs to that company.
+
+Both records already happened — a company at the top of the funnel, a person proposed to Network OS —
+**as two unrelated rows.** The fact that THIS founder belongs to THAT company was thrown away at the
+one moment the firm could see it for nothing. The email is the proof; reconstructing it later means
+somebody remembering, and "who founded Sensori" is exactly the question nobody can answer six months
+on.
+
+`ProposedPerson.company` already existed and was only ever filled from a literal `company:` line in
+the body, which almost no real message carries. It now takes the DEAL's matched company name in
+preference to anything parsed out of prose — that is the name checked against the register, so it is
+the one that will still match tomorrow.
+
+## 22 Aug 2026 — The operator can change the rota
+
+Operator: *"what is dutyroster's flow? i want a default flow and one that i can change in the admin
+section — i should be able to adj hours for an employee."*
+
+**The code default stays and the database holds only DIFFERENCES.** `dutyRoster.ts` warns that a
+second roster is a second source of truth, so nothing was copied into a table. Storing only overrides
+means the default keeps its hand-written reasons, a newly seated employee inherits a sensible shift
+with no action, the page can distinguish *default* from *you changed this*, and **reverting is
+deleting a row** rather than restoring a remembered value.
+
+**Precedence is stated in exactly one place** — `DUTY_PRECEDENCE = ["PINNED", "CUSTOM_HOURS",
+"SHIFT_OVERRIDE", "CODE_DEFAULT"]` — and the resolver walks that array once. The implementations are
+keyed off the same union, so a source cannot exist without being in the ordering, and the same order
+sorts the list a partner reads: what she sees IS the rule rather than a second statement of it.
+
+**Custom hours ask a different question of the day than of the moment**, and both are tested: 6am–8pm
+is off at 10pm but still COVERS the Evening shift. Collapsing those two would have silently dropped
+people off the whole-day view.
+
+`resolveDuty` stays pure — overrides are passed in, nothing reaches a database from `src/shared/`,
+and a test asserts that against the source text. The rota must remain predictable and arguable, which
+is the reason its docstring gives for not letting a model decide it.
+
+**Both surfaces read the same resolver.** The "On duty now" readout on Employees and the control on
+AI controls load the same overrides, with a test asserting a change shows in both — two surfaces
+disagreeing about who is on duty is the failure the design exists to prevent.
+
+A trigger refuses UPDATE outright: setting again is delete-then-insert, so the reason always
+describes the verdict sitting beside it. `CHECK (kind <> 'HOURS' OR IFNULL(from_hour <> to_hour, 0))`
+carries the IFNULL for the NULL-passes-a-CHECK trap this repo hit yesterday, and a test plants a
+zero-length window and requires the insert to fail.
+
+### Two real arrivals, cancelled by our own test, and unworkable regardless
+
+Auditing production before deploying found four work cards, **all CANCELLED, none open** — including
+Helios Grid and Vantage Robotics, which had arrived by email at 01:36 and 01:42 on 22 Aug.
+
+The spine names the actor: `fu_browser_agent` at 01:43, which is the Cloudflare Access service token
+— **this project's own review agent, walking the interface.** Nobody at the firm decided those were
+not worth working. The companies stayed in the funnel; the cards telling anybody to look at them did
+not, so in practice they would have sat unworked with nothing flagging it.
+
+And they could not have been worked anyway: both were owned by the string `Wyatt` rather than
+`aie_wyatt`, so `runEmployeeWork` would have answered "that employee does not exist."
+
+Migration `0139` repairs both — owner ids resolved by MATCHING ON NAME rather than hardcoding pairs,
+so a seat renamed later still resolves; and the two cards put back to OPEN, scoped to those titles
+AND to that one actor. A card a PARTNER cancelled is never reopened underneath her: the whole point
+of a visible pass pile is that a decision to stop stays stopped.
+
+**Worth naming as a practice, not just a bug:** an agent testing against PRODUCTION mutates the
+firm's real records. The review that found so much this week also cancelled two live deal-flow cards
+and nobody noticed for eighteen hours. A read-only identity for review passes would have prevented it.

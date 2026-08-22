@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
+import { pageHost } from "@shared/help/pageHosts";
 
 /**
  * Item 14 — the panel that lets a partner ask whoever runs the page they are on.
@@ -50,8 +51,18 @@ afterAll(async () => {
 
 describe("a partner can ask whoever runs the page", () => {
   it("refuses in the host's own name when the host is not employed, and keeps the refusal in the thread", async () => {
-    // No employee is ACTIVE in a fresh database — that is the honest default and the case a
-    // first-time partner actually meets.
+    /*
+     * The host is stood down HERE rather than found that way. This used to lean on "no employee is
+     * ACTIVE in a fresh database", which stopped being true when migration 0136 employed the whole
+     * roster — and the case the rule is about (a partner asking a seat that is switched off) is
+     * still perfectly reachable, it just has to be set up.
+     *
+     * The name comes from `pageHost`, not from a literal, so re-pointing the LP page at a different
+     * seat moves this test with it instead of quietly making it test nothing.
+     */
+    const lpHost = pageHost("lp")!;
+    await t.db.prepare("UPDATE ai_employee SET status = 'PAUSED' WHERE name = ?1").bind(lpHost.name).run();
+
     const asked = await call<{ ok: boolean; detail: string | null }>("/api/pages/lp/reply", SEQUOIA, "POST", {
       message: "What does a soft commitment mean here?",
     });

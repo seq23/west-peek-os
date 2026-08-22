@@ -219,17 +219,37 @@ describe("MP command coherence — all ten questions", () => {
   });
 
   it("the workforce module tells the truth when nothing is active", async () => {
-    const home = await buildHome(env, {
-      id: "fu_scooter_taylor",
-      email: "scooter@westpeek.ventures",
-      fullName: "Scooter Taylor",
-      status: "ACTIVE",
-      roles: ["MANAGING_PARTNER"],
-      authorityScopes: [],
-    });
-    const employees = home.modules.find((m) => m.key === "employees")!;
-    expect(employees.answers).toBe("What are the AI employees doing?");
-    expect(employees.note).toContain("Activation is a Managing Partner decision");
+    /*
+     * The empty case is CREATED and then put back. It used to be the ambient state of a fresh
+     * database, which is how this went red the day migration 0136 employed the whole roster —
+     * nothing about the rule had changed, only what the database happened to hold.
+     *
+     * The rule is worth keeping: an empty workforce module must say WHY it is empty and what would
+     * change it, rather than rendering an ambiguous blank. That is the same "no ambiguous blank for
+     * a reader who cannot act" rule the design suite holds.
+     */
+    const employed = (
+      await t.db.prepare("SELECT id FROM ai_employee WHERE status = 'ACTIVE'").all<{ id: string }>()
+    ).results ?? [];
+    await t.db.prepare("UPDATE ai_employee SET status = 'INACTIVE' WHERE status = 'ACTIVE'").run();
+    try {
+      const home = await buildHome(env, {
+        id: "fu_scooter_taylor",
+        email: "scooter@westpeek.ventures",
+        fullName: "Scooter Taylor",
+        status: "ACTIVE",
+        roles: ["MANAGING_PARTNER"],
+        authorityScopes: [],
+      });
+      const employees = home.modules.find((m) => m.key === "employees")!;
+      expect(employees.answers).toBe("What are the AI employees doing?");
+      expect(employees.count).toBe(0);
+      expect(employees.note).toContain("Activation is a Managing Partner decision");
+    } finally {
+      for (const e of employed) {
+        await t.db.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = ?1").bind(e.id).run();
+      }
+    }
   });
 
   it("every module links to the surface that owns its records", async () => {
@@ -238,6 +258,8 @@ describe("MP command coherence — all ten questions", () => {
     expect(links.get("employees")).toBe("employees");
     expect(links.get("ai_spend")).toBe("cockpit");
     expect(links.get("portfolio_risk")).toBe("portfolio");
-    expect(links.get("intelligence")).toBe("intelligence");
+    // "sources-and-sweeps", not "intelligence" — the latter has never been a route, so Open bounced the
+    // operator back to Home. Found by a browser test; this assertion had been pinning the dead link.
+    expect(links.get("intelligence")).toBe("sources-and-sweeps");
   });
 });

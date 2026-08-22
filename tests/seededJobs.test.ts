@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { createTestDb, type TestDb } from "./helpers/db";
+import { createTestDb, disposeTestDb, type TestDb } from "./helpers/db";
 
 /**
  * Every job the dispatcher handles must actually exist as a row.
@@ -18,7 +18,7 @@ import { createTestDb, type TestDb } from "./helpers/db";
 
 let t: TestDb;
 beforeAll(async () => { t = await createTestDb(); });
-afterAll(async () => { await t.mf.dispose(); });
+afterAll(async () => { await disposeTestDb(t); });
 
 /** Job keys the dispatcher special-cases, read from the source so the two cannot drift apart. */
 const JOBS_SRC = readFileSync(fileURLToPath(new URL("../src/worker/services/jobs.ts", import.meta.url)), "utf8");

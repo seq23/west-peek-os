@@ -75,6 +75,19 @@ export interface LoopContext {
   guidance: string;
   /** What has already happened this run and in previous ones, oldest first. */
   history: string[];
+  /**
+   * What a partner has said about this card SINCE the work started, and has not been answered on.
+   *
+   * Operator, 22 Aug 2026: "can the MPs give feedback on a work card that we want the ai employee to
+   * acknowledge while they are doing the work?" This is the field that makes the answer yes. A note
+   * that rendered on a page and never reached here would be a comment box — the partner types, the
+   * machine carries on — and the file already carries the rule: a method displayed on a page and
+   * never reaching a prompt is decoration.
+   *
+   * Empty once every note has been answered, so an employee does not re-answer settled instructions
+   * for the life of the card.
+   */
+  steering?: Array<{ id: string; body: string }>;
 }
 
 export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
@@ -99,6 +112,21 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     // read how West Peek does this kind of thing before being told how anyone does anything.
     ctx.guidance,
     ctx.prompt ? `HOW THE PARTNER WANTS THIS DONE — follow this over any general advice below:\n${ctx.prompt}` : "",
+    // ABOVE EVERYTHING ELSE THE PARTNER SAID, because it was said LATER and while watching the work.
+    // A partner who interrupts a job in progress is correcting the brief, not adding to it, so a
+    // steering note outranks the original instruction rather than sitting beside it.
+    ctx.steering && ctx.steering.length > 0
+      ? [
+          "A PARTNER HAS SAID SOMETHING SINCE YOU STARTED. This is the most recent instruction you have",
+          "and it outranks everything above, including the original brief.",
+          ...ctx.steering.map((n) => `  • ${n.body}`),
+          "",
+          "Before doing anything else, say in one line what each of these changes about what you are",
+          "doing — or say plainly that it changes nothing and why, which is a real answer and more",
+          "useful than agreeing. Begin that line with ACKNOWLEDGED: so it can be recorded against the",
+          "note. Do not simply repeat the instruction back.",
+        ].join("\n")
+      : "",
     "",
     ctx.history.length
       ? `WHAT HAS HAPPENED SO FAR (oldest first):\n${ctx.history.map((h, i) => `  ${i + 1}. ${h}`).join("\n")}`

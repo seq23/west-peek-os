@@ -24,17 +24,23 @@ test("P4 AI journey: governed run, blocked run reason, provider kill switch", as
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
 
   // AI page: run a mock-local task (LOCKDOWN default → local adapter).
-  await gotoSurface(page, "AI");
+  await gotoSurface(page, "AI controls");
   await page.getByTestId("ai-purpose").fill(marker);
   await page.getByTestId("ai-input").fill("Summarize the weekly portfolio notes for the command center.");
   await page.getByTestId("ai-run-submit").click();
   await expect(page.getByTestId("ai-message")).toContainText("COMPLETED");
   await expect(page.getByTestId("ai-message")).toContainText("trace trc_");
 
-  // The completed run is listed with its trace id.
+  /*
+   * The completed run is listed with its trace id.
+   *
+   * The ROW says "completed" — the status tag is spoken rather than shouted, `status.split("_")
+   * .join(" ").toLowerCase()`. The confirmation line above still carries the raw status, because it
+   * echoes what the API returned. Both are asserted, in the form each of them actually takes.
+   */
   const completedRun = page.locator('li[data-testid^="ai-run-"]').filter({ hasText: marker }).first();
   await expect(completedRun).toBeVisible();
-  await expect(completedRun).toContainText("COMPLETED");
+  await expect(completedRun).toContainText("completed");
   await expect(completedRun).toContainText("mock-local");
 
   // A credential-shaped input is blocked with a visible reason — before any provider call.
@@ -44,7 +50,7 @@ test("P4 AI journey: governed run, blocked run reason, provider kill switch", as
   await page.getByTestId("ai-run-submit").click();
   await expect(page.getByTestId("ai-message")).toContainText("EGRESS_BLOCKED");
   const blockedRun = page.locator('li[data-testid^="ai-run-"]').filter({ hasText: blockedMarker }).first();
-  await expect(blockedRun).toContainText("EGRESS_BLOCKED");
+  await expect(blockedRun).toContainText("egress blocked");
   await expect(blockedRun).toContainText("credential_like_content");
 
   // Kill switch as MP: governed (approval receipt) and logged. Idempotent across
@@ -54,7 +60,12 @@ test("P4 AI journey: governed run, blocked run reason, provider kill switch", as
     await killButton.click();
     await expect(page.getByTestId("ai-message")).toContainText("kill-switched");
   }
-  await expect(page.getByTestId("provider-ks-openai")).toHaveText("yes");
+  /*
+   * "stopped" is what a killed provider says now — the tag was a bare `yes`/`no` against the column
+   * name, which told a partner nothing about what had happened. The state itself is unchanged, and
+   * the audit event below is still the proof that it was governed.
+   */
+  await expect(page.getByTestId("provider-ks-openai")).toHaveText("stopped");
 
   // The kill switch left an audit event on the spine.
   await expect

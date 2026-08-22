@@ -67,11 +67,20 @@ export const EMAIL_TRIGGERS: readonly EmailTrigger[] = [
   },
   {
     tag: "#wpdeck",
-    means: "A deck to read. The information is in the attachment, and it is either a new company or the missing half of one already on the board.",
+    /*
+     * A SYNONYM FOR `#wpdealflow` SINCE 22 AUG 2026, kept because people have been told it.
+     *
+     * The two were split on where the substance was — message versus attachment — which only
+     * mattered while nothing could extract an attachment and the sender had to say where to look.
+     * The system looks now: a PDF present means read the deck, whichever tag was typed. Operator:
+     * "i think they should do the same but idk", and she was right. Two tags with one behaviour is
+     * two controls where one of them is a lie.
+     */
+    means: "A company for the funnel, with its deck attached. The same as #wpdealflow — either tag works, and any PDF that comes with it gets read.",
     owner: "WEST_PEEK_OS",
     does:
-      "Matches the deck against the companies already on record FIRST. A match fills the blanks on that record from the deck; " +
-      "no match opens a new company at the top of the funnel. Either way the analyst reads the attachment, not the covering note.",
+      "Matches against the companies already on record FIRST. A match updates that record from the deck; no match opens a new " +
+      "company at the top of the funnel. Either way the analyst reads the attachment rather than the covering note.",
     lands:
       "Dealflow — a proposal at the top of the funnel for a new company, or proposed answers to the empty fields on an existing " +
       "one. Never a second row for a company already there.",

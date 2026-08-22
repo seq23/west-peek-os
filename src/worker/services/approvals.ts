@@ -10,6 +10,7 @@ import {
   authorize,
   getActionType,
   getApprovalCard,
+  liveStandingGrant,
   requiredApproverRolesFor,
   type Actor,
   type ApprovalCardRow,
@@ -197,6 +198,51 @@ export async function submitApproval(env: Env, actor: Actor, cardId: string): Pr
     throw new ApprovalError(403, "forbidden", "only the requester may submit this card");
   }
   assertTransition(card.state, "pending_review");
+
+  /*
+   * DELEGATED AHEAD OF TIME? Then the card does not wait (ADR-018).
+   *
+   * This is the operator's "don't ask me again", and the shape matters: the card is still created,
+   * still carries its action and its requester, and still lands on the event spine — it simply does
+   * not sit in the queue. A delegation that made the record disappear would be a delegation nobody
+   * could audit afterwards, which is the difference between authority and a blind spot.
+   *
+   * A reserved action or an external effect can never reach here with a grant, because
+   * `grantStandingAuthority` refuses to record one and `liveStandingGrant` only matches rows that
+   * exist. The judgement stays with the partners.
+   */
+  const grant = await liveStandingGrant(env, card.action_key, {
+    objectType: card.object_type,
+    objectId: card.object_id ?? undefined,
+  });
+  if (grant) {
+    await env.WP_OS_DB.prepare("UPDATE standing_authority SET uses = uses + 1 WHERE id = ?1").bind(grant.id).run();
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO standing_authority_use (id, authority_id, object_type, object_id, actor_type, actor_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    )
+      .bind(`sau_${crypto.randomUUID()}`, grant.id, card.object_type, card.object_id ?? null, actor.type, actorId)
+      .run();
+    await env.WP_OS_DB.prepare(
+      `UPDATE approval_card
+          SET state = 'approved', decided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              decision_note = 'Approved by standing authority granted earlier — not reviewed again.'
+        WHERE id = ?1`,
+    )
+      .bind(cardId)
+      .run();
+    await appendEvent(env, {
+      eventType: "approval.auto_approved_by_standing",
+      actorType: actor.type === "HUMAN" ? "firm_user" : actor.type === "AI" ? "ai_employee" : "system",
+      actorId,
+      objectType: "approval_card",
+      objectId: cardId,
+      firmScope: card.firm_scope,
+      payload: { action_key: card.action_key, standing_authority_id: grant.id, uses_left: grant.max_uses - grant.uses - 1 },
+    });
+    return (await getApprovalCard(env, cardId))!;
+  }
+
   await env.WP_OS_DB.prepare("UPDATE approval_card SET state = 'pending_review' WHERE id = ?1").bind(cardId).run();
   await appendEvent(env, {
     eventType: "approval.submitted",
@@ -653,11 +699,24 @@ export async function handleListApprovals(ctx: RouteContext): Promise<Response> 
   // What a blocked card is waiting on travels with the card in the LIST, not only on the detail.
   // "Blocked" on its own is the least useful word in the queue: it tells a partner something has
   // stopped and nothing about whether they are the person who can start it again.
+  /*
+   * WHETHER A CARD CAN BE DELEGATED TRAVELS WITH IT (ADR-018), read from `action_type` rather than
+   * decided in the client. A page that worked it out for itself would be a second copy of the rule,
+   * and the one place it must never be wrong is the control that offers to stop asking.
+   *
+   * `work_card_id` is derived rather than stored: a card raised ABOUT a work card has that card as
+   * its object, which is exactly what a "until this task is done" grant needs to attach to.
+   */
   const select =
     `SELECT c.*,
             (SELECT b.waiting_on FROM approval_block b
-              WHERE b.approval_card_id = c.id AND b.released_at IS NULL LIMIT 1) AS blocked_waiting_on
-       FROM approval_card c`;
+              WHERE b.approval_card_id = c.id AND b.released_at IS NULL LIMIT 1) AS blocked_waiting_on,
+            at.is_reserved AS is_reserved,
+            at.is_external_effect AS is_external_effect,
+            (at.is_reserved = 0 AND at.is_external_effect = 0) AS delegable,
+            CASE WHEN c.object_type = 'work_card' THEN c.object_id END AS work_card_id
+       FROM approval_card c
+       LEFT JOIN action_type at ON at.key = c.action_key`;
   const rows = state
     ? await ctx.env.WP_OS_DB.prepare(`${select} WHERE c.state = ?1 AND ${scopeClause} ORDER BY c.created_at DESC, c.id`)
         .bind(state)

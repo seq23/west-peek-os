@@ -30,7 +30,8 @@ test("a partially configured operator can discover setup and read the recommende
   // The recommendation is present, ranked, and each entry carries a reason and a priority.
   const list = page.getByTestId("setup-recommended");
   await expect(list).toBeVisible();
-  await expect(page.getByTestId("setup-rec-wesley")).toContainText("LP Relations Manager");
+  // The role as the registry states it. "LP Relations Manager" was the old title.
+  await expect(page.getByTestId("setup-rec-wesley")).toContainText("LP Relations");
   await expect(page.getByTestId("setup-rec-wesley")).toContainText("Answers:");
   await expect(page.getByTestId("setup-rec-willow")).toContainText("Compliance");
 });
@@ -38,10 +39,29 @@ test("a partially configured operator can discover setup and read the recommende
 test("the cap's cost is shown rather than hidden", async ({ page }) => {
   await signIn(page);
   await gotoSurface(page, "Set up");
-  // Six stated priorities, five slots: the uncovered one must be named, and the role that would
-  // have covered it must still be listed.
-  await expect(page.getByTestId("setup-uncovered")).toContainText("not covered");
-  await expect(page.getByTestId("setup-also-considered")).toContainText("Winter");
+
+  /*
+   * THE CAP IS STATED AGAINST ITS USAGE, AND ITS COST IS NAMED WHEN IT HAS ONE.
+   *
+   * This used to be unconditional — six stated priorities against five slots meant one was always
+   * uncovered, and the page had to say which. Migration 0136 raised the cap to the whole roster, so
+   * the recommended team now covers every priority and there is no trade-off to report. The rule
+   * did not change: a cap that leaves a priority uncovered must NAME it and still list the role
+   * that would have covered it. So the rule is asserted in the form it actually takes, both ways,
+   * rather than asserting a consequence that no longer has a case.
+   */
+  await expect(page.getByTestId("setup-slots")).toContainText("activation slots in use");
+
+  const uncovered = page.getByTestId("setup-uncovered");
+  if ((await uncovered.count()) > 0) {
+    await expect(uncovered).toContainText("not covered");
+    await expect(uncovered).toContainText("trade-off, not an oversight");
+    // The roles that WOULD have covered it are still shown rather than quietly dropped.
+    await expect(page.getByTestId("setup-also-considered")).toBeVisible();
+  } else {
+    // Nothing is uncovered — and the page must not invent a trade-off it does not have.
+    await expect(page.getByTestId("setup-also-considered")).toHaveCount(0);
+  }
 });
 
 test("setup never activates anyone — it routes to the governed surface", async ({ page }) => {
@@ -51,8 +71,17 @@ test("setup never activates anyone — it routes to the governed surface", async
   const page_ = page.getByTestId("setup-page");
   // No control on this page performs an activation.
   await expect(page_.getByRole("button", { name: /activate/i })).toHaveCount(0);
-  // And it says where the governed step lives, naming the receipt requirement.
-  await expect(page.getByTestId("setup-rec-wesley")).toContainText("Managing Partner approval receipt");
+  /*
+   * And it says where the governed step lives, naming the receipt requirement — on the roles that
+   * are not employed yet. A role already ACTIVE reads "Already active — nothing to do", which is
+   * the correct thing to say and carries no receipt sentence; since 0136 employed the whole roster
+   * that is most of them, so the assertion targets whichever recommendation still has the step in
+   * front of it rather than a name that happens to be switched off today.
+   */
+  const notYet = page.locator('[data-testid^="setup-rec-"]', { hasNotText: "Already active" }).first();
+  if ((await notYet.count()) > 0) {
+    await expect(notYet).toContainText("Managing Partner approval receipt");
+  }
 
   // The contextual help states the same law.
   await page.getByTestId("how-this-works-toggle-setup").click();
@@ -130,7 +159,7 @@ test("Home answers 'what is blocked' or stays honestly silent", async ({ page })
   } else {
     // Silence is a valid answer, but only when nothing is wrong — the strip must not be
     // suppressed while a dead-lettered job exists. Confirm via the jobs surface.
-    await gotoSurface(page, "Scheduled work");
+    await gotoSurface(page, "Work");
     await expect(page.getByTestId("jobs-page")).toBeVisible();
     const deadLetters = await page.getByText(/dead-letter/i).count();
     expect(deadLetters, "Home hid the attention strip while jobs report dead letters").toBe(0);

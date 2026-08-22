@@ -47,9 +47,16 @@ test("no surface renders an ambiguous blank for a reader who holds no Managing P
   const chars = await page.evaluate(() => (document.querySelector(".surface-body") as HTMLElement)?.innerText.trim().length ?? 0);
   expect(chars, "Governance rendered nothing under its header").toBeGreaterThan(80);
 
-  // Reporting had the same shape: an empty period list with nothing to explain it.
-  await gotoSurface(page, "Reporting");
-  await expect(page.getByTestId("period-list-empty")).toContainText("No reporting periods open");
+  /*
+   * Reporting had the same shape: an empty period list with nothing to explain it.
+   *
+   * Reporting is no longer a destination — it folded into LP (App.tsx: "an LP is somebody who gave
+   * the fund money and whom the fund owes an account of it"). The rule under test is unchanged and
+   * so is the slot; only the address moved, so this walks to the page that now holds it rather than
+   * to a nav button that has not existed for days.
+   */
+  await gotoSurface(page, "LP");
+  await expect(page.getByTestId("period-list-empty")).toContainText("No period has been opened");
 });
 
 test("a decision the reader may not make says who may, instead of showing a dead button", async ({ page, request }) => {

@@ -31,6 +31,21 @@ export async function openSystemAreaIfCollapsed(page: Page): Promise<void> {
 }
 
 /**
+ * Open a `<details>` disclosure by its testid, if it is closed.
+ *
+ * Several surfaces now fold a whole workflow behind a summary — the Companies route puts the
+ * register on show and the identity/evidence work (aliases, merges, claims, contradictions) inside
+ * `company-identity`. Everything under a closed `<details>` is in the DOM and NOT visible, so a
+ * spec that fills a field down there fails with "element is not visible" and reads like a missing
+ * control rather than a shut lid. This opens it the way a person does.
+ */
+export async function openDisclosure(page: Page, testId: string): Promise<void> {
+  const details = page.getByTestId(testId);
+  if ((await details.evaluate((el) => (el as HTMLDetailsElement).open).catch(() => true)) === true) return;
+  await details.locator("summary").first().click();
+}
+
+/**
  * Navigate to any surface by its visible label, at any viewport, in either nav tier.
  *
  * Callers should not have to know which tier a destination lives in — that is a product decision

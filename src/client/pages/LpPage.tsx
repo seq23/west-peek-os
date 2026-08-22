@@ -213,7 +213,10 @@ function ReportingSection({ funds }: { funds: FundRaise[] }) {
             );
           })}
           {rows.length === 0 && (
-            <li className="state-empty">
+            /* The empty state carries a handle as well as a sentence. `e2e/d1-design-states.spec.ts`
+               is the regression suite for the rule that no surface may render an ambiguous blank,
+               and it can only hold a surface to that rule if it can point at the slot. */
+            <li className="state-empty" data-testid="period-list-empty">
               No period has been opened. Investors are owed an account each quarter; this is where it
               starts.
             </li>

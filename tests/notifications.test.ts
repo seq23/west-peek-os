@@ -301,7 +301,7 @@ describe("the PWA surface exists and never caches institutional state", () => {
   it("has a service worker that refuses to cache /api/* and has no fake push handler", () => {
     const sw = readFileSync(`${clientDir}/public/sw.js`, "utf8");
     expect(sw).toContain('url.pathname.startsWith("/api/")');
-    expect(sw).toContain("Institutional state is never served from cache");
+    expect(sw).toMatch(/never served from cache/i);
     // No push handler is registered, because no push service exists to register one for.
     expect(sw).not.toContain('addEventListener("push"');
     expect(sw).not.toContain("addEventListener('push'");

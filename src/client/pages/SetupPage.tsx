@@ -36,7 +36,19 @@ interface LoungeEmployee {
 
 interface MachineRow {
   id: number;
-  machine_key: string;
+  /*
+   * `key`, and the name matters. `/api/machines/control-center` serves the registry column as
+   * `key`; this interface declared `machine_key`, so `m.machine_key` was `undefined` at runtime on
+   * every row while TypeScript stayed happy — a shape mismatch a type cannot catch because the type
+   * was the thing that was wrong.
+   *
+   * The consequence was not subtle: `machineStatusByKey` came out keyed `undefined`, so
+   * `employeeReadiness` found NO assigned machine present and reported every recommended role as
+   * "3 assigned machine(s) are not present on the server … the registry and the server disagree."
+   * The guided-setup page — the first surface a new operator reads — told them the system was
+   * broken when all 46 machines were there. Caught by `e2e/p27-guided-setup.spec.ts`.
+   */
+  key: string;
   name: string;
   status: string;
 }
@@ -188,8 +200,8 @@ export function SetupPage({ me }: { me: MeResponse }): JSX.Element {
   );
   const machineStatusByKey = new Map<string, MachineStatus>(
     (fleet.data?.machines ?? []).map((m) => [
-      m.machine_key,
-      { key: m.machine_key, name: m.name, status: m.status },
+      m.key,
+      { key: m.key, name: m.name, status: m.status },
     ]),
   );
   const employeeStatusByName = new Map(

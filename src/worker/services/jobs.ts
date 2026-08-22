@@ -218,6 +218,29 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     };
   }
 
+  /*
+   * Wyatt reading the decks that arrived. Lazily imported like every other job body so the module
+   * is not pulled into an invocation that will never run it.
+   *
+   * ON A JOB RATHER THAN ON ARRIVAL because reading a deck is a model call, and the email handler
+   * has 10ms of CPU. The bytes were stored when the mail landed — nearly free — and this reads them
+   * with its own budget. Store now, read later.
+   */
+  if (job.job_key === "deck_reading") {
+    const { runDeckReading } = await import("./deckQueue");
+    const out = await runDeckReading(env);
+    return {
+      status: "SUCCEEDED",
+      // A deck that could not be read is reported, never swallowed: "the deck said nothing about
+      // revenue" and "nobody read the deck" look identical on a company card unless one is said.
+      summary:
+        out.read === 0 && out.failed === 0
+          ? "no decks waiting"
+          : `${out.read} read${out.failed ? ` · ${out.failed} could not be read` : ""}`,
+      artifacts,
+    };
+  }
+
   // Parker's monthly Room proposal. Same job_key-before-kind reasoning as above, and the same
   // shape as weekly_mp_review: it fires daily and generates only when the current month has no
   // proposal yet. schedule_kind has no MONTHLY value and adding one would mean rebuilding

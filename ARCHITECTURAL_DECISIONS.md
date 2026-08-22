@@ -313,3 +313,175 @@ Three consequences worth stating plainly:
    retried. Retrying a governance refusal would be trying to wear it down.
 3. **Genuine failures retry to the job's own limit and then stop** in `DEAD_LETTER`, where a human
    can see them. Nothing loops silently.
+
+### ADR-018 — Standing authority is a third tier, bounded three ways, and can never reach a reserved action
+Operator ask, 22 Aug 2026: a way to approve something and stop being asked about it again for this
+task, today, or this week — with the design decided rather than put to her.
+
+**The frame is delegated authority, not dismissal.** An LPA lets the GP act within stated limits
+without returning to the LPs; a board delegates spend up to a threshold; a desk sets a daily limit.
+Each carries a scope, a limit and an expiry, and each is revocable. Authority is delegable; judgment
+is not. That distinction is what makes the tier safe rather than what makes it convenient.
+
+`authorize()` gained one tier, checked in a deliberate position:
+
+    receipt → reserved → external effect → RESTRICTED (role gate) → STANDING (delegated) → ordinary
+
+**After reserved and external, never before.** A standing grant therefore *cannot* cover the 53
+human-reserved actions or the 4 external effects, and that is enforced in the choke point rather
+than in the interface — an interface rule is a suggestion, and this one protects the operator's own
+standing line that no AI employee emails anybody yet. `grantStandingAuthority()` refuses such a grant
+at creation as well, so the impossible state cannot be recorded even briefly.
+
+**All three bounds are required at creation.** Scope (one action key, optionally one object), a use
+limit, and an expiry — end of this task, end of today, or end of this week. There is no unbounded
+option, and `ends_at` is NOT NULL.
+
+**Expiry-by-default is the safety property, not the convenience.** A grant that never expires becomes
+permanent through neglect: revoking it requires first remembering it exists, and the reason it was
+granted was to stop thinking about the thing. Expiry inverts the default so authority returns
+without anybody acting. "Until this work card closes" is the recommended option because its lifetime
+is bounded by a real event rather than by a clock that runs overnight.
+
+**Refused, deliberately:** a blanket "approve everything today"; a silent "remember my choice"
+checkbox; any grant without a written reason. The first is abdication rather than delegation; the
+second creates authority nobody can find later; the third is unreviewable.
+
+Work-card volume is handled in the same change and is deliberately NOT part of this tier. Duplicate
+suppression is a uniqueness rule that is always on and joins the existing card rather than refusing.
+Rate limits (20 per employee per rolling hour, 60 open) are a HEALTH SIGNAL routed through
+`healthEscalation.ts`, not a permission — a permission gate on volume would deliver a runaway to the
+partners as forty approvals instead of stopping it. Full reasoning in `docs/APPROVAL_AND_WORK_DESIGN.md`.
+
+### ADR-019 — A meeting is captured in the browser, and a deal reaches the committee by moving one stage
+Operator, 22 Aug 2026: "the meeting tab is not good enough it is not self explanatory from looking
+at the page what im able to do. and the IC flow ----who makes the packet how does that get done? how
+do we get thru the pipeline and what happens to the page once a deal is at the IC stage?"
+
+Four questions, and the honest answer to all four before this change was that nobody had decided.
+The machinery existed — consent records, transcript gates, close-out extraction, a diligence
+framework, an append-only decision — and none of it had an owner, a trigger, or a page that said so.
+This ADR decides the whole shape, including the two parts it deliberately does not build.
+
+**Poppy makes the packet, and the packet's missing half is a list of questions rather than prose.**
+She is the IC Facilitator; she already holds `ic_decision` and `ic_learning_loop`; assembling the
+packet is literally her stated job. The packet is DRAFTED from what the firm already holds —
+verified claims, diligence answers, portfolio metrics, deal math — and **every gap becomes a named
+question owed by a named person** instead of a paragraph. A packet that invents its missing half is
+worse than a short one: it reads as complete, so nobody goes looking. `ic_open_question` (migration
+0131) is where those gaps live, each carrying what the firm looked at and did not find.
+
+**Pierce is always the champion, so Pierce may never write the kill case.** That rule already
+existed in `icPortal.ts` and is now also what decides who a question is addressed to: the bear-case
+questions are owed by a partner who is not carrying the deal, and the ordinary diligence questions
+are owed by the champion. Otherwise IC becomes a sales meeting for the investment, which is the
+firm's own stated reason for the rule.
+
+**A deal reaches IC by a stage transition, not by anybody remembering.** `DILIGENCE → IC_READY` on
+the Dealflow spine now creates an `ic_packet` in DRAFT and opens a WORK CARD for Poppy to assemble
+it. Nothing auto-decides and nothing auto-answers; the card is the mechanism, exactly as inbound
+email opens a card for Wyatt rather than quietly creating a company. Re-entering the stage does not
+mint a second packet — an open packet is found and left alone.
+
+**An IC rejection sends the deal to the pass pile, and that is a bug fix as much as a decision.**
+`IC_DECIDED` could only move on to `CLOSED` or `WITHDRAWN`, so a deal the committee rejected was
+stranded in a state whose only forward move said the fund invested. REJECT now transitions the
+opportunity to `PASS` carrying the decision's own rationale as the reason, which is why a REJECT
+requires a rationale in a sentence: for a fund the record of what it declined is half the value of
+the pipeline, and the reason is the whole of that half. Nothing is deleted; PASS already reopens at
+SCREENING when a company comes back.
+
+**Capture is in-browser, chunked to Workers AI Whisper on the existing `AI` binding.** No new
+vendor, no new credential, nothing added to the egress allowlist — the same argument that made
+Workers AI the cheap text tier and Browser Rendering a binding rather than an HTTP client. The
+alternative everyone reaches for is a recording bot that joins the call, and it was refused for a
+product reason rather than a cost one: **the firm's employees have to be able to talk to the
+partners DURING the meeting.** Live Help is already built, seated, capped and revocable, and a bot
+sitting in the call cannot be conferred with — it can only hand back a transcript afterwards. A
+capture that runs in the same page as the conversation keeps the seated employee reachable while the
+meeting is still happening, which is the entire point of having seated an employee at all.
+
+**Consent is prompted and logged before capture starts, every time.** California is a two-party
+state; New York and Georgia are not. A firm whose partners sit in one and whose founders sit in the
+others cannot run on "usually fine". The consent machinery was already correct and already unused:
+`consent_record` is append-only, human-only, revocable, the current state is the latest row per
+(meeting, consent type), and `importTranscript` refuses and RECORDS the refusal when consent is
+missing — so "we did not record" is auditable. What did not exist was the PROMPT. Capture now cannot
+start without one, the prompt is shown every time rather than remembered, and both gates it depends
+on — the activated recording policy and granted consent — are named on screen in plain words before
+anybody presses anything. A remembered consent is the failure mode here: consent is given by a
+person in a room on a day, and a checkbox that carries it forward to the next meeting is a record of
+something that did not happen.
+
+**Whisper is UNPROVEN and the button says so.** The transcription path is written, governed and
+reachable, and it has never run against a real model: the `AI` binding does not exist under local
+miniflare, there is no offline fixture that would prove anything, and this change deploys nothing.
+So the capability is probed at runtime and the button is DISABLED with the reason on screen wherever
+the binding is absent. It is never rendered as live and inert. When a chunk fails to transcribe the
+page says which chunk and why, rather than dropping it — a transcript with a silent hole in it is
+worse than a short one, for the same reason a packet with an invented middle is.
+
+**A shared live room for both Managing Partners at once is designed here and DELIBERATELY NOT
+BUILT.** It is also the one thing in this whole design that would genuinely justify a Durable
+Object, which ADR-017 refused and AGENTS.md forbids without cause. The cause would be real: two
+partners typing into one meeting room needs presence ("Sequoia is here"), ordering (whose line came
+first when both typed in the same second), and a single authority both browsers agree with — and a
+`next_run_at` column, a UNIQUE key and polling give none of those. Every other coordination problem
+in this system is coarse and low-frequency; this one is per-keystroke and inherently multi-client,
+which is exactly the boundary ADR-017 said would be the moment to revisit the decision.
+
+It is deferred anyway, and the reason is not doubt about the design. Everything else in this change
+is D1 rows written through the existing choke point — it can fail, but it fails the way the rest of
+the system already fails, and a partner sees a refusal. A Durable Object adds a second coordination
+primitive and a second failure surface: a room that is up while the Worker is down, or down while
+the Worker is up, and a class of bug ("the other partner's line never arrived") that is invisible in
+D1 and cannot be reconstructed from the event spine. Both partners in one room is worth that price
+one day. It is not worth it in the same change that first makes the page legible, and shipping it
+alongside would make every problem in the page ambiguous between the two. **Designed, written down,
+not built** — and when it is built it will be a visible change with its own ADR, not a silent one.
+
+**The page is flat and always renders every section, LP-shaped.** Five sections in the order a
+partner asks in: what is coming up; what happened and what came out of it; start a meeting now;
+where a deal stands with the committee; and last, how a meeting becomes work. An empty section
+states that it is empty and why, because "nothing has reached this yet" and "this is broken" look
+identical otherwise — the same defect the IC sequence block was written to fix, applied to the whole
+surface. The explainer goes last: a page that explains itself before showing anything is a page you
+have to read before you can use.
+
+**A transcript the firm did not record comes in by paste or file, not by API.** Operator, same day:
+"i sometimes have fireflies meeting notes so the meetings should have fireflies and whisper
+capabilities to transfer those notes and transcripts." Both paths land in the same place — turns on
+the meeting, through the same two gates — and they are reached differently on purpose. A Fireflies
+API integration needs a credential, a declared network boundary and a vendor decision, and
+`validate:network-boundary` exists precisely to stop an outbound host appearing outside a declared
+adapter. An export the operator already has in her hand needs none of that and works today. **The
+API route is designed and deferred on the same terms as the shared room**: it is a second vendor
+relationship for a convenience the paste box already delivers, and the day it is built it will be a
+visible change with its own credential in the vault.
+
+Three rules govern what an imported transcript IS, and each exists because getting it wrong is
+silent:
+
+1. **Importing is never consent.** The firm did not ask anybody anything by pressing a button;
+   somebody else made that recording under conditions nobody here witnessed. Nothing in the import
+   path writes a GRANTED consent row. The two existing gates still apply — taking custody of a
+   recording of a conversation is the governed act, not the button used to do it — so an import
+   without an activated policy and granted consent is refused and the refusal is recorded.
+2. **The source travels with the transcript.** `source` already said PROVIDER / NATIVE / MANUAL /
+   UPLOAD, which is the right shape at the wrong resolution: "PROVIDER" does not tell a reader who
+   recorded this. `transcript_import.provider_name` names the vendor, and the record says in words
+   that the firm cannot vouch for the permission the recording was made under. A turn West Peek
+   captured and a turn out of somebody else's export are both usable and are not the same evidence.
+3. **The parser never guesses who spoke.** Exports vary — speaker labels, timestamps, both, neither.
+   A line that cannot be attributed with confidence is kept and marked as unattributed rather than
+   handed to the nearest name above it, because close-out extracts commitments from these turns and
+   an invented attribution becomes a task assigned to somebody who was never in the room. The one
+   place a line inherits a speaker is a wrapped continuation directly beneath one, with nothing in
+   between. A stop-list keeps "Note:" and "Action items:" from being read as people — that failure
+   is silent, looks exactly like a transcript, and poisons every line beneath it.
+
+Fireflies' own summary and action items are filed as **theirs**, clearly labelled, and never as
+speech: their model wrote those words and nobody in the room said them. The action items are
+deliberately NOT turned into commitments on import. Close-out reads the notes and PROPOSES
+commitments a person accepts, and a second path that assigned work straight out of a vendor's
+bullet list would go around the only step in the chain with a human in it.

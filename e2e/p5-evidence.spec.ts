@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openDisclosure } from "./support/nav";
 
 /**
  * P5 browser journey against local `wrangler dev`:
@@ -32,7 +32,14 @@ test("P5 evidence journey: document upload → conflicting claims → contradict
   await expect(page.getByTestId("doc-message")).toContainText("sha256");
 
   // Create a company and open its evidence surface.
-  await page.getByRole("button", { name: "Companies", exact: true }).click();
+  /*
+   * The evidence workbench — creating a company, its claims, verification, contradictions — folded
+   * into the `company-identity` disclosure under the register. Everything inside a closed
+   * `<details>` is in the DOM and invisible, so this used to time out on a control that was there
+   * the whole time, behind a shut lid.
+   */
+  await gotoSurface(page, "Companies");
+  await openDisclosure(page, "company-identity");
   await page.getByTestId("company-create-name").fill(`${marker} Co`);
   await page.getByTestId("company-create-submit").click();
   await expect(page.getByTestId("company-message")).toContainText("Created");
@@ -55,15 +62,19 @@ test("P5 evidence journey: document upload → conflicting claims → contradict
 
   // Deterministic detection proposes the contradiction; a human opens it.
   await page.getByTestId("detect-contradictions").click();
-  await expect(page.getByTestId("candidate-0")).toContainText("VALUE");
+  // The candidate names the KIND of disagreement in words ("value"), not the enum, and quotes
+  // both figures — which is the part a partner has to read before opening it.
+  await expect(page.getByTestId("candidate-0")).toContainText("value");
+  await expect(page.getByTestId("candidate-0")).toContainText("$4M");
   await page.getByTestId("open-contradiction-0").click();
   await expect(page.getByTestId("claim-message")).toContainText("Contradiction ctr_");
 
   // The contradiction is visible in the evidence summary (material, unresolved).
   const summaryItem = page.locator('li[data-testid^="summary-contradiction-"]').first();
   await expect(summaryItem).toBeVisible();
-  await expect(summaryItem).toContainText("HIGH");
-  await expect(summaryItem).toContainText("OPEN");
+  // Lower-cased on the page — the materiality and the state are spoken, not shouted. Same facts.
+  await expect(summaryItem).toContainText("high");
+  await expect(summaryItem).toContainText("open");
 
   // Resolve it (human disposition with evidence note).
   await page.locator('select[data-testid^="resolve-disposition-"]').first().selectOption("RESOLVED");
@@ -77,7 +88,7 @@ test("P5 evidence journey: document upload → conflicting claims → contradict
   await page.getByTestId("nav-system-toggle").click();
   await page.getByRole("button", { name: "Contradictions", exact: true }).click();
   const resolved = page.locator('li[data-testid^="contradiction-"]', { hasText: "arr" }).first();
-  await expect(resolved).toContainText("RESOLVED");
+  await expect(resolved).toContainText("resolved");
   await expect(resolved).toContainText("fu_scooter_taylor");
 
   // The Activity spine shows the typed P5 events.

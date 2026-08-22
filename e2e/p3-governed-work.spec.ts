@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { approvalStateWords } from "@shared/help/actionNames";
+import { stateMeaning } from "@shared/work/workCards";
 import { gotoSurface } from "./support/nav";
 import { provisionLocalD1 } from "./support/provision";
 
@@ -36,27 +38,72 @@ test("governed work journey: capture → work card → approval → activity spi
   await page.getByTestId("capture-submit").click();
   const captureResult = page.getByTestId("capture-result");
   await expect(captureResult).toBeVisible();
-  await expect(captureResult).toContainText("NEW");
+  /*
+   * The capture is UNROUTED, and the page proves it by offering the routing form.
+   *
+   * This used to read `toContainText("NEW")` — the raw capture state, printed on the page. The
+   * state vocabulary came off every surface in the plain-English pass, and asserting the enum was
+   * always the weaker test anyway: `route-form` renders only while `status === "NEW"` (App.tsx), so
+   * its presence is the same fact stated through the interface rather than through the database.
+   */
+  await expect(captureResult.getByTestId("route-form")).toBeVisible();
 
   // Route to a machine, creating a work card in the same step.
   await page.getByTestId("route-machine").selectOption({ label: "#21 Meeting Intelligence Machine" });
   await page.getByTestId("route-submit").click();
-  await expect(page.getByTestId("route-result")).toContainText("Routed to machine #21");
-  await expect(page.getByTestId("route-result")).toContainText("work card wc_");
+  await expect(page.getByTestId("route-result")).toContainText("machine #21");
+  await expect(page.getByTestId("route-result")).toContainText("work card was opened");
 
   // Work Cards: the new card is listed OPEN; request an approval-requiring action.
-  await page.getByRole("button", { name: "Work cards", exact: true }).click();
+  // The rail says "Work" now — Work cards and the scheduled machinery are one surface.
+  await gotoSurface(page, "Work");
   const workCard = page.locator('li[data-testid^="work-card-"]').filter({ hasText: marker }).first();
   await expect(workCard).toBeVisible();
-  await expect(workCard).toContainText("OPEN");
-  await workCard.getByRole("button", { name: "Request approval" }).click();
-  await expect(page.getByTestId("work-card-message")).toContainText("submitted for review");
+  // Same reasoning as the approval badge below: the state is read from the one module that decides
+  // how a work-card state is spoken, so the assertion cannot be broken by a rewording.
+  await expect(workCard).toContainText(stateMeaning("OPEN")!.label);
+
+  /*
+   * THE APPROVAL IS RAISED AGAINST THIS CARD, THROUGH THE ROUTE THE PRODUCT STILL HAS.
+   *
+   * This step used to press a "Request approval" button on the card. That control is gone — and so
+   * is any route behind it: `src/worker/index.ts` exposes no work-card approval endpoint, and
+   * `WorkCardsPage.tsx` offers assign / start / done / drop / look and nothing else. An approval is
+   * now raised by the ACTION that needs one, with the work card as its object, which is also what
+   * makes "approve, and don't ask again until this task is done" attachable (ADR-018).
+   *
+   * So the card is raised the way anything else raises one, and it is deliberately raised ABOUT the
+   * work card the browser just watched appear — `object_type: "work_card"` is what puts
+   * `work_card_id` on the row. The rest of the journey is unchanged and still runs in the browser:
+   * the queue shows it, a partner decides it, and the spine records both.
+   */
+  const workCardId = (await workCard.getAttribute("data-testid"))!.replace("work-card-", "");
+  const raised = await request.post("/api/approvals", {
+    headers: MP,
+    data: {
+      action_key: "governance.policy_change",
+      object_type: "work_card",
+      object_id: workCardId,
+      title: marker,
+      summary: "Raised against the work card this journey just opened.",
+      submit: true,
+    },
+  });
+  expect(raised.status(), await raised.text()).toBe(201);
 
   // Approvals: the pending card is visible; approve it with a note.
   await page.getByRole("button", { name: "Approvals", exact: true }).click();
   const approvalCard = page.locator('li[data-testid^="approval-card-"]').filter({ hasText: marker }).first();
   await expect(approvalCard).toBeVisible();
-  await expect(approvalCard).toContainText("pending_review");
+  /*
+   * The badge reads the STATE, in the firm's own words rather than the database's.
+   *
+   * Taken from `APPROVAL_STATE_WORDS` — the single place the product decides how a state is
+   * spoken — instead of the string "pending_review", which is what this line said until the
+   * vocabulary changed underneath it. Reading the label from the source means a future rewording
+   * moves this assertion with it, and a state that stops being offered breaks the import.
+   */
+  await expect(approvalCard).toContainText(approvalStateWords("pending_review").label);
   const cardId = (await approvalCard.getAttribute("data-testid"))!.replace("approval-card-", "");
   // Targeted by testid, not by role: an approval card now also carries evidence and comment
   // inputs (canon §24.2 context), so "the textbox" is ambiguous.

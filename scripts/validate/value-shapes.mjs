@@ -129,6 +129,12 @@ async function orphanAudit(tables) {
   }
   const findings = [];
   await pooled(pairs, async (p) => {
+    /*
+     * The offending VALUES come back with the count, because a count on its own is not actionable.
+     * "work_card.owner_id → ai_employee.id: 12 orphaned row(s)" tells a reader something is wrong
+     * and gives them nowhere to start; `["Wyatt", "Winter"]` tells them instantly that a name was
+     * written where an id belongs — which is the shape of every bug this scan was built for.
+     */
     const rows = await query(
       `SELECT COUNT(*) AS n FROM "${p.table}" c
         WHERE c."${p.column}" IS NOT NULL
@@ -136,7 +142,14 @@ async function orphanAudit(tables) {
     ).catch(() => null);
     if (!rows) return;
     const n = Number(rows[0]?.n ?? 0);
-    if (n > 0) findings.push({ ...p, orphans: n });
+    if (n === 0) return;
+    const sample = await query(
+      `SELECT DISTINCT c."${p.column}" AS v FROM "${p.table}" c
+        WHERE c."${p.column}" IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM "${p.target.table}" t WHERE t."${p.target.column}" = c."${p.column}")
+        LIMIT 5`,
+    ).catch(() => []);
+    findings.push({ ...p, orphans: n, sample: sample.map((r) => String(r.v)) });
   });
   findings.sort((a, b) => b.orphans - a.orphans);
   return findings;
@@ -465,9 +478,15 @@ async function main() {
     process.stdout.write(`\nREFERENCES POINTING AT ROWS THAT ARE NOT THERE — ${orphans.length}:\n`);
     for (const o of orphans) {
       process.stdout.write(
-        `  ✗ ${o.table}.${o.column} → ${o.target.table}.${o.target.column}: ${o.orphans} orphaned row(s)\n`,
+        `  ✗ ${o.table}.${o.column} → ${o.target.table}.${o.target.column}: ${o.orphans} orphaned row(s)\n` +
+          `      holding e.g. ${JSON.stringify(o.sample)}\n`,
       );
     }
+    process.stdout.write(
+      `      Read the sample first. Values in the target's format mean the ROWS went missing — find\n` +
+        `      what deleted them. Values in another format (a name where an id belongs, a stale\n` +
+        `      prefix) mean the WRITER is wrong — fix it at the write, then backfill the rows.\n`,
+    );
   }
 
   if (pins.length > 0) {

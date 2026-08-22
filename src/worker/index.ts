@@ -59,7 +59,9 @@ import {
   handleUnresolvedPeople,
 } from "./services/captures";
 import {
+  handleAddWorkCardNote,
   handleCreateWorkCard,
+  handleListWorkCardNotes,
   handleWorkByOwner,
   handleGetWorkCard,
   handleListWorkCards,
@@ -205,6 +207,11 @@ import {
   handleRequestActivation,
 } from "./services/aiEmployees";
 import {
+  handleDutyPicture,
+  handleRevertDutyOverride,
+  handleSetDutyOverride,
+} from "./services/dutyOverrides";
+import {
   handleGetAiBudget,
   handleListAiProviders,
   handleProviderEnable,
@@ -340,10 +347,12 @@ import {
   handleListConflicts,
   handleListMappings,
   handleListSyncState,
+  handleNetworkCompanyPush,
   handlePullResource,
   handleResolveConflict,
   handleWriteBack,
 } from "./services/networkAdapter";
+import { handleScoutedIntake } from "./services/dealIntake";
 import {
   handleAlertVolume,
   handleCreateMetricDefinition,
@@ -381,11 +390,23 @@ import {
 import {
   handleAssembleIcPacket,
   handleGetIcPacket,
+  handleIcDealSurface,
   handleListIcPackets,
+  handleListIcQuestions,
+  handleRaiseIcQuestion,
   handleRecordDissent,
   handleRecordIcDecision,
+  handleResolveIcQuestion,
   handleSubmitIcPacket,
 } from "./services/ic";
+// ADR-019 — recording a meeting from the browser it is being held in. The consent prompt lives in
+// front of it and the two existing gates (activated policy, granted consent) are unchanged.
+import {
+  handleCaptureChunk,
+  handleCaptureConsent,
+  handleCaptureReadiness,
+  handleImportFireflies,
+} from "./services/liveTranscription";
 import {
   handleAddWatchlist,
   handleArchiveItem,
@@ -454,6 +475,11 @@ import {
   handleUpdateLpEngagement,
 } from "./services/lpOps";
 import { handlePageThread, handlePageReply } from "./services/pageChat";
+import {
+  handleGrantStandingAuthority,
+  handleListStandingAuthority,
+  handleRevokeStandingAuthority,
+} from "./services/standingAuthority";
 import {
   handleAddQuestion,
   handleProposeQuestions,
@@ -664,6 +690,9 @@ const router = new Router()
   .post("/api/deliverables/:id/dismiss", handleDismissDeliverable)
   .get("/api/deliverables/:id/feedback", handleListDeliverableFeedback)
   .post("/api/deliverables/:id/feedback", handleDeliverableFeedback)
+  // Steering work in flight: a partner says something, the employee answers it on its next step.
+  .get("/api/work-cards/:id/notes", handleListWorkCardNotes)
+  .post("/api/work-cards/:id/notes", handleAddWorkCardNote)
   .get("/api/work-cards/by-owner", handleWorkByOwner)
   .get("/api/work-cards", handleListWorkCards)
   .get("/api/work-cards/:id", handleGetWorkCard)
@@ -708,6 +737,13 @@ const router = new Router()
   .post("/api/ai/runs/:id/discard-output", handleDiscardAiOutput)
   // P4 — AI employee lifecycle (no direct status route; activation via approval receipt only).
   .get("/api/ai/employees/on-duty", handleDutyRoster)
+  // The rota the operator can change. One GET, because "who is on now", "the whole day" and "what
+  // was changed" must be computed from the same override set — three calls could disagree.
+  // Reverting is a POST rather than a DELETE only because this router has no DELETE; it is a
+  // deletion, and putting a row back is not a thing the system can do.
+  .get("/api/ai/duty", handleDutyPicture)
+  .post("/api/ai/duty/overrides", handleSetDutyOverride)
+  .post("/api/ai/duty/revert", handleRevertDutyOverride)
   .get("/api/ai/employees", handleListAiEmployees)
   .get("/api/ai/employees/:id", handleGetAiEmployee)
   .post("/api/ai/employees/:id/request-activation", handleRequestActivation)
@@ -772,7 +808,11 @@ const router = new Router()
   // P6 — investment opportunities (secondaries keep seller/broker/class provenance).
   .get("/api/dealflow/board", handleDealflowBoard)
   .get("/api/portfolio/composition", handlePortfolioComposition)
+  // Item 7, route 1: the manual door a partner drives herself. It runs through openIntoFunnel.
   .post("/api/opportunities", handleCreateOpportunity)
+  // Item 7, route 4: the analyst's own scouting. His list, so his to cut — but it still arrives
+  // through the same door, and what he drops still shows on the pass pile.
+  .post("/api/dealflow/scouted", handleScoutedIntake)
   .get("/api/opportunities", handleListOpportunities)
   // P51 — where deals come from, and which ones nobody recorded.
   .get("/api/opportunities/provenance", handleDealProvenance)
@@ -816,6 +856,12 @@ const router = new Router()
   .post("/api/ic/packets/:id/submit", handleSubmitIcPacket)
   .post("/api/ic/packets/:id/decide", handleRecordIcDecision)
   .post("/api/ic/decisions/:id/dissent", handleRecordDissent)
+  // ADR-019 — the gaps a packet drafted from the record cannot fill, each owed by somebody, and the
+  // read behind "where a deal stands with the committee".
+  .get("/api/ic/deals", handleIcDealSurface)
+  .get("/api/ic/packets/:id/questions", handleListIcQuestions)
+  .post("/api/ic/packets/:id/questions", handleRaiseIcQuestion)
+  .post("/api/ic/questions/:id/resolve", handleResolveIcQuestion)
   // P6 — company 360 over the one canonical identity (D3).
   .get("/api/companies/:id/360", handleCompany360)
   // P7 — meetings: a conversation is never institutional truth.
@@ -836,6 +882,13 @@ const router = new Router()
   .post("/api/meetings/:id/prep", handleAssemblePrepPacket)
   .get("/api/meetings/:id/closeout", handleGetCloseout)
   .post("/api/meetings/:id/closeout", handleRunCloseout)
+  // ADR-019 — in-browser capture. Readiness says whether a chunk posted now would actually be
+  // written down and why not; the consent answer is logged before anything starts, every time.
+  .get("/api/meetings/:id/capture", handleCaptureReadiness)
+  .post("/api/meetings/:id/capture/consent", handleCaptureConsent)
+  .post("/api/meetings/:id/capture/chunk", handleCaptureChunk)
+  // A transcript somebody else recorded. Same two gates, and importing is never consent.
+  .post("/api/meetings/:id/transcript/fireflies", handleImportFireflies)
   // P33 — Event OS / Community OS scaffolding.
   .get("/api/events", handleListEvents)
   .post("/api/events", handleCreateEvent)
@@ -980,6 +1033,9 @@ const router = new Router()
   .get("/api/network/conflicts", handleListConflicts)
   .post("/api/network/conflicts/:id/resolve", handleResolveConflict)
   .post("/api/network/writeback", handleWriteBack)
+  // Item 7, route 3: Network OS proposing a company for OUR funnel. A proposal, so it lands as a
+  // card for the analyst — the far system owns people, not this firm's pipeline.
+  .post("/api/network/dealflow", handleNetworkCompanyPush)
   // P10 — LP / fundraising. LP data is LP_PRIVATE by default.
   // What an LP actually committed, and how big the fund is — the two questions the LP surface
   // could not answer at all before 21 Aug 2026.
@@ -1158,6 +1214,10 @@ const router = new Router()
   .get("/api/research/projects/:id/thread", handleResearchThread)
   .post("/api/research/projects/:id/reply", handleResearchReply)
   // Item 14: the panel on every hosted page. Keyed by nav key because a page is not a row.
+  // ADR-018: authority the partners delegated ahead of time, within bounds.
+  .get("/api/standing-authority", handleListStandingAuthority)
+  .post("/api/standing-authority", handleGrantStandingAuthority)
+  .post("/api/standing-authority/:id/revoke", handleRevokeStandingAuthority)
   .get("/api/pages/:navKey/thread", handlePageThread)
   .post("/api/pages/:navKey/reply", handlePageReply)
   .post("/api/research/projects/:id/propose-questions", handleProposeQuestions)
@@ -1245,14 +1305,28 @@ export default {
    *
    * UNPROVEN until Email Routing is enabled on joinwestpeek.com — no mail reaches this yet.
    */
-  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(
-      handleInboundEmail(message, env).catch((err) => {
-        // A handler that throws silently drops the message. Logged, because an inbox that loses
-        // mail without saying so is worse than one that does not exist.
-        console.error("inbound email failed", err);
-      }),
-    );
+  /*
+   * AWAITED, NOT `waitUntil`ed — and that is a correctness change, not a style one.
+   *
+   * `message.raw` is a ReadableStream tied to the delivery of THIS message. `ctx.waitUntil` returns
+   * from the handler immediately and lets the work continue afterwards, which is right for a
+   * fire-and-forget side effect and wrong here: the very first thing `handleInboundEmail` does is
+   * read that stream. Under local `wrangler dev` the consequence is exact and visible —
+   *
+   *   ✘ [ERROR] inbound email failed Error: ReadableStream received over RPC disconnected prematurely.
+   *     at async handleInboundEmail (src/worker/effects/inboundEmail.ts:231)
+   *
+   * — and the message is then lost with no event, no work card and no capture, which is precisely
+   * the silent-drop failure the rest of this file is written to prevent. Awaiting keeps the stream
+   * alive for as long as the handler needs it. Nothing else changes: the `.catch` is still here, so
+   * a throw is still logged rather than bounced back to the sender.
+   */
+  async email(message: ForwardableEmailMessage, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await handleInboundEmail(message, env).catch((err) => {
+      // A handler that throws silently drops the message. Logged, because an inbox that loses
+      // mail without saying so is worse than one that does not exist.
+      console.error("inbound email failed", err);
+    });
   },
 
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {

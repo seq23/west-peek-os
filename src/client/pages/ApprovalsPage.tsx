@@ -49,6 +49,13 @@ interface BlockRow {
 }
 
 export interface ApprovalCardRow {
+  /** Whether this may be delegated ahead of time (ADR-018) — computed by the server from
+   *  `action_type`, never re-derived here. A reserved action or an external effect is 0. */
+  delegable?: number | boolean;
+  is_reserved?: number;
+  /** The work card this decision is about, when it is about one. What a "until this task is done"
+   *  grant attaches to; absent means that window is not offered. */
+  work_card_id?: string | null;
   id: string;
   action_key: string;
   object_type: string;
@@ -302,6 +309,7 @@ function ApprovalCard({
 }): JSX.Element {
   const [open, setOpen] = useState(startOpen);
   const [note, setNote] = useState("");
+  const [delegateReason, setDelegateReason] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
   // Only fetched once the card is open — see the note at the top of the file.
   const detail = useApi<ApprovalCardRow>(open ? `/api/approvals/${card.id}` : null, [card.id, open, card.state]);
@@ -332,6 +340,34 @@ function ApprovalCard({
    * nothing was said. On the page where the firm records its binding decisions, a refusal that
    * presents as a completed act is the worst failure this client can have.
    */
+  /**
+   * Approve this card, and delegate the ones like it (ADR-018).
+   *
+   * ORDER MATTERS: the grant is written FIRST, then the card is approved. `submitApproval` consults
+   * a live grant when a card enters the queue, so a card already sitting there is decided by the
+   * ordinary path — approving first and granting second would leave a partner unsure whether the
+   * delegation had taken effect for this one or only for the next.
+   */
+  const delegate = async (window: "THIS_TASK" | "TODAY" | "THIS_WEEK") => {
+    setFailure(null);
+    const granted = await api<{ detail?: string }>("/api/standing-authority", {
+      method: "POST",
+      body: {
+        action_key: card.action_key,
+        window,
+        reason: delegateReason.trim(),
+        object_type: card.object_type,
+        ...(window === "THIS_TASK" && card.work_card_id ? { work_card_id: card.work_card_id } : {}),
+      },
+    });
+    if (granted.status !== 201) {
+      // The server's sentence, not a status code — it explains WHY something is not delegable.
+      setFailure(granted.data?.detail ?? "That could not be delegated. The card is untouched.");
+      return;
+    }
+    await decide("approved");
+  };
+
   const decide = async (decision: "approved" | "rejected" | "revise_requested") => {
     setFailure(null);
     const failed = mutationError(
@@ -348,6 +384,23 @@ function ApprovalCard({
 
   const words = approvalStateWords(card.state);
   const waitingOn = standingBlock?.waiting_on ?? card.blocked_waiting_on ?? null;
+
+  /*
+   * DELEGABLE, AS A BOOLEAN — and this was a real hole in ADR-018's interface half.
+   *
+   * The server computes it in SQL, so it arrives as 0 or 1, not false or true. The two branches
+   * below read `card.delegable !== false` and `card.delegable === false`; against the number 0 the
+   * first is TRUE and the second is FALSE, so a HUMAN-RESERVED action and an EXTERNAL EFFECT both
+   * rendered "Approve, and don't ask again…" and neither rendered the sentence saying why they
+   * cannot be delegated.
+   *
+   * Nothing was actually delegated — `grantStandingAuthority()` refuses to record such a grant and
+   * `liveStandingGrant()` would never match one — so the choke point held, which is exactly why
+   * ADR-018 puts the rule there. But the operator was offered a control on the firm's most
+   * consequential decisions that could only ever fail, on the page where she is told what she may
+   * and may not hand over. Caught by `e2e/p55-delegate-and-steer.spec.ts`.
+   */
+  const delegable = card.delegable === undefined ? true : Boolean(Number(card.delegable));
 
   return (
     <li className={open ? "card work-card-row is-open" : "card work-card-row"} data-testid={`approval-card-${card.id}`}>
@@ -464,6 +517,65 @@ function ApprovalCard({
               >
                 Approve
               </button>
+
+              {/*
+                APPROVE, AND STOP BEING ASKED — within bounds (ADR-018).
+
+                Offered only where it is genuinely delegable. A reserved action or an external effect
+                does not get this control at all, and the card says why in a sentence rather than
+                hiding it: the judgement on those IS the work, and anything leaving the building is
+                decided one message at a time.
+
+                Three windows and no fourth. "Until this task is done" comes first because it is the
+                one whose lifetime is a real event rather than a clock that keeps running overnight —
+                when the work closes, the authority is gone without anybody deciding it should be.
+              */}
+              {canDecide && delegable && (
+                <details className="delegate" data-testid={`delegate-${card.id}`}>
+                  <summary>Approve, and don't ask again…</summary>
+                  <div className="delegate-body">
+                    <label>
+                      Why
+                      <input
+                        placeholder="so this is reviewable later"
+                        aria-label={`delegate-reason-${card.id}`}
+                        data-testid={`delegate-reason-${card.id}`}
+                        value={delegateReason}
+                        onChange={(e) => setDelegateReason(e.target.value)}
+                      />
+                    </label>
+                    <div className="delegate-windows">
+                      {([
+                        ["THIS_TASK", "until this task is done"],
+                        ["TODAY", "for the rest of today"],
+                        ["THIS_WEEK", "for the rest of this week"],
+                      ] as const).map(([window, label]) => (
+                        <button
+                          key={window}
+                          type="button"
+                          disabled={delegateReason.trim().length < 4 || (window === "THIS_TASK" && !card.work_card_id)}
+                          data-testid={`delegate-${window.toLowerCase()}-${card.id}`}
+                          onClick={() => void delegate(window)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="muted small">
+                      This still approves the card in front of you. Anything else like it goes through
+                      without asking, up to a limit, until it expires — and you can stop it at any time.
+                      {!card.work_card_id && " This one is not attached to a task, so that option is off."}
+                    </p>
+                  </div>
+                </details>
+              )}
+              {canDecide && !delegable && (
+                <p className="muted small" data-testid={`not-delegable-${card.id}`}>
+                  This one comes back to you every time. {card.is_reserved
+                    ? "The judgement is the work, so there is no version of it you can delegate ahead."
+                    : "It reaches somebody outside the firm, and those are decided one at a time."}
+                </p>
+              )}
               <button
                 type="button"
                 data-testid={`revise-${card.id}`}

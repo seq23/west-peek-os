@@ -690,7 +690,10 @@ details h3 {
 
 .module-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(20rem, 100%), 1fr));
+  /* 26rem, not 20: these hold a sentence from a named colleague, and a column too narrow to fit one
+     turns every card into four wrapped lines. `auto-fit` so one card fills the row rather than
+     leaving three empty tracks beside it. See the note on `.work-card-grid`. */
+  grid-template-columns: repeat(auto-fit, minmax(min(26rem, 100%), 1fr));
   gap: var(--space-md);
   margin: 0 0 var(--space-md);
 }
@@ -2803,13 +2806,30 @@ details h3 {
  * A grid you can run your eye across is the whole point of a card: you see how
  * much there is before you read any of it.
  */
+/*
+ * WIDER CARDS MAKE A SHORTER PAGE, which is the opposite of how it looks.
+ *
+ * Operator, 22 Aug 2026: "make sure cards are as long and wide as they need to be to make it work
+ * and readable without a lot of scrolling." The cause was here. At a 19rem minimum, auto-fill packs
+ * four skinny columns onto a wide screen; a sentence that sits on two lines at 30rem wraps over four
+ * at 19rem, so every card gets TALLER and the page gets longer. Raising the minimum trades a column
+ * for far less wrapping and less scrolling overall.
+ *
+ * `auto-fit` rather than `auto-fill` so a single card fills the row instead of sitting in a narrow
+ * strip beside three empty column tracks — which is where most of the wasted space on this page was.
+ *
+ * NO CARD HAS A FIXED HEIGHT and none scrolls inside itself. A card is as long as its content: an
+ * inner scrollbar hides the end of something a partner is trying to read, and two nested scrolls on
+ * one page is the interaction nobody wins.
+ */
 .work-card-grid {
   list-style: none;
   margin: 0 0 var(--space-xl);
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(30rem, 100%), 1fr));
   gap: var(--space-md);
+  align-items: start;
 }
 
 .work-card-grid > li {
@@ -3219,6 +3239,67 @@ details h3 {
   min-width: 0;
 }
 
+/* ── Delegating an approval (ADR-018) ──────────────────────────────────────
+   A disclosure rather than three more buttons in the row: delegating is the
+   rarer act, and putting it at the same weight as Approve would invite it to
+   be pressed by reflex — which is precisely what a bounded delegation is
+   meant to prevent. */
+.delegate {
+  border-top: 1px solid var(--wp-line);
+  padding-top: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.delegate > summary {
+  font-size: var(--text-sm);
+  color: var(--wp-muted);
+  cursor: pointer;
+}
+
+.delegate-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding-top: var(--space-sm);
+}
+
+/* The three windows read as one choice, so they sit on one line and wrap
+   together rather than stacking into what looks like three decisions. */
+.delegate-windows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+/* ── Quiet hours, as a sentence ────────────────────────────────────────────
+   Was two bare number inputs asking for a UTC hour, so a partner had to do
+   the timezone arithmetic herself and redo it twice a year. It reads as one
+   line of English now, with the selects sitting inside the sentence. */
+.quiet-hours {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+/* The selects sit ON the text baseline rather than beside it — a control
+   dropped into a sentence has to read as part of the sentence. */
+.quiet-hours-line {
+  margin: 0;
+  line-height: var(--lh-normal);
+}
+
+.quiet-hours-line select {
+  display: inline-block;
+  width: auto;
+  vertical-align: baseline;
+}
+
+.quiet-hours-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
 /* ── Asking the host of a page (item 14) ───────────────────────────────────
    NOT a panel. The card expands. Operator, on the first attempt — a button
    floated to the right edge opening a 22rem column inside the card: "i am
@@ -3515,6 +3596,60 @@ details h3 {
 .ic-step-body > p:last-child { margin-bottom: 0; }
 
 .ic-step-title { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
+
+/* ── Meetings: consent, capture, and a deal at committee (ADR-019) ─────────
+   Five classes, and each one exists because the thing it marks has to be
+   impossible to skim past. No font-size anywhere here: the register comes from
+   the `small` and `muted` utilities the markup already carries, and a second
+   size on top of those is the exact one-step difference the token scan exists
+   to catch. */
+
+/* The sentence you read out loud before recording anybody. Set apart from the
+   prose around it because it is a script rather than an explanation — the
+   difference between something to understand and something to say. */
+.consent-script {
+  margin: var(--space-md) 0;
+  padding: var(--space-md) var(--space-lg);
+  border-left: 3px solid var(--wp-orange);
+  background: var(--wp-tint);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  color: var(--wp-ink);
+  line-height: var(--lh-normal);
+}
+
+/* The microphone is open. Deliberately the loudest thing on the page while it
+   is true, and absent the rest of the time — an indicator that is always there
+   stops being read. */
+.capture-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-pill);
+  background: var(--wp-danger-tint);
+  border: 1px solid var(--wp-danger-line);
+  color: var(--wp-danger);
+  font-weight: 600;
+}
+
+/* One deal in front of the committee. A rule above it rather than a box around
+   it: the page already has cards, and a card inside a card reads as a mistake. */
+.ic-deal { display: flex; flex-direction: column; gap: var(--space-sm); }
+.ic-deal > h4 { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; margin: 0; }
+
+/* A gap the packet is honest about. Indented under its own marker so a list of
+   them reads as a list of questions rather than a wall of assertions. */
+.ic-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  padding: var(--space-sm) 0;
+  border-top: 1px solid var(--wp-line);
+}
+
+/* Who owes the answer. A question with nobody against it is one nobody has
+   agreed to answer, so this is never allowed to be quieter than the question. */
+.ic-owes { color: var(--wp-ink-2); font-weight: 600; }
 
 /* ── Deliverables ──────────────────────────────────────────────────────────
    Things an employee produced and handed over. Signed, with a face, and always
@@ -3817,6 +3952,41 @@ tbody tr.is-selected > td {
 
 @media (prefers-reduced-motion: reduce) {
   .health-ok { animation: none; }
+}
+
+/* ── The duty roster, and the operator's changes to it ─────────────────────
+   Four shift cards, one per part of the day. The shift running now is edged in
+   the accent — "this is the current selection", which is the one meaning orange
+   is allowed to carry. The word "Running now" sits beside it, so the edge is
+   never the only cue. Nothing here declares a font size: the rota borrows the
+   page's existing registers rather than inventing a step of its own. */
+.rota-current { border-color: var(--wp-orange); }
+
+/* A name and its mark on one baseline; the revert control sits at the far end
+   of the same line, where the eye already is after reading what changed. */
+.rota-entry-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+/* Why an entry is not the default. Ruled rather than boxed: it is a note ON the
+   line above it, not a second thing beside it. */
+.rota-change {
+  margin-top: var(--space-2xs);
+  padding-left: var(--space-sm);
+  border-left: 2px solid var(--wp-tint-line);
+}
+
+/* The two ways to change the rota, side by side at desk width and stacked on a
+   phone. They are alternatives, so they read as a pair rather than a sequence. */
+.rota-forms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+  gap: var(--space-md);
+  margin: 0 0 var(--space-md);
 }
 
 .jobs-run-now { margin-bottom: var(--space-sm); }
@@ -4214,4 +4384,108 @@ body {
    second border-top of its own a few pixels under that one, which reads as a mistake. */
 .declined-shelf {
   opacity: 0.72;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE DEAL RECORD — one company, one record, a flat sequence of sections
+   Operator: "i dont underestand why it cant be simple like the lp page.
+   everything is there and its easy to follow", and "you need to fix it once
+   we pick a company and all the stuff comes out."
+
+   The LP page works because it is a FLAT SEQUENCE — a heading, one card, the
+   next heading — and because the h3 rule above draws the divider for free. So
+   nothing here invents a layout: the record is a run of ordinary sections, and
+   these rules exist only to give the record a visible beginning, to put the
+   company's name at the head of it, and to lay a set of facts out in a grid
+   the eye can learn once and then read at a glance.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The record's own beginning. Two rules would be drawn if the first h3 inside it
+   also drew one, so the wrapper draws the heavier line and its first heading
+   does not — see `h3:not(:first-child)` above, which the wrapper satisfies. */
+.deal-record {
+  margin-top: var(--space-2xl);
+  padding-top: var(--space-lg);
+  border-top: 2px solid var(--wp-line-strong);
+}
+
+/* Whose record this is, what deal it is showing, and the two ways out of it,
+   on one baseline. */
+.record-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-md);
+}
+.record-head h4 { margin: 0; font-size: var(--text-md); }
+/* The exits sit at the right-hand end, away from the name they are not part of. */
+.record-head > button:first-of-type { margin-left: auto; }
+
+/* Which deal, when a company genuinely has more than one. Chips, because it is a
+   choice between a handful of things rather than a list of them. */
+.record-deals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+/* The sentence under a section heading. Given a measure because it is prose and
+   a 1200px line of it is unreadable; the facts below it are not prose and keep
+   the full width. */
+.record-lede { max-width: 68ch; }
+
+.record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+/* A set of facts in fixed positions. The same grid carries "where this stands"
+   and "the deal itself", so the second one is already familiar by the time the
+   reader reaches it. */
+.fact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--space-md) var(--space-lg);
+  margin: var(--space-md) 0;
+}
+
+/* A hairline down the left of each fact rather than a box around it: twelve
+   boxes on one card is a grid of buttons, which is not what these are. */
+.fact {
+  min-width: 0;
+  padding-left: var(--space-sm);
+  border-left: 1px solid var(--wp-line);
+}
+
+.fact-value {
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: var(--lh-snug);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.fact-note {
+  font-size: var(--text-xs);
+  line-height: var(--lh-snug);
+  color: var(--wp-muted);
+  margin-top: var(--space-3xs);
+}
+
+/* A stand-in is only safe while it is loud. Amber, never red: a provisional
+   figure is a legitimate state of a deal whose paperwork is not to hand. */
+.fact-provisional { color: var(--wp-warn); font-weight: 600; }
+
+/* The pipeline row whose record is open below. It is not selected in the sense
+   of chosen-for-an-action, so it takes the tint and the accent edge rather than
+   the filled treatment a pressed control would get. */
+.deal-row-open {
+  border-color: var(--wp-orange);
+  background: var(--wp-tint);
 }

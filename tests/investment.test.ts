@@ -808,7 +808,14 @@ describe("6. IC packet, decision, and dissent", () => {
     expect(replay.status).toBe(409);
   });
 
-  it("REJECT is recorded by an MP without a capital receipt and resolves the pending card", async () => {
+  /*
+   * ADR-019 changed where a rejected deal lands, and the change is a bug fix as much as a decision.
+   * REJECT used to send the opportunity to IC_DECIDED, whose only forward moves are CLOSED and
+   * WITHDRAWN — so the one thing a deal the committee turned down could do next was say the fund
+   * had invested in it. A pass goes to the visible pass pile carrying the decision's own rationale,
+   * and PASS → SCREENING already exists for the day the company comes back raising.
+   */
+  it("REJECT is recorded by an MP without a capital receipt, resolves the card, and passes the deal", async () => {
     const { opportunity, packetId } = await icReadyOpportunity("Reject IC Co");
     const packet = await call<{ id: string }>("/api/ic/packets", MP, "POST", { opportunity_id: opportunity.id, deal_math_packet_id: packetId });
     const submitted = await call<{ approval_card_id: string }>(`/api/ic/packets/${packet.body.id}/submit`, MP, "POST", {});
@@ -817,8 +824,26 @@ describe("6. IC packet, decision, and dissent", () => {
     expect(rejected.body.decision).toBe("REJECT");
     const card = await call<{ state: string }>(`/api/approvals/${submitted.body.approval_card_id}`, MP);
     expect(card.body.state).toBe("rejected");
+    const opp = await call<{ status: string; exit_reason: string | null }>(`/api/opportunities/${opportunity.id}`, MP);
+    expect(opp.body.status).toBe("PASS");
+    // The reason travels with the pass. For a fund the record of what it declined is half the value
+    // of the pipeline, and the reason is the whole of that half.
+    expect(opp.body.exit_reason).toBe("pass on price");
+  });
+
+  it("refuses a REJECT with no reason rather than recording a pass nobody can explain", async () => {
+    const { opportunity, packetId } = await icReadyOpportunity("Reasonless Reject Co");
+    const packet = await call<{ id: string }>("/api/ic/packets", MP, "POST", { opportunity_id: opportunity.id, deal_math_packet_id: packetId });
+    await call(`/api/ic/packets/${packet.body.id}/submit`, MP, "POST", {});
+    const res = await call<{ error: string }>(`/api/ic/packets/${packet.body.id}/decide`, MP, "POST", { decision: "REJECT", rationale: "no" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("reason_required");
+    // Refused BEFORE the append-only decision row is written: a verdict on the record with the deal
+    // stranded at IC_READY would be unfixable in either direction.
+    const after = await call<{ decisions: unknown[] }>(`/api/ic/packets/${packet.body.id}`, MP);
+    expect(after.body.decisions).toHaveLength(0);
     const opp = await call<{ status: string }>(`/api/opportunities/${opportunity.id}`, MP);
-    expect(opp.body.status).toBe("IC_DECIDED");
+    expect(opp.body.status).toBe("IC_READY");
   });
 
   it("a non-MP human cannot record any IC decision", async () => {

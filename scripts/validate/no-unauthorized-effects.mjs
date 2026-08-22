@@ -216,6 +216,12 @@ const violations = checkSources(scanRealTree());
 if (violations.length > 0) {
   console.error("AUTHORITY SCAN FAILED — unauthorized-effect violations:");
   for (const v of violations) console.error(`  ✗ ${v}`);
+  // What to do about it. This is the scan most likely to be tripped by someone who thinks they are
+  // writing an ordinary service, so the epilogue names the one path rather than restating the rule.
+  console.error("\nAnything that leaves the system is an external effect: it is REQUESTED by a service,");
+  console.error("authorized through authorize(), and EXECUTED only by effects/executor.ts, which");
+  console.error("consumes the approval receipt so it cannot be replayed. Splitting those three steps");
+  console.error("across a service is how an effect happens with nobody having approved it.");
   process.exit(1);
 }
 console.log("AUTHORITY SCAN PASSED: external-effect execution is confined to effects/executor.ts, no outbound fetch in worker code, merge/reverse/executor route through authorize().");

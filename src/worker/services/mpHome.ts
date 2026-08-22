@@ -99,7 +99,11 @@ async function intelligenceModule(env: Env, identity: FirmUserIdentity): Promise
     key: "intelligence",
     title: "Daily intelligence",
     answers: "What do I need to know? / What opportunities surfaced?",
-    link: "intelligence",
+    // `sources-and-sweeps`, because that is where this now lives and "intelligence" is not a route.
+    // A `link` that names no destination does not fail loudly: `navigate()` sets the hash, nothing
+    // matches it, and `keyFromHash` falls back — so pressing Open on this module put the operator
+    // back on Home with no explanation. A dead link on the surface the partners start their day on.
+    link: "sources-and-sweeps",
     count: items.length,
     items,
     note:
@@ -228,7 +232,9 @@ async function reconciliationModule(env: Env): Promise<HomeModule> {
     key: "reconciliation",
     title: "Reconciliation exceptions",
     answers: "What is broken?",
-    link: "reporting",
+    // Same as the intelligence module above: reporting folded into LP, "reporting" resolves to
+    // nothing, and Open silently bounced back to Home.
+    link: "lp",
     count: items.length,
     items,
     note:
@@ -496,8 +502,28 @@ export async function handleMpHome(ctx: RouteContext): Promise<Response> {
    * unrouted one safely recorded, and silently recorded is exactly how work goes missing. Counted
    * rather than listed: this line's job is to say "go and look", not to reproduce the inbox.
    */
+  /*
+   * EVERYTHING THE MAILBOX HAD TO HAND TO A PERSON, not only the untagged mail.
+   *
+   * Operator, 22 Aug 2026: "no inbound emails to os@joinwestpeek.com should silently fail. the
+   * employee responsible for routing should surface that an email came in the needs attention box."
+   *
+   * This counted `EMAIL_UNROUTED` captures alone, so it saw a message with no recognised tag and
+   * missed every other way the mailbox gives up: a message too large to read, a deal tag with no
+   * readable company, a person the relay could not propose. Those all open a routing card and none
+   * of them reached this number.
+   *
+   * Counting the OPEN ROUTING CARDS instead means it cannot miss a new failure mode by construction:
+   * anything the handler hands to a person appears here, because handing it over IS opening a card.
+   */
   const unrouted = await ctx.env.WP_OS_DB.prepare(
-    "SELECT COUNT(*) AS n FROM capture WHERE capture_type = 'EMAIL_UNROUTED' AND status = 'NEW' AND firm_scope = ?1",
+    `SELECT
+       (SELECT COUNT(*) FROM capture
+         WHERE capture_type = 'EMAIL_UNROUTED' AND status = 'NEW' AND firm_scope = ?1)
+     + (SELECT COUNT(*) FROM work_card
+         WHERE firm_scope = ?1
+           AND state IN ('OPEN','IN_PROGRESS','BLOCKED')
+           AND (title LIKE 'Unclear email:%' OR title LIKE 'Too big to read:%')) AS n`,
   )
     .bind("west-peek")
     .first<{ n: number }>();

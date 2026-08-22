@@ -43,6 +43,49 @@ const TRANSACTION_TYPES = [
   { key: "SALE", label: "Sale — we sold" },
 ] as const;
 
+/**
+ * A booked purchase said in words, not in the six stored values it is made of.
+ *
+ * Until 22 Aug 2026 a row here read `primary investment · 125000 @ 4 · DRAFT · 2026-08-14` — a
+ * share count and a share price as bare integers, and the lifecycle state printed as a raw enum
+ * inside a `<code>` element. Money is money and a state is a sentence.
+ */
+function transactionKind(key: string): string {
+  return TRANSACTION_TYPES.find((t) => t.key === key)?.label.split(" — ")[0] ?? "Purchase";
+}
+
+/** Where a purchase has got to on the ladder, and what has to happen next. */
+function transactionStanding(status: string): string {
+  switch (status) {
+    case "DRAFT":
+      return "drafted — nothing is booked";
+    case "PENDING_APPROVAL":
+      return "waiting on a partner's decision";
+    case "APPROVED":
+      return "approved — not booked until it is executed";
+    case "EXECUTED":
+      return "booked — the fund holds this";
+    case "VOIDED":
+      return "voided";
+    default:
+      return "in progress";
+  }
+}
+
+function money(value: number | null | undefined, currency = "USD"): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency,
+    maximumFractionDigits: Math.abs(value) < 100 ? 2 : 0,
+  }).format(value);
+}
+
+function count(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+}
+
 export function RecordInvestment({
   companyId,
   companyName,
@@ -166,7 +209,9 @@ export function RecordInvestment({
 
   return (
     <section className="card" data-testid="record-investment">
-      <h3>What the fund actually owns</h3>
+      {/* An h4: this panel sits inside "The deal itself" on the deal record, and a section heading
+          here would read as a sibling of that section rather than a part of it. */}
+      <h4>What the fund has actually booked</h4>
       <p className="muted small">
         A position is created when a transaction is executed, and never any other way. Draft it, a partner approves it,
         then it is booked against {companyName}.
@@ -257,8 +302,11 @@ export function RecordInvestment({
       <ul className="card-list small" data-testid="transaction-list">
         {rows.map((t) => (
           <li key={t.id} data-testid={`txn-${t.id}`}>
-            <strong>{t.transaction_type.split("_").join(" ").toLowerCase()}</strong> · {t.quantity} @ {t.price_per_share} ·{" "}
-            <code data-testid={`txn-status-${t.id}`}>{t.status}</code> · {t.transaction_date}
+            <strong>{transactionKind(t.transaction_type)}</strong> — {count(t.quantity)} shares at{" "}
+            {money(t.price_per_share)} each, {money(t.gross_amount)} in all
+            <div className="muted" data-testid={`txn-status-${t.id}`}>
+              {transactionStanding(t.status)} · {new Date(t.transaction_date).toLocaleDateString()}
+            </div>
             {t.status === "DRAFT" && (
               <>
                 {" "}
@@ -267,10 +315,12 @@ export function RecordInvestment({
                 </button>
               </>
             )}
+            {/* The card's id used to be printed here. It is an identifier, it means nothing to a
+                reader, and the card is already the top item on Approvals when it is waiting. */}
             {t.status === "PENDING_APPROVAL" && (
               <p className="muted small">
-                Waiting on a decision{t.approval_card_id ? ` — card ${t.approval_card_id}` : ""}. Approve it on Approvals,
-                then bring the receipt back here.
+                Waiting on a decision. A Managing Partner decides it on Approvals; bring the receipt
+                back here afterwards.
               </p>
             )}
             {t.status === "APPROVED" && isPartner && (

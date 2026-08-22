@@ -70,6 +70,51 @@ export interface StepOutcome {
 }
 
 /** What has already happened, so a step is chosen knowing the run rather than restarting it. */
+/**
+ * What the partners have said about this card and have not been answered on.
+ *
+ * Re-read on EVERY step, because the entire point is that a note left while the work is running
+ * lands on the next step rather than after the card closes.
+ */
+async function unansweredNotes(env: Env, cardId: string): Promise<Array<{ id: string; body: string }>> {
+  const rows = await env.WP_OS_DB.prepare(
+    `SELECT n.id, n.body, fu.full_name
+       FROM work_card_note n
+       LEFT JOIN firm_user fu ON fu.id = n.author_id
+      WHERE n.work_card_id = ?1 AND n.acknowledged_at IS NULL
+      ORDER BY n.created_at ASC`,
+  )
+    .bind(cardId)
+    .all<{ id: string; body: string; full_name: string | null }>();
+  return (rows.results ?? []).map((r) => ({ id: r.id, body: `${r.full_name ?? "A partner"}: ${r.body}` }));
+}
+
+/**
+ * Record what the employee said back, against the notes it was answering.
+ *
+ * ACKNOWLEDGEMENT AND ANSWER ARE ONE EVENT — the table's CHECK enforces it, so a note cannot be
+ * marked seen without saying what it changed. A flag on its own would let an employee dismiss a
+ * partner's instruction without it ever touching the work, which is the failure the whole feature
+ * exists to prevent.
+ */
+async function recordAcknowledgement(
+  env: Env,
+  notes: Array<{ id: string }>,
+  output: string,
+): Promise<void> {
+  const line = output.split("\n").find((l) => l.trim().toUpperCase().startsWith("ACKNOWLEDGED:"));
+  if (!line) return;
+  const response = line.replace(/^\s*ACKNOWLEDGED:\s*/i, "").trim();
+  if (!response) return;
+  for (const n of notes) {
+    await env.WP_OS_DB.prepare(
+      "UPDATE work_card_note SET acknowledged_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), response = ?2 WHERE id = ?1 AND acknowledged_at IS NULL",
+    )
+      .bind(n.id, response)
+      .run();
+  }
+}
+
 async function historyFor(env: Env, cardId: string): Promise<string[]> {
   // FAILURES CAUSED BY A DEFECT THAT NO LONGER EXISTS ARE NOT HISTORY, THEY ARE NOISE. Early runs
   // drove the browser at DuckDuckGo, which returns a bot challenge; those attempts are still on the
@@ -174,6 +219,8 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
         .filter((block) => block.length > 0)
         .join("\n"),
       history: await historyFor(env, card.id),
+      // Re-read each step: a partner may leave a note while this is already running.
+      steering: await unansweredNotes(env, card.id),
     };
 
     const { run } = await runAi(env, {
@@ -194,6 +241,12 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
         workCardId: card.id,
       },
     });
+
+    // Recorded before the output is interpreted, so a note is answered even on a step that then
+    // fails to produce a usable action — the partner asked a question and it WAS answered.
+    if (loopCtx.steering && loopCtx.steering.length > 0 && run.output_text) {
+      await recordAcknowledgement(env, loopCtx.steering, run.output_text);
+    }
 
     if (run.status !== "COMPLETED" || !run.output_text) {
       steps.push({ step, action: "failed", detail: run.failure_reason ?? `run ${run.status}` });

@@ -337,7 +337,7 @@ function InterestsEditor(): JSX.Element {
 }
 
 export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {}): JSX.Element {
-  const state = useApi<{ report: Report | null; sections: Section[]; citations: Citation[]; date: string }>("/api/daily-intelligence");
+  const state = useApi<{ report: Report | null; sections: Section[]; citations: Citation[]; date: string; no_brief_because?: string | null }>("/api/daily-intelligence");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -407,7 +407,9 @@ export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {})
 
       {!report && !state.loading && (
         <p className="state-empty" data-testid="daily-brief-empty">
-          No brief for today yet. Run a sweep first so there is something to read, then build it.
+          {/* The reason the schedule gives, not a blank. A partner who cannot tell "nothing today"
+              from "this is broken" stops trusting the thing she reads first every morning. */}
+          {state.data?.no_brief_because ?? "No brief for today yet. Run a sweep first so there is something to read, then build it."}
         </p>
       )}
 

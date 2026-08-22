@@ -37,6 +37,7 @@ import { NotificationsPage } from "./pages/NotificationsPage";
 import { ResearchPage } from "./pages/ResearchPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { CockpitPage } from "./pages/CockpitPage";
+import { DutyRosterPanel } from "./pages/DutyRosterPanel";
 import { ThesisPage } from "./pages/ThesisPage";
 import { ModelingPage } from "./pages/ModelingPage";
 import { DealflowPage } from "./pages/DealflowPage";
@@ -1118,6 +1119,17 @@ function AiPage({ me }: { me: MeResponse }) {
     <section data-testid="ai-page">
       {/* First on the page, because it is the answer to the question a partner walks in with. */}
       <OutboundSwitches />
+
+      {/*
+        THE DUTY ROSTER LIVES HERE, on the operator's instruction that she wants to change it "in
+        the admin section". This page is the one Admin surface whose subject is controls over how
+        the firm's AI behaves rather than a record you read — the kill switches, the ceiling, the
+        outbound switches. Who the firm leans on at 3am is that kind of thing.
+
+        Above the run box deliberately: the rota governs the whole workforce every hour of every
+        day, and a one-off governed run does not.
+      */}
+      <DutyRosterPanel />
 
       <h4>Run AI task (governed boundary)</h4>
       <form
@@ -2494,205 +2506,15 @@ function InvestmentPage({ me, initialCompanyId }: { me: MeResponse; initialCompa
 }
 
 // ── P7: meetings ──
-
-interface MeetingListRow {
-  id: string;
-  title: string;
-  meeting_type: string;
-  status: string;
-  company_id: string | null;
-  recording_enabled: number;
-}
-
-interface MeetingDetailRow extends MeetingListRow {
-  consent_current: Record<string, { id: string; state: string; basis: string } | null>;
-  consent_history: Array<{ id: string; consent_type: string; state: string; created_at: string }>;
-  notes: Array<{ id: string; note_type: string; body: string; author_type: string }>;
-  commitments: Array<{ id: string; commitment_text: string; status: string; work_card_id: string | null }>;
-  debriefs: Array<{ id: string; summary: string }>;
-  transcript_imports: Array<{ id: string; status: string; refusal_reason: string | null; source: string }>;
-  prep_packets: Array<{ id: string; unresolved_contradictions_json: string }>;
-}
-
-function MeetingDetail({ meetingId }: { meetingId: string }) {
-  const meeting = useApi<MeetingDetailRow>(`/api/meetings/${meetingId}`, [meetingId]);
-  const [noteBody, setNoteBody] = useState("");
-  const [noteType, setNoteType] = useState("MANUAL");
-  const [commitmentText, setCommitmentText] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-  if (!meeting.data) return <p>Loading meeting…</p>;
-  const m = meeting.data;
-  const transcription = m.consent_current.TRANSCRIPTION;
-
-  const post = async (path: string, body: unknown, okStatus: number, label: string) => {
-    const { status, data } = await api<{ error?: string; detail?: string }>(path, { method: "POST", body });
-    setMessage(status === okStatus ? `${label} ok.` : `${label} refused: ${(data as { error?: string })?.error ?? status}`);
-    meeting.reload();
-  };
-
-  return (
-    <div data-testid="meeting-detail">
-      <h4>
-        {m.title} — <code data-testid="meeting-status">{m.status}</code> · recording{" "}
-        <code data-testid="meeting-recording">{m.recording_enabled === 1 ? "ACTIVE" : "NOT ACTIVATED"}</code> · transcription consent{" "}
-        <code data-testid="meeting-consent">{transcription?.state ?? "NOT RECORDED"}</code>
-      </h4>
-
-      <div className="form-row">
-        <button
-          type="button"
-          data-testid="consent-grant"
-          onClick={() =>
-            post(
-              `/api/meetings/${m.id}/consent`,
-              { consent_type: "TRANSCRIPTION", state: "GRANTED", basis: "verbal consent recorded on the call", granted_by: "counterparty" },
-              201,
-              "Consent GRANTED",
-            )
-          }
-        >
-          Record consent: GRANTED
-        </button>
-        <button
-          type="button"
-          data-testid="consent-revoke"
-          onClick={() => post(`/api/meetings/${m.id}/consent`, { consent_type: "TRANSCRIPTION", state: "REVOKED", basis: "counterparty revoked" }, 201, "Consent REVOKED")}
-        >
-          Revoke consent
-        </button>
-        {/* Both gates are independent: this attempt is refused (and recorded) unless
-            the recording policy was activated through an approved receipt. */}
-        <button type="button" data-testid="transcript-import" onClick={() => post(`/api/meetings/${m.id}/transcript`, { source: "transcription export" }, 201, "Transcript import")}>
-          Import transcript
-        </button>
-        <button type="button" data-testid="prep-assemble" onClick={() => post(`/api/meetings/${m.id}/prep`, { open_questions: ["What is the authoritative ARR?"] }, 201, "Prep packet")}>
-          Assemble prep packet
-        </button>
-      </div>
-
-      <form
-        className="form-row"
-        data-testid="note-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await post(`/api/meetings/${m.id}/notes`, { note_type: noteType, body: noteBody }, 201, "Note");
-          setNoteBody("");
-        }}
-      >
-        <select data-testid="note-type" aria-label="Kind of note" value={noteType} onChange={(e) => setNoteType(e.target.value)}>
-          {["MANUAL", "OFF_RECORD"].map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
-        <input data-testid="note-body" aria-label="What the update says" value={noteBody} onChange={(e) => setNoteBody(e.target.value)} placeholder="meeting note" />
-        <button type="submit" className="btn-strong" data-testid="note-submit">
-          Add note
-        </button>
-      </form>
-
-      <form
-        className="form-row"
-        data-testid="commitment-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await post(`/api/meetings/${m.id}/commitments`, { commitment_text: commitmentText, owner_side: "FIRM" }, 201, "Commitment");
-          setCommitmentText("");
-        }}
-      >
-        <input data-testid="commitment-text" aria-label="What you need, in your own words" value={commitmentText} onChange={(e) => setCommitmentText(e.target.value)} placeholder="commitment made in the meeting" />
-        <button type="submit" className="btn-strong" data-testid="commitment-submit">
-          Record commitment
-        </button>
-      </form>
-
-      <ul data-testid="commitment-list" className="card-list">
-        {m.commitments.map((c) => (
-          <li key={c.id} className="card" data-testid={`commitment-${c.id}`}>
-            {c.commitment_text} — <code>{c.status}</code>
-            {c.work_card_id ? ` · work card ${c.work_card_id}` : ""}
-            {c.status === "OPEN" && (
-              <button type="button" data-testid={`commitment-convert-${c.id}`} onClick={() => post(`/api/meeting-commitments/${c.id}/convert`, {}, 200, "Converted to work card")}>
-                Convert to work card
-              </button>
-            )}
-          </li>
-        ))}
-        {m.commitments.length === 0 && <li className="state-empty" data-testid="no-commitments">No commitments.</li>}
-      </ul>
-
-      <ul data-testid="note-list">
-        {m.notes.map((n) => (
-          <li key={n.id} data-testid={`note-${n.id}`}>
-            <code>{n.note_type}</code> {n.body} ({n.author_type})
-          </li>
-        ))}
-      </ul>
-
-      <ul data-testid="transcript-list">
-        {m.transcript_imports.map((tr) => (
-          <li key={tr.id} data-testid={`transcript-${tr.id}`}>
-            <code>{tr.status}</code> {tr.source}
-            {tr.refusal_reason ? ` — ${tr.refusal_reason}` : ""}
-          </li>
-        ))}
-        {m.transcript_imports.length === 0 && <li className="state-empty" data-testid="no-transcripts">No transcript imports.</li>}
-      </ul>
-
-      <LiveHelpPanel meetingId={m.id} />
-      <CloseoutPanel meetingId={m.id} />
-
-      {message && <p className="notice" data-testid="meeting-message">{message}</p>}
-    </div>
-  );
-}
-
-function MeetingsPage({ me }: { me: MeResponse }) {
-  const meetings = useApi<{ meetings: MeetingListRow[] }>("/api/meetings");
-  const companies = useApi<{ companies: CompanyRow[] }>("/api/companies");
-  const [title, setTitle] = useState("");
-  const [companyId, setCompanyId] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  void me;
-
-  return (
-    <section data-testid="meetings-page">
-      {/*
-        THE CREATE FORM IS GONE FROM HERE, and that is the fix rather than a tidy-up.
-        It hardcoded `meeting_type: "FOUNDER"` on every meeting it recorded. That is not cosmetic:
-        close-out delegation READS the type to decide who follows up, so an LP call filed as a
-        founder meeting routes its commitments to the wrong person. The surface above this one has
-        a proper type picker with per-type seating suggestions, and it is the one door.
-
-        What stays is the reason this component still exists — prep packets, notes, consent,
-        transcripts, debriefs and close-out, which belong to one meeting rather than to the list.
-        Removing the form also removes a duplicate `meeting-create-form` test id that made every
-        selector on this surface ambiguous.
-      */}
-      {message && <p className="notice small" data-testid="meetings-message">{message}</p>}
-
-      <ul className="card-list" data-testid="meeting-list">
-        {(meetings.data?.meetings ?? []).map((m) => (
-          <li key={m.id} className="card" data-testid={`meeting-${m.id}`}>
-            <button type="button" className="link-button" data-testid={`meeting-open-${m.id}`} onClick={() => setSelected(m.id)}>
-              {m.title}
-            </button>{" "}
-            {/* Was `<code>FOUNDER</code> <code>SCHEDULED</code>`. A partner reading their own
-                calendar should not be shown a column value. */}
-            <span className="muted small">
-              {m.meeting_type.split("_").join(" ").toLowerCase()} · {m.status.split("_").join(" ").toLowerCase()}
-            </span>
-          </li>
-        ))}
-        {(meetings.data?.meetings ?? []).length === 0 && <li className="state-empty" data-testid="no-meetings">No meetings.</li>}
-      </ul>
-
-      {selected && <MeetingDetail meetingId={selected} />}
-    </section>
-  );
-}
+//
+// THE WHOLE SURFACE IS `pages/MeetingsPage.tsx` NOW, and that is the fix rather than a tidy-up.
+// Two Meetings pages used to render one under the other: a list with a create form from the
+// surface file, and a second list with the notes, consent, transcript and close-out machinery
+// from here. Both emitted `meeting-list` and `meeting-${id}`, so every selector on this surface
+// was ambiguous and opening a meeting in one had no effect on the other. Anybody looking at it
+// was reading two pages and being asked to work out which one they were on — which is most of
+// what the operator meant by "it is not self explanatory from looking at the page what im able
+// to do". See ADR-019.
 
 // ── P9: Network OS integration boundary ──
 
@@ -3079,6 +2901,19 @@ function AllocationPage({ me }: { me: MeResponse }) {
           // fund the firm does not have, and printed the answers as arithmetic. This page already
           // refused to open a scenario without a pinned policy version; it had no business being
           // stricter about a policy id than about the size of the fund.
+          /*
+           * Read BEFORE any await, like the rest of this handler: `currentTarget` is gone by the
+           * time the policy lookups resolve, and reading it afterwards is how this form lost fields
+           * silently once already.
+           */
+          const investableGiven = Number(form.get("investable"));
+          if (!Number.isFinite(investableGiven) || investableGiven <= 0) {
+            setMessage(
+              "Scenario refused: say how much of the fund is actually investable after fees. Nobody has recorded a fee model, so this is the one number the system cannot work out for you.",
+            );
+            return;
+          }
+
           const { data: basis } = await api<{
             fund_size: number | null;
             fund_deployed: number;
@@ -3100,6 +2935,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
               reserve_version_id: pins.reserve,
               concentration_version_id: pins.concentration,
               fund_size: basis.fund_size,
+              investable: investableGiven,
               fund_deployed: basis.fund_deployed,
               // Investable and the modelled reserve need are OMITTED, not zeroed. Nobody has
               // recorded a fee model or a reserve plan, and a zero would be read as "the fund has
@@ -3124,6 +2960,22 @@ function AllocationPage({ me }: { me: MeResponse }) {
         </label>
         <label>
           Name <input name="name" data-testid="scenario-name" defaultValue="" />
+        </label>
+        {/*
+          ASKED FOR, BECAUSE NOBODY HAS RECORDED IT. `investable` is NOT NULL and the firm has no fee
+          model on file, so there are only three options: invent a number, refuse to open scenarios
+          at all, or ask. Inventing is what put a $30M fund into every scenario in the first place,
+          and refusing would take Fund strategy away entirely — so the form asks for the one figure
+          the system genuinely does not know, and the answer is recorded rather than assumed.
+        */}
+        <label>
+          Investable after fees{" "}
+          <input
+            name="investable"
+            data-testid="scenario-investable"
+            inputMode="decimal"
+            placeholder="what is actually deployable"
+          />
         </label>
         <button type="submit" className="btn-strong" data-testid="scenario-create">
           Open scenario (pins current policy versions)
@@ -3536,14 +3388,8 @@ export function App() {
   // Distinguishes "signed out deliberately" from "never signed in". Without it the two states
   // render the same screen and the operator cannot tell whether sign-out worked.
   const [signedOut, setSignedOut] = useState(false);
-  /**
-   * Which company the deal record is showing.
-   *
-   * Lifted here because the pipeline and the deal record are two components on one page, and a row
-   * warning that a deal carries placeholder figures has to be able to open the place that replaces
-   * them. Held in the shell rather than passed sideways between siblings.
-   */
-  const [dealRecordCompany, setDealRecordCompany] = useState("");
+  /* Which company the deal record is showing used to be held here, because the pipeline and the
+     record were two components on one page. They are one component now and it owns the choice. */
 
   /**
    * Which nav groups are collapsed, remembered across sessions.
@@ -3849,53 +3695,25 @@ export function App() {
           {/* The old Deal Math address, kept working. `MERGED_ROUTES` normally resolves it to
               fund-strategy before it gets here; this stays so a direct jump cannot land nowhere. */}
           {authed && active === "deal-math" && <FundStrategyPage me={me.data!} />}
-          {authed && active === "dealflow" && (
-            <>
-              {/*
-                THE PIPELINE AND THE DEAL RECORD ARE ONE PAGE, so the warning on a row can reach the
-                place that resolves it. A deal saying "2 values are placeholders" and a picker that
-                replaces them were on the same screen with nothing joining them, which is the whole
-                of the operator's "i never realised it was the way to enter real numbers".
-              */}
-              <DealflowPage
-                me={me.data!}
-                onNavigate={navigate}
-                onFixNumbers={(companyId) => {
-                  setDealRecordCompany(companyId);
-                  document.querySelector('[data-testid="deal-records"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
-              />
-              {/* A SECTION, NOT A DRAWER. This was folded away, so the deal math, the IC assembly
-                  and the company record — the tools you reach for once a deal is real — were
-                  behind a disclosure most people never opened. A heading and the tool beneath it
-                  is what a person expects; hiding working machinery is how it stops being used. */}
-              <section data-testid="deal-records">
-                <div className="home-section-head">
-                  <h3>Deal records and tooling</h3>
-                  <span className="muted small">acts on one deal you pick, not on the pipeline above</span>
-                </div>
-                <p className="muted small">
-                  Deal math, IC packets and the full record behind a single company.
-                </p>
-                <InvestmentPage me={me.data!} initialCompanyId={dealRecordCompany} />
-              </section>
-            </>
-          )}
-          {authed && active === "meetings" && (
-            <>
-              <MeetingsSurface me={me.data!} onNavigate={navigate} />
-              {/*
-                NOT BEHIND A DISCLOSURE ANY MORE. Prep packets, notes, consent, transcripts, debriefs
-                and close-out are the machinery of this page, and they sat collapsed behind a
-                summary reading "Meeting records and close-out" — so the half of the surface that
-                does the work only existed if you guessed to press it. That is the same defect the
-                layout pass removed from Sources & sweeps, Machines and Rooms; a section is not
-                secondary detail just because it is second.
-              */}
-              <h3>What happened in each meeting, and what came out of it</h3>
-              <MeetingsPage me={me.data!} />
-            </>
-          )}
+          {/*
+            THE PIPELINE AND THE DEAL RECORD ARE ONE PAGE AND ONE COMPONENT.
+
+            They used to be two: this file rendered the pipeline, then a second section headed
+            "Deal records and tooling" holding a separate page whose first control was ANOTHER
+            company picker. So picking a company on the pipeline did not open its record — it
+            scrolled you to a dropdown where you picked the same company again. Operator: "you need
+            to fix it once we pick a company and all the stuff comes out."
+
+            The record now lives inside DealflowPage, opens from the row you pressed, and is the
+            only thing on this route. `InvestmentPage` and the three panels it alone used are
+            superseded by it and remain in this file for whoever owns App.tsx to remove.
+          */}
+          {authed && active === "dealflow" && <DealflowPage me={me.data!} onNavigate={navigate} />}
+          {/* ONE SURFACE, five sections, in the order a partner asks in (ADR-019). What used to be
+              mounted underneath this — a second meetings list with the notes, consent, transcript
+              and close-out machinery — is now section two of the page itself, under a heading that
+              says what it is for. */}
+          {authed && active === "meetings" && <MeetingsSurface me={me.data!} onNavigate={navigate} />}
           {/* ITEM 12: Portfolio is its own file and its own two sub-tabs — how the companies are
               doing, and what they have reported. The fund-allocation ring and the composition bars
               that used to sit above it are the PLAN, and they already have a home on Fund strategy;

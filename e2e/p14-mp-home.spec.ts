@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * P14 browser journey — MP Home + Daily Intelligence (GAP-04, GAP-05, GAP-23).
@@ -24,7 +25,7 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   await signIn(page);
 
   // ── Intelligence: watch a topic, then run the engine on a manual item ──
-  await page.getByRole("button", { name: "Sweeps", exact: true }).click();
+  await gotoSurface(page, "Sources & sweeps");
   await expect(page.getByTestId("intelligence-page")).toBeVisible();
 
   // The watchlist is a section of the page now, not a closed disclosure: nothing is opened first.

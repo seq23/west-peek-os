@@ -789,7 +789,48 @@ export async function handleGetDailyReport(ctx: RouteContext): Promise<Response>
   )
     .bind(firmUserId, date)
     .first<Record<string, unknown>>();
-  if (!report) return json({ report: null, sections: [], date });
+  if (!report) {
+    /*
+     * WHY THERE IS NO BRIEF, not merely that there is none.
+     *
+     * Operator, 22 Aug 2026: "my brief was not in my home page today at 7am ET" — and it was a
+     * Saturday, with weekends off, so the pipeline had behaved exactly as configured. The bug is
+     * that she had to work that out. A blank where a brief should be reads as broken, and a partner
+     * who believes the morning brief is broken stops relying on it.
+     *
+     * So the empty state carries the reason the schedule gives. Reading the profile costs one query
+     * on a path that has already decided it has nothing to show.
+     */
+    const profile = await ctx.env.WP_OS_DB.prepare(
+      "SELECT enabled, weekends, timezone, earliest_start_local FROM partner_intelligence_profile WHERE firm_user_id = ?1",
+    )
+      .bind(firmUserId)
+      .first<{ enabled: number; weekends: number; timezone: string; earliest_start_local: string }>();
+
+    let why: string | null = null;
+    if (!profile) {
+      why = "You have no brief settings yet, so nothing is being built for you.";
+    } else if (profile.enabled === 0) {
+      why = "Your morning brief is switched off.";
+    } else {
+      // The reader's own weekday, not the server's: at 02:00 UTC on a Monday it is still Sunday in
+      // New York, and the schedule runs on the partner's calendar rather than on UTC's.
+      let weekday = "today";
+      let isWeekend = false;
+      try {
+        weekday = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: profile.timezone }).format(new Date());
+        isWeekend = weekday === "Saturday" || weekday === "Sunday";
+      } catch {
+        isWeekend = false;
+      }
+      if (isWeekend && profile.weekends === 0) {
+        why = `No brief on a ${weekday} — weekends are off in your settings. Turn them on if you want one.`;
+      } else {
+        why = `Nothing built yet today. It starts after ${profile.earliest_start_local} your time, and needs a sweep to have found something.`;
+      }
+    }
+    return json({ report: null, sections: [], date, no_brief_because: why });
+  }
 
   const sections = await ctx.env.WP_OS_DB.prepare(
     "SELECT section_key, heading, body_md, item_ids_json, position FROM intelligence_report_section WHERE report_id = ?1 ORDER BY position",

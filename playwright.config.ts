@@ -24,7 +24,25 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],
   webServer: {
-    command: `npm run build && npx wrangler d1 migrations apply WP_OS_DB --local && npx wrangler dev --port ${PORT}`,
+    /*
+     * `--local` is REQUIRED, and it is what makes the documented "offline; no credentials" promise
+     * true again.
+     *
+     * Wrangler now treats some bindings as REMOTE by default in `wrangler dev`. `[ai]` is one of
+     * them, so plain `wrangler dev` opens a remote proxy session before it will serve anything —
+     * and on this account that session dies with
+     *   `The domain "west-peek-os.seq-taylor.workers.dev" is behind Cloudflare Access, but no
+     *    Access Service Token credentials were found`
+     * The server then exits 1 and Playwright reports `Process from config.webServer was not able to
+     * start`, which is not a product failure and not a spec failure: NOTHING runs. Measured
+     * 2026-08-22 on wrangler 4.120.1 — the entire 27-spec suite could not boot.
+     *
+     * `--local` disables remote bindings, which is the profile this repo has always claimed to test
+     * under (AGENTS.md: "resets the local D1, then starts its own `wrangler dev`; no credentials").
+     * The consequence is honest and intended: `env.AI` cannot reach Workers AI, so any journey that
+     * ends in a real model call must assert up to that boundary rather than through it.
+     */
+    command: `npm run build && npx wrangler d1 migrations apply WP_OS_DB --local && npx wrangler dev --local --port ${PORT}`,
     url: `http://localhost:${PORT}/api/health`,
     reuseExistingServer: false,
     timeout: 240_000,

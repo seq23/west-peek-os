@@ -7,6 +7,7 @@ import { ago, summarise, worstOf, type HealthCheck } from "../../shared/health/c
 import { browserConfigured } from "../effects/browserClient";
 import { STALE_AFTER_MINUTES } from "./dailyIntelligence";
 import { dailySpendUsd, workersAiConfigured } from "../ai/runAi";
+import { actionName } from "../../shared/help/actionNames";
 
 /**
  * GET /api/diagnostics/health — is anything broken, and what do I do about it.
@@ -172,12 +173,68 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
   const active = jobs.filter((j) => j.status === "ACTIVE");
   const stalled = active.filter((j) => j.target_kind === "EMPLOYEE" && j.target_id && byRef.get(j.target_id)?.status !== "ACTIVE");
   const failing = active.filter((j) => j.last_status === "FAILED" || j.last_status === "DEAD_LETTER");
+  /*
+   * A JOB THAT KEEPS BEING REFUSED IS NOT RUNNING, and this check could not see it.
+   *
+   * `runJob` records `job_run.refused` and returns — no notification, and REFUSED is not FAILED, so
+   * it was invisible here too. Production holds two of them from 20 Aug that nobody was ever told
+   * about. A refusal is usually legitimate and transient (a spend ceiling reached for the day, an
+   * employee paused), which is exactly why it is DEGRADED rather than DOWN: the job is not broken,
+   * it is not happening, and those need different words.
+   */
+  const refused = active.filter((j) => j.last_status === "REFUSED");
+  /*
+   * A LONG APPROVAL QUEUE IS A BUG REPORT, NOT A TO-DO LIST — and this check is the inversion.
+   *
+   * Research on alert fatigue is consistent and unkind: review quality collapses well before volume
+   * feels overwhelming, and people begin batch-approving while believing they are still reading. For
+   * two partners sharing one queue, more than ten pending at once does not mean the partners are
+   * behind. It means something is classified wrong and is generating cards that were never a
+   * decision.
+   *
+   * So this reports on the DESIGN and names the action keys producing the volume, because the fix is
+   * to reclassify them — or to delegate them under ADR-018 — rather than to work harder. Reasoning
+   * in docs/APPROVAL_AND_WORK_DESIGN.md.
+   */
+  const pending = await env.WP_OS_DB.prepare(
+    `SELECT action_key, COUNT(*) AS n FROM approval_card
+      WHERE state = 'pending_review' GROUP BY action_key ORDER BY n DESC`,
+  ).all<{ action_key: string; n: number }>();
+  const pendingRows = pending.results ?? [];
+  const pendingTotal = pendingRows.reduce((sum, r) => sum + r.n, 0);
+  const worst = pendingRows.slice(0, 3).map((r) => `${actionName(r.action_key)} (${r.n})`);
+  checks.push({
+    key: "approval_load",
+    label: "Is the approval queue asking too much?",
+    // DEGRADED rather than DOWN even when it is bad: nothing is broken, and a red light for a design
+    // problem would train the partners to ignore red lights that mean something has actually failed.
+    state: pendingTotal > 25 ? "DOWN" : pendingTotal > 10 ? "DEGRADED" : "OK",
+    reading:
+      pendingTotal === 0
+        ? "Nothing waiting"
+        : `${pendingTotal} waiting${worst.length ? ` · mostly ${worst.join(", ")}` : ""}`,
+    remedy:
+      pendingTotal > 10
+        ? `Past about ten at once, a queue gets skimmed rather than read. ${worst.length ? `Most of this is ${worst.join(", ")} — ` : ""}the fix is to stop those needing a decision at all, or to delegate them for the day, not to get through them faster.`
+        : undefined,
+    page: "approvals",
+  });
+
   checks.push({
     key: "scheduled_work",
     label: "Scheduled work",
-    state: failing.length > 0 ? "DOWN" : stalled.length > 0 ? "DEGRADED" : active.length > 0 ? "OK" : "DEGRADED",
-    reading: `${active.length} of ${jobs.length} running${failing.length ? ` · ${failing.length} failing` : ""}${stalled.length ? ` · ${stalled.length} cannot run` : ""}`,
-    remedy: stalled.length
+    state:
+      failing.length > 0
+        ? "DOWN"
+        : stalled.length > 0 || refused.length > 0
+          ? "DEGRADED"
+          : active.length > 0
+            ? "OK"
+            : "DEGRADED",
+    reading: `${active.length} of ${jobs.length} running${failing.length ? ` · ${failing.length} failing` : ""}${stalled.length ? ` · ${stalled.length} cannot run` : ""}${refused.length ? ` · ${refused.length} refused` : ""}`,
+    remedy: refused.length && !stalled.length && !failing.length
+      ? `${refused.map((j) => j.job_key).join(", ")} ${refused.length === 1 ? "was" : "were"} refused on the last attempt — usually a spend ceiling or an employee who is switched off. Not broken, but not happening either.`
+      : stalled.length
       ? `${stalled.map((j) => byRef.get(j.target_id!)?.name ?? j.target_id).join(", ")} ${stalled.length === 1 ? "is" : "are"} switched off, so ${stalled.length === 1 ? "that job" : "those jobs"} cannot run.`
       : failing.length
         ? `${failing.map((j) => j.job_key).join(", ")} failed on the last attempt.`

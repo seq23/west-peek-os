@@ -27,6 +27,10 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "capture.resolve", name: "Resolve capture", description: "Say what a capture is about — a company, a person, or neither — and reconcile it against the register or Network OS.", isExternalEffect: false },
   { key: "capture.archive", name: "Archive capture", description: "Archive a capture without routing.", isExternalEffect: false },
   { key: "work_card.create", name: "Create work card", description: "Create a unit of governed work, optionally from a capture.", isExternalEffect: false },
+  // ADR-018. Deliberately an ORDINARY action rather than reserved: a partner delegating something
+  // she can already do is not a new power, and making the delegation itself require an approval card
+  // would mean raising a card to stop raising cards.
+  { key: "standing_authority.grant", name: "Delegate an approval ahead of time", description: "Grant standing authority for one action, bounded by a use count and an expiry. Can never cover a reserved action or an external effect — those come back to a partner every time.", isExternalEffect: false },
   { key: "work_card.update", name: "Update work card", description: "Change work-card state, owner, priority, or next action.", isExternalEffect: false },
   { key: "approval.request", name: "Request approval", description: "Draft or submit an approval card for a governed action.", isExternalEffect: false },
   { key: "approval.decide", name: "Decide approval", description: "Approve, reject, or request revision on a pending approval card (human with required role only).", isExternalEffect: false },
@@ -79,6 +83,12 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "deal_math_packet.review", name: "Review deal math packet", description: "Human review transition of a packet's math quality status.", isExternalEffect: false },
   { key: "ic_packet.assemble", name: "Assemble IC packet", description: "Assemble an IC packet: deal math + evidence summary + unresolved material contradictions (never filtered). AI may draft; humans decide.", isExternalEffect: false },
   { key: "dissent.create", name: "Record dissent", description: "Attach a dissent record to an IC decision (append-only).", isExternalEffect: false },
+  // ADR-019. A packet drafted from what the firm holds will always be missing something; these two
+  // keys are how the missing part is NAMED rather than written. Ordinary actions, deliberately —
+  // recording that the firm does not know something is not a power that needs a partner's signature,
+  // and putting an approval in front of it would mean the gaps go unrecorded instead.
+  { key: "ic_packet.question.raise", name: "Name a gap in the IC packet", description: "Record something the packet does not know as a question, with what was looked at and who owes the answer. Naming a gap is never the same as filling it in.", isExternalEffect: false },
+  { key: "ic_packet.question.answer", name: "Answer or withdraw an IC question", description: "Answer an open question on an IC packet, or withdraw one the firm decided it does not need, with a reason. Withdrawing is recorded as withdrawing and never as answered.", isExternalEffect: false },
   // P7 — meeting intelligence: prep, consent, transcript, notes, commitments, debrief.
   { key: "meeting.create", name: "Create meeting", description: "Record a meeting (scheduled or historical) with its participants.", isExternalEffect: false },
   { key: "meeting.update", name: "Update meeting", description: "Update meeting fields or lifecycle status.", isExternalEffect: false },
@@ -285,6 +295,13 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "community.act", name: "Record a community act", description: "Record something West Peek witnessed a member do — attended, hosted, answered, referred. Append-only evidence.", isExternalEffect: false },
   { key: "council.decide", name: "Decide Council membership", description: "Record a Council decision with a reason. Human only in code — the Council is a judgement, never a computed threshold.", isExternalEffect: false },
   { key: "match.manage", name: "Manage introduction suggestions", description: "Propose or dismiss a suggested introduction between two people. Proposing is internal; making the introduction is a human act.", isExternalEffect: false },
+  // The operator changing the duty roster (migration 0137). Ordinary, not reserved: the rota decides
+  // who the firm LEANS ON at an hour, never who is employed — employment stays on the reserved
+  // ai_employee.activate receipt path, and an override cannot put somebody on duty who is switched
+  // off. Two keys because they are two authorities, and putting a shift back to the default the
+  // whole system already agrees on is the safe direction.
+  { key: "duty_override.set", name: "Change who is on duty", description: "Put an employee on or off a named shift, or give them explicit working hours that supersede the shift model for them. Stored as a difference from the firm's default rota, never as a copy of it, and always with who changed it and why.", isExternalEffect: false },
+  { key: "duty_override.clear", name: "Put a duty change back to default", description: "Remove a duty override so the employee follows the firm's default rota again. The change and its removal both stay on the event spine.", isExternalEffect: false },
 ] as const;
 
 /**

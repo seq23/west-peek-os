@@ -248,6 +248,9 @@ describe("where the firm's Access credentials are allowed to go", () => {
     const withCreds = { ...BOUND, CF_ACCESS_CLIENT_ID: "id", CF_ACCESS_CLIENT_SECRET: "secret" } as Env;
     const r = await browsePage(withCreds, "https://os.joinwestpeek.com/", async () => stub);
     expect(r.ok).toBe(false);
-    expect(r.detail).toContain("Stopped rather than carry our Access credentials off-site");
+    // The refusal itself is the point and is asserted above. What the detail must DO is name why:
+    // our own Access credentials, and that they were not sent. The sentence may be reworded.
+    expect(r.detail).toMatch(/Access credential/i);
+    expect(r.detail).toMatch(/stopped|refused|did not/i);
   });
 });

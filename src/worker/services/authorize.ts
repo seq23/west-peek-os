@@ -56,6 +56,11 @@ export interface AuthorizationDecision {
   requiredApproverRoles?: string[];
   /** The verified receipt card id when ALLOW was granted via receipt. */
   receiptId?: string;
+  /** The standing grant spent, when ALLOW came from delegated authority (ADR-018). */
+  standingAuthorityId?: string;
+  /** Uses left on that grant after this one. Surfaced so a caller can say "3 left" rather than
+   *  leaving a partner to discover the limit by hitting it. */
+  standingUsesLeft?: number;
 }
 
 export const HOME_FIRM_SCOPE = "west-peek";
@@ -89,6 +94,18 @@ interface ReservedActionRow {
 export interface ApprovalCardRow {
   id: string;
   action_key: string;
+  /**
+   * Whether this card may be delegated ahead of time (ADR-018). Read from `action_type` on the way
+   * out rather than worked out in the client: a page that derived it would be a second copy of the
+   * rule, and the one place it must never be wrong is the control offering to stop asking.
+   * Absent on queries that do not join `action_type`.
+   */
+  delegable?: number | boolean;
+  is_reserved?: number;
+  is_external_effect?: number;
+  /** The work card this decision is about, when it is about one — what a "until this task is done"
+   *  grant attaches to. Derived from `object_type = 'work_card'`, never stored twice. */
+  work_card_id?: string | null;
   object_type: string;
   object_id: string;
   title: string;
@@ -204,6 +221,49 @@ export async function verifyAuthorizationReceipt(
 /**
  * The choke point. See module docstring for the decision vocabulary.
  */
+/**
+ * A live standing grant covering this action on this object, if there is one.
+ *
+ * CONSULTED WHERE AN APPROVAL CARD WOULD ENTER THE QUEUE, not here. That placement was wrong twice
+ * over and the mistake is worth recording: inside `authorize()` the tier was INERT where it was safe
+ * (nothing but reserved and external returns REQUIRE_APPROVAL, and neither is delegable) and
+ * DANGEROUS where it was not — a grant would have satisfied a RESTRICTED action for any identity at
+ * all, including the read-only service account, which is exactly the role gate it was meant to
+ * respect. Delegating an approval is about the queue, so it belongs at the queue.
+ *
+ * "Live" means: not revoked, not expired, uses remaining, and — when the grant was tied to a work
+ * card — that card still open. Every one of those is checked in SQL rather than in TypeScript so a
+ * caller cannot forget one.
+ *
+ * MATCHES THE NARROWEST GRANT FIRST. A grant scoped to one object is more considered than a
+ * blanket one for the action, so it should be spent before the general grant is touched — otherwise
+ * a broad grant silently absorbs uses that a specific one was created to cover.
+ */
+export async function liveStandingGrant(
+  env: Env,
+  actionKey: string,
+  ref: ObjectRef,
+): Promise<{ id: string; uses: number; max_uses: number } | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT sa.id, sa.uses, sa.max_uses
+       FROM standing_authority sa
+       LEFT JOIN work_card wc ON wc.id = sa.work_card_id
+      WHERE sa.action_key = ?1
+        AND sa.revoked_at IS NULL
+        AND sa.ends_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        AND sa.uses < sa.max_uses
+        AND (sa.object_id IS NULL OR (sa.object_type = ?2 AND sa.object_id = ?3))
+        -- A grant that lives until a task is done dies with the task, whether it was finished,
+        -- cancelled or reopened into something else.
+        AND (sa.work_card_id IS NULL OR wc.state IN ('OPEN','IN_PROGRESS','BLOCKED'))
+      ORDER BY CASE WHEN sa.object_id IS NULL THEN 1 ELSE 0 END, sa.created_at ASC
+      LIMIT 1`,
+  )
+    .bind(actionKey, ref.objectType, ref.objectId ?? null)
+    .first<{ id: string; uses: number; max_uses: number }>();
+  return row ?? null;
+}
+
 export async function authorize(
   env: Env,
   actor: Actor,

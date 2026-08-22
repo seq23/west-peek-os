@@ -63,7 +63,10 @@ describe("employee readiness reflects the real dependency chain", () => {
     )!;
     expect(r.state).toBe("NOT_ACTIVATED");
     const b = r.blockers.find((x) => x.kind === "EMPLOYEE_NOT_ACTIVE")!;
-    expect(b.detail).toContain("waiting for a Managing Partner approval receipt");
+    // The rule is that the blocker names WHO has to act and WHAT it is waiting for — not the
+    // sentence it says it in.
+    expect(b.detail).toMatch(/Managing Partner/);
+    expect(b.detail).toMatch(/approval receipt/i);
     expect(b.action).toContain("Approvals");
   });
 

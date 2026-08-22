@@ -40,7 +40,17 @@ async function call<T = any>(path: string, headers: Record<string, string>, meth
   return { status: res.status, body: (await res.json()) as T };
 }
 
+/**
+ * Activate through the ONLY governed path: reserved card → approval → receipt.
+ *
+ * The contract is "this employee is ACTIVE when I return", not "I performed the activation".
+ * Migration 0136 employed the whole roster, so insisting on doing it makes the helper 409 on a
+ * seat that is already working — and that is the seed's business, not this suite's.
+ */
 async function activate(employeeId: string): Promise<void> {
+  const already = await t.db.prepare("SELECT status FROM ai_employee WHERE id = ?1").bind(employeeId).first<{ status: string }>();
+  if (already?.status === "ACTIVE") return;
+
   const card = await call<{ id: string }>(`/api/ai/employees/${employeeId}/request-activation`, MP, "POST", { reason: "P19" });
   await call(`/api/approvals/${card.body.id}/decide`, MP, "POST", { decision: "approved", note: "ok" });
   const res = await call<{ status: string }>(`/api/ai/employees/${employeeId}/activate`, MP, "POST", {
@@ -48,6 +58,18 @@ async function activate(employeeId: string): Promise<void> {
     reason: "P19",
   });
   expect(res.body.status).toBe("ACTIVE");
+}
+
+/**
+ * Stand a seat down, so a test that needs an unemployed employee CREATES that precondition.
+ *
+ * The mirror of `activate`, and needed for the same reason: since migration 0136 employed the whole
+ * roster, "an employee who is not ACTIVE" is not something a test can find lying around. Inheriting
+ * it from the seed made the D10 test below assert the seed rather than the rule, and it went red the
+ * day the partners employed everybody.
+ */
+async function standDown(employeeId: string): Promise<void> {
+  await t.db.prepare("UPDATE ai_employee SET status = 'INACTIVE' WHERE id = ?1").bind(employeeId).run();
 }
 
 beforeAll(async () => {
@@ -139,6 +161,9 @@ describe("recurring work never starts itself", () => {
 
 describe("a scheduled job can never activate an employee (GAP-22 / D10)", () => {
   it("REFUSES to run for an employee who is not ACTIVE, and leaves them inactive", async () => {
+    // The precondition is created, not inherited. See `standDown` above.
+    await standDown("aie_wells");
+
     const created = await call<{ job_key: string }>("/api/jobs", MP, "POST", {
       job_key: "wells_daily_note",
       name: "Knowledge manager daily note",

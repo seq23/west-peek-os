@@ -17,7 +17,8 @@ import {
 
 describe("core framework", () => {
   it("covers all eleven sections", () => {
-    expect(CORE_SECTIONS).toHaveLength(11);
+    // The list IS the count. A separate toHaveLength(11) beside it could only ever fail together
+    // with the toEqual below, and it was the half a reader had to update twice.
     expect(CORE_SECTIONS.map((s) => s.id)).toEqual([
       "founder", "problem", "product", "market", "traction", "distribution",
       "competition", "moat", "financing", "return_math", "kill_case",
@@ -76,14 +77,15 @@ describe("sector modules", () => {
 
   it("layers a sector module on top of core rather than replacing it", () => {
     const ai = sectionsFor("AI");
-    expect(ai.core).toHaveLength(11);
+    // Counted from the framework: "on top of core" is the rule, and eleven is only today's core.
+    expect(ai.core).toHaveLength(CORE_SECTIONS.length);
     expect(ai.sector?.title).toBe("AI / AI Infrastructure");
   });
 
   it("returns no module for OTHER without dropping the core", () => {
     const other = sectionsFor("OTHER");
     expect(other.sector).toBeUndefined();
-    expect(other.core).toHaveLength(11);
+    expect(other.core).toHaveLength(CORE_SECTIONS.length);
   });
 
   it("carries the killer question for the sectors that have one", () => {
