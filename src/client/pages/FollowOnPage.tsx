@@ -11,6 +11,12 @@ import { HowThisWorks } from "./HowThisWorks";
  * The candidate rule is PRINTED ON THE PAGE. A ranked list with an unstated rule invites the reader
  * to assume judgement that was never applied — these are companies where one number went up, not
  * companies the system thinks you should back.
+ *
+ * WHAT "CANDIDATE" MEANS, settled 21 Aug 2026. The word used to name two different populations:
+ * these companies, and separately the undecided options sitting in an allocation scenario, which the
+ * Cockpit also called "follow-on candidates" and which included reserves. The two pages could print
+ * different counts and both be right. Detection owns the word now; the Cockpit panel is named for
+ * what it holds. The four stages are stated on the page so a partner can see where a company is.
  */
 
 interface Review {
@@ -36,6 +42,19 @@ export function FollowOnPage(): JSX.Element {
     <div className="page" data-testid="follow-on-page">
       <h3>Follow-on</h3>
       <p className="muted">Where more money might go, and what has already been reviewed.</p>
+
+      {/*
+        Said once, here, because four different words were being used for four stages of one path and
+        nothing connected them. A partner reading any single surface could not tell how far along a
+        company was.
+      */}
+      <p className="small" data-testid="follow-on-stages">
+        A company travels four stages, and each lives somewhere different. <strong>Candidate</strong> — a
+        holding whose latest reading beat its previous one, detected below. <strong>Option</strong> — a
+        cheque somebody modelled inside an allocation scenario, on Fund strategy.{" "}
+        <strong>Review</strong> — the path economics, opened here and decided by a partner.{" "}
+        <strong>Booked</strong> — an executed follow-on transaction, which is the only stage where money moved.
+      </p>
 
       <section className="card">
         <h4>

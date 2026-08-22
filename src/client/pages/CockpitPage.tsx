@@ -16,7 +16,7 @@ interface Cockpit {
   improving: Array<{ company: string; metric: string; change_pct: number; window: string }>;
   stale_or_missing: Array<{ company: string; metric: string; as_of_date: string; days_old: number; stale_after_days: number }>;
   support_asks: Array<{ id: string; canonical_name: string | null; request_type: string; urgency: string; description: string }>;
-  follow_on_candidates: Array<{ id: string; label: string; option_type: string; canonical_name: string | null; capital: number }>;
+  undecided_capital_options: Array<{ id: string; label: string; option_type: string; canonical_name: string | null; capital: number }>;
   secondary_opportunities: Array<{ id: string; title: string; status: string; canonical_name: string | null }>;
   ownership_changes: Array<{ id: string; canonical_name: string | null; as_of_date: string; ownership_pct: number; source: string }>;
   changed_this_week: Array<{ event_type: string; object_type: string; object_id: string; created_at: string }>;
@@ -115,14 +115,22 @@ export function CockpitPage({ me }: { me: MeResponse }) {
           </ul>
         </Panel>
 
-        <Panel title="Follow-on candidates" testid="cockpit-followon">
+        {/*
+          Not "follow-on candidates" — that name belonged to the Follow-on page, which uses it for
+          companies whose latest reading beat their previous one. These are options somebody modelled
+          in a scenario and has not decided, reserves included. Same word over two populations meant
+          the two pages could print different counts and both be telling the truth.
+        */}
+        <Panel title="Capital options nobody has decided" testid="cockpit-undecided-options">
           <ul className="small">
-            {(c?.follow_on_candidates ?? []).map((f) => (
+            {(c?.undecided_capital_options ?? []).map((f) => (
               <li key={f.id}>
-                {f.canonical_name ?? f.label} — {f.option_type}, capital {f.capital}
+                {f.canonical_name ?? f.label} — {f.option_type === "RESERVE" ? "reserve" : "follow-on"}, capital {f.capital}
               </li>
             ))}
-            {(c?.follow_on_candidates ?? []).length === 0 && <li className="state-empty">No undecided follow-on or reserve options.</li>}
+            {(c?.undecided_capital_options ?? []).length === 0 && (
+              <li className="state-empty">Nothing modelled and left undecided. Companies pulling ahead are on Follow-on, not here.</li>
+            )}
           </ul>
         </Panel>
 

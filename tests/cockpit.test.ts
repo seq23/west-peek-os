@@ -123,13 +123,13 @@ describe("the cockpit reports movement and missing data from real records", () =
   });
 
   it("returns empty sections with an explanation rather than fabricated content", async () => {
-    const res = await call<{ support_asks: any[]; secondary_opportunities: any[]; follow_on_candidates: any[] }>(
+    const res = await call<{ support_asks: any[]; secondary_opportunities: any[]; undecided_capital_options: any[] }>(
       "/api/portfolio/cockpit",
       MP,
     );
     expect(Array.isArray(res.body.support_asks)).toBe(true);
     expect(Array.isArray(res.body.secondary_opportunities)).toBe(true);
-    expect(Array.isArray(res.body.follow_on_candidates)).toBe(true);
+    expect(Array.isArray(res.body.undecided_capital_options)).toBe(true);
   });
 });
 

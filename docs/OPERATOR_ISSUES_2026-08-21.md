@@ -358,6 +358,36 @@ email handler is last and only after Email Routing exists.
 
 ---
 
+## Item 25 — every tab laid out like the LP page · final pass
+
+> "add a final pass for every single tab that makes sure the pages are not jumbled like the events
+> tab and look more like the LP tab"
+
+**The standard, named, because "make it nicer" is not one.** The LP page reads well for reasons that
+can be copied:
+
+1. **A flat sequence.** Heading, one card, next heading. Nothing nested, nothing behind a
+   disclosure, nothing that reveals a further thing when you pick something. The only thing that
+   nests is a rare action — "add a second deal for this company" — confirmed by the operator as the
+   right exception.
+2. **One heading level per rank.** Sections are `h3`, things inside a card are `h4`. Dealflow had
+   four sections at the same rank rendering at four sizes, with the most important one smallest.
+3. **Headings say what the section is FOR**, not what table it reads. "Where the raise stands", not
+   "Fund metrics".
+4. **Rules between sections.** They were always distinct and the page never showed it.
+5. **Nothing waits silently.** A section with nothing in it says why — and says whether it is empty
+   or has not been asked yet, which are different facts.
+6. **No machine vocabulary.** `LP_PRIVATE`, `EXTERNAL VDR UNPROVEN`, "Working claim" were all on one
+   page.
+
+**Known offenders already seen:** Events & Rooms (the operator's own example), Cockpit, Machines,
+Governance, Contradictions, Integrations, Secondaries, Meetings.
+
+**Do it last**, after the functional items — a page whose behaviour is about to change is a page not
+worth laying out twice.
+
+---
+
 ## Item 24 — every role researched, every machine given another pass
 
 > "i should not have had to give u that. u r an ai and llm and u should figure out what the role is

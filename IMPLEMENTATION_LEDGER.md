@@ -3726,3 +3726,29 @@ Every claim here was checked against the live service, not inferred:
 Not deployed. This fix is on branch `fix/workers-ai-cheap-tier` and has not reached production, so
 University in production is still broken until it ships. The re-survey of the 24 working free models,
 and surfacing unusable models to the partners, are recorded in `BACKLOG.md` rather than done here.
+
+## 21 Aug 2026 — The follow-on discrepancy, settled
+
+**The discrepancy.** "Follow-on candidate" named two unrelated populations. `/api/follow-on`
+(Follow-on page) meant a held position whose latest metric reading beat its previous one — a
+detected signal. `/api/cockpit` meant undecided `capital_allocation_option` rows inside an
+allocation scenario — a queue of cheques somebody typed — and it included `RESERVE` options, which
+are not follow-ons at all. The two pages could report different counts of "candidates" and both be
+telling the truth, which is the worst kind of wrong number: unfalsifiable from either surface.
+
+**Settled: detection owns the word.** A CANDIDATE is a company the system spotted. The Cockpit
+panel is renamed for what it actually holds — `undecided_capital_options`, "Capital options nobody
+has decided" — and its empty state now points at Follow-on rather than implying the list is
+exhaustive. Nothing was deleted; the two lists were always distinct and both are wanted.
+
+**The four stages are now stated once, on the Follow-on page**, because four words were in use for
+one path and no surface connected them:
+
+| Stage | Means | Lives |
+|---|---|---|
+| Candidate | a holding whose latest reading beat its previous one | Follow-on (detected) |
+| Option | a cheque modelled inside an allocation scenario | Fund strategy |
+| Review | the path economics, decided by a partner | Follow-on |
+| Booked | an executed `FOLLOW_ON` transaction | the only stage where money moved |
+
+Typecheck, `tests/cockpit.test.ts` (11), `validate:brand` and `validate:design-tokens` green.

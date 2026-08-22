@@ -183,14 +183,19 @@ export async function handlePortfolioCockpit(ctx: RouteContext): Promise<Respons
     improving: trends.filter((t) => t.verdict === "IMPROVING").slice(0, 10),
     stale_or_missing: stale,
     support_asks: support,
-    follow_on_candidates: followOn,
+    undecided_capital_options: followOn,
     secondary_opportunities: secondaries,
     ownership_changes: ownership,
     changed_this_week: changedThisWeek,
     definitions: {
       trend: "Latest dated snapshot against the previous one, read against the metric's declared direction. The same comparison P8 alerting uses, so the cockpit and the alert list cannot disagree.",
       stale_or_missing: "A company/metric pair whose newest snapshot is older than that metric's own operator-set staleness rule. Missing data is reported as a finding, never as a blank.",
-      follow_on_candidates: "Undecided FOLLOW_ON and RESERVE options from allocation scenarios. A candidate is a comparison, not a recommendation to deploy.",
+      // Renamed 21 Aug 2026. This panel was called "follow-on candidates" while the Follow-on page
+      // used the same words for something else entirely — companies whose latest reading beat their
+      // previous one. Two populations, one name, so the two pages could report different counts of
+      // "candidates" and both be right. The word CANDIDATE now belongs to detection only; this is a
+      // decision queue, and it holds RESERVE options too, which were never follow-ons at all.
+      undecided_capital_options: "FOLLOW_ON and RESERVE options that were modelled in an allocation scenario and not yet decided. An option is a comparison somebody typed, not a company the system spotted — for that, see Follow-on.",
       runway: "Runway appears here only when the firm has defined a runway metric and recorded snapshots for it. West Peek OS does not estimate runway it was not given.",
     },
   });
