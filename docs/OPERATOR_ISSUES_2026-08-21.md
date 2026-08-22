@@ -172,10 +172,82 @@ person Network OS has a record of.
   `SELECT *` — so it depends on columns the list query does not guarantee, and lowercases them
   without a guard.
 
-**Hashtag triggers.** `#wpdealflow` and `#wpnetwork` are Network OS's inbound triggers today.
-Item 7's spec already routes `#wpdealflow` into this app's funnel. `#wpnetwork` stays Network OS's:
-a person entering the network is Network OS's event, and this app learns about them on the next
-pull. Two systems must not both claim the write.
+### The three crossings, decided 21 Aug 2026
+
+Read against the Network OS repo rather than assumed. `ContactRecord` there already carries
+`person_type: 'investor' | 'founder' | 'operator' | 'lawyer' | 'service_provider' | 'media' |
+'general' | 'unknown'`, plus `company`, `title`, `tags`, `relationship_type`, `priority`,
+`last_touch_date` and `deal_flow_prospect: 'yes' | 'no' | 'unknown'`. Its four main person types are
+exactly the categories the operator asked about, so no new taxonomy is needed anywhere below.
+
+**1 · Community reads a shape, not a roster.**
+
+> "when we are ready we are going to update the network OS with all of our 5000 community members
+> and then what will happen to community tab here? should it mirror all those names or only just be
+> the algorithmic page that matches people and shows a breakdown of cohort analysis?"
+
+**The algorithmic page. It does not mirror.** Four reasons, in order of weight:
+
+- A mirrored copy of 5,000 people is a second database that drifts, and the boundary law already
+  forbids this app becoming one. The moment both systems hold the roster, "which is right" becomes a
+  question somebody has to answer weekly and nobody will.
+- 5,000 rows is not a decision surface. Nobody scrolls it, so building it costs work and returns a
+  page that is never used.
+- Network OS already does rosters, search and dedupe, and does them better because that is its job.
+- What only THIS app can say is what the population MEANS to the fund: how many founders against
+  operators against investors, which cohort is going quiet, who should meet whom, whether the
+  community is producing deal flow. That is judgement over a population, which is what §12A.4 gives
+  this module and deliberately denies it the contact record.
+
+So: **cohort rollups, matching, and on-demand lookup.** The pull computes counts by `person_type`,
+by segment, by engagement and by touch recency, and stores a small dated rollup — so the page reads
+an aggregate, not five thousand rows, and movement over time becomes visible. A search box reaches
+any individual on demand. The firm's own opinion of a person — segment, engagement, signal — is
+stored here keyed to the Network OS contact id. That key is the join, and it is the only thing about
+a person this app owns.
+
+**Operational note for 5,000.** `/api/sheets/snapshot` returns the whole table with no paging, so a
+full pull at that size is one large response. The rollup is computed at pull time for exactly this
+reason; the page must never trigger a pull to render.
+
+**2 · Capture writes OUT to Network OS, as a proposal.**
+
+> "the capture tab needs to integrate also with network OS and allow new people to go the other way
+> and go into the network OS database"
+
+Feasible today and it uses the operator's own mechanism. Network OS exposes
+`POST /api/intake/create`, authenticated by the same `wpn_session` this app already mints. It takes
+`raw_text`, requires a recognised trigger, parses `key: value` lines through `parseFields`, and
+appends to Network OS's **intake queue** — not straight to the contact table.
+
+That posture is the point: capturing somebody here **proposes** them to Network OS and Network OS
+decides. This app never becomes a writer of the record, which keeps the source of truth single.
+Compose the raw text with `#wpnetwork` and the fields Capture already collects.
+
+On this side it is still outbound, so it stays behind the existing reserved `network_os.writeback`
+action and its receipt — `configuredClient().push()` currently throws by design and that is the
+thing being enabled, narrowly, for this one endpoint.
+
+**3 · Network OS deal flow flows IN to the funnel.**
+
+> "what are we doing about new companies. i think network OS deal flow needs to be sent into this
+> app in the deal flow tab that is another way in the funnel."
+
+Agreed, and it is the fourth intake route in item 7. Network OS already marks it two ways: the
+`#wpdealflow` trigger, which `classifyTrigger` separates from `#wpnetwork`, and
+`deal_flow_prospect: 'yes'` on the contact itself. A contact carrying either arrives here as a
+**proposed** opportunity — the same door every other intake route uses, never a direct write into
+the pipeline — carrying the person who introduced it, so provenance survives.
+
+**Direction summary, so it is never ambiguous.**
+
+| | Owns | Direction | Mechanism |
+|---|---|---|---|
+| People | Network OS | in → cohort rollups; out ← Capture proposes | pull snapshot / `POST /api/intake/create` |
+| Deal flow | West Peek OS funnel | in ← Network OS | `#wpdealflow` / `deal_flow_prospect = yes` |
+| Firm's read on a person | West Peek OS | never leaves | `com_member` keyed to contact id |
+
+Two systems never both claim the same write.
 
 ---
 
