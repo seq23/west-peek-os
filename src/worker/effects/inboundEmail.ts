@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { proposePerson } from "./networkOsClient";
+import { dealFromMessage, intakeDealFromEmail } from "../services/dealIntake";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 
 /**
@@ -165,16 +166,33 @@ export async function handleInboundEmail(
   const raw = await new Response(message.raw).text();
   const summary = classifyInbound({ to: message.to, from: sender, subject, body: raw });
 
-  // Everything that arrives becomes a capture, triggered or not. An email the system could not place
-  // is the one that most needs a person, and the failure this repo has already had once is work
-  // sitting somewhere nobody opens.
-  const captureId = await fileCapture(env, {
-    kind: summary.unrouted ? "EMAIL_UNROUTED" : `EMAIL_${summary.triggers[0]!.replace("#wp", "").toUpperCase()}`,
-    from: summary.from,
-    subject: summary.subject,
-    body: raw,
-    triggers: summary.triggers,
-  });
+  /*
+   * A COMPANY GOES TO THE FUNNEL. A message nobody could place goes to Capture.
+   *
+   * Operator correction: "capture page is for things we manually want to capture. the top of the
+   * funnel is the deal flow tab." Filing every triggered email as a capture turned a partner's own
+   * deliberate list into an inbox they then had to sort the firm's mail out of.
+   */
+  let dealResult: { outcome: string; detail: string } | null = null;
+  const wantsDeal = summary.triggers.includes("#wpdealflow") || summary.triggers.includes("#wpdeck");
+  if (wantsDeal) {
+    const deal = dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"));
+    dealResult = deal
+      ? await intakeDealFromEmail(env, deal)
+      : { outcome: "NO_COMPANY", detail: "no company name could be read, so nothing was opened" };
+  }
+
+  // Only what nobody could place becomes a capture — that is the message that actually needs a
+  // person, and it must not be held silently.
+  const captureId = summary.unrouted
+    ? await fileCapture(env, {
+        kind: "EMAIL_UNROUTED",
+        from: summary.from,
+        subject: summary.subject,
+        body: raw,
+        triggers: summary.triggers,
+      })
+    : null;
 
   // People are Network OS's record. A #wpnetwork mail is relayed there as a proposal; the capture
   // above stays here as this side's evidence of having sent it.
@@ -203,7 +221,8 @@ export async function handleInboundEmail(
       owner: summary.unrouted ? NO_TRIGGER_ROUTE.owner : undefined,
       mailbox: INTAKE_MAILBOX,
       known_triggers: EMAIL_TRIGGERS.map((t) => t.tag),
-      capture_id: captureId,
+      ...(captureId ? { capture_id: captureId } : {}),
+      ...(dealResult ? { dealflow: dealResult.outcome, dealflow_detail: dealResult.detail } : {}),
       ...(relayed ? { network_os_relay: relayed.ok ? "PROPOSED" : `REFUSED: ${relayed.detail}` } : {}),
     },
   });
