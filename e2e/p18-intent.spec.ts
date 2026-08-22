@@ -101,18 +101,20 @@ test("the lens bench publishes its storage rule", async ({ page }) => {
 });
 
 /*
- * THE MISSING SURFACE.
+ * THE SURFACE THAT WAS MISSING, NOW BUILT.
  *
- * The gate above is real and a partner cannot see it. There is no control anywhere in
- * `src/client/` for opening a work packet, reading the ambiguities it found in her own sentence,
- * recording a lens verdict, or executing one — while `/api/work-packets/*` is live and will open a
- * work card for anything that calls it. The bench is published on the Ask page; the thing it gates
- * is not.
+ * The gate above was real and a partner could not see it. Nothing in `src/client/` opened a work
+ * packet, read the ambiguities it found in her own sentence, recorded a lens verdict or executed
+ * one, while `/api/work-packets/*` stayed live and enforcing — the bench was published on the Ask
+ * page and the thing it gates was not, which made it a dead end with a rule attached rather than a
+ * gate.
  *
- * Left as the behaviour that should hold, marked expected-to-fail.
+ * The Ask page now carries it, inside the section that explains what a check is: a box to put
+ * something under the checks on purpose, the list of what they are holding, each check with its
+ * verdict in the words somebody giving one would use, and the control to run the work once they
+ * have been looked at.
  */
 test("a partner can open the packet a lens is gating", async ({ page }) => {
-  test.fail();
   await signIn(page);
   await gotoSurface(page, "Ask");
   await expect(page.getByTestId("intent-text")).toBeVisible();

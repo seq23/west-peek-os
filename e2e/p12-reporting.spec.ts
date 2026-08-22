@@ -180,19 +180,21 @@ test("P12 reporting journey: review gates → receipted distribution → reconci
 });
 
 /*
- * THE MISSING SURFACE, ASSERTED RATHER THAN ONLY MENTIONED.
+ * THE SURFACE THAT WAS MISSING, NOW BUILT.
  *
- * A quarterly LP letter cannot be reviewed or sent from anywhere in the interface. `packet-submit`,
- * `review-record-FINANCE`, `packet-distribute` and the certification banner that states "NO
- * FINANCIAL, ACCOUNTING, OR VALUATION CORRECTNESS IS CERTIFIED" are gone from `src/client/`, while
- * `/api/reporting/packets/*` is live and enforcing all four gates. The disclaimer in particular was
- * a promise made to whoever reads the numbers, and it is now made to nobody.
+ * A quarterly LP letter could not be drafted, reviewed or sent from anywhere in the interface:
+ * `packet-submit`, `review-record-FINANCE`, `packet-distribute` and the certification banner had
+ * all gone from `src/client/` while `/api/reporting/packets/*` stayed live and enforcing all four
+ * gates. The disclaimer was the worst of it — a promise made to whoever reads the numbers, being
+ * made to nobody.
  *
- * Left as the behaviour that should hold, marked expected-to-fail. Remove `test.fail()` when the LP
- * surface carries the packet again.
+ * The LP surface carries the letter again: drafting it, putting it in front of its three named
+ * reviewers, recording each review, and sending it behind a Managing Partner's signature. The
+ * certification is printed as the server states it, on first paint, whether or not any letter
+ * exists — which is what this asserts, because a promise that only appears once there is something
+ * to disclaim is not a promise.
  */
 test("the LP surface states what it does not certify, and lets a reviewed packet be sent", async ({ page }) => {
-  test.fail();
   await page.goto("/");
   await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
   await page.getByTestId("dev-login-submit").click();

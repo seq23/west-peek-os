@@ -380,41 +380,58 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
   let opportunity: OpportunityRow | null = null;
   let workCardId: string | null = null;
 
+  /*
+   * 2a. THE REGISTER IS NOT THE PIPELINE, and conflating them made the deck feature a no-op.
+   *
+   * `opensRecord` used to gate BOTH creating the company record and opening an opportunity, so a
+   * company arriving by email never got a `canonical_company` row at all. Everything downstream that
+   * needs one — the deck reader above all — had nothing to attach to, and `deckQueue` skipped it for
+   * ever while the job cheerfully reported "no decks waiting".
+   *
+   * They are different acts. The REGISTER is every company the firm has heard of; recording that we
+   * heard of somebody commits nothing and is exactly what an arrival IS. The PIPELINE is a claim on
+   * partner attention, and that still requires a human — which is what `opensRecord` actually meant
+   * and now solely governs.
+   *
+   * The operator's own sentence needs both halves: "if its a new company they create a new one. if
+   * existing they update it."
+   */
+  if (!companyId) {
+    companyId = `cc_${crypto.randomUUID()}`;
+    const registrar = arrival.actor?.firmUserId ?? `system:${policy.owner ?? "intake"}`;
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO canonical_company (id, canonical_name, website, privacy_label, firm_scope, created_by, sector, one_liner)
+       VALUES (?1, ?2, ?3, 'INTERNAL', ?4, ?5, ?6, ?7)`,
+    )
+      .bind(
+        companyId,
+        arrival.company.trim(),
+        arrival.website ?? null,
+        arrival.actor?.firmScopes[0] ?? FIRM_SCOPE,
+        registrar,
+        arrival.sector ?? null,
+        arrival.one_liner ?? null,
+      )
+      .run();
+    await appendEvent(env, {
+      eventType: "identity.company_created",
+      actorType: arrival.actor?.firmUserId ? "firm_user" : "system",
+      actorId: registrar,
+      objectType: "canonical_company",
+      objectId: companyId,
+      firmScope: arrival.actor?.firmScopes[0] ?? FIRM_SCOPE,
+      payload: { canonical_name: arrival.company.trim(), via: arrival.route },
+    });
+  }
+
   if (policy.opensRecord) {
     /*
-     * 2a. THE ROUTE THAT WRITES. Exactly one, and it needs an authenticated actor to do it — the
-     * whole reason the other three raise cards is that they have nobody to attribute the decision to.
+     * 2b. THE ROUTE THAT OPENS AN OPPORTUNITY. Exactly one, and it needs an authenticated actor —
+     * the whole reason the other three raise cards is that they have nobody to attribute a claim on
+     * partner attention to.
      */
     const actor = arrival.actor;
     if (!actor) throw new Error(`the ${arrival.route} route opens the record itself and needs the actor who drove it`);
-
-    if (!companyId) {
-      // Match-first has already run and found nothing, so this genuinely is a new company.
-      companyId = `cc_${crypto.randomUUID()}`;
-      await env.WP_OS_DB.prepare(
-        `INSERT INTO canonical_company (id, canonical_name, website, privacy_label, firm_scope, created_by, sector, one_liner)
-         VALUES (?1, ?2, ?3, 'INTERNAL', ?4, ?5, ?6, ?7)`,
-      )
-        .bind(
-          companyId,
-          arrival.company.trim(),
-          arrival.website ?? null,
-          actor.firmScopes[0] ?? FIRM_SCOPE,
-          actor.firmUserId ?? actor.aiEmployeeId ?? "system",
-          arrival.sector ?? null,
-          arrival.one_liner ?? null,
-        )
-        .run();
-      await appendEvent(env, {
-        eventType: "identity.company_created",
-        actorType: "firm_user",
-        actorId: actor.firmUserId ?? "system",
-        objectType: "canonical_company",
-        objectId: companyId,
-        firmScope: actor.firmScopes[0] ?? FIRM_SCOPE,
-        payload: { canonical_name: arrival.company.trim(), via: arrival.route },
-      });
-    }
 
     const wanted = arrival.opportunity;
     opportunity = await createOpportunity(env, actor, {
@@ -649,24 +666,49 @@ async function parseJsonBody(request: Request): Promise<unknown | null> {
   }
 }
 
+/**
+ * A GOVERNED REFUSAL FROM THE FUNNEL, SAID OUT LOUD.
+ *
+ * `openIntoFunnel` raises a work card, and `createWorkCardInternal` can legitimately refuse to open
+ * one: `403 forbidden` when authorize says no, and `429 opening_too_fast` when the breaker trips —
+ * "Wyatt has opened 20 work cards in the last hour, past the 20 that means something is looping
+ * rather than working." Both are deliberate and both are correct.
+ *
+ * Neither was ever TRANSLATED. The throw escaped the handler and the router answered
+ * `500 {"error":"internal_error"}` — so a route into the funnel refused an arrival for a stated,
+ * sensible reason and told the caller nothing at all. For the two unattended doors that is the
+ * silent-failure shape this system already has a doctrine against: an arrival Network OS pushed or
+ * the analyst found is dropped, and the only trace is a 500 in a log nobody reads.
+ *
+ * Now the status and the reason travel, exactly as they do everywhere else.
+ */
+export function funnelErrorResponse(err: unknown): Response {
+  if (err instanceof WorkCardError) return json({ error: err.code, detail: err.message }, { status: err.status });
+  throw err;
+}
+
 export async function handleScoutedIntake(ctx: RouteContext): Promise<Response> {
   const body = (await parseJsonBody(ctx.request)) as Partial<ScoutedCompany> | null;
   const company = typeof body?.company === "string" ? body.company.trim() : "";
   if (company.length < 2) {
     return json({ error: "invalid_input", detail: "a scouted company needs a name" }, { status: 400 });
   }
-  const entry = await intakeScoutedCompany(ctx.env, {
-    company,
-    sector: body?.sector ?? null,
-    one_liner: body?.one_liner ?? null,
-    website: body?.website ?? null,
-    where: body?.where ?? null,
-    note: body?.note ?? null,
-    // Named on the record even when the request does not say: the seat that scouts is the seat that
-    // owns the top of the funnel, and an unattributed find is a find nobody can learn from.
-    scout: typeof body?.scout === "string" && body.scout.trim() ? body.scout.trim() : DEAL_INTAKE_EMPLOYEE,
-  });
-  return json(entry, { status: 201 });
+  try {
+    const entry = await intakeScoutedCompany(ctx.env, {
+      company,
+      sector: body?.sector ?? null,
+      one_liner: body?.one_liner ?? null,
+      website: body?.website ?? null,
+      where: body?.where ?? null,
+      note: body?.note ?? null,
+      // Named on the record even when the request does not say: the seat that scouts is the seat that
+      // owns the top of the funnel, and an unattributed find is a find nobody can learn from.
+      scout: typeof body?.scout === "string" && body.scout.trim() ? body.scout.trim() : DEAL_INTAKE_EMPLOYEE,
+    });
+    return json(entry, { status: 201 });
+  } catch (err) {
+    return funnelErrorResponse(err);
+  }
 }
 
 // ── The rung below: when nobody can tell what an arrival is ──

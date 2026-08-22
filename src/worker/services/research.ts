@@ -723,13 +723,23 @@ export async function handleResearchReply(ctx: RouteContext): Promise<Response> 
     .first<{ title: string; question: string }>();
   if (!project) return json({ error: "not_found" }, { status: 404 });
 
+  /*
+   * THE LAST THIRTY TURNS, NOT THE FIRST THIRTY — the same fault `pageChat.ts` carried.
+   *
+   * `ASC LIMIT 30` takes the OLDEST thirty, so past the thirtieth turn the analyst was permanently
+   * re-reading the opening of the conversation and never saw anything recent, while the partner
+   * reads the whole thread on screen. Taken newest-first and reversed, so the model still reads it
+   * in order.
+   */
   const priorTurns = (
-    await ctx.env.WP_OS_DB.prepare(
-      "SELECT role, body FROM research_turn WHERE project_id = ?1 AND state = 'OK' ORDER BY turn_no ASC LIMIT 30",
-    )
-      .bind(ctx.params.id!)
-      .all<{ role: string; body: string }>()
-  ).results ?? [];
+    (
+      await ctx.env.WP_OS_DB.prepare(
+        "SELECT role, body FROM research_turn WHERE project_id = ?1 AND state = 'OK' ORDER BY turn_no DESC LIMIT 30",
+      )
+        .bind(ctx.params.id!)
+        .all<{ role: string; body: string }>()
+    ).results ?? []
+  ).reverse();
 
   const open = (
     await ctx.env.WP_OS_DB.prepare("SELECT question, status, answer FROM research_question WHERE project_id = ?1")
@@ -737,7 +747,23 @@ export async function handleResearchReply(ctx: RouteContext): Promise<Response> 
       .all<{ question: string; status: string; answer: string | null }>()
   ).results ?? [];
 
-  const nextNo = priorTurns.length + 1;
+  /*
+   * `MAX(turn_no) + 1`, NOT `priorTurns.length + 1` — and the old form collided two different ways
+   * against `UNIQUE (project_id, turn_no)` on `research_turn` (migration 0110).
+   *
+   * `priorTurns` is filtered to `state = 'OK'` and capped at thirty. So a single FAILED or REFUSED
+   * turn — which this file deliberately KEEPS, "a provider failure must never lose the conversation"
+   * — made the next reply reuse a number already taken, and past thirty OK turns the number froze at
+   * 31 and every further reply collided. Either way the partner's next question 500s and the thread
+   * is dead. `pageChat.ts` states the rule ("turn numbers count every turn, not the OK ones") and
+   * this, the older of the two surfaces, never got it.
+   */
+  const used = await ctx.env.WP_OS_DB.prepare(
+    "SELECT COALESCE(MAX(turn_no), 0) AS n FROM research_turn WHERE project_id = ?1",
+  )
+    .bind(ctx.params.id!)
+    .first<{ n: number }>();
+  const nextNo = (used?.n ?? 0) + 1;
   const askId = `rt_${crypto.randomUUID()}`;
   await ctx.env.WP_OS_DB.prepare(
     "INSERT INTO research_turn (id, project_id, turn_no, role, body) VALUES (?1, ?2, ?3, 'PARTNER', ?4)",

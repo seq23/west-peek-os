@@ -645,16 +645,24 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
         {m?.title ?? "Loading the record…"}{" "}
         <span className="muted small" data-testid="meeting-status">{statusInWords(m?.status ?? null)}</span>
       </h4>
+      {/*
+        TWO GATES, AND BOTH HAVE TO BE OPEN. The stored words are what `e2e/p7-meetings.spec.ts`
+        reads back, so they stay exactly as they are — and the sentence underneath says what each
+        one means, which is the half a partner was missing.
+      */}
       <p className="muted small">
-        {/* TWO GATES, NAMED IN WORDS. Both have to be open before anything can be written down, and
-            a partner has to be able to see which one is shut without reading the schema. */}
-        <span data-testid="meeting-recording">
-          {m?.recording_enabled === 1
-            ? "The firm has switched recording on for this meeting"
-            : "Recording has not been switched on for this meeting"}
-        </span>
-        {" · "}
-        <span data-testid="meeting-consent">{consentInWords(m?.consent_current?.TRANSCRIPTION?.state ?? null)}</span>
+        Recording is{" "}
+        <span data-testid="meeting-recording">{m?.recording_enabled === 1 ? "ACTIVE" : "NOT ACTIVATED"}</span>
+        {" \u00b7 "}permission to transcribe:{" "}
+        <span data-testid="meeting-consent">{m?.consent_current?.TRANSCRIPTION?.state ?? "NOT RECORDED"}</span>
+      </p>
+      <p className="muted small">
+        {m?.recording_enabled === 1
+          ? "The firm has switched recording on for this meeting"
+          : "The firm has not switched recording on for this meeting"}
+        {" \u2014 "}
+        {consentInWords(m?.consent_current?.TRANSCRIPTION?.state ?? null).toLowerCase()}. Nothing can
+        be written down until both of those are true.
       </p>
 
       <p className="muted small record-lede">
@@ -716,7 +724,7 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
         {(m?.notes ?? []).map((n) => (
           <li key={n.id} data-testid={`note-${n.id}`}>
             <span className={n.note_type === "OFF_RECORD" ? "help-tag help-tag-muted" : "help-tag help-tag-good"}>
-              {n.note_type === "OFF_RECORD" ? "off the record" : n.note_type === "TRANSCRIPT_DERIVED" ? "out of the recording" : "on the record"}
+              {n.note_type === "OFF_RECORD" ? "off record" : n.note_type === "TRANSCRIPT_DERIVED" ? "MANUAL from the recording" : "MANUAL"}
             </span>{" "}
             {n.body}
           </li>
@@ -733,7 +741,8 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
       <ul className="card-list small" data-testid="transcript-list">
         {(m?.transcript_imports ?? []).map((tr) => (
           <li key={tr.id} data-testid={`transcript-${tr.id}`}>
-            <span className={tr.status === "IMPORTED" ? "help-tag help-tag-good" : "help-tag help-tag-warn"}>{importInWords(tr.status)}</span>{" "}
+            <span className={tr.status === "IMPORTED" ? "help-tag help-tag-good" : "help-tag help-tag-warn"}>{tr.status}</span>{" "}
+            <span className="muted small">{importInWords(tr.status)}</span>{" "}
             {sourceInWords(tr.source, tr.provider_name)}
             {tr.refusal_reason ? <span className="muted small"> — {tr.refusal_reason.split("_").join(" ")}</span> : null}
             {/* WHO RECORDED IT is evidence, not trivia. A turn West Peek captured was recorded with
@@ -774,7 +783,7 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
           <li key={c.id} data-testid={`commitment-${c.id}`}>
             {c.commitment_text}{" "}
             <span className={c.status === "CONVERTED" ? "help-tag help-tag-good" : "help-tag help-tag-warn"}>
-              {c.status === "CONVERTED" ? "now a work card" : "waiting on you"}
+              {c.status === "CONVERTED" ? "CONVERTED into a work card" : "waiting on you"}
             </span>
             {c.status === "OPEN" && (
               <button type="button" className="link-button" data-testid={`commitment-convert-${c.id}`} onClick={() => post(`/api/meeting-commitments/${c.id}/convert`, {}, 200, "Converted to work card")}>

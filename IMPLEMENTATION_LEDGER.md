@@ -4969,3 +4969,185 @@ has not reached the committee.
 Three `test.fail()` markers cleared today by fixing the product rather than the test: the thrown-away
 deck, the un-openable scenario, and "how long have we known them". Three remain, all LP or
 work-packet surfaces whose ROUTES ARE LIVE AND ENFORCING while nothing in the interface shows them.
+
+## 22 Aug 2026 — The committee section is filled, the three remaining gaps are surfaces now, and a meeting can be taken off the record
+
+Operator: *"the meeting tab is not done right? maybe we actually work on the meeting tab and build
+that out fully."* Four things, and the first of them had been sitting in a gap between two agents who
+were each right to refuse to reach into the other's file.
+
+### The committee section on the deal record was a placeholder, and it could not have been filled from the detail response
+
+`DealflowPage.tsx` carried a section headed "Where this deal stands with the committee" whose whole
+body said the information "is being brought across from the meetings side and is not on this record
+yet". The comment left in place pointed at `d.ic_packets` as the source. **It is not enough and never
+was**: `GET /api/opportunities/:id` returns `{ id, status }` per packet — no questions, no seats, no
+decision, and above all **no dissent**. A section built on it would have had to invent the rest on
+the client, and a deal record that disagrees with the committee's own surface is worse than a blank
+one.
+
+So the endpoint was extended instead. `icDealSurface()` takes an optional opportunity id and
+`GET /api/ic/deals/:opportunityId` serves **the same read Meetings renders** — one query, two
+surfaces, which is the only arrangement in which they cannot drift. It answers `{ deal: null }`
+rather than 404 for a deal the committee has never seen, because "it has not been to the committee"
+is an answer and a 404 is a malfunction, and the record draws those differently.
+
+Three things were added to that read, all of which the section needed and none of which existed:
+
+- **`packet_evidence`** — what the committee actually saw, counted: how many claims, how many of
+  them with nothing under them, who assembled it and when, whether the arithmetic was attached, and
+  **the contradiction count twice** — at assembly and right now. A contradiction raised after the
+  packet was written is precisely the one nobody in the room knows about, and a single number hides
+  exactly that case.
+- **`dissents`** — read for **every** decision on the packet rather than the latest, because a
+  deferred deal comes round again and a dissent recorded against the first sitting is the thing
+  somebody wants in front of them at the second. Printed whole on both surfaces, never condensed.
+- **names instead of ids** — `decided_by`, `drafted_by` and each dissenter resolved through whichever
+  roster they are on. The third time this repo has paid for the id/name divergence; resolved in the
+  statement so the two cannot be typed apart.
+
+**And dissent had no way in.** `dissent_record` has been append-only, human-only and governed since
+P6, and nothing anywhere in the product wrote to it — a rule about a table nobody could reach, which
+is to say a committee record that could only ever record agreement. Meetings now carries the control,
+against the decision it disagrees with.
+
+### Making the page explain itself, without adding a section
+
+`tests/meetingsLayout.test.ts` pins the five section titles exactly, which is right: the fix for "not
+self explanatory" is never a sixth heading. Every section now states what it is for and what can be
+done to it in a sentence above its list, and the operator's four IC questions — *who makes the
+packet, how does that get done, how do we get thru the pipeline, what happens once a deal is at the
+IC stage* — are answered **inside the committee section**, beside the deals they are about, and
+render whether or not any deal has got there. The commonest moment somebody needs that answer is when
+the list is empty and they cannot tell why.
+
+**One correction made honestly rather than quietly.** Several enum values were rewritten into words
+and then put back: `e2e/p7-meetings.spec.ts` reads `ACTIVE`, `NOT ACTIVATED`, `GRANTED`, `REVOKED`,
+`IMPORTED`, `REFUSED`, `MANUAL` and `CONVERTED` back off the page, and that spec was not this agent's
+to edit. The stored words stayed and a sentence translating them sits beside each, which is the half
+a reader was actually missing. Worth naming as a real tension between the no-raw-enum rule and a
+spec that asserts on the raw value.
+
+### A meeting can be taken off the record — migration 0140
+
+Operator: *"the call with scooter meeting has no way to delete it. it was a test and some meetings i
+want to delete….we need a way to delete them and we can have an audit trail if someone deletes."*
+
+The document pattern (0095), and the argument is stronger here than it was there. A meeting is
+referenced by its consent records, its transcript imports, its notes, the employees seated in it, its
+commitments and every work card a close-out made out of one. Destroying the row breaks all of that
+and erases the trail the audit exists to keep.
+
+- **A reason is required**, human only, and archiving twice is a no-op that says so rather than an
+  error — a second press is somebody who could not tell whether the first one worked.
+- **The confirm says what stays.** The list read carries four counts per meeting — notes,
+  transcripts, promises, and work cards already made from it — and they are on screen *before* the
+  press. "Are you sure?" tells a partner nothing; "the 1 note and 2 work cards already made from it
+  stay exactly where they are" tells her the thing she actually needs.
+- **What was taken off is visible**, on the pass-pile pattern rather than as a second tab. A removal
+  nobody can see afterwards is indistinguishable from a deletion, which is the thing this is not.
+
+Proven end to end against local `wrangler dev`: refusal without a reason, the archive, the no-op
+second press, disappearance from the list, appearance under `?archived=1` with who/when/why, the
+notes still readable on the meeting, and `meeting.archived` on the event spine.
+
+### Three `test.fail()` markers cleared by building the surfaces, not by weakening the tests
+
+All three were the same defect in three places: **a route live and enforcing, with nothing in the
+interface able to reach it.**
+
+- **`e2e/p10-lp.spec.ts` — the data-room access ledger.** Granting and revoking LP data-room access
+  have been governed since P10 and no partner could see who held a key. LP now carries the ledger:
+  who holds access to which document right now, what they may do with it, since when, and a control
+  to take it back with a reason. What was closed stays listed underneath — a revocation that
+  disappears leaves only the grant, which reads as though the key is still out. **Granting is
+  deliberately not offered here**: sharing LP material is a signature against a named document and a
+  named recipient, and a one-click share on a summary page is the shape of control that gets pressed
+  by accident.
+- **`e2e/p12-reporting.spec.ts` — the LP letter and its certification.** The quarterly letter can be
+  drafted, put in front of its three named reviewers, reviewed, and sent behind a Managing Partner's
+  signature — the four gates shown as steps rather than discovered as refusals. The certification is
+  printed as the server states it, on first paint, whether or not a letter exists: a promise that
+  only appears once there is something to disclaim is not a promise.
+- **`e2e/p18-intent.spec.ts` — the packet a lens is gating.** Removing the packet vocabulary from the
+  front of Ask was right; removing every control that could REACH the checks was not. The lens gate
+  refuses an adverse verdict AND refuses silence, and no partner could read a verdict, record one, or
+  run the work afterwards — a dead end with a rule attached. It is back **inside the section that
+  explains what a check is**, not as a second way to ask: what the checks are holding, each check
+  with its verdict in a person's words, and the control to run it.
+
+Each marker was removed after the behaviour held, because Playwright reports an unexpected pass as a
+failure.
+
+### Needs regenerating, not run here
+
+`meeting.archive` was added to `src/shared/registry/actionTypes.ts` and is compensated in migration
+`0140` (`ON CONFLICT DO NOTHING`, following 0131 — `INSERT OR IGNORE` would also swallow a CHECK
+failure, which has shipped a bug in this repo twice). The generated `0003` seed block has **not**
+been regenerated, so `npm run validate:authority` will fail until somebody runs
+`scripts/seed/generate-machine-seed.mjs`.
+
+## 22 Aug 2026 — The bug hunt, and two blockers on the deck the operator was about to send
+
+A hunt aimed at the SHAPES this codebase has already produced, rather than a general review. Seven
+fixed with tests, eleven reported. The two that mattered most would both have failed live.
+
+### The 7MB deck could never have been read
+
+`inboundEmail.ts` returns before `pdfAttachments` for anything over `MAX_BODY_BYTES` (256KB), because
+walking a multi-megabyte MIME tree does not fit in 10ms of CPU. Base64 is 4/3, so the real ceiling on
+a readable deck was about **190KB** — and `MAX_ATTACHMENT_BYTES = 12MB` was unreachable by
+construction. The operator's actual deck is 7,093,115 bytes.
+
+The oversize path stored the `.eml` and opened a card and wrote **no `pending_deck` row**: the bytes
+were there and nothing pointed a reader at them. Extraction now happens in the scheduled job, which
+has its own CPU budget — the same store-now-read-later asymmetry the storage half already used.
+
+### The deck feature was a permanent no-op for any new company
+
+`deckQueue` selects `WHERE company_id IS NOT NULL`, and **nothing ever set it.** `opensRecord` gated
+BOTH creating the `canonical_company` row and opening an opportunity, so a company arriving by email
+got no register row at all.
+
+**The register is not the pipeline**, and conflating them is what broke this. Recording that the firm
+HEARD OF somebody commits nothing and is exactly what an arrival is; opening an opportunity is a
+claim on partner attention and still needs a human. The operator asked directly whether everything
+heard of should be top-of-funnel — no: portfolio companies, passed companies and names from a market
+map all belong in the register and not in the pipeline, and a funnel containing everything tells you
+nothing about what needs attention.
+
+And it was invisible: `runDeckReading` hardcoded `skipped: 0`, so the job reported **SUCCEEDED, "no
+decks waiting"** while decks waited for ever — a status line true of the query and false about the
+firm.
+
+### The fourth instance of the name/id bug, and it disabled a safety control
+
+`rateTrip` counted `WHERE owner_id = ?` against a column holding `aie_wyatt` while every machine route
+passes a display name. **Both counts were always zero, so the runaway breaker could not trip for
+exactly the unattended callers it exists to stop.** The duplicate guard beside it had been moved above
+the name→id resolution when it silently stopped guarding; the rate check two lines below was left
+reading the raw input.
+
+### Three more, each silent
+
+A **folded `Content-Type`** — routine from Apple Mail and Outlook — made `boundaryOf` return null, so
+the deck was dropped with **no unread note either**, contradicting the file's own promise. Both 1:1
+chats ordered history `ASC LIMIT 30`, so past turn 30 the employee re-read the opening of the thread
+for ever while the partner saw the whole thread. The research thread computed its next turn number
+from OK turns only against a UNIQUE constraint, so **one failed turn killed the thread permanently**.
+
+### And a stray brace nobody could see
+
+`styles.css` carried an extra `}` at line 1877 — a rule deleted with its closing brace left behind
+after a comment. esbuild reports that only as a minify WARNING, so the build succeeded and everything
+after it parsed at the wrong nesting level. `validate:css-classes` now fails on unbalanced braces,
+proven by planting one.
+
+### `sql-against-schema` made real
+
+It was the only validator without a self-test, and it spawned one remote `wrangler d1 execute` per
+statement — 1,095 of them, which is where the ten-plus minutes went, essentially none of it in SQLite.
+**A validator nobody runs is not in the suite.** The migrations ARE production's schema (the deploy
+refuses to ship against a pending migration), so it now builds the schema once in an in-memory
+`node:sqlite` database: **0.95 seconds, no credentials**, with a five-case self-test covering all
+three bugs that prompted it.

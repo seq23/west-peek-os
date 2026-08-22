@@ -409,19 +409,20 @@ function rosterFor(shift: ShiftKey, hour: number | null, size: number, options: 
   const candidates = [...new Set([...pinned, ...SHIFT_PREFERENCE[shift], ...overrides.map((o) => o.name)])]
     .filter(isAvailable);
 
-  const decided = candidates
-    .map((name) => ({
+  const judged = candidates.map((name) => ({
+    name,
+    ...decideFor({
       name,
-      ...decideFor({
-        name,
-        shift,
-        hour,
-        role: byName.get(name)!.role,
-        pinned,
-        overrides,
-        rosterRank: rosterRank.get(name) ?? 999,
-      }),
-    }))
+      shift,
+      hour,
+      role: byName.get(name)!.role,
+      pinned,
+      overrides,
+      rosterRank: rosterRank.get(name) ?? 999,
+    }),
+  }));
+
+  const decided = judged
     .filter((d) => d.on)
     // Precedence orders the page as well as the outcome, so what a reader sees IS the rule.
     .sort((a, b) => a.sourceIndex - b.sourceIndex || a.rank - b.rank);
@@ -446,7 +447,18 @@ function rosterFor(shift: ShiftKey, hour: number | null, size: number, options: 
     hours: readableWindow(meta.from, meta.to),
     onDuty,
     benched,
-    changed: onDuty.some((a) => a.change !== null),
+    /*
+     * JUDGED, NOT `onDuty` — and the difference is the whole of the migration's headline example.
+     *
+     * This read `onDuty.some(...)`, but taking somebody OFF a shift is the common case (0137: "SHIFT
+     * — on or off for one named shift. The common case. 'Wyatt is not on Overnight.'"), and a person
+     * turned off is filtered out above and therefore appears in neither `onDuty` nor `benched`. So
+     * the one change the operator makes most often left `changed` false and the panel printed "This
+     * shift is the firm's default" on a shift she had just changed by hand — with no trace of the
+     * removal anywhere on the page. The field's own contract is "anything on this shift is not the
+     * code default", and a removal is the loudest kind of that.
+     */
+    changed: judged.some((d) => d.change !== null),
   };
 }
 

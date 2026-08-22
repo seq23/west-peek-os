@@ -1874,7 +1874,6 @@ details h3 {
  * above. Widening this instead would push a briefing past 100 characters a line, which is harder to
  * read, not denser.
  */
-}
 .daily-brief .brief-section h4 { margin-bottom: var(--space-2xs); }
 .brief-sources { border-top: 1px solid var(--wp-line); padding-top: var(--space-2xs); margin-top: var(--space-2xs); }
 

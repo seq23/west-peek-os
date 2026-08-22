@@ -93,6 +93,216 @@ interface PacketRow {
 }
 
 /**
+ * The certification the server attaches to every packet read, word for word.
+ *
+ * It lives here as a fallback rather than as the source: the page prints what the SERVER says
+ * whenever the read has landed, so the two can never quietly diverge into a promise the API is not
+ * making. This is what stands on the first paint, before the first response.
+ */
+const CERTIFICATION_STATE =
+  "NO FINANCIAL, ACCOUNTING, OR VALUATION CORRECTNESS IS CERTIFIED — this surface records process, review, and discrepancy only";
+
+/** What has to happen to a letter before it can go, in the order it happens. */
+const REVIEWS = [
+  { key: "FINANCE", label: "Finance", who: "whoever owns the numbers" },
+  { key: "COMPLIANCE", label: "Compliance", who: "whoever owns what may be said" },
+  { key: "MANAGING_PARTNER", label: "A Managing Partner", who: "a partner, personally" },
+] as const;
+
+/** A letter's state in words. The stored value never reaches a reader. */
+function packetStanding(status: string): string {
+  switch (status) {
+    case "DRAFT": return "drafted, not sent to its reviewers yet";
+    case "IN_REVIEW": return "with its reviewers";
+    case "APPROVED": return "reviewed, and cleared to go";
+    case "DISTRIBUTED": return "sent";
+    case "WITHDRAWN": return "pulled — a rejected letter goes out as a new version, never as an edit";
+    default: return "no state recorded";
+  }
+}
+
+interface PacketDetail extends PacketRow {
+  reviews: Array<{ id: string; review_type: string; status: string; reviewer_id: string | null; note: string | null; reviewed_at: string | null }>;
+  outstanding: string[];
+  all_complete: boolean;
+  distribution_receipts: Array<{ id: string; recipient_label: string; distributed_at: string }>;
+}
+
+/**
+ * One quarterly letter, and the four things standing between it and an investor's inbox.
+ *
+ * WHY THIS HAD TO EXIST. `/api/reporting/packets/*` has been live and enforcing all four gates —
+ * three named reviews, the role each reviewer must actually hold, a Managing Partner's approval
+ * receipt, and human-only throughout — and there was no control anywhere in the interface for any
+ * of it. So the enforcement was real and invisible: the only way to send an LP letter was an API
+ * client, and the only way to see one had been sent was the event spine.
+ *
+ * THE GATES ARE SHOWN AS STEPS, NOT AS ERRORS. A refusal that arrives after the press teaches
+ * somebody the product is broken; the same fact stated before it teaches them how the firm works.
+ */
+function PacketPanel({ packetId, lps, onChanged }: { packetId: string; lps: LpRecordRow[]; onChanged: () => void }) {
+  const packet = useApi<PacketDetail>(`/api/reporting/packets/${packetId}`, [packetId]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  /**
+   * The card raised to authorise sending, once this panel has raised one.
+   *
+   * Held here rather than read back off the packet because `approval_card_id` is only written when
+   * the letter actually goes out — before that the card exists and the packet does not know about
+   * it. Losing it on a reload costs a second press, and pressing again raises another card rather
+   * than sending anything, which is the safe direction to be wrong in.
+   */
+  const [receipt, setReceipt] = useState<string | null>(null);
+
+  const p = packet.data;
+  const done = new Set((p?.reviews ?? []).filter((r) => r.status === "COMPLETED").map((r) => r.review_type));
+  const rejected = (p?.reviews ?? []).some((r) => r.status === "REJECTED");
+
+  const run = async (label: string, path: string, body: unknown, expected: number) => {
+    setBusy(true);
+    const failed = mutationError(await api(path, { method: "POST", body }), expected);
+    setBusy(false);
+    setMessage(failed ?? label);
+    packet.reload();
+    onChanged();
+    return failed === null;
+  };
+
+  async function send() {
+    if (!p) return;
+    const recipients = lps.map((l) => ({ recipient_label: l.legal_name, lp_record_id: l.id }));
+    if (recipients.length === 0) {
+      setMessage("There is nobody to send it to yet. Add an investor at the foot of this page first.");
+      return;
+    }
+    setBusy(true);
+    const attempt = await api<{ error?: string; detail?: string }>(`/api/reporting/packets/${p.id}/distribute`, {
+      method: "POST",
+      body: { recipients, ...(receipt ? { approval_receipt_id: receipt } : {}) },
+    });
+    if (attempt.status === 200) {
+      setBusy(false);
+      setReceipt(null);
+      setMessage(`Sent to ${recipients.length} investor${recipients.length === 1 ? "" : "s"}, with a receipt kept for each one.`);
+      packet.reload();
+      onChanged();
+      return;
+    }
+    if (attempt.data?.error !== "approval_required") {
+      setBusy(false);
+      setMessage(attempt.data?.detail ?? attempt.data?.error ?? `Not sent (HTTP ${attempt.status}).`);
+      return;
+    }
+    // Sending anything LP-facing is a partner's signature, never a role. Raise the card and say so.
+    const card = await api<{ id?: string; error?: string; detail?: string }>("/api/approvals", {
+      method: "POST",
+      body: {
+        action_key: "lp_sensitive_communication.send",
+        object_type: "lp_reporting_packet",
+        object_id: p.id,
+        title: `Send the ${p.title} letter to ${recipients.length} investor${recipients.length === 1 ? "" : "s"}`,
+        submit: true,
+      },
+    });
+    setBusy(false);
+    if (!card.data?.id) {
+      setMessage(card.data?.detail ?? card.data?.error ?? "The approval could not be raised.");
+      return;
+    }
+    setReceipt(card.data.id);
+    setMessage("A partner has to sign this off before it goes. It is waiting in Approvals; come back and press send again once it is signed.");
+  }
+
+  return (
+    <div className="card" data-testid={`packet-${packetId}`}>
+      <h4>{p?.title ?? "Reading the letter…"}</h4>
+      <p className="muted small">
+        {p ? packetStanding(p.status) : "…"}
+        {p && p.version > 1 ? ` · version ${p.version}` : ""}
+      </p>
+
+      <ul className="card-list small" data-testid={`packet-reviews-${packetId}`}>
+        {REVIEWS.map((r) => (
+          <li key={r.key}>
+            <strong>{r.label}</strong>{" "}
+            <span className="muted">
+              {done.has(r.key) ? "has read it" : p?.status === "DRAFT" ? "not asked yet" : "still to read it"} · {r.who}
+            </span>
+            {p?.status === "IN_REVIEW" && !done.has(r.key) && (
+              <button
+                type="button"
+                className="link-button"
+                disabled={busy}
+                data-testid={`review-record-${r.key}`}
+                onClick={() =>
+                  void run(
+                    `${r.label} has read it.`,
+                    `/api/reporting/packets/${packetId}/reviews`,
+                    { review_type: r.key, status: "COMPLETED", note: "Read and cleared on the LP surface." },
+                    200,
+                  )
+                }
+              >
+                I have read it
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {rejected && (
+        <p className="muted small">
+          Somebody sent it back, so this version is finished. A corrected letter goes out as a new
+          version rather than as an edit to this one — an investor who has read the first must be
+          able to see it did not change under them.
+        </p>
+      )}
+
+      <div className="form-row">
+        {p?.status === "DRAFT" && (
+          <button
+            type="button"
+            disabled={busy}
+            data-testid="packet-submit"
+            onClick={() => void run("It is with its reviewers.", `/api/reporting/packets/${packetId}/submit`, {}, 200)}
+          >
+            Put it in front of its reviewers
+          </button>
+        )}
+        {p?.status === "APPROVED" && (
+          <button type="button" className="btn-strong" disabled={busy} data-testid="packet-distribute" onClick={() => void send()}>
+            {receipt ? "It is signed off — send it" : "Send it to the investors"}
+          </button>
+        )}
+        {p?.status === "IN_REVIEW" && (
+          <span className="muted small">
+            {(p.outstanding ?? []).length} of the three still to read it. It cannot be sent until all
+            three have, and a signature does not stand in for a review.
+          </span>
+        )}
+      </div>
+
+      {(p?.distribution_receipts ?? []).length > 0 && (
+        <ul className="card-list small" data-testid={`packet-sent-${packetId}`}>
+          {(p?.distribution_receipts ?? []).map((r) => (
+            <li key={r.id}>
+              <strong>{r.recipient_label}</strong>{" "}
+              <span className="muted">sent {new Date(r.distributed_at).toLocaleDateString()}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {message && (
+        <p className="notice small" data-testid={`packet-message-${packetId}`} role="status">
+          {message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * What the fund has told its investors, folded into the page about the investors.
  *
  * Operator, item 16: "LP page rebuilt in human language; reporting folded in." They were two tabs
@@ -110,10 +320,13 @@ interface PacketRow {
  * have to read it before it goes. That is the whole model, and it did not need three headings of
  * vocabulary to say.
  */
-function ReportingSection({ funds }: { funds: FundRaise[] }) {
+function ReportingSection({ funds, lps }: { funds: FundRaise[]; lps: LpRecordRow[] }) {
   const [nonce, setNonce] = useState(0);
   const periods = useApi<{ periods: PeriodRow[] }>("/api/reporting/periods", [nonce]);
-  const packets = useApi<{ packets: PacketRow[] }>("/api/reporting/packets", [nonce]);
+  const packets = useApi<{ packets: PacketRow[]; certification_state?: string }>("/api/reporting/packets", [nonce]);
+  const [drafting, setDrafting] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [openPacket, setOpenPacket] = useState<string | null>(null);
   const [fundId, setFundId] = useState("");
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
@@ -155,6 +368,21 @@ function ReportingSection({ funds }: { funds: FundRaise[] }) {
     }
   }
 
+  async function draftPacket(periodId: string) {
+    setBusy(true);
+    const failed = mutationError(
+      await api(`/api/reporting/periods/${periodId}/packets`, { method: "POST", body: { title: draftTitle.trim() } }),
+      201,
+    );
+    setBusy(false);
+    setMessage(failed ?? "Started. Three people have to read it before it can go out, and a partner has to sign the sending.");
+    if (!failed) {
+      setDrafting(null);
+      setDraftTitle("");
+      setNonce((n) => n + 1);
+    }
+  }
+
   return (
     <>
       <h3>What we have told them</h3>
@@ -167,6 +395,17 @@ function ReportingSection({ funds }: { funds: FundRaise[] }) {
         <p className="muted small">
           This records what was sent and who signed it off. It does not check whether the numbers in
           it are right — that is the administrator's job, and comparing the two is below.
+        </p>
+        {/*
+          AND THE PROMISE ITSELF, IN THE WORDS IT WAS MADE IN.
+          The sentence above is the readable version and it is the one a partner acts on. This is the
+          certification the SERVER attaches to every packet read, printed verbatim, because it is a
+          statement to whoever relies on these numbers rather than a label for us — and for a while
+          it was being made to nobody at all: the route carried it and no page rendered it. Kept
+          quiet-looking on purpose; it is a footing, not a headline.
+        */}
+        <p className="muted small" data-testid="certification-state">
+          {packets.data?.certification_state ?? CERTIFICATION_STATE}
         </p>
 
         <div className="form-row" data-testid="period-form">
@@ -205,9 +444,57 @@ function ReportingSection({ funds }: { funds: FundRaise[] }) {
                 {out ? (
                   <span className="muted">sent {new Date(out.distributed_at!).toLocaleDateString()}</span>
                 ) : mine.length > 0 ? (
-                  <span className="muted">drafted, not sent yet — {mine[0]!.status.toLowerCase().split("_").join(" ")}</span>
+                  <span className="muted">{packetStanding(mine[0]!.status)}</span>
                 ) : (
                   <span className="muted">nothing drafted yet</span>
+                )}
+                {mine.length === 0 ? (
+                  drafting === p.id ? (
+                    <div className="form-row">
+                      <label>
+                        What to call the letter{" "}
+                        <input
+                          data-testid={`packet-title-${p.id}`}
+                          value={draftTitle}
+                          onChange={(e) => setDraftTitle(e.target.value)}
+                          placeholder={`${p.label} investor letter`}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn-strong"
+                        disabled={busy || draftTitle.trim().length < 3}
+                        data-testid={`packet-draft-${p.id}`}
+                        onClick={() => void draftPacket(p.id)}
+                      >
+                        Start it
+                      </button>
+                      <button type="button" data-testid={`packet-draft-cancel-${p.id}`} onClick={() => setDrafting(null)}>
+                        Not now
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="link-button"
+                      data-testid={`packet-start-${p.id}`}
+                      onClick={() => { setDrafting(p.id); setDraftTitle(`${p.label} investor letter`); }}
+                    >
+                      Draft this quarter's letter
+                    </button>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    className="link-button"
+                    data-testid={`packet-open-${mine[0]!.id}`}
+                    onClick={() => setOpenPacket(openPacket === mine[0]!.id ? null : mine[0]!.id)}
+                  >
+                    {openPacket === mine[0]!.id ? "Close the letter" : "Open the letter"}
+                  </button>
+                )}
+                {mine.length > 0 && openPacket === mine[0]!.id && (
+                  <PacketPanel packetId={mine[0]!.id} lps={lps} onChanged={() => setNonce((n) => n + 1)} />
                 )}
               </li>
             );
@@ -511,6 +798,178 @@ function FundStanding({ funds, lps }: { funds: FundRaise[]; lps: LpRecordRow[] }
   );
 }
 
+interface AccessRow {
+  id: string;
+  artifact_id: string;
+  artifact_version: number;
+  recipient_label: string;
+  permission: string;
+  granted_at: string;
+  expires_at: string | null;
+  effective_status: string;
+  revoked_at?: string | null;
+  revocation_reason?: string | null;
+}
+
+interface ArtifactRow {
+  id: string;
+  title: string;
+  version: number;
+  status: string;
+}
+
+/** What somebody may do with a document that was shared with them, in words. */
+function permissionInWords(permission: string): string {
+  return permission === "DOWNLOAD" ? "can keep a copy" : "can read it in place";
+}
+
+/**
+ * Who currently holds a key to the fund's own material.
+ *
+ * WHY THIS IS ON THE PAGE AT ALL. Granting and revoking data-room access have been live and
+ * governed since P10 — a grant needs a Managing Partner's approval receipt, a revocation is
+ * human-only and append-only, and both land on the event spine — and NOTHING in the interface
+ * showed either. So the position was: anything with an API client could share LP-private material,
+ * and no partner could see who held access. The enforcement was never the gap; the visibility was,
+ * and an access list nobody can read is not access control.
+ *
+ * WHO CURRENTLY HOLDS IT IS THE QUESTION, so the live grants come first and are counted in the
+ * heading of their own list. What was taken away is kept underneath rather than dropped: a
+ * revocation with its reason is how the firm answers "did we ever send them that?", and deleting it
+ * would leave only the grant, which reads as though the key is still out.
+ *
+ * NOTHING IS GRANTED FROM HERE. Sharing LP material is a partner's signature against a named
+ * document and a named recipient, and a one-click share button on a summary page is precisely the
+ * shape of control that gets pressed by accident. Revoking, which only ever closes a door, is here.
+ */
+function DataRoomSection() {
+  const [nonce, setNonce] = useState(0);
+  const access = useApi<{ access_records: AccessRow[] }>("/api/lp/data-room/access", [nonce]);
+  const artifacts = useApi<{ artifacts: ArtifactRow[] }>("/api/lp/data-room/artifacts", [nonce]);
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const rows = access.data?.access_records ?? [];
+  const live = rows.filter((r) => r.effective_status === "ACTIVE");
+  const closed = rows.filter((r) => r.effective_status !== "ACTIVE");
+  const titles = new Map((artifacts.data?.artifacts ?? []).map((a) => [a.id, a.title]));
+  const named = (r: AccessRow) => titles.get(r.artifact_id) ?? "a document that is no longer listed";
+
+  async function revoke(id: string) {
+    setBusy(true);
+    const failed = mutationError(
+      await api(`/api/lp/data-room/access/${id}/revoke`, { method: "POST", body: { reason: reason.trim() } }),
+      201,
+    );
+    setBusy(false);
+    setMessage(failed ?? "Closed. The reason is on the record and the grant itself is kept, so the trail still reads.");
+    if (!failed) {
+      setRevoking(null);
+      setReason("");
+      setNonce((n) => n + 1);
+    }
+  }
+
+  return (
+    <>
+      <h3>Who can see our material</h3>
+      <div className="card" data-testid="lp-data-room">
+        <p className="small">
+          Everyone who currently holds a key to something of the fund's — which document, what they
+          can do with it, and since when. Access is only ever given against a named document with a
+          partner's sign-off, which is why it is not given from here; taking it back is.
+        </p>
+
+        <h4>Holding access now</h4>
+        <ul className="card-list small" data-testid="data-room-live">
+          {live.map((r) => (
+            <li key={r.id} data-testid={`data-room-access-${r.id}`}>
+              <strong>{r.recipient_label}</strong>{" "}
+              <span className="muted">
+                {named(r)} · {permissionInWords(r.permission)} · since{" "}
+                {new Date(r.granted_at).toLocaleDateString()}
+                {r.expires_at ? ` · until ${new Date(r.expires_at).toLocaleDateString()}` : " · with no end date set"}
+              </span>
+              {revoking === r.id ? (
+                <div className="form-row">
+                  <label>
+                    Why{" "}
+                    <input
+                      data-testid={`data-room-reason-${r.id}`}
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="the diligence window closed"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-strong"
+                    disabled={busy || reason.trim().length < 3}
+                    data-testid={`data-room-revoke-${r.id}`}
+                    onClick={() => void revoke(r.id)}
+                  >
+                    Close it
+                  </button>
+                  <button type="button" data-testid={`data-room-revoke-cancel-${r.id}`} onClick={() => setRevoking(null)}>
+                    Leave it open
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid={`data-room-close-${r.id}`}
+                  onClick={() => { setRevoking(r.id); setReason(""); }}
+                >
+                  Take this access back
+                </button>
+              )}
+            </li>
+          ))}
+          {live.length === 0 && (
+            <li className="state-empty" data-testid="data-room-nobody">
+              {access.loading
+                ? "Reading who has access…"
+                : "Nobody outside the firm currently holds access to anything of ours. That is a real answer rather than a blank — every grant that has ever been made would be listed here."}
+            </li>
+          )}
+        </ul>
+
+        <h4>Access that has been closed</h4>
+        <ul className="card-list small" data-testid="data-room-closed">
+          {closed.map((r) => (
+            <li key={r.id} data-testid={`data-room-closed-${r.id}`}>
+              <strong>{r.recipient_label}</strong>{" "}
+              <span className="muted">
+                {named(r)} ·{" "}
+                {r.effective_status === "REVOKED"
+                  ? `taken back${r.revoked_at ? ` ${new Date(r.revoked_at).toLocaleDateString()}` : ""}`
+                  : "the access ran out on its own end date"}
+              </span>
+              {r.revocation_reason && <div className="muted small">{r.revocation_reason}</div>}
+            </li>
+          ))}
+          {closed.length === 0 && (
+            <li className="state-empty">
+              Nothing has been taken back or run out. When it is, it stays listed here with its
+              reason — the record of what somebody once held is how the firm answers whether they
+              ever saw a thing.
+            </li>
+          )}
+        </ul>
+
+        {message && (
+          <p className="notice small" data-testid="data-room-message" role="status">
+            {message}
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function LpPage({ me }: { me: MeResponse }) {
   const raise = useApi<{ funds: FundRaise[] }>("/api/lp/fundraising");
   const commitments = useApi<{ commitments: CommitmentRow[] }>("/api/lp/commitments");
@@ -762,9 +1221,11 @@ export function LpPage({ me }: { me: MeResponse }) {
 
       <FundStanding funds={funds} lps={records} />
 
-      <ReportingSection funds={funds} />
+      <ReportingSection funds={funds} lps={records} />
 
       <ReconciliationSection funds={funds} />
+
+      <DataRoomSection />
 
       <h3>Add an investor</h3>
       <div className="card">

@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { readDeck } from "./deckReader";
+import { pdfAttachments } from "../effects/mimeAttachments";
 import { DEAL_INTAKE_EMPLOYEE } from "../../shared/intake/emailTriggers";
 
 /**
@@ -57,7 +58,9 @@ const PER_RUN = 1;
 const FILLABLE = ["sector", "one_liner", "website"] as const;
 
 export async function runDeckReading(env: Env): Promise<{ read: number; failed: number; skipped: number }> {
-  if (!env.WP_OS_DOCUMENTS) return { read: 0, failed: 0, skipped: 0 };
+  // No bucket means nothing can be read, and saying "no decks waiting" would be a lie about a
+  // configuration problem rather than about the queue.
+  if (!env.WP_OS_DOCUMENTS) return { read: 0, failed: 0, skipped: -1 };
 
   /*
    * ONLY DECKS THAT HAVE A COMPANY TO FILL. A deck can arrive before its company exists — the EMAIL
@@ -80,6 +83,19 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
 
   let read = 0;
   let failed = 0;
+
+  /*
+   * DECKS THAT CANNOT BE READ YET ARE COUNTED AND SAID, not silently skipped.
+   *
+   * `skipped` was hardcoded to 0 and the job reported SUCCEEDED "no decks waiting" while decks sat
+   * waiting — a status line that was true of the query and false about the firm. That is the exact
+   * shape this whole review keeps finding: machinery reporting success over work that is not
+   * happening.
+   */
+  const waiting = await env.WP_OS_DB.prepare(
+    "SELECT COUNT(*) AS n FROM pending_deck WHERE state = 'PENDING' AND company_id IS NULL",
+  ).first<{ n: number }>();
+  const skipped = waiting?.n ?? 0;
 
   for (const deck of pending.results ?? []) {
     const fail = async (detail: string) => {
@@ -106,10 +122,33 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
      * Worker has 10ms. A five-megabyte deck round-tripped through bytes would have exhausted the
      * budget and failed as though the deck were unreadable.
      */
-    const dataBase64 = (await object.text()).trim();
+    let dataBase64 = (await object.text()).trim();
     if (!dataBase64) {
       await fail("The stored file was empty.");
       continue;
+    }
+
+    /*
+     * AN OVERSIZED MESSAGE IS EXTRACTED HERE, NOT AT ARRIVAL — which is what makes a 7MB deck
+     * readable at all.
+     *
+     * The email handler returns before `pdfAttachments` for anything over 256KB, because walking a
+     * multi-megabyte MIME tree does not fit in a Worker's 10ms of CPU. So the whole `.eml` is stored
+     * and the extraction happens here, in a scheduled invocation with its own budget. Without this
+     * the ceiling on a readable deck was about 190KB — base64 is 4/3 — and the operator's actual
+     * 7MB deck could never have been read no matter what else worked.
+     */
+    if (deck.object_key.endsWith(".eml")) {
+      const { attachments, unread } = pdfAttachments(dataBase64);
+      if (attachments.length === 0) {
+        await fail(
+          unread.length > 0
+            ? `No readable PDF in the message: ${unread.join("; ")}.`
+            : "The message carried no PDF this can read.",
+        );
+        continue;
+      }
+      dataBase64 = attachments[0]!.dataBase64;
     }
 
     const reading = await readDeck(
@@ -180,5 +219,5 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
     read += 1;
   }
 
-  return { read, failed, skipped: 0 };
+  return { read, failed, skipped };
 }

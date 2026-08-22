@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { proposePerson } from "./networkOsClient";
-import { dealFromMessage, intakeDealFromEmail, openRoutingCard } from "../services/dealIntake";
+import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openRoutingCard } from "../services/dealIntake";
 import { pdfAttachments } from "./mimeAttachments";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
@@ -174,6 +174,16 @@ export async function handleInboundEmail(
    */
   if (message.rawSize > MAX_BODY_BYTES) {
     const oversizeSummary = classifyInbound({ to: message.to, from: sender, subject, body: "" });
+
+    /*
+     * MATCHED FROM THE SUBJECT ALONE, which is all a header-only read has — and is usually enough,
+     * because the subject is where the company name lives ("#wpdealflow Sensori"). Match-only: this
+     * path never REGISTERS a company, because a name read out of a subject with no body to confirm
+     * it is the weakest evidence the system takes, and a wrong new company is worse than none.
+     */
+    const oversizeName = strippedSubject(subject);
+    const oversizeMatch = oversizeName.length >= 2 ? await matchFunnelCompany(env, oversizeName) : null;
+    const oversizeCompanyId = oversizeMatch?.id ?? null;
     await appendEvent(env, {
       eventType: "inbound_email.too_large_to_read",
       actorType: "system",
@@ -229,6 +239,33 @@ export async function handleInboundEmail(
         // message is in the mailbox — which it is, whatever happened here.
         storedKey = null;
       }
+    }
+
+    /*
+     * QUEUED FOR READING, NOT ONLY STORED — the half that was missing.
+     *
+     * The bytes were being written to R2 and nothing ever pointed a reader at them, so the operator's
+     * actual 7MB Sensori deck would have been kept and never read. The `.eml` key is what tells
+     * `deckQueue` to extract the PDF before reading it, using a scheduled invocation's own CPU budget
+     * rather than this handler's 10ms.
+     *
+     * Only when a company was matched from the headers: a deck for a company nobody can name has
+     * nothing to fill in, and the routing card below is the right home for that.
+     */
+    if (storedKey && oversizeCompanyId) {
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO pending_deck (id, company_id, filename, object_key, bytes, firm_scope)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      )
+        .bind(
+          `pdk_${crypto.randomUUID()}`,
+          oversizeCompanyId,
+          `${subject || "message"}.eml`.slice(0, 200),
+          storedKey,
+          message.rawSize,
+          firmScope,
+        )
+        .run();
     }
 
     await openRoutingCard(env, {
@@ -528,15 +565,35 @@ export function personFromMessage(from: string, body: string): { name: string; e
  * who sent a deck is worse than admitting the header is all we have.
  */
 export function forwardedOrigin(raw: string): { from: string | null; subject: string | null } | null {
-  const marker = /(-{2,}\s*forwarded message\s*-{2,}|begin forwarded message:)/i.exec(raw);
+  /*
+   * SEARCHED IN THE BODY ONLY, and without that every ordinary message read as a forward.
+   *
+   * A forwarded block is quoted text; it lives after the blank line that ends the message's own
+   * headers, and there is nowhere else it can be. Scanning the whole `raw` meant the markerless
+   * Outlook fallback below matched the message's OWN top-level headers, because
+   * `From:` immediately followed by `Date:` is the ordinary header order Gmail and most MTAs emit:
+   *
+   *   From: Ada <ada@sensori.example>
+   *   Date: Fri, 22 Aug 2026 03:29:00 -0400
+   *
+   * So `origin.from` came back as the real sender, the caller set `forwardedBy = sender`, and the
+   * register recorded a message as forwarded by the person who wrote it. Nothing was misattributed
+   * — `from` was right either way — but the FORWARDING TRAIL was invented, and that trail is the
+   * provenance evidence this function exists to preserve.
+   */
+  const bodyAt = raw.search(/\r?\n\r?\n/);
+  if (bodyAt === -1) return null;
+  const body = raw.slice(bodyAt);
+
+  const marker = /(-{2,}\s*forwarded message\s*-{2,}|begin forwarded message:)/i.exec(body);
   // Outlook forwards carry no marker at all: the block begins at a bare "From:" line that is
   // followed by "Sent:" or "Date:". Looked for only when no marker was found, so a Gmail forward is
   // never parsed from the wrong place.
-  const start = marker ? marker.index + marker[0].length : /^\s*from:\s*.+\r?\n\s*(sent|date):/im.exec(raw)?.index;
+  const start = marker ? marker.index + marker[0].length : /^\s*from:\s*.+\r?\n\s*(sent|date):/im.exec(body)?.index;
   if (start === undefined) return null;
 
   // One screenful is enough for a header block, and bounding it keeps this cheap on a long thread.
-  const block = raw.slice(start, start + 1200);
+  const block = body.slice(start, start + 1200);
   const fromLine = /^\s*from:\s*(.+)$/im.exec(block)?.[1]?.trim() ?? null;
   const subjectLine = /^\s*subject:\s*(.+)$/im.exec(block)?.[1]?.trim() ?? null;
 

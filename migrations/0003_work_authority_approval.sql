@@ -318,6 +318,7 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('firm_skill.retire', 'Retire a method', 'Stop a method being read by the employees on that machine.', 0, 0),
   ('document.archive', 'Archive a document', 'Take a document out of the shelf, keeping the record of who removed it and why.', 0, 0),
   ('opportunity.archive', 'Archive a deal record', 'Take a deal record off the board, keeping who removed it and why.', 0, 0),
+  ('meeting.archive', 'Archive a meeting', 'Take a meeting off the record, keeping who removed it, when, and why. Nothing already taken out of it is removed.', 0, 0),
   ('capability.assign', 'Assign a capability', 'Assign a capability to an AI employee or a machine.', 0, 0),
   ('capability_after_action.record', 'Record capability after-action', 'Record what actually happened when a capability was used.', 0, 0),
   ('build_vs_buy.decide', 'Record a build-vs-buy decision', 'Record a build, buy, or defer decision for a capability with its rationale.', 0, 0),

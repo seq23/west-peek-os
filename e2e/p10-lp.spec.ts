@@ -200,18 +200,19 @@ test("P10 LP journey: evidence gate → compliance receipt → publish → recor
 });
 
 /*
- * THE MISSING SURFACE, ASSERTED RATHER THAN ONLY MENTIONED.
+ * THE SURFACE THAT WAS MISSING, NOW BUILT.
  *
- * Every gate above is real and enforced, and a person can reach none of it: there is no control
- * anywhere in `src/client/` for drafting an LP-facing claim, linking what it rests on, publishing
- * it, or reading who currently holds access to shared material. The routes are live, so anything
- * with an API client can share LP-private material and nothing in the interface will show it.
+ * Every gate above is real and enforced, and until now a person could reach none of it: nothing in
+ * `src/client/` read who currently held access to shared material. The routes were live, so
+ * anything with an API client could share LP-private material and no partner could see that it had
+ * happened — the enforcement was never the gap, the visibility was, and an access list nobody can
+ * read is not access control.
  *
- * Left as the behaviour that should hold, marked expected-to-fail. Remove `test.fail()` when the LP
- * surface carries the access ledger again.
+ * The LP surface now carries the ledger: who holds a key to what right now, what they may do with
+ * it, since when, and a control to take it back with a reason. What was closed stays listed
+ * underneath, because a revocation that disappears leaves only the grant.
  */
 test("a partner can see who currently holds access to LP material", async ({ page }) => {
-  test.fail();
   await page.goto("/");
   await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
   await page.getByTestId("dev-login-submit").click();

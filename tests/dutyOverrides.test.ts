@@ -644,3 +644,43 @@ describe("what the surface is given is already readable", () => {
     }
   });
 });
+
+/**
+ * TAKING SOMEBODY OFF A SHIFT IS A CHANGE, AND THE PAGE SAID IT WAS THE DEFAULT.
+ *
+ * `changed` was computed from `onDuty`, but a person turned off is filtered out before `onDuty`
+ * exists and lands in neither `onDuty` nor `benched`. So the operator's most common edit — 0137's
+ * own headline example, "Wyatt is not on Overnight" — left `changed` false, and `DutyRosterPanel`
+ * printed "This shift is the firm's default" on a shift she had just changed by hand, with no trace
+ * of the removal anywhere on the page. The field's contract is "anything on this shift is not the
+ * code default".
+ */
+describe("a shift knows it was changed even when the change was a removal", () => {
+  const off: DutyOverride = {
+    // Porter, not Wyatt: 0137's prose example names Wyatt but the code default does not put him on
+    // Overnight, so removing him removes nobody and the assertion would hold with the bug in place.
+    name: "Porter",
+    kind: "SHIFT",
+    shift: "OVERNIGHT",
+    onDuty: false,
+    reason: "Porter is not on overnight any more",
+    setBy: "Sequoia Taylor",
+    setAt: "2026-08-22T10:00:00.000Z",
+  };
+
+  it("reports changed after somebody is taken off", () => {
+    const overnight = SHIFTS.find((s) => s.key === "OVERNIGHT")!;
+    const before = resolveDuty(overnight.from, 8);
+    // Guards the guard: the removal has to actually remove somebody, or this proves nothing.
+    expect(before.onDuty.map((a) => a.name)).toContain("Porter");
+
+    const after = resolveDuty(overnight.from, 8, { overrides: [off] });
+    expect(after.onDuty.map((a) => a.name)).not.toContain("Porter");
+    expect(after.changed).toBe(true);
+  });
+
+  it("still reports unchanged when nobody has said anything about the shift", () => {
+    const overnight = SHIFTS.find((s) => s.key === "OVERNIGHT")!;
+    expect(resolveDuty(overnight.from, 8, { overrides: [] }).changed).toBe(false);
+  });
+});

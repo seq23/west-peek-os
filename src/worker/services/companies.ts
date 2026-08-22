@@ -131,6 +131,15 @@ const createCompanySchema = z.object({
   legal_name: z.string().trim().min(1).optional(),
   website: z.string().trim().min(1).optional(),
   description: z.string().optional(),
+  /*
+   * The firm's own read, recordable at the moment the company is opened.
+   *
+   * It was silently DROPPED before: the create endpoint accepted the field and ignored it, so a
+   * partner who wrote her judgement while adding a company found it gone. Caught by an end-to-end
+   * test reading back NULL — and the drop was hiding a worse hole, since the trigger guarding this
+   * column watched UPDATE and not INSERT (migration 0141 closes that).
+   */
+  mp_notes: z.string().trim().min(1).optional(),
   privacy_label: privacyLabelSchema.optional(),
   aliases: z.array(aliasInputSchema).optional(),
   external_identities: z.array(externalIdentityInputSchema).optional(),
@@ -277,8 +286,10 @@ export async function handleCreateCompany(ctx: RouteContext): Promise<Response> 
   const id = `cc_${crypto.randomUUID()}`;
   const statements: D1PreparedStatement[] = [
     env.WP_OS_DB.prepare(
-      `INSERT INTO canonical_company (id, canonical_name, legal_name, website, description, privacy_label, created_by, sector, one_liner)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      `INSERT INTO canonical_company
+         (id, canonical_name, legal_name, website, description, privacy_label, created_by, sector, one_liner,
+          mp_notes, mp_notes_by, mp_notes_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
     ).bind(
       id,
       input.canonical_name.trim(),
@@ -289,6 +300,11 @@ export async function handleCreateCompany(ctx: RouteContext): Promise<Response> 
       identity!.id,
       input.sector ?? null,
       input.one_liner ?? null,
+      input.mp_notes ?? null,
+      // The author travels with the note, always. The database refuses it otherwise, which is the
+      // point: no automatic process has a firm_user to put here.
+      input.mp_notes ? identity!.id : null,
+      input.mp_notes ? new Date().toISOString() : null,
     ),
   ];
   for (const a of input.aliases ?? []) {

@@ -156,9 +156,25 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
             (SELECT status FROM job_run r WHERE r.job_id = j.id ORDER BY started_at DESC LIMIT 1) AS last_status
        FROM scheduled_job j`,
   ).all<{ job_key: string; status: string; target_kind: string; target_id: string | null; last_run_at: string | null; last_status: string | null }>()
-    .catch(() => ({ results: [] }))).results ?? []);
+    .catch(() => {
+      unreadable.push("scheduled_job");
+      return { results: [] };
+    })).results ?? []);
+  /*
+   * NAMED WHEN IT FAILS, like every other read on this board.
+   *
+   * These two swallowed their errors and pushed nothing, so an unreadable `ai_employee` produced
+   * `employees = []` and the workforce check below then reported DOWN with "0 switched on of 0
+   * employed" and "Nobody is switched on, so no work of any kind can run." — a confident diagnosis
+   * of a fact nobody had established, which `runHealthEscalation` then sends to both partners. The
+   * "Readings on this page" check exists precisely so "a check that could not run is never mistaken
+   * for a check that came back clean", and these two were the ones it could not see.
+   */
   const employees = ((await env.WP_OS_DB.prepare("SELECT id, name, status FROM ai_employee").all<{ id: string; name: string; status: string }>()
-    .catch(() => ({ results: [] }))).results ?? []);
+    .catch(() => {
+      unreadable.push("ai_employee");
+      return { results: [] };
+    })).results ?? []);
   /*
    * Keyed by id AND name. `scheduled_job.target_id` holds the id after migration 0087; keying on
    * name alone would have turned every EMPLOYEE job amber the moment that landed — the same
@@ -196,10 +212,18 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
    * to reclassify them — or to delegate them under ADR-018 — rather than to work harder. Reasoning
    * in docs/APPROVAL_AND_WORK_DESIGN.md.
    */
+  // Caught like the rest: an uncaught throw here rejects `runHealthChecks` outright, so one bad
+  // table 500s `GET /api/diagnostics/health` and takes `runHealthEscalation` down with it — the
+  // opposite of this file's rule that catching keeps one bad table from blanking the whole board.
   const pending = await env.WP_OS_DB.prepare(
     `SELECT action_key, COUNT(*) AS n FROM approval_card
       WHERE state = 'pending_review' GROUP BY action_key ORDER BY n DESC`,
-  ).all<{ action_key: string; n: number }>();
+  )
+    .all<{ action_key: string; n: number }>()
+    .catch(() => {
+      unreadable.push("approval_card");
+      return { results: [] as Array<{ action_key: string; n: number }> };
+    });
   const pendingRows = pending.results ?? [];
   const pendingTotal = pendingRows.reduce((sum, r) => sum + r.n, 0);
   const worst = pendingRows.slice(0, 3).map((r) => `${actionName(r.action_key)} (${r.n})`);

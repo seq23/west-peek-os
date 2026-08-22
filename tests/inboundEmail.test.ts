@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { classifyInbound, decodeMimeHeader, extractAddress, MAX_BODY_BYTES, personFromMessage } from "../src/worker/effects/inboundEmail";
+import { classifyInbound, decodeMimeHeader, extractAddress, forwardedOrigin, MAX_BODY_BYTES, personFromMessage } from "../src/worker/effects/inboundEmail";
+import { pdfAttachments } from "../src/worker/effects/mimeAttachments";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import { defuseTriggers, wouldLoop } from "../src/worker/effects/emailTransport";
 
@@ -170,5 +171,113 @@ describe("the sender recorded is the person, not the relay", () => {
   it("falls back rather than inventing one, because a header can be absent", () => {
     expect(extractAddress(null)).toBeNull();
     expect(extractAddress("Dana Reyes")).toBeNull();
+  });
+});
+
+describe("a folded header still yields its boundary, so a deck is not dropped in silence", () => {
+  /**
+   * RFC 5322 lets a header wrap onto a continuation line starting with a space or a tab, and Apple
+   * Mail and Outlook both do it for `Content-Type`. `boundaryOf` matched with `[^\n]*`, which cannot
+   * cross that break, so it returned null — `pdfAttachments` then returned no attachments AND no
+   * `unread` note, the caller set `isDeck = false`, and the deck vanished with nothing said. That is
+   * the exact silent drop the module docstring promises never to do ("anything it cannot confidently
+   * read it reports as unread rather than guessing").
+   */
+  const pdf = Buffer.from("%PDF-1.4 pretend").toString("base64");
+  const message = (contentType: string, boundary: string) =>
+    [
+      "From: Ada <ada@sensori.example>",
+      "To: os@joinwestpeek.com",
+      "Subject: #wpdeck Sensori",
+      contentType,
+      "",
+      `--${boundary}`,
+      'Content-Type: application/pdf; name="sensori.pdf"',
+      'Content-Disposition: attachment; filename="sensori.pdf"',
+      "Content-Transfer-Encoding: base64",
+      "",
+      pdf,
+      `--${boundary}--`,
+      "",
+    ].join("\r\n");
+
+  it("reads a boundary declared on a continuation line", () => {
+    const folded = message('Content-Type: multipart/mixed;\r\n\tboundary="Apple-Mail=_A1B2C3"', "Apple-Mail=_A1B2C3");
+    const { attachments, unread } = pdfAttachments(folded);
+    expect(attachments.map((a) => a.filename)).toEqual(["sensori.pdf"]);
+    expect(attachments[0]!.dataBase64).toBe(pdf);
+    expect(unread).toEqual([]);
+  });
+
+  it("still reads one declared on a single line", () => {
+    const same = message('Content-Type: multipart/mixed; boundary="wp(e2e)+bound?ary_1"', "wp(e2e)+bound?ary_1");
+    expect(pdfAttachments(same).attachments.map((a) => a.filename)).toEqual(["sensori.pdf"]);
+  });
+
+  it("finds nothing in a message that is not multipart, and says nothing was lost", () => {
+    const plain = ["From: Ada <ada@sensori.example>", "Subject: #wpdealflow Sensori", "", "Deck to follow."].join("\r\n");
+    expect(pdfAttachments(plain)).toEqual({ attachments: [], unread: [] });
+  });
+});
+
+describe("the forwarding trail records a forward and only a forward", () => {
+  /**
+   * The markerless Outlook fallback — a bare `From:` line followed by `Sent:`/`Date:` — was searched
+   * across the WHOLE message, and that is the ordinary header order Gmail and most MTAs emit. So a
+   * message nobody forwarded matched its own top-level headers, `origin.from` came back as the real
+   * sender, and the caller set `forwardedBy` to that same person. Nothing was misattributed, but the
+   * forwarding trail — which this function exists to keep, because it is the provenance evidence a
+   * Fund I has about its sourcing — was invented.
+   */
+  const headers = [
+    "MIME-Version: 1.0",
+    "From: Ada Reyes <ada@sensori.example>",
+    "Date: Fri, 22 Aug 2026 03:29:00 -0400",
+    "Message-ID: <abc@mail>",
+    "Subject: #wpdealflow Sensori",
+    "To: os@joinwestpeek.com",
+  ].join("\r\n");
+
+  it("returns nothing for a message that was sent directly", () => {
+    expect(forwardedOrigin(`${headers}\r\n\r\nHere is the deck.`)).toBeNull();
+  });
+
+  it("still recovers the original sender from a Gmail forward", () => {
+    const raw = [
+      "From: Scooter Taylor <scooter@westpeek.ventures>",
+      "Date: Fri, 22 Aug 2026 08:00:00 -0400",
+      "Subject: Fwd: Sensori",
+      "To: os@joinwestpeek.com",
+      "",
+      "#wpdeck — worth a look.",
+      "",
+      "---------- Forwarded message ----------",
+      "From: Ada Reyes <ada@sensori.example>",
+      "Date: Fri, 22 Aug 2026 03:29:00 -0400",
+      "Subject: Sensori — Series A",
+      "To: scooter@westpeek.ventures",
+      "",
+      "Deck attached.",
+    ].join("\r\n");
+    expect(forwardedOrigin(raw)).toEqual({ from: "ada@sensori.example", subject: "Sensori — Series A" });
+  });
+
+  it("still recovers one from a markerless Outlook forward", () => {
+    const raw = [
+      "From: Scooter Taylor <scooter@westpeek.ventures>",
+      "Date: Fri, 22 Aug 2026 08:00:00 -0400",
+      "Subject: FW: Sensori",
+      "To: os@joinwestpeek.com",
+      "",
+      "Passing this on.",
+      "",
+      "From: Ada Reyes <ada@sensori.example>",
+      "Sent: Friday, 22 August 2026 03:29",
+      "To: Scooter Taylor",
+      "Subject: Sensori — Series A",
+      "",
+      "Deck attached.",
+    ].join("\r\n");
+    expect(forwardedOrigin(raw)?.from).toBe("ada@sensori.example");
   });
 });

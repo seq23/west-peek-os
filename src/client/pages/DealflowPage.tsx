@@ -1666,7 +1666,7 @@ function CompanyDealRecord({
                 <div className="muted">
                   {committeeDeal.stage}
                   {committeeDeal.facilitator_card
-                    ? ` · the facilitator is holding a card to assemble it — ${cardStateInWords(committeeDeal.facilitator_card.state)}`
+                    ? ` · the card to assemble it is ${cardStateInWords(committeeDeal.facilitator_card.state)}`
                     : ""}
                 </div>
               </li>
@@ -1699,8 +1699,9 @@ function CompanyDealRecord({
                   {/* THE TWO COUNTS TRAVEL SEPARATELY ON PURPOSE. A contradiction opened after the
                       packet was written is the one nobody in the room knows about. */}
                   <div className="muted">
-                    {committeeDeal.packet_evidence.contradictions_at_assembly} were open when the
-                    packet was put together
+                    {committeeDeal.packet_evidence.contradictions_at_assembly === 1
+                      ? "One was open when the packet was put together"
+                      : `${count(committeeDeal.packet_evidence.contradictions_at_assembly)} were open when the packet was put together`}
                     {committeeDeal.packet_evidence.contradictions_now >
                     committeeDeal.packet_evidence.contradictions_at_assembly
                       ? " — the rest were raised since, so nobody in the room has seen them"

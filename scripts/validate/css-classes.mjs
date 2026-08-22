@@ -117,6 +117,41 @@ function selfTest() {
   console.log(`SELF-TEST PASSED: ${cases.length}/${cases.length} cases, including the two interpolation traps.`);
 }
 
+/**
+ * The stylesheet's braces balance, and never go negative.
+ *
+ * A rule deleted while its closing brace is left behind produces a stray `}` that esbuild reports
+ * only as a WARNING during minification — the build still succeeds, and everything after that point
+ * is parsed at the wrong nesting level. One shipped exactly that way: a `}` orphaned after a comment
+ * block at line 1877, which the operator would only ever have seen as "the styling looks wrong".
+ *
+ * Checked here rather than trusted to a build warning, because this file already exists to catch the
+ * one front-end mistake with no symptom, and an unbalanced stylesheet is the same disease at a larger
+ * scale. Depth is tracked rather than just totals: a matched pair in the wrong ORDER balances to zero
+ * and is still broken.
+ */
+function braceBalance(css) {
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length));
+  let depth = 0;
+  const lines = code.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    for (const ch of lines[i]) {
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      if (depth < 0) return `a stray closing brace at ${CSS}:${i + 1} — everything after it is parsed at the wrong nesting level`;
+    }
+  }
+  return depth === 0 ? null : `${depth} unclosed rule(s) in ${CSS}`;
+}
+
+const unbalanced = braceBalance(readFileSync(CSS, "utf8"));
+if (unbalanced) {
+  console.error(`CSS CLASS SCAN FAILED — ${unbalanced}.\n`);
+  console.error("esbuild reports this only as a warning during minify, so the build still succeeds");
+  console.error("and the damage shows up as styling that silently does not apply.");
+  process.exit(1);
+}
+
 const problems = scan(readFileSync(CSS, "utf8"), walk(ROOT));
 if (problems.length > 0) {
   console.error("CSS CLASS SCAN FAILED — these are applied to elements and style nothing:\n");

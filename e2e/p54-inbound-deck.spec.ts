@@ -66,7 +66,14 @@ test("a deck emailed about a company we already have is stored, queued, and read
   // the deck must never overwrite, and it is the reason this journey uses an existing company.
   const created = await request.post("/api/companies", {
     headers: MP,
-    data: { canonical_name: company, one_liner: "Typed by a partner, and not the deck's to change." },
+    data: {
+      canonical_name: company,
+      one_liner: "What we wrote down before the deck arrived.",
+      // The field the deck may NEVER touch, guarded by a database trigger rather than by code
+      // remembering. Written through the API so `mp_notes_by` is set, which is what the trigger
+      // checks — no automatic process has a firm_user to put there.
+      mp_notes: "Our own read: strong team, thin traction. Not the deck's to change.",
+    },
   });
   expect(created.status(), await created.text()).toBe(201);
   const companyId = ((await created.json()) as { id: string }).id;
@@ -138,13 +145,25 @@ test("a deck emailed about a company we already have is stored, queued, and read
   expect(deckRun!.actor_type).toBe("AI");
 
   /*
-   * NOTHING A PERSON TYPED WAS TOUCHED. The rule survives the failure path too, which is the point:
-   * a deck that could not be read must leave the record exactly as it found it.
+   * WHOSE FACT IS IT. Operator's ruling, 22 Aug 2026, overturning an earlier blanks-only rule:
+   * "i think the updated deck should overwrite us....coming from the company. overwriting us is
+   * fine. maybe each company card has a field for MP notes that cannot be overwritten."
+   *
+   * So the company's own facts — sector, one-liner, website — are the COMPANY's to correct, and a
+   * newer deck is a more recent statement from the same source. What is ours is `mp_notes`, and
+   * nothing automatic may write it; a database trigger holds that rather than this file trusting the
+   * next service to remember.
+   *
+   * This spec asserted the SUPERSEDED rule and so failed on the fix — the same shape as the test
+   * that pinned a placeholder and the fixture that named an employee who never existed.
    */
   const record = (await (await request.get(`/api/companies/${companyId}`, { headers: MP })).json()) as {
     one_liner: string | null;
+    mp_notes: string | null;
   };
-  expect(record.one_liner).toBe("Typed by a partner, and not the deck's to change.");
+  expect(record.mp_notes, "the firm's own judgement is never overwritten").toBe(
+    "Our own read: strong team, thin traction. Not the deck's to change.",
+  );
 
   // And the operator can see the company's record on Dealflow, under the name she would look for.
   await signIn(page);

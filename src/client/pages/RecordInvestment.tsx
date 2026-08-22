@@ -65,7 +65,10 @@ function transactionStanding(status: string): string {
       return "approved — not booked until it is executed";
     case "EXECUTED":
       return "booked — the fund holds this";
-    case "VOIDED":
+    // `VOID` is what the column holds (`migrations/0006…:111` CHECK, and `voidTransaction` writes
+    // it). This case read `VOIDED`, which no row has ever been, so a voided transaction fell
+    // through to the default and reported itself as "in progress" — the one standing it is not.
+    case "VOID":
       return "voided";
     default:
       return "in progress";
@@ -323,7 +326,26 @@ export function RecordInvestment({
                 back here afterwards.
               </p>
             )}
-            {t.status === "APPROVED" && isPartner && (
+            {/*
+              THE RUNG THAT WAS NOT THERE, and it is why production holds zero positions.
+
+              This read `t.status === "APPROVED"`, and NOTHING EVER WRITES THAT STATUS. The only
+              three UPDATEs on the column are `PENDING_APPROVAL` (submit), `EXECUTED` (execute) and
+              `VOID` (void) — `investment.ts:1030/1146/1194` — so a submitted transaction sits at
+              `PENDING_APPROVAL` for the whole of its approved life and the receipt field could
+              never render. The line directly above it told the partner to "bring the receipt back
+              here afterwards", to a control that did not exist. The ladder was complete on the
+              server and had no last rung on the page, exactly as the comment at the top of this
+              file says it must not.
+
+              Showing it while the decision is still outstanding is safe, and it is the honest
+              shape: the server is the gate. `executeTransaction` re-verifies the receipt through
+              `authorize()` every time — the card must be in state `approved`, for this exact action
+              key and this exact object, decided by somebody who still holds the approver role — and
+              answers `409 approval_required` otherwise. A partner who presses this early is told
+              no by the authority that is entitled to say it, rather than by a hidden button.
+            */}
+            {(t.status === "PENDING_APPROVAL" || t.status === "APPROVED") && isPartner && (
               <div className="form-row">
                 <label>
                   Approval receipt{" "}

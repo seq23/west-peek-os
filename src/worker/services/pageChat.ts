@@ -90,14 +90,27 @@ export async function handlePageReply(ctx: RouteContext): Promise<Response> {
     .bind(host.name)
     .first<{ status: string }>();
 
+  /*
+   * THE LAST THIRTY TURNS, NOT THE FIRST THIRTY.
+   *
+   * `ORDER BY turn_no ASC LIMIT 30` takes the OLDEST thirty, so once a thread passed its thirtieth
+   * turn the host was handed the OPENING of the conversation for ever and never saw anything recent
+   * — while the partner reads the whole thread on screen, because `handlePageThread` has no limit.
+   * The symptom is an employee who slowly stops following what is being said and starts answering
+   * a question from last week, which reads as a bad model rather than as a bad query.
+   *
+   * Taken newest-first and turned back the right way round, so the model still reads it in order.
+   */
   const priorTurns = (
-    await ctx.env.WP_OS_DB.prepare(
-      `SELECT role, body FROM page_turn
-        WHERE nav_key = ?1 AND firm_user_id = ?2 AND state = 'OK' ORDER BY turn_no ASC LIMIT ?3`,
-    )
-      .bind(navKey, ctx.identity!.id, HISTORY_TURNS)
-      .all<{ role: string; body: string }>()
-  ).results ?? [];
+    (
+      await ctx.env.WP_OS_DB.prepare(
+        `SELECT role, body FROM page_turn
+          WHERE nav_key = ?1 AND firm_user_id = ?2 AND state = 'OK' ORDER BY turn_no DESC LIMIT ?3`,
+      )
+        .bind(navKey, ctx.identity!.id, HISTORY_TURNS)
+        .all<{ role: string; body: string }>()
+    ).results ?? []
+  ).reverse();
 
   // Turn numbers count every turn, not the OK ones — a failed turn stays in the thread and must
   // keep its place, or the next reply collides with it on the UNIQUE constraint.

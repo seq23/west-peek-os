@@ -489,14 +489,28 @@ describe("all four routes converge on one entry point", () => {
     expect(again.work_card_id).toBe(first.work_card_id);
   });
 
-  it("refuses to open the record for a route that has nobody to attribute the decision to", async () => {
-    // The governance in one line: the manual route writes because a partner is behind it. Take the
-    // actor away and the door must refuse rather than write something nobody decided.
+  it("refuses to open an OPPORTUNITY for a route with nobody to attribute the decision to", async () => {
+    /*
+     * The governance in one line: the manual route claims partner attention because a partner is
+     * behind it. Take the actor away and it must refuse rather than open something nobody decided.
+     *
+     * THE REGISTER IS NOT THE PIPELINE, and this test used to conflate them by asserting no
+     * `canonical_company` row either. That conflation made the deck feature a permanent no-op: a
+     * company arriving by email got no register row, so the deck reader had nothing to attach to and
+     * skipped it for ever while the job reported "no decks waiting".
+     *
+     * Recording that the firm HEARD OF somebody commits nothing and is exactly what an arrival is.
+     * Opening an opportunity is a claim on partner attention and still needs a human — which is what
+     * `opensRecord` actually meant and now solely governs.
+     */
     await expect(
       openIntoFunnel(env, { route: "MANUAL", company: "Unattributed Co", source: "nobody" }),
     ).rejects.toThrow(/needs the actor/);
     expect(
-      (await t.db.prepare("SELECT COUNT(*) AS n FROM canonical_company WHERE canonical_name = 'Unattributed Co'").first<{ n: number }>())!.n,
+      (await t.db
+        .prepare("SELECT COUNT(*) AS n FROM investment_opportunity o JOIN canonical_company c ON c.id = o.company_id WHERE c.canonical_name = 'Unattributed Co'")
+        .first<{ n: number }>())!.n,
+      "no opportunity may be opened without somebody to attribute it to",
     ).toBe(0);
   });
 });

@@ -234,9 +234,14 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
       // A deck that could not be read is reported, never swallowed: "the deck said nothing about
       // revenue" and "nobody read the deck" look identical on a company card unless one is said.
       summary:
-        out.read === 0 && out.failed === 0
-          ? "no decks waiting"
-          : `${out.read} read${out.failed ? ` · ${out.failed} could not be read` : ""}`,
+        out.skipped === -1
+          ? "no document store is configured, so no deck can be read"
+          : out.read === 0 && out.failed === 0 && out.skipped === 0
+            ? "no decks waiting"
+            // A deck waiting on a company nobody has opened yet is SAID. Reporting "no decks
+            // waiting" while decks wait is a status line that is true of the query and false about
+            // the firm.
+            : `${out.read} read${out.failed ? ` · ${out.failed} could not be read` : ""}${out.skipped ? ` · ${out.skipped} waiting for a company to be opened` : ""}`,
       artifacts,
     };
   }

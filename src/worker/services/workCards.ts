@@ -249,9 +249,20 @@ async function duplicateOf(
  * Returns the reason when tripped, so the caller can say which limit and by how much rather than
  * "too many". Only counts an OWNER — a partner opening cards by hand is not rate-limited, because a
  * human doing something forty times is a human who means it.
+ *
+ * COUNTED BY ID, SAID BY NAME. `ownerId` must be the RESOLVED `aie_*` id, because that is what the
+ * column holds; `saidAs` is whatever the caller wrote, because "Wyatt has opened 40 work cards" is
+ * a sentence a partner can act on and "aie_wyatt has opened 40" is one she has to decode. The two
+ * used to be the same argument, and passing the display name made the counts always zero.
  */
-async function rateTrip(env: Env, ownerId: string | null | undefined, firmScope: string): Promise<string | null> {
+async function rateTrip(
+  env: Env,
+  ownerId: string | null | undefined,
+  firmScope: string,
+  saidAs?: string | null,
+): Promise<string | null> {
   if (!ownerId) return null;
+  const who = saidAs?.trim() || ownerId;
   const row = await env.WP_OS_DB.prepare(
     `SELECT
        (SELECT COUNT(*) FROM work_card
@@ -264,10 +275,10 @@ async function rateTrip(env: Env, ownerId: string | null | undefined, firmScope:
     .first<{ last_hour: number; open_now: number }>();
   if (!row) return null;
   if (row.last_hour >= CARDS_PER_HOUR_TRIP) {
-    return `${ownerId} has opened ${row.last_hour} work cards in the last hour, past the ${CARDS_PER_HOUR_TRIP} that means something is looping rather than working.`;
+    return `${who} has opened ${row.last_hour} work cards in the last hour, past the ${CARDS_PER_HOUR_TRIP} that means something is looping rather than working.`;
   }
   if (row.open_now >= OPEN_CARDS_CEILING) {
-    return `${ownerId} is holding ${row.open_now} open work cards, past the ceiling of ${OPEN_CARDS_CEILING}. Nobody works sixty things.`;
+    return `${who} is holding ${row.open_now} open work cards, past the ceiling of ${OPEN_CARDS_CEILING}. Nobody works sixty things.`;
   }
   return null;
 }
@@ -331,15 +342,26 @@ export async function createWorkCardInternal(
    * A LOOPING EMPLOYEE IS STOPPED HERE AND THE PARTNERS ARE TOLD — the card is refused, but the
    * refusal is the alarm rather than the point. Escalation goes through the health spine, which
    * already reports only what persists, tells both partners once, and announces recovery.
+   *
+   * THE RESOLVED ID, FOR THE SAME REASON THE DUPLICATE CHECK ABOVE TAKES IT. This read `input.owner_id`
+   * — the raw value a caller passed — while `rateTrip` counts `work_card WHERE owner_id = ?` and the
+   * column holds `aie_wyatt`. Every machine route into this function names an employee by their
+   * display string (`DEAL_INTAKE_EMPLOYEE` "Wyatt", `ROUTING_EMPLOYEE` "Porter",
+   * `PORTFOLIO_UPDATE_EMPLOYEE` "Winter", `IC_FACILITATOR` "Poppy"), so both counts came back 0 and
+   * the breaker could never trip — for exactly the unattended routes it exists to stop. A partner
+   * opening cards by hand was never the risk; a job in a loop is.
+   *
+   * The event's `objectId` takes it too: it is declared `objectType: "ai_employee"`, so a display
+   * name there is the same two-formats-in-one-column fault in the spine rather than in the table.
    */
-  const tripped = await rateTrip(env, input.owner_id, firmScope);
+  const tripped = await rateTrip(env, ownerId, firmScope, input.owner_id);
   if (tripped) {
     await appendEvent(env, {
       eventType: "work_card.rate_limited",
       actorType: "firm_user",
       actorId: identity.id,
       objectType: "ai_employee",
-      objectId: input.owner_id ?? "unknown",
+      objectId: ownerId ?? "unknown",
       payload: { detail: tripped },
     });
     throw new WorkCardError(429, "opening_too_fast", tripped);
