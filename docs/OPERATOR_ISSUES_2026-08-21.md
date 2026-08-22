@@ -42,13 +42,13 @@ already has is a green suite over a product nobody exercised.
 | 1 | Fold Today into Home; brief runs at 7am ET without a button | IN PROGRESS | **Root cause found and fixed: 10 ms of CPU per cron trigger on the Workers Free plan.** The manual button was never the same code — it briefs one partner through a request. Now chunked: two sources and one partner's brief per tick, job on INTERVAL 15, `deliver_at_local` as the per-partner gate, regex compilation hoisted and the feed byte cap cut 2 MB → 256 KB. A failed brief retries up to three times rather than costing a partner the day. A scheduled tick has been watched SUCCEEDING in production. Does not close until briefs are watched landing on consecutive days. |
 | 2 | "I know" and "Stop telling me" do the same thing; one should delete | **DONE** | They now differ: "I know" is quiet for a week (somebody who said it last Tuesday has not said it about today); "Stop telling me, for good" is permanent. Both stay keyed to the exact wording, so the same problem described differently is a different item and still gets said — that is what makes a permanent option safe. |
 | 3 | Approvals: cards, reject/block/send-back/draft, state change after decision; hostile review | IN PROGRESS | **Correction:** Approve, Request revision and Reject all exist — they render only for a `pending_review` card, and production has none, so the queue looked actionless. Decisions no longer swallow their result (a 403 said nothing before). Still missing: changing state *after* a decision, a block distinct from reject, and the card treatment. |
-| 4 | Work under Approvals; drop the checkmark | TODO | Lands with the nav work. |
+| 4 | Work under Approvals; drop the checkmark | **DONE** | Both answer the same question — what is waiting on a person — so they are adjacent rather than separated by Today, Notifications and the weekly review. The tick was the only icon on any item in the group, which made Approvals read as a state (done) rather than a place, and made every other item look like it was missing one. |
 | 5 | Nav group titles carry no more weight than their items | **DONE** | They were quieter on every axis at once — same colour token, same weight, smaller, dimmed to 0.72. Now brighter and heavier, deliberately still small: a signpost should not compete on SIZE with the things it points at, or the eye scans categories instead of destinations. Verified on screen. |
 | 6 | Thesis formatting | **DONE** | The real defect was not formatting: the page rendered the **oldest** mandate version, so amending said "Saved as version 2" and changed nothing. The API now names `current` explicitly and all eight call sites read it — removing the indexing question rather than answering it eight times. |
 | 7 | Three routes into the funnel: manual/deck upload, Airtable, scout | TODO | Four uncontrolled routes already exist while the page claims "the only way in". Consolidate before adding. |
 | 8 | A host AI employee on every Deals / Firm / Learn page | IN PROGRESS | Registry and rule landed: 17 pages across Deals, Firm and Learn have a named owner joined to the roster and its machines. Admin deliberately has none — it is machinery, not a room somebody runs. Personal surfaces are already signed by their deliverer. Card component and chat still to build; gate the card on live employment status. |
 | 9 | Edit a company; working History; link deal ↔ company; record a dropped "no" | TODO | `PATCH /api/companies/:id` exists with no caller, no authorization and no event. Needs a `company.update` action key. The pass path does not exist anywhere. |
-| 10 | Sectors derived from the thesis, plus a Misc catch-all | TODO | Currently free text, already diverging from the mandate's own vocabulary. |
+| 10 | Sectors derived from the thesis, plus a Misc catch-all | **DONE** | Derived at read time from the current mandate through one route, so amending the thesis changes every picker and the two cannot drift. Free text had already diverged: the mandate said `HEALTH_TECH` while the register said "Ed tech" and "Consumer", and three spellings of one taxonomy means "how much of the pipeline is health tech" has no answer. `matchSector` reads the old free text as the sectors it plainly is rather than discarding history. **Off-thesis is a real answer**, always last and always present — a company that does not fit is a fact worth recording, and forcing every one into a mandate sector would make the register lie to keep a dropdown tidy. The key stays `AI` so nothing already filed under it orphans; the label reads "Artificial intelligence". |
 | 11 | Meetings + IC rebuilt | TODO | Spine kept (see decisions). Delete the legacy form on the same route first — it files every meeting as FOUNDER. |
 | 12 | Portfolio sub-tabs: monitoring, and reporting from inbound updates | TODO | Blocked behind the fund being able to record that it owns anything at all. |
 | 13 | Deal Math folded into Fund strategy; rebuilt for a novice GP | TODO | Deal Math contains no math today. Fund strategy fabricates its inputs — every scenario records $10M deployed against a real $10K. |
@@ -75,7 +75,7 @@ different tab.
 
 **Still open:** the claims and data-room machinery is not yet re-surfaced in plain words.|
 | 17 | Cull employees; no duplicated work; veteran prompting from their machine's skills | TODO | 1 of 31 employees has ever run anything; 0 hold a tool; the veteran standard reaches 2 of ~27 call sites. |
-| 18 | Research as a guided conversation; market mapping unburied | TODO | The AI research engine is built and reachable from no button. Wire it before redesigning around it. |
+| 18 | Research as a guided conversation; market mapping unburied | **IN PROGRESS** | The engine is now reachable. `POST /api/research/packets` searches live, grounds every finding against the record it came from, drops what the sources did not support and reports how much it dropped — and had no caller anywhere in the client. The only button on the page assembled a document out of findings a person had typed, which is a different job wearing the same word. Both now exist as separate buttons because they answer different questions: "write up what we know" and "go and learn". **Still open:** the guided-conversation shape itself. |
 | 19 | University does not work | **DONE (undeployed)** | Root cause: the Workers AI adapter read a field the model does not return, so the whole cheap tier had never once succeeded. Fixed, proven against the live service, and University pinned to a capable model. **Still broken in production until this ships.** |
 | 20 | Delete documents with a trail; stop filing morning briefs | **DONE** | Archive with a required reason, recording who and when, on the event spine. Not a hard delete: deliverables reference documents by id and the bytes live in R2, so destroying the row would break references and erase the history you asked to keep — it leaves every list, and the trail survives. Morning briefs are no longer filed at all; they live on Home and are superseded daily. Existing noise is yours to clear with the new control. |
 | 21 | Cockpit overhaul; text fits; deterministic adjustable budgets; explain the two blocks | IN PROGRESS | Overflow **fixed** — the four posture cards rendered on top of one another. Remaining: "Best available" writes a policy identical to "Balanced"; spend has three definitions that disagree by 28%; 51 quarantined outputs cannot be accepted because the button does not exist. |
@@ -355,6 +355,26 @@ sitting in a queue nobody opens is the same failure as a stuck job.
 **Order of build.** The outbound relay (crossing 2) comes first, because the `#wpnetwork` half of
 this email route is the same call. Deal flow intake (crossing 3) reuses item 7's proposal door. The
 email handler is last and only after Email Routing exists.
+
+---
+
+## Item 23 — the firmwide budget · operator ask, 21 Aug 2026
+
+> "add another item to overhaul the budget section in the cockpit tab. i need to be able to set a
+> firmwide budget very easily and have it change, show up and persist — u can do this last"
+
+Queued behind the rest of the 22 at the operator's request.
+
+**Worth knowing before it is built:** the spend ceiling a partner would want to change is on **AI
+controls**, not on the page the nav calls Cockpit — `cockpit` renders Fund strategy, which is about
+allocating the fund rather than the firm's running costs. So this is either a rename, a move, or
+both, and that should be settled before any control is built. The review's item 21 already found
+the adjacent problem: money has three definitions, and Diagnostics and the cockpit report today's
+spend 28% apart under the same label.
+
+"Persist" is the operative word. The daily cap currently reads $25 with no surface that sets it, so
+whatever is built has to write somewhere durable and be read back by the boundary that enforces it —
+a budget that displays but does not bind is worse than none.
 
 ---
 

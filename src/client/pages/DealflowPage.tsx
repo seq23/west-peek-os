@@ -323,6 +323,15 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const [newSector, setNewSector] = useState("");
   /** Optional. A deal is a record; a deck is an attachment, and one must not block the other. */
   const [deck, setDeck] = useState<File | null>(null);
+  /*
+   * The sector list, derived from the fund's written mandate on the server and fetched whole.
+   * Amending the thesis changes what a company can be filed under, so the two cannot drift — and
+   * the derivation lives in one place rather than in every surface that files a company.
+   */
+  const sectorList = useApi<{ options: Array<{ key: string; label: string; inMandate: boolean }>; from: string }>(
+    "/api/thesis/sectors",
+  );
+  const sectors = sectorList.data?.options ?? [];
   const [sleeve, setSleeve] = useState("EARLY_STAGE_PRIMARY");
   /**
    * WHERE A DEAL STANDS, as a filter.
@@ -580,14 +589,22 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
                   placeholder="Psyflo"
                 />
               </label>
+              {/* ITEM 10: the list comes from the thesis, never typed.
+                  Sector was free text and had already drifted from the firm's own mandate — the
+                  mandate says HEALTH_TECH and the register said "Ed tech" and "Consumer". Three
+                  spellings of one taxonomy means "how much of the pipeline is health tech" has no
+                  answer. Derived at read time, so amending the thesis changes this and the two can
+                  never disagree. */}
               <label>
                 Sector{" "}
-                <input
-                  data-testid="dealflow-new-sector"
-                  value={newSector}
-                  onChange={(e) => setNewSector(e.target.value)}
-                  placeholder="optional"
-                />
+                <select data-testid="dealflow-new-sector" value={newSector} onChange={(e) => setNewSector(e.target.value)}>
+                  <option value="">— not said —</option>
+                  {sectors.map((o) => (
+                    <option key={o.key} value={o.key}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </label>
             </>
           )}

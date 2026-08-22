@@ -88,6 +88,8 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
   const [statement, setStatement] = useState("");
   const [sourceId, setSourceId] = useState("");
   const [packetTitle, setPacketTitle] = useState("");
+  /** The live pass takes tens of seconds; a button with no state reads as broken. */
+  const [busy, setBusy] = useState(false);
 
   if (detail.loading && !detail.data) return <p>Loading project…</p>;
   if (!detail.data) return <p className="muted">Could not load this project.</p>;
@@ -272,10 +274,58 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
         }}
       >
         <input data-testid="research-packet-title" aria-label="Packet title" value={packetTitle} onChange={(e) => setPacketTitle(e.target.value)} placeholder="Packet title" />
-        <button type="submit" className="btn-strong" data-testid="research-packet-submit">
-          Assemble packet
+        <button type="submit" data-testid="research-packet-submit">
+          Gather what we already have
         </button>
       </form>
+
+      {/*
+        THE ENGINE THAT WAS BUILT AND REACHABLE FROM NOTHING.
+
+        `POST /api/research/packets` searches live, grounds every finding against the record it came
+        from, drops anything the sources did not support, and reports how much it dropped. It had no
+        caller anywhere in the client — the only button on this page assembled a document out of
+        findings a person had typed in, which is a different job with the same word on it.
+
+        Operator, item 18: "Research as a guided conversation" — this is the half that goes and finds
+        out. The two are kept as separate buttons rather than merged because they answer different
+        questions: one is "write up what we know", the other is "go and learn".
+
+        WHAT IT DROPPED IS REPORTED, not hidden. A packet that reads well and cites nothing is worse
+        than no packet: it launders a model's priors into something that looks like firm research.
+      */}
+      <div className="form-row" data-testid="research-live">
+        <button
+          type="button"
+          className="btn-strong"
+          disabled={busy}
+          data-testid="research-live-run"
+          onClick={async () => {
+            setBusy(true);
+            setMessage(null);
+            const res = await api<{ findings?: number; dropped_ungrounded?: number; considered?: number; detail?: string; error?: string }>(
+              "/api/research/packets",
+              { method: "POST", body: { project_id: id } },
+            );
+            setBusy(false);
+            if (res.status === 201) {
+              const d = res.data!;
+              setMessage(
+                `${d.findings} finding${d.findings === 1 ? "" : "s"} from ${d.considered} sources.` +
+                  (d.dropped_ungrounded ? ` ${d.dropped_ungrounded} claim${d.dropped_ungrounded === 1 ? " was" : "s were"} dropped for not being supported by anything.` : ""),
+              );
+              refresh();
+            } else {
+              setMessage(res.data?.detail ?? res.data?.error ?? `Could not research it (HTTP ${res.status}).`);
+            }
+          }}
+        >
+          {busy ? "Researching…" : "Go and research this"}
+        </button>
+        <span className="muted small">
+          Searches, reads, and writes up what it can actually support — and says what it threw away.
+        </span>
+      </div>
       <ul className="card-list small" data-testid="research-packets">
         {d.packets.map((p) => (
           <li key={p.id}>

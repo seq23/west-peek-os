@@ -36,6 +36,7 @@ import {
   handleCreateFund,
   handleCreateFundEntity,
   handleCreatePolicyVersion,
+  handleThesisSectors,
   handleWriteThesisStatement,
   handleGetFund,
   handleGetPolicyVersion,
@@ -611,6 +612,8 @@ const router = new Router()
   .get("/api/funds/:id", handleGetFund)
   .post("/api/funds/:id/entities", handleCreateFundEntity)
   .get("/api/funds/:id/entities", handleListFundEntities)
+  // The sector list every surface files a company under. Derived, never typed.
+  .get("/api/thesis/sectors", handleThesisSectors)
   .post("/api/thesis/statement", handleWriteThesisStatement)
   .post("/api/funds/:id/policies/:kind", handleCreatePolicyVersion)
   .get("/api/funds/:id/policies/:kind", handleListPolicyVersions)

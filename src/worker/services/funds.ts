@@ -6,6 +6,7 @@ import { appendEvent } from "../events";
 import { actorFromIdentity } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { THESIS_PROMPT_VERSION, buildStatementPrompt, parseStatement } from "../../shared/thesis/statement";
+import { sectorOptions } from "../../shared/investment/sectors";
 
 /**
  * Fund + policy substrate (P2).
@@ -301,4 +302,43 @@ export async function handleWriteThesisStatement(ctx: RouteContext): Promise<Res
   const result = parseStatement(run.output_text);
   if (!result) return json({ error: "unreadable", run_id: run.id }, { status: 502 });
   return json({ ...result, run_id: run.id, prompt_version: THESIS_PROMPT_VERSION });
+}
+
+// ── The sectors a company can be filed under ──
+
+/**
+ * Derived from the current mandate, plus the off-thesis catch-all.
+ *
+ * ONE ROUTE RATHER THAN CLIENT PLUMBING. Every surface that files a company needs this list, and
+ * making each one fetch the fund, then the mandate, then parse its JSON would put the same
+ * three-step derivation in three places — where it would drift, and where a page that got it wrong
+ * would silently offer a different taxonomy from the page next to it.
+ */
+export async function handleThesisSectors(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+
+  const row = await ctx.env.WP_OS_DB.prepare(
+    `SELECT m.mandate_json
+       FROM investment_mandate_version m
+       JOIN fund f ON f.id = m.fund_id
+      WHERE f.firm_scope = ?1
+      ORDER BY m.version_no DESC
+      LIMIT 1`,
+  )
+    .bind(firmScope)
+    .first<{ mandate_json: string }>();
+
+  let sectors: string[] | undefined;
+  try {
+    sectors = JSON.parse(row?.mandate_json ?? "{}").sectors as string[] | undefined;
+  } catch {
+    sectors = undefined;
+  }
+
+  return json({
+    options: sectorOptions(sectors),
+    // Said, so a surface can explain itself rather than looking arbitrary.
+    from: sectors?.length ? "the fund's written mandate" : "no sectors are stated in the mandate yet",
+  });
 }

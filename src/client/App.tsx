@@ -225,17 +225,21 @@ const NAV_GROUPS = [
     group: "Now",
     blurb: "What is in front of you today",
     items: [
-      { key: "approvals", label: "Approvals", icon: "approvals" },
+      // ITEM 4: Approvals and Work sit together, and the checkmark is gone.
+      //
+      // Operator: "Move Work under Approvals; drop the checkmark." Both answer the same question —
+      // what is waiting on a person — so they belong adjacent rather than separated by Today,
+      // Notifications and the weekly review. The tick was the only icon on any nav item in the
+      // group, which made Approvals look like a state (done) rather than a place, and made every
+      // other item look like it was missing something.
+      { key: "approvals", label: "Approvals" },
+      { key: "work-cards", label: "Work" },
       { key: "today", label: "Today" },
       { key: "notifications", label: "Notifications" },
       // Introductions moved into Community. It sat here beside Approvals and Notifications — things
       // that always have something waiting — while being a surface that is deliberately empty most
       // months, so its presence read as a system that had stopped working. The route stays live.
       { key: "weekly-review", label: "Weekly review" },
-      // Scheduled work and work cards answered the same question — what is the firm doing — from
-      // two tabs, so you had to check both. One destination, two sections: the distinction between
-      // machinery on a clock and a task somebody carries is real and stays visible.
-      { key: "work-cards", label: "Work" },
     ],
   },
   {
