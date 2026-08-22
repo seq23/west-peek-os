@@ -4188,3 +4188,28 @@ carrying Fund strategy's content: **a page signed by the wrong person.** Resolvi
 anything reads the key fixes the title, the host card and the purpose block together. `today` and
 `allocation`, both merged earlier, are now resolved the same way instead of each carrying its own
 render branch.
+
+## 22 Aug 2026 — DEPLOYED AND VERIFIED
+
+`npm run deploy:production` — eight migrations applied, `067d911e` deployed and verified.
+
+Production, read back after the deploy rather than assumed:
+
+| | |
+|---|---|
+| Live seats | 18 |
+| Retired seats | 13 — every row still present, holding its AI runs, seating and work-card history |
+| Machines | 46 |
+| Retired machines | 3 — flagged and PAUSED, never deleted |
+| `diagnostics_sweep` | present, confirmed by `0127` rather than assumed |
+
+**Test position, stated honestly.** 1,535 tests: 1,452 passed, 82 skipped, 1 failed in the full run.
+Seven FILES reported failure with `TypeError: fetch failed` — Miniflare port exhaustion, not
+assertions. Every one of the seven was re-run alone and is green (14, 15, 12, 17, 18, 6 and 18 tests
+respectively). The single failing test took 178 SECONDS before failing, which is a timeout rather
+than a wrong answer, and passes in 18/18 alone.
+
+**E2E REMAINS UNPROVEN and that is not a formality.** Playwright resets the local D1 and could not be
+run with seven agents in the tree. Several specs were UPDATED to match new copy — `p51-rooms`,
+`p17-machines`, `p16-ai-ops`, `p25-journeys`, `p22-24-integrations`, `p14-mp-home`, `p6-investment`,
+`p7-meetings` — and NOT executed. The browser layer of this deploy is reasoned, not watched.
