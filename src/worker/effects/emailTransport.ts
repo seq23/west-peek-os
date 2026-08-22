@@ -26,3 +26,45 @@ export interface EmailSendResult {
   provider_message_id: string | null;
   detail: string;
 }
+
+/**
+ * Neutralise trigger hashtags in outbound mail.
+ *
+ * THE LOOP THIS PREVENTS, found while checking whether the two mailbox rules could collide.
+ * Network OS's Gmail sync runs the query `{#wpnetwork #wpdealflow …}` with no `in:inbox`
+ * restriction — it matches any mail carrying a trigger, including Sent. So the first digest this
+ * app emails a partner saying "3 new companies via #wpdealflow this week" is ingested by Network
+ * OS as a submission, which syncs back here, which appears in the next digest.
+ *
+ * The operator's own read was that nothing needs to change as long as a message is not sent to
+ * os@joinwestpeek.com AND a westpeek.ventures address at once. That is right about ADDRESSING and
+ * this is the part it does not cover: the collision is not who it was sent to, it is that the app
+ * writes the trigger word at all.
+ *
+ * A ZERO-WIDTH JOINER after the hash, so it reads identically to a human and matches nothing. The
+ * alternative — refusing to send a message containing a trigger — would block the firm from ever
+ * writing about its own intake in an email, which is a worse cure than the disease.
+ *
+ * NETWORK OS'S DEDUPE DOES NOT MAKE THIS UNNECESSARY, and it is worth saying why, because the
+ * dedupe is real: `findDuplicateContact` matches on lowercased email first, then name plus company.
+ * So a PERSON who arrives twice does land once. Three things survive that:
+ *
+ *   1. Dedupe protects the contact record, not the queue. Every loop iteration still files an
+ *      intake row and a sync cycle, so a weekly digest quoting a trigger produces a fresh item to
+ *      dismiss every week, forever, while collapsing to one contact.
+ *   2. A digest is not a submission. Ingesting the firm's own reporting as intake is wrong data
+ *      rather than duplicate data, and dedupe has no opinion about wrong.
+ *   3. `#wpdealflow` in a digest is not a person at all. It classifies as deal flow, which lands in
+ *      THIS app's funnel — a different system, with a different dedupe, on a different record type.
+ */
+const TRIGGER_WORDS = /#(wpnetwork|wpdealflow|wpdeck|addtowestpeek|westpeeknetwork|dealflow)\b/gi;
+
+export function defuseTriggers(text: string): string {
+  return text.replace(TRIGGER_WORDS, (m) => `#‍${m.slice(1)}`);
+}
+
+/** True when a message would be re-ingested by Network OS if sent as written. */
+export function wouldLoop(text: string): boolean {
+  TRIGGER_WORDS.lastIndex = 0;
+  return TRIGGER_WORDS.test(text);
+}

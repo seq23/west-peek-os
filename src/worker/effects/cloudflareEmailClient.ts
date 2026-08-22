@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { defuseTriggers } from "./emailTransport";
 import type { EmailPayload, EmailSendResult } from "./emailTransport";
 
 /**
@@ -91,8 +92,9 @@ export async function sendViaCloudflare(
   const result = await email.send({
     to: payload.to,
     from: { email: from, name: "West Peek Ventures" },
-    subject: payload.subject,
-    text: payload.text,
+    // Defused at the transport so neither send path can loop — see defuseTriggers.
+    subject: defuseTriggers(payload.subject),
+    text: defuseTriggers(payload.text),
   });
 
   // The real message id, straight from the platform. It is what makes the receipt checkable against

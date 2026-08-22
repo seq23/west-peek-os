@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { defuseTriggers } from "./emailTransport";
 import type { EmailPayload, EmailSendResult } from "./emailTransport";
 
 /**
@@ -76,6 +77,12 @@ export async function sendViaResend(
   const from = payload.from ?? env.WP_OS_EMAIL_FROM;
   if (!from) throw new Error("no sender address configured (WP_OS_EMAIL_FROM)");
 
+  // Applied at the transport, not the composer, so no future caller can forget it. See
+  // defuseTriggers: Network OS's Gmail sync matches trigger words in ANY mail including Sent, so a
+  // digest that writes "#wpdealflow" is ingested as a submission and loops back here.
+  const subject = defuseTriggers(payload.subject);
+  const text = defuseTriggers(payload.text);
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -85,7 +92,7 @@ export async function sendViaResend(
         authorization: `Bearer ${env.RESEND_API_KEY}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ from, to: [payload.to], subject: payload.subject, text: payload.text }),
+      body: JSON.stringify({ from, to: [payload.to], subject, text }),
       signal: controller.signal,
     });
 
