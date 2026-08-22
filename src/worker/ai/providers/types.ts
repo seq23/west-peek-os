@@ -25,11 +25,24 @@ export interface ProviderImage {
   label: string;
 }
 
+/** A document handed to a provider. Kept apart from an image: the wire formats differ. */
+export interface ProviderDocument {
+  mediaType: string;
+  dataBase64: string;
+  label: string;
+}
+
 export interface ProviderRequest {
   purpose: string;
   inputs: string[];
   /** Present only for vision work. An adapter that cannot see must refuse rather than ignore them. */
   images?: ProviderImage[];
+  /**
+   * Present only for document work — a deck, a term sheet. An adapter that cannot read one must
+   * refuse rather than ignore it: silently dropping the attachment produces a confident answer
+   * about a file the model never saw, which is worse than an error.
+   */
+  documents?: ProviderDocument[];
   model: string | null;
   capabilityRequirement?: string;
 }

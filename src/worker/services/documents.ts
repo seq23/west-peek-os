@@ -213,6 +213,22 @@ const uploadSchema = z.object({
   privacy_label: privacyLabelSchema.optional(),
   content_base64: z.string().min(1),
   content_type: z.string().trim().min(1),
+  /**
+   * What this file is about, attached in the same call that stores it.
+   *
+   * Optional, and a separate route exists for attaching later — but offered here because the moment
+   * somebody has the deck in their hand is the moment they know which company it belongs to. Making
+   * them upload first and attach second is how a document ends up on a general shelf with a title
+   * somebody typed as its only clue.
+   */
+  about: z
+    .object({
+      object_type: z.enum(["canonical_company", "investment_opportunity", "lp_record", "event"]),
+      object_id: z.string().trim().min(1),
+      role: z.enum(["DECK", "MEMO", "FINANCIALS", "LEGAL", "OTHER"]).default("OTHER"),
+      note: z.string().trim().max(500).optional(),
+    })
+    .optional(),
 });
 
 const versionSchema = z.object({
@@ -225,8 +241,13 @@ export async function handleUploadDocument(ctx: RouteContext): Promise<Response>
   const parsed = uploadSchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   try {
-    const { document, version } = await uploadDocument(ctx.env, actorFromIdentity(ctx.identity!), parsed.data);
-    return json({ ...document, version }, { status: 201 });
+    const actor = actorFromIdentity(ctx.identity!);
+    const { document, version } = await uploadDocument(ctx.env, actor, parsed.data);
+    let link: string | null = null;
+    if (parsed.data.about) {
+      link = await linkDocument(ctx.env, actor, document.id, parsed.data.about);
+    }
+    return json({ ...document, version, ...(link ? { link_id: link } : {}) }, { status: 201 });
   } catch (err) {
     return errorResponse(err);
   }
@@ -367,4 +388,93 @@ export async function handleDownloadDocument(ctx: RouteContext): Promise<Respons
   } catch (err) {
     return errorResponse(err);
   }
+}
+
+
+// ── What a document is about ──
+
+/**
+ * Record that a stored document concerns a company, a deal, an LP or an event.
+ *
+ * A LINK AND NOT A COLUMN, because one document legitimately concerns more than one thing — a
+ * sector report covers four companies, a data-room artifact belongs to an LP and a fund — and a
+ * `company_id` on the document forces a choice that is wrong for those.
+ *
+ * The version is deliberately not pinned. Versions are immutable and the link is to the DOCUMENT,
+ * so "the deck for this deal" follows it forward when the founder sends v2 — which is what anybody
+ * means by it. Pinning would make the link go stale the moment the deck improved.
+ */
+export async function linkDocument(
+  env: Env,
+  actor: Actor,
+  documentId: string,
+  about: { object_type: string; object_id: string; role?: string; note?: string },
+): Promise<string> {
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const authz = await authorize(env, actor, "document.link", {
+    objectType: "document",
+    objectId: documentId,
+    firmScope,
+  });
+  if (authz.decision !== "ALLOW") throw new DocumentError(403, "forbidden", authz.reason ?? "not allowed");
+
+  const id = `dl_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.prepare(
+    `INSERT OR IGNORE INTO document_link (id, document_id, object_type, object_id, role, note, firm_scope, linked_by)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+  )
+    .bind(id, documentId, about.object_type, about.object_id, about.role ?? "OTHER", about.note ?? null, firmScope, actor.firmUserId ?? actor.aiEmployeeId ?? "system")
+    .run();
+
+  await appendEvent(env, {
+    eventType: "document.linked",
+    actorType: actor.type === "HUMAN" ? "firm_user" : actor.type === "AI" ? "ai_employee" : "system",
+    actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+    objectType: about.object_type,
+    objectId: about.object_id,
+    firmScope,
+    payload: { document_id: documentId, role: about.role ?? "OTHER" },
+  });
+  return id;
+}
+
+const linkSchema = z.object({
+  object_type: z.enum(["canonical_company", "investment_opportunity", "lp_record", "event"]),
+  object_id: z.string().trim().min(1),
+  role: z.enum(["DECK", "MEMO", "FINANCIALS", "LEGAL", "OTHER"]).default("OTHER"),
+  note: z.string().trim().max(500).optional(),
+});
+
+export async function handleLinkDocument(ctx: RouteContext): Promise<Response> {
+  const parsed = linkSchema.safeParse(await parseJsonBody(ctx.request));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    const id = await linkDocument(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data);
+    return json({ id }, { status: 201 });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/** Everything attached to one thing — what a deal page asks for. */
+export async function handleListLinkedDocuments(ctx: RouteContext): Promise<Response> {
+  const url = new URL(ctx.request.url);
+  const objectType = url.searchParams.get("object_type");
+  const objectId = url.searchParams.get("object_id");
+  if (!objectType || !objectId) {
+    return json({ error: "invalid_input", detail: "object_type and object_id are required" }, { status: 400 });
+  }
+  const rows = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT l.id AS link_id, l.role, l.note, l.created_at,
+              d.id AS document_id, d.title, d.doc_type, d.current_version_id
+         FROM document_link l
+         JOIN document d ON d.id = l.document_id
+        WHERE l.object_type = ?1 AND l.object_id = ?2
+        ORDER BY l.created_at DESC`,
+    )
+      .bind(objectType, objectId)
+      .all()
+  ).results ?? [];
+  return json({ documents: rows });
 }

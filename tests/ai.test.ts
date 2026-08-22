@@ -1023,3 +1023,49 @@ describe("images only go to a model that can see", () => {
     expect(src).toContain('"anthropic/claude-sonnet-5"');
   });
 });
+
+describe("a document is gated separately from an image", () => {
+  /**
+   * Operator asked for a deck to be readable — from the "add a company" flow and from a #wpdeck
+   * email. Most decks are PDFs, and a PDF is a `file` block rather than an image block: sent as an
+   * image, a twenty-page deck is one unreadable thumbnail. So documents get their own type, their
+   * own model list and their own guards, and these pin all three.
+   */
+  const deck = { mediaType: "application/pdf", dataBase64: "JVBERi0xLjQK", label: "deck.pdf" };
+
+  it("refuses a document above INTERNAL, before any provider is consulted", async () => {
+    const stub = stubFetch();
+    const { run: r } = await run({ sensitivity: "RESTRICTED", documents: [deck] }, { fetchImpl: stub.fetchImpl });
+    expect(r.status).not.toBe("COMPLETED");
+    expect(r.failure_reason).toContain("documents_not_permitted_at_label");
+    // A deck a partner marked confidential does not leave because somebody pressed "read the deck".
+    expect(stub.calls.length).toBe(0);
+  });
+
+  it("refuses anything that is not a PDF rather than handing a model a file it cannot open", async () => {
+    const stub = stubFetch();
+    const { run: r } = await run(
+      { sensitivity: "INTERNAL", documents: [{ ...deck, mediaType: "application/vnd.ms-powerpoint" }] },
+      { fetchImpl: stub.fetchImpl },
+    );
+    expect(r.failure_reason).toContain("unsupported_document_type");
+    expect(stub.calls.length).toBe(0);
+  });
+
+  it("carries one at a time — a deck is a deck", async () => {
+    const stub = stubFetch();
+    const { run: r } = await run({ sensitivity: "INTERNAL", documents: [deck, deck] }, { fetchImpl: stub.fetchImpl });
+    expect(r.failure_reason).toContain("too_many_documents");
+  });
+
+  it("costs more than text, so the budget check can see it coming", async () => {
+    // Under-counting a twenty-page deck would let exactly the run the ceiling exists to stop go
+    // through. The estimate is deliberately generous in the other direction.
+    const stub = stubFetch();
+    const withDoc = await run({ sensitivity: "INTERNAL", documents: [deck] }, { fetchImpl: stub.fetchImpl });
+    const stub2 = stubFetch();
+    const withoutDoc = await run({ sensitivity: "INTERNAL" }, { fetchImpl: stub2.fetchImpl });
+    const est = (r: any) => JSON.parse(String(r.run.cost_estimate_json ?? "{}")).input_tokens ?? 0;
+    expect(est(withDoc)).toBeGreaterThan(est(withoutDoc));
+  });
+});

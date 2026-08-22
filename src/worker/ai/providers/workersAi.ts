@@ -105,6 +105,12 @@ export function createWorkersAiAdapter(options: WorkersAiOptions): ProviderAdapt
        * silently is the failure being guarded against, and it is still guarded against — the guard
        * is now "this model cannot see" instead of "this provider cannot see".
        */
+      // Refused rather than dropped. Silently ignoring an attachment produces a confident answer
+      // about a file the model never saw, which is worse than an error. runAi's DOCUMENT_CAPABLE
+      // gate should stop this reaching here at all — this is the second lock on the same door.
+      if (req.documents?.length) {
+        throw new Error(`workers_ai_cannot_read_documents:${model}`);
+      }
       if (req.images?.length && !VISION_MODELS.has(model)) {
         throw new Error("workers_ai_no_vision");
       }

@@ -119,6 +119,11 @@ export interface RunAiInput {
    * around it — see the gate in the pipeline below for why that is not a formality.
    */
   images?: RunAiImage[];
+  /**
+   * Documents for a model to read. Routed through this boundary for the same reason images are:
+   * the budget check, the credential scrubber and the model gate all have to see it.
+   */
+  documents?: RunAiDocument[];
   sensitivity: PrivacyLabel;
   capabilityRequirement?: string;
   budgetContext?: RunAiBudgetContext;
@@ -143,6 +148,47 @@ export interface RunAiImage {
   dataBase64: string;
   label: string;
 }
+
+/**
+ * A document for a model to read — a pitch deck, a term sheet, a report.
+ *
+ * SEPARATE FROM AN IMAGE and not a special case of one. A provider sends a picture as an image
+ * block and a PDF as a file block, and the difference is not cosmetic: sent as an image, a
+ * twenty-page deck is one unreadable thumbnail. Most decks the firm receives are PDFs, so a deck
+ * pipeline that only handled images would work on the rare case and fail on the common one.
+ */
+export interface RunAiDocument {
+  /** `application/pdf` and nothing else for now — see DOCUMENT_CAPABLE_MODELS. */
+  mediaType: string;
+  dataBase64: string;
+  /** Sent as the filename, which is what a model quotes back when it cites a page. */
+  label: string;
+}
+
+/**
+ * A document is bigger than an image and the estimate has to reflect that.
+ *
+ * A deck runs to twenty pages of text and diagrams. Under-counting it would let exactly the run the
+ * budget check exists to stop go through, so this is deliberately generous — the cost of over-
+ * estimating is a refusal somebody can override, and of under-estimating is a bill nobody expected.
+ */
+export const TOKENS_PER_DOCUMENT = 12_000;
+
+/** One per run. A deck is a deck; wanting four of them is a different job than this. */
+export const MAX_DOCUMENTS_PER_RUN = 1;
+
+/**
+ * Models known to actually read a PDF, kept apart from the vision list for the same reason the
+ * types are apart: seeing a picture and reading a document are different capabilities, and a model
+ * that does one does not necessarily do the other.
+ */
+const DOCUMENT_CAPABLE_MODELS: ReadonlySet<string> = new Set([
+  "anthropic/claude-sonnet-5",
+  "anthropic/claude-opus-5",
+  "anthropic/claude-sonnet-4",
+  "google/gemini-2.5-pro",
+  "google/gemini-2.5-flash",
+]);
 
 /**
  * Images cost tokens, and a lot of them.
@@ -509,6 +555,7 @@ async function executeAttempt(
       purpose: rec.input.purpose,
       inputs: rec.input.inputs,
       ...(rec.input.images?.length ? { images: rec.input.images } : {}),
+      ...(rec.input.documents?.length ? { documents: rec.input.documents } : {}),
       model: rec.model,
       capabilityRequirement: rec.input.capabilityRequirement,
     });
@@ -632,7 +679,9 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     input.budgetContext?.expectedInputTokens ??
     // Images are the expensive half of a vision run, and a budget check that cannot see them is
     // checking the cheap part.
-    Math.max(1, Math.ceil(input.inputs.join("\n").length / 4)) + (input.images?.length ?? 0) * TOKENS_PER_IMAGE;
+    Math.max(1, Math.ceil(input.inputs.join("\n").length / 4)) +
+    (input.images?.length ?? 0) * TOKENS_PER_IMAGE +
+    (input.documents?.length ?? 0) * TOKENS_PER_DOCUMENT;
   const expectedOutputTokens = input.budgetContext?.expectedOutputTokens ?? 512;
 
   const baseEstimate: CostEstimate = {
@@ -714,6 +763,30 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     const badType = input.images.find((i) => i.mediaType !== "image/jpeg" && i.mediaType !== "image/png");
     if (badType) {
       return { run: await blocked("PREFLIGHT_BLOCKED", `unsupported_image_type:${badType.mediaType}`) };
+    }
+  }
+
+  /*
+   * Documents get the same three guards as images, for the same reasons.
+   *
+   * A deck leaves the building when it is sent, so the label gate is the important one: a document
+   * a partner marked confidential does not go to a third-party model because somebody pressed
+   * "read the deck".
+   */
+  if (input.documents?.length) {
+    if (input.sensitivity !== "PUBLIC" && input.sensitivity !== "INTERNAL") {
+      return {
+        run: await blocked("EGRESS_BLOCKED", `documents_not_permitted_at_label:${input.sensitivity}`),
+      };
+    }
+    if (input.documents.length > MAX_DOCUMENTS_PER_RUN) {
+      return {
+        run: await blocked("PREFLIGHT_BLOCKED", `too_many_documents:${input.documents.length}>${MAX_DOCUMENTS_PER_RUN}`),
+      };
+    }
+    const badDoc = input.documents.find((d) => d.mediaType !== "application/pdf");
+    if (badDoc) {
+      return { run: await blocked("PREFLIGHT_BLOCKED", `unsupported_document_type:${badDoc.mediaType}`) };
     }
   }
 
@@ -1013,6 +1086,20 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * model — adding a model here is a deliberate act, and the cost of forgetting is a blocked run
    * rather than a fabricated review.
    */
+  if (input.documents?.length && !DOCUMENT_CAPABLE_MODELS.has(selected.pricing.model)) {
+    // Same reasoning as the vision gate below: a named list, because guessing from a model string
+    // is how a model that cannot read a PDF is handed one and answers about nothing.
+    return {
+      run: await blocked(
+        "PREFLIGHT_BLOCKED",
+        `model_cannot_read_documents:${selected.pricing.model}`,
+        estimate,
+        selected.provider.id,
+        selected.pricing.model,
+      ),
+    };
+  }
+
   if (input.images?.length) {
     if (!VISION_CAPABLE_MODELS.has(selected.pricing.model)) {
       return {

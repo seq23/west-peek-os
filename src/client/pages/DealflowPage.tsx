@@ -321,6 +321,8 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   // Blank company id means "the name below is new". One form, both cases.
   const [newName, setNewName] = useState("");
   const [newSector, setNewSector] = useState("");
+  /** Optional. A deal is a record; a deck is an attachment, and one must not block the other. */
+  const [deck, setDeck] = useState<File | null>(null);
   const [sleeve, setSleeve] = useState("EARLY_STAGE_PRIMARY");
   /**
    * WHERE A DEAL STANDS, as a filter.
@@ -431,9 +433,44 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         }
       }
     }
-    setMessage(`${company?.canonical_name} added at ${stage(startsAt)?.label}.`);
+    /*
+     * THE DECK GOES ON WITH THE COMPANY.
+     *
+     * Operator: "is there a way to add the deck directly from the add a company button flow
+     * manually?" There was not, and the missing piece was not the button — a document had nothing
+     * recording what it was ABOUT, so an uploaded deck landed on a general shelf with a typed title
+     * as its only clue. It is attached in the same call that stores it, because the moment somebody
+     * has the deck in their hand is the moment they know whose it is.
+     *
+     * Attached to the COMPANY rather than the opportunity: a founder's deck outlives any one round,
+     * and the next deal in the same company should find it already there.
+     *
+     * A failed upload does not undo the deal. The company and the opportunity are the record; the
+     * deck is an attachment, and losing the file is a thing to say plainly rather than a reason to
+     * throw away work that succeeded.
+     */
+    let deckNote = "";
+    if (deck) {
+      const bytes = new Uint8Array(await deck.arrayBuffer());
+      let binary = "";
+      for (const b of bytes) binary += String.fromCharCode(b);
+      const up = await api<{ id?: string; error?: string; detail?: string }>("/api/documents", {
+        method: "POST",
+        body: {
+          title: `${name || "Company"} — deck`,
+          doc_type: "DECK",
+          content_base64: window.btoa(binary),
+          content_type: deck.type || "application/octet-stream",
+          about: { object_type: "canonical_company", object_id: id, role: "DECK" },
+        },
+      });
+      deckNote = up.status === 201 ? " Deck attached." : ` The deal is in, but the deck did not upload: ${up.data?.detail ?? up.data?.error ?? up.status}.`;
+    }
+
+    setMessage(`${company?.canonical_name ?? name} added at ${stage(startsAt)?.label}.${deckNote}`);
     setAdding(false);
     setCompanyId("");
+    setDeck(null);
     board.reload();
   }
 
@@ -554,6 +591,19 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
               </label>
             </>
           )}
+          {/* The deck, attached to the company as the deal is created — see `create`. Optional, and
+              on every path rather than only the new-company one, because a follow-up deck for a
+              company already on the board is the more common case. */}
+          <label>
+            Deck{" "}
+            <input
+              type="file"
+              data-testid="dealflow-deck"
+              accept=".pdf,.ppt,.pptx,.key,image/*"
+              onChange={(e) => setDeck(e.target.files?.[0] ?? null)}
+            />
+          </label>
+
           {/* PRIMARY OR SECONDARY. One answer, and everything downstream follows it — the sleeve,
               the approval keys, and whether it shows up on Secondaries. */}
           <label>

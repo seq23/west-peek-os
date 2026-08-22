@@ -123,6 +123,9 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // An employee advising on a deal. Deliberately not reserved and deliberately not the transition:
   // recommending costs nothing and moves no authority, and the partner's decision is the separate,
   // already-governed act.
+  // Saying what an already-stored document is about. The upload itself is governed separately;
+  // this only records the relationship, and a wrong link is corrected rather than dangerous.
+  { key: "document.link", name: "Attach a document to something", description: "Record that a stored document is about a company, a deal, an LP or an event.", isExternalEffect: false },
   { key: "opportunity.recommend", name: "Recommend what to do with a deal", description: "An employee's view on whether the firm should pass or look closer. Never moves the deal.", isExternalEffect: false },
   { key: "lp_commitment.record", name: "Record an LP commitment", description: "Record or revise how much a limited partner has committed to a fund.", isExternalEffect: false },
   { key: "fund.set_size", name: "Set the fund's target size", description: "State what the fund is raising. What has actually been committed is derived from signed commitments, never typed.", isExternalEffect: false },

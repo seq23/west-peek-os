@@ -1,5 +1,6 @@
 import type { Env } from "./env";
 import { handleInboundEmail } from "./effects/inboundEmail";
+import { handleReadCompanyDeck } from "./services/deckReader";
 import {
   handleFundraisingSummary,
   handleListCommitments,
@@ -191,6 +192,8 @@ import {
 } from "./services/aiGovernance";
 import {
   handleAddDocumentVersion,
+  handleLinkDocument,
+  handleListLinkedDocuments,
   handleDownloadDocument,
   handleGetDocument,
   handleListDocuments,
@@ -684,6 +687,11 @@ const router = new Router()
   .get("/api/documents", handleListDocuments)
   .get("/api/documents/:id", handleGetDocument)
   .post("/api/documents/:id/versions", handleAddDocumentVersion)
+  // What a document is about. A deck and a deal were two records that never met.
+  .post("/api/documents/:id/link", handleLinkDocument)
+  // Read the deck attached to a company. Proposes what it found; writes nothing.
+  .post("/api/companies/:id/read-deck", handleReadCompanyDeck)
+  .get("/api/document-links", handleListLinkedDocuments)
   .get("/api/documents/:id/download", handleDownloadDocument)
   .post("/api/documents/:id/archive", handleArchiveDocument)
   // P5 — diligence claims (ADR-004 enum; self-promotion ban enforced in the service).
