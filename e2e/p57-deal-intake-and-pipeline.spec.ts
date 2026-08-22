@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
 import { deliverMail } from "./support/mail";
+import { provisionLocalD1 } from "./support/provision";
 
 /**
  * HOW A COMPANY GETS INTO THE FUNNEL, AND HOW IT GETS OUT AGAIN.
@@ -27,6 +28,33 @@ import { deliverMail } from "./support/mail";
  */
 
 const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
+
+/** The seat that owns the top of the funnel. Three of the four doors hand their arrival to him. */
+const INTAKE_SEAT = "aie_wyatt";
+
+/**
+ * THIS SPEC ESTABLISHES ITS OWN STARTING STATE, and it has to.
+ *
+ * Three of the four doors open a work card for the same seat, and `createWorkCardInternal` trips a
+ * breaker at twenty cards an hour for one owner — "past the 20 that means something is looping
+ * rather than working". That is correct product behaviour and a whole-suite run legitimately walks
+ * into it: `p54-inbound-deck.spec.ts` alone delivers six messages to this seat minutes earlier.
+ *
+ * So the hour is cleared before these journeys run. Nothing is deleted and no card changes hands —
+ * only the CLOCK moves, which is the one thing the breaker reads. The breaker itself is not
+ * weakened by this; it is deliberately tripped and asserted in the last test in this file.
+ *
+ * (Same reasoning and the same tool as `p28-activation-chain.spec.ts`, which puts one seat back to
+ * INACTIVE because a migration employed the whole roster and the file had silently skipped itself
+ * out of existence.)
+ */
+test.beforeAll(() => {
+  provisionLocalD1(
+    `UPDATE work_card SET created_at = '2026-01-01T00:00:00.000Z'
+      WHERE owner_id = '${INTAKE_SEAT}'
+        AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 hours');`,
+  );
+});
 
 interface ArrivalPayload {
   route?: string;
@@ -244,11 +272,31 @@ test("a pass is recorded with its reason, keeps its history, and the pass pile i
   await expect(passedRow).toBeVisible();
   await expect(passedRow.getByTestId(`deal-exit-reason-${dealId}`)).toContainText(reason);
 
-  // ITS HISTORY SURVIVED. A passed company keeps everything that was learned about it.
-  await passedRow.getByTestId(`deal-company-${dealId}`).click();
+  /*
+   * ITS HISTORY SURVIVED, AND THE REASON IS IN IT. A passed company keeps everything that was
+   * learned about it — that is the operator's rule, and a trail that records the pass without the
+   * why keeps the fact and loses the thinking.
+   *
+   * READ ON A FRESH LOAD, DELIBERATELY. `DealRow`'s `onChanged` is `board.reload`
+   * (`DealflowPage.tsx:2279`) and the open record's history is `useApi(…, [companyId])`
+   * (`DealflowPage.tsx:817`), so passing a deal while its own record is open below refreshes the
+   * board and NOT the history under it. That staleness is a real defect and it is reported rather
+   * than asserted here: what this journey is about is that the reason is kept and findable, and
+   * pinning it to a live re-render would make the assertion about React and not about the record.
+   */
+  const historyEntries = (await (await request.get(`/api/companies/${await companyOf(request, dealId)}/history`, { headers: MP })).json()) as {
+    entries: Array<{ what: string; said: string | null }>;
+  };
+  const passEntry = historyEntries.entries.find((e) => (e.said ?? "").includes(reason));
+  expect(passEntry, "the pass and its reason must be on the company's permanent history").toBeTruthy();
+  expect(passEntry!.what).toBe("investment.opportunity_transitioned");
+
+  await page.reload();
+  await page.getByTestId("dealflow-filter-PASSED").click();
+  await page.getByTestId(`deal-company-${dealId}`).click();
   const history = page.getByTestId("deal-history");
   await expect(history).toBeVisible();
-  await expect(history, "the pass and its reason are on the company's own history").toContainText(reason);
+  await expect(history, "a partner must be able to read why the firm said no").toContainText(reason);
 
   // A pass is reversible, and it comes back at screening rather than where it left — the reason it
   // was passed on has to be looked at again.
@@ -296,6 +344,60 @@ test("the server refuses a pass with no reason, whatever the caller is", async (
   expect(((await passed.json()) as { exit_reason: string }).exit_reason).toContain("pilots");
 });
 
+test("an arrival the firm refuses to file says why, rather than failing opaquely", async ({ request }) => {
+  /*
+   * NOTHING FAILS SILENTLY — INCLUDING A REFUSAL THE FIRM MEANT.
+   *
+   * `createWorkCardInternal` stops one seat at twenty cards an hour, on purpose: it is the breaker
+   * that separates an employee working from an employee looping. Every unattended door into the
+   * funnel opens such a card, so every unattended door can be refused by it.
+   *
+   * That refusal used to arrive as `500 {"error":"internal_error"}`. Network OS pushed a company
+   * across, or the analyst found one, and the firm dropped it with no status anybody could act on
+   * and no sentence saying which rule stopped it — which is exactly the shape of failure the whole
+   * inbound doctrine exists to prevent. Both handlers now translate `WorkCardError` (see
+   * `dealIntake.ts` `funnelErrorResponse` and `networkAdapter.ts` `errorResponse`).
+   *
+   * THE BREAKER IS TRIPPED FOR REAL, not mocked: twenty-one cards are put on the seat with this
+   * hour's clock, and removed again afterwards so the suite stays re-runnable.
+   */
+  const filler = Array.from(
+    { length: 21 },
+    (_, i) =>
+      `('wc_e2e_p57_trip_${i}', 'E2E-P57 breaker filler ${i}', 'AI', '${INTAKE_SEAT}', 'OPEN', 'west-peek', 'fu_scooter_taylor')`,
+  ).join(",");
+  provisionLocalD1(
+    `INSERT OR IGNORE INTO work_card (id, title, owner_type, owner_id, state, firm_scope, created_by) VALUES ${filler};`,
+  );
+
+  try {
+    for (const [label, path, data] of [
+      ["the analyst's own find", "/api/dealflow/scouted", { company: `E2E-P57-TRIP scout ${Date.now()}` }],
+      ["a Network OS push", "/api/network/dealflow", { company: `E2E-P57-TRIP push ${Date.now()}`, pushed_by: "network-os" }],
+    ] as const) {
+      const res = await request.post(path, { headers: MP, data });
+      const text = await res.text();
+      expect(res.status(), `${label} must be refused with a status, not a 500: ${text}`).toBe(429);
+      // The reason names the seat, the count and the limit — enough for a partner to act on.
+      expect(text, `${label} must say which rule stopped it`).toContain("opening_too_fast");
+      expect(text).toContain("Wyatt");
+      expect(text, "an opaque internal error is the failure mode this exists to prevent").not.toContain(
+        "internal_error",
+      );
+    }
+  } finally {
+    provisionLocalD1(`DELETE FROM work_card WHERE id LIKE 'wc_e2e_p57_trip_%';`);
+  }
+
+  // The seat is workable again the moment the hour is not full, so the breaker is a pause and not a
+  // door that stays shut.
+  const after = await request.post("/api/dealflow/scouted", {
+    headers: MP,
+    data: { company: `E2E-P57-TRIP recovered ${Date.now()}` },
+  });
+  expect(after.status(), await after.text()).toBe(201);
+});
+
 // ── helpers ────────────────────────────────────────────────────────────────────────────────────
 
 type Ctx = import("@playwright/test").APIRequestContext;
@@ -311,6 +413,14 @@ interface BoardDeal {
 async function boardDeals(request: Ctx): Promise<BoardDeal[]> {
   const body = (await (await request.get("/api/dealflow/board", { headers: MP })).json()) as { deals: BoardDeal[] };
   return body.deals;
+}
+
+async function companyOf(request: Ctx, opportunityId: string): Promise<string> {
+  const body = (await (await request.get(`/api/opportunities/${opportunityId}`, { headers: MP })).json()) as {
+    company_id?: string;
+    opportunity?: { company_id: string };
+  };
+  return body.company_id ?? body.opportunity!.company_id;
 }
 
 async function statusOf(request: Ctx, opportunityId: string): Promise<string> {

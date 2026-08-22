@@ -7,7 +7,7 @@ import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { consumeApprovalCard } from "./approvals";
-import { createWorkCardInternal } from "./workCards";
+import { createWorkCardInternal, WorkCardError } from "./workCards";
 // Item 7: a company pushed across is one of four routes, and they all converge on `openIntoFunnel`.
 import { openIntoFunnel, type FunnelEntry } from "./dealIntake";
 
@@ -695,6 +695,16 @@ async function parseJsonBody(request: Request): Promise<unknown | null> {
 
 function errorResponse(err: unknown): Response {
   if (err instanceof NetworkAdapterError) return json({ error: err.code, detail: err.message }, { status: err.status });
+  /*
+   * A PUSHED ARRIVAL RAISES A WORK CARD, AND THAT CAN BE REFUSED FOR A GOOD REASON.
+   *
+   * `handleNetworkCompanyPush` runs `openIntoFunnel`, which opens a card for the analyst — and
+   * `createWorkCardInternal` throws `WorkCardError` on a governed refusal (403) or when the breaker
+   * trips (429 `opening_too_fast`). Neither is a `NetworkAdapterError`, so both fell through this
+   * re-throw and the router answered `500 internal_error`: Network OS pushed a company across, the
+   * firm refused it for a reason it could have stated, and said nothing anybody could act on.
+   */
+  if (err instanceof WorkCardError) return json({ error: err.code, detail: err.message }, { status: err.status });
   throw err;
 }
 

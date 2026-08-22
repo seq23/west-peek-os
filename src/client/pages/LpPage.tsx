@@ -149,8 +149,8 @@ function PacketPanel({ packetId, lps, onChanged }: { packetId: string; lps: LpRe
    *
    * Held here rather than read back off the packet because `approval_card_id` is only written when
    * the letter actually goes out — before that the card exists and the packet does not know about
-   * it. Losing it on a reload costs a second press, and pressing again raises another card rather
-   * than sending anything, which is the safe direction to be wrong in.
+   * it. Losing it costs nothing but the button's wording: `send()` looks for the standing approved
+   * card before raising a new one, so a partner who went to Approvals and came back still sends.
    */
   const [receipt, setReceipt] = useState<string | null>(null);
 
@@ -193,6 +193,44 @@ function PacketPanel({ packetId, lps, onChanged }: { packetId: string; lps: LpRe
       setMessage(attempt.data?.detail ?? attempt.data?.error ?? `Not sent (HTTP ${attempt.status}).`);
       return;
     }
+
+    /*
+     * ── THE SIGNATURE THIS PANEL ALREADY HAS, FOUND BEFORE ASKING FOR ANOTHER ────────────────────
+     *
+     * `receipt` above is component state, and the message at the foot of this function sends the
+     * partner to Approvals — which unmounts this panel. Coming back the way they were told to come
+     * back therefore lost the card, and the next press raised a SECOND one. The note above `receipt`
+     * called that "a second press… the safe direction to be wrong in"; it is safe, and it is also a
+     * loop with no exit. Every press raised a fresh card, none was ever spent, and a reviewed
+     * quarterly letter could not be sent from the browser at all — which is the whole of what this
+     * panel was built to make possible.
+     *
+     * So the standing signature is looked for first. An APPROVED card for this exact action and
+     * this exact packet IS the receipt; it is unspent until a distribution consumes it, and the
+     * server re-verifies it either way. Nothing is weakened — a card that is not approved is not
+     * found here, and the partner is asked for one below exactly as before.
+     */
+    const standing = await api<{ approvals?: Array<{ id: string; action_key: string; object_id: string }> }>(
+      "/api/approvals?state=approved",
+    );
+    const signed = (standing.data?.approvals ?? []).find(
+      (a) => a.action_key === "lp_sensitive_communication.send" && a.object_id === p.id,
+    );
+    if (signed) {
+      const withReceipt = await api<{ error?: string; detail?: string }>(`/api/reporting/packets/${p.id}/distribute`, {
+        method: "POST",
+        body: { recipients, approval_receipt_id: signed.id },
+      });
+      if (withReceipt.status === 200) {
+        setBusy(false);
+        setReceipt(null);
+        setMessage(`Sent to ${recipients.length} investor${recipients.length === 1 ? "" : "s"}, with a receipt kept for each one.`);
+        packet.reload();
+        onChanged();
+        return;
+      }
+    }
+
     // Sending anything LP-facing is a partner's signature, never a role. Raise the card and say so.
     const card = await api<{ id?: string; error?: string; detail?: string }>("/api/approvals", {
       method: "POST",

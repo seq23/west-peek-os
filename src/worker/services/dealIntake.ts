@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { FirmUserIdentity } from "../auth";
 import { json, type RouteContext } from "../router";
-import { createWorkCardInternal } from "./workCards";
+import { createWorkCardInternal, WorkCardError } from "./workCards";
 import { actorFromIdentity, type Actor } from "./authorize";
 import { createOpportunity, type CreateOpportunityInput, type OpportunityRow } from "./investment";
 

@@ -216,20 +216,67 @@ export async function submitApproval(env: Env, actor: Actor, cardId: string): Pr
     objectId: card.object_id ?? undefined,
   });
   if (grant) {
-    await env.WP_OS_DB.prepare("UPDATE standing_authority SET uses = uses + 1 WHERE id = ?1").bind(grant.id).run();
+    /*
+     * THE BOUND IS ENFORCED BY THE UPDATE ITSELF, not by the SELECT that found the grant.
+     *
+     * `liveStandingGrant` checks `uses < max_uses` in an earlier round trip; two submissions racing
+     * between that read and this write would each see room and both spend, pushing a grant past its
+     * own limit — the limit being the thing that bounds the damage of a grant that turns out to have
+     * been a mistake.
+     *
+     * So the condition moves into the UPDATE and the result is checked. If it changed nothing, the
+     * grant was spent by somebody else in between and this card takes the ordinary path rather than
+     * being waved through on authority that no longer exists.
+     */
+    const spend = await env.WP_OS_DB.prepare(
+      "UPDATE standing_authority SET uses = uses + 1 WHERE id = ?1 AND uses < max_uses AND revoked_at IS NULL",
+    )
+      .bind(grant.id)
+      .run();
+    if ((spend.meta?.changes ?? 0) === 0) {
+      await env.WP_OS_DB.prepare("UPDATE approval_card SET state = 'pending_review' WHERE id = ?1").bind(cardId).run();
+      return (await getApprovalCard(env, cardId))!;
+    }
     await env.WP_OS_DB.prepare(
       `INSERT INTO standing_authority_use (id, authority_id, object_type, object_id, actor_type, actor_id)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
     )
       .bind(`sau_${crypto.randomUUID()}`, grant.id, card.object_type, card.object_id ?? null, actor.type, actorId)
       .run();
+    /*
+     * A DECISION ROW, AND A NAMED DECIDER — both were missing, and the card was unusable without them.
+     *
+     * This module's own docstring says EVERY decision is appended to `approval_decision`. A standing
+     * approval wrote none, with three consequences: the card came back with `decisions: []`, so it
+     * looked decided by nobody; `latestDecisionId()` returned null so a reopen superseded nothing;
+     * and `verifyAuthorizationReceipt` requires `decided_by`, so the card was **approved and
+     * permanently unexecutable, with nothing anywhere saying why.**
+     *
+     * The decider is the partner who GRANTED the authority, not the actor who happened to submit.
+     * That is the honest attribution: she made this decision in advance, and the grant is named
+     * beside it so the trail says which one and when.
+     */
+    const grantedBy = await env.WP_OS_DB.prepare("SELECT granted_by FROM standing_authority WHERE id = ?1")
+      .bind(grant.id)
+      .first<{ granted_by: string }>();
+    const decidedBy = grantedBy?.granted_by ?? actorId;
+    const note = `Approved by standing authority granted earlier (${grant.id}) — not reviewed again.`;
+
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO approval_decision (id, approval_card_id, decision, decided_by, note)
+       VALUES (?1, ?2, 'approved', ?3, ?4)`,
+    )
+      .bind(`apd_${crypto.randomUUID()}`, cardId, decidedBy, note)
+      .run();
+
     await env.WP_OS_DB.prepare(
       `UPDATE approval_card
-          SET state = 'approved', decided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-              decision_note = 'Approved by standing authority granted earlier — not reviewed again.'
+          SET state = 'approved', decided_by = ?2,
+              decided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              decision_note = ?3
         WHERE id = ?1`,
     )
-      .bind(cardId)
+      .bind(cardId, decidedBy, note)
       .run();
     await appendEvent(env, {
       eventType: "approval.auto_approved_by_standing",

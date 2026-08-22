@@ -247,12 +247,42 @@ export async function liveStandingGrant(
   const row = await env.WP_OS_DB.prepare(
     `SELECT sa.id, sa.uses, sa.max_uses
        FROM standing_authority sa
+       JOIN action_type at ON at.key = sa.action_key
        LEFT JOIN work_card wc ON wc.id = sa.work_card_id
       WHERE sa.action_key = ?1
+        /*
+         * THE FLAGS ARE READ NOW, NOT AT GRANT TIME — and this join was missing.
+         *
+         * grantStandingAuthority refuses to record a grant over a reserved action or an external
+         * effect, which is necessary and not sufficient: the flags live on action_type and CAN
+         * change. A key that becomes reserved next month must immediately stop being coverable by a
+         * grant written last month, without anybody remembering to revoke it. Migration 0130 says
+         * exactly that; the enforcement moved to the queue and the flag check did not move with it,
+         * so the only thing standing between a reserved action and a stale grant was the moment it
+         * was written.
+         */
+        AND at.is_reserved = 0
+        AND at.is_external_effect = 0
         AND sa.revoked_at IS NULL
         AND sa.ends_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
         AND sa.uses < sa.max_uses
-        AND (sa.object_id IS NULL OR (sa.object_type = ?2 AND sa.object_id = ?3))
+        /*
+         * SCOPE IS HONOURED AT BOTH LEVELS, and the type half was inert.
+         *
+         * object_type was only consulted INSIDE the branch requiring a non-null object_id, so a
+         * row carrying a type and no id matched every object of every type — and that is precisely
+         * the shape the delegate control sends on every grant made through the product. So every
+         * real grant was a BLANKET grant while the row read as a narrowing, which is worse than an
+         * honest blanket grant: the operator could see a scope she did not have.
+         *
+         * Read as three cases in decreasing breadth: no scope at all, this type, or this exact
+         * object. Migration 0130 requires all three bounds; this is the one that was decorative.
+         */
+        AND (
+          (sa.object_type IS NULL AND sa.object_id IS NULL)
+          OR (sa.object_id IS NULL AND sa.object_type = ?2)
+          OR (sa.object_type = ?2 AND sa.object_id = ?3)
+        )
         -- A grant that lives until a task is done dies with the task, whether it was finished,
         -- cancelled or reopened into something else.
         AND (sa.work_card_id IS NULL OR wc.state IN ('OPEN','IN_PROGRESS','BLOCKED'))

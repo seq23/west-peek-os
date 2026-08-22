@@ -5151,3 +5151,32 @@ statement — 1,095 of them, which is where the ten-plus minutes went, essential
 refuses to ship against a pending migration), so it now builds the schema once in an in-memory
 `node:sqlite` database: **0.95 seconds, no credentials**, with a five-case self-test covering all
 three bugs that prompted it.
+
+### Standing authority: four holes, all reading as protection
+
+**The flags were never re-checked when a grant was spent.** Migration `0130` states the reason a
+grant must be validated at spend time rather than at grant time — *"a key that becomes reserved next
+month must immediately stop being coverable by a grant written last month"* — and when the
+enforcement moved from `authorize()` to the approval queue, the flag check did not move with it. The
+only thing between a reserved action and a stale grant was the moment it was written. Now a join to
+`action_type`, with a test that makes a key reserved AFTER granting and proves the grant dies.
+
+**And its test asserted something trivially true.** It checked that `authorize()` never returns the
+reason `standing_authority` — which no longer exists there at all, so it would have passed with the
+feature deleted. Rewritten to submit a card against a forged grant and prove it still waits.
+
+**Every grant made through the product was a blanket grant.** `object_type` was consulted only inside
+the branch requiring a non-null `object_id`, and the delegate control sends type-without-id on every
+grant — so a row that read as "companies only" matched every object of every type. **Worse than an
+honest blanket grant: the operator could see a scope she did not have.**
+
+**An auto-approved card was approved and permanently unexecutable.** No `approval_decision` row and no
+`decided_by`, while this module's own docstring says every decision is appended — so the card came
+back decided by nobody, a reopen superseded nothing, and `verifyAuthorizationReceipt` refused it for
+want of a decider, with nothing saying why. The decision is now attributed to the partner who GRANTED
+the authority, which is the honest answer: she made it in advance, and the grant is named beside it.
+
+**The use limit could be raced past.** The bound was checked in the SELECT that found the grant and
+the increment carried no condition, so two submissions between read and write would both spend. The
+condition moved into the UPDATE and the result is checked; a card that loses the race takes the
+ordinary path rather than riding authority that no longer exists.

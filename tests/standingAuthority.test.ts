@@ -88,9 +88,68 @@ describe("what can never be delegated", () => {
        VALUES ('sta_forged', 'investment.approve', '2099-01-01T00:00:00.000Z', 50, 'fu_sequoia_taylor', 'planted by a test')`,
     ).run();
 
-    const d = await authorize(env, partner, "investment.approve", target);
-    expect(d.decision).not.toBe("ALLOW");
-    expect(d.reason).not.toBe("standing_authority");
+    /*
+     * ASSERTED AT THE SEAM THAT EXISTS. This used to check `authorize()` never returned the reason
+     * "standing_authority" — trivially true, because the standing branch was moved OUT of authorize()
+     * to the approval queue and no such reason is ever returned there. The test would have passed
+     * with the feature deleted, which is the definition of an assertion that holds nothing.
+     *
+     * It now proves the thing that matters: a forged grant over a reserved action does not get a card
+     * waved through. And the check is on the LIVE flags rather than on what was true when the grant
+     * was written, so a key that becomes reserved LATER stops being coverable immediately.
+     */
+    const card = await call<{ id: string }>("/api/approvals", MP, "POST", {
+      action_key: "investment.approve",
+      object_type: "canonical_company",
+      object_id: "cc_forged",
+      title: "deciding with a forged grant",
+    });
+    const submitted = await call<{ state: string }>(`/api/approvals/${card.body.id}/submit`, MP, "POST", {});
+    expect(submitted.body.state, "a reserved action still waits for a partner").toBe("pending_review");
+
+    const spent = await env.WP_OS_DB.prepare("SELECT uses FROM standing_authority WHERE id = 'sta_forged'")
+      .first<{ uses: number }>();
+    expect(spent!.uses, "and the forged grant was never even touched").toBe(0);
+  });
+
+  it("stops covering an action the moment that action becomes reserved", async () => {
+    /*
+     * The case migration 0130 was written for and the code had stopped honouring: a grant made while
+     * a key was ordinary must die the instant the key becomes reserved, with nobody remembering to
+     * revoke it. Checked against the LIVE flags at spend time rather than captured at grant time.
+     */
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO standing_authority (id, action_key, ends_at, max_uses, granted_by, reason)
+       VALUES ('sta_later', 'company.update', '2099-01-01T00:00:00.000Z', 10, 'fu_sequoia_taylor', 'granted while ordinary')`,
+    ).run();
+
+    const raise = async (objectId: string) => {
+      const created = await call<{ id: string }>("/api/approvals", MP, "POST", {
+        action_key: "company.update",
+        object_type: "canonical_company",
+        object_id: objectId,
+        title: `deciding ${objectId}`,
+      });
+      const res = await call<{ state: string }>(`/api/approvals/${created.body.id}/submit`, MP, "POST", {});
+      return res.body.state;
+    };
+
+    expect(await raise("cc_before"), "ordinary: the grant covers it").toBe("approved");
+
+    // The firm decides this needs a partner every time. Nothing revokes the grant.
+    await env.WP_OS_DB.prepare("UPDATE action_type SET is_reserved = 1 WHERE key = 'company.update'").run();
+    expect(await raise("cc_after"), "reserved now: the grant must stop covering it").toBe("pending_review");
+
+    await env.WP_OS_DB.prepare("UPDATE action_type SET is_reserved = 0 WHERE key = 'company.update'").run();
+    /*
+     * REVOKED, because a live grant left behind is shared state and the next test in this file is
+     * about a grant running out. A test that leaves authority lying around makes the one after it
+     * pass or fail for reasons it never mentions — which is the brittleness this suite has been
+     * having removed all day.
+     */
+    await env.WP_OS_DB.prepare(
+      "UPDATE standing_authority SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 'sta_later'",
+    ).run();
   });
 });
 
@@ -112,6 +171,39 @@ describe("a grant is bounded three ways", () => {
       reason: "ok",
     });
     expect(res.status).toBe(400);
+  });
+
+  it("honours the object-type scope, which was decorative", async () => {
+    /*
+     * The bound that read as a narrowing and was not one. `object_type` was consulted only inside
+     * the branch requiring a non-null `object_id`, so a grant scoped to a TYPE matched every object
+     * of every type — and that is exactly the shape the delegate control sends. Every grant made
+     * through the product was a blanket grant while the row said otherwise, which is worse than an
+     * honest blanket grant: the operator could see a scope she did not have.
+     */
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO standing_authority (id, action_key, object_type, ends_at, max_uses, granted_by, reason)
+       VALUES ('sta_typed', 'company.update', 'canonical_company', '2099-01-01T00:00:00.000Z', 10, 'fu_sequoia_taylor', 'companies only')`,
+    ).run();
+
+    const submit = async (objectType: string, objectId: string) => {
+      const created = await call<{ id: string }>("/api/approvals", MP, "POST", {
+        action_key: "company.update",
+        object_type: objectType,
+        object_id: objectId,
+        title: `deciding ${objectId}`,
+      });
+      const res = await call<{ state: string }>(`/api/approvals/${created.body.id}/submit`, MP, "POST", {});
+      return res.body.state;
+    };
+
+    expect(await submit("canonical_company", "cc_in_scope"), "the type it was granted for").toBe("approved");
+    expect(await submit("work_card", "wc_out_of_scope"), "a different type is NOT covered").toBe("pending_review");
+
+    // Left revoked: a live grant is shared state, and the next test is about a grant running out.
+    await env.WP_OS_DB.prepare(
+      "UPDATE standing_authority SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = 'sta_typed'",
+    ).run();
   });
 
   it("ends today at the end of today, and this week at the end of Sunday", () => {
