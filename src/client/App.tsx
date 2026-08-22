@@ -3108,9 +3108,33 @@ function UnresolvedPeople(): JSX.Element | null {
     why: string;
     next_step: string;
   }>("/api/captures/unresolved-people");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   const d = queue.data;
   if (!d || d.count === 0) return null;
+
+  /*
+   * THE BUTTON THIS LIST WAS ASKING FOR.
+   *
+   * Its own next_step read "Add these N to Network OS, or use this list as the case for building a
+   * write path" — so it has been telling the operator to go and do it by hand while the write path
+   * was built and reachable from nothing. The same shape as every other gap this review found.
+   *
+   * It PROPOSES. The person lands in Network OS's intake queue for a human there to review, which
+   * is why one press is enough: the far end still holds the veto, so there is nothing here for an
+   * approval card to protect.
+   */
+  async function propose(captureId: string, name: string) {
+    setBusy(captureId);
+    const res = await api<{ detail?: string; error?: string }>(`/api/captures/${captureId}/propose-to-network`, {
+      method: "POST",
+      body: {},
+    });
+    setBusy(null);
+    setMessage(res.status === 200 ? res.data?.detail ?? `${name} sent.` : `Could not send ${name}: ${res.data?.detail ?? res.data?.error ?? `HTTP ${res.status}`}`);
+    queue.reload();
+  }
 
   return (
     <section className="card" data-testid="unresolved-people">
@@ -3124,11 +3148,28 @@ function UnresolvedPeople(): JSX.Element | null {
             <strong>{p.full_name}</strong>
             {p.organization ? ` — ${p.organization}` : ""}
             {p.email ? ` · ${p.email}` : ""}
-            <span className="muted small"> · met {readableDate(p.resolved_at)}</span>
+            <span className="muted small"> · met {readableDate(p.resolved_at)}</span>{" "}
+            <button
+              type="button"
+              className="btn-strong"
+              disabled={busy === p.capture_id}
+              data-testid={`propose-${p.person_id}`}
+              onClick={() => void propose(p.capture_id, p.full_name)}
+            >
+              {busy === p.capture_id ? "Sending…" : "Send to Network OS"}
+            </button>
           </li>
         ))}
       </ul>
-      <p className="muted small">{d.next_step}</p>
+      <p className="muted small">
+        Sending puts someone in Network OS's review queue — it never writes a contact, because
+        Network OS decides who is a member.
+      </p>
+      {message && (
+        <p className="notice small" data-testid="unresolved-message" role="status">
+          {message}
+        </p>
+      )}
     </section>
   );
 }

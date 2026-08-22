@@ -238,6 +238,7 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('network_adapter_contract.declare', 'Declare adapter contract', 'Publish a versioned Network OS adapter contract (ownership, direction, keys, freshness, conflict, idempotency, retry, audit, failure).', 0, 0),
   ('network_sync.pull', 'Pull from Network OS', 'Pull relationship records through the declared adapter (read-only; idempotent by delivery key).', 0, 0),
   ('network_conflict.resolve', 'Resolve sync conflict', 'Human disposition of a Network OS/WP OS divergence (never a silent overwrite).', 0, 0),
+  ('network_os.propose_person', 'Propose a person to Network OS', 'Send a captured person to Network OS''s intake queue for a human there to review. Never writes a contact.', 1, 0),
   ('lp_record.create', 'Create LP record', 'Record an LP entity (LP_PRIVATE by default).', 0, 0),
   ('lp_opportunity.create', 'Create LP opportunity', 'Track a fundraising conversation with an LP.', 0, 0),
   ('lp_opportunity.transition', 'Transition LP opportunity', 'Move an LP opportunity through its governed stages.', 0, 0),

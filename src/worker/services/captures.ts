@@ -8,6 +8,7 @@ import { isMachinePaused } from "./machines";
 import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy";
 import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityClause } from "./authorize";
 import { createWorkCardInternal } from "./workCards";
+import { proposePerson } from "../effects/networkOsClient";
 
 /**
  * Capture intake (+Capture): unstructured input enters here, then routes to a
@@ -412,6 +413,12 @@ export async function handleUnresolvedPeople(ctx: RouteContext): Promise<Respons
        FROM capture c
        JOIN person p ON p.id = c.resolved_person_id
       WHERE c.person_source = 'LOCAL_UNRESOLVED' AND c.firm_scope = ?1
+        -- Already proposed people leave this list. Derived from the event that recorded the send,
+        -- so the list and the trail can never disagree about who has gone.
+        AND NOT EXISTS (
+          SELECT 1 FROM event_record e
+           WHERE e.event_type = 'network.person_proposed' AND e.object_id = p.id
+        )
       ORDER BY c.resolved_at DESC
       LIMIT 200`,
   )
@@ -428,6 +435,122 @@ export async function handleUnresolvedPeople(ctx: RouteContext): Promise<Respons
     next_step:
       people.length === 0
         ? "Nothing waiting."
-        : `Add these ${people.length} to Network OS, or use this list as the case for building a write path.`,
+        : `Send these ${people.length} to Network OS's review queue, one press each.`,
+  });
+}
+
+// ── Sending a person the other way ─────────────────────────────────────────────
+
+/**
+ * Propose a captured person to Network OS.
+ *
+ * Operator, 21 Aug 2026: "the capture tab needs to integrate also with network OS and allow new
+ * people to go the other way and go into the network OS database."
+ *
+ * THIS IS THE BUTTON THAT WAS MISSING, and it is the same shape of gap the whole review keeps
+ * finding: `handleUnresolvedPeople` above has been listing people the firm has met who are not in
+ * Network OS, and its own `next_step` read "Add these N to Network OS, or use this list as the case
+ * for building a write path." The write path was built and nothing reached it, so the list sat there
+ * telling the operator to go and do it by hand.
+ *
+ * PROPOSES, NEVER WRITES. It posts to Network OS's intake queue, where a human there decides whether
+ * the person becomes a contact. That is why it is authorized under `network_os.propose_person`
+ * rather than the MP-reserved `network_os.writeback`: the far end holds the veto, and an approval
+ * card in front of every captured business card would be ceremony with no content on the one
+ * surface that has to be fast.
+ *
+ * NOT SENT TWICE, AND NOT BY A NEW COLUMN. The obvious move was to stamp `person_source`, but that
+ * column carries `CHECK (person_source IN ('NETWORK_OS','LOCAL_UNRESOLVED'))` — a third value would
+ * have thrown on the first press in production while passing every local test that did not exercise
+ * the constraint. Rebuilding the table to widen a CHECK is a lot of risk for a boolean.
+ *
+ * The event spine already answers this. `network.person_proposed` is written on success and the
+ * unresolved list excludes anyone who has one, so "already sent" is derived from the record of it
+ * having been sent rather than from a flag that could disagree with that record.
+ */
+export async function handleProposePersonToNetwork(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") {
+    return json({ error: "forbidden", detail: "only a person may propose somebody to Network OS" }, { status: 403 });
+  }
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+
+  const row = await ctx.env.WP_OS_DB.prepare(
+    `SELECT c.id AS capture_id, c.raw_text, c.person_source,
+            p.id AS person_id, p.full_name, p.email, p.organization
+       FROM capture c
+       JOIN person p ON p.id = c.resolved_person_id
+      WHERE c.id = ?1 AND c.firm_scope = ?2`,
+  )
+    .bind(ctx.params.id!, firmScope)
+    .first<{
+      capture_id: string;
+      raw_text: string | null;
+      person_source: string;
+      person_id: string;
+      full_name: string;
+      email: string | null;
+      organization: string | null;
+    }>();
+
+  if (!row) return json({ error: "not_found", detail: "no captured person on that capture" }, { status: 404 });
+  const alreadySent = await ctx.env.WP_OS_DB.prepare(
+    "SELECT id FROM event_record WHERE event_type = 'network.person_proposed' AND object_id = ?1 LIMIT 1",
+  )
+    .bind(row.person_id)
+    .first();
+  if (alreadySent) {
+    return json(
+      { error: "already_proposed", detail: `${row.full_name} has already been sent to Network OS.` },
+      { status: 409 },
+    );
+  }
+
+  const authz = await authorize(ctx.env, actor, "network_os.propose_person", {
+    objectType: "person",
+    objectId: row.person_id,
+    firmScope,
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const result = await proposePerson(ctx.env, {
+    name: row.full_name,
+    email: row.email,
+    company: row.organization,
+    // The capture's own words are the best context anybody will ever write about this person, and a
+    // reviewer in Network OS reading "met at the AI infra dinner" can act on it. Bounded, because
+    // the far end parses free text and a wall of it helps nobody.
+    context: row.raw_text ? row.raw_text.slice(0, 500) : null,
+  });
+
+  if (!result.ok) {
+    // Recorded, not swallowed. A refusal by the far end is a fact about the integration and the
+    // operator should be able to see it happened rather than press the button again and wonder.
+    await appendEvent(ctx.env, {
+      eventType: "network.person_proposal_failed",
+      actorType: "firm_user",
+      actorId: actor.firmUserId!,
+      objectType: "person",
+      objectId: row.person_id,
+      firmScope,
+      payload: { capture_id: row.capture_id, reason: result.detail },
+    });
+    return json({ error: "propose_failed", detail: result.detail }, { status: 502 });
+  }
+
+  await appendEvent(ctx.env, {
+    eventType: "network.person_proposed",
+    actorType: "firm_user",
+    actorId: actor.firmUserId!,
+    objectType: "person",
+    objectId: row.person_id,
+    firmScope,
+    payload: { capture_id: row.capture_id, name: row.full_name },
+  });
+
+  return json({
+    ok: true,
+    name: row.full_name,
+    detail: `${row.full_name} is in Network OS's review queue. Somebody there decides whether they become a contact.`,
   });
 }

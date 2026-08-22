@@ -105,6 +105,14 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "network_adapter_contract.declare", name: "Declare adapter contract", description: "Publish a versioned Network OS adapter contract (ownership, direction, keys, freshness, conflict, idempotency, retry, audit, failure).", isExternalEffect: false },
   { key: "network_sync.pull", name: "Pull from Network OS", description: "Pull relationship records through the declared adapter (read-only; idempotent by delivery key).", isExternalEffect: false },
   { key: "network_conflict.resolve", name: "Resolve sync conflict", description: "Human disposition of a Network OS/WP OS divergence (never a silent overwrite).", isExternalEffect: false },
+  // Proposing a person is NOT `network_os.writeback`, and the distinction is the governance.
+  // Writeback mutates a record Network OS already holds, which is why it is MP-reserved behind an
+  // approval receipt. This appends to Network OS's INTAKE QUEUE, where a human over there decides
+  // whether the person becomes a contact at all — so the far end still holds the veto, and putting
+  // an approval card in front of every captured business card would be ceremony with no content on
+  // the one surface that has to be fast. External effect all the same: it sends a real person's
+  // details to another system, so it is authorized, audited, and refused outright for an AI actor.
+  { key: "network_os.propose_person", name: "Propose a person to Network OS", description: "Send a captured person to Network OS's intake queue for a human there to review. Never writes a contact.", isExternalEffect: true },
   // P10 — LP / fundraising / claims / data-room control.
   { key: "lp_record.create", name: "Create LP record", description: "Record an LP entity (LP_PRIVATE by default).", isExternalEffect: false },
   { key: "lp_opportunity.create", name: "Create LP opportunity", description: "Track a fundraising conversation with an LP.", isExternalEffect: false },

@@ -261,6 +261,23 @@ trigger to whichever system owns that kind of record. One email may carry both.
 |---|---|---|
 | `#wpdealflow` | this app's funnel, as a **proposed** company | West Peek OS owns deal flow |
 | `#wpnetwork` | relayed to Network OS `POST /api/intake/create`, as a **proposal** | Network OS owns people |
+| `#wpdeck` | this app's funnel, built from the **attachment** | the information is in the deck, not the body |
+
+**The third trigger, settled 21 Aug 2026.** It answers a different question from the other two — not
+*what is this* but *where is the information*. A mail carrying `#wpdeck` tells the analyst the
+content is the attachment and the body is a covering note, which changes what they do first. Without
+it a deck arrives under `#wpdealflow` with a thin-looking body and reads as a poor submission rather
+than a complete one.
+
+**Defined once, in `src/shared/intake/emailTriggers.ts`.** The email handler routes from that table,
+Porter's `the_inbox_triggers` method is written from it, and a test asserts the two cannot drift —
+three copies of a routing rule is three chances for the inbox to do something the documentation says
+it does not.
+
+**STILL NOT RECEIVING.** The table, the routes and the method are built and tested. Mail to
+`os@westpeek.ventures` does not reach this Worker yet, because Cloudflare Email Routing has never
+been enabled on the domain. Until it is, sending a triggered email does nothing at all and must not
+be described as working.
 
 This does not contradict the rule above — it honours it. The mailbox is a front door, not a store:
 nothing is written twice, each record goes to its one owner, and both arrive as proposals a human

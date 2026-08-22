@@ -37,6 +37,7 @@ import {
   handleListCaptures,
   handleRouteCapture,
   handleResolveCapture,
+  handleProposePersonToNetwork,
   handleUnresolvedPeople,
 } from "./services/captures";
 import {
@@ -598,6 +599,8 @@ const router = new Router()
   // Literal before the :param that would otherwise swallow it — "unresolved-people" is a
   // perfectly good capture id as far as the router is concerned (README, "Adding a feature" §4).
   .get("/api/captures/unresolved-people", handleUnresolvedPeople)
+  // The other direction: a person the firm met goes to Network OS as a PROPOSAL.
+  .post("/api/captures/:id/propose-to-network", handleProposePersonToNetwork)
   .get("/api/captures/:id", handleGetCapture)
   .post("/api/captures/:id/route", handleRouteCapture)
   .post("/api/captures/:id/resolve", handleResolveCapture)

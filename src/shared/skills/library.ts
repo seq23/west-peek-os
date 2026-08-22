@@ -655,6 +655,19 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
         ],
       },
       {
+        key: "the_inbox_triggers",
+        title: "What a hashtag in the inbox means",
+        when: `Mail arriving at ${"os@westpeek.ventures"}.`,
+        guidance: [
+          "#wpdealflow is a company for the funnel. Read the company out of the message, check it against what is already on record, and open a PROPOSED opportunity with the sender recorded as the source.",
+          "#wpnetwork is a person for the network. Relay them to Network OS's intake queue and stop there — Network OS owns who is a member and this app does not.",
+          "#wpdeck means the information is in the attachment and the body is only a covering note. Parse the deck first; do not read the covering note as the submission and conclude it is thin.",
+          "A trigger routes, it never authorises. Anybody who learns the word can type it, so what arrives is always a proposal a person accepts — never an entry into the pipeline.",
+          "One message can carry more than one trigger. Route each on its own; a mail introducing a founder AND their company is both, not a choice.",
+          "Mail with no trigger is yours, and it is the part that actually needs judgement: a reply into an old thread, a deck with no words, an introduction written as prose. Put it in front of a partner rather than guessing, and never hold it silently.",
+        ],
+      },
+      {
         key: "what_arrives_from_a_room",
         title: "Handling what comes out of a gathering",
         when: "Captures from a Room, a Mastermind, the Office, or a conversation with a member.",
