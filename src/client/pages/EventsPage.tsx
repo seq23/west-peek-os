@@ -62,7 +62,7 @@ export function EventsPage(): JSX.Element {
 
   return (
     <div className="page" data-testid="events-page">
-      <h2>Events</h2>
+      <h3>Events</h3>
       <p className="muted">
         Events as firm records — who came, when, and what came out of it.{" "}
         <strong>West Peek Live</strong> runs the room itself; link it here.
@@ -74,7 +74,7 @@ export function EventsPage(): JSX.Element {
       </p>
 
       <form className="card" onSubmit={create} data-testid="event-create-form">
-        <h3>Add an event</h3>
+        <h4>Add an event</h4>
         <div className="form-row">
           <label>
             Title{" "}
@@ -106,7 +106,7 @@ export function EventsPage(): JSX.Element {
       </form>
 
       <section className="card">
-        <h3>All events</h3>
+        <h4>All events</h4>
         {events.length === 0 ? (
           <p className="state-empty" data-testid="events-empty">No events recorded yet.</p>
         ) : (

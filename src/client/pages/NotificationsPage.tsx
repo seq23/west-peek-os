@@ -157,9 +157,9 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
   return (
     <section data-testid="notifications-page">
       <div className="home-section-head">
-        <h2>
+        <h3>
           {clear ? "You are caught up" : `${needsYou.length + worthKnowing.length} waiting`}
-        </h2>
+        </h3>
         {!clear && (
           <button type="button" className="link-button" disabled={busy} data-testid="notifications-read-all" onClick={() => void readAll()}>
             {busy ? "…" : "Dismiss all"}
@@ -180,7 +180,7 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
       {needsYou.length > 0 && (
         <>
           <div className="home-section-head">
-            <h3>Needs you</h3>
+            <h4>Needs you</h4>
             <span className="count-pill">{needsYou.length}</span>
           </div>
           <ul className="card-list" data-testid="notifications-needs-you">
@@ -194,7 +194,7 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
       {worthKnowing.length > 0 && (
         <>
           <div className="home-section-head">
-            <h3>Worth knowing</h3>
+            <h4>Worth knowing</h4>
             <span className="muted small">nothing here is blocked on you</span>
           </div>
           <ul className="card-list" data-testid="notifications-worth-knowing">
@@ -260,7 +260,7 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
           </button>
         </form>
 
-        <h4>What gets sent, and when</h4>
+        <h5>What gets sent, and when</h5>
         <ul className="small muted" data-testid="notification-rules">
           {Object.entries(prefs.data?.rules ?? {}).map(([k, v]) => (
             <li key={k}>

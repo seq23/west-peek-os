@@ -259,7 +259,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   return (
     <section data-testid="work-cards-page">
       <div className="home-section-head">
-        <h2>{live.length === 0 ? "Nothing open" : `${live.length} open`}</h2>
+        <h3>{live.length === 0 ? "Nothing open" : `${live.length} open`}</h3>
         <button type="button" className="btn-strong" data-testid="work-card-add-toggle" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a card"}
         </button>
@@ -339,7 +339,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
 
       {live.length === 0 && !adding && (
         <div className="card" data-testid="work-cards-empty">
-          <h3>Nothing is open</h3>
+          <h4>Nothing is open</h4>
           <p className="small">
             A work card is a piece of work somebody owns, with a next action. It is not a
             notification — that just says look at this — and not an approval, which is a decision
@@ -371,9 +371,9 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
       {bands.map((group) => (
         <section key={group.key} data-testid={`work-owner-${group.key}`}>
           <div className="home-section-head">
-            <h3>
+            <h4>
               {group.name} <span className="count-pill">{group.cards.length}</span>
-            </h3>
+            </h4>
             <span className="muted small">{group.note}</span>
           </div>
 

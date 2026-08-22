@@ -190,7 +190,7 @@ export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (ke
     <section data-testid="intent-page">
       {/* ── Asking ─────────────────────────────────────────────────────────────────────────── */}
       <section className="card ask-card">
-        <h2>What do you need?</h2>
+        <h3>What do you need?</h3>
         <p className="small">
           In your own words, {me.fullName.split(" ")[0]}. Ask works out which of four things it is —
           a page that already holds the answer, an answer it can give you outright, work somebody
@@ -261,7 +261,7 @@ export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (ke
           <div className="ask-answer" data-testid="ask-draft">
             <p>{result.says}</p>
             <div className="card">
-              <h3>{draft.title}</h3>
+              <h4>{draft.title}</h4>
               {draft.next_action && (
                 <p className="small">
                   <span className="lbl">Next</span> {draft.next_action}
@@ -304,7 +304,7 @@ export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (ke
           <div className="ask-answer" data-testid="ask-brief">
             <p>{result.says}</p>
             <div className="card">
-              <h3>{result.brief.title}</h3>
+              <h4>{result.brief.title}</h4>
               <p className="small">
                 <span className="lbl">Answers</span> {result.brief.question}
               </p>
@@ -330,7 +330,7 @@ export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (ke
           reads as a page that does nothing. */}
       <section data-testid="ask-produced">
         <div className="home-section-head">
-          <h2>What you have asked for</h2>
+          <h3>What you have asked for</h3>
           <span className="muted small">every brief this page has written, newest first</span>
         </div>
         <DeliverableList
@@ -348,7 +348,7 @@ export function IntentPage({ me, onNavigate }: { me: MeResponse; onNavigate: (ke
           explained, in a drawer, in its own vocabulary. */}
       <section data-testid="ask-lenses">
         <div className="home-section-head">
-          <h2>What checks it before it runs</h2>
+          <h3>What checks it before it runs</h3>
           <span className="muted small">the same checks, whatever you ask for</span>
         </div>
         <p className="small">

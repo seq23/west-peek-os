@@ -44,7 +44,7 @@ export function CrossOfficePage(): JSX.Element {
 
   return (
     <div className="page" data-testid="cross-office-page">
-      <h2>Cross-office</h2>
+      <h3>Cross-office</h3>
       <p className="muted">
         Where the two offices are colliding — the same work twice, the same employee twice, or two
         drafts to one recipient.

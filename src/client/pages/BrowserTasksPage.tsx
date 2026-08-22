@@ -124,7 +124,7 @@ export function BrowserTasksPage({ me }: { me: MeResponse }) {
       {message && <p className="notice" data-testid="browser-task-message">{message}</p>}
 
       <div className="home-section-head">
-        <h2>Tasks</h2>
+        <h3>Tasks</h3>
       </div>
 
       <ul className="card-list" data-testid="browser-task-list">

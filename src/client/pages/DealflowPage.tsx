@@ -513,7 +513,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       */}
       <section className="funnel-mouth" data-testid="dealflow-mouth">
         <div className="funnel-mouth-copy">
-          <h2>Top of the funnel</h2>
+          <h3>Top of the funnel</h3>
           <p className="small">
             Every company the firm records enters here, {me.fullName.split(" ")[0]} — primary or
             secondary. Each one is screened against the written mandate, not against instinct,
@@ -547,7 +547,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       {/* THE PIPELINE, with a way to narrow it. Three companies fit on a screen; thirty do not,
           and "show me what we passed on" is a question this page could not answer at all. */}
       <div className="home-section-head">
-        <h3>The pipeline</h3>
+        <h4>The pipeline</h4>
         <span className="muted small">sorted by what needs you soonest</span>
         <span className="deal-filters" role="group" aria-label="Filter deals by where they stand">
           {DEAL_FILTERS.map((f) => (

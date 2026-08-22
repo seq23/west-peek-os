@@ -207,7 +207,7 @@ function PersonalIntelligencePanel() {
   return (
     <section className="card private-panel" data-testid="personal-intelligence">
       <header className="module-card-head">
-        <h3>Private layer</h3>
+        <h4>Private layer</h4>
         <button type="button" className="link-button" data-testid="personal-toggle" onClick={() => setOpen((o) => !o)}>
           {open ? "Hide" : "Show"}
         </button>
@@ -305,7 +305,7 @@ function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => 
   return (
     <section className="card" data-testid="home-settings">
       <header className="module-card-head">
-        <h3>Home layout</h3>
+        <h4>Home layout</h4>
         <button type="button" className="link-button" data-testid="home-settings-toggle" onClick={() => setOpen((o) => !o)}>
           {open ? "Done" : "Configure"}
         </button>
@@ -482,7 +482,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           The examples are real capabilities, not placeholder prompts: showing something Ask cannot
           do would teach the operator to distrust it on the first try. */}
       <section className="card ask-band" data-testid="home-ask">
-        <h2>Ask</h2>
+        <h3>Ask</h3>
         <p>
           Describe what you need in your own words. Ask works out which part of the firm owns it,
           shows you the plan, and does nothing consequential without your approval.
@@ -508,7 +508,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           survives on the API as one_thing_to_watch for anything that still wants it. */}
       {(visibleAttention.length > 0 || silencedCount > 0) && (
         <section className="card" data-testid="home-attention">
-          <h2>Needs your attention</h2>
+          <h3>Needs your attention</h3>
           {visibleAttention.length === 0 && (
             <p className="muted small">
               Nothing outstanding. {silencedCount} {silencedCount === 1 ? "item is" : "items are"} silenced.
@@ -608,7 +608,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       {waiting && (
         <section data-testid="home-waiting">
           <div className="home-section-head">
-            <h2>Waiting on you</h2>
+            <h3>Waiting on you</h3>
             <span className="count-pill">{waiting.count}</span>
           </div>
           {waiting.items.length === 0 ? (
@@ -646,7 +646,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       */}
       <section data-testid="home-deliverables">
         <div className="home-section-head">
-          <h2>Prepared for you</h2>
+          <h3>Prepared for you</h3>
           <span className="muted small">briefs, reviews and research — yours to keep</span>
         </div>
         <DeliverableList
@@ -663,7 +663,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
 
       <section data-testid="home-deliveries">
         <div className="home-section-head">
-          <h2>From your team</h2>
+          <h3>From your team</h3>
           <span className="muted small">
             {deliveries.filter((m) => m.items.length > 0).length} of {deliveries.length} have something for you
           </span>
@@ -680,7 +680,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       </section>
 
       <section className="card" data-testid="home-questions">
-        <h3>The ten questions this surface answers</h3>
+        <h4>The ten questions this surface answers</h4>
         <ul className="question-list">
           {data.questions.map((q) => (
             <li key={q.question} data-testid={`home-question-${q.module ?? "none"}`}>

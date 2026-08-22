@@ -119,7 +119,7 @@ export function IntroductionsPage({ embedded = false }: { embedded?: boolean } =
 
       <section className="panel">
         <header className="panel-head">
-          {embedded ? <h3>Introductions</h3> : <h2>Suggested</h2>}
+          {embedded ? <h4>Introductions</h4> : <h3>Suggested</h3>}
           <button type="button" onClick={run} disabled={running} data-testid="run-matching">
             {running ? "Looking…" : "Look for matches"}
           </button>
@@ -247,7 +247,7 @@ function SignalEntry(props: {
 
   return (
     <section className="panel">
-      {props.embedded ? <h3>What we know about people</h3> : <h2>What we know</h2>}
+      {props.embedded ? <h4>What we know about people</h4> : <h3>What we know</h3>}
       <p className="muted">
         Write down what someone needs, or what they could help someone else with. This is what
         matching runs on. Notes expire after about four months so an old situation cannot resurface

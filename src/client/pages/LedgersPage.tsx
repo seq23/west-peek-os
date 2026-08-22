@@ -45,7 +45,7 @@ export function LedgersPage(): JSX.Element {
 
   return (
     <div className="page" data-testid="ledgers-page">
-      <h2>Record</h2>
+      <h3>Record</h3>
       <p className="muted">What the firm decided, what it knows, and who is doing the work.</p>
 
       <nav className="ic-tabs" data-testid="ledger-tabs">
@@ -62,7 +62,7 @@ export function LedgersPage(): JSX.Element {
 
       {view === "decisions" && (
         <section className="card" data-testid="decision-journal">
-          <h3>Decision journal</h3>
+          <h4>Decision journal</h4>
           <p className="muted small">
             Every decision, from all four places the firm records them. Append-only at the database —
             nothing here can be edited after the fact.
@@ -96,7 +96,7 @@ export function LedgersPage(): JSX.Element {
 
       {view === "evidence" && (
         <section className="card" data-testid="evidence-ledger">
-          <h3>Evidence ledger</h3>
+          <h4>Evidence ledger</h4>
           <p className="muted small">Every claim, with where it came from.</p>
           {unsourced > 0 && (
             <p className="notice" data-testid="evidence-unsourced-count">
@@ -140,7 +140,7 @@ export function LedgersPage(): JSX.Element {
 
       {view === "queues" && (
         <section className="card" data-testid="work-queues">
-          <h3>Work queues</h3>
+          <h4>Work queues</h4>
           <p className="muted small">
             {queues.data?.total_open ?? 0} open{" "}
             {queues.data?.blocked_count ? (
@@ -152,12 +152,12 @@ export function LedgersPage(): JSX.Element {
           ) : (
             queues.data!.queues.map((q) => (
               <div key={`${q.owner_type}:${q.owner_id}`} data-testid={`queue-${q.owner_id ?? "unassigned"}`}>
-                <h4>
+                <h5>
                   {q.owner_name}{" "}
                   <span className="muted small">
                     {q.owner_type.toLowerCase()} · {q.cards.length} card{q.cards.length === 1 ? "" : "s"}
                   </span>
-                </h4>
+                </h5>
                 <ul className="card-list small">
                   {q.cards.map((c) => (
                     <li key={c.id}>

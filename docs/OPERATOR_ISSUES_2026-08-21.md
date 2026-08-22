@@ -358,6 +358,43 @@ email handler is last and only after Email Routing exists.
 
 ---
 
+## Item 24 — every role researched, every machine given another pass
+
+> "i should not have had to give u that. u r an ai and llm and u should figure out what the role is
+> and what it entails and make sure the machine has those skills and task requests and make sure the
+> tabs show the things" — and: "IN FACT U NEED TO DO SOME RESEARCH FOR ALL THE ROLES AT THE END AND
+> GIVE THE MACHINES ANOTHER PASS. ADD THIS TO YOUR LIST"
+
+Fair, and the criticism is the useful part: the duties of an early-stage VC research seat are
+knowable without being dictated, and waiting to be handed them was the wrong instinct.
+
+**MEASURED, so this is a scoped task rather than a sentiment.** Of 45 declared machines:
+
+| | count |
+|---|---|
+| No methods at all | **19** |
+| One or two methods | **15** |
+| Meaningfully covered | 11 |
+
+The empty ones include machines the fund cannot run without — Fund Construction + Capital
+Allocation, Portfolio Performance + Follow-On Decision, Source-of-Truth Resolver, AI Employee
+Performance + Lifecycle. The thin ones include `ic_decision` (1), `lp_fundraising` (1),
+`portfolio_support` (1) and `venturedeals_deal_math` (1): the committee, the raise, the companies
+and the arithmetic, each with a single method.
+
+**What the pass has to do, per machine:**
+1. Work out what the role actually entails, from what the seat is for rather than from its name.
+2. Write methods to the standard already set — what to DO and what makes an answer good. "Be
+   thorough" is not a skill; "name the one assumption the thesis rests on, and say what would
+   falsify it" is.
+3. Check the surface. A method nobody can trigger is a document, not a capability — the operator's
+   "make sure the tabs show the things" is the half that turns a written duty into work the firm
+   can actually ask for.
+
+Queued to the end with items 21–23.
+
+---
+
 ## Item 23 — the firmwide budget · operator ask, 21 Aug 2026
 
 > "add another item to overhaul the budget section in the cockpit tab. i need to be able to set a

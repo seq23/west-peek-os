@@ -90,7 +90,7 @@ function SectionEditor({
 
   return (
     <section className="card ic-section" data-testid={`ic-section-${sectionId}`}>
-      <h4>
+      <h5>
         {title}{" "}
         <span
           className={state === "ANSWERED" ? "help-tag help-tag-good" : state === "NOT_APPLICABLE" ? "help-tag help-tag-muted" : "help-tag help-tag-warn"}
@@ -98,7 +98,7 @@ function SectionEditor({
         >
           {state === "ANSWERED" ? "answered" : state === "NOT_APPLICABLE" ? "not applicable" : "open"}
         </span>
-      </h4>
+      </h5>
       {intent && <p className="muted small">{intent}</p>}
 
       {questions && questions.length > 0 && (
@@ -177,7 +177,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
   return (
     <div className="page" data-testid="ic-portal-page">
-      <h2>IC Decision Portal</h2>
+      <h3>IC Decision Portal</h3>
 
       {readiness && (
         <p
@@ -245,7 +245,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
             />
           )}
 
-          <h3>The Closing Six</h3>
+          <h4>The Closing Six</h4>
           <p className="muted small">Mandatory for every West Peek investment, whatever the sector.</p>
           {data.framework.closing_six.map((q) => (
             <SectionEditor
@@ -264,7 +264,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
       {tab === "followup" && (
         <section className="card" data-testid="ic-followup">
-          <h3>Follow-Up</h3>
+          <h4>Follow-Up</h4>
           {(follow.data?.followups ?? []).length === 0 ? (
             <p className="state-empty">Nothing yet. Follow-ups are what the decision obliges us to do.</p>
           ) : (
@@ -282,7 +282,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
       {tab === "audit" && (
         <section className="card" data-testid="ic-audit">
-          <h3>Audit</h3>
+          <h4>Audit</h4>
           <p className="muted small">
             Every event recorded against this packet, oldest first. Read from the append-only log —
             nothing here was curated.
@@ -304,12 +304,12 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
       {tab === "company" && (
         <section className="card" data-testid="ic-tab-panel-company">
-          <h3>Company</h3>
+          <h4>Company</h4>
           <p className="muted small">
             {String(records.data?.packet?.canonical_name ?? "—")}
             {records.data?.packet?.description ? ` — ${String(records.data.packet.description)}` : ""}
           </p>
-          <h4>Latest metrics</h4>
+          <h5>Latest metrics</h5>
           {(records.data?.company.metrics ?? []).length === 0 ? (
             <p className="state-empty">No metrics recorded for this company.</p>
           ) : (
@@ -324,7 +324,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
               ))}
             </ul>
           )}
-          <h4>Deal math</h4>
+          <h5>Deal math</h5>
           {records.data?.company.deal_math ? (
             <p className="muted small" data-testid="ic-deal-math">
               valuation {String(records.data.company.deal_math.valuation ?? "—")} · check{" "}
@@ -340,7 +340,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
       {tab === "memo" && (
         <section className="card" data-testid="ic-tab-panel-memo">
-          <h3>Memo</h3>
+          <h4>Memo</h4>
           <p className="muted small">The claims this case rests on, with how many sources each has.</p>
           {records.data && records.data.memo.unsourced > 0 && (
             <p className="notice" data-testid="ic-memo-unsourced">
@@ -368,7 +368,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
       {tab === "market" && (
         <section className="card" data-testid="ic-tab-panel-market">
-          <h3>Market</h3>
+          <h4>Market</h4>
           {records.data?.market ? (
             <>
               <p>
@@ -387,7 +387,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
       {tab === "people" && (
         <section className="card" data-testid="ic-tab-panel-people">
-          <h3>People</h3>
+          <h4>People</h4>
           {(records.data?.people ?? []).length === 0 ? (
             <p className="state-empty">No people linked to this company yet.</p>
           ) : (
@@ -408,7 +408,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
       {tab === "decision" && (
         <section className="card" data-testid="ic-tab-panel-decision">
-          <h3>Decision</h3>
+          <h4>Decision</h4>
           {(records.data?.decisions ?? []).length === 0 ? (
             <p className="state-empty" data-testid="ic-no-decision">
               No decision recorded. It is made from the IC packet, against an approval receipt.
@@ -435,7 +435,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
       {tab === "live" && (
         <section className="card" data-testid="ic-tab-panel-live">
-          <h3>Live Help</h3>
+          <h4>Live Help</h4>
           {/* Deliberately a pointer, not a second chat. Live Help belongs to the meeting workspace
               where seating, the ≤5 cap and Revoke All already govern it; duplicating it here would
               mean two places to revoke access from. */}

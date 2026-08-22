@@ -578,7 +578,7 @@ function CapturePage({ onChanged, onNavigate }: { me: MeResponse; onChanged: () 
   return (
     <section data-testid="capture-page">
       <div className="card capture-explainer">
-        <h3>Write it down now, sort it out later</h3>
+        <h4>Write it down now, sort it out later</h4>
         <p>
           This is the box for anything you do not want to lose and do not want to think about yet — a name from a
           dinner, a company somebody mentioned, a number, a thing to chase. Nothing here needs to be tidy.
@@ -759,7 +759,7 @@ function CapturePage({ onChanged, onNavigate }: { me: MeResponse; onChanged: () 
 
       {/* A page with nothing on it reads as broken. Recent captures show the box is real and give
           the unrouted ones somewhere to be seen rather than quietly accumulating. */}
-      <h3>Recently kept</h3>
+      <h4>Recently kept</h4>
       {unrouted.length > 0 && (
         <p className="notice" data-testid="capture-unrouted">
           {unrouted.length} {unrouted.length === 1 ? "capture has" : "captures have"} not been sent anywhere yet.
@@ -934,7 +934,7 @@ function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeRe
   return (
     <li className="card" data-testid={`approval-card-${card.id}`}>
       <div className="panel-head">
-        <h4>{card.title}</h4>
+        <h5>{card.title}</h5>
         <span className={approvalStateBadge(card.state)} title={approvalStateWords(card.state).means}>{approvalStateWords(card.state).label}</span>
       </div>
 
@@ -1141,7 +1141,7 @@ function GovernancePage({ me }: { me: MeResponse }) {
           to pick the first and hope, which is how a rule ends up filed as a bulletin and binds
           nobody. */}
       <section className="card" data-testid="governance-explainer">
-        <h3>What this page is for</h3>
+        <h4>What this page is for</h4>
         <p>
           The rules this firm operates under, and the reasoning behind decisions somebody will
           otherwise re-argue in six months. Everything issued here is permanent and attributed —
@@ -1166,7 +1166,7 @@ function GovernancePage({ me }: { me: MeResponse }) {
 
       {isMp && RECOMMENDED_GOVERNANCE.length > 0 && (
         <section className="card" data-testid="governance-recommended">
-          <h3>Worth writing down</h3>
+          <h4>Worth writing down</h4>
           <p className="muted small">
             Three suggestions, not a checklist. Each is somewhere this firm&apos;s own history
             already shows the cost of not having written it down.
@@ -1214,7 +1214,7 @@ function GovernancePage({ me }: { me: MeResponse }) {
             }
           }}
         >
-          <h3>Issue governance update (MP only)</h3>
+          <h4>Issue governance update (MP only)</h4>
           <div className="form-row">
             <label>
               Type{" "}
@@ -1331,7 +1331,7 @@ function OutboundSwitches() {
 
   return (
     <section className="card" data-testid="ai-outbound">
-      <h3>Can an employee email anybody</h3>
+      <h4>Can an employee email anybody</h4>
       <p className="small">{p.summary}</p>
       <ul className="danger-switches">
         {row(p.to_partners, "The partners")}
@@ -1386,7 +1386,7 @@ function AiPage({ me }: { me: MeResponse }) {
       {/* First on the page, because it is the answer to the question a partner walks in with. */}
       <OutboundSwitches />
 
-      <h3>Run AI task (governed boundary)</h3>
+      <h4>Run AI task (governed boundary)</h4>
       <form
         className="card"
         data-testid="ai-run-form"
@@ -1438,12 +1438,12 @@ function AiPage({ me }: { me: MeResponse }) {
       </form>
       {message && <p className="notice" data-testid="ai-message">{message}</p>}
 
-      <h3>
+      <h4>
         Policy: <code>{budget.data?.policy.privacy_mode ?? "…"}</code> privacy · <code>{budget.data?.policy.cost_mode ?? "…"}</code> cost
         {budget.data ? ` · today $${budget.data.today.spent_usd.toFixed(4)} / $${budget.data.today.daily_cap_usd}` : ""}
-      </h3>
+      </h4>
 
-      <h3>Providers (kill switch is MP-only, logged via approval receipt)</h3>
+      <h4>Providers (kill switch is MP-only, logged via approval receipt)</h4>
       <ul data-testid="ai-provider-list" className="card-list">
         {(providers.data?.providers ?? []).map((p) => (
           <li key={p.provider_key} className="card" data-testid={`provider-${p.provider_key}`}>
@@ -1460,7 +1460,7 @@ function AiPage({ me }: { me: MeResponse }) {
         ))}
       </ul>
 
-      <h3>AI runs</h3>
+      <h4>AI runs</h4>
       <button type="button" className="btn-ghost" onClick={() => runs.reload()}>
         Refresh
       </button>
@@ -1526,7 +1526,7 @@ function DiagnosticsPage({ onNavigate }: { onNavigate: (page: string) => void })
 
   return (
     <section data-testid="diagnostics-page">
-      <h3>Is anything broken?</h3>
+      <h4>Is anything broken?</h4>
       {data ? (
         <>
           <div className="health-headline" data-testid="health-headline" role="status">
@@ -1561,7 +1561,7 @@ function DiagnosticsPage({ onNavigate }: { onNavigate: (page: string) => void })
         <p>{health.status ? `Health check failed (HTTP ${health.status}).` : "Reading the system\u2026"}</p>
       )}
 
-      <h3>How much are you being asked to approve?</h3>
+      <h4>How much are you being asked to approve?</h4>
       <p className="muted">
         The firm is supposed to need you no more than {volume.data?.targetPerDay ?? 15} times a day. More than that
         and the machine is pushing its judgement onto you.
@@ -1586,7 +1586,7 @@ function DiagnosticsPage({ onNavigate }: { onNavigate: (page: string) => void })
           </tbody>
         </table>
       </div>
-      <h4>Weekly rollup</h4>
+      <h5>Weekly rollup</h5>
       <ul>
         {(volume.data?.weekly ?? []).map((w) => (
           <li key={w.week}>
@@ -1716,7 +1716,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
 
   return (
     <div data-testid="company-detail">
-      <h3>{company.canonical_name} — evidence summary</h3>
+      <h4>{company.canonical_name} — evidence summary</h4>
       {summary.data && (
         <div className="card" data-testid="evidence-summary">
           <p data-testid="summary-claims-by-status">
@@ -1724,7 +1724,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
               .map(([s, n]) => `${s}: ${n}`)
               .join(" · ")}
           </p>
-          <h4>Unresolved material contradictions (HIGH/CRITICAL, OPEN/INVESTIGATING)</h4>
+          <h5>Unresolved material contradictions (HIGH/CRITICAL, OPEN/INVESTIGATING)</h5>
           <ul data-testid="unresolved-contradictions">
             {summary.data.unresolved_material_contradictions.map((c) => (
               <li key={c.id} data-testid={`summary-contradiction-${c.id}`}>
@@ -1737,7 +1737,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
         </div>
       )}
 
-      <h4>Add claim (source provenance required)</h4>
+      <h5>Add claim (source provenance required)</h5>
       <form
         className="card"
         data-testid="claim-form"
@@ -1802,7 +1802,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
         {message && <p className="notice" data-testid="claim-message">{message}</p>}
       </form>
 
-      <h4>Claims</h4>
+      <h5>Claims</h5>
       <ul data-testid="claim-list" className="card-list">
         {(summary.data?.claims ?? []).map((c) => (
           <li key={c.id} className="card" data-testid={`claim-${c.id}`}>
@@ -1827,7 +1827,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
         ))}
       </ul>
 
-      <h4>Detect contradictions (deterministic; humans decide)</h4>
+      <h5>Detect contradictions (deterministic; humans decide)</h5>
       <button
         type="button"
         data-testid="detect-contradictions"
@@ -2105,7 +2105,7 @@ function Company360Panel({ companyId }: { companyId: string }) {
   const v = view.data;
   return (
     <div className="card" data-testid="company-360">
-      <h4>{v.company.canonical_name} — 360</h4>
+      <h5>{v.company.canonical_name} — 360</h5>
       <p data-testid="company-360-counts">
         opportunities: {v.opportunities.length} · transactions: {v.transactions.length} · positions: {v.positions.length} · share classes:{" "}
         {v.security_classes.length} · pricing observations: {v.pricing_observations.length} · IC packets: {v.ic_packets.length}
@@ -2460,13 +2460,13 @@ function InvestmentPage({ me }: { me: MeResponse }) {
       </details>
 
       <div className="deal-record-section">
-        <h4>What the firm knows about them</h4>
+        <h5>What the firm knows about them</h5>
         <p className="muted small">Everything on record, and where each part of it came from.</p>
         <Company360Panel key={`${companyId}-${nonce}`} companyId={companyId} />
       </div>
 
       <div className="deal-record-section">
-      <h4>Its deals</h4>
+      <h5>Its deals</h5>
       <p className="muted small">Pick one to open its record. That is where the real numbers go.</p>
       <ul className="card-list" data-testid="opportunity-list">
         {(opportunities.data?.opportunities ?? []).map((o) => (
@@ -2500,7 +2500,7 @@ function InvestmentPage({ me }: { me: MeResponse }) {
 
       {selected && (
         <div className="deal-record-section" data-testid="opportunity-detail">
-          <h4>The deal record: {selected.title}</h4>
+          <h5>The deal record: {selected.title}</h5>
           <p className="muted small">
             What the fund would own and at what price, what it actually owns, and the packet the
             committee decides on.
@@ -2665,11 +2665,11 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
 
   return (
     <div data-testid="meeting-detail">
-      <h4>
+      <h5>
         {m.title} — <code data-testid="meeting-status">{m.status}</code> · recording{" "}
         <code data-testid="meeting-recording">{m.recording_enabled === 1 ? "ACTIVE" : "NOT ACTIVATED"}</code> · transcription consent{" "}
         <code data-testid="meeting-consent">{transcription?.state ?? "NOT RECORDED"}</code>
-      </h4>
+      </h5>
 
       <div className="form-row">
         <button
@@ -2929,7 +2929,7 @@ function PortfolioPage({ me }: { me: MeResponse }) {
         {message && <span data-testid="portfolio-message">{message}</span>}
       </form>
 
-      <h4>Alerts</h4>
+      <h5>Alerts</h5>
       <ul className="card-list" data-testid="alert-list">
         {(alerts.data?.alerts ?? []).map((a) => (
           <li key={a.id} className="card" data-testid={`alert-${a.id}`}>
@@ -2957,7 +2957,7 @@ function PortfolioPage({ me }: { me: MeResponse }) {
         {(alerts.data?.alerts ?? []).length === 0 && <li className="state-empty" data-testid="no-alerts">No alerts.</li>}
       </ul>
 
-      <h4>Support requests</h4>
+      <h5>Support requests</h5>
       <ul className="card-list" data-testid="support-list">
         {(requests.data?.support_requests ?? []).map((r) => (
           <li key={r.id} className="card" data-testid={`support-${r.id}`}>
@@ -2991,7 +2991,7 @@ function SupportRequestDetail({ requestId, onChanged }: { requestId: string; onC
 
   return (
     <div data-testid="support-detail">
-      <h4>{r.description}</h4>
+      <h5>{r.description}</h5>
       <form
         className="form-row"
         data-testid="match-form"
@@ -3146,9 +3146,9 @@ function UnresolvedPeople(): JSX.Element | null {
 
   return (
     <section className="card" data-testid="unresolved-people">
-      <h3>
+      <h4>
         Not in Network OS <span className="module-count">{d.count}</span>
-      </h3>
+      </h4>
       <p className="muted small">{d.why}</p>
       <ul className="card-list small">
         {d.people.map((p) => (
@@ -3221,7 +3221,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
         </p>
       )}
 
-      <h4>Local fixture sync (no live system)</h4>
+      <h5>Local fixture sync (no live system)</h5>
       <form
         className="form-row"
         data-testid="fixture-form"
@@ -3254,7 +3254,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
         {message && <span data-testid="network-message">{message}</span>}
       </form>
 
-      <h4>Sync state</h4>
+      <h5>Sync state</h5>
       <ul data-testid="sync-state">
         {(syncState.data?.cursors ?? []).map((c) => (
           <li key={c.resource} data-testid={`cursor-${c.resource}`}>
@@ -3265,7 +3265,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
         {(syncState.data?.cursors ?? []).length === 0 && <li className="state-empty" data-testid="no-cursors">No sync has run.</li>}
       </ul>
 
-      <h4>Conflict resolver</h4>
+      <h5>Conflict resolver</h5>
       <ul className="card-list" data-testid="conflict-list">
         {(conflicts.data?.conflicts ?? []).map((c) => (
           <li key={c.id} className="card" data-testid={`conflict-${c.id}`}>
@@ -3397,7 +3397,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="allocation-page">
-      <h4>Scenarios (each pins its policy versions)</h4>
+      <h5>Scenarios (each pins its policy versions)</h5>
       <form
         className="form-row"
         data-testid="scenario-form"
@@ -3509,7 +3509,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
         </div>
       )}
 
-      <h4>Capital options (initial, follow-on, reserve, secondary, exit — one framework)</h4>
+      <h5>Capital options (initial, follow-on, reserve, secondary, exit — one framework)</h5>
       <form
         className="form-row"
         data-testid="option-form"
@@ -3582,7 +3582,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
         </div>
       )}
 
-      <h4>Options — humans decide</h4>
+      <h5>Options — humans decide</h5>
       {/* The receipt is typed in, not remembered for you: an approval card is
           presented deliberately, and it survives leaving this page to approve it. */}
       <label>
@@ -3771,14 +3771,14 @@ function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
       <CockpitPage me={me} />
 
       <div className="home-section-head">
-        <h2>What the portfolio is made of</h2>
+        <h3>What the portfolio is made of</h3>
         <span className="muted small">read from closed holdings, not projected</span>
       </div>
       <PortfolioComposition />
       <PortfolioAllocation />
 
       <div className="home-section-head">
-        <h2>Modelling the next cheque</h2>
+        <h3>Modelling the next cheque</h3>
         <span className="muted small">scenarios, and what each one breaks</span>
       </div>
       <AllocationPage me={me} />
@@ -3790,7 +3790,7 @@ function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
           of you is deciding it blind, and the reserve consequence is the last step of the sequence
           this page already walks. */}
       <div className="home-section-head">
-        <h2>Following on</h2>
+        <h3>Following on</h3>
         <span className="muted small">the companies we already own, and what a second cheque costs</span>
       </div>
       <FollowOnPage />
@@ -4054,7 +4054,7 @@ export function App() {
         <main className="shell-main">
           <header className="shell-header">
             <p className="surface-eyebrow">{activeItem.group}</p>
-            <h2>{activeItem.label}</h2>
+            <h3>{activeItem.label}</h3>
             <div className="surface-identity">
               <IdentityPanel me={me.data} status={me.status} loading={me.loading} onSignOut={handleSignOut} />
               {authed && <StatusBar onNavigate={navigate} refreshNonce={refreshNonce} />}
@@ -4115,9 +4115,9 @@ export function App() {
                   nothing said where the section ended. A chevron makes it obvious that what follows
                   is the scheduled half of this page. */}
               <div className="home-section-head work-scheduled-head">
-                <h2>
+                <h3>
                   <span className="chev" aria-hidden="true" /> Scheduled work
-                </h2>
+                </h3>
                 <span className="muted small">machinery, not anything somebody carries</span>
               </div>
               <JobsPage me={me.data!} />
@@ -4147,7 +4147,7 @@ export function App() {
                   is what a person expects; hiding working machinery is how it stops being used. */}
               <section data-testid="deal-records">
                 <div className="home-section-head">
-                  <h2>Deal records and tooling</h2>
+                  <h3>Deal records and tooling</h3>
                   <span className="muted small">acts on one deal you pick, not on the pipeline above</span>
                 </div>
                 <p className="muted small">

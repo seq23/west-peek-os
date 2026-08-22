@@ -51,6 +51,50 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
     machineKey: "research_intelligence",
     skills: [
       {
+        key: "sourcing_signals",
+        title: "Where an early company shows up before it is a company",
+        when: "Standing sourcing work, and whenever a new sector is worth watching.",
+        guidance: [
+          "Watch where builders are before they are founders: GitHub for a repository gaining real contributors rather than stars, arXiv for a paper whose authors are suddenly all at the same new address, Product Hunt and Hacker News for something shipping that developers argue about rather than applaud.",
+          "Traction that matters at this stage is USE, not attention. A repo with forty forks and eight outside contributors is a stronger signal than one with four thousand stars, because somebody had to read the code.",
+          "On a founder, check what is checkable: papers they actually wrote, companies they actually exited, code they actually merged. Say which of the three you found and which you did not — a background you could not verify is a finding, not a blank.",
+          "Cluster rather than list. Three companies solving the same problem in one quarter is the signal; any one of them alone is an anecdote.",
+        ],
+      },
+      {
+        key: "inbound_triage",
+        title: "Reading what arrives",
+        when: "A deck, an intro or an inbound company reaching the firm.",
+        guidance: [
+          "Score against the written mandate, not against how the deck reads. A beautiful deck for an off-thesis company is off-thesis.",
+          "Say the ONE thing that would have to be true, and whether the deck offers any evidence for it. Most decks assert it and prove something else.",
+          "Flag the outlier explicitly — the one that does not fit the pattern and is more interesting for it. A triage that only ever confirms the filter will miss the deal that made the fund.",
+          "An arrival is never yours to close. Recommend, say why, and leave it — see what you may scrap and what you may not.",
+        ],
+      },
+      {
+        key: "technical_validation",
+        title: "Testing whether the thing can actually work",
+        when: "A company whose claim rests on novel AI, deep tech or an architecture nobody has shipped.",
+        guidance: [
+          "Read the paper or the architecture and say what it would take for the claim to hold — the assumption, the scaling behaviour, the dependency on somebody else's model or chip.",
+          "Separate what is hard from what is merely unbuilt. Plenty of good companies are doing something straightforward that nobody has bothered to do; that is a market question, not a technical one.",
+          "Name what you could not evaluate. A summary that reads as confident about a method you do not understand is worse than saying you need somebody who does.",
+          "Aggregate what users actually say — reviews, issue threads, developer forums — and quote them. Sentiment you summarise without quoting is your opinion wearing a customer's clothes.",
+        ],
+      },
+      {
+        key: "memo_first_pass",
+        title: "The first pass at an investment memo",
+        when: "A company being taken seriously enough to write up.",
+        guidance: [
+          "Gather what is public first: funding history, team size, traffic or download estimates, and who else is already in. Cite each and date it — a metric with no date is not a metric.",
+          "Structure it the way a committee reads it: the team, the market, what has to be true, and the risks. Do not lead with the product.",
+          "Write the FAQ nobody wants to answer — unit economics, why now, what happens when the obvious large competitor does this, and what the last round's investors know that we do not.",
+          "A first pass is a draft for a person, not a decision. Say what is still unverified in it rather than smoothing the gaps closed.",
+        ],
+      },
+      {
         key: "scout_before_there_is_a_deal",
         title: "Finding companies and founders before anybody is raising",
         when: "Standing scouting work: who should the firm know that it does not know yet.",

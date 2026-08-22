@@ -59,7 +59,7 @@ export function SecondariesPage({ onNavigate }: { onNavigate: (k: string) => voi
 
   return (
     <div className="page" data-testid="secondaries-page">
-      <h2>Secondaries</h2>
+      <h3>Secondaries</h3>
       <p className="muted">Purchases and sales in the secondary sleeve.</p>
 
       {/* WHERE THESE COME FROM, and where to go to price one. The page listed two empty tables and
@@ -90,12 +90,12 @@ export function SecondariesPage({ onNavigate }: { onNavigate: (k: string) => voi
       </p>
 
       <section className="card">
-        <h3>Purchases <span className="muted small">{purchases.length}</span></h3>
+        <h4>Purchases <span className="muted small">{purchases.length}</span></h4>
         {table(purchases, "secondaries-purchases")}
       </section>
 
       <section className="card">
-        <h3>Sales <span className="muted small">{sales.length}</span></h3>
+        <h4>Sales <span className="muted small">{sales.length}</span></h4>
         {table(sales, "secondaries-sales")}
       </section>
 

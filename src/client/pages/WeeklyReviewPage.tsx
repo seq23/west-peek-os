@@ -194,7 +194,7 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
 
   return (
     <div className="page" data-testid="weekly-review-page">
-      <h2>Weekly review</h2>
+      <h3>Weekly review</h3>
       {failure && (
         <p className="notice notice-gate small" data-testid="weekly-review-failed" role="alert">
           {failure}
@@ -411,9 +411,9 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
           if (rows.length === 0) return null;
           return (
             <section className="card" key={h.key} data-testid={`weekly-heading-${h.key}`}>
-              <h3>
+              <h4>
                 {h.label} <span className="muted small">{rows.length}</span>
-              </h3>
+              </h4>
               <ul className="card-list small">
                 {rows.map((i) => (
                   <li key={i.id} data-testid={`weekly-item-${i.id}`}>

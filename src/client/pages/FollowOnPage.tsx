@@ -34,16 +34,16 @@ export function FollowOnPage(): JSX.Element {
 
   return (
     <div className="page" data-testid="follow-on-page">
-      <h2>Follow-on</h2>
+      <h3>Follow-on</h3>
       <p className="muted">Where more money might go, and what has already been reviewed.</p>
 
       <section className="card">
-        <h3>
+        <h4>
           Open reviews{" "}
           {state.data?.pending_count ? (
             <span className="help-tag help-tag-warn" data-testid="follow-on-pending">{state.data.pending_count} pending</span>
           ) : null}
-        </h3>
+        </h4>
         {reviews.length === 0 ? (
           <p className="state-empty" data-testid="follow-on-reviews-empty">No follow-on reviews yet.</p>
         ) : (
@@ -63,7 +63,7 @@ export function FollowOnPage(): JSX.Element {
       </section>
 
       <section className="card">
-        <h3>Pulling ahead</h3>
+        <h4>Pulling ahead</h4>
         <p className="muted small" data-testid="follow-on-rule">{state.data?.candidate_rule}</p>
         {candidates.length === 0 ? (
           <p className="state-empty" data-testid="follow-on-candidates-empty">

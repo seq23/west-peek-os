@@ -104,7 +104,7 @@ function Programme(): JSX.Element {
   return (
     <section className="card" data-testid="programme">
       <header className="module-card-head">
-        <h3>How West Peek gathers</h3>
+        <h4>How West Peek gathers</h4>
         <button type="button" className="link-button" data-testid="programme-toggle" onClick={() => setOpen((o) => !o)}>
           {open ? "Hide the rhythm" : "Show the rhythm"}
         </button>
@@ -121,7 +121,7 @@ function Programme(): JSX.Element {
       {open && (
         <>
           <p className="muted small" data-testid="programme-money">{EVENT_ETHOS.money}</p>
-          <h4>At full speed</h4>
+          <h5>At full speed</h5>
           <p className="muted small">
             The cadence when the community is running properly — not a promise about this month.
             Being earlier in the sequence is not being behind.
@@ -216,7 +216,7 @@ export function RoomsPage(): JSX.Element {
 
       <section className="panel">
         <header className="panel-head">
-          <h2>Proposals</h2>
+          <h3>Proposals</h3>
           <button type="button" className="primary" onClick={propose} disabled={busy} data-testid="propose-room">
             {busy ? "Proposing…" : "Propose a Room"}
           </button>
@@ -272,7 +272,7 @@ export function RoomsPage(): JSX.Element {
           matters is not Rooms-versus-Events but proposed-versus-happened: above is the Room being
           planned, below is the firm's record of what actually took place. */}
       <section data-testid="events-section">
-        <h3>Every gathering on the record</h3>
+        <h4>Every gathering on the record</h4>
         <p className="muted small">
           Rooms, dinners, workshops, masterminds and the summit, as firm records: who came, when,
           and what came out of it. West Peek Live runs the room itself; this is the record of it.
@@ -311,14 +311,14 @@ function PacketDetail(props: {
 
       {seedQuestions.length > 0 && (
         <div>
-          <h4>Questions to seed it with</h4>
+          <h5>Questions to seed it with</h5>
           <ul>{seedQuestions.map((q) => <li key={q}>{q}</li>)}</ul>
         </div>
       )}
 
       {guestIdeas.length > 0 && (
         <div>
-          <h4>Guest ideas</h4>
+          <h5>Guest ideas</h5>
           <ul>
             {guestIdeas.map((g) => (
               <li key={g.description}>{g.description}{g.why ? <span className="muted"> — {g.why}</span> : null}</li>
@@ -335,7 +335,7 @@ function PacketDetail(props: {
       )}
 
       <div>
-        <h4>Venues</h4>
+        <h5>Venues</h5>
         {d.venues.length === 0 ? (
           <p className="muted">
             No venue survived sourcing, so a person needs to find the space. That is a search
@@ -350,7 +350,7 @@ function PacketDetail(props: {
 
       {economics && (
         <div>
-          <h4>If it runs</h4>
+          <h5>If it runs</h5>
           <table className="data">
             <tbody>
               <tr><th>Venue</th><td>{usd(economics.venueLowUsd)}–{usd(economics.venueHighUsd)}</td></tr>
@@ -486,7 +486,7 @@ function SponsorPipeline(props: { sponsors: SponsorRow[]; committedUsd: number; 
   return (
     <section className="panel">
       <header className="panel-head">
-        <h2>Sponsors</h2>
+        <h3>Sponsors</h3>
         <span className="muted">{usd(props.committedUsd)} committed</span>
       </header>
       <p className="muted">

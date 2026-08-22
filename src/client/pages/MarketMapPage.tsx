@@ -68,7 +68,7 @@ export function MarketMapPage(): JSX.Element {
 
   return (
     <div className="page" data-testid="market-map-page">
-      <h2>Market mapping</h2>
+      <h3>Market mapping</h3>
       <p className="muted">Who is in a sector, and how big they are.</p>
 
       <form className="card" onSubmit={build} data-testid="mkt-build-form">
@@ -93,10 +93,10 @@ export function MarketMapPage(): JSX.Element {
 
       {openId && detail.data && (
         <section className="card" data-testid="mkt-result">
-          <h3>
+          <h4>
             {detail.data.map.sector}{" "}
             <span className="muted small">{detail.data.map.company_count} companies</span>
-          </h3>
+          </h4>
 
           <nav className="ic-tabs">
             <button type="button" className={view === "map" ? "ic-tab ic-tab-active" : "ic-tab"} data-testid="mkt-view-map" onClick={() => setView("map")}>Map</button>
@@ -107,7 +107,7 @@ export function MarketMapPage(): JSX.Element {
             <div className="mkt-map" data-testid="mkt-map">
               {panels.map((p) => (
                 <section key={p.segment} className="mkt-panel" data-testid={`mkt-panel-${p.segment}`}>
-                  <h4>{p.segment} <span className="muted small">{p.companies.length}</span></h4>
+                  <h5>{p.segment} <span className="muted small">{p.companies.length}</span></h5>
                   <ul className="mkt-tiles">{p.companies.map(tile)}</ul>
                 </section>
               ))}

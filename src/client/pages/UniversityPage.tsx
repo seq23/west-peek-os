@@ -67,7 +67,7 @@ export function UniversityPage(): JSX.Element {
 
   return (
     <div className="page" data-testid="university-page">
-      <h2>West Peek University</h2>
+      <h3>West Peek University</h3>
 
       {/*
         THE PROFESSOR WELCOMES YOU, because a page that teaches ought to have somebody teaching on
@@ -84,7 +84,7 @@ export function UniversityPage(): JSX.Element {
           worth keeping now lives in PAGE_HOSTS, so there is one card and one source. */}
       {!activeId && (
         <form className="card" onSubmit={start} data-testid="university-start-form">
-          <h3>What do you want to learn?</h3>
+          <h4>What do you want to learn?</h4>
           <div className="form-row">
             <input
               data-testid="university-topic" aria-label="What you want to learn"
@@ -122,10 +122,10 @@ export function UniversityPage(): JSX.Element {
 
       {activeId && (
         <section className="card" data-testid="university-session">
-          <h3>
+          <h4>
             {current?.topic}{" "}
             <span className="muted small">{LEARNING_MODES.find((m) => m.key === current?.mode)?.label}</span>
-          </h3>
+          </h4>
 
           <ul className="university-thread" data-testid="university-thread">
             {turns.map((t) => (

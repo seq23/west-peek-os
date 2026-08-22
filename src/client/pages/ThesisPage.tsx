@@ -188,7 +188,7 @@ export function ThesisPage({ me }: { me: MeResponse }) {
       {/*
         THE THESIS IS THE DOCUMENT, not a panel of settings for one.
 
-        This rendered as an <h3> over a definition list inside a card, at the same visual weight as
+        This rendered as an <h4> over a definition list inside a card, at the same visual weight as
         the version history beneath it — so the single most consequential statement the firm makes
         about what it invests in read as a settings screen. The operator asked for the thing itself
         to look official, and it should: this is what gets put in front of an LP.
@@ -200,7 +200,7 @@ export function ThesisPage({ me }: { me: MeResponse }) {
         <header className="thesis-doc-head">
           <div>
             <p className="thesis-doc-firm">{fund.name}</p>
-            <h2 className="thesis-doc-title">Investment thesis</h2>
+            <h3 className="thesis-doc-title">Investment thesis</h3>
           </div>
           <button type="button" className="link-button" data-testid="thesis-print" onClick={() => window.print()}>
             Print or save as PDF
@@ -287,7 +287,7 @@ export function ThesisPage({ me }: { me: MeResponse }) {
       {/* THE INPUTS, ALWAYS VISIBLE. Amending writes a new version and keeps the old one. */}
       <section className="card" data-testid="thesis-inputs">
         <div className="home-section-head">
-          <h3>What it is built from</h3>
+          <h4>What it is built from</h4>
           <span className="muted small">saving writes a new version — nothing is overwritten</span>
         </div>
 
@@ -531,7 +531,7 @@ function ConstructionCard({ fundId }: { fundId: string }) {
   return (
     <section className="card" data-testid="construction-card">
       <header className="module-card-head">
-        <h3>Construction</h3>
+        <h4>Construction</h4>
         <button
           type="button"
           className="link-button"

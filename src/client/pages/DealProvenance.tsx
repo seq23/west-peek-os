@@ -88,7 +88,7 @@ export function DealProvenance(): JSX.Element {
 
   return (
     <section className="panel" data-testid="deal-provenance">
-      <h2>Where deals come from</h2>
+      <h3>Where deals come from</h3>
       <p className="muted">
         Not how busy the community is — how early it puts us in the room. The number that matters is
         how long we knew someone before the deal existed.
@@ -145,7 +145,7 @@ export function DealProvenance(): JSX.Element {
 
       {d.unrecorded.length > 0 && (
         <>
-          <h3>Set an origin</h3>
+          <h4>Set an origin</h4>
           <p className="muted">
             Where did the relationship start, and roughly when? The date is the useful half — it is
             the difference between meeting someone early and meeting them with everyone else.
