@@ -365,12 +365,22 @@ email handler is last and only after Email Routing exists.
 
 Queued behind the rest of the 22 at the operator's request.
 
-**Worth knowing before it is built:** the spend ceiling a partner would want to change is on **AI
-controls**, not on the page the nav calls Cockpit — `cockpit` renders Fund strategy, which is about
-allocating the fund rather than the firm's running costs. So this is either a rename, a move, or
-both, and that should be settled before any control is built. The review's item 21 already found
-the adjacent problem: money has three definitions, and Diagnostics and the cockpit report today's
-spend 28% apart under the same label.
+**A NAMING COLLISION IN THE CODE, and it is worth fixing while this is open.** There are two keys
+and their names cross:
+
+| nav key | label a partner sees | what it is |
+|---|---|---|
+| `cockpit` | **Fund strategy** | allocating the fund |
+| `ai-ops` | **Cockpit** | the admin console — providers, routing, and what the firm spends |
+
+Cockpit is `ai-ops`, and it is the right home for a firmwide budget: its own stated purpose is
+"Providers, models, how work is routed, and what the firm is spending on AI", and it already offers
+"Raise or lower AI spend". The key named `cockpit` renders something else entirely. I read the key
+rather than the label and got this wrong once; the collision is the reason, and renaming the stale
+key is part of this item.
+
+The review's item 21 found the adjacent problem: money has three definitions, and Diagnostics and
+Cockpit report today's spend 28% apart under the same label.
 
 "Persist" is the operative word. The daily cap currently reads $25 with no surface that sets it, so
 whatever is built has to write somewhere durable and be read back by the boundary that enforces it —

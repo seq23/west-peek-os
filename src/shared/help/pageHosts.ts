@@ -50,13 +50,13 @@ export const PAGE_HOSTS: Readonly<Record<string, PageHost>> = {
   thesis: { employee: "Pierce", because: "Owns what the fund is looking for and what it will not chase." },
   // Not "from first look" — that is the analyst's. This seat takes it once the firm has
   // decided a company is worth real time. See aiEmployees.ts for why screening moved.
-  investment: { employee: "Pierce", because: "Takes a deal once it is worth real time, and runs it to a decision." },
+  dealflow: { employee: "Pierce", because: "Takes a deal once it is worth real time, and runs it to a decision." },
   companies: { employee: "Wyatt", because: "Finds companies and keeps what the firm knows about them straight." },
   meetings: { employee: "Walter", because: "Sits in the room and makes sure the meeting produces something." },
   secondaries: { employee: "Pierce", because: "Runs the block and secondary side of the book." },
   portfolio: { employee: "Winter", because: "Watches how the companies you own are actually doing." },
-  cockpit: { employee: "Preston", because: "Owns fund construction, reserves and the arithmetic under them." },
-  modeling: { employee: "Preston", because: "Owns the deal arithmetic and what it means for the fund." },
+  "fund-strategy": { employee: "Preston", because: "Owns fund construction, reserves and the arithmetic under them." },
+  "deal-math": { employee: "Preston", because: "Owns the deal arithmetic and what it means for the fund." },
 
   // ── Firm ──
   lp: { employee: "Wesley", because: "Holds the relationships with the people whose money this is." },

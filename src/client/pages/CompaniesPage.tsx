@@ -102,7 +102,7 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
       <p className="muted small" data-testid="companies-register-note">
         This is the register — everything the firm has recorded, whether or not it is a live deal.
         Nothing is created here. A company enters the firm in one place, on{" "}
-        <button type="button" className="link-button" data-testid="companies-add-toggle" onClick={() => onNavigate("investment")}>
+        <button type="button" className="link-button" data-testid="companies-add-toggle" onClick={() => onNavigate("dealflow")}>
           Dealflow
         </button>
         , because a company worth recording is almost always one you are already looking at.
@@ -164,7 +164,7 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
         )}
       </div>
 
-      <button type="button" className="link-button" onClick={() => onNavigate("investment")}>
+      <button type="button" className="link-button" onClick={() => onNavigate("dealflow")}>
         See where these stand in the pipeline →
       </button>
     </section>

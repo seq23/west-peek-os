@@ -233,7 +233,7 @@ const NAV_GROUPS = [
       // group, which made Approvals look like a state (done) rather than a place, and made every
       // other item look like it was missing something.
       { key: "approvals", label: "Approvals" },
-      { key: "work-cards", label: "Work" },
+      { key: "work", label: "Work" },
       { key: "today", label: "Today" },
       { key: "notifications", label: "Notifications" },
       // Introductions moved into Community. It sat here beside Approvals and Notifications — things
@@ -247,7 +247,7 @@ const NAV_GROUPS = [
     blurb: "Companies, from first look to exit",
     items: [
       { key: "thesis", label: "Thesis" },
-      { key: "investment", label: "Dealflow" },
+      { key: "dealflow", label: "Dealflow" },
       { key: "companies", label: "Companies" },
       { key: "meetings", label: "Meetings" },
       { key: "secondaries", label: "Secondaries" },
@@ -255,8 +255,8 @@ const NAV_GROUPS = [
       // Allocation merged into Fund strategy. Two tabs answered one question — "what the portfolio
       // is made of" and "where the fund goes" lived on one, "allocation decision view" on the
       // other — so you had to visit both to be sure you had seen everything. The route stays live.
-      { key: "cockpit", label: "Fund strategy" },
-      { key: "modeling", label: "Deal Math" },
+      { key: "fund-strategy", label: "Fund strategy" },
+      { key: "deal-math", label: "Deal Math" },
     ],
   },
   {
@@ -295,11 +295,11 @@ const NAV_GROUPS = [
     blurb: "How the system is set up and behaving",
     secondary: true,
     items: [
-      { key: "ai-ops", label: "Cockpit" },
+      { key: "cockpit", label: "Cockpit" },
       // "AI" named nothing — it is where the provider kill switches, the spend ceiling and
       // the outbound-email switches live, all of which are controls rather than a subject.
-      { key: "ai", label: "AI controls" },
-      { key: "intelligence", label: "Sources & sweeps" },
+      { key: "ai-controls", label: "AI controls" },
+      { key: "sources-and-sweeps", label: "Sources & sweeps" },
       // "Go and look" moved to Work. Admin is where you configure the system; sending an employee
       // to read a live page is work that produces something you act on. The route stays live.
       { key: "machines", label: "Machines" },
@@ -455,7 +455,7 @@ function TodayPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string)
       <div className="home-section-head">
         <h3>My open work</h3>
         {mine.length > 0 && (
-          <button type="button" className="link-button" data-testid="today-open-work" onClick={() => onNavigate("work-cards")}>
+          <button type="button" className="link-button" data-testid="today-open-work" onClick={() => onNavigate("work")}>
             Open Work →
           </button>
         )}
@@ -463,7 +463,7 @@ function TodayPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string)
       {mine.length === 0 ? (
         <p className="state-empty">
           Nothing open and assigned to you.{" "}
-          <button type="button" className="link-button" onClick={() => onNavigate("work-cards")}>
+          <button type="button" className="link-button" onClick={() => onNavigate("work")}>
             Add a card on Work
           </button>{" "}
           — or one reaches you from a routed capture, an accepted handoff, or something you asked for.
@@ -472,7 +472,7 @@ function TodayPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string)
         <ul className="card-list small" data-testid="today-my-work">
           {mine.map((c) => (
             <li key={c.id}>
-              <button type="button" className="link-button" onClick={() => onNavigate("work-cards")}>
+              <button type="button" className="link-button" onClick={() => onNavigate("work")}>
                 <strong>{c.title}</strong>
               </button>{" "}
               <span className="muted small">
@@ -705,7 +705,7 @@ function CapturePage({ onChanged, onNavigate }: { me: MeResponse; onChanged: () 
             the Network
           </button>
           , or{" "}
-          <button type="button" className="link-button" onClick={() => onNavigate("work-cards")}>
+          <button type="button" className="link-button" onClick={() => onNavigate("work")}>
             a work card
           </button>{" "}
           with an owner. Until then it just sits there safely, and it survives losing signal mid-sentence.
@@ -1612,7 +1612,7 @@ const HEALTH_DESTINATION: Record<string, string> = {
   home: "Open the morning brief",
   "work-cards": "Open scheduled work",
   employees: "Open the employee lounge",
-  "ai-ops": "Open spend and routing",
+  "cockpit": "Open spend and routing",
   record: "Open the record",
   integrations: "Open integrations",
 };
@@ -3862,7 +3862,7 @@ function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
  * THE APP HAD NO ROUTING AT ALL. `active` was React state initialised to "home", so the address bar
  * never changed: a page could not be bookmarked, a link to one could not be sent to Scooter,
  * refreshing dumped you back at Home from wherever you were, and the browser's back button did
- * nothing. Everything in here already speaks in nav keys — `onNavigate("work-cards")` — so the keys
+ * nothing. Everything in here already speaks in nav keys — `onNavigate("work")` — so the keys
  * were a routing table that was simply never connected to the URL.
  *
  * HASH RATHER THAN PATH, deliberately. A path needs the server to serve the app for every route;
@@ -4140,7 +4140,7 @@ export function App() {
           {active === "help" && <HelpCenterPage />}
           {authed && active === "home" && <HomePage me={me.data!} onNavigate={navigate} />}
           {authed && active === "setup" && <SetupPage me={me.data!} />}
-          {authed && active === "intelligence" && <IntelligencePage me={me.data!} />}
+          {authed && active === "sources-and-sweeps" && <IntelligencePage me={me.data!} />}
           {authed && active === "employees" && <EmployeesPage me={me.data!} />}
           {authed && active === "rooms" && <RoomsPage />}
           {authed && active === "introductions" && <IntroductionsPage />}
@@ -4159,7 +4159,7 @@ export function App() {
           {authed && active === "today" && <TodayPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} onNavigate={navigate} />}
           {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={navigate} />}
-          {authed && active === "work-cards" && (
+          {authed && active === "work" && (
             <>
               <WorkSurface me={me.data!} onChanged={refresh} onNavigate={navigate} />
               {/* "Runs on a schedule" read as a sentence fragment rather than a section name, and
@@ -4188,8 +4188,8 @@ export function App() {
           )}
           {authed && active === "research" && <ResearchPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
-          {authed && active === "modeling" && <ModelingPage me={me.data!} />}
-          {authed && active === "investment" && (
+          {authed && active === "deal-math" && <ModelingPage me={me.data!} />}
+          {authed && active === "dealflow" && (
             <>
               <DealflowPage me={me.data!} onNavigate={navigate} />
               {/* A SECTION, NOT A DRAWER. This was folded away, so the deal math, the IC assembly
@@ -4228,7 +4228,7 @@ export function App() {
               <PortfolioPage me={me.data!} />
             </>
           )}
-          {authed && active === "cockpit" && <FundStrategyPage me={me.data!} />}
+          {authed && active === "fund-strategy" && <FundStrategyPage me={me.data!} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}
           {authed && active === "integrations" && <IntegrationsPage me={me.data!} />}
           {authed && active === "lp" && <LpPage me={me.data!} />}
@@ -4243,8 +4243,8 @@ export function App() {
           {authed && active === "contradictions" && <ContradictionsPage />}
           {authed && active === "activity" && <ActivityPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "governance" && <GovernancePage me={me.data!} />}
-          {authed && active === "ai" && <AiPage me={me.data!} />}
-          {authed && active === "ai-ops" && <AiOpsPage me={me.data!} />}
+          {authed && active === "ai-controls" && <AiPage me={me.data!} />}
+          {authed && active === "cockpit" && <AiOpsPage me={me.data!} />}
           {authed && active === "diagnostics" && <DiagnosticsPage onNavigate={navigate} />}
           </div>
         </main>

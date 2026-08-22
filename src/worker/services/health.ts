@@ -174,7 +174,7 @@ export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
       : failing.length
         ? `${failing.map((j) => j.job_key).join(", ")} failed on the last attempt.`
         : active.length === 0 ? "Nothing is scheduled to run." : undefined,
-    page: "work-cards",
+    page: "work",
   });
 
   // ── The workforce ──
@@ -194,13 +194,13 @@ export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
   const blocked = await one<{ n: number }>("ai_run", "SELECT COUNT(*) AS n FROM ai_run WHERE status != 'COMPLETED' AND date(created_at) = date('now')",
   );
   checks.push({
-    key: "ai",
+    key: "ai-controls",
     label: "AI runs",
     state: !lastRun ? "DEGRADED" : (blocked?.n ?? 0) > 3 ? "DEGRADED" : "OK",
     reading: lastRun
       ? `last run ${ago(lastRun.created_at)}${(blocked?.n ?? 0) > 0 ? ` · ${blocked!.n} blocked or failed today` : ""}`
       : "nothing has ever run",
-    page: "ai-ops",
+    page: "cockpit",
   });
 
   // ── Spend against the cap ──
@@ -216,7 +216,7 @@ export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
     state: pct >= 90 ? "DOWN" : pct >= 70 ? "DEGRADED" : "OK",
     reading: `$${spent.toFixed(4)} of $${cap} · ${Math.round(pct)}% of the daily cap`,
     remedy: pct >= 70 ? "Close to the cap. Work will start being refused when it is reached." : undefined,
-    page: "ai-ops",
+    page: "cockpit",
   });
 
   // ── Failures that were deliberately swallowed. The whole reason recordSwallowed() exists. ──
@@ -257,7 +257,7 @@ export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
     label: "Cheap model tier",
     state: workersAiConfigured(env) ? "OK" : "DEGRADED",
     reading: workersAiConfigured(env) ? "Workers AI bound — routine work can run near free" : "not bound — everything routes to paid models",
-    page: "ai-ops",
+    page: "cockpit",
   });
 
   // Reported last so it names everything that failed above, and reported at all so a check that

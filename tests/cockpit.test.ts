@@ -236,7 +236,7 @@ describe("MP command coherence — all ten questions", () => {
     const home = await call<{ modules: Array<{ key: string; link: string }> }>("/api/mp-home", MP);
     const links = new Map(home.body.modules.map((m) => [m.key, m.link]));
     expect(links.get("employees")).toBe("employees");
-    expect(links.get("ai_spend")).toBe("ai-ops");
+    expect(links.get("ai_spend")).toBe("cockpit");
     expect(links.get("portfolio_risk")).toBe("portfolio");
     expect(links.get("intelligence")).toBe("intelligence");
   });

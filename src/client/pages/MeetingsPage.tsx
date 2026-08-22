@@ -297,7 +297,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         )}
 
         <div className="form-row">
-          <button type="button" className="btn-strong" data-testid="meetings-ic-open" onClick={() => onNavigate("investment")}>
+          <button type="button" className="btn-strong" data-testid="meetings-ic-open" onClick={() => onNavigate("dealflow")}>
             {icCounts.ready_deals > 0
               ? `Open Dealflow — ${icCounts.ready_deals} deal${icCounts.ready_deals === 1 ? "" : "s"} could go to committee`
               : "Open Dealflow"}

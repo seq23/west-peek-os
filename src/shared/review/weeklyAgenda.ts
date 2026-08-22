@@ -155,11 +155,11 @@ const SOURCES: Readonly<Record<string, { said: string; page: string | null }>> =
   meeting_notes: { said: "Read out of meeting notes you pasted in", page: null },
   approval_card: { said: "An approval has been waiting for a decision", page: "approvals" },
   lp_engagement: { said: "From an LP relationship record", page: "lp" },
-  investment_opportunity: { said: "From a deal in the pipeline", page: "investment" },
+  investment_opportunity: { said: "From a deal in the pipeline", page: "dealflow" },
   portfolio_alert: { said: "A portfolio company raised an alert", page: "portfolio" },
   support_request: { said: "A founder asked for help", page: "portfolio" },
   evt_event: { said: "From an event in the calendar", page: "rooms" },
-  job_run: { said: "A scheduled job failed or was refused", page: "work-cards" },
+  job_run: { said: "A scheduled job failed or was refused", page: "work" },
   meeting_commitment: { said: "Somebody committed to this in a meeting", page: "meetings" },
   contradiction_record: { said: "Two records disagree with each other", page: "contradictions" },
 };

@@ -8,6 +8,7 @@ import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } fro
 import { createClaim, type ClaimSourceType } from "./evidence";
 import { deliver } from "./deliverables";
 import { privacyLabelSchema } from "../../shared/privacy";
+import { runAi } from "../ai/runAi";
 
 /**
  * Research / Analyst Workstation (P21, GAP-14).
@@ -590,4 +591,101 @@ function renderPacketBody(
     : `Not yet — ${reasons.join("; ")}.`);
 
   return out.join("\n");
+}
+
+// ── The guided half: what do we actually need to find out ──
+
+/**
+ * Wyatt turns a topic into the questions the research has to answer.
+ *
+ * Operator, item 18: "Research as a guided conversation" with the research employee "who builds a
+ * schema then produces the report".
+ *
+ * WHAT THE PAGE WAS. Two text boxes — a title and a question — and then a list of empty sections.
+ * A partner who types "AI inference" has said what they are curious about and not what would settle
+ * it, and the gap between those is the whole job. So the page asked the hardest part of research as
+ * its first field and gave no help with it.
+ *
+ * THE SCHEMA IS THE GUIDANCE. Naming the five or six questions that would actually resolve a topic
+ * is where an analyst earns their place, and it is a thing a model does well because it is a
+ * question about the SHAPE of an enquiry rather than about the world. Answering them is the part
+ * that needs evidence, and that is the existing engine's job.
+ *
+ * PROPOSED, NOT CREATED. They come back as a list a partner accepts, edits or throws away. A
+ * research plan somebody did not agree to is a plan they will not use — and this is the one step
+ * where being slightly wrong sends the whole packet in the wrong direction.
+ */
+export async function handleProposeQuestions(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "ai.run", { objectType: "research_project", objectId: ctx.params.id! });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  // Visibility first, then the fields this needs. `visibleProject` deliberately selects only what
+  // the privacy check requires, so the title and question are read separately rather than widening
+  // a function every other caller depends on.
+  const visible = await visibleProject(ctx, ctx.params.id!);
+  if (!visible) return json({ error: "not_found" }, { status: 404 });
+  const project = await ctx.env.WP_OS_DB.prepare("SELECT title, question FROM research_project WHERE id = ?1")
+    .bind(ctx.params.id!)
+    .first<{ title: string; question: string }>();
+  if (!project) return json({ error: "not_found" }, { status: 404 });
+
+  const existing = (
+    await ctx.env.WP_OS_DB.prepare("SELECT question FROM research_question WHERE project_id = ?1")
+      .bind(ctx.params.id!)
+      .all<{ question: string }>()
+  ).results ?? [];
+
+  const { run } = await runAi(ctx.env, {
+    purpose: `Propose the research schema for ${project.title}`,
+    actor,
+    inputs: [
+      [
+        "You are an analyst at an early-stage venture fund, scoping a piece of research before it starts.",
+        "",
+        `Topic: ${project.title}`,
+        `The partner's question: ${project.question}`,
+        existing.length > 0
+          ? `Already being asked (do not repeat these): ${existing.map((q) => q.question).join(" | ")}`
+          : "",
+        "",
+        "Name the 5 to 7 questions that would actually settle this, as a JSON array of strings and",
+        "nothing else. Rules:",
+        "- Each must be answerable with evidence somebody could go and find. Not 'is this a good",
+        "  market' but 'how much did the three largest players spend on inference in the last year'.",
+        "- Include at least one that would DISCONFIRM the obvious thesis, because research that can",
+        "  only agree with the person who commissioned it is not research.",
+        "- Include one about who is already doing this, since the useful version of most questions",
+        "  is comparative.",
+        "- No question whose answer is a matter of opinion, and none that restates the topic.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    ],
+    sensitivity: "INTERNAL" as never,
+    budgetContext: { expectedOutputTokens: 600 },
+    routing: { category: "RESEARCH", taskClass: "research_scoping" },
+  });
+
+  if (run.status !== "COMPLETED" || !run.output_text) {
+    return json({ error: "propose_failed", detail: run.failure_reason ?? `The run did not complete (${run.status}).` }, { status: 502 });
+  }
+
+  // Models decorate JSON however firmly they are asked not to; reading the first array out of the
+  // text is more robust than refusing an answer that is present but wrapped.
+  const match = /\[[\s\S]*\]/.exec(run.output_text);
+  let questions: string[] = [];
+  try {
+    questions = match ? (JSON.parse(match[0]) as unknown[]).map(String).filter((q) => q.trim().length > 8) : [];
+  } catch {
+    questions = [];
+  }
+  if (questions.length === 0) {
+    return json({ error: "propose_failed", detail: "The answer could not be read as a list of questions." }, { status: 502 });
+  }
+
+  return json({
+    questions: questions.slice(0, 8),
+    note: "Proposed, not added. Keep the ones worth answering.",
+  });
 }

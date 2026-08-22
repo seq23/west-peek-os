@@ -65,7 +65,7 @@ export function SecondariesPage({ onNavigate }: { onNavigate: (k: string) => voi
       {/* WHERE THESE COME FROM, and where to go to price one. The page listed two empty tables and
           a separation rule, and answered neither question. */}
       <div className="form-row secondaries-doors">
-        <button type="button" className="btn-strong" data-testid="secondaries-add" onClick={() => onNavigate("investment")}>
+        <button type="button" className="btn-strong" data-testid="secondaries-add" onClick={() => onNavigate("dealflow")}>
           Add a secondary
         </button>
         {/* The modelling dashboard is a separate product and deliberately not embedded — this is a

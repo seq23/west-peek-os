@@ -187,7 +187,7 @@ async function icPrioritiesModule(env: Env, identity: FirmUserIdentity): Promise
     key: "ic_priorities",
     title: "IC / deal priorities",
     answers: "What should the firm do next?",
-    link: "investment",
+    link: "dealflow",
     count: items.length,
     items,
     note: items.length === 0 ? "Nothing at diligence or IC-ready." : undefined,
@@ -249,7 +249,7 @@ async function aiSpendModule(env: Env, identity: FirmUserIdentity): Promise<Home
     key: "ai_spend",
     title: "AI spend today",
     answers: "What is costing money?",
-    link: "ai-ops",
+    link: "cockpit",
     count: blocked?.n ?? 0,
     items: [
       {

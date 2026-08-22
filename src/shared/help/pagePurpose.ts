@@ -52,7 +52,7 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "Somewhere to put anything that arrives before it has a home — a note, a forward, a thought between meetings.",
     youCan: ["Capture something quickly", "Route it to the right machine later"],
   },
-  "work-cards": {
+  "work": {
     purpose: "Everything the firm is doing, in two kinds. Someone carries a work card and it stops if nobody picks it up; scheduled work is machinery that runs on a clock whether anyone looks. Both live here so you only check one place.",
     youCan: ["See what has stopped, and who is carrying what", "Write a card and hand it to an employee or your partner", "Switch a scheduled job on or off", "See what your employees have actually been running"],
   },
@@ -64,7 +64,7 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "What the firm is looking for, and the check and ownership it is looking for it at. Editing writes a new version rather than replacing the old one.",
     youCan: ["Change the sectors, stage and filters that define a fit", "Set the check size and the ownership to hold out for", "Read every version the firm has held"],
   },
-  investment: {
+  dealflow: {
     purpose: "Where every company stands and what is stopping the next decision. Deals die of neglect rather than judgement, so each one shows how long it has sat where it is against that stage's own clock.",
     youCan: ["See the whole pipeline as one line", "Move a company to its next stage", "Find what has stalled, and what is only waiting on your decision", "Add a company at the stage it is actually at"],
   },
@@ -97,11 +97,11 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "Now part of Fund strategy, which answers the whole question in one place rather than half of it on each of two tabs.",
     youCan: ["See how capital is split across the sleeves", "Compare allocation options", "See what a change requires before approving it"],
   },
-  modeling: {
+  "deal-math": {
     purpose: "The team's venture deal dashboards — secondary deals, primary rounds and fund construction — with the firm's own numbers ready to carry across. The math there and the math on a deal here are the same code.",
     youCan: ["Open the dashboards to model a deal or a fund", "Copy the fund's current check, ownership and reserve figures", "See why a number modelled there matches one on a real deal"],
   },
-  cockpit: {
+  "fund-strategy": {
     purpose:
       "Can we write this cheque, and what does it cost us later? What the portfolio is made of, " +
       "what is going wrong in it, and what the next cheque would do to the shape of the fund.",
@@ -143,7 +143,7 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "What goes out to LPs, and the review it passes through first.",
     youCan: ["Assemble a reporting packet", "Send it for review", "See what was distributed and when"],
   },
-  intelligence: {
+  "sources-and-sweeps": {
     purpose: "Where your briefing gets its material. A sweep checks every source, drops duplicates and ranks what is left against what you follow. Setup, not reading — the brief itself is on Home.",
     youCan: ["See which sources are working", "Add a source", "Choose what to watch", "Check what a brief was written from"],
   },
@@ -175,11 +175,11 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "Your AI employees — who they are, what they are good at, and which are switched on.",
     youCan: ["Read what someone is for", "Activate or pause an employee", "See how they have been performing"],
   },
-  "ai-ops": {
+  "cockpit": {
     purpose: "The admin console. Providers, models, how work is routed, and what the firm is spending on AI.",
     youCan: ["Raise or lower AI spend", "Turn a provider on or off", "See what has cost what", "Change how tasks are routed"],
   },
-  ai: {
+  "ai-controls": {
     purpose: "Every AI run the firm has made, and the governance around it.",
     youCan: ["Inspect a run and its cost", "See why a run was refused", "Accept or reject quarantined output"],
   },

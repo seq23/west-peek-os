@@ -447,6 +447,7 @@ import {
 } from "./services/lpOps";
 import {
   handleAddQuestion,
+  handleProposeQuestions,
   handleAddSource,
   handleAnswerQuestion,
   handleAssemblePacket,
@@ -1121,6 +1122,8 @@ const router = new Router()
   .post("/api/research/projects", handleCreateProject)
   .get("/api/research/projects", handleListProjects)
   .get("/api/research/projects/:id", handleGetProject)
+  // Wyatt names what would settle the topic. Proposed, never created.
+  .post("/api/research/projects/:id/propose-questions", handleProposeQuestions)
   .post("/api/research/projects/:id/questions", handleAddQuestion)
   .post("/api/research/projects/:id/sources", handleAddSource)
   .post("/api/research/projects/:id/findings", handleRecordFinding)
