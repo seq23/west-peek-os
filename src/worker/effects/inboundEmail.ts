@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { proposePerson } from "./networkOsClient";
-import { dealFromMessage, intakeDealFromEmail } from "../services/dealIntake";
+import { dealFromMessage, intakeDealFromEmail, openRoutingCard } from "../services/dealIntake";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 
 /**
@@ -173,26 +173,40 @@ export async function handleInboundEmail(
    * funnel is the deal flow tab." Filing every triggered email as a capture turned a partner's own
    * deliberate list into an inbox they then had to sort the firm's mail out of.
    */
+  /*
+   * THE LADDER. Wyatt owns the top of the funnel, so a readable company is his. Porter takes what
+   * is ambiguous, and blocks it to a partner if he cannot resolve it either. Nothing ends in
+   * "held quietly" — see dealIntake.ts.
+   */
   let dealResult: { outcome: string; detail: string } | null = null;
+  let routingCardId: string | null = null;
   const wantsDeal = summary.triggers.includes("#wpdealflow") || summary.triggers.includes("#wpdeck");
+
   if (wantsDeal) {
     const deal = dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"));
-    dealResult = deal
-      ? await intakeDealFromEmail(env, deal)
-      : { outcome: "NO_COMPANY", detail: "no company name could be read, so nothing was opened" };
-  }
-
-  // Only what nobody could place becomes a capture — that is the message that actually needs a
-  // person, and it must not be held silently.
-  const captureId = summary.unrouted
-    ? await fileCapture(env, {
-        kind: "EMAIL_UNROUTED",
-        from: summary.from,
+    if (deal) {
+      dealResult = await intakeDealFromEmail(env, deal);
+    } else {
+      // A deal tag with no readable company is exactly the ambiguity Porter exists for. Guessing a
+      // name out of prose would put a confidently wrong company at the top of the funnel.
+      routingCardId = await openRoutingCard(env, {
         subject: summary.subject,
-        body: raw,
+        from: summary.from,
+        raw,
         triggers: summary.triggers,
-      })
-    : null;
+        why: "Tagged for deal flow, but no company name could be read out of it.",
+      });
+      dealResult = { outcome: "AMBIGUOUS", detail: `No company name could be read, so ${"Porter"} has it.` };
+    }
+  } else if (summary.unrouted) {
+    routingCardId = await openRoutingCard(env, {
+      subject: summary.subject,
+      from: summary.from,
+      raw,
+      triggers: [],
+      why: "No recognised tag, so nothing could route it automatically.",
+    });
+  }
 
   // People are Network OS's record. A #wpnetwork mail is relayed there as a proposal; the capture
   // above stays here as this side's evidence of having sent it.
@@ -221,48 +235,11 @@ export async function handleInboundEmail(
       owner: summary.unrouted ? NO_TRIGGER_ROUTE.owner : undefined,
       mailbox: INTAKE_MAILBOX,
       known_triggers: EMAIL_TRIGGERS.map((t) => t.tag),
-      ...(captureId ? { capture_id: captureId } : {}),
+      ...(routingCardId ? { routing_card_id: routingCardId } : {}),
       ...(dealResult ? { dealflow: dealResult.outcome, dealflow_detail: dealResult.detail } : {}),
       ...(relayed ? { network_os_relay: relayed.ok ? "PROPOSED" : `REFUSED: ${relayed.detail}` } : {}),
     },
   });
-}
-
-/**
- * File an arriving message as a capture.
- *
- * `captured_by` is `system:inbound_email` rather than a person, because nobody at the firm captured
- * it — attributing it to whoever happens to read it first would put a name on the record that did
- * not do the thing.
- *
- * The subject and sender are prepended to the stored text rather than kept only in the event,
- * because Capture's own resolution reads `raw_text` and a message stripped of who sent it is not
- * resolvable to a person.
- */
-async function fileCapture(
-  env: Env,
-  input: { kind: string; from: string; subject: string; body: string; triggers: string[] },
-): Promise<string> {
-  const id = `cap_${crypto.randomUUID()}`;
-  const text = [`From: ${input.from}`, `Subject: ${input.subject}`, "", input.body].join("\n");
-
-  await env.WP_OS_DB.prepare(
-    `INSERT INTO capture (id, capture_type, raw_text, source_channel, privacy_label, firm_scope, captured_by)
-     VALUES (?1, ?2, ?3, 'email', 'INTERNAL', 'west-peek', 'system:inbound_email')`,
-  )
-    .bind(id, input.kind, text.slice(0, 60_000))
-    .run();
-
-  await appendEvent(env, {
-    eventType: "capture.created",
-    actorType: "system",
-    actorId: "inbound_email",
-    objectType: "capture",
-    objectId: id,
-    firmScope: "west-peek",
-    payload: { capture_type: input.kind, source_channel: "email", from: input.from, triggers: input.triggers },
-  });
-  return id;
 }
 
 /**

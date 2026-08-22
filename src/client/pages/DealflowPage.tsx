@@ -36,6 +36,10 @@ interface Deal {
   placeholder_fields: string[];
   placeholder_note: string | null;
   backfilled: boolean;
+  source_channel: string | null;
+  arrived_by_email: boolean;
+  /** Arrived by email and has not moved since. Derived, so it clears itself the moment it does. */
+  unreviewed: boolean;
 }
 
 interface Board {
@@ -235,6 +239,20 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
           </button>
         )}
         {deal.backfilled && <span className="badge" title="Status was entered as history, not decided here">history</span>}
+
+        {/*
+          ARRIVED BY EMAIL AND NOBODY HAS LOOKED AT IT.
+          Machine-filed deals have to be distinguishable at a glance from ones a partner entered:
+          the second kind carries somebody's judgement and the first carries none yet. The badge is
+          derived from the deal having never moved off NEW, so it clears itself the moment anybody
+          acts — and "Not for us" is right here, because the cost of an emailed junk row is only
+          low if dismissing it is one press.
+        */}
+        {deal.unreviewed && (
+          <span className="badge badge-attention" data-testid={`deal-unreviewed-${deal.id}`} title={`Filed from ${deal.source_channel}. Nobody has looked at it yet.`}>
+            by email · not yet looked at
+          </span>
+        )}
       </div>
 
       {message && <div className="notice small deal-message">{message}</div>}

@@ -51,6 +51,21 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
     machineKey: "research_intelligence",
     skills: [
       {
+        key: "scout_before_there_is_a_deal",
+        title: "Finding companies and founders before anybody is raising",
+        when: "Standing scouting work: who should the firm know that it does not know yet.",
+        guidance: [
+          "The job is not to find rounds. It is to find PEOPLE and companies early enough that the firm is already known to them when a round happens. A company you first hear about from a deck is a company you are late to.",
+          "Four things are worth surfacing: a company just formed that nobody has written about; somebody visibly in stealth; somebody who looks likely to found something within a year; and a founder who has just left somewhere that mints founders.",
+          "The tells for likely-soon: a senior operator who quietly dropped a title, a technical lead whose employer stopped appearing anywhere, a repeat founder whose last company was acquired 6–18 months ago, and anybody suddenly writing publicly about a problem rather than a product.",
+          "Write a PROFILE, not a row. Who they are, what they have actually built, what the firm would talk to them about, and the one warm path in. A name with no reason to call is a name nobody calls.",
+          "Say plainly when somebody is in stealth and what is public versus inferred. Repeating something that was told in confidence, or presenting a guess as a fact about a person, is the fastest way for this firm to become one nobody talks to early.",
+          "Never contact anybody. Surface them, say why, and let a partner decide whether and how.",
+          "Rank by how early the firm would be, not by how impressive the person sounds. A well-covered founder everybody already knows is not scouting, it is reading the news.",
+          "Bring a small number of good ones. Twenty names with thin reasons is worse than three the firm actually acts on, because nobody reads the twenty.",
+        ],
+      },
+      {
         key: "source-quality",
         title: "Judging a source before believing it",
         when: "Any time a finding rests on something read rather than something the firm witnessed.",

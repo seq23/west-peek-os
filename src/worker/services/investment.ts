@@ -2315,7 +2315,7 @@ export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> 
   const rows = await ctx.env.WP_OS_DB.prepare(
     `SELECT o.id, o.title, o.status, o.opportunity_type, o.relationship_origin, o.created_at,
             o.backfilled_at, o.as_of_date, o.placeholder_fields, o.placeholder_note,
-            o.price_per_share, o.quantity,
+            o.price_per_share, o.quantity, o.source_channel,
             c.canonical_name AS company_name, c.id AS company_id,
             (SELECT MAX(e.created_at)
                FROM event_record e
@@ -2342,6 +2342,17 @@ export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> 
       in_stage_since: (r.last_moved_at as string | null) ?? (r.created_at as string),
       placeholder_fields: provisional,
       backfilled: Boolean(r.backfilled_at),
+      /*
+       * Arrived by email and nobody has looked at it yet.
+       *
+       * Operator: machine-filed deals should be "distinguishable at a glance from ones you entered,
+       * and a junk one is one press to dismiss." Derived rather than stored: an emailed deal that
+       * has never moved off NEW is, by definition, one nobody has acted on — and the moment somebody
+       * transitions it the flag goes away on its own. A stored "reviewed" boolean would be one more
+       * thing that can disagree with what actually happened.
+       */
+      arrived_by_email: String(r.source_channel ?? "").startsWith("email:"),
+      unreviewed: String(r.source_channel ?? "").startsWith("email:") && r.status === "NEW" && !r.last_moved_at,
     };
   });
 

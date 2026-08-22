@@ -3845,3 +3845,12 @@ body {
 .cohort-count { font-size: var(--text-xl); font-weight: 700; font-variant-numeric: tabular-nums; }
 .cohort-label { font-size: var(--text-sm); color: var(--wp-ink-2); }
 .cohort-pct { font-size: var(--text-sm); color: var(--wp-muted); font-variant-numeric: tabular-nums; }
+
+
+/* A deal that arrived by machine and has not been looked at. Orange because it wants attention, not
+   because anything is wrong — an unreviewed arrival is a normal state, briefly. */
+.badge-attention {
+  border-color: var(--wp-orange);
+  color: var(--wp-orange-deep);
+  background: var(--wp-tint);
+}

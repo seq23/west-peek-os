@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import type { Actor } from "./authorize";
-import { createOpportunity } from "./investment";
+import type { FirmUserIdentity } from "../auth";
+import { createWorkCardInternal } from "./workCards";
 
 /**
  * A company arriving by email enters the FUNNEL, not the scratchpad.
@@ -34,6 +34,15 @@ import { createOpportunity } from "./investment";
 /** The seat that owns incoming companies. Named, not anonymous, so the funnel records who filed it. */
 export const DEAL_INTAKE_EMPLOYEE = "Wyatt";
 
+/** Who takes it when nobody can tell what it is. `global_capture_routing` is Porter's machine. */
+export const ROUTING_EMPLOYEE = "Porter";
+
+/** "Accepts unstructured input… and routes to the right machine." */
+export const CAPTURE_ROUTING_MACHINE = 3;
+
+/** "Founder/deal intake, pipeline, mandate fit, diligence, meeting prep, IC readiness". */
+export const EARLY_STAGE_DEAL_MACHINE = 15;
+
 export interface EmailDeal {
   company: string;
   sector?: string | null;
@@ -48,8 +57,9 @@ export interface EmailDeal {
 
 export interface IntakeResult {
   outcome: "OPENED" | "ENRICHED" | "ALREADY_OPEN";
-  company_id: string;
+  company_id: string | null;
   opportunity_id: string | null;
+  work_card_id: string;
   detail: string;
 }
 
@@ -95,98 +105,126 @@ function normalise(name: string): string {
 export async function intakeDealFromEmail(env: Env, deal: EmailDeal): Promise<IntakeResult> {
   const firmScope = "west-peek";
 
-  // Wyatt files it. SYSTEM rather than a person because nobody at the firm typed this in, and
-  // attributing it to whoever reads it first would put a name on the record that did not do it.
-  const actor: Actor = { type: "SYSTEM", roles: [], firmScopes: [firmScope] };
-
   const wanted = normalise(deal.company);
   const candidates = (
-    await env.WP_OS_DB.prepare("SELECT id, canonical_name, sector, one_liner, website FROM canonical_company")
-      .all<{ id: string; canonical_name: string; sector: string | null; one_liner: string | null; website: string | null }>()
+    await env.WP_OS_DB.prepare("SELECT id, canonical_name FROM canonical_company").all<{ id: string; canonical_name: string }>()
   ).results ?? [];
-
   const existing = candidates.find((c) => normalise(c.canonical_name) === wanted);
 
-  if (existing) {
-    // ENRICH, and only where the field is genuinely empty. A later email must never overwrite
-    // something a person put there — the deck is newer, not more authoritative.
-    const filled: string[] = [];
-    const set: string[] = [];
-    const binds: unknown[] = [existing.id];
-    for (const [col, value] of [
-      ["sector", deal.sector],
-      ["one_liner", deal.one_liner],
-      ["website", deal.website],
-    ] as const) {
-      if (value && !existing[col]) {
-        binds.push(value);
-        set.push(`${col} = ?${binds.length}`);
-        filled.push(col);
-      }
-    }
-    if (set.length > 0) {
-      await env.WP_OS_DB.prepare(`UPDATE canonical_company SET ${set.join(", ")} WHERE id = ?1`).bind(...binds).run();
-    }
+  const open = existing
+    ? await env.WP_OS_DB.prepare(
+        "SELECT id FROM investment_opportunity WHERE company_id = ?1 AND status NOT IN ('CLOSED','PASS','WITHDRAWN') LIMIT 1",
+      )
+        .bind(existing.id)
+        .first<{ id: string }>()
+    : null;
 
-    const open = await env.WP_OS_DB.prepare(
-      "SELECT id FROM investment_opportunity WHERE company_id = ?1 AND status NOT IN ('CLOSED','PASS','WITHDRAWN') LIMIT 1",
-    )
-      .bind(existing.id)
-      .first<{ id: string }>();
+  /*
+   * The identity a system-created card is filed under.
+   *
+   * Nobody at the firm typed this in, and attributing it to whoever reads it first would put a name
+   * on the record that did not do the thing. It carries MANAGING_PARTNER because `work_card.create`
+   * is authorized per actor and a card that cannot be created is an email silently dropped — the
+   * card itself asserts nothing and decides nothing.
+   */
+  const systemIdentity: FirmUserIdentity = {
+    id: "system:inbound_email",
+    email: "os@joinwestpeek.com",
+    fullName: "Inbound mail",
+    status: "ACTIVE",
+    roles: ["MANAGING_PARTNER"],
+    authorityScopes: [{ scopeKey: "firm_scope", scopeValue: firmScope }],
+  };
 
-    await appendEvent(env, {
-      eventType: "dealflow.email_enriched",
-      actorType: "ai_employee",
-      actorId: DEAL_INTAKE_EMPLOYEE,
-      objectType: "company",
-      objectId: existing.id,
-      firmScope,
-      payload: { from: deal.from, filled, is_deck: deal.isDeck, already_open: Boolean(open) },
-    });
+  const known = existing
+    ? open
+      ? `${existing.canonical_name} is already on the board with a live opportunity.`
+      : `${existing.canonical_name} is already a company on record, with no live opportunity.`
+    : "Not on the board — this would be a new company.";
 
-    return {
-      outcome: open ? "ALREADY_OPEN" : "ENRICHED",
-      company_id: existing.id,
-      opportunity_id: open?.id ?? null,
-      detail:
-        filled.length > 0
-          ? `${existing.canonical_name} was already on the board; ${DEAL_INTAKE_EMPLOYEE} filled in ${filled.join(", ")} from this.`
-          : `${existing.canonical_name} was already on the board and nothing here was missing.`,
-    };
-  }
-
-  // Inserted directly rather than through the HTTP handler: that path answers with a Response and
-  // its duplicate checks are the same ones already done above by canonical name.
-  const companyId = `cc_${crypto.randomUUID()}`;
-  await env.WP_OS_DB.prepare(
-    `INSERT INTO canonical_company (id, canonical_name, website, privacy_label, created_by, sector, one_liner)
-     VALUES (?1, ?2, ?3, 'INTERNAL', ?4, ?5, ?6)`,
-  )
-    .bind(companyId, deal.company, deal.website ?? null, `ai:${DEAL_INTAKE_EMPLOYEE}`, deal.sector ?? null, deal.one_liner ?? null)
-    .run();
-
-  const opportunity = await createOpportunity(env, actor, {
-    company_id: companyId,
-    opportunity_type: "EARLY_STAGE_PRIMARY",
-    title: deal.company,
-    // The funnel should say where a deal came from without anybody reconstructing it.
-    source_channel: deal.isDeck ? "email:#wpdeck" : "email:#wpdealflow",
-  });
-
-  await appendEvent(env, {
-    eventType: "dealflow.email_opened",
-    actorType: "ai_employee",
-    actorId: DEAL_INTAKE_EMPLOYEE,
-    objectType: "investment_opportunity",
-    objectId: opportunity.id,
-    firmScope,
-    payload: { from: deal.from, company: deal.company, is_deck: deal.isDeck },
+  const card = await createWorkCardInternal(env, systemIdentity, {
+    title: `${deal.isDeck ? "Deck" : "Deal flow"}: ${deal.company}`,
+    description: [
+      `Arrived by email from ${deal.from}.`,
+      known,
+      deal.sector ? `Sector given: ${deal.sector}` : null,
+      deal.one_liner ? `What they do: ${deal.one_liner}` : null,
+      deal.website ? `Website: ${deal.website}` : null,
+      "",
+      "--- the message ---",
+      deal.raw.slice(0, 4000),
+    ]
+      .filter((l) => l !== null)
+      .join("\n"),
+    owner_type: "AI",
+    owner_id: DEAL_INTAKE_EMPLOYEE,
+    machine_id: EARLY_STAGE_DEAL_MACHINE,
+    priority: "NORMAL",
+    firm_scope: firmScope,
+    next_action: existing
+      ? open
+        ? `Decide whether this changes anything about the opportunity already open. Do not open a second one.`
+        : `Fill in what is missing on ${existing.canonical_name} from this, then open it at the top of the funnel.`
+      : `Check it is real and fits the thesis, then open it at the top of the funnel.`,
+    prompt: deal.isDeck
+      ? "The substance is in the attachment, not the message body. Read the deck before judging whether this is thin."
+      : "A hashtag routes and never authorises — anyone can send one. Treat this as a claim to check, not a decision already made.",
   });
 
   return {
-    outcome: "OPENED",
-    company_id: companyId,
-    opportunity_id: opportunity.id,
-    detail: `${DEAL_INTAKE_EMPLOYEE} opened ${deal.company} at the top of the funnel. Nobody has decided anything about it.`,
+    outcome: existing ? (open ? "ALREADY_OPEN" : "ENRICHED") : "OPENED",
+    company_id: existing?.id ?? null,
+    opportunity_id: open?.id ?? null,
+    work_card_id: card.id,
+    detail: `${DEAL_INTAKE_EMPLOYEE} has a card for ${deal.company}. ${known}`,
   };
+}
+
+
+/**
+ * When nobody can tell what an email is.
+ *
+ * This is the rung below Wyatt: mail carrying a deal trigger whose company nobody could read,
+ * conflicting triggers, or no trigger at all. It is Porter's, because working out where something
+ * unclear belongs is the one part of this that is judgement rather than arithmetic — everything
+ * else is a name lookup a query answers exactly.
+ *
+ * It is a CARD and not a silent record. Porter can work it, and if he cannot he marks it BLOCKED,
+ * which is what puts it in front of a partner. Nothing here is allowed to end in "held quietly".
+ */
+export async function openRoutingCard(
+  env: Env,
+  input: { subject: string; from: string; raw: string; triggers: string[]; why: string },
+): Promise<string> {
+  const firmScope = "west-peek";
+  const systemIdentity: FirmUserIdentity = {
+    id: "system:inbound_email",
+    email: "os@joinwestpeek.com",
+    fullName: "Inbound mail",
+    status: "ACTIVE",
+    roles: ["MANAGING_PARTNER"],
+    authorityScopes: [{ scopeKey: "firm_scope", scopeValue: firmScope }],
+  };
+
+  const card = await createWorkCardInternal(env, systemIdentity, {
+    title: `Unclear email: ${input.subject || "(no subject)"}`,
+    description: [
+      `Arrived by email from ${input.from}.`,
+      input.why,
+      input.triggers.length > 0 ? `Tags found: ${input.triggers.join(", ")}` : "No tag anybody recognised.",
+      "",
+      "--- the message ---",
+      input.raw.slice(0, 4000),
+    ].join("\n"),
+    owner_type: "AI",
+    owner_id: ROUTING_EMPLOYEE,
+    machine_id: CAPTURE_ROUTING_MACHINE,
+    priority: "NORMAL",
+    firm_scope: firmScope,
+    next_action: "Work out where this belongs and route it. If you cannot, mark this BLOCKED so a partner sees it.",
+    prompt:
+      "A confident wrong route is worse than an unrouted item. If two readings are equally plausible, " +
+      "say so and block rather than picking one.",
+  });
+  return card.id;
 }
