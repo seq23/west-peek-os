@@ -69,7 +69,11 @@ export function FollowOnPage(): JSX.Element {
           <ul className="card-list small" data-testid="follow-on-reviews">
             {reviews.map((r) => (
               <li key={r.id} data-testid={`follow-on-review-${r.id}`}>
-                <span className={r.status === "PENDING" ? "help-tag help-tag-warn" : "help-tag help-tag-good"}>
+                {/* OPEN is the undecided state (migration 0011); "PENDING" is not a value this
+                    column can hold, so every review — including ones nobody had looked at — was
+                    painted with the good tag. An undecided decision reading as settled is the one
+                    thing this list must not do. */}
+                <span className={r.status === "OPEN" ? "help-tag help-tag-warn" : "help-tag help-tag-good"}>
                   {r.status.toLowerCase()}
                 </span>{" "}
                 <strong>{r.company_name ?? r.company_id}</strong>

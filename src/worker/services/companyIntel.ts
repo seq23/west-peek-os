@@ -102,7 +102,12 @@ export async function handleFollowOnCentre(ctx: RouteContext): Promise<Response>
             c.canonical_name AS company_name
        FROM follow_on_review r
        LEFT JOIN canonical_company c ON c.id = r.company_id
-      ORDER BY CASE r.status WHEN 'PENDING' THEN 0 ELSE 1 END, r.created_at DESC
+      -- 'OPEN' is what an undecided review actually is. This read 'PENDING', which the status
+      -- column cannot hold: its CHECK is ('OPEN','REVIEWED','CLOSED') and the default is 'OPEN'
+      -- (migration 0011). So the ordering collapsed into one bucket, and pending_count below was
+      -- permanently 0 — the "N pending" badge could never render, and a review nobody had decided
+      -- sorted underneath ones that were finished.
+      ORDER BY CASE r.status WHEN 'OPEN' THEN 0 ELSE 1 END, r.created_at DESC
       LIMIT 100`,
   ).all<Record<string, unknown>>();
 
@@ -133,7 +138,9 @@ export async function handleFollowOnCentre(ctx: RouteContext): Promise<Response>
 
   return json({
     reviews: reviews.results ?? [],
-    pending_count: (reviews.results ?? []).filter((r) => r.status === "PENDING").length,
+    // Same fix, same reason: the undecided state is OPEN. Counting "PENDING" counted nothing, so a
+    // partner with three reviews waiting on them was told there were none.
+    pending_count: (reviews.results ?? []).filter((r) => r.status === "OPEN").length,
     candidates: candidates.results ?? [],
     // The rule is published with the result so nobody has to guess what "pulling ahead" meant.
     candidate_rule: "Open position, and the latest reading of a metric is higher than the previous reading for that same metric.",

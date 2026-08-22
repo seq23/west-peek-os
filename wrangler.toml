@@ -189,6 +189,9 @@ WP_OS_EMAIL_SEND = "enabled"
 # are useless without WP_OS_NETWORK_OS_SESSION_SECRET, which is a Worker secret and never in this
 # file. The pull stays 503 until all three are present.
 WP_OS_NETWORK_OS_BASE_URL = "https://network.joinwestpeek.com"
+# sequoia@, and this was tried as info@ for one deploy on 22 Aug 2026 and reverted. Network OS's
+# own `ADMIN_EMAIL_ALLOWLIST` holds sequoia@ and scooter@ and NOT info@, so the alternative could
+# never have authenticated — checked in that repo rather than guessed at from here.
 WP_OS_NETWORK_OS_USER_EMAIL = "sequoia@westpeek.ventures"
 
 [env.production.observability]

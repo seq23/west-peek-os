@@ -796,7 +796,7 @@ fail.
 collapsed to a single line of prose when its API returned 403, so the sections did not appear at all
 and a reader could not tell they existed.
 
-## Network OS, fully on · filed 22 Aug 2026, for the end of this work
+## Network OS, fully on · CONNECTED 22 Aug 2026
 
 Operator: *"in the integrations tab - network OS should be fully integrated and turned on and
 working. do whatever is needed to make that happen and can file away for the end of this work."*
@@ -807,19 +807,29 @@ appears outside it. It can read the snapshot, propose a person, and record a rec
 `#wpnetwork` relays a person to it as a PROPOSAL, and since 22 Aug the founder's company travels with
 them. Community is designed as the algorithmic view over Network OS rather than a mirror of it.
 
-**Why it is off.** Exactly three values gate it, and **two are missing in production**:
+**Why it was off, and a correction to how this was first diagnosed.** The original filing said two
+of the three values were missing. **They were not.** `wrangler secret list` shows SECRETS and not
+VARS, and both the origin and the email were in `[env.production.vars]` all along. The same mistake
+was then repeated on the email: `info@` was read as absent from `.env.local` in the Network OS repo
+when `wrangler.toml` — the source the deployed project actually uses — had carried all three
+addresses the whole time. Two wrong conclusions, both from reading a copy instead of the source.
 
-| | |
-|---|---|
-| `WP_OS_NETWORK_OS_SESSION_SECRET` | ✅ set |
-| `WP_OS_NETWORK_OS_BASE_URL` | ❌ not set — the Network OS origin |
-| `WP_OS_NETWORK_OS_USER_EMAIL` | ❌ not set — must be an approved Network OS user |
+The real cause was the only remaining candidate: **the session secret did not match.** Network OS
+signs its `wpn_session` cookie with `APP_SESSION_SECRET`, this app mints a byte-compatible one with
+`WP_OS_NETWORK_OS_SESSION_SECRET`, and neither Cloudflare Workers nor Pages will reveal a secret
+value once set — so the only way to make them agree was to ROTATE to a known value on both sides.
+The operator accepted the cost, which is that every open browser session is signed out.
 
 `networkOsBlockedReason()` names whichever is missing, and every surface reports it rather than
 failing quietly — which is why the Integrations page currently says it is not configured instead of
 appearing broken.
 
-**What "turned on" needs, in order.**
+**Connected at 20:57 on 22 Aug 2026**, and read back from the RECEIPT rather than the cursor:
+`{"resource":"contact","status":"OK","provider":"LIVE"}`. The cursor agrees, but the cursor is not
+the evidence — on 17 Aug it read `contact — OK` over three FAILED receipts and zero mappings, because
+a fixture run had written OK over live failures.
+
+**What "turned on" needed, in order.**
 1. The two missing secrets set on the production Worker. **The operator supplies these — the base URL
    of her Network OS deployment and an email that is an approved user there.** They are credentials
    and go through `npm run vault:sync:cloudflare`, never into the repository.

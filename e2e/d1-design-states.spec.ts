@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { sweepSurfaces } from "./support/surfaces";
 import { provisionLocalD1 } from "./support/provision";
 
 /**
@@ -57,6 +58,29 @@ test("no surface renders an ambiguous blank for a reader who holds no Managing P
    */
   await gotoSurface(page, "LP");
   await expect(page.getByTestId("period-list-empty")).toContainText("No period has been opened");
+});
+
+test("no surface renders an ambiguous blank for a reader who holds no Managing Partner role — anywhere", async ({
+  page,
+}) => {
+  /*
+   * THE SAME SWEEP `d0-empty-firm.spec.ts` RUNS, BUT WITH NO AUTHORITY.
+   *
+   * The test above pins the two surfaces where this was actually found. This one asks the same
+   * three questions of EVERY destination, because the defect was never specific to Governance —
+   * it was specific to the combination the product's own verification never used: a reader with
+   * nothing to show AND nothing they are allowed to do. Every control on the page disappears, and
+   * whatever is left has to still be an answer.
+   *
+   * A reader who cannot act must still be able to tell "you may not do this" from "this is broken"
+   * from "nothing has happened yet". A blank says none of the three.
+   */
+  await signInAs(page, MEMBER_EMAIL);
+  const complaints = await sweepSurfaces(page);
+
+  expect(complaints.silent, "read without authority, these surfaces said nothing at all").toEqual([]);
+  expect(complaints.unoriented, "these surfaces do not say what they are for").toEqual([]);
+  expect(complaints.unexplained, "these lists were empty with no row explaining what would fill them").toEqual([]);
 });
 
 test("a decision the reader may not make says who may, instead of showing a dead button", async ({ page, request }) => {

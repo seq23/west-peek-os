@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { queryLocalD1 } from "./support/provision";
 
 /**
  * THE SYSTEM TELLING THE TRUTH ABOUT ITSELF.
@@ -133,9 +134,9 @@ test("diagnostics catches something down, escalates once to BOTH partners, and a
    * across episodes. What this journey is about is ONE fault episode: how many people it told, and
    * how many times. So the ledger is photographed first and only the new rows are counted.
    */
-  const alreadySeen = new Set((await notificationsAbout(request, "approval_load")).map((n) => n.id));
-  const newlyRaised = async (): Promise<NotificationRow[]> =>
-    (await notificationsAbout(request, "approval_load")).filter((n) => !alreadySeen.has(n.id));
+  const alreadySeen = new Set(notificationsAbout("approval_load").map((n) => n.id));
+  const newlyRaised = (): NotificationRow[] =>
+    notificationsAbout("approval_load").filter((n) => !alreadySeen.has(n.id));
 
   const cards: string[] = [];
   try {
@@ -179,7 +180,7 @@ test("diagnostics catches something down, escalates once to BOTH partners, and a
      * BOTH PARTNERS, ONE EACH. A firm with two Managing Partners where only one is told has a
      * partner walking around believing the system is fine.
      */
-    const warnings = (await newlyRaised()).filter((n) => n.severity === "WARNING");
+    const warnings = newlyRaised().filter((n) => n.severity === "WARNING");
     expect(warnings.length, "each Managing Partner is told, once").toBe(2);
     expect(new Set(warnings.map((n) => n.dedupe_key)).size, "the two are distinct rows, not one counted twice").toBe(2);
     for (const n of warnings) {
@@ -194,7 +195,7 @@ test("diagnostics catches something down, escalates once to BOTH partners, and a
      */
     const third = await sweep(request);
     expect(third, "an open fault must not be re-escalated on every tick").toContain("nothing new");
-    expect((await newlyRaised()).filter((n) => n.severity === "WARNING")).toHaveLength(2);
+    expect(newlyRaised().filter((n) => n.severity === "WARNING")).toHaveLength(2);
 
     // A partner can see the fault on the board it belongs to, in the state it is in.
     await signIn(page);
@@ -223,12 +224,22 @@ test("diagnostics catches something down, escalates once to BOTH partners, and a
   const recovered = await sweep(request);
   expect(recovered, "the sweep that finds it fixed must say so").toContain("recovered approval_load");
 
-  const good = (await newlyRaised()).filter((n) => n.severity === "INFO");
+  /*
+   * Counted as a TOTAL here rather than as a delta, and deliberately. The recovery notification is
+   * deduped into an hour bucket (`health_recovered:<key>:<hour>`), so a second recovery inside the
+   * same hour writes nothing — which is correct, and is the opposite of the escalation case where
+   * "one each, once" is the property. What has to hold is that the recovery WAS announced, and the
+   * sweep's own summary above is what pins it to this episode.
+   */
+  const good = notificationsAbout("approval_load").filter((n) => n.severity === "INFO");
   expect(good.length, "recovery is announced").toBeGreaterThan(0);
   expect(good[0]!.title).toContain("working again");
   // And nothing else was changed by the check — diagnostics observes, it does not repair.
   expect(good[0]!.body).toContain("Nothing else was changed");
 
+  // Read fresh: the board was already open on this page from the DOWN half above, and navigating to
+  // the page you are already on does not re-ask the server.
+  await page.reload();
   await gotoSurface(page, "Diagnostics");
   await expect(page.getByTestId("health-approval_load")).not.toHaveAttribute("data-state", "DOWN");
 });
@@ -398,9 +409,21 @@ interface NotificationRow {
   dedupe_key: string;
 }
 
-async function notificationsAbout(request: Ctx, checkKey: string): Promise<NotificationRow[]> {
-  const body = (await (await request.get("/api/notifications", { headers: MP })).json()) as {
-    notifications: NotificationRow[];
-  };
-  return body.notifications.filter((n) => n.object_id === checkKey);
+/**
+ * The notifications a health check produced, READ FROM THE DATABASE and not from the route.
+ *
+ * `GET /api/notifications` orders CRITICAL → WARNING → INFO and stops at 200. A firm that has
+ * accumulated two hundred warnings therefore cannot see ANY of its INFO rows through that route —
+ * including every diagnostics all-clear, which is precisely the row this journey has to look at.
+ * That is a real limit of the route and it is reported rather than worked around in the product;
+ * here the ledger is read directly, which is what `queryLocalD1` exists for: "the handful of facts
+ * no route serves".
+ */
+function notificationsAbout(checkKey: string): NotificationRow[] {
+  return queryLocalD1<NotificationRow>(
+    `SELECT id, severity, title, body, object_id, dedupe_key
+       FROM notification
+      WHERE object_id = '${checkKey}' AND object_type = 'health_fault'
+      ORDER BY created_at`,
+  );
 }

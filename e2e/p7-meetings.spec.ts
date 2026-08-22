@@ -89,9 +89,58 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   await gotoSurface(page, "Work");
   // The board is a list of card ROWS; there is no single list container to assert against, and the
   // row is the thing that has to exist. Same locator the P3 journey uses.
-  await expect(
-    page.locator('li[data-testid^="work-card-"]').filter({ hasText: `${marker}: send the diligence question list` }).first(),
-  ).toBeVisible();
+  const promised = page
+    .locator('li[data-testid^="work-card-"]')
+    .filter({ hasText: `${marker}: send the diligence question list` })
+    .first();
+  await expect(promised).toBeVisible();
+
+  /*
+   * ── AND THE WORK IT PRODUCED REACHES A PARTNER ────────────────────────────────────────────────
+   *
+   * The journey is not "a promise becomes a card"; it is "a promise made out loud in a room becomes
+   * work somebody decides on". A card that appears on a board and is never put in front of anybody
+   * is the same as a note in a notebook — which is what this whole meeting record exists to replace.
+   *
+   * Raised the way everything raises an approval, with the work card as its object, because there
+   * is no work-card approval route and there deliberately is not one: an approval belongs to the
+   * ACTION that needs it, and `object_type: "work_card"` is what ties the decision back to the
+   * promise (ADR-018, and the same pattern `p3-governed-work.spec.ts` uses).
+   */
+  const promisedCardId = (await promised.getAttribute("data-testid"))!.replace("work-card-", "");
+  const raised = await request.post("/api/approvals", {
+    headers: MP,
+    data: {
+      action_key: "governance.policy_change",
+      object_type: "work_card",
+      object_id: promisedCardId,
+      title: `${marker} act on what was promised`,
+      summary: "Raised against the work card this meeting's commitment produced.",
+      submit: true,
+    },
+  });
+  expect(raised.status(), await raised.text()).toBe(201);
+  const promiseCardId = ((await raised.json()) as { id: string }).id;
+
+  await gotoSurface(page, "Approvals");
+  const decision = page.getByTestId(`approval-card-${promiseCardId}`);
+  await expect(decision).toBeVisible();
+  await decision.getByTestId(`decision-note-${promiseCardId}`).fill(`${marker}: yes, send it today`);
+  await decision.getByTestId(`approve-${promiseCardId}`).click();
+  await expect
+    .poll(async () => ((await (await request.get(`/api/approvals/${promiseCardId}`, { headers: MP })).json()) as { state: string }).state)
+    .toBe("approved");
+
+  // The decision is tied back to the promise, so "what came of what we said in that meeting" has an
+  // answer that does not depend on anybody remembering the meeting.
+  const decided = (await (await request.get(`/api/approvals/${promiseCardId}`, { headers: MP })).json()) as {
+    object_type: string;
+    object_id: string;
+    decisions: Array<{ decision: string; note: string | null }>;
+  };
+  expect(decided.object_type).toBe("work_card");
+  expect(decided.object_id).toBe(promisedCardId);
+  expect(decided.decisions.map((d) => d.decision)).toEqual(["approved"]);
 
   // Revoking consent re-closes the gate for any further import.
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
