@@ -130,6 +130,55 @@ a narrow screen. It renders on all 38 pages, which is why it was visible on seve
 
 ---
 
+## Community ↔ Network OS · operator spec, 21 Aug 2026
+
+Filed because it was discussed and never written down.
+
+**What the operator said, in order.**
+
+> "right now we have triggers for our network.joinwestpeek.com repo — `#wpdealflow` to add deal flow
+> and `#wpnetwork` adds people to the network tab. maybe fully integrate all of that with this. deal
+> flow flows thru to this app and i dont know if the network OS keeps the official database or not"
+
+> "ok then since network os has the official database then the community tab should pull from it to
+> match people and all of that. and maybe pull in rows of people names and job descriptions? or just
+> pull in numbers and % of how many of each category we have of founders, lawyers, operators
+> (employees), VCS? i dont know u figure it out"
+
+**Settled: Network OS is the official database of people.** West Peek OS never becomes a second
+one. This is already the declared law — `networkAdapter.ts` is the single crossing, inbound is
+read-only and idempotent, and `validate:network-boundary` fails the build if any other file reaches
+a Network OS host. Nothing below changes that; it makes the Community tab read what is already
+there instead of inventing its own population.
+
+**The two options were "rows of people" or "counts and percentages". The answer is both, in that
+order of importance — counts first.** A roster of names is something Network OS already does better
+and owns; duplicating it here would be a second copy that drifts. What West Peek OS can say that
+Network OS cannot is what the population MEANS to the fund: how many founders, operators,
+investors and advisors, what share each is, and which way those shares are moving. That is a read
+on a community, which is exactly what §12A.4 gives this module and denies it the contact record.
+So: the shape of the population up top, and beneath it a sample of real people with what they do,
+clearly attributed to Network OS and never editable here.
+
+**What "matching people" means.** The Community page currently holds the firm's own read —
+segment, engagement, signal — on names typed in by hand. Those rows must be joined to the Network
+OS record rather than living beside it, so a person the firm has an opinion about is the same
+person Network OS has a record of.
+
+**Known broken, found by the review and not yet fixed.**
+- `network_external_mapping` and `person` are both **0 rows in production** despite a sync event
+  recorded as successful. The sync reports success and stores nothing.
+- The Community page reads `m.segment`, `m.member_type` and `m.engagement` off rows returned by
+  `SELECT *` — so it depends on columns the list query does not guarantee, and lowercases them
+  without a guard.
+
+**Hashtag triggers.** `#wpdealflow` and `#wpnetwork` are Network OS's inbound triggers today.
+Item 7's spec already routes `#wpdealflow` into this app's funnel. `#wpnetwork` stays Network OS's:
+a person entering the network is Network OS's event, and this app learns about them on the next
+pull. Two systems must not both claim the write.
+
+---
+
 ## Operator notes filed 21 Aug 2026, not yet built
 
 **Machines: show, and EDIT, each machine's skills.** Surveyed 21 Aug 2026.

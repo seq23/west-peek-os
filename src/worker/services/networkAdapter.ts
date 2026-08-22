@@ -233,11 +233,29 @@ export interface PullSummary {
  * writes mappings, conflicts, and receipts — never a Network OS record, and never
  * an overwrite of an internal value.
  */
+/**
+ * A FIXTURE PULL MUST NEVER MARK THE LIVE INTEGRATION HEALTHY.
+ *
+ * Production, read 21 Aug 2026: `network_sync_cursor` said `contact — OK`, while the receipts under
+ * it read FAILED ("Network OS rejected the session"), REFUSED (adapter_unconfigured), FAILED again
+ * — and `network_external_mapping` held zero rows. The three real attempts were on 17 Aug; the OK
+ * was written at 00:57 the next day by a fixture run, which exercises the transform against records
+ * posted in the request body and never touches Network OS at all.
+ *
+ * Both paths shared one cursor, so a test of the mapping code overwrote the record of a live
+ * integration that has never once worked, and the only surface reporting on it went green. Nobody
+ * looked again for three days.
+ *
+ * The cursor is a statement about the FAR END. A fixture has nothing to say about the far end, so
+ * it now says nothing: it still writes its receipt, still records the event, still reports what it
+ * applied, and leaves the cursor exactly as it found it.
+ */
 export async function pullResource(
   env: Env,
   identity: FirmUserIdentity,
   resource: NetworkResource,
   client: NetworkOsClient | null,
+  opts: { isFixture?: boolean } = {},
 ): Promise<PullSummary> {
   const actor = actorFromIdentity(identity);
   const firmScope = actor.firmScopes[0] ?? "west-peek";
@@ -248,7 +266,9 @@ export async function pullResource(
 
   if (!client) {
     // No configured client: fail closed, stay read-only, and say so on the cursor.
-    await upsertCursor(env, firmScope, resource, { last_status: "DEGRADED_READ_ONLY", failure_reason: "adapter_unconfigured" });
+    if (!opts.isFixture) {
+      await upsertCursor(env, firmScope, resource, { last_status: "DEGRADED_READ_ONLY", failure_reason: "adapter_unconfigured" });
+    }
     await recordReceipt(env, {
       direction: "INBOUND",
       resource,
@@ -271,7 +291,9 @@ export async function pullResource(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     // Bounded, visible failure: previously synced mappings stay readable.
-    await upsertCursor(env, firmScope, resource, { last_status: "FAILED", failure_reason: reason });
+    if (!opts.isFixture) {
+      await upsertCursor(env, firmScope, resource, { last_status: "FAILED", failure_reason: reason });
+    }
     await recordReceipt(env, {
       direction: "INBOUND",
       resource,
@@ -382,12 +404,16 @@ export async function pullResource(
     });
   }
 
-  await upsertCursor(env, firmScope, resource, {
-    cursor_value: page.next_cursor,
-    last_sync_at: new Date().toISOString(),
-    last_status: "OK",
-    failure_reason: null,
-  });
+  // The success case, guarded for the same reason as the failure cases above: a fixture that
+  // transformed its own records correctly has proven nothing about Network OS.
+  if (!opts.isFixture) {
+    await upsertCursor(env, firmScope, resource, {
+      cursor_value: page.next_cursor,
+      last_sync_at: new Date().toISOString(),
+      last_status: "OK",
+      failure_reason: null,
+    });
+  }
   await appendEvent(env, {
     eventType: "network.sync_completed",
     actorType: "firm_user",
@@ -756,7 +782,7 @@ export async function handlePullResource(ctx: RouteContext): Promise<Response> {
   // Local fixture path (see localFixtureClient): never available outside local mode.
   const client = fixture.success ? localFixtureClient(ctx.env, fixture.data.fixture_records) : configuredClient(ctx.env);
   try {
-    const summary = await pullResource(ctx.env, ctx.identity!, resource, client);
+    const summary = await pullResource(ctx.env, ctx.identity!, resource, client, { isFixture: fixture.success });
     return json({ ...summary, provider: fixture.success ? "LOCAL_FIXTURE" : "LIVE" }, { status: 201 });
   } catch (err) {
     return errorResponse(err);

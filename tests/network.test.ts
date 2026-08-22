@@ -322,6 +322,43 @@ describe("3. adapter failure degrades to read-only and stays visible", () => {
   });
 });
 
+describe("3b. a fixture proves the transform, never the far end", () => {
+  /**
+   * Production, 21 Aug 2026: the cursor read `contact — OK` over three FAILED/REFUSED receipts and
+   * zero mappings. The OK came from a fixture run the following day, which never touches Network OS
+   * at all — so a test of the mapping code reported a live integration healthy that had never once
+   * worked, and the only surface watching it went green for three days.
+   */
+  it("leaves the live cursor untouched, however it goes", async () => {
+    const before = await t.db
+      .prepare("SELECT last_status, failure_reason FROM network_sync_cursor WHERE resource = 'gmail_thread'")
+      .first<{ last_status: string; failure_reason: string | null }>();
+    // The previous block left this resource FAILED; that is the state a fixture must not improve.
+    expect(before!.last_status).toBe("FAILED");
+
+    const res = await call<{ provider: string; applied: number }>("/api/network/pull/gmail_thread", MP, "POST", {
+      fixture_records: [
+        { external_id: "thread_fixture_1", identity_key: "thread_fixture_1", fields: { subject: "fixture" } },
+      ],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.provider).toBe("LOCAL_FIXTURE");
+
+    const after = await t.db
+      .prepare("SELECT last_status, failure_reason FROM network_sync_cursor WHERE resource = 'gmail_thread'")
+      .first<{ last_status: string; failure_reason: string | null }>();
+    expect(after!.last_status).toBe("FAILED");
+    expect(after!.failure_reason).toBe(before!.failure_reason);
+  });
+
+  it("still records its own receipt, so the run itself is not invisible", async () => {
+    const receipts = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM network_sync_receipt WHERE resource = 'gmail_thread' AND status = 'APPLIED'")
+      .first<{ n: number }>();
+    expect(receipts!.n).toBeGreaterThan(0);
+  });
+});
+
 // ── 4. Outbound writeback is MP-reserved and receipted ──
 
 describe("4. writeback requires the reserved approval and is never replayed", () => {
