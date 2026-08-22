@@ -486,8 +486,22 @@ export async function buildHome(
 export async function handleMpHome(ctx: RouteContext): Promise<Response> {
   const identity = ctx.identity!;
   const home = await buildHome(ctx.env, identity);
+  /*
+   * Mail nobody has placed, counted here because Home is where the operator finds out.
+   *
+   * The inbound handler files every message as a capture whether it routed or not — which makes an
+   * unrouted one safely recorded, and silently recorded is exactly how work goes missing. Counted
+   * rather than listed: this line's job is to say "go and look", not to reproduce the inbox.
+   */
+  const unrouted = await ctx.env.WP_OS_DB.prepare(
+    "SELECT COUNT(*) AS n FROM capture WHERE capture_type = 'EMAIL_UNROUTED' AND status = 'NEW' AND firm_scope = ?1",
+  )
+    .bind("west-peek")
+    .first<{ n: number }>();
+
   return json({
     ...home,
+    unrouted_emails: unrouted?.n ?? 0,
     available_modules: HOME_MODULE_KEYS,
     generated_at: new Date().toISOString(),
   });

@@ -45,6 +45,15 @@ export interface AttentionInputs {
   aiProviderConfigured?: boolean;
   /** Employees whose work is blocked despite being active (e.g. every machine paused). */
   blockedActiveEmployees?: Array<{ name: string; reason: string }>;
+  /**
+   * Mail that reached the firm's inbox carrying no recognised trigger.
+   *
+   * The inbound handler already routes everything it can read. What lands here is the remainder,
+   * and it is the part that actually needs a person: a founder replying into an old thread, a deck
+   * with no covering words, an introduction written as prose. Counted rather than listed, because
+   * the item's job is to say "go and look", not to reproduce the inbox on the home page.
+   */
+  unroutedEmails?: number;
 }
 
 const SEVERITY_ORDER: Record<AttentionSeverity, number> = {
@@ -55,6 +64,23 @@ const SEVERITY_ORDER: Record<AttentionSeverity, number> = {
 
 export function operatorAttention(inputs: AttentionInputs): AttentionItem[] {
   const items: AttentionItem[] = [];
+
+  // 0 · Mail nobody has placed.
+  //
+  // The handler files every message as a capture whether it routed or not, which means an unrouted
+  // one is safely recorded — and silently recorded is exactly how work goes missing. This is the
+  // line that makes it visible, and it is DEGRADED rather than INFO because somebody emailed the
+  // firm and nothing has happened to it.
+  if ((inputs.unroutedEmails ?? 0) > 0) {
+    const n = inputs.unroutedEmails!;
+    items.push({
+      key: "email-unrouted",
+      severity: "DEGRADED",
+      headline: `${n} email${n === 1 ? "" : "s"} arrived that nobody has placed yet.`,
+      action: "Read them on Capture and route each to whoever owns it.",
+      link: "capture",
+    });
+  }
 
   // 1 · No provider — nothing AI-driven can run at all.
   if (inputs.aiProviderConfigured === false) {

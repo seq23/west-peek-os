@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyInbound, decodeMimeHeader, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
+import { classifyInbound, decodeMimeHeader, extractAddress, MAX_BODY_BYTES, personFromMessage } from "../src/worker/effects/inboundEmail";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import { defuseTriggers, wouldLoop } from "../src/worker/effects/emailTransport";
 
@@ -127,5 +127,38 @@ describe("outbound mail cannot feed the inbound rule", () => {
   it("leaves ordinary prose alone", () => {
     const plain = "The deal flow this week was quiet. No hashtags here.";
     expect(defuseTriggers(plain)).toBe(plain);
+  });
+});
+
+describe("a person can be read out of a #wpnetwork message", () => {
+  it("reads the fields Network OS's own parser expects", () => {
+    const p = personFromMessage("intro@example.com", "#wpnetwork\nName: Dana Reyes\nEmail: dana@northwind.io\nCompany: Northwind");
+    expect(p).toEqual({ name: "Dana Reyes", email: "dana@northwind.io", company: "Northwind" });
+  });
+
+  it("falls back to the sender's address, but never invents a name", () => {
+    const withName = personFromMessage("scout@example.com", "Name: Dana Reyes\nplease add");
+    expect(withName?.email).toBe("scout@example.com");
+    // No name means nothing to propose. A blank record for somebody to puzzle over is worse than
+    // saying so — and the sender is often the introducer, not the person being introduced.
+    expect(personFromMessage("scout@example.com", "#wpnetwork please add my friend")).toBeNull();
+  });
+});
+
+describe("the sender recorded is the person, not the relay", () => {
+  /**
+   * The first three live emails recorded a sender of
+   * `010001a027045243-47127e91-…@amazonses.com` — the envelope address a delivery service uses for
+   * bounce tracking. The capture would have said who relayed the message rather than who wrote it,
+   * and Capture's own person resolution reads exactly that line.
+   */
+  it("prefers the From header over the envelope", () => {
+    expect(extractAddress("Dana Reyes <dana@northwind.io>")).toBe("dana@northwind.io");
+    expect(extractAddress("dana@northwind.io")).toBe("dana@northwind.io");
+  });
+
+  it("falls back rather than inventing one, because a header can be absent", () => {
+    expect(extractAddress(null)).toBeNull();
+    expect(extractAddress("Dana Reyes")).toBeNull();
   });
 });

@@ -32,6 +32,8 @@ interface HomeModule {
 }
 
 interface HomeResponse {
+  /** Mail that reached the firm's inbox carrying no trigger anyone could route. */
+  unrouted_emails?: number;
   modules: HomeModule[];
   enabled_modules: string[];
   available_modules: string[];
@@ -408,6 +410,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
   // `undefined` where a source has not answered, so the strip stays silent rather than guessing.
   const attention = operatorAttention({
     ...(jobs.data ? { jobs: jobs.data.jobs } : {}),
+    ...(typeof home.data?.unrouted_emails === "number" ? { unroutedEmails: home.data.unrouted_emails } : {}),
     ...(providers.data
       ? {
           aiProviderConfigured: providers.data.providers.some(
