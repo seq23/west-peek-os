@@ -58,3 +58,38 @@ session deliberately produced no delivery ZIP of its own.
 - Any decrypted secret value; `~/.west-peek-os/vault/` is never copied into the project.
 - `.dev.vars`, `.env` (only `.env.example`, names-only, is checked in).
 - Local databases, backups, caches, build output.
+
+## Snapshot — 22 Aug 2026, the operator-issues program
+
+| | |
+|---|---|
+| Archive | `west-peek-os-odysseus_FULL_SNAPSHOT_20260822T155641Z_07ad66c9a1c6.zip` |
+| SHA-256 | `ab0dd93b9651d9297f6400006b55e14d6956d5f971af11d7e385da42b35c1a2e` |
+| Commit | `07ad66c9a1c6` on `main`, pushed to `seq23/west-peek-os` |
+| Deployed build | `6ff58052-7e72-415e-afdc-0773dfb41500` at os.joinwestpeek.com |
+| Size | 3.9 MB |
+
+**Verified, not assumed.** `unzip -t` reports no errors; `ARTIFACT_MANIFEST.md`, `AGENTS.md` and
+`package.json` are present; 443 files under `migrations/` and `src/`; and a scan for the excluded
+set — `node_modules/`, `dist/`, `.wrangler/`, `backups/`, `.git/`, test artifacts, `.dev.vars`,
+`.env` — returns zero matches, so no secret or build output travelled with it.
+
+### What this snapshot contains, and what remains unproven
+
+**Proven:** unit suite 110 files / 1,682 tests / 0 skipped; end-to-end **95 passed, 0 failed, run
+twice consecutively** — the first time this suite has executed at all, since it could not previously
+boot; all seven local validators pass with their self-tests; ten migrations applied to production and
+the repairs read back afterwards rather than assumed.
+
+**UNPROVEN, and stated rather than implied:**
+- **Reading a deck with a real model.** Locally `run_ai` routes to `mock-local`, so which blanks a
+  live model fills is not claimed. The journey is asserted through the governed boundary and stops
+  there.
+- **A steering note reaching an employee's prompt.** `ai_run` stores a hash of its inputs rather than
+  the inputs, and the mock never emits the `ACKNOWLEDGED:` line.
+- **Whisper capture**, built end to end and never once called — the control renders disabled with the
+  reason on screen rather than looking live.
+- **A shared live IC room** and the **Fireflies API**, both designed in ADR-019 and deliberately not
+  built.
+- `validate:sql` was not run: it takes 10+ minutes against production, and the recommendation to move
+  it local (6.3s, 0 rejected) is recorded in `IMPLEMENTATION_LEDGER.md`, not adopted.
