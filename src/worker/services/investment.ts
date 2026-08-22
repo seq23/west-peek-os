@@ -2316,6 +2316,7 @@ export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> 
     `SELECT o.id, o.title, o.status, o.opportunity_type, o.relationship_origin, o.created_at,
             o.backfilled_at, o.as_of_date, o.placeholder_fields, o.placeholder_note,
             o.price_per_share, o.quantity, o.source_channel,
+            o.recommendation, o.recommendation_note, o.recommended_by, o.recommended_at,
             c.canonical_name AS company_name, c.id AS company_id,
             (SELECT MAX(e.created_at)
                FROM event_record e
@@ -2450,4 +2451,65 @@ export async function handlePortfolioComposition(ctx: RouteContext): Promise<Res
       ? "Some amounts rest on placeholder values, so these percentages are provisional."
       : null,
   });
+}
+
+// ── An employee's view on a deal ──
+
+const recommendationSchema = z.object({
+  recommendation: z.enum(["PASS", "LOOK_CLOSER"]).nullable(),
+  note: z.string().trim().min(1).max(600).optional(),
+  by: z.string().trim().min(1).max(60).optional(),
+});
+
+/**
+ * Record what an employee thinks should happen to a deal, without it happening.
+ *
+ * Operator rule: "every arrival survives until i've seen it but it comes with a recommendation to
+ * scrap it... never scrap our inbound stuff without our input."
+ *
+ * THE EASIER IMPLEMENTATION WAS THE WRONG ONE. Letting the analyst pass a deal outright is a single
+ * transition and no schema — but a passed deal has LEFT the funnel, so seeing what was turned away
+ * becomes something a partner has to remember to go and look for, and the thing you forget to look
+ * at is the thing decided by nobody. This keeps the deal where they are already looking, carrying
+ * the view and the reason, with the decision still one press either way.
+ *
+ * IT MOVES NOTHING. Status is untouched: a recommendation is not a state, and the transition it
+ * argues for stays the separate, already-governed act.
+ */
+export async function handleRecommendOpportunity(ctx: RouteContext): Promise<Response> {
+  const parsed = recommendationSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "opportunity.recommend", {
+    objectType: "investment_opportunity",
+    objectId: ctx.params.id!,
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const existing = await ctx.env.WP_OS_DB.prepare("SELECT id, status FROM investment_opportunity WHERE id = ?1")
+    .bind(ctx.params.id!)
+    .first<{ id: string; status: string }>();
+  if (!existing) return json({ error: "not_found" }, { status: 404 });
+
+  const by = parsed.data.by ?? actor.aiEmployeeId ?? "a partner";
+  await ctx.env.WP_OS_DB.prepare(
+    `UPDATE investment_opportunity
+        SET recommendation = ?2, recommendation_note = ?3, recommended_by = ?4,
+            recommended_at = CASE WHEN ?2 IS NULL THEN NULL ELSE strftime('%Y-%m-%dT%H:%M:%fZ','now') END
+      WHERE id = ?1`,
+  )
+    .bind(ctx.params.id!, parsed.data.recommendation, parsed.data.note ?? null, parsed.data.recommendation === null ? null : by)
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: parsed.data.recommendation === null ? "investment.recommendation_cleared" : "investment.recommended",
+    actorType: actor.type === "HUMAN" ? "firm_user" : "ai_employee",
+    actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+    objectType: "investment_opportunity",
+    objectId: ctx.params.id!,
+    payload: { recommendation: parsed.data.recommendation, note: parsed.data.note ?? null, by },
+  });
+
+  return json({ ok: true, recommendation: parsed.data.recommendation, by });
 }

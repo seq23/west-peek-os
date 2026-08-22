@@ -38,6 +38,9 @@ interface Deal {
   backfilled: boolean;
   source_channel: string | null;
   arrived_by_email: boolean;
+  recommendation: "PASS" | "LOOK_CLOSER" | null;
+  recommendation_note: string | null;
+  recommended_by: string | null;
   /** Arrived by email and has not moved since. Derived, so it clears itself the moment it does. */
   unreviewed: boolean;
 }
@@ -49,7 +52,7 @@ interface Board {
 }
 
 /** The spine. Filled where deals are, hollow where none. */
-function Spine({ counts }: { counts: Record<string, number> }) {
+function Spine({ counts, onShowExit }: { counts: Record<string, number>; onShowExit: (key: string) => void }) {
   return (
     <section className="card spine" data-testid="dealflow-spine">
       <div className="spine-track">
@@ -70,12 +73,26 @@ function Spine({ counts }: { counts: Record<string, number> }) {
           );
         })}
       </div>
+      {/*
+        THE PASS PILE IS A DOOR, NOT A FOOTNOTE.
+        Operator: "as long as the pass pile is clearly visible and easy to get to." It was grey text
+        under the spine stating a number — you could see that a deal had been passed and had nowhere
+        to click. What the firm turned away is one of the more useful things it owns, especially when
+        a company comes back raising, so each exit is now the way into its own list.
+      */}
       <div className="spine-exits">
         Left the pipeline
         {EXITS.map((e) => (
           <span key={e.key}>
             {" · "}
-            <strong>{counts[e.key] ?? 0}</strong> {e.label.toLowerCase()}
+            <button
+              type="button"
+              className="link-button"
+              data-testid={`spine-exit-${e.key}`}
+              onClick={() => onShowExit(e.key)}
+            >
+              <strong>{counts[e.key] ?? 0}</strong> {e.label.toLowerCase()}
+            </button>
           </span>
         ))}
       </div>
@@ -176,6 +193,39 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
             for, not optional: "we passed in August" is a fact, "we passed because the second
             founder had already left and nobody would say why" is what you want in front of you when
             they come back raising. */}
+        {/*
+          AN EMPLOYEE'S VIEW, IN FRONT OF THE PARTNER RATHER THAN INSTEAD OF THEM.
+          Operator rule: "every arrival survives until i've seen it but it comes with a
+          recommendation to scrap it... never scrap our inbound stuff without our input." Letting the
+          analyst pass it outright would have been one line of code and would have moved the deal out
+          of the funnel — and what leaves the funnel is what you have to remember to go and look for.
+          So it stays here, carrying the view and the reason, and the decision is one press either
+          way.
+        */}
+        {deal.recommendation && (
+          <div className="deal-recommendation" data-testid={`deal-recommendation-${deal.id}`}>
+            <strong>
+              {deal.recommended_by ?? "An employee"} says{" "}
+              {deal.recommendation === "PASS" ? "pass on this" : "look closer"}.
+            </strong>
+            {deal.recommendation_note ? <span className="muted"> {deal.recommendation_note}</span> : null}{" "}
+            <button
+              type="button"
+              className="link-button"
+              disabled={busy}
+              data-testid={`deal-recommendation-clear-${deal.id}`}
+              onClick={async () => {
+                setBusy(true);
+                await api(`/api/opportunities/${deal.id}/recommend`, { method: "POST", body: { recommendation: null } });
+                setBusy(false);
+                onChanged();
+              }}
+            >
+              keep it, ignore this
+            </button>
+          </div>
+        )}
+
         {PASSABLE.includes(deal.status) && (
           <button
             type="button"
@@ -442,7 +492,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           a shape that says nothing about order or where a deal is stuck. The spine IS the funnel:
           it belongs directly under the mouth, open, and the counts it carries make the cards
           redundant rather than complementary. */}
-      <Spine counts={board.data?.counts ?? {}} />
+      <Spine counts={board.data?.counts ?? {}} onShowExit={() => setFilter("PASSED")} />
 
       <p className="muted small" data-testid="dealflow-staleness-note">
         {board.data?.how_staleness_works}

@@ -120,6 +120,10 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // number somebody signed is bookkeeping, and gating it behind an approval card would mean the
   // fund's own total is the one figure nobody can keep current. What IS governed sits downstream —
   // a position is still only created by an executed transaction.
+  // An employee advising on a deal. Deliberately not reserved and deliberately not the transition:
+  // recommending costs nothing and moves no authority, and the partner's decision is the separate,
+  // already-governed act.
+  { key: "opportunity.recommend", name: "Recommend what to do with a deal", description: "An employee's view on whether the firm should pass or look closer. Never moves the deal.", isExternalEffect: false },
   { key: "lp_commitment.record", name: "Record an LP commitment", description: "Record or revise how much a limited partner has committed to a fund.", isExternalEffect: false },
   { key: "fund.set_size", name: "Set the fund's target size", description: "State what the fund is raising. What has actually been committed is derived from signed commitments, never typed.", isExternalEffect: false },
   { key: "lp_opportunity.transition", name: "Transition LP opportunity", description: "Move an LP opportunity through its governed stages.", isExternalEffect: false },

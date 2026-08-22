@@ -3854,3 +3854,16 @@ body {
   color: var(--wp-orange-deep);
   background: var(--wp-tint);
 }
+
+/* An employee's view on a deal, sitting with the deal rather than instead of it. Bordered on the
+   accent because it wants reading before the buttons beside it are pressed — it is advice, and
+   advice nobody notices is the same as advice nobody gave. */
+.deal-recommendation {
+  flex: 1 1 100%;
+  margin: var(--space-2xs) 0;
+  padding: var(--space-xs) var(--space-sm);
+  border-left: 3px solid var(--wp-orange);
+  background: var(--wp-tint);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}

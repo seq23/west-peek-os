@@ -250,6 +250,7 @@ import {
   handleScanBlockLinks,
   handleSubmitTransaction,
   handleArchiveOpportunity,
+  handleRecommendOpportunity,
   handleTransitionOpportunity,
   handleBackfillOpportunity,
   handleConfirmPlaceholders,
@@ -727,6 +728,8 @@ const router = new Router()
   .get("/api/opportunities/:id", handleGetOpportunity)
   .patch("/api/opportunities/:id", handleUpdateOpportunity)
   .post("/api/opportunities/:id/transition", handleTransitionOpportunity)
+  // An employee advises; the partner still decides. Never moves the deal.
+  .post("/api/opportunities/:id/recommend", handleRecommendOpportunity)
   .post("/api/opportunities/:id/archive", handleArchiveOpportunity)
   .post("/api/opportunities/:id/backfill", handleBackfillOpportunity)
   .post("/api/opportunities/:id/placeholders", handleConfirmPlaceholders)

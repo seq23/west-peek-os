@@ -241,6 +241,7 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('network_os.propose_person', 'Propose a person to Network OS', 'Send a captured person to Network OS''s intake queue for a human there to review. Never writes a contact.', 1, 0),
   ('lp_record.create', 'Create LP record', 'Record an LP entity (LP_PRIVATE by default).', 0, 0),
   ('lp_opportunity.create', 'Create LP opportunity', 'Track a fundraising conversation with an LP.', 0, 0),
+  ('opportunity.recommend', 'Recommend what to do with a deal', 'An employee''s view on whether the firm should pass or look closer. Never moves the deal.', 0, 0),
   ('lp_commitment.record', 'Record an LP commitment', 'Record or revise how much a limited partner has committed to a fund.', 0, 0),
   ('fund.set_size', 'Set the fund''s target size', 'State what the fund is raising. What has actually been committed is derived from signed commitments, never typed.', 0, 0),
   ('lp_opportunity.transition', 'Transition LP opportunity', 'Move an LP opportunity through its governed stages.', 0, 0),

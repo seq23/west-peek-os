@@ -48,7 +48,9 @@ export interface PageHost {
 export const PAGE_HOSTS: Readonly<Record<string, PageHost>> = {
   // ── Deals ──
   thesis: { employee: "Pierce", because: "Owns what the fund is looking for and what it will not chase." },
-  investment: { employee: "Pierce", because: "Carries deals from first look to a decision." },
+  // Not "from first look" — that is the analyst's. This seat takes it once the firm has
+  // decided a company is worth real time. See aiEmployees.ts for why screening moved.
+  investment: { employee: "Pierce", because: "Takes a deal once it is worth real time, and runs it to a decision." },
   companies: { employee: "Wyatt", because: "Finds companies and keeps what the firm knows about them straight." },
   meetings: { employee: "Walter", because: "Sits in the room and makes sure the meeting produces something." },
   secondaries: { employee: "Pierce", because: "Runs the block and secondary side of the book." },
