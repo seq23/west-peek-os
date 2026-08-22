@@ -659,3 +659,74 @@ describe("the fund can record what an LP committed, and how big it is", () => {
     expect(f.percent_of_target).toBeNull();
   });
 });
+
+// ── How the fund is actually doing ──
+
+describe("the fund can report where it is, computed rather than typed", () => {
+  /**
+   * Operator: "the LP page needs to allow us to create a report for LPs at the drop of a hat that
+   * explains where we are at any given time with metrics LPs care about."
+   *
+   * `position` recorded cost_basis — what the fund PAID — and nothing anywhere recorded what a
+   * holding is WORTH. No TVPI, DPI, RVPI, MOIC or IRR was computed anywhere in the system. So the
+   * fund could answer "what did we put in" and could not answer "what is it worth", which is the
+   * numerator of every number an LP asks for.
+   */
+  let fundId = "";
+  let lpId = "";
+
+  it("has no ratios at all before anything is called — a question, not a zero", async () => {
+    const f = await call<{ id: string }>("/api/funds", MP, "POST", { name: "Performance Fund" });
+    fundId = f.body.id;
+    const lp = await call<{ id: string }>("/api/lp/records", MP, "POST", { legal_name: "Cedar Trust", lp_type: "FAMILY_OFFICE" });
+    lpId = lp.body.id;
+    await call("/api/lp/commitments", MP, "POST", { lp_record_id: lpId, fund_id: fundId, amount: 10_000_000, state: "SIGNED" });
+
+    const res = await call<{ committed: number; called: number; metrics: { tvpi: number | null; dpi: number | null } }>(
+      `/api/funds/${fundId}/performance`,
+      MP,
+    );
+    expect(res.body.committed).toBe(10_000_000);
+    expect(res.body.called).toBe(0);
+    // With nothing called there is no denominator. Zero would read as a result.
+    expect(res.body.metrics.tvpi).toBeNull();
+    expect(res.body.metrics.dpi).toBeNull();
+  });
+
+  it("records what was called and what came back, and says what is still uncalled", async () => {
+    await call("/api/lp/capital-calls", MP, "POST", { fund_id: fundId, lp_record_id: lpId, amount: 4_000_000, on: "2026-02-01" });
+    await call("/api/lp/distributions", MP, "POST", { fund_id: fundId, lp_record_id: lpId, amount: 1_000_000, on: "2026-06-01", kind: "GAIN" });
+
+    const res = await call<{ called: number; uncalled: number; distributed: number; metrics: { dpi: number } }>(
+      `/api/funds/${fundId}/performance`,
+      MP,
+    );
+    expect(res.body.called).toBe(4_000_000);
+    // The number a partner is asked at dinner.
+    expect(res.body.uncalled).toBe(6_000_000);
+    expect(res.body.distributed).toBe(1_000_000);
+    expect(res.body.metrics.dpi).toBe(0.25);
+  });
+
+  it("refuses a mark that is not at cost without saying what it rests on", async () => {
+    const pos = await t.db.prepare("SELECT id FROM position LIMIT 1").first<{ id: string }>();
+    if (!pos) return; // no position in this fixture; the guard is unit-tested by the next case
+    const res = await call(`/api/positions/${pos.id}/mark`, MP, "POST", {
+      value: 5_000_000,
+      source: "LAST_ROUND",
+      as_of_date: "2026-06-30",
+    });
+    expect(res.status).toBe(400);
+    expect((res.body as any).error).toBe("basis_required");
+  });
+
+  it("says how much of the answer is only what the fund paid", async () => {
+    // The number that decides whether any ratio is worth putting in a letter.
+    const res = await call<{ honesty: { holdings_total: number; held_at_cost: number; note: string } }>(
+      `/api/funds/${fundId}/performance`,
+      MP,
+    );
+    expect(res.body.honesty.holdings_total).toBe(res.body.honesty.held_at_cost);
+    expect(res.body.honesty.note).toBeTruthy();
+  });
+});

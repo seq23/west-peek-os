@@ -350,6 +350,164 @@ function ReconciliationSection({ funds }: { funds: FundRaise[] }) {
   );
 }
 
+
+interface Performance {
+  fund: { id: string; name: string; currency: string; target: number | null };
+  committed: number;
+  called: number;
+  uncalled: number;
+  distributed: number;
+  cost: number;
+  value: number;
+  holdings: Array<{ position_id: string; company: string; cost: number; value: number; mark_source: string; mark_basis: string | null; multiple: number | null }>;
+  metrics: { tvpi: number | null; dpi: number | null; rvpi: number | null };
+  honesty: { holdings_total: number; held_at_cost: number; note: string };
+}
+
+/**
+ * Where the fund actually is, and the letter that says so.
+ *
+ * Operator: "the LP page needs to allow us to create a report for LPs at the drop of a hat that
+ * explains where we are at any given time with metrics LPs care about", and "our ai employee that
+ * deals with LPs is hosting this page too and can send the report to LPs when we ask him to."
+ *
+ * EVERY FIGURE IS COMPUTED, none is typed. It reads Portfolio's marks and this page's capital, and
+ * writes neither — Portfolio owns what a holding is worth because that is a fact about the holding,
+ * and two surfaces claiming the fund's position would disagree inside a quarter.
+ *
+ * THE HONESTY LINE IS NOT A FOOTNOTE. How many holdings have never been marked decides whether any
+ * ratio above it is worth putting in a letter, so it is stated before the letter is drafted rather
+ * than discovered afterwards.
+ *
+ * DRAFTED, NEVER SENT. Automatic outbound is off for everyone including the partners; mail reaches
+ * an investor when a partner sends it and not before.
+ */
+function FundStanding({ funds, lps }: { funds: FundRaise[]; lps: LpRecordRow[] }) {
+  const [fundId, setFundId] = useState("");
+  const chosen = fundId || funds[0]?.id || "";
+  const perf = useApi<Performance>(chosen ? `/api/funds/${chosen}/performance` : null, [chosen]);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const p = perf.data;
+
+  async function ask() {
+    setBusy(true);
+    const res = await api<{ draft?: string; detail?: string; error?: string }>(`/api/funds/${chosen}/lp-report`, {
+      method: "POST",
+      body: {},
+    });
+    setBusy(false);
+    if (res.status === 200 && res.data?.draft) {
+      setDraft(res.data.draft);
+      setMessage("Wesley has drafted it. Nothing has been sent.");
+    } else {
+      setMessage(`Wesley could not draft it: ${res.data?.detail ?? res.data?.error ?? `HTTP ${res.status}`}`);
+    }
+  }
+
+  const money = (n: number) =>
+    new Intl.NumberFormat(undefined, { style: "currency", currency: p?.fund.currency ?? "USD", maximumFractionDigits: 0 }).format(n);
+
+  return (
+    <>
+      <h3>Where the fund stands</h3>
+      <div className="card" data-testid="fund-standing">
+        {funds.length > 1 && (
+          <div className="form-row">
+            <label>
+              Fund{" "}
+              <select value={chosen} onChange={(e) => setFundId(e.target.value)} data-testid="standing-fund">
+                {funds.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+
+        {p && (
+          <>
+            <div className="cohort-grid" data-testid="fund-metrics">
+              <div className="cohort">
+                <span className="cohort-count">{p.metrics.tvpi ?? "—"}</span>
+                <span className="cohort-label">TVPI</span>
+                <span className="cohort-pct">everything held plus paid back, per dollar called</span>
+              </div>
+              <div className="cohort">
+                <span className="cohort-count">{p.metrics.dpi ?? "—"}</span>
+                <span className="cohort-label">DPI</span>
+                <span className="cohort-pct">what has actually come back</span>
+              </div>
+              <div className="cohort">
+                <span className="cohort-count">{money(p.called)}</span>
+                <span className="cohort-label">Called</span>
+                <span className="cohort-pct">{money(p.uncalled)} still uncalled</span>
+              </div>
+              <div className="cohort">
+                <span className="cohort-count">{money(p.value)}</span>
+                <span className="cohort-label">Held at</span>
+                <span className="cohort-pct">{money(p.cost)} invested</span>
+              </div>
+            </div>
+
+            {/* Stated before the letter is drafted, not discovered after it goes out. */}
+            {p.honesty.held_at_cost > 0 && (
+              <p className="notice notice-gate small" data-testid="fund-honesty">
+                {p.honesty.note}
+              </p>
+            )}
+
+            <ul className="card-list small" data-testid="fund-holdings">
+              {p.holdings.map((h) => (
+                <li key={h.position_id}>
+                  <strong>{h.company}</strong> — cost {money(h.cost)}, held at {money(h.value)}
+                  {h.multiple !== null ? ` (${h.multiple}×)` : ""} ·{" "}
+                  <span className="muted">
+                    {h.mark_source === "COST" ? "never marked" : h.mark_source.toLowerCase().split("_").join(" ")}
+                    {h.mark_basis ? ` — ${h.mark_basis}` : ""}
+                  </span>
+                </li>
+              ))}
+              {p.holdings.length === 0 && (
+                <li className="state-empty">
+                  The fund holds nothing yet. A holding appears when a transaction is executed on a company.
+                </li>
+              )}
+            </ul>
+
+            <div className="form-row">
+              <button type="button" className="btn-strong" disabled={busy || !chosen} data-testid="lp-report-ask" onClick={() => void ask()}>
+                {busy ? "Wesley is writing…" : "Ask Wesley for the report"}
+              </button>
+              <span className="muted small">He drafts it from these figures. Nothing goes to an investor until you send it.</span>
+            </div>
+
+            {draft && (
+              <div className="brief-prose" data-testid="lp-report-draft">
+                <h4>Wesley's draft</h4>
+                <p style={{ whiteSpace: "pre-wrap" }}>{draft}</p>
+                <p className="muted small">
+                  Not sent. {lps.length} investor{lps.length === 1 ? "" : "s"} on record would receive it.
+                </p>
+              </div>
+            )}
+          </>
+        )}
+
+        {message && (
+          <p className="notice small" data-testid="standing-message" role="status">
+            {message}
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function LpPage({ me }: { me: MeResponse }) {
   const raise = useApi<{ funds: FundRaise[] }>("/api/lp/fundraising");
   const commitments = useApi<{ commitments: CommitmentRow[] }>("/api/lp/commitments");
@@ -598,6 +756,8 @@ export function LpPage({ me }: { me: MeResponse }) {
           </tbody>
         </table>
       </div>
+
+      <FundStanding funds={funds} lps={records} />
 
       <ReportingSection funds={funds} />
 

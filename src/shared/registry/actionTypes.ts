@@ -125,6 +125,14 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // already-governed act.
   // Saying what an already-stored document is about. The upload itself is governed separately;
   // this only records the relationship, and a wrong link is corrected rather than dangerous.
+  // What a holding is worth, and what moved between the fund and an LP. Not reserved: recording
+  // that a round priced a company, or that a call went out, is bookkeeping — and a fund whose own
+  // numbers need an approval card to stay current is a fund whose numbers are always stale. The
+  // reserved `official_valuation_or_capital_account.change` still governs changing an OFFICIAL
+  // valuation or capital account, which is the act with consequences.
+  { key: "position.mark", name: "Mark a holding", description: "Record what a position is worth now, on what basis, as of when. Append-only; a mark is superseded, never edited.", isExternalEffect: false },
+  { key: "capital_call.record", name: "Record a capital call", description: "Record capital called from a limited partner against their commitment.", isExternalEffect: false },
+  { key: "capital_distribution.record", name: "Record a distribution", description: "Record cash paid back to a limited partner.", isExternalEffect: false },
   { key: "document.link", name: "Attach a document to something", description: "Record that a stored document is about a company, a deal, an LP or an event.", isExternalEffect: false },
   { key: "opportunity.recommend", name: "Recommend what to do with a deal", description: "An employee's view on whether the firm should pass or look closer. Never moves the deal.", isExternalEffect: false },
   { key: "lp_commitment.record", name: "Record an LP commitment", description: "Record or revise how much a limited partner has committed to a fund.", isExternalEffect: false },

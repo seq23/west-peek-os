@@ -2,6 +2,13 @@ import type { Env } from "./env";
 import { handleInboundEmail } from "./effects/inboundEmail";
 import { handleReadCompanyDeck } from "./services/deckReader";
 import {
+  handleDraftLpReport,
+  handleFundPerformance,
+  handleMarkPosition,
+  handleRecordCall,
+  handleRecordDistribution,
+} from "./services/fundPerformance";
+import {
   handleFundraisingSummary,
   handleListCommitments,
   handleRecordCommitment,
@@ -940,6 +947,14 @@ const router = new Router()
   .post("/api/lp/commitments", handleRecordCommitment)
   .get("/api/lp/commitments", handleListCommitments)
   .get("/api/lp/fundraising", handleFundraisingSummary)
+  // How the fund is actually doing. Reads Portfolio's marks and LP's capital; writes neither.
+  .get("/api/funds/:id/performance", handleFundPerformance)
+  // Wesley writes it. Nothing reaches an investor until a partner sends it.
+  .post("/api/funds/:id/lp-report", handleDraftLpReport)
+  // A mark is a fact about a HOLDING, so it is recorded against the position — Portfolio's surface.
+  .post("/api/positions/:id/mark", handleMarkPosition)
+  .post("/api/lp/capital-calls", handleRecordCall)
+  .post("/api/lp/distributions", handleRecordDistribution)
   .patch("/api/funds/:id/size", handleSetFundSize)
   .post("/api/lp/records", handleCreateLpRecord)
   .get("/api/lp/records", handleListLpRecords)
