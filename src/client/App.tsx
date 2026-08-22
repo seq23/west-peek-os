@@ -234,7 +234,6 @@ const NAV_GROUPS = [
       // other item look like it was missing something.
       { key: "approvals", label: "Approvals" },
       { key: "work", label: "Work" },
-      { key: "today", label: "Today" },
       { key: "notifications", label: "Notifications" },
       // Introductions moved into Community. It sat here beside Approvals and Notifications — things
       // that always have something waiting — while being a surface that is deliberately empty most
@@ -436,112 +435,6 @@ function IdentityPanel({ me, status, loading, onSignOut }: { me: MeResponse | nu
 
 // ── Pages ──
 
-function TodayPage({ me, onNavigate }: { me: MeResponse; onNavigate: (k: string) => void }) {
-  const cards = useApi<{ work_cards: WorkCardRow[] }>("/api/work-cards");
-  const approvals = useApi<{ approvals: ApprovalCardRow[] }>("/api/approvals?state=pending_review");
-  const activity = useApi<{ events: ActivityEvent[] }>("/api/activity?limit=10");
-
-  const mine = (cards.data?.work_cards ?? []).filter(
-    (c) => c.owner_id === me.id && (c.state === "OPEN" || c.state === "IN_PROGRESS"),
-  );
-  const pendingCount = approvals.data?.approvals.length ?? 0;
-
-  return (
-    <section data-testid="today-page">
-      {/* A LIST OF WORK WITH NO WAY TO REACH IT. Today showed the operator their open cards and
-          offered no route to the page that can do anything about them — you could read that a card
-          existed and then had to go and find it yourself. Every item is a link now, and the section
-          heading carries the way through. */}
-      <div className="home-section-head">
-        <h3>My open work</h3>
-        {mine.length > 0 && (
-          <button type="button" className="link-button" data-testid="today-open-work" onClick={() => onNavigate("work")}>
-            Open Work →
-          </button>
-        )}
-      </div>
-      {mine.length === 0 ? (
-        <p className="state-empty">
-          Nothing open and assigned to you.{" "}
-          <button type="button" className="link-button" onClick={() => onNavigate("work")}>
-            Add a card on Work
-          </button>{" "}
-          — or one reaches you from a routed capture, an accepted handoff, or something you asked for.
-        </p>
-      ) : (
-        <ul className="card-list small" data-testid="today-my-work">
-          {mine.map((c) => (
-            <li key={c.id}>
-              <button type="button" className="link-button" onClick={() => onNavigate("work")}>
-                <strong>{c.title}</strong>
-              </button>{" "}
-              <span className="muted small">
-                {stateMeaning(c.state)?.label ?? c.state}
-                {c.next_action ? ` · next: ${c.next_action}` : ""}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="home-section-head">
-        <h3>Pending approvals</h3>
-        {pendingCount > 0 && (
-          <button type="button" className="link-button" data-testid="today-open-approvals" onClick={() => onNavigate("approvals")}>
-            Open Approvals →
-          </button>
-        )}
-      </div>
-      <p data-testid="pending-approvals-count">
-        {pendingCount === 0 ? "Nothing is waiting on your signature." : `${pendingCount} waiting on a decision from you.`}
-      </p>
-      {/* FOLDED, because it is the audit spine rather than something to read. It answers "did that
-          actually get recorded" on the rare day somebody asks, and the rest of the time it is a
-          wall of event types and ids between the reader and the bottom of the page. */}
-      <details className="card" data-testid="today-activity-panel">
-        <summary>
-          Recent activity <span className="muted small">{(activity.data?.events ?? []).length}</span>
-        </summary>
-        <p className="muted small">
-          Every governed action this firm took, newest first — the record behind the pages above.
-          Nothing here needs doing; it is here so you can check that something happened.
-        </p>
-        <ul data-testid="today-activity" className="small">
-          {(activity.data?.events ?? []).slice(0, 40).map((e) => (
-            <li key={e.id}>
-              {/* An audit row keeps its ids — they are what you search for when something has gone
-                  wrong, and hiding them would defeat the point of the ledger. The TIMESTAMP is a
-                  different matter: `2026-08-20T06:41:28.855Z` is a machine's way of saying a time
-                  to a person who is scanning for when something happened. */}
-              <code>{e.event_type}</code> {e.object_type}/{e.object_id}{" "}
-              <span className="muted">— {new Date(e.created_at).toLocaleString()}</span>
-            </li>
-          ))}
-          {(activity.data?.events ?? []).length === 0 && (
-            <li className="state-empty">Nothing recorded yet today.</li>
-          )}
-        </ul>
-        {(activity.data?.events ?? []).length > 40 && (
-          <p className="muted small">Showing the 40 most recent of {(activity.data?.events ?? []).length}.</p>
-        )}
-      </details>
-    </section>
-  );
-}
-
-/**
- * Say what a capture is about.
- *
- * Capture is a holding pen — it owns nothing, and until this existed the only thing you could do
- * with a note was hand it to a processing machine. Meanwhile the two systems of record were fed by
- * hand: companies here, people in Network OS.
- *
- * The person branch is the one worth reading. Network OS owns people and this system cannot write
- * to it, so somebody it has never heard of has nowhere to go. Rather than pretend, they are
- * recorded locally, marked, and queued — and the response says which of those two happened in
- * words rather than a status code, because "we filed this under a system that does not know them"
- * is exactly the kind of thing an interface usually hides.
- */
 function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolved: () => void }): JSX.Element {
   const [kind, setKind] = useState<"COMPANY" | "PERSON" | "NEITHER">("COMPANY");
   const [name, setName] = useState("");
@@ -4156,7 +4049,14 @@ export function App() {
           {authed && active === "browser-tasks" && <BrowserTasksPage me={me.data!} />}
           {authed && active === "machines" && <MachinesPage me={me.data!} />}
           {authed && active === "notifications" && <NotificationsPage me={me.data!} />}
-          {authed && active === "today" && <TodayPage me={me.data!} onNavigate={navigate} />}
+          {/* ITEM 1: Today folded into Home.
+              It showed open work, pending approvals and recent activity — all three of which Home
+              already carries as modules (`my_work`, `approvals`, `what_changed`), and the first two
+              of which are now tabs sitting directly above where Today used to be. The review found
+              it also promised a date, meetings and deadlines it never showed, so it read as a page
+              that had stopped working rather than one that was a smaller copy of Home.
+              The route still resolves, so a bookmark lands on the page that holds it. */}
+          {authed && active === "today" && <HomePage me={me.data!} onNavigate={navigate} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} onNavigate={navigate} />}
           {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "work" && (

@@ -90,6 +90,9 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
   const [packetTitle, setPacketTitle] = useState("");
   /** The live pass takes tens of seconds; a button with no state reads as broken. */
   const [busy, setBusy] = useState(false);
+  const [proposing, setProposing] = useState(false);
+  /** Held in memory until kept — nothing is written by proposing. */
+  const [proposed, setProposed] = useState<string[]>([]);
 
   if (detail.loading && !detail.data) return <p>Loading project…</p>;
   if (!detail.data) return <p className="muted">Could not load this project.</p>;
@@ -106,7 +109,72 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
       </h3>
       <p className="muted small">{d.project.question}</p>
 
+      {/*
+        THE GUIDED HALF. Operator, item 18: "Research as a guided conversation" with the employee
+        "who builds a schema then produces the report".
+
+        The page asked the hardest part of research as its first field. A partner who types
+        "AI inference" has said what they are curious about, not what would settle it — and naming
+        the five or six questions that would is where an analyst earns their place. It is also a
+        thing a model does well, because it is a question about the SHAPE of an enquiry rather than
+        about the world; answering them is the part that needs evidence, and that is the engine's
+        job.
+
+        PROPOSED, NOT ADDED. They arrive as a list to keep or discard. A research plan somebody did
+        not agree to is a plan they will not use, and this is the one step where being slightly
+        wrong sends the whole packet in the wrong direction.
+      */}
       <h4>Questions</h4>
+
+      <div className="form-row" data-testid="research-propose">
+        <button
+          type="button"
+          disabled={proposing}
+          data-testid="research-propose-run"
+          onClick={async () => {
+            setProposing(true);
+            setMessage(null);
+            const res = await api<{ questions?: string[]; detail?: string; error?: string }>(
+              `/api/research/projects/${id}/propose-questions`,
+              { method: "POST", body: {} },
+            );
+            setProposing(false);
+            if (res.status === 200 && res.data?.questions) setProposed(res.data.questions);
+            else setMessage(res.data?.detail ?? res.data?.error ?? `Could not scope it (HTTP ${res.status}).`);
+          }}
+        >
+          {proposing ? "Thinking…" : "What do we need to find out?"}
+        </button>
+        <span className="muted small">
+          Wyatt names what would actually settle this — including at least one that could disprove it.
+        </span>
+      </div>
+
+      {proposed.length > 0 && (
+        <ul className="card-list small" data-testid="research-proposed">
+          {proposed.map((q) => (
+            <li key={q}>
+              {q}{" "}
+              <button
+                type="button"
+                className="link-button"
+                data-testid="research-proposed-keep"
+                onClick={async () => {
+                  await api(`/api/research/projects/${id}/questions`, { method: "POST", body: { question: q } });
+                  setProposed((list) => list.filter((x) => x !== q));
+                  refresh();
+                }}
+              >
+                keep it
+              </button>{" "}
+              <button type="button" className="link-button" onClick={() => setProposed((list) => list.filter((x) => x !== q))}>
+                no
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
       <ul className="card-list small" data-testid="research-questions">
         {d.questions.map((q) => (
           <li key={q.id}>
