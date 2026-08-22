@@ -178,7 +178,21 @@ export function RoomsPage(): JSX.Element {
     packets.reload();
   }
 
-  const rows = packets.data?.packets ?? [];
+  const all = packets.data?.packets ?? [];
+  /*
+   * A DECLINED PROPOSAL DOES NOT VANISH. Operator: "declined proposals should go somewhere after
+   * they are declined, somewhere below greyed out."
+   *
+   * Same reasoning as the passed pile on Dealflow: what the firm turned down is one of the more
+   * useful things it owns. Parker proposes a Room a month and most are declined by design, so a
+   * list that silently drops them loses the record of what was considered — and the same idea
+   * arriving again in March has nothing to be checked against.
+   *
+   * Below and greyed rather than in a separate view: it is history, so it should not compete with
+   * what is live, and it should not be somewhere you have to remember to go and look.
+   */
+  const rows = all.filter((p) => p.status !== "DECLINED");
+  const declined = all.filter((p) => p.status === "DECLINED");
   const proposed = rows.filter((p) => p.status === "PROPOSED");
 
   return (
@@ -257,6 +271,28 @@ export function RoomsPage(): JSX.Element {
             </li>
           ))}
         </ul>
+
+        {declined.length > 0 && (
+          <div className="declined-shelf" data-testid="declined-proposals">
+            <h4>Turned down</h4>
+            <p className="muted small">
+              Kept because the same idea will be proposed again, and knowing it was already
+              considered is the useful part.
+            </p>
+            <ul className="card-list small">
+              {declined.map((p) => (
+                <li key={p.id} data-testid={`declined-${p.id}`}>
+                  <strong>{p.title}</strong>
+                  <span className="muted">
+                    {" "}
+                    — {p.proposed_for_month}
+                    {p.decided_by ? `, turned down by ${p.decided_by}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {proposed.length > 0 && (
           <p className="muted">{proposed.length} awaiting a decision.</p>
         )}

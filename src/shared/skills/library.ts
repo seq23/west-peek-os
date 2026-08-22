@@ -766,6 +766,43 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Build the downside with the same care as the upside. The case nobody models is the one that happens.",
         ],
       },
+      {
+        key: "one_calculator_not_two",
+        title: "Where the arithmetic is allowed to live",
+        when: "Any time you are tempted to work a number out yourself, in a memo, a spreadsheet or a chat reply.",
+        guidance: [
+          "Call the verified functions rather than reproducing them. A second copy is a second thing to verify and a second thing to drift, and two tools that can disagree about the same deal is worse than one extra click.",
+          "Verification is not acceptance. The arithmetic has been hand-worked by engineering; accepting it for live use is the operator's, and until they do, every output is a modelled figure and says so.",
+          "Say which model version and which inputs produced the number. A figure quoted with no version is unreconstructible six weeks later when somebody disputes it.",
+          "A calculation that reruns invalidates its own review. If the inputs changed, the packet is not IC-ready again until a human has looked at it a second time.",
+          "When there is no verified formula for the shape of deal in front of you, say so and keep the entry manual and labelled. A plausible number here becomes a term somebody signs.",
+        ],
+      },
+      {
+        key: "the_traps_in_a_cap_table",
+        title: "The arithmetic that quietly changes the answer",
+        when: "Any priced round, SAFE, note, preference stack or exit waterfall.",
+        guidance: [
+          "Dilution happens twice and both times count: the round itself, then everything after it. Model entry ownership and exit ownership as separate numbers and never quote the first when the question was about the second.",
+          "A post-money SAFE does not dilute with the round and a pre-money one does. Say which instrument you were given, because the two produce different ownership from identical headline terms.",
+          "On a note, the cap, the discount and the pre-money race each other and the lowest wins — then interest accrues on top. Show which of the three won and for how long the interest ran.",
+          "Participating preferred pays the preference AND the common; non-participating pays the greater of the two. State which one you modelled and the valuation at which a holder would convert, because that number is the negotiation.",
+          "Option pool expansion is not modelled here at all, and it is usually the largest silent transfer in a term sheet. Work it by hand, say you did, and say who bore it.",
+          "SAFE and note conversion here is an approximation of what the documents will do. The legal documents control, and any answer that matters has to survive a lawyer reading the paper.",
+        ],
+      },
+      {
+        key: "no_score_decides_anything",
+        title: "Judgement heuristics are not formulas",
+        when: "Anywhere a rating, a band, a verdict or a 'recommended' option appears.",
+        guidance: [
+          "The deal scores, the stage dilution bands and the traffic-light signals are somebody's underwriting judgement, not derived arithmetic. Keep them out of the calculated fields and label them as opinion when you use them.",
+          "No score may decide anything in this firm. A number that ranks options is an input a human argues with, never an answer, and a 'recommended' scenario is the most misread output in the workbench.",
+          "Score every follow-on path against doing nothing rather than in absolute terms. The question is what the extra cheque buys, and gross proceeds flatter every path equally.",
+          "Mark a path that the reserve cannot actually fund as not executable, with the shortfall in dollars. An elegant super-pro-rata the fund cannot write is not an option, it is a wish.",
+          "Realised performance figures are not computed here. TVPI and DPI stay manual entry until the cash flows exist, and a target is not a result.",
+        ],
+      },
     ],
   },
   {

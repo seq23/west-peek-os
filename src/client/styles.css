@@ -3957,3 +3957,14 @@ body {
 .research-thread { margin: var(--space-md) 0; }
 .research-thread .turn { padding: var(--space-xs) 0; line-height: var(--lh-normal); }
 .research-thread .turn-mine { color: var(--wp-ink-2); }
+
+
+/* Proposals the firm turned down. Below and greyed: it is history, so it must not compete with what
+   is live — and it must not be somewhere you have to remember to go and look. */
+.declined-shelf {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--wp-line);
+  opacity: 0.72;
+}
+.declined-shelf h4 { color: var(--wp-muted); }
