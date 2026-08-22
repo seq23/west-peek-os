@@ -107,6 +107,7 @@ import {
   handleAcceptAiOutput,
   handleAiOutboundPolicy,
   handleDiscardAiOutput,
+  handleDiscardAllQuarantined,
   handleGetAiRun,
   handleListAiRuns,
   handleListQuarantinedOutputs,
@@ -737,6 +738,8 @@ const router = new Router()
   // and throwing one away are new, and without all three the queue could only grow.
   .get("/api/ai/quarantine", handleListQuarantinedOutputs)
   .post("/api/ai/runs/:id/discard-output", handleDiscardAiOutput)
+  // Everything waiting, in one press. Built on the single-item path so every guard comes with it.
+  .post("/api/ai/quarantine/discard-all", handleDiscardAllQuarantined)
   // P4 — AI employee lifecycle (no direct status route; activation via approval receipt only).
   .get("/api/ai/employees/on-duty", handleDutyRoster)
   // The rota the operator can change. One GET, because "who is on now", "the whole day" and "what

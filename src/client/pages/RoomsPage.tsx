@@ -328,7 +328,10 @@ export function RoomsPage(): JSX.Element {
           "Parker proposes at least one Room a month with a theme, agenda, seed questions and guest ideas",
           "Parker finds candidate venues by live search and reads prices off the page it cites",
           "Parker reads close-out notes and turns what West Peek committed to into assigned work",
-          "Wynn keeps the sponsor pipeline and drafts the approach",
+          // Parker, not Wynn: that seat was retired in the cull and `brand_sponsorship_revenue` sits
+          // on Parker now. Naming a colleague who no longer exists tells a partner to go and find
+          // somebody who is not there.
+          "Parker keeps the sponsor pipeline and drafts the approach",
         ]}
         requiresOperator={[
           "Approving a Room — it commits the firm to spend and to approaching sponsors in its name",

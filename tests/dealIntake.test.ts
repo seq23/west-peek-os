@@ -328,7 +328,11 @@ describe("route 4 · the analyst's own scouting", () => {
     expect(res.body.route).toBe("SCOUT");
     const arrival = await arrivalOf(res.body.arrival_event_id);
     expect(arrival.actor_type).toBe("ai_employee");
-    expect(arrival.actor_id).toBe("Wyatt");
+    // The seat's ID under `actorType: "ai_employee"`, never the display name. Asserting the name
+    // pinned the divergence that made the company trail read "Wyatt (AI)" in some rows and
+    // "aie_wyatt (AI)" in others — the same colleague, twice, for the same reason intake cards could
+    // never be worked.
+    expect(arrival.actor_id).toBe("aie_wyatt");
   });
 
   it("refuses a find with no company, rather than opening a card about nothing", async () => {

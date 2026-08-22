@@ -212,10 +212,111 @@ test("P10 LP journey: evidence gate → compliance receipt → publish → recor
  * it, since when, and a control to take it back with a reason. What was closed stays listed
  * underneath, because a revocation that disappears leaves only the grant.
  */
-test("a partner can see who currently holds access to LP material", async ({ page }) => {
+test("a partner sees who holds a key to LP material, and takes it back with a reason", async ({ page, request }) => {
+  const marker = `E2E-P10-ROOM-${Date.now()}`;
+  const holder = `${marker} Northbrook CIO`;
+
+  /*
+   * THE GRANT IS MADE THROUGH THE API, DELIBERATELY, AND THE PAGE SAYS WHY.
+   *
+   * There is no control anywhere for HANDING somebody a key — "granting is not something you should
+   * be able to do quickly" — so the setup here is the same shape as the real risk: something with an
+   * API client shares LP-private material. What this journey proves is that a partner can then SEE
+   * it and CLOSE it, which is the half that had no surface at all.
+   */
+  const artifact = (await (
+    await request.post("/api/lp/data-room/artifacts", {
+      headers: MP,
+      data: { title: `${marker} Q1 pack`, status: "READY" },
+    })
+  ).json()) as { id: string };
+
+  const card = (await (
+    await request.post("/api/approvals", {
+      headers: MP,
+      data: {
+        action_key: "lp_sensitive_communication.send",
+        object_type: "data_room_artifact",
+        object_id: artifact.id,
+        title: `${marker} share the pack`,
+        submit: true,
+      },
+    })
+  ).json()) as { id: string };
+  expect(
+    (await request.post(`/api/approvals/${card.id}/decide`, { headers: MP, data: { decision: "approved" } })).status(),
+  ).toBe(200);
+
+  const granted = await request.post("/api/lp/data-room/access", {
+    headers: MP,
+    data: {
+      artifact_id: artifact.id,
+      recipient_label: holder,
+      permission: "DOWNLOAD",
+      approval_receipt_id: card.id,
+    },
+  });
+  expect(granted.status(), await granted.text()).toBe(201);
+  const accessId = ((await granted.json()) as { id: string }).id;
+
   await page.goto("/");
   await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
   await page.getByTestId("dev-login-submit").click();
   await gotoSurface(page, "LP");
-  await expect(page.getByTestId("lp-data-room")).toBeVisible();
+
+  /*
+   * ── WHO HOLDS A KEY RIGHT NOW ────────────────────────────────────────────────────────────────
+   *
+   * By NAME, with what they may do with it and since when. A count would not answer the question a
+   * partner actually has, which is "is this person still able to download our LP pack".
+   */
+  const ledger = page.getByTestId("lp-data-room");
+  await expect(ledger).toBeVisible();
+  const live = page.getByTestId(`data-room-access-${accessId}`);
+  await expect(live).toBeVisible();
+  await expect(live).toContainText(holder);
+  await expect(live).toContainText(`${marker} Q1 pack`);
+  // DOWNLOAD said as what it means, because "DOWNLOAD" and "VIEW" are the same word to a reader who
+  // has not read the schema — and the difference is whether a copy has left the building.
+  await expect(live).toContainText("can keep a copy");
+  await expect(live).toContainText("since");
+
+  /*
+   * ── AND TAKING IT BACK NEEDS A REASON ────────────────────────────────────────────────────────
+   *
+   * The control refuses to fire on a blank one. A withdrawal of access with nothing written on it
+   * is a row nobody can interpret later, which is the same failure as a grant with no receipt.
+   */
+  await page.getByTestId(`data-room-close-${accessId}`).click();
+  await expect(page.getByTestId(`data-room-revoke-${accessId}`)).toBeDisabled();
+  await page.getByTestId(`data-room-reason-${accessId}`).fill("the diligence window closed");
+  await expect(page.getByTestId(`data-room-revoke-${accessId}`)).toBeEnabled();
+  await page.getByTestId(`data-room-revoke-${accessId}`).click();
+  await expect(page.getByTestId("data-room-message")).toContainText("the grant itself is kept");
+
+  /*
+   * IT LEFT THE LIVE LIST AND STAYED ON THE LEDGER. A revocation that disappears leaves only the
+   * grant, which reads as though nobody ever took the key back.
+   */
+  await expect(page.getByTestId(`data-room-access-${accessId}`)).toHaveCount(0);
+  const closed = page.getByTestId(`data-room-closed-${accessId}`);
+  await expect(closed).toBeVisible();
+  await expect(closed).toContainText(holder);
+  await expect(closed).toContainText("the diligence window closed");
+
+  const rows = (await (await request.get("/api/lp/data-room/access", { headers: MP })).json()) as {
+    access_records: Array<{ id: string; effective_status: string; granted_at: string; revocation_reason: string | null }>;
+  };
+  const row = rows.access_records.find((r) => r.id === accessId)!;
+  expect(row.effective_status).toBe("REVOKED");
+  expect(row.granted_at, "when they were given it is kept as well as when it was taken back").toBeTruthy();
+  expect(row.revocation_reason).toContain("diligence window");
+
+  // A second revocation is refused rather than silently writing a second row over the first.
+  const again = await request.post(`/api/lp/data-room/access/${accessId}/revoke`, {
+    headers: MP,
+    data: { reason: "closing it twice" },
+  });
+  expect(again.status(), await again.text()).toBe(409);
+  expect(await again.text()).toContain("already_revoked");
 });

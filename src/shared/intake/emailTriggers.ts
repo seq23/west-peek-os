@@ -157,3 +157,26 @@ export const DEAL_INTAKE_EMPLOYEE = "Wyatt";
 
 /** Who takes it when nobody can tell what it is. `global_capture_routing` is Porter's machine. */
 export const ROUTING_EMPLOYEE = "Porter";
+
+/**
+ * The row id for a seat, derived from its name in one place.
+ *
+ * WHY THIS EXISTS. A display name written where an identifier belongs is the single most common bug
+ * in this codebase — five separate instances by 22 Aug 2026, and every one of them silent:
+ *
+ *   · intake work cards owned by "Wyatt" could never be worked, because the loop resolves an owner
+ *     by `ai_employee.id`;
+ *   · the fix for that broke the duplicate guard ten minutes later, which compared a raw name
+ *     against a stored id;
+ *   · the runaway-employee breaker counted by name and so could never trip;
+ *   · `ic.ts` looked up the packet card by "Poppy" and matched nothing, ever, so the committee
+ *     reported no facilitator card for every deal;
+ *   · the event trail alternated between "Wyatt (AI)" and "aie_wyatt (AI)" for one colleague.
+ *
+ * None errored. Each read as a feature quietly not working. The names are still the right thing to
+ * SAY — a card should name a colleague — so the answer is not to delete them but to make the
+ * identifier derivable in exactly one place, so a caller can never invent a second convention.
+ */
+export function seatId(name: string): string {
+  return name.startsWith("aie_") ? name : `aie_${name.toLowerCase()}`;
+}

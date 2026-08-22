@@ -795,3 +795,43 @@ fail.
 `data_room_access` were requested, returned, and dropped on the floor. The whole investor block also
 collapsed to a single line of prose when its API returned 403, so the sections did not appear at all
 and a reader could not tell they existed.
+
+## Network OS, fully on · filed 22 Aug 2026, for the end of this work
+
+Operator: *"in the integrations tab - network OS should be fully integrated and turned on and
+working. do whatever is needed to make that happen and can file away for the end of this work."*
+
+**What is already built.** The adapter (`src/worker/effects/networkOsClient.ts`) is complete and
+boundary-checked — `npm run validate:network-boundary` fails the build if any Network OS host or path
+appears outside it. It can read the snapshot, propose a person, and record a receipt for every call.
+`#wpnetwork` relays a person to it as a PROPOSAL, and since 22 Aug the founder's company travels with
+them. Community is designed as the algorithmic view over Network OS rather than a mirror of it.
+
+**Why it is off.** Exactly three values gate it, and **two are missing in production**:
+
+| | |
+|---|---|
+| `WP_OS_NETWORK_OS_SESSION_SECRET` | ✅ set |
+| `WP_OS_NETWORK_OS_BASE_URL` | ❌ not set — the Network OS origin |
+| `WP_OS_NETWORK_OS_USER_EMAIL` | ❌ not set — must be an approved Network OS user |
+
+`networkOsBlockedReason()` names whichever is missing, and every surface reports it rather than
+failing quietly — which is why the Integrations page currently says it is not configured instead of
+appearing broken.
+
+**What "turned on" needs, in order.**
+1. The two missing secrets set on the production Worker. **The operator supplies these — the base URL
+   of her Network OS deployment and an email that is an approved user there.** They are credentials
+   and go through `npm run vault:sync:cloudflare`, never into the repository.
+2. A live pull proven end to end and WATCHED, not assumed. There is history here: on 17 Aug the sync
+   cursor reported `contact — OK` over three FAILED receipts and zero mappings, because a FIXTURE run
+   wrote OK over live failures. Fixtures can no longer touch the live cursor, and the first real pull
+   must be read back from the receipts rather than from the cursor.
+3. `#wpnetwork` relay proven against the live queue — a person proposed, and somebody at the Network
+   OS end seeing them arrive.
+4. Dedupe confirmed at their end, which the operator has stated is Network OS's job: *"network OS
+   should already have dedupe and dupe prevention."* This app must not grow a second one.
+
+**What must not change when it goes on.** Network OS owns who is a member; this app proposes and
+never writes a contact. That boundary is enforced by the validator, not by convention, and turning
+the integration on does not relax it.

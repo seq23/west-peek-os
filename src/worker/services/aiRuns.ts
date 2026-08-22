@@ -295,6 +295,53 @@ export async function discardQuarantinedOutput(env: Env, actor: Actor, runId: st
   return run;
 }
 
+/**
+ * Throwing away everything currently waiting.
+ *
+ * Operator, 22 Aug 2026, of the Cockpit's "What is waiting for somebody to look at it?": *"we need a
+ * throw all away option."* Fifty-one items nobody is going to review one at a time is a queue that
+ * simply sits there, and a queue that sits there teaches a partner to stop looking at queues.
+ *
+ * BUILT ON THE SINGLE-ITEM PATH RATHER THAN BESIDE IT, which is the whole design. Every guard —
+ * human-only, authorized, a required reason, refusing an already-decided or already-accepted run,
+ * never clearing the quarantine flag — comes for free and cannot drift, because there is no second
+ * implementation to drift from. A bulk operation that reimplements its own checks is how a control
+ * ends up stricter one at a time than fifty at a time.
+ *
+ * ONE REASON COVERS THE BATCH, and each item still gets its own decision row and its own event. The
+ * reason is what stops a queue being emptied thoughtlessly, and a per-item prompt for fifty-one items
+ * would guarantee it was answered thoughtlessly.
+ *
+ * IT NEVER RELEASES ANY TEXT. Discarding is a tombstone, exactly as for one: refused output stays
+ * refused, the item leaves the queue, and "why did we throw that away" stays answerable.
+ */
+export async function discardAllQuarantined(
+  env: Env,
+  actor: Actor,
+  reason: string,
+): Promise<{ discarded: number; failed: Array<{ id: string; detail: string }> }> {
+  const waiting = await env.WP_OS_DB.prepare(
+    `SELECT r.id FROM ai_run r
+      WHERE r.status = 'COMPLETED' AND r.output_quarantine = 1
+        AND NOT EXISTS (SELECT 1 FROM ai_output_decision d WHERE d.ai_run_id = r.id)
+      ORDER BY r.created_at ASC`,
+  ).all<{ id: string }>();
+
+  let discarded = 0;
+  const failed: Array<{ id: string; detail: string }> = [];
+  for (const row of waiting.results ?? []) {
+    try {
+      await discardQuarantinedOutput(env, actor, row.id, reason);
+      discarded += 1;
+    } catch (err) {
+      // One item failing must not silently stop the rest, and must not be silently swallowed either:
+      // a partner who pressed "throw all away" and got 49 of 51 needs to know which two remain.
+      failed.push({ id: row.id, detail: err instanceof AiRouteError ? err.message : String(err) });
+    }
+  }
+  return { discarded, failed };
+}
+
 /** One decision per run, enforced by a UNIQUE index. A second attempt is a conflict, not a no-op. */
 async function recordOutputDecision(
   env: Env,
@@ -329,6 +376,21 @@ export async function handleAcceptAiOutput(ctx: RouteContext): Promise<Response>
       parsed.success ? parsed.data.reason || undefined : undefined,
     );
     return json(run);
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/** Throwing away everything waiting, in one press, with one reason on the whole batch. */
+export async function handleDiscardAllQuarantined(ctx: RouteContext): Promise<Response> {
+  try {
+    const parsed = outputDecisionSchema.safeParse((await parseJsonBody(ctx.request)) ?? {});
+    const out = await discardAllQuarantined(
+      ctx.env,
+      actorFromIdentity(ctx.identity!),
+      parsed.success ? parsed.data.reason : "",
+    );
+    return json(out);
   } catch (err) {
     return errorResponse(err);
   }

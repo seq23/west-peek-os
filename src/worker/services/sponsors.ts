@@ -127,14 +127,16 @@ export async function createSponsor(env: Env, actor: Actor, input: z.infer<typeo
       input.ask_high_usd ?? null, input.pitch ?? null, input.ask_detail ?? null,
       input.packet_id ?? null, input.event_id ?? null, input.contact_name ?? null,
       input.contact_email ?? null, input.contact_url ?? null, input.source_url ?? null,
-      input.note ?? null, firmScope, actor.firmUserId ?? actor.aiEmployeeId ?? "Wynn",
+      // "Wynn" was the fallback here, and that seat is RETIRED — so an unattributed write invented an
+      // AI employee who does not exist, under `actorType: "ai_employee"`. A system act says system.
+      input.note ?? null, firmScope, actor.firmUserId ?? actor.aiEmployeeId ?? "system",
     )
     .run();
 
   await appendEvent(env, {
     eventType: "sponsor.identified",
     actorType: actor.type === "HUMAN" ? "firm_user" : "ai_employee",
-    actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "Wynn",
+    actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
     objectType: "sponsor_prospect", objectId: id, firmScope,
     payload: { org: input.org_name, tier: input.tier },
   });
@@ -181,7 +183,7 @@ export async function advanceSponsor(
   await appendEvent(env, {
     eventType: "sponsor.stage_changed",
     actorType: actor.type === "HUMAN" ? "firm_user" : "ai_employee",
-    actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "Wynn",
+    actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
     objectType: "sponsor_prospect", objectId: id, firmScope: sponsor.firm_scope,
     payload: { from: sponsor.stage, to: input.stage },
   });

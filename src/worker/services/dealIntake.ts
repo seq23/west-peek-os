@@ -51,7 +51,7 @@ import { createOpportunity, type CreateOpportunityInput, type OpportunityRow } f
 
 // Both seats now live in `shared/intake/emailTriggers.ts` — the Dealflow page has to name them and
 // a client cannot import from `src/worker`. Re-exported so existing importers here are unaffected.
-import { DEAL_INTAKE_EMPLOYEE, INTAKE_MAILBOX, ROUTING_EMPLOYEE } from "../../shared/intake/emailTriggers";
+import { DEAL_INTAKE_EMPLOYEE, INTAKE_MAILBOX, ROUTING_EMPLOYEE, seatId } from "../../shared/intake/emailTriggers";
 export { DEAL_INTAKE_EMPLOYEE, ROUTING_EMPLOYEE };
 
 /** "Accepts unstructured input… and routes to the right machine." */
@@ -339,7 +339,13 @@ function arrivalActor(arrival: FunnelArrival): { actorType: "firm_user" | "ai_em
   if (arrival.route === "MANUAL") {
     return { actorType: "firm_user", actorId: arrival.actor?.firmUserId ?? arrival.source };
   }
-  if (arrival.route === "SCOUT") return { actorType: "ai_employee", actorId: arrival.source };
+  if (arrival.route === "SCOUT") {
+    // The employee's ID, never their display name. `arrival.source` defaults to the display string,
+    // and writing that under `actorType: "ai_employee"` is the same divergence that made intake
+    // cards unworkable — it leaves an event trail that alternates between "Wyatt (AI)" and
+    // "aie_wyatt (AI)" for the same colleague.
+    return { actorType: "ai_employee", actorId: seatId(arrival.source) };
+  }
   return { actorType: "system", actorId: arrival.route === "EMAIL" ? "inbound_email" : "network_os" };
 }
 

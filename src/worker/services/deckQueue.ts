@@ -2,7 +2,10 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { readDeck } from "./deckReader";
 import { pdfAttachments } from "../effects/mimeAttachments";
-import { DEAL_INTAKE_EMPLOYEE } from "../../shared/intake/emailTriggers";
+import { DEAL_INTAKE_EMPLOYEE, seatId } from "../../shared/intake/emailTriggers";
+
+/** Derived through the one helper, so this file cannot invent a second convention. */
+const DEAL_INTAKE_EMPLOYEE_ID = seatId(DEAL_INTAKE_EMPLOYEE);
 
 /**
  * Reading the decks that arrived, and filling in what the company record did not know.
@@ -153,7 +156,9 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
 
     const reading = await readDeck(
       env,
-      { type: "AI", aiEmployeeId: DEAL_INTAKE_EMPLOYEE, roles: [], firmScopes: ["west-peek"] },
+      // An Actor carries an ID everywhere else in this system; passing a display name here reached
+      // `authorize()` and `ai_run.ai_employee_id` as a value nothing else would match.
+      { type: "AI", aiEmployeeId: DEAL_INTAKE_EMPLOYEE_ID, roles: [], firmScopes: ["west-peek"] },
       { dataBase64, label: deck.filename, mediaType: "application/pdf" },
     );
     if (!reading.ok) {
@@ -202,7 +207,10 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
     await appendEvent(env, {
       eventType: "company.deck_read",
       actorType: "ai_employee",
-      actorId: DEAL_INTAKE_EMPLOYEE,
+      // The ID, not the display name. Written as a name this event read "Wyatt (AI)" on the company
+      // trail while every other event read "aie_wyatt (AI)" — the same colleague, twice, and the
+      // fourth place this divergence has surfaced.
+      actorId: DEAL_INTAKE_EMPLOYEE_ID,
       objectType: "canonical_company",
       objectId: deck.company_id,
       payload: {

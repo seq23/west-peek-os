@@ -321,6 +321,8 @@ function QuarantineQueue({ onMessage }: { onMessage: (m: string) => void }) {
   const queue = useApi<QuarantineResponse>("/api/ai/quarantine");
   const [discarding, setDiscarding] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+  const [bulkReason, setBulkReason] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const decide = async (id: string, path: string, body: unknown, ok: string) => {
     const res = await api<{ error?: string; detail?: string }>(`/api/ai/runs/${id}/${path}`, { method: "POST", body });
@@ -343,6 +345,69 @@ function QuarantineQueue({ onMessage }: { onMessage: (m: string) => void }) {
         </span>
       </div>
       <p className="muted small">{queue.data?.what_this_is}</p>
+
+      {/*
+        THROW THE WHOLE QUEUE AWAY. Operator, 22 Aug 2026: "we need a throw all away option."
+        Fifty-one items nobody is going to review one at a time is a queue that sits there, and a
+        queue that sits there teaches a partner to stop looking at queues.
+
+        Behind a disclosure and requiring a reason, because it is the one control here that acts on
+        everything at once — not to make it hard, but so it cannot be the thing your hand lands on
+        while reaching for a single item. The reason covers the batch: asking fifty-one times would
+        guarantee it was answered without thought.
+
+        Nothing is released. Discarding is a tombstone exactly as it is for one item — refused output
+        stays refused, and "why did we throw that away" stays answerable.
+      */}
+      {(queue.data?.waiting_count ?? 0) > 0 && (
+        <details className="delegate" data-testid="quarantine-discard-all">
+          <summary>Throw all {queue.data!.waiting_count} of these away…</summary>
+          <div className="delegate-body">
+            <label>
+              Why
+              <input
+                data-testid="quarantine-discard-all-reason"
+                aria-label="Why the whole queue is being thrown away"
+                placeholder="so the next person knows what was wrong with it"
+                value={bulkReason}
+                onChange={(e) => setBulkReason(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn-strong"
+              disabled={bulkReason.trim().length < 4 || bulkBusy}
+              data-testid="quarantine-discard-all-submit"
+              onClick={async () => {
+                setBulkBusy(true);
+                const res = await api<{ discarded?: number; failed?: Array<{ id: string }>; detail?: string }>(
+                  "/api/ai/quarantine/discard-all",
+                  { method: "POST", body: { reason: bulkReason.trim() } },
+                );
+                setBulkBusy(false);
+                onMessage(
+                  res.status === 200
+                    ? `${res.data?.discarded ?? 0} thrown away.${
+                        res.data?.failed?.length
+                          ? ` ${res.data.failed.length} could not be — they are still in the list.`
+                          : ""
+                      }`
+                    : `Nothing changed: ${res.data?.detail ?? `the server answered ${res.status}`}`,
+                );
+                setBulkReason("");
+                queue.reload();
+              }}
+            >
+              {bulkBusy ? "Throwing away…" : "Throw them all away"}
+            </button>
+            <p className="muted small">
+              The text is never released — each one is recorded as thrown away, with this reason and
+              your name, exactly as if you had done them one at a time.
+            </p>
+          </div>
+        </details>
+      )}
+
       <ul className="card-list small" data-testid="quarantine-list">
         {(queue.data?.waiting ?? []).map((r) => (
           <li key={r.id} data-testid={`quarantine-item-${r.id}`}>
