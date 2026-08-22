@@ -114,7 +114,7 @@ function Spine({ counts, onShowExit }: { counts: Record<string, number>; onShowE
  */
 const PASSABLE: readonly string[] = ["NEW", "SCREENING", "DILIGENCE", "IC_READY"];
 
-function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
+function DealRow({ deal, onChanged, onFixNumbers }: { deal: Deal; onChanged: () => void; onFixNumbers: (companyId: string, name: string) => void }) {
   const s = stage(deal.status);
   const stall = stallRead(deal.status, deal.in_stage_since);
   const [busy, setBusy] = useState(false);
@@ -158,10 +158,21 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
         {deal.placeholder_fields.length > 0 ? (
           <>
             <div className="lbl">Needs from you</div>
-            <div className="deal-blocker-text warn">
+            {/*
+              THE WARNING IS THE WAY IN. Operator: "i never realised it was the way to enter real
+              numbers for sensori — this is a ui problem." It said a deal was carrying stand-in
+              figures and offered no route to the one place they can be replaced, which is further
+              down this same page behind a dropdown. Now it takes you there and picks the company.
+            */}
+            <button
+              type="button"
+              className="link-button deal-blocker-text warn"
+              data-testid={`deal-placeholders-${deal.id}`}
+              onClick={() => onFixNumbers(deal.company_id, deal.company_name)}
+            >
               {deal.placeholder_fields.length} value{deal.placeholder_fields.length === 1 ? " is a" : "s are"} placeholder
-              {deal.placeholder_fields.length === 1 ? "" : "s"}
-            </div>
+              {deal.placeholder_fields.length === 1 ? "" : "s"} — put the real ones in
+            </button>
           </>
         ) : stall?.stalled ? (
           <>
@@ -310,7 +321,16 @@ function DealRow({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
   );
 }
 
-export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
+export function DealflowPage({
+  me,
+  onNavigate,
+  onFixNumbers,
+}: {
+  me: MeResponse;
+  onNavigate: (key: string) => void;
+  /** Take the reader to the deal record with this company already picked. */
+  onFixNumbers: (companyId: string, name: string) => void;
+}) {
   const board = useApi<Board>("/api/dealflow/board");
   const companies = useApi<{ companies: Array<{ id: string; canonical_name: string }> }>("/api/companies");
   const [adding, setAdding] = useState(false);
@@ -547,7 +567,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       {/* THE PIPELINE, with a way to narrow it. Three companies fit on a screen; thirty do not,
           and "show me what we passed on" is a question this page could not answer at all. */}
       <div className="home-section-head">
-        <h4>The pipeline</h4>
+        <h3>The pipeline</h3>
         <span className="muted small">sorted by what needs you soonest</span>
         <span className="deal-filters" role="group" aria-label="Filter deals by where they stand">
           {DEAL_FILTERS.map((f) => (
@@ -657,7 +677,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
 
       <ul className="deal-list" data-testid="deal-list">
         {shown.map((d) => (
-          <DealRow key={d.id} deal={d} onChanged={board.reload} />
+          <DealRow key={d.id} deal={d} onChanged={board.reload} onFixNumbers={onFixNumbers} />
         ))}
         {shown.length === 0 && (
           <li className="state-empty" data-testid="dealflow-empty">

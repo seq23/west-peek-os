@@ -2308,9 +2308,16 @@ function PlaceholderPanel({
   );
 }
 
-function InvestmentPage({ me }: { me: MeResponse }) {
+function InvestmentPage({ me, initialCompanyId }: { me: MeResponse; initialCompanyId?: string }) {
   const companies = useApi<{ companies: CompanyRow[] }>("/api/companies");
-  const [companyId, setCompanyId] = useState("");
+  const [companyId, setCompanyId] = useState(initialCompanyId ?? "");
+  // Follows the pipeline when a row above asks for this company. Guarded on a value, so opening the
+  // page normally does not clear a choice the reader just made.
+  useEffect(() => {
+    if (initialCompanyId) setCompanyId(initialCompanyId);
+  }, [initialCompanyId]);
+
+
   const opportunities = useApi<{ opportunities: OpportunityRow[] }>(companyId ? `/api/opportunities?company_id=${companyId}` : null, [companyId]);
   const [title, setTitle] = useState("");
   const [dealType, setDealType] = useState("EARLY_STAGE_PRIMARY");
@@ -2319,6 +2326,24 @@ function InvestmentPage({ me }: { me: MeResponse }) {
   const [origin, setOrigin] = useState("UNRECORDED");
   const [relStartedAt, setRelStartedAt] = useState("");
   const [selected, setSelected] = useState<OpportunityRow | null>(null);
+
+  /*
+   * THE RECORD OPENS WITH THE COMPANY. Operator: "there should be 1 deal record for every company
+   * with all fields in it... and it should open once u select a company."
+   *
+   * A company almost always has exactly one live deal, so the click between picking the company and
+   * seeing its record bought nothing and hid the fields somebody came here to fill in. Where there
+   * genuinely are several — a follow-on beside a secondary — the list still stands and nothing is
+   * chosen for the reader, because then it is a real question.
+   */
+  const opportunityRows = opportunities.data?.opportunities ?? [];
+  useEffect(() => {
+    if (!companyId) {
+      setSelected(null);
+      return;
+    }
+    if (opportunityRows.length === 1) setSelected(opportunityRows[0]!);
+  }, [companyId, opportunityRows.length]);
   const [packet, setPacket] = useState<DealMathPacketRow | null>(null);
   /*
    * THE DEAL'S OWN NUMBERS, TYPED. This panel used to submit a hardcoded $1M cheque into a $20M
@@ -2496,14 +2521,29 @@ function InvestmentPage({ me }: { me: MeResponse }) {
           </li>
         )}
       </ul>
+
+      <details className="card" data-testid="company-360-details">
+        <summary>Everything else on record for this company</summary>
+        <Company360Panel key={`${companyId}-${nonce}`} companyId={companyId} />
+      </details>
       </div>
 
       {selected && (
         <div className="deal-record-section" data-testid="opportunity-detail">
-          <h5>The deal record: {selected.title}</h5>
+          {/*
+            LAID OUT LIKE THE LP PAGE. Operator: "i dont understand why it cant be simple like the lp
+            page — everything is there and its easy to follow."
+
+            The LP page works because it is a FLAT SEQUENCE: a heading, one card, the next heading.
+            Nothing nested, nothing behind a disclosure, nothing that reveals a further thing when
+            you pick something. This record was the opposite — pick a company, pick a deal, then
+            three unlabelled blocks inside one section, one of which was a bare row of inputs with
+            no heading at all. Same content, laid out the same way as the page she can follow.
+          */}
+          <h4>What the fund would own</h4>
           <p className="muted small">
-            What the fund would own and at what price, what it actually owns, and the packet the
-            committee decides on.
+            The price, the shares, and what that adds up to. These are the real numbers — anything
+            still a stand-in is marked.
           </p>
           {/*
             THE MISSING RUNG. A `position` is created only when a transaction is executed, and every
@@ -2518,6 +2558,11 @@ function InvestmentPage({ me }: { me: MeResponse }) {
             me={me}
             onRecorded={() => opportunities.reload()}
           />
+          <h4>The arithmetic</h4>
+          <p className="muted small">
+            What the cheque buys and what it is worth if it works. Every figure is typed by a person;
+            nothing here is assumed.
+          </p>
           <div className="form-row" data-testid="deal-math-inputs">
             {(
               [
@@ -2614,8 +2659,18 @@ function InvestmentPage({ me }: { me: MeResponse }) {
               {packet.ownership_at_close ?? "—"} · MOIC {packet.moic ?? "—"} · TVPI {packet.tvpi ?? "— (manual only)"}
             </p>
           )}
-          {icPacketId && <IcPacketPanel packetId={icPacketId} onChanged={() => setNonce((n) => n + 1)} />}
-          {icPacketId && <IcPortalPage packetId={icPacketId} />}
+          {/* The last step in the sequence, and it gets a heading like the rest of them. Nesting is
+              reserved for the rare action — adding a second deal — rather than for the work. */}
+          {icPacketId && (
+            <>
+              <h4>Ready for the committee</h4>
+              <p className="muted small">
+                What the committee decides on, and what it still needs before it can.
+              </p>
+              <IcPacketPanel packetId={icPacketId} onChanged={() => setNonce((n) => n + 1)} />
+              <IcPortalPage packetId={icPacketId} />
+            </>
+          )}
         </div>
       )}
         </>
@@ -3845,6 +3900,14 @@ export function App() {
   // Distinguishes "signed out deliberately" from "never signed in". Without it the two states
   // render the same screen and the operator cannot tell whether sign-out worked.
   const [signedOut, setSignedOut] = useState(false);
+  /**
+   * Which company the deal record is showing.
+   *
+   * Lifted here because the pipeline and the deal record are two components on one page, and a row
+   * warning that a deal carries placeholder figures has to be able to open the place that replaces
+   * them. Held in the shell rather than passed sideways between siblings.
+   */
+  const [dealRecordCompany, setDealRecordCompany] = useState("");
 
   /**
    * Which nav groups are collapsed, remembered across sessions.
@@ -4140,7 +4203,20 @@ export function App() {
           {authed && active === "deal-math" && <ModelingPage me={me.data!} />}
           {authed && active === "dealflow" && (
             <>
-              <DealflowPage me={me.data!} onNavigate={navigate} />
+              {/*
+                THE PIPELINE AND THE DEAL RECORD ARE ONE PAGE, so the warning on a row can reach the
+                place that resolves it. A deal saying "2 values are placeholders" and a picker that
+                replaces them were on the same screen with nothing joining them, which is the whole
+                of the operator's "i never realised it was the way to enter real numbers".
+              */}
+              <DealflowPage
+                me={me.data!}
+                onNavigate={navigate}
+                onFixNumbers={(companyId) => {
+                  setDealRecordCompany(companyId);
+                  document.querySelector('[data-testid="deal-records"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              />
               {/* A SECTION, NOT A DRAWER. This was folded away, so the deal math, the IC assembly
                   and the company record — the tools you reach for once a deal is real — were
                   behind a disclosure most people never opened. A heading and the tool beneath it
@@ -4153,7 +4229,7 @@ export function App() {
                 <p className="muted small">
                   Deal math, IC packets and the full record behind a single company.
                 </p>
-                <InvestmentPage me={me.data!} />
+                <InvestmentPage me={me.data!} initialCompanyId={dealRecordCompany} />
               </section>
             </>
           )}

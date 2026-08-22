@@ -143,6 +143,17 @@ export function DealProvenance(): JSX.Element {
         </>
       )}
 
+      {/*
+        THE SECTION HAS AN END. Operator: "the last section is incomplete." With every deal already
+        carrying an origin the page simply stopped after the table — no line saying the queue was
+        empty, so it read as something that had failed to load rather than something finished.
+      */}
+      {d.total > 0 && d.unrecorded.length === 0 && (
+        <p className="state-empty" data-testid="provenance-complete">
+          Every deal on the board says where it came from. Nothing to fill in.
+        </p>
+      )}
+
       {d.unrecorded.length > 0 && (
         <>
           <h4>Set an origin</h4>
