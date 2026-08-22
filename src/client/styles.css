@@ -955,12 +955,6 @@ hr {
   min-width: 0;
 }
 
-/* A money or quantity field is as wide as the number, not as wide as the row. `flex` below makes
-   free text grow, which is right for a name and wrong for an amount — an input sized for a
-   paragraph invites one. */
-.form-row > label:has(> .input-money) { flex: 0 1 14rem; }
-.input-money { font-variant-numeric: tabular-nums; }
-
 /*
  * A TEXT FIELD FILLS THE ROW IT IS IN.
  *
@@ -979,6 +973,20 @@ hr {
 .form-row > label:has(> input[type="url"]),
 .form-row > label:has(> input:not([type])) {
   flex: 1 1 16rem;
+}
+
+/* A money or quantity field is as wide as the number, not as wide as the row.
+   AFTER the rule above and not before it: both selectors carry the same specificity, so the one
+   declared last wins — placed first, this was silently overridden and the amount field stayed the
+   width of a paragraph, which is an input that invites one. */
+/* Capped on the INPUT rather than the label's flex basis. Two `:has()` attempts at the label lost
+   to the free-text rule above and left the amount field the width of a paragraph — an input sized
+   for prose invites prose. A max-width on the control itself cannot be out-specified by a rule
+   about its parent. */
+.form-row > label .input-money,
+.input-money {
+  max-width: 12rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* A checkbox/radio label is a row, not a stack. */
