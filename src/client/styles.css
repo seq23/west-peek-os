@@ -933,6 +933,29 @@ hr {
 }
 
 /*
+ * `.row` had no rule at all.
+ *
+ * The markup used it as a layout class in several places and the stylesheet never defined it, so
+ * those controls fell back to inline defaults — on Community the "is looking for…" note field sat
+ * at the browser's default width with its own placeholder truncated, beside a thousand pixels of
+ * nothing. It behaves as a form row, because that is what every caller was using it as.
+ */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-sm);
+}
+
+.row > input[type="text"],
+.row > input[type="search"],
+.row > input:not([type]) {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+/*
  * A TEXT FIELD FILLS THE ROW IT IS IN.
  *
  * Every text input sat at the browser default of roughly 180px regardless of the space beside it —

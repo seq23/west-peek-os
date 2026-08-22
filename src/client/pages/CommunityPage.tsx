@@ -208,10 +208,9 @@ export function CommunityPage(): JSX.Element {
 
   return (
     <div className="page" data-testid="community-page">
-      <h2>Community</h2>
-      <p className="muted">
-        How the community is behaving — segments, engagement, and what that suggests for the firm.
-      </p>
+      {/* The page heading is already "Community" twice above this — once as the surface title and
+          once opening the purpose line. A third was noise, and the sentence it introduced says the
+          same thing the purpose line already said. */}
 
       <PopulationPanel />
 
