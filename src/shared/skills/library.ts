@@ -696,6 +696,29 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
         ],
       },
       {
+        key: "which_way_a_record_travels",
+        title: "Which direction each kind of record goes",
+        when: "Anything crossing between West Peek OS and Network OS, in either direction.",
+        guidance: [
+          "People belong to Network OS. Companies and deal flow belong to us. The firm's read on a person — their segment, how engaged they are, what we make of them — belongs to us and never leaves.",
+          "Sending a person out is a PROPOSAL, not a write. They land in Network OS's intake queue and somebody there decides whether they become a contact. Never describe a proposal as if the person is now in the database.",
+          "Never let two systems claim the same write. If both could plausibly own a record, that is the question to raise, not a thing to resolve by writing to both.",
+          "We read the SHAPE of the community, not the roster. Counts, cohorts and how warm each one is — not a copy of five thousand names, which would be a second database that drifts and a list nobody scrolls.",
+        ],
+      },
+      {
+        key: "a_green_light_is_not_proof",
+        title: "Reading a sync's own report of itself",
+        when: "Judging whether the mirror is actually working, or being asked whether a sync landed.",
+        guidance: [
+          "Check what came ACROSS, not what the status says. A cursor read OK for three days over a live integration that had never once succeeded, because a fixture run had written the OK on top of the real failures.",
+          "A fixture proves the transform, never the far end. If a run did not touch Network OS it has nothing to say about Network OS.",
+          "Zero rows with a healthy status is a finding, not a quiet day. Say it out loud rather than waiting to be asked.",
+          "A big community arrives over many ticks, not in one go. While it is loading, say how far through it is — a number climbing for hours with no explanation reads as a fault.",
+          "A half-read community is not a sync that happened. Do not report it as complete because some of it arrived.",
+        ],
+      },
+      {
         key: "a_person_record_is_a_relationship",
         title: "Merging and correcting people",
         when: "Deduplicating, merging or correcting a person record.",
