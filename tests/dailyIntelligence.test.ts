@@ -358,9 +358,9 @@ describe("the brief is built one partner at a time, across ticks", () => {
 
     await t.db
       .prepare(
-        `INSERT INTO partner_intelligence_profile (firm_user_id, timezone, deliver_at_local, weekends)
+        `INSERT INTO partner_intelligence_profile (firm_user_id, timezone, earliest_start_local, weekends)
          VALUES (?1, 'America/New_York', '07:00', 1)
-         ON CONFLICT (firm_user_id) DO UPDATE SET timezone = 'America/New_York', deliver_at_local = '07:00', weekends = 1`,
+         ON CONFLICT (firm_user_id) DO UPDATE SET timezone = 'America/New_York', earliest_start_local = '07:00', weekends = 1`,
       )
       .bind(partner!.id)
       .run();

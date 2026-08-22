@@ -42,6 +42,28 @@ export class NetworkAdapterError extends Error {
 
 /** Resources Network OS owns. WP OS never becomes their source of truth. */
 export const NETWORK_RESOURCES = ["contact", "relationship", "touch", "gmail_thread"] as const;
+
+/**
+ * How many records one pull applies. Sized for the CPU budget rather than for speed: each record
+ * costs a duplicate-check query, an upsert and a receipt, and it is better to take twenty ticks and
+ * finish than to take one and be killed halfway with no record of where.
+ */
+export const RECORDS_PER_PULL = 250;
+
+/** `cursor_value` doubles as the resume point. Anything unparseable means start from the top. */
+function readProgress(cursorValue: string | null): number {
+  if (!cursorValue) return 0;
+  try {
+    const parsed = JSON.parse(cursorValue) as { offset?: number };
+    return typeof parsed.offset === "number" && parsed.offset >= 0 ? parsed.offset : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeProgress(offset: number, total: number): string {
+  return JSON.stringify({ offset, total });
+}
 export type NetworkResource = (typeof NETWORK_RESOURCES)[number];
 
 /** Every clause the plan requires a declared adapter contract to state. */
@@ -226,6 +248,8 @@ export interface PullSummary {
   status: "OK" | "DEGRADED_READ_ONLY" | "FAILED";
   failure_reason?: string;
   cursor: string | null;
+  /** How far through the far end's table this pass got. Absent when nothing was read. */
+  progress?: { done: number; total: number; complete: boolean };
 }
 
 /**
@@ -315,11 +339,37 @@ export async function pullResource(
     return { resource, applied: 0, duplicates: 0, conflicts: 0, status: "FAILED", failure_reason: reason, cursor: cursorRow?.cursor_value ?? null };
   }
 
+  /*
+   * A BIG COMMUNITY ARRIVES OVER MANY TICKS, NOT IN ONE REQUEST.
+   *
+   * Operator, 21 Aug 2026: "it doesnt have to load our entire community the same day it can work at
+   * whatever pace and let us know when its done give us a progress bar."
+   *
+   * The far end returns its whole table in one response — there is no paging to ask for — and this
+   * Worker has a 10 ms CPU budget per invocation, the same wall the morning brief hit. Five thousand
+   * contacts means five thousand duplicate-checks and five thousand upserts, which is not a slow
+   * request, it is a request that never finishes.
+   *
+   * So a pull applies a bounded WINDOW and records where it got to. The cron calls it again, it
+   * resumes, and the community fills in over a few hours with a number the operator can watch. The
+   * window is stored on `cursor_value`, which is the column that already exists to answer "where did
+   * I get to" — no migration, and nothing else has to know.
+   *
+   * Re-running is safe by construction: `receiptExists` keys on the record's delivery id, so a
+   * record seen twice is counted as a duplicate rather than applied twice. The window is an
+   * optimisation over that guarantee, not a replacement for it.
+   */
+  const startedFrom = readProgress(cursorRow?.cursor_value ?? null);
+  const total = page.records.length;
+  const from = startedFrom < total ? startedFrom : 0;
+  const window = page.records.slice(from, from + RECORDS_PER_PULL);
+  const reachedEnd = from + window.length >= total;
+
   let applied = 0;
   let duplicates = 0;
   let conflicts = 0;
 
-  for (const record of page.records) {
+  for (const record of window) {
     const idempotencyKey = `pull:${resource}:${record.delivery_id ?? record.external_id}`;
     if (await receiptExists(env, idempotencyKey, firmScope)) {
       duplicates += 1;
@@ -406,11 +456,15 @@ export async function pullResource(
 
   // The success case, guarded for the same reason as the failure cases above: a fixture that
   // transformed its own records correctly has proven nothing about Network OS.
+  //
+  // `last_sync_at` moves only when the pass COMPLETES. A half-read community is not a sync that
+  // happened; stamping it would make a partial read look finished on every surface that reads this
+  // row, which is the same lie the fixture cursor told.
   if (!opts.isFixture) {
     await upsertCursor(env, firmScope, resource, {
-      cursor_value: page.next_cursor,
-      last_sync_at: new Date().toISOString(),
-      last_status: "OK",
+      cursor_value: reachedEnd ? page.next_cursor : writeProgress(from + window.length, total),
+      ...(reachedEnd ? { last_sync_at: new Date().toISOString() } : {}),
+      last_status: reachedEnd ? "OK" : "IN_PROGRESS",
       failure_reason: null,
     });
   }
@@ -423,7 +477,15 @@ export async function pullResource(
     firmScope,
     payload: { resource, applied, duplicates, conflicts },
   });
-  return { resource, applied, duplicates, conflicts, status: "OK", cursor: page.next_cursor };
+  return {
+    resource,
+    applied,
+    duplicates,
+    conflicts,
+    status: "OK",
+    cursor: page.next_cursor,
+    progress: { done: from + window.length, total, complete: reachedEnd },
+  };
 }
 
 // ── Conflicts ──

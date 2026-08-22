@@ -47,6 +47,134 @@ const MEMBER_KINDS = [
   { key: "MEMBER", label: "Members" },
 ] as const;
 
+
+interface PopulationSlice {
+  key: string;
+  count: number;
+  pct: number;
+}
+
+interface Population {
+  total: number;
+  loading: { done: number; total: number } | null;
+  by_type: PopulationSlice[];
+  deal_flow: PopulationSlice[];
+  touch_recency: PopulationSlice[];
+  firm_has_a_view_on: number;
+  source: { last_status: string; last_sync_at: string | null; failure_reason: string | null };
+}
+
+/** Plain words for a machine's vocabulary. `service_provider` is not a category anybody says out loud. */
+const TYPE_WORDS: Record<string, string> = {
+  investor: "Investors",
+  founder: "Founders",
+  operator: "Operators",
+  lawyer: "Lawyers",
+  service_provider: "Service providers",
+  media: "Media",
+  general: "General",
+  unknown: "Not categorised",
+};
+
+const RECENCY_WORDS: Record<string, string> = {
+  recent: "heard from us in the last 90 days",
+  fading: "not in 3–12 months",
+  cold: "not in over a year",
+  never: "never recorded a touch",
+};
+
+/**
+ * What the community IS — the birds-eye view.
+ *
+ * Operator, on this tab's purpose: "introduction and algorithmic matching and a birds eye view of
+ * what our community is like." This is the third of those, and it is deliberately the first thing
+ * on the page: introductions are what you DO, and this is what you are doing it to.
+ *
+ * IT IS A SHAPE, NOT A ROSTER. Network OS owns the five thousand names; mirroring them here would
+ * be a second database that drifts and a list nobody scrolls. The categories are Network OS's own
+ * `person_type`, read rather than re-invented, so the two systems can never disagree about what a
+ * founder is.
+ */
+function PopulationPanel(): JSX.Element {
+  const pop = useApi<Population>("/api/community/population");
+  const p = pop.data;
+
+  if (pop.loading && !p) return <p className="state-message">Reading the community…</p>;
+  if (!p) return <p className="state-message">The community shape could not be read just now.</p>;
+
+  const loadingNow = p.loading;
+  const pctLoaded = loadingNow && loadingNow.total > 0 ? Math.round((loadingNow.done / loadingNow.total) * 100) : 0;
+
+  return (
+    <section className="card" data-testid="community-population">
+      <h3>What the community looks like</h3>
+
+      {/* A LOAD IN PROGRESS IS SAID PLAINLY, because a number that grows for hours with no
+          explanation reads as a bug. Operator: "let us know when its done give us a progress bar." */}
+      {loadingNow && (
+        <div data-testid="community-load-progress">
+          <p className="small">
+            Reading your community from Network OS — <strong>{loadingNow.done.toLocaleString()}</strong> of{" "}
+            {loadingNow.total.toLocaleString()} so far. It carries on by itself; nothing needs to stay open.
+          </p>
+          <div
+            className="progress-track"
+            role="progressbar"
+            aria-valuenow={pctLoaded}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Community load progress"
+          >
+            <div className="progress-fill" style={{ width: `${pctLoaded}%` }} />
+          </div>
+        </div>
+      )}
+
+      {p.total === 0 && !loadingNow && (
+        <p className="state-empty" data-testid="community-population-empty">
+          {p.source.last_status === "OK"
+            ? "Network OS answered and had nobody to give. Once the community is loaded there, this fills in on its own."
+            : `Network OS could not be read — ${p.source.failure_reason ?? p.source.last_status}. This is empty because the sync did not land, not because the community is.`}
+        </p>
+      )}
+
+      {p.total > 0 && (
+        <>
+          <p className="small">
+            <strong>{p.total.toLocaleString()}</strong> people. The firm has formed a view on{" "}
+            {p.firm_has_a_view_on.toLocaleString()} of them.
+          </p>
+
+          <div className="cohort-grid" data-testid="community-cohorts">
+            {p.by_type.map((s) => (
+              <div key={s.key} className="cohort" data-testid={`cohort-${s.key}`}>
+                <span className="cohort-count">{s.count.toLocaleString()}</span>
+                <span className="cohort-label">{TYPE_WORDS[s.key] ?? s.key}</span>
+                <span className="cohort-pct">{s.pct}%</span>
+              </div>
+            ))}
+          </div>
+
+          {/* The number that actually changes a decision. A community is not a headcount — it is
+              how many of those people have heard from the firm lately. */}
+          <h4>How warm it is</h4>
+          <ul className="card-list small" data-testid="community-recency">
+            {p.touch_recency.map((s) => (
+              <li key={s.key}>
+                <strong>{s.count.toLocaleString()}</strong> {RECENCY_WORDS[s.key] ?? s.key} · {s.pct}%
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <p className="muted small">
+        Network OS owns who these people are. This reads the shape of them and never keeps a copy.
+      </p>
+    </section>
+  );
+}
+
 export function CommunityPage(): JSX.Element {
   const state = useApi<{ members: MemberRow[]; counts: Record<string, number> }>("/api/community/members");
   const [name, setName] = useState("");
@@ -84,6 +212,8 @@ export function CommunityPage(): JSX.Element {
       <p className="muted">
         How the community is behaving — segments, engagement, and what that suggests for the firm.
       </p>
+
+      <PopulationPanel />
 
       {/* INTRODUCTIONS LIVES HERE NOW, and first, because it is the only thing on this page anybody
           has to ACT on. It had a tab of its own next to Approvals and Notifications, which put a

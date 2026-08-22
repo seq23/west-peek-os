@@ -3769,3 +3769,42 @@ body {
   margin-top: var(--space-2xs);
   font-size: var(--text-sm);
 }
+
+/* — The community's shape, and a long load's progress.
+     The bar exists because a five-thousand-person import runs for hours across cron ticks, and a
+     count that climbs with no explanation reads as a bug rather than as work happening. */
+.progress-track {
+  height: var(--space-xs);
+  margin: var(--space-2xs) 0 var(--space-sm);
+  border-radius: var(--radius-pill);
+  background: var(--wp-line);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--wp-orange);
+  border-radius: var(--radius-pill);
+  transition: width 240ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill { transition: none; }
+}
+
+.cohort-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+.cohort {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  padding: var(--space-sm);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface-2);
+}
+.cohort-count { font-size: var(--text-xl); font-weight: 700; font-variant-numeric: tabular-nums; }
+.cohort-label { font-size: var(--text-sm); color: var(--wp-ink-2); }
+.cohort-pct { font-size: var(--text-sm); color: var(--wp-muted); font-variant-numeric: tabular-nums; }

@@ -635,12 +635,12 @@ export async function runDailyForAll(
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const partners = await env.WP_OS_DB.prepare(
     `SELECT u.id, COALESCE(p.enabled, 1) AS enabled, COALESCE(p.timezone,'America/Chicago') AS timezone,
-            COALESCE(p.weekends, 0) AS weekends, COALESCE(p.deliver_at_local,'06:45') AS deliver_at_local
+            COALESCE(p.weekends, 0) AS weekends, COALESCE(p.earliest_start_local,'06:15') AS earliest_start_local
        FROM firm_user u
        LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
        JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
       WHERE u.status = 'ACTIVE'`,
-  ).all<{ id: string; enabled: number; timezone: string; weekends: number; deliver_at_local: string }>();
+  ).all<{ id: string; enabled: number; timezone: string; weekends: number; earliest_start_local: string }>();
 
   // Before starting anything: close out yesterday's casualties. A row still marked GENERATING from
   // a run that died hours ago is not in progress, and leaving it that way hides today's real state.
@@ -686,7 +686,9 @@ export async function runDailyForAll(
       // Their own hour, in their own timezone. The job now fires all day, so this is the gate the
       // 06:00 schedule used to be — without it a brief gets built at midnight local and is stale
       // by the time anybody reads it.
-      isAfterLocalTime(now, p.timezone, p.deliver_at_local) &&
+      // The moment the brief may BEGIN, chosen so it is finished before the partner looks —
+      // not the moment it is delivered. See migration 0099.
+      isAfterLocalTime(now, p.timezone, p.earliest_start_local) &&
       !done.has(`${p.id}:${localReportDate(now, p.timezone)}`),
   );
 

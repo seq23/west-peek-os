@@ -296,7 +296,8 @@ export function localReportDate(now: Date, timezone: string): string {
  * the schedule WAS the gate. Chunking a partner per tick means the job fires all day, and without
  * this a brief would be built at midnight local and be stale by breakfast.
  *
- * `hhmm` is the profile's `deliver_at_local`, "HH:MM". An unparseable value is treated as due,
+ * `hhmm` is the profile's `earliest_start_local`, "HH:MM" — when the brief may START, chosen so
+ * it is FINISHED before the partner opens the app. An unparseable value is treated as due,
  * because a partner with a mistyped preference should still get their brief and see the mistake
  * rather than silently never receive one.
  */
