@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SKILL_LIBRARY, guidanceBlock, skillsForMachines } from "@shared/skills/library";
-import { MACHINE_REGISTRY } from "@shared/registry/machines";
+import { ACTIVE_MACHINES, MACHINE_REGISTRY, isRetiredMachine } from "@shared/registry/machines";
 import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 import { DEPARTMENTS_COVER_ALL_DOMAINS, departmentDef } from "@shared/registry/departments";
 
@@ -22,6 +22,49 @@ describe("the skill library is attached to a real firm", () => {
     const seated = new Set(AI_EMPLOYEE_ROSTER.flatMap((e) => e.primaryMachineKeys));
     const unread = SKILL_LIBRARY.filter((d) => !seated.has(d.machineKey)).map((d) => d.machineKey);
     expect(unread).toEqual([]);
+  });
+
+  /*
+   * The other direction, and the reason the registry keeps rows it no longer uses.
+   *
+   * A retired machine is not deleted — work_card, ai_run and ai_run_attribution point at it, and
+   * migrations are append-only, so the row stays in the registry and in the database and simply
+   * stops taking work. `ACTIVE_MACHINES` is what may be seated on, scheduled to or routed to, and
+   * these two guards are what make that flag mean something rather than being documentation.
+   */
+  it("seats nobody on a retired machine", () => {
+    const wrong = AI_EMPLOYEE_ROSTER.flatMap((e) =>
+      e.primaryMachineKeys.filter((k) => isRetiredMachine(k)).map((k) => `${e.name} sits on retired ${k}`),
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  it("writes no methods for a retired machine", () => {
+    expect(SKILL_LIBRARY.filter((d) => isRetiredMachine(d.machineKey)).map((d) => d.machineKey)).toEqual([]);
+  });
+
+  it("keeps every active machine seated and every seat's machines real", () => {
+    /*
+     * The count is asserted because both halves are decisions the operator made, and a number that
+     * drifts silently is how twelve machines came to have nobody on them without anyone noticing.
+     *
+     * 46 rows in the registry: canon §5A.2's forty-five plus `venture_teaching`, added because the
+     * Professor had no teaching machine and was seated on the committee's post-mortem instead.
+     * 43 active: `prompt_enhancer_intent` (askToCard.ts already does it), `developer_diagnostics`
+     * and `builder_repo_product` (both assume an engineer this firm does not employ) are flagged
+     * retired and kept, because deleting them would orphan live history.
+     */
+    expect(MACHINE_REGISTRY).toHaveLength(46);
+    expect(ACTIVE_MACHINES).toHaveLength(43);
+
+    // Every seat names a machine that exists.
+    const known = new Set(MACHINE_REGISTRY.map((m) => m.key));
+    const unknown = AI_EMPLOYEE_ROSTER.flatMap((e) => e.primaryMachineKeys.filter((k) => !known.has(k)));
+    expect(unknown).toEqual([]);
+
+    // And every active machine has somebody accountable for it — the state item 17 finished in.
+    const seated = new Set(AI_EMPLOYEE_ROSTER.flatMap((e) => e.primaryMachineKeys));
+    expect(ACTIVE_MACHINES.filter((m) => !seated.has(m.key)).map((m) => m.key)).toEqual([]);
   });
 
   it("gives every domain the machine registry uses a human name", () => {
@@ -49,11 +92,17 @@ describe("what an employee is actually told", () => {
   it("says nothing at all for a department with no methods written down", () => {
     // An employee told "HOW THIS FIRM DOES THIS WORK:" followed by nothing has been told something
     // false about the firm. Empty means the section is omitted entirely.
-    // `approval_center` is deliberately unseated — no employee declares it in primaryMachineKeys —
-    // so methods there would be read by nobody. It was `continuity_maintenance` until Pax's seat
-    // got methods of its own, which is this test doing exactly what it exists to do.
-    expect(guidanceBlock(["approval_center"])).toBe("");
-    expect(skillsForMachines(["approval_center"])).toEqual([]);
+    //
+    // THE EXAMPLE HAS MOVED TWICE AND THAT IS THIS TEST WORKING. It was `continuity_maintenance`
+    // until Pax's seat got methods, then `approval_center` until Pax was seated on that too (for
+    // queue-hygiene reporting only — his first method says the machine approves nothing). Every
+    // ACTIVE machine now has a seat and a method, so the only machines left with neither are the
+    // RETIRED ones, which is exactly right: nothing may be seated on them, so nothing should be
+    // written for them either.
+    expect(guidanceBlock(["prompt_enhancer_intent"])).toBe("");
+    expect(skillsForMachines(["prompt_enhancer_intent"])).toEqual([]);
+    // And a key nobody has at all, which is the other way a caller reaches this branch.
+    expect(guidanceBlock(["not_a_machine"])).toBe("");
   });
 
   it("frames them as guidelines and says the rules live elsewhere", () => {

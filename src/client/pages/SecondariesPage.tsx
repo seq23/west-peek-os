@@ -59,12 +59,11 @@ export function SecondariesPage({ onNavigate }: { onNavigate: (k: string) => voi
 
   return (
     <div className="page" data-testid="secondaries-page">
-      <h3>Secondaries</h3>
       <p className="muted">Purchases and sales in the secondary sleeve.</p>
 
       {/* WHERE THESE COME FROM, and where to go to price one. The page listed two empty tables and
           a separation rule, and answered neither question. */}
-      <div className="form-row secondaries-doors">
+      <div className="form-row">
         <button type="button" className="btn-strong" data-testid="secondaries-add" onClick={() => onNavigate("dealflow")}>
           Add a secondary
         </button>
@@ -89,15 +88,23 @@ export function SecondariesPage({ onNavigate }: { onNavigate: (k: string) => voi
         {state.data?.separation_rule ?? "Secondaries run as a separate sleeve from early-stage primaries."}
       </p>
 
-      <section className="card">
-        <h4>Purchases <span className="muted small">{purchases.length}</span></h4>
-        {table(purchases, "secondaries-purchases")}
-      </section>
+      {/*
+        The two sections are h3 OUTSIDE the card, which is LpPage's shape and the reason it reads
+        well: the heading names the section, the card holds the answer. They were h4 card titles, so
+        this page had no heading at section rank at all and the two halves read as two boxes rather
+        than as the two things the page is about. Phrased as the question a partner is asking, not
+        as the nouns "Purchases" and "Sales" — a label tells you what a table is called; a question
+        tells you why you would read it.
+      */}
+      <h3>
+        What have we bought from existing holders? <span className="muted small">{purchases.length}</span>
+      </h3>
+      <section className="card">{table(purchases, "secondaries-purchases")}</section>
 
-      <section className="card">
-        <h4>Sales <span className="muted small">{sales.length}</span></h4>
-        {table(sales, "secondaries-sales")}
-      </section>
+      <h3>
+        What have we sold out of the portfolio? <span className="muted small">{sales.length}</span>
+      </h3>
+      <section className="card">{table(sales, "secondaries-sales")}</section>
 
       <HowThisWorks
         title="Secondaries"

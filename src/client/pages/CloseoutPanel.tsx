@@ -102,7 +102,7 @@ export function CloseoutPanel({ meetingId }: { meetingId: string }): JSX.Element
   }
 
   return (
-    <section className="closeout" data-testid={`closeout-${meetingId}`}>
+    <section className="card" data-testid={`closeout-${meetingId}`}>
       <h4>Close-out</h4>
 
       {!closeout && (
@@ -130,14 +130,14 @@ export function CloseoutPanel({ meetingId }: { meetingId: string }): JSX.Element
 
       {assigned.length > 0 && (
         <>
-          <h5>Assigned</h5>
+          <p className="small"><strong>Assigned</strong></p>
           <ul className="card-list small" data-testid="closeout-assigned">{assigned.map(row)}</ul>
         </>
       )}
 
       {recommended.length > 0 && (
         <>
-          <h5>Recommended for you</h5>
+          <p className="small"><strong>Recommended for you</strong></p>
           <p className="muted small">Not assigned to anyone — these need a person.</p>
           <ul className="card-list small" data-testid="closeout-recommended">{recommended.map(row)}</ul>
         </>
@@ -145,14 +145,14 @@ export function CloseoutPanel({ meetingId }: { meetingId: string }): JSX.Element
 
       {unowned.length > 0 && (
         <>
-          <h5>Needs an owner</h5>
+          <p className="small"><strong>Needs an owner</strong></p>
           <ul className="card-list small" data-testid="closeout-unowned">{unowned.map(row)}</ul>
         </>
       )}
 
       {theirs.length > 0 && (
         <>
-          <h5>They owe us</h5>
+          <p className="small"><strong>They owe us</strong></p>
           <p className="muted small">Tracked, not assigned to anyone here.</p>
           <ul className="card-list small" data-testid="closeout-counterparty">{theirs.map(row)}</ul>
         </>

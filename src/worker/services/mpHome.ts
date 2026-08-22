@@ -343,7 +343,10 @@ async function myWorkModule(env: Env, identity: FirmUserIdentity): Promise<HomeM
     key: "my_work",
     title: "My open work",
     answers: "What should I look at today?",
-    link: "work-cards",
+    // "work", which is the nav key. "work-cards" is the API path and was never a route — Home's
+    // busiest module linked nowhere, and the router falls back to Home, so pressing it appeared to
+    // do nothing rather than to fail. `operatorAttention` already says "work"; these two disagreed.
+    link: "work",
     count: items.length,
     items,
     note: items.length === 0 ? "No open work cards assigned to you." : undefined,

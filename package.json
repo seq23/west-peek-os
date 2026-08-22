@@ -29,7 +29,8 @@
     "deploy:production": "node scripts/deploy/production.mjs",
     "validate:sql": "node scripts/validate/sql-against-schema.mjs",
     "validate:value-shapes": "node scripts/validate/value-shapes.mjs && node scripts/validate/value-shapes.mjs --self-test",
-    "validate:design-tokens": "node scripts/validate/design-tokens.mjs && node scripts/validate/design-tokens.mjs --self-test"
+    "validate:design-tokens": "node scripts/validate/design-tokens.mjs && node scripts/validate/design-tokens.mjs --self-test",
+    "validate:css-classes": "node scripts/validate/css-classes.mjs"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",

@@ -563,7 +563,10 @@ describe("the cost centre reports spend with its definitions attached", () => {
     expect(res.body.totals.runs).toBeGreaterThan(0);
     expect(res.body.by_category.some((c) => c.key === "RESEARCH")).toBe(true);
     expect(res.body.by_machine.some((m) => m.key === "23")).toBe(true);
-    expect(res.body.definitions.committed).toContain("estimate recorded before the call");
+    // The one definition, served from ai/spend.ts. Asserted on the substance rather than the exact
+    // wording, but asserted HERE because this payload is what puts the sentence on the page.
+    expect(res.body.definitions.committed).toContain("our own estimate where it did not");
+    expect(res.body.definitions.committed).toContain("counts as nothing");
     expect(res.body.definitions.value).toContain("benefit is not measured as money");
     expect(res.body.budgets.length).toBeGreaterThan(0);
   });

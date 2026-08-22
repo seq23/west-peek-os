@@ -30,7 +30,7 @@ import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 /**
  * WHO HAS A FACE — everybody, including the retired.
  *
- * This was derived from AI_EMPLOYEE_ROSTER, which holds only the nineteen currently-employed seats.
+ * This was derived from AI_EMPLOYEE_ROSTER, which holds only the currently-employed seats.
  * That was right while retired employees never rendered, and wrong the moment the lounge let you
  * bring one back: an employee returning from retirement arrived with no face, and the page that
  * exists to make the workforce feel like people showed a grey initial.

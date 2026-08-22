@@ -56,7 +56,11 @@ export const MEETING_TYPES: readonly MeetingType[] = [
     key: "LP",
     label: "LP conversation",
     when: "An existing or prospective limited partner.",
-    suggests: ["Wesley", "Piper"],
+    // Wesley alone since the merge. It used to suggest him and Piper, two seats holding identical
+    // guidance — that is the duplication the merge removed, not a second perspective. Walter is
+    // deliberately not added: an LP conversation is Wesley's whole job, and the compliance seat
+    // cannot be suggested here because this type is external and that seat is INTERNAL_ONLY.
+    suggests: ["Wesley"],
     external: true,
   },
   {

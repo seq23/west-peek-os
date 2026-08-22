@@ -38,8 +38,18 @@ describe("an arriving message is classified, never acted on", () => {
     expect(deck.lands.toLowerCase()).toContain("never a second row");
   });
 
+  it("sends a company reporting its own numbers to the portfolio seat, not to the funnel", () => {
+    // Item 12. Before this it matched nothing and went to Porter as an unclear email, which is
+    // correct and useless: the one seat that watches how the companies are doing never saw it.
+    const out = classifyInbound({ ...base, subject: "#wpupdate Northwind — March", body: "ARR 120k" });
+    expect(out.triggers).toEqual(["#wpupdate"]);
+    expect(out.unrouted).toBe(false);
+    // And it must not also read as a new company for the top of the funnel.
+    expect(out.triggers).not.toContain("#wpdealflow");
+  });
+
   it("lands everything as a proposal, because the trigger word is public", () => {
-    const all = classifyInbound({ ...base, body: "#wpdealflow #wpnetwork #wpdeck" });
+    const all = classifyInbound({ ...base, body: "#wpdealflow #wpnetwork #wpdeck #wpupdate" });
     for (const r of all.routed) {
       expect(r.lands.toLowerCase()).toMatch(/proposal|proposed|review queue/);
     }
@@ -105,7 +115,7 @@ describe("outbound mail cannot feed the inbound rule", () => {
    * ingested as a submission, syncs back, and appears in the next digest.
    */
   it("defuses every trigger this app could write into an email", () => {
-    const digest = "3 new companies via #wpdealflow, 2 people via #wpnetwork, 1 #wpdeck parsed.";
+    const digest = "3 new companies via #wpdealflow, 2 people via #wpnetwork, 1 #wpdeck parsed, 4 #wpupdate read.";
     expect(wouldLoop(digest)).toBe(true);
     const safe = defuseTriggers(digest);
     expect(wouldLoop(safe)).toBe(false);

@@ -31,11 +31,10 @@ import { createWorkCardInternal } from "./workCards";
  * arriving by email advances it. A hashtag is a public word — it may route, never authorise.
  */
 
-/** The seat that owns incoming companies. Named, not anonymous, so the funnel records who filed it. */
-export const DEAL_INTAKE_EMPLOYEE = "Wyatt";
-
-/** Who takes it when nobody can tell what it is. `global_capture_routing` is Porter's machine. */
-export const ROUTING_EMPLOYEE = "Porter";
+// Both seats now live in `shared/intake/emailTriggers.ts` — the Dealflow page has to name them and
+// a client cannot import from `src/worker`. Re-exported so existing importers here are unaffected.
+import { DEAL_INTAKE_EMPLOYEE, ROUTING_EMPLOYEE } from "../../shared/intake/emailTriggers";
+export { DEAL_INTAKE_EMPLOYEE, ROUTING_EMPLOYEE };
 
 /** "Accepts unstructured input… and routes to the right machine." */
 export const CAPTURE_ROUTING_MACHINE = 3;

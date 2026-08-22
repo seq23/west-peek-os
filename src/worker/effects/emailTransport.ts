@@ -57,7 +57,14 @@ export interface EmailSendResult {
  *   3. `#wpdealflow` in a digest is not a person at all. It classifies as deal flow, which lands in
  *      THIS app's funnel — a different system, with a different dedupe, on a different record type.
  */
-const TRIGGER_WORDS = /#(wpnetwork|wpdealflow|wpdeck|addtowestpeek|westpeeknetwork|dealflow)\b/gi;
+/*
+ * This list is HAND-MAINTAINED and it is wider than `EMAIL_TRIGGERS`, which is why it cannot be
+ * generated from it: `#addtowestpeek`, `#westpeeknetwork` and `#dealflow` are Network OS's aliases
+ * and this app has never published them. The cost of that is real — a trigger added to the registry
+ * must be added here too, and `#wpupdate` (item 12) was. A portfolio digest that quotes the tag
+ * loops otherwise, and this time the loop would carry a company's own reported figures.
+ */
+const TRIGGER_WORDS = /#(wpnetwork|wpdealflow|wpdeck|wpupdate|addtowestpeek|westpeeknetwork|dealflow)\b/gi;
 
 export function defuseTriggers(text: string): string {
   return text.replace(TRIGGER_WORDS, (m) => `#‍${m.slice(1)}`);

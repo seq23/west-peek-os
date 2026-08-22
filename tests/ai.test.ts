@@ -509,12 +509,29 @@ describe("9. every run leaves a complete ai_run row", () => {
 // ── 10. AI employee lifecycle authority ──
 
 describe("10. activation governance (D10)", () => {
-  it("seeds exactly the roster, all INACTIVE, no Managing Partner names", async () => {
+  it("seeds exactly the roster, all INACTIVE, no Managing Partner names — and keeps the retired rows", async () => {
     const rows = await t.db.prepare("SELECT name, status FROM ai_employee").all<{ name: string; status: string }>();
     const employees = rows.results ?? [];
-    expect(employees).toHaveLength(AI_EMPLOYEE_ROSTER.length);
-    for (const e of employees) {
+
+    /*
+     * The LIVE seats are the roster; the extra rows are seats that outlived themselves.
+     *
+     * ai_employee rows are seeded by migration, migrations are append-only and the generator only
+     * ever INSERTs, so a name dropped from the registry does not leave the database. Deleting it
+     * would be worse than leaving it: ai_run attribution, meeting seating and work cards point at
+     * it. So a culled seat goes RETIRED (migration 0126 does this for Piper, whose LP Sourcing seat
+     * merged into Wesley's LP Relations), and the count that has to match the registry is the
+     * non-retired one.
+     */
+    const live = employees.filter((e) => e.status !== "RETIRED");
+    expect(live).toHaveLength(AI_EMPLOYEE_ROSTER.length);
+    expect(new Set(live.map((e) => e.name))).toEqual(new Set(AI_EMPLOYEE_ROSTER.map((e) => e.name)));
+
+    for (const e of live) {
+      // Still INACTIVE: activation is human-reserved and never happens at seed time (D10).
       expect(e.status).toBe("INACTIVE");
+    }
+    for (const e of employees) {
       expect(MANAGING_PARTNER_NAMES.map((n) => n.toLowerCase())).not.toContain(e.name.toLowerCase());
     }
   });
@@ -805,7 +822,15 @@ describe("pausing and resuming an employee", () => {
       req(`/api/ai/employees/${id}/activate`, MP, "POST", { approval_receipt_id: card.id, reason: "staffing for the test" }),
       env,
     );
-    expect(done.status).toBe(200);
+    /*
+     * 409 means already employed, and that is a PASS for this helper.
+     *
+     * Its contract is "make sure this seat is employed", not "prove nobody employed it first".
+     * Insisting on 200 made every test in the file depend on the order of every other one, and on a
+     * hand-kept list of which ids were spoken for — a list that silently rotted the moment a seat
+     * was merged away. Any other status is still a failure.
+     */
+    expect([200, 409]).toContain(done.status);
   }
 
   it("pauses without any approval at all — stopping a machine is always safe", async () => {
@@ -840,9 +865,28 @@ describe("pausing and resuming an employee", () => {
   });
 
   it("lets far more than five be employed at once", async () => {
-    // Six DISTINCT employees none of the earlier tests in this file has already employed —
-    // employing somebody twice is a 409 and would prove nothing about the cap.
-    for (const id of ["aie_pax", "aie_preston", "aie_winter", "aie_parker", "aie_poppy", "aie_piper"]) {
+    /*
+     * Six DISTINCT employees none of the earlier tests in this file has already employed —
+     * employing somebody twice is a 409 and would prove nothing about the cap.
+     *
+     * Taken from the ROSTER rather than typed. The hand-written list ended in `aie_piper`, and when
+     * that seat merged into Wesley the id stopped resolving: `employ` 404'd, the loop carried on,
+     * and the test failed on a count rather than on the thing it was testing. The same failure
+     * shape as the phantom "Paige" — a name in a fixture that the system no longer has.
+     */
+    // WHO IS ALREADY EMPLOYED IS READ, NOT GUESSED. Employing somebody twice is a 409 and the
+    // helper asserts 200, so a hand-kept list of "the ones the other tests use" has to be right
+    // about a file that keeps changing — and it was not: the original list ended in `aie_piper`,
+    // an id that stopped existing when that seat merged into Wesley.
+    const active = await t.db
+      .prepare("SELECT id FROM ai_employee WHERE status = 'ACTIVE'")
+      .all<{ id: string }>();
+    const taken = new Set((active.results ?? []).map((r) => r.id));
+    const six = AI_EMPLOYEE_ROSTER.map((e) => `aie_${e.name.toLowerCase()}`)
+      .filter((id) => !taken.has(id))
+      .slice(0, 6);
+    expect(six, "the roster must hold six seats nobody has employed yet").toHaveLength(6);
+    for (const id of six) {
       await employ(id);
     }
     const row = await t.db

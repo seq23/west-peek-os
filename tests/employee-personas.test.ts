@@ -97,13 +97,21 @@ describe("bios and outward-facing capability", () => {
     }
   });
 
-  it("consolidated to seventeen, plus the seats brought back, without losing a discipline", () => {
-    // Seventeen after the v4.0 consolidation. Nineteen since two RETIRED seats were re-pointed at
+  it("consolidated to seventeen, plus the seats brought back, minus the merge, without losing a discipline", () => {
+    // Seventeen after the v4.0 consolidation. Nineteen once two RETIRED seats were re-pointed at
     // questions the live roster could not answer — Whitney to teach in University, Percy to review
     // design and growth — rather than new seats being invented beside people who already did the
-    // job. The number is asserted because the consolidation is a decision, and a roster silently
-    // growing back towards thirty-one is exactly the failure this guards.
-    expect(AI_EMPLOYEE_ROSTER).toHaveLength(19);
+    // job. EIGHTEEN since 21 Aug 2026: LP Sourcing merged into LP Relations, because Piper and
+    // Wesley sat on `lp_fundraising` and nothing else, read byte-identical guidance, and were
+    // therefore two seats working the same prospect at a fund with roughly forty LPs.
+    //
+    // The number is asserted because every move is a decision, and a roster silently growing back
+    // towards thirty-one is exactly the failure this guards.
+    expect(AI_EMPLOYEE_ROSTER).toHaveLength(18);
+    // The merged seat is gone from the REGISTRY and only from there. Her database row is RETIRED
+    // by migration 0126 rather than deleted, because ai_run attribution and meeting seating point
+    // at it — see tests/workforce.test.ts, which asserts both halves.
+    expect(AI_EMPLOYEE_ROSTER.some((e) => e.name === "Piper")).toBe(false);
     // Every one of these still has somebody accountable for it after the merges.
     const layers = new Set(AI_EMPLOYEE_ROSTER.map((e) => e.layer));
     expect(layers.size).toBeGreaterThanOrEqual(4);

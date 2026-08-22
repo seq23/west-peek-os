@@ -5,7 +5,7 @@ import { json } from "../router";
 import { actorFromIdentity, authorize } from "./authorize";
 import { appendEvent } from "../events";
 import { runAi } from "../ai/runAi";
-import { MACHINE_REGISTRY } from "../../shared/registry/machines";
+import { ACTIVE_MACHINES, MACHINE_REGISTRY, isRetiredMachine, retirementReason } from "../../shared/registry/machines";
 import { skillsForMachines } from "../../shared/skills/library";
 
 /**
@@ -52,10 +52,6 @@ const draftSchema = z.object({
   /** What the partner actually wants, in their own words. */
   plain_english: z.string().trim().min(12),
 });
-
-function machineExists(key: string): boolean {
-  return MACHINE_REGISTRY.some((m) => m.key === key);
-}
 
 function parseGuidance(row: FirmSkillRow): string[] {
   try {
@@ -109,7 +105,10 @@ export async function handleListFirmSkills(ctx: RouteContext): Promise<Response>
         .all<FirmSkillRow>()
     ).results ?? [];
 
-  const machines = MACHINE_REGISTRY.map((m) => {
+  // ACTIVE_MACHINES, not the whole registry: retired ones stay in the registry so old work cards
+  // can still name the machine that produced them, but offering a partner a machine nobody sits on
+  // as somewhere to write a method is offering a place for the work to go and be unread.
+  const machines = ACTIVE_MACHINES.map((m) => {
     const written = rows.filter((r) => r.machine_key === m.key);
     return {
       machine_key: m.key,
@@ -162,6 +161,23 @@ export async function handleDraftFirmSkill(ctx: RouteContext): Promise<Response>
 
   const machine = MACHINE_REGISTRY.find((m) => m.key === parsed.data.machine_key);
   if (!machine) return json({ error: "unknown_machine", detail: `No machine has the key ${parsed.data.machine_key}.` }, { status: 400 });
+
+  /*
+   * A RETIRED machine still exists in `MACHINE_REGISTRY` — deliberately, so that a work card from
+   * June can still name the machine that produced it. But nobody sits on one, so a method written
+   * for it would be read by no employee, ever, while costing a model run and appearing to have been
+   * filed. Refused with the reason it was retired, so the partner learns something rather than
+   * being told no.
+   */
+  if (isRetiredMachine(machine.key)) {
+    return json(
+      {
+        error: "machine_retired",
+        detail: `${machine.name} was retired: ${retirementReason(machine.key) ?? "no longer in use"}. Nobody sits on it, so a method written here would never be read.`,
+      },
+      { status: 400 },
+    );
+  }
 
   const { run } = await runAi(ctx.env, {
     purpose: `drafting a method for ${machine.key}`,

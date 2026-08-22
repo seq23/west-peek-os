@@ -90,7 +90,7 @@ export function IntroductionsPage({ embedded = false }: { embedded?: boolean } =
   const signalCount = signals.data?.signals?.length ?? 0;
 
   return (
-    <div className="stack">
+    <div className="page">
       {!embedded && (
       <HowThisWorks
         title="Introductions"
@@ -160,14 +160,16 @@ export function IntroductionsPage({ embedded = false }: { embedded?: boolean } =
               <li key={m.id} className="card" data-testid={`match-${m.id}`}>
                 <div className="card-head-static">
                   <strong>{m.person_a_name} → {m.person_b_name}</strong>
-                  <span className={`pill pill-${m.status.toLowerCase()}`}>{m.status.replace(/_/g, " ").toLowerCase()}</span>
+                  <span className={m.status === "APPROVED" ? "help-tag help-tag-good" : m.status === "DECLINED" ? "help-tag help-tag-muted" : "help-tag help-tag-warn"}>
+                    {m.status.replace(/_/g, " ").toLowerCase()}
+                  </span>
                 </div>
-                <div className="card-body stack">
+                <div className="card-body">
                   <p>{m.rationale}</p>
 
                   {m.status === "PROPOSED" && (
                     <div className="row">
-                      <button type="button" className="primary" onClick={() => decide(m.id, "APPROVE")} data-testid={`approve-match-${m.id}`}>
+                      <button type="button" className="btn-strong" onClick={() => decide(m.id, "APPROVE")} data-testid={`approve-match-${m.id}`}>
                         Worth doing — ask them both
                       </button>
                       <button type="button" onClick={() => decide(m.id, "DISMISS")}>Not this one</button>
@@ -191,7 +193,7 @@ export function IntroductionsPage({ embedded = false }: { embedded?: boolean } =
                   {m.status === "CONSENTED" && (
                     <div className="row">
                       <p className="muted">Both said yes. Write the introduction, then:</p>
-                      <button type="button" className="primary" onClick={() => connected(m.id)} data-testid={`connected-${m.id}`}>
+                      <button type="button" className="btn-strong" onClick={() => connected(m.id)} data-testid={`connected-${m.id}`}>
                         I made the introduction
                       </button>
                     </div>
@@ -289,7 +291,7 @@ function SignalEntry(props: {
                     <strong>{s.full_name}</strong>{" "}
                     {s.kind === "NEED" ? "is looking for" : "can help with"} {s.body}
                   </span>
-                  <span className={s.expired ? "pill pill-expired" : "muted"}>
+                  <span className={s.expired ? "help-tag help-tag-muted" : "muted"}>
                     {s.expired ? "expired" : `${left} day${left === 1 ? "" : "s"} left`}
                   </span>
                 </div>

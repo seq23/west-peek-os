@@ -5,7 +5,15 @@ import { json } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize } from "./authorize";
 import { activeBudgetScopes, periodStart, scopeSpendUsd, type BudgetPeriod, type BudgetScopeType } from "../ai/routing";
-import { dailySpendUsd, getLatestBudgetPolicy } from "../ai/runAi";
+import { getLatestBudgetPolicy } from "../ai/runAi";
+import {
+  COMMITTED_SPEND_DEFINITION,
+  centsToUsd,
+  committedCostOf,
+  firmBudgetStates,
+  firmSpend,
+  type FirmBudgetWindow,
+} from "../ai/spend";
 
 /**
  * AI Cost Command Center (P16, GAP-02).
@@ -53,23 +61,13 @@ interface RunCostRow {
 
 const COMMITTED = new Set(["QUEUED", "RUNNING", "COMPLETED"]);
 
-function costOf(row: RunCostRow): { committed: number; estimated: number; actual: number | null } {
-  let estimated = 0;
-  let actual: number | null = null;
-  try {
-    estimated = (JSON.parse(row.cost_estimate_json) as { estimated_cost_usd?: number }).estimated_cost_usd ?? 0;
-  } catch {
-    estimated = 0;
-  }
-  if (row.actual_usage_json) {
-    try {
-      actual = (JSON.parse(row.actual_usage_json) as { cost_usd?: number }).cost_usd ?? 0;
-    } catch {
-      actual = null;
-    }
-  }
-  const committed = COMMITTED.has(row.status) ? actual ?? estimated : 0;
-  return { committed, estimated, actual };
+/**
+ * One row's committed cost — delegated, not re-derived. This file used to hold its own copy and a
+ * separate all-time SQL query with a third definition again, which is how the same page could show
+ * a period total counting estimates and an all-time total silently valuing them at zero.
+ */
+function costOf(row: RunCostRow): { committed: number } {
+  return { committed: committedCostOf(row) };
 }
 
 async function loadRuns(env: Env, since: string): Promise<RunCostRow[]> {
@@ -112,21 +110,15 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
 
   const firmScope = ctx.identity!.authorityScopes.find((s) => s.scopeKey === "firm_scope")?.scopeValue ?? "west-peek";
   const policy = await getLatestBudgetPolicy(ctx.env, firmScope);
-  const today = await dailySpendUsd(ctx.env, firmScope);
+
+  // ALL THREE FIGURES, ONE DEFINITION. Today, this month and ever now come from the same function,
+  // over the same population, with the same day boundary. They used to come from three places and
+  // the operator caught two of them 28% apart under the same word.
+  const todaySpend = await firmSpend(ctx.env, firmScope, "TODAY", now);
+  const allTime = await firmSpend(ctx.env, firmScope, "ALL_TIME", now);
+  const firmBudgets = await firmBudgetStates(ctx.env, firmScope, now);
 
   const committed = runs.reduce((sum, r) => sum + costOf(r).committed, 0);
-
-  // EVERYTHING THE FIRM HAS EVER SPENT. The overview reports a period, which answers "are we on
-  // track this month" and not "what has this cost us" — and the second question is the one somebody
-  // asks first. Computed in SQL rather than by loading every run: this grows without limit and the
-  // page must not.
-  const allTime = await ctx.env.WP_OS_DB.prepare(
-    `SELECT COUNT(*) AS runs,
-            COALESCE(SUM(CAST(json_extract(actual_usage_json, '$.cost_usd') AS REAL)), 0) AS spent,
-            MIN(created_at) AS first_run
-       FROM ai_run
-      WHERE status = 'COMPLETED' AND actual_usage_json IS NOT NULL`,
-  ).first<{ runs: number; spent: number; first_run: string | null }>();
   const estimatedOnly = runs.filter((r) => COMMITTED.has(r.status) && r.actual_usage_json === null);
   const blocked = runs.filter((r) => !COMMITTED.has(r.status));
   const quarantined = runs.filter((r) => r.status === "COMPLETED" && r.output_quarantine === 1);
@@ -162,12 +154,12 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
   ).results ?? [];
 
   /*
-   * SPEND WITH VENDORS THAT ARE NOT REASONING MODELS.
+   * SPEND WITH VENDORS THAT ARE NOT REASONING MODELS, broken out by vendor.
    *
-   * Everything above is summed from `ai_run`, which is the complete picture only for work that goes
-   * through the model boundary. Image generation deliberately does not — see the exemption in
-   * scripts/validate/no-direct-provider-calls.mjs — so it is summed here and added to the firm
-   * total. Two ledgers, one number, and the model ledger stays clean.
+   * The totals themselves come from `firmSpend` with everything else; this query exists only to say
+   * WHICH vendor. Image generation deliberately does not go through the model boundary — see the
+   * exemption in scripts/validate/no-direct-provider-calls.mjs — so it is a second ledger, and the
+   * firm's number is both.
    *
    * `unpriced` is reported rather than hidden: calls the vendor did not price are real spend of an
    * unknown amount, and rolling them in as zero would understate the total silently.
@@ -183,9 +175,6 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
       ORDER BY spent DESC`,
   ).all<{ vendor: string; spent: number; calls: number; unpriced: number; first_call: string }>()).results ?? []);
 
-  const vendorTotal = vendors.reduce((sum, v) => sum + Number(v.spent ?? 0), 0);
-  const vendorUnpriced = vendors.reduce((sum, v) => sum + Number(v.unpriced ?? 0), 0);
-
   return json({
     /**
      * Since the very first run. Stated apart from the period totals because they answer different
@@ -194,15 +183,13 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
      * this. Understating is the honest direction for a number nobody should be surprised by.
      */
     all_time: {
-      // MODEL SPEND PLUS VENDOR SPEND. This used to be model spend alone and was labelled as the
-      // firm total, which made it wrong the moment anything was bought outside the AI boundary.
-      spent_usd: Math.round((Number(allTime?.spent ?? 0) + vendorTotal) * 1_000_000) / 1_000_000,
-      model_spent_usd: Math.round(Number(allTime?.spent ?? 0) * 1_000_000) / 1_000_000,
-      vendor_spent_usd: Math.round(vendorTotal * 1_000_000) / 1_000_000,
-      runs: Number(allTime?.runs ?? 0),
-      since: allTime?.first_run ?? null,
+      spent_usd: allTime.total_usd,
+      model_spent_usd: allTime.model_usd,
+      vendor_spent_usd: allTime.vendor_usd,
+      runs: allTime.runs,
+      since: allTime.first_run_at,
       // How many charges the vendor did not price. Real money of an unknown amount, not zero.
-      unpriced_vendor_calls: vendorUnpriced,
+      unpriced_vendor_calls: allTime.unpriced_vendor_calls,
     },
     by_vendor: vendors.map((v) => ({
       vendor: v.vendor,
@@ -218,11 +205,19 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
       // Which posture this is, so the lever can show where it currently sits rather than making
       // the operator infer it from a mode name and a boolean.
       honours_pins: Number((policy as unknown as { honours_pins?: number }).honours_pins ?? 1) === 1,
+      // The bit that finally tells "Best available" apart from "Balanced". Without it the page
+      // showed a partner who chose the expensive setting that they were on the middle one.
+      prefers_frontier: Number((policy as unknown as { prefers_frontier?: number }).prefers_frontier ?? 0) === 1,
       privacy_mode: policy.privacy_mode,
       daily_cap_usd: policy.daily_cap_usd,
       per_run_cap_usd: policy.per_run_cap_usd,
-      spent_today_usd: Math.round(today * 1_000_000) / 1_000_000,
+      spent_today_usd: todaySpend.total_usd,
     },
+    /**
+     * The firmwide ceilings, and their usage, from the same function the AI boundary refuses runs
+     * with. A cap here is a cap there — there is no second copy to fall out of step.
+     */
+    firm_budgets: firmBudgets,
     totals: {
       committed_usd: Math.round(committed * 1_000_000) / 1_000_000,
       runs: runs.length,
@@ -240,13 +235,108 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
     budgets,
     alerts,
     definitions: {
-      committed: "Provider-reported ACTUAL cost where one exists, otherwise the estimate recorded before the call. Blocked runs cost nothing.",
+      // ONE SENTENCE, IMPORTED. Every spend figure on the page — today, this period, all time, and
+      // the two ceilings — counts the same thing, and this is the only place that says what.
+      committed: COMMITTED_SPEND_DEFINITION,
       estimate_only_runs: "Committed runs where no provider reported an actual cost — these totals are estimates, not invoices.",
       rework_cost_usd: "Committed cost of completed runs whose output is still quarantined (nobody accepted it). A cost-of-rework measure, not a quality verdict.",
       forecast_period_usd: "Straight-line projection of the current period from the elapsed fraction. A projection, not a prediction.",
       value: "No 'value generated' figure exists here. Spend is money; benefit is not measured as money.",
     },
   });
+}
+
+// ── The firmwide ceiling ──
+
+const firmBudgetSchema = z.object({
+  budget_window: z.enum(["MONTHLY", "ALL_TIME"]),
+  /**
+   * CENTS, and the client sends cents. Taking dollars here and multiplying would put a float
+   * conversion between the number the operator typed and the number that refuses a run — which for
+   * a ceiling is the one place a rounding artefact becomes work being blocked early.
+   */
+  cap_cents: z.number().int().nonnegative(),
+  reason: z.string().trim().min(1),
+  active: z.boolean().default(true),
+});
+
+/**
+ * Set what the firm will spend — this month, or ever.
+ *
+ * Operator, item 23: "i need to be able to set a firmwide budget very easily and have it change,
+ * show up and persist." Persist is the operative word, so this writes a versioned row that the AI
+ * boundary reads before every run, rather than a display value.
+ *
+ * Managing Partner only, and not because of a role table: this is the firm deciding how much of its
+ * money may go to a category of expense, which is the same class of decision as the privacy mode
+ * next to it.
+ */
+export async function handleSetFirmBudget(ctx: RouteContext): Promise<Response> {
+  const parsed = firmBudgetSchema.safeParse(await parseJsonBody(ctx.request));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") {
+    return errorResponse(403, "forbidden", "the firm's spending ceiling is set by a person, never by an employee");
+  }
+  if (!actor.roles.includes("MANAGING_PARTNER")) {
+    return errorResponse(403, "forbidden", "only a Managing Partner can change what the firm will spend");
+  }
+  const authz = await authorize(ctx.env, actor, "firm_budget.set", { objectType: "firm_spend_budget" });
+  if (authz.decision !== "ALLOW") return errorResponse(403, "forbidden", authz.reason);
+
+  const body = parsed.data;
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const window = body.budget_window as FirmBudgetWindow;
+
+  /*
+   * AN ALL-TIME CEILING BELOW WHAT HAS ALREADY BEEN SPENT stops every run the moment it is saved,
+   * and would do it silently — the page would look fine and the firm would simply stop thinking.
+   * Refused here, naming both figures, because a partner typing 50 when they meant 500 should find
+   * out now rather than from a week of blocked work.
+   */
+  const spend = await firmSpend(ctx.env, firmScope, window === "MONTHLY" ? "THIS_MONTH" : "ALL_TIME");
+  const cap = centsToUsd(body.cap_cents);
+  if (body.active && cap < spend.total_usd) {
+    return errorResponse(
+      409,
+      "cap_below_spend",
+      `That ceiling is $${cap.toFixed(2)} and the firm has already spent $${spend.total_usd.toFixed(2)} ${
+        window === "MONTHLY" ? "this month" : "in total"
+      }. Saving it would refuse every run immediately.`,
+    );
+  }
+
+  const current = await ctx.env.WP_OS_DB.prepare(
+    "SELECT MAX(version_no) AS v FROM firm_spend_budget WHERE firm_scope = ?1 AND budget_window = ?2",
+  )
+    .bind(firmScope, window)
+    .first<{ v: number | null }>();
+  const version = (current?.v ?? 0) + 1;
+  const id = `fsb_${crypto.randomUUID()}`;
+  await ctx.env.WP_OS_DB.prepare(
+    `INSERT INTO firm_spend_budget (id, firm_scope, budget_window, cap_cents, version_no, active, reason, set_by)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+  )
+    .bind(id, firmScope, window, body.cap_cents, version, body.active ? 1 : 0, body.reason, actor.firmUserId!)
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: "firm_budget.set",
+    actorType: "firm_user",
+    actorId: actor.firmUserId!,
+    objectType: "firm_spend_budget",
+    objectId: id,
+    firmScope,
+    payload: { budget_window: window, cap_cents: body.cap_cents, version_no: version, active: body.active },
+  });
+
+  return json(
+    {
+      budget: await ctx.env.WP_OS_DB.prepare("SELECT * FROM firm_spend_budget WHERE id = ?1").bind(id).first(),
+      state: (await firmBudgetStates(ctx.env, firmScope)).find((s) => s.budget_window === window) ?? null,
+    },
+    { status: 201 },
+  );
 }
 
 const budgetSchema = z.object({

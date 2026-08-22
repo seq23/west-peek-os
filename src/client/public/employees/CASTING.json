@@ -1,5 +1,5 @@
 {
-  "_note": "Casting sheet for the 17 AI employee portraits (roster v4.0, consolidated from 31). Direction: everyone reads 28-40, attractive and modelesque, deliberately diverse \u2014 protected through the consolidation rather than left to chance, so senior seats keep it. Expertise is veteran-level regardless of apparent age; depth is in the persona text, not the face. LP-facing seats (Piper, Wesley) are white and blonde per operator direction. Appearance lives ONLY here: there is no race, appearance or demographic field in the registry, the database or the worker.",
+  "_note": "Casting sheet for the AI employee portraits (roster v4.1). Direction: everyone reads 28-40, attractive and modelesque, deliberately diverse — protected through the consolidation rather than left to chance, so senior seats keep it. Expertise is veteran-level regardless of apparent age; depth is in the persona text, not the face. The LP-facing seat (Wesley) is white and blonde per operator direction; Piper's entry stays below although her seat was merged into his on 21 Aug 2026, because a retired employee keeps her face — an employee brought back with a grey initial arrives as a stranger. Appearance lives ONLY here: there is no race, appearance or demographic field in the registry, the database or the worker.",
   "_style": "Editorial fashion-portrait quality headshot. Strikingly attractive, model-like features: excellent bone structure, high cheekbones, symmetrical face, flawless clear complexion, expressive eyes, groomed and polished. Youthful and vibrant. Natural window light from the left, soft neutral grey-warm backdrop, shoulders-up framing, shallow depth of field, 85mm lens look, direct confident eye contact, subtle natural smile, impeccably styled modern business-casual, photorealistic, high-end magazine quality, no text, no logos, no watermark.",
   "cast": [
     {
@@ -44,7 +44,8 @@
     },
     {
       "name": "Piper",
-      "look": "woman, 30, white, blonde hair in a low ponytail, warm open expression, ivory blouse"
+      "look": "woman, 30, white, blonde hair in a low ponytail, warm open expression, ivory blouse",
+      "retired": "Seat merged into Wesley, 21 Aug 2026. Portrait kept; see _note."
     },
     {
       "name": "Wesley",

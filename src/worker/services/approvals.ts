@@ -25,6 +25,11 @@ import {
  *                                        comms-facing alias of executed, never stored)
  * Everything else is illegal and rejected with 409.
  *
+ * Two further moves exist and are deliberately NOT rows in that table — see
+ * REOPENABLE_FROM and BLOCKABLE_FROM below for why:
+ *   reopen:  approved | rejected | revise_requested → pending_review  (supersedes a decision)
+ *   block:   drafted | pending_review | revise_requested | approved → blocked → back where it was
+ *
  * Decision rules:
  * - Only HUMAN actors decide. AI/SYSTEM can request but can NEVER decide — an AI
  *   can never approve its own (or anyone's) work.
@@ -56,6 +61,39 @@ const ALLOWED_TRANSITIONS: Readonly<Record<ApprovalState, readonly ApprovalState
   executed: [],
   blocked: [],
 };
+
+/**
+ * States a decision can be TAKEN BACK from, and the two that are missing on purpose.
+ *
+ * WHY THIS IS NOT AN ENTRY IN ALLOWED_TRANSITIONS. Both submitApproval() and decideApproval() read
+ * that table. Adding `rejected → pending_review` there would let the REQUESTER resubmit their way
+ * past a rejection — press submit, card is pending again, try a different approver. Changing a
+ * decision is an authority the DECIDER holds, not a door the person who wanted the yes can walk
+ * back through, so it lives in its own guard with its own role check.
+ *
+ * `executed` is absent because it is the one state a reversal cannot honestly reach: the email is
+ * sent, the transaction is booked, the receipt is consumed. Reopening it would record a lie about
+ * what the firm can still choose. Undoing an executed action is a NEW request for a NEW action.
+ *
+ * `blocked` is absent because a blocked card has no standing decision to supersede — release the
+ * block first and it returns to whatever was true before, which is then reopenable if it was a
+ * decision.
+ */
+const REOPENABLE_FROM: readonly ApprovalState[] = ["approved", "rejected", "revise_requested"];
+
+/**
+ * States a card can be BLOCKED from — everything that has not already finished.
+ *
+ * A block says "nothing here proceeds until something else is resolved", which is true of a card
+ * nobody has looked at yet and equally true of one already approved and waiting to run. It is NOT
+ * true of `executed` (it already ran) or `rejected` (it is already stopped, and dressing a dead
+ * card as a live blocker would put it back in front of a partner for no reason).
+ *
+ * Kept out of ALLOWED_TRANSITIONS for the same reason as above: consumeApprovalCard() reads that
+ * table, and a widened `blocked` row would let an execution path consume a card the firm has
+ * explicitly put on hold.
+ */
+const BLOCKABLE_FROM: readonly ApprovalState[] = ["drafted", "pending_review", "revise_requested", "approved"];
 
 export class ApprovalError extends Error {
   constructor(
@@ -191,6 +229,42 @@ export type ApprovalDecisionKind = "approved" | "rejected" | "revise_requested";
  * The decision is appended to approval_decision (append-only) and mirrored onto
  * the card (state, decided_by/at, decision_note).
  */
+/**
+ * The authority test every act on a card in front of a partner has to pass: deciding it, changing
+ * that decision afterwards, blocking it, and releasing the block.
+ *
+ * Blocking is in that list on purpose, and it is the arguable one. A block only ever STOPS things,
+ * so a wider authority would be safe in one direction — but a person who can block anything can
+ * hold the whole firm's decisions hostage without ever being able to resolve one, and there is no
+ * queue in this product where that is a useful power to grant.
+ */
+function assertMayAct(card: ApprovalCardRow, actor: Actor, verb: string): void {
+  // AI/SYSTEM can never decide — an AI can never approve its own (or any) work.
+  if (actor.type !== "HUMAN") {
+    throw new ApprovalError(403, "forbidden", `approval ${verb} is human-reserved`);
+  }
+  const required = JSON.parse(card.required_approver_roles_json) as string[];
+  if (!required.some((r) => actor.roles.includes(r))) {
+    throw new ApprovalError(403, "forbidden", `${verb} requires one of: ${required.join(", ")}`);
+  }
+}
+
+/**
+ * A reason somebody actually wrote, or a refusal that says why it was refused.
+ *
+ * Required here and optional on an ordinary decision, which is a deliberate asymmetry. The first
+ * decision is explained by the card it sits on. A reversal is not: six months later "approved, then
+ * rejected" with nothing between them is unreadable, and the fact that cannot be reconstructed
+ * afterwards is precisely the one the reverser was holding at the time.
+ */
+function requireReason(value: string | undefined, whatFor: string): string {
+  const reason = (value ?? "").trim();
+  if (reason.length < 3) {
+    throw new ApprovalError(400, "reason_required", `${whatFor} — say what changed, in a sentence. Nothing has been recorded.`);
+  }
+  return reason;
+}
+
 export async function decideApproval(
   env: Env,
   actor: Actor,
@@ -201,14 +275,7 @@ export async function decideApproval(
   const card = await getApprovalCard(env, cardId);
   if (!card) throw new ApprovalError(404, "not_found");
 
-  // AI/SYSTEM can never decide — an AI can never approve its own (or any) work.
-  if (actor.type !== "HUMAN") {
-    throw new ApprovalError(403, "forbidden", "approval decisions are human-reserved");
-  }
-  const required = JSON.parse(card.required_approver_roles_json) as string[];
-  if (!required.some((r) => actor.roles.includes(r))) {
-    throw new ApprovalError(403, "forbidden", `decision requires one of: ${required.join(", ")}`);
-  }
+  assertMayAct(card, actor, "decision");
   assertTransition(card.state, decision);
 
   const decidedAt = new Date().toISOString();
@@ -280,21 +347,254 @@ export async function consumeApprovalCard(env: Env, cardId: string, consumer: { 
   });
 }
 
-/** approved → blocked (execution could not proceed; card is NOT consumed). */
-export async function blockApprovalCard(env: Env, cardId: string, actorId: string, reason: string): Promise<void> {
+// ── Changing a decision after it has been made (item 3) ──────────────────────────────────────
+//
+// THE CONSTRAINT SHAPES THE FEATURE. `approval_decision` refuses UPDATE and DELETE at the database
+// layer, and that refusal is the reason an approval trail is worth anything: a partner cannot go
+// back and make Tuesday say something else. So changing your mind cannot mean editing the decision.
+// It means recording a NEW one that supersedes it — new actor, new timestamp, required reason — and
+// the original stays exactly where it was, still visible on the card.
+//
+// A reopen is deliberately NOT a re-decision. It puts the card back to "waiting on you" and stops
+// there, so the replacement verdict is made on the card, in front of whatever evidence and
+// questions have accumulated since, by somebody holding the role. One press that flipped an
+// approval straight to a rejection would be a decision taken without the card in front of you.
+
+/** Whatever decision currently stands on this card, or null if none does. */
+async function latestDecisionId(env: Env, cardId: string): Promise<string | null> {
+  const row = await env.WP_OS_DB.prepare(
+    "SELECT id FROM approval_decision WHERE approval_card_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
+  )
+    .bind(cardId)
+    .first<{ id: string }>();
+  return row?.id ?? null;
+}
+
+/**
+ * Take back a decision already made. approved | rejected | revise_requested → pending_review.
+ *
+ * The refusals are as much of the feature as the success: a partner who cannot reopen something
+ * needs to be told which of the four reasons applies, because "executed" and "you do not hold the
+ * role" call for completely different next moves.
+ */
+export async function reopenApproval(env: Env, actor: Actor, cardId: string, reason: string): Promise<ApprovalCardRow> {
   const card = await getApprovalCard(env, cardId);
   if (!card) throw new ApprovalError(404, "not_found");
-  assertTransition(card.state, "blocked");
-  await env.WP_OS_DB.prepare("UPDATE approval_card SET state = 'blocked' WHERE id = ?1").bind(cardId).run();
+  assertMayAct(card, actor, "changing a decision");
+
+  if (card.state === "executed") {
+    throw new ApprovalError(
+      409,
+      "already_carried_out",
+      "This already happened, so there is no decision left to change. Undoing it is a new request for the action that undoes it.",
+    );
+  }
+  if (card.state === "blocked") {
+    throw new ApprovalError(409, "card_is_blocked", "This is blocked. Release the block first, then change the decision underneath it.");
+  }
+  if (!REOPENABLE_FROM.includes(card.state as ApprovalState)) {
+    throw new ApprovalError(409, "nothing_decided", "Nothing has been decided on this yet, so there is nothing to change.");
+  }
+  const written = requireReason(reason, "Changing a decision needs a reason");
+
+  const supersedes = await latestDecisionId(env, cardId);
+  const decisionId = `apd_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.batch([
+    env.WP_OS_DB.prepare(
+      `INSERT INTO approval_decision (id, approval_card_id, decision, decided_by, note, supersedes_decision_id)
+       VALUES (?1, ?2, 'reopened', ?3, ?4, ?5)`,
+    ).bind(decisionId, cardId, actor.firmUserId!, written, supersedes),
+    // decided_by/decided_at/decision_note are cleared because they mirror the decision that
+    // CURRENTLY STANDS, and after a reopen none does. The trail is not lost — it never lived here.
+    // approval_decision holds it, this card reads it back, and those rows cannot be touched.
+    env.WP_OS_DB.prepare(
+      `UPDATE approval_card
+          SET state = 'pending_review', decided_by = NULL, decided_at = NULL, decision_note = NULL
+        WHERE id = ?1`,
+    ).bind(cardId),
+  ]);
+
   await appendEvent(env, {
-    eventType: "approval.blocked",
+    eventType: "approval.reopened",
     actorType: "firm_user",
-    actorId,
+    actorId: actor.firmUserId!,
     objectType: "approval_card",
     objectId: cardId,
     firmScope: card.firm_scope,
-    payload: { reason },
+    payload: { previous_state: card.state, supersedes_decision_id: supersedes, reason: written, action_key: card.action_key },
   });
+
+  // It is waiting on a person again, so the people who can decide it are told again — the same
+  // reason submitting raises one. A card that quietly re-entered the queue is one nobody works.
+  await notifyQuietly(env, {
+    kind: "APPROVAL",
+    severity: "WARNING",
+    title: `Decision reopened: ${card.title}`,
+    body: `${actor.firmUserId} took back the earlier decision — ${written}`,
+    objectType: "approval_card",
+    objectId: cardId,
+    dedupeKey: `approval:${cardId}:reopened:${decisionId}`,
+    firmScope: card.firm_scope,
+  });
+  return (await getApprovalCard(env, cardId))!;
+}
+
+// ── Blocking, which is not rejecting ─────────────────────────────────────────────────────────
+//
+// Reject is a verdict on the request: no, not this, and that is the end of it. Block is a statement
+// about the firm: nothing here proceeds until something ELSE is resolved. The request may be
+// perfectly good — it is the ground under it that is not ready.
+//
+// Two things follow, and they are what make this a different feature rather than a second word for
+// the same one. A block must NAME what it is waiting on, because a hold that cannot say what would
+// end it is a rejection with better manners and it rots in the queue with nobody able to tell
+// whether it is still true. And a block must be RELEASABLE, returning the card to exactly where it
+// stood — blocking pauses, it never decides. That is why `state_before` is recorded: a card that was
+// approved and waiting to run is approved and waiting to run again, not sent back for a second yes.
+
+export interface ApprovalBlockRow {
+  id: string;
+  approval_card_id: string;
+  waiting_on: string;
+  state_before: string;
+  blocked_by: string;
+  created_at: string;
+  released_by: string | null;
+  released_at: string | null;
+  release_note: string | null;
+}
+
+/** The block currently standing on a card, or null. At most one can exist (unique index). */
+export async function openBlockFor(env: Env, cardId: string): Promise<ApprovalBlockRow | null> {
+  return env.WP_OS_DB.prepare(
+    "SELECT * FROM approval_block WHERE approval_card_id = ?1 AND released_at IS NULL LIMIT 1",
+  )
+    .bind(cardId)
+    .first<ApprovalBlockRow>();
+}
+
+/** Every block a card has ever carried, released ones included. */
+export async function blocksFor(env: Env, cardId: string): Promise<ApprovalBlockRow[]> {
+  const rows = await env.WP_OS_DB.prepare(
+    "SELECT * FROM approval_block WHERE approval_card_id = ?1 ORDER BY created_at, id",
+  )
+    .bind(cardId)
+    .all<ApprovalBlockRow>();
+  return rows.results ?? [];
+}
+
+/** Put a card on hold until `waitingOn` is resolved. Anything unfinished can be blocked. */
+export async function blockApproval(env: Env, actor: Actor, cardId: string, waitingOn: string): Promise<ApprovalBlockRow> {
+  const card = await getApprovalCard(env, cardId);
+  if (!card) throw new ApprovalError(404, "not_found");
+  assertMayAct(card, actor, "blocking");
+
+  if (card.state === "blocked") {
+    const standing = await openBlockFor(env, cardId);
+    throw new ApprovalError(
+      409,
+      "already_blocked",
+      standing ? `This is already blocked, waiting on: ${standing.waiting_on}` : "This is already blocked.",
+    );
+  }
+  if (!BLOCKABLE_FROM.includes(card.state as ApprovalState)) {
+    throw new ApprovalError(
+      409,
+      "nothing_to_block",
+      card.state === "executed"
+        ? "This already happened. Blocking it now would stop nothing."
+        : "This was rejected, so nothing is going to proceed from it anyway.",
+    );
+  }
+  const named = requireReason(waitingOn, "A block has to say what it is waiting on");
+
+  const blockId = `apb_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.batch([
+    env.WP_OS_DB.prepare(
+      `INSERT INTO approval_block (id, approval_card_id, waiting_on, state_before, blocked_by)
+       VALUES (?1, ?2, ?3, ?4, ?5)`,
+    ).bind(blockId, cardId, named, card.state, actor.firmUserId!),
+    // Written into the decision trail as well as its own table, so the card has ONE chronology a
+    // partner can read top to bottom. A hold that only exists in a side table is a hold that
+    // disappears from the story of how the decision was reached.
+    env.WP_OS_DB.prepare(
+      `INSERT INTO approval_decision (id, approval_card_id, decision, decided_by, note)
+       VALUES (?1, ?2, 'blocked', ?3, ?4)`,
+    ).bind(`apd_${crypto.randomUUID()}`, cardId, actor.firmUserId!, named),
+    env.WP_OS_DB.prepare("UPDATE approval_card SET state = 'blocked' WHERE id = ?1").bind(cardId),
+  ]);
+
+  await appendEvent(env, {
+    eventType: "approval.blocked",
+    actorType: "firm_user",
+    actorId: actor.firmUserId!,
+    objectType: "approval_card",
+    objectId: cardId,
+    firmScope: card.firm_scope,
+    payload: { waiting_on: named, state_before: card.state, action_key: card.action_key },
+  });
+
+  // A blocked card is not waiting on a decision, so the outstanding "approval waiting" prompt stops
+  // asking for one. Read, never deleted: what was asked and when stays on the record.
+  try {
+    await env.WP_OS_DB.prepare(
+      `UPDATE notification SET read_at = ?2
+        WHERE object_type = 'approval_card' AND object_id = ?1 AND read_at IS NULL`,
+    )
+      .bind(cardId, new Date().toISOString())
+      .run();
+  } catch {
+    /* the block stands regardless */
+  }
+  return (await openBlockFor(env, cardId))!;
+}
+
+/** Release the block: whatever it was waiting on is resolved, and the card goes back where it was. */
+export async function releaseApprovalBlock(env: Env, actor: Actor, cardId: string, resolution: string): Promise<ApprovalCardRow> {
+  const card = await getApprovalCard(env, cardId);
+  if (!card) throw new ApprovalError(404, "not_found");
+  assertMayAct(card, actor, "releasing a block");
+
+  const standing = await openBlockFor(env, cardId);
+  if (!standing) throw new ApprovalError(409, "not_blocked", "Nothing is blocking this.");
+  const written = requireReason(resolution, "Releasing a block needs to say what resolved it");
+
+  const releasedAt = new Date().toISOString();
+  await env.WP_OS_DB.batch([
+    env.WP_OS_DB.prepare(
+      "UPDATE approval_block SET released_by = ?2, released_at = ?3, release_note = ?4 WHERE id = ?1",
+    ).bind(standing.id, actor.firmUserId!, releasedAt, written),
+    env.WP_OS_DB.prepare(
+      `INSERT INTO approval_decision (id, approval_card_id, decision, decided_by, note)
+       VALUES (?1, ?2, 'unblocked', ?3, ?4)`,
+    ).bind(`apd_${crypto.randomUUID()}`, cardId, actor.firmUserId!, written),
+    // Back to state_before, not forward to anything. See the note on `state_before`.
+    env.WP_OS_DB.prepare("UPDATE approval_card SET state = ?2 WHERE id = ?1").bind(cardId, standing.state_before),
+  ]);
+
+  await appendEvent(env, {
+    eventType: "approval.block_released",
+    actorType: "firm_user",
+    actorId: actor.firmUserId!,
+    objectType: "approval_card",
+    objectId: cardId,
+    firmScope: card.firm_scope,
+    payload: { waiting_on: standing.waiting_on, resolution: written, returned_to: standing.state_before },
+  });
+
+  if (standing.state_before === "pending_review") {
+    await notifyQuietly(env, {
+      kind: "APPROVAL",
+      severity: "WARNING",
+      title: `Unblocked and waiting again: ${card.title}`,
+      body: `Was waiting on ${standing.waiting_on} — ${written}`,
+      objectType: "approval_card",
+      objectId: cardId,
+      dedupeKey: `approval:${cardId}:released:${standing.id}`,
+      firmScope: card.firm_scope,
+    });
+  }
+  return (await getApprovalCard(env, cardId))!;
 }
 
 // ── HTTP handlers ──
@@ -327,6 +627,11 @@ const decideSchema = z.object({
   note: z.string().optional(),
 });
 
+// The reason is required at the edge as well as in the service. Parsing it away here would answer
+// with a schema issue list; the service answers with a sentence, which is what the operator reads.
+const reasonSchema = z.object({ reason: z.string().optional() });
+const blockSchema = z.object({ waiting_on: z.string().optional() });
+
 export async function handleCreateApproval(ctx: RouteContext): Promise<Response> {
   const body = await parseJsonBody(ctx.request);
   const parsed = createApprovalSchema.safeParse(body);
@@ -345,15 +650,19 @@ export async function handleListApprovals(ctx: RouteContext): Promise<Response> 
   const scopePlaceholders = ctx.identity!.authorityScopes.filter((s) => s.scopeKey === "firm_scope").map((s) => s.scopeValue);
   const scopes = scopePlaceholders.length > 0 ? scopePlaceholders : ["west-peek"];
   const scopeClause = `firm_scope IN (${scopes.map((s) => `'${s.replaceAll("'", "''")}'`).join(", ")})`;
+  // What a blocked card is waiting on travels with the card in the LIST, not only on the detail.
+  // "Blocked" on its own is the least useful word in the queue: it tells a partner something has
+  // stopped and nothing about whether they are the person who can start it again.
+  const select =
+    `SELECT c.*,
+            (SELECT b.waiting_on FROM approval_block b
+              WHERE b.approval_card_id = c.id AND b.released_at IS NULL LIMIT 1) AS blocked_waiting_on
+       FROM approval_card c`;
   const rows = state
-    ? await ctx.env.WP_OS_DB.prepare(
-        `SELECT * FROM approval_card WHERE state = ?1 AND ${scopeClause} ORDER BY created_at DESC, id`,
-      )
+    ? await ctx.env.WP_OS_DB.prepare(`${select} WHERE c.state = ?1 AND ${scopeClause} ORDER BY c.created_at DESC, c.id`)
         .bind(state)
         .all<ApprovalCardRow>()
-    : await ctx.env.WP_OS_DB.prepare(
-        `SELECT * FROM approval_card WHERE ${scopeClause} ORDER BY created_at DESC, id`,
-      ).all<ApprovalCardRow>();
+    : await ctx.env.WP_OS_DB.prepare(`${select} WHERE ${scopeClause} ORDER BY c.created_at DESC, c.id`).all<ApprovalCardRow>();
   return json({ approvals: rows.results ?? [] });
 }
 
@@ -366,7 +675,10 @@ export async function handleGetApproval(ctx: RouteContext): Promise<Response> {
   )
     .bind(card.id)
     .all();
-  return json({ ...card, decisions: decisions.results ?? [] });
+  // Blocks travel with the card for the same reason decisions do: a released block is part of how
+  // the decision was reached, and a standing one is the answer to "why has nothing happened".
+  const blocks = await blocksFor(ctx.env, card.id);
+  return json({ ...card, decisions: decisions.results ?? [], blocks });
 }
 
 export async function handleSubmitApproval(ctx: RouteContext): Promise<Response> {
@@ -384,6 +696,39 @@ export async function handleDecideApproval(ctx: RouteContext): Promise<Response>
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   try {
     const card = await decideApproval(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data.decision, parsed.data.note);
+    return json(card);
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/** POST /api/approvals/:id/reopen — take back a decision by recording one that supersedes it. */
+export async function handleReopenApproval(ctx: RouteContext): Promise<Response> {
+  const parsed = reasonSchema.safeParse(await parseJsonBody(ctx.request));
+  try {
+    const card = await reopenApproval(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.success ? (parsed.data.reason ?? "") : "");
+    return json(card);
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/** POST /api/approvals/:id/block — hold it until a named thing is resolved. */
+export async function handleBlockApproval(ctx: RouteContext): Promise<Response> {
+  const parsed = blockSchema.safeParse(await parseJsonBody(ctx.request));
+  try {
+    const block = await blockApproval(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.success ? (parsed.data.waiting_on ?? "") : "");
+    return json(block, { status: 201 });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/** POST /api/approvals/:id/release — the blocker is resolved; put the card back where it was. */
+export async function handleReleaseApprovalBlock(ctx: RouteContext): Promise<Response> {
+  const parsed = reasonSchema.safeParse(await parseJsonBody(ctx.request));
+  try {
+    const card = await releaseApprovalBlock(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.success ? (parsed.data.reason ?? "") : "");
     return json(card);
   } catch (err) {
     return errorResponse(err);

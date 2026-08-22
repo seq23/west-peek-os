@@ -89,7 +89,11 @@ export const FIRM_SENDING_FACTS = {
   summary:
     "Already on, and separate from anything you connect here. West Peek OS can send email as the firm without touching anybody's personal account.",
   can: [
-    "Send an approved message from os@westpeek.ventures — LP updates, event invitations, follow-ups.",
+    // The sending address is `WP_OS_EMAIL_FROM`, set per environment — naming one here was a claim
+    // this file cannot check, and it was already stale: intake moved to joinwestpeek.com and this
+    // sentence did not. Better to say what it does than to assert an address that may not be the
+    // configured one.
+    "Send an approved message from the firm's own address — LP updates, event invitations, follow-ups.",
     "Record what was sent, to whom, and who approved it.",
   ],
   cannot: [

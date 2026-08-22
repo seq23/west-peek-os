@@ -155,7 +155,9 @@ test("journey 6 — portfolio cockpit → allocation view → human decision bou
 test("journey 9 — AI cost centre → provider/model spend → policy action", async ({ page }) => {
   await signIn(page);
   await gotoSurface(page, "Cockpit");
-  await expect(page.getByTestId("cost-totals")).toContainText("committed this");
+  // The block now asks the question rather than labelling a total: the operator could not tell
+  // this figure from the all-time one sitting directly above it.
+  await expect(page.getByTestId("cost-totals")).toContainText("what has it cost");
   await expect(page.getByTestId("spend-by-provider")).toBeVisible();
 
   await page.getByTestId("budget-scope-type").selectOption("CATEGORY");

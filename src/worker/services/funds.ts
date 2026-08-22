@@ -342,3 +342,69 @@ export async function handleThesisSectors(ctx: RouteContext): Promise<Response> 
     from: sectors?.length ? "the fund's written mandate" : "no sectors are stated in the mandate yet",
   });
 }
+
+/**
+ * What the fund actually is, for anyone about to model against it.
+ *
+ * WHY THIS EXISTS, and it is the worst thing found in this review. Every allocation scenario the
+ * client created was hardcoded — `fund_size: 30000000, investable: 24000000, fund_deployed:
+ * 10000000, reserve_modeled_need: 8000000`, written into the POST body in App.tsx. Not a form
+ * default a partner could see and correct: numbers no partner ever laid eyes on. The constraint
+ * engine then answered "does this sleeve fit", "is concentration within limit" and "is the reserve
+ * sufficient" against a thirty-million-dollar fund the firm does not have, and printed the answers
+ * with the confidence of arithmetic. West Peek's real recorded fund is four orders of magnitude
+ * off that. Every scenario ever run was a comparison against fiction.
+ *
+ * SO THIS ROUTE READS, AND SAYS WHERE EACH NUMBER CAME FROM. Three provenances and no fourth:
+ * RECORDED (a human typed it into the fund record), DERIVED (computed from executed transactions),
+ * or MISSING. There is deliberately no "assumed" — an assumption is what got us here.
+ *
+ * MISSING IS AN ANSWER, and the caller must refuse rather than substitute. A scenario built on a
+ * fund size nobody has recorded is not a cautious scenario, it is a wrong one, and the partner
+ * cannot tell the difference by looking at it.
+ *
+ * DEPLOYED IS DERIVED FROM COST BASIS ON OPEN POSITIONS, which is the only number the system
+ * actually knows: a position exists solely because a transaction was executed against an approval
+ * receipt. Marks are not used — what a holding is now worth is a judgement, and deployed capital is
+ * a fact about money that left.
+ */
+export async function handleFundBasis(ctx: RouteContext): Promise<Response> {
+  const fund = await getFundById(ctx.env, ctx.params.id!);
+  if (!fund) return json({ error: "not_found" }, { status: 404 });
+
+  const held = await ctx.env.WP_OS_DB.prepare(
+    "SELECT COUNT(*) AS n, COALESCE(SUM(cost_basis), 0) AS deployed FROM position WHERE fund_id = ?1 AND status = 'OPEN'",
+  )
+    .bind(fund.id)
+    .first<{ n: number; deployed: number }>();
+
+  // `target_size_minor` is integer minor units; everything downstream of the allocation engine is
+  // in whole currency, so it is converted once, here, rather than in each of its callers.
+  const sizeMinor = (fund as unknown as { target_size_minor: number | null }).target_size_minor;
+  const size = typeof sizeMinor === "number" ? sizeMinor / 100 : null;
+  const deployed = held?.deployed ?? 0;
+
+  return json({
+    fund_id: fund.id,
+    fund_name: (fund as unknown as { name: string }).name,
+    fund_size: size,
+    fund_size_source: size === null ? "MISSING" : "RECORDED",
+    fund_deployed: deployed,
+    // DERIVED even at zero, and that distinction matters: a fund that has bought nothing has
+    // genuinely deployed nothing. Reporting that as MISSING would send the caller looking for a
+    // number that does not exist to be found.
+    fund_deployed_source: "DERIVED",
+    positions_held: held?.n ?? 0,
+    // Investable is fund size less what the fund will never invest — fees and expenses over its
+    // life. West Peek has not recorded a fee model, and inventing the standard one would be the
+    // same mistake at a smaller scale, so this is MISSING until somebody records it.
+    investable: null,
+    investable_source: "MISSING",
+    ready: size !== null,
+    // Said in the partner's language, because the caller has to show this when it refuses.
+    blocked_because:
+      size === null
+        ? "The fund's size has not been recorded, so there is nothing true to model against. Set it on the fund record first."
+        : null,
+  });
+}

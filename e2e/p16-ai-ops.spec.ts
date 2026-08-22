@@ -57,5 +57,15 @@ test("a Managing Partner sets a scoped budget and the cost centre shows its defi
   await expect(page.getByTestId("budget-list")).toContainText("CATEGORY:RESEARCH");
 
   await expect(page.getByTestId("cost-definitions")).toContainText("benefit is not measured as money");
-  await expect(page.getByTestId("cost-totals")).toContainText("committed this");
+  await expect(page.getByTestId("cost-totals")).toContainText("what has it cost");
+
+  // The two adjacent figures the operator asked about now say why there are two of them.
+  await expect(page.getByTestId("cost-two-blocks")).toContainText("not the same number");
+
+  // The firmwide ceiling — both windows, present even when nothing has been set.
+  await expect(page.getByTestId("firm-budget-MONTHLY")).toContainText("Most it may spend in a month");
+  await expect(page.getByTestId("firm-budget-ALL_TIME")).toContainText("Most it may ever spend");
+
+  // And the quarantine has somewhere to go. It was 51 rows deep with no button.
+  await expect(page.getByTestId("quarantine-queue")).toBeVisible();
 });

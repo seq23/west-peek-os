@@ -184,6 +184,13 @@ const budgetUpdateSchema = z.object({
    * changes for anyone who does not send it.
    */
   honours_pins: z.boolean().default(true),
+  /**
+   * Which way UNPINNED work leans. Only "best available" sets this true, and it is the whole
+   * difference between that posture and "balanced" — without it the two wrote identical rows and a
+   * partner who chose to spend more got the cheap behaviour and was told they were on Balanced.
+   * Defaults false so nothing changes for anyone who does not send it.
+   */
+  prefers_frontier: z.boolean().default(false),
   approval_receipt_id: z.string().trim().min(1).optional(),
 });
 
@@ -239,8 +246,8 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
 
     const id = `bp_${crypto.randomUUID()}`;
     await ctx.env.WP_OS_DB.prepare(
-      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, strategic_surge_json, honours_pins, set_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, strategic_surge_json, honours_pins, prefers_frontier, set_by)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
     )
       .bind(
         id,
@@ -251,6 +258,7 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
         input.per_run_cap_usd,
         input.strategic_surge ? JSON.stringify(input.strategic_surge) : null,
         input.honours_pins ? 1 : 0,
+        input.prefers_frontier ? 1 : 0,
         actor.firmUserId!,
       )
       .run();

@@ -3,6 +3,7 @@ import { useApi } from "../lib/api";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { pageHost } from "@shared/help/pageHosts";
 import { personaFor } from "@shared/registry/aiEmployeePersonas";
+import { PageHostChat } from "./PageHostChat";
 
 /**
  * Who runs this page.
@@ -21,6 +22,18 @@ import { personaFor } from "@shared/registry/aiEmployeePersonas";
  * nobody is working answers "is anyone on this?" with a lie, which is worse than leaving it unsigned.
  * So the roster supplies who it WOULD be and the database supplies whether they are actually
  * employed, and when they are not the card says so plainly instead of smiling.
+ *
+ * THE CHAT RIDES ALONG (item 14), and mounting it here rather than on each page is the point:
+ * seventeen pages get it in one change and none of them can forget it. It is offered even when the
+ * host is switched off — the refusal is worth more inside the conversation, where a partner can see
+ * that they asked and why nothing came back, than as a button that is missing for reasons nobody
+ * explains.
+ *
+ * WHICH IS WHY THE CARD IS NOW A COLUMN. `professor-welcome` is a flex ROW — face left, words right —
+ * so anything added as a sibling became a third column and shoved itself into the corner. The row is
+ * now an inner element and the card stacks: the portrait block, then the conversation under it. The
+ * row's own layout is untouched, which is the point; the card looks identical until somebody asks
+ * something.
  */
 
 interface LoungeEmployee {
@@ -44,7 +57,8 @@ export function PageHostCard({ navKey }: { navKey: string }) {
   const portrait = portraitFor(host.name);
 
   return (
-    <section className="card professor-welcome" data-testid={`page-host-${navKey}`}>
+    <section className="card page-host" data-testid={`page-host-${navKey}`}>
+      <div className="professor-welcome">
       {portrait && !portraitFailed ? (
         <img
           className="professor-face"
@@ -94,6 +108,9 @@ export function PageHostCard({ navKey }: { navKey: string }) {
           </p>
         )}
       </div>
+      </div>
+
+      <PageHostChat navKey={navKey} hostName={host.name} />
     </section>
   );
 }

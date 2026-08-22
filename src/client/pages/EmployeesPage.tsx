@@ -274,7 +274,7 @@ function EmployeeDetailPanel({ id, me, onChanged }: { id: string; me: MeResponse
           landing pages. */}
       {isMp && (
         <form
-          className="form-row retitle"
+          className="form-row"
           data-testid={`employee-retitle-${id}`}
           onSubmit={async (e) => {
             e.preventDefault();

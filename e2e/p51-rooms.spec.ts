@@ -19,13 +19,23 @@ async function signIn(page: import("@playwright/test").Page): Promise<void> {
  * betray the community model.
  */
 
-test("Rooms explains itself and offers a proposal", async ({ page }) => {
+test("Events & Rooms explains itself and offers a proposal", async ({ page }) => {
   await signIn(page);
-  await gotoSurface(page, "Rooms");
+  // The nav label became "Events & Rooms" when the two tabs merged, and gotoSurface matches the
+  // visible label exactly — so this spec had been navigating to a button that no longer existed.
+  await gotoSurface(page, "Events & Rooms");
   await expect(page.getByTestId("how-this-works-rooms")).toBeVisible();
   await expect(page.getByTestId("propose-room")).toBeVisible();
   // Sponsors live on the same page: a Room and its funding are one decision.
   await expect(page.getByTestId("add-sponsor")).toBeVisible();
+  // The record of what happened is the same page too, not a tab away.
+  await expect(page.getByText("Every gathering on the record")).toBeVisible();
+  /*
+   * Operator: "declined proposals should go somewhere after they are declined. somewhere below
+   * greyed out." The shelf is a section that renders even when it is empty — a shelf that appears
+   * only once something is on it is a shelf nobody learns exists.
+   */
+  await expect(page.getByTestId("declined-proposals")).toBeVisible();
 });
 
 test("an empty Introductions page says that quiet is the normal state", async ({ page }) => {

@@ -2311,6 +2311,15 @@ export async function handleDealProvenance(ctx: RouteContext): Promise<Response>
  * yesterday after two months of screening is fresh; dating staleness from creation would paint
  * every hard-won deal red and teach the operator to ignore the colour. Where a deal has never
  * moved — still sitting at NEW — creation IS the last movement, which is the correct reading.
+ *
+ * A REMOVED RECORD IS OFF THE BOARD, and it was not. `archived_at` (0098) was written by "Remove
+ * this record" and read by nothing here, so the row came straight back on the next reload and the
+ * control looked broken. Every other list that can show an opportunity already filters it; this one,
+ * the most visible of them, did not.
+ *
+ * A PASS CARRIES ITS REASON THIS FAR. The reason is the whole value of a recorded no, and the board
+ * selected every column except that one — so the pass pile could say a company had been declined
+ * and never say why, which is the state the reason was added to prevent.
  */
 export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> {
   const visibility = privacyVisibilityClause(ctx.identity!, "o.privacy_label");
@@ -2318,7 +2327,7 @@ export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> 
   const rows = await ctx.env.WP_OS_DB.prepare(
     `SELECT o.id, o.title, o.status, o.opportunity_type, o.relationship_origin, o.created_at,
             o.backfilled_at, o.as_of_date, o.placeholder_fields, o.placeholder_note,
-            o.price_per_share, o.quantity, o.source_channel,
+            o.price_per_share, o.quantity, o.source_channel, o.exit_reason,
             o.recommendation, o.recommendation_note, o.recommended_by, o.recommended_at,
             c.canonical_name AS company_name, c.id AS company_id,
             (SELECT MAX(e.created_at)
@@ -2328,7 +2337,7 @@ export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> 
             ) AS last_moved_at
        FROM investment_opportunity o
        JOIN canonical_company c ON c.id = o.company_id
-      WHERE ${visibility}
+      WHERE ${visibility} AND o.archived_at IS NULL
       ORDER BY o.created_at DESC
       LIMIT 500`,
   ).all<Record<string, unknown>>();

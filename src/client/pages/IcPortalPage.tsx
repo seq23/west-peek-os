@@ -90,7 +90,7 @@ function SectionEditor({
 
   return (
     <section className="card ic-section" data-testid={`ic-section-${sectionId}`}>
-      <h5>
+      <h4>
         {title}{" "}
         <span
           className={state === "ANSWERED" ? "help-tag help-tag-good" : state === "NOT_APPLICABLE" ? "help-tag help-tag-muted" : "help-tag help-tag-warn"}
@@ -98,7 +98,7 @@ function SectionEditor({
         >
           {state === "ANSWERED" ? "answered" : state === "NOT_APPLICABLE" ? "not applicable" : "open"}
         </span>
-      </h5>
+      </h4>
       {intent && <p className="muted small">{intent}</p>}
 
       {questions && questions.length > 0 && (
@@ -177,7 +177,6 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
 
   return (
     <div className="page" data-testid="ic-portal-page">
-      <h3>IC Decision Portal</h3>
 
       {readiness && (
         <p
@@ -309,14 +308,16 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
             {String(records.data?.packet?.canonical_name ?? "—")}
             {records.data?.packet?.description ? ` — ${String(records.data.packet.description)}` : ""}
           </p>
-          <h5>Latest metrics</h5>
+          <h4>Latest metrics</h4>
           {(records.data?.company.metrics ?? []).length === 0 ? (
             <p className="state-empty">No metrics recorded for this company.</p>
           ) : (
             <ul className="card-list small" data-testid="ic-company-metrics">
               {records.data!.company.metrics.map((m, i) => (
                 <li key={i}>
-                  <strong>{String(m.metric_key)}</strong> {String(m.value)}{" "}
+                  {/* The stored key is `arr` / `burn_multiple`; a partner reading a committee packet
+                      should not be shown a column name. Underscores out, sentence case in. */}
+                  <strong>{String(m.metric_key).split("_").join(" ")}</strong> {String(m.value)}{" "}
                   {/* The as-of date travels with every figure: a number without one invites
                       someone to quote it in the room without knowing its age. */}
                   <span className="muted small">as of {String(m.as_of_date)} · {String(m.source ?? "—")}</span>
@@ -324,7 +325,7 @@ export function IcPortalPage({ packetId }: { packetId: string }): JSX.Element {
               ))}
             </ul>
           )}
-          <h5>Deal math</h5>
+          <h4>Deal math</h4>
           {records.data?.company.deal_math ? (
             <p className="muted small" data-testid="ic-deal-math">
               valuation {String(records.data.company.deal_math.valuation ?? "—")} · check{" "}

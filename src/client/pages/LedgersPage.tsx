@@ -45,7 +45,6 @@ export function LedgersPage(): JSX.Element {
 
   return (
     <div className="page" data-testid="ledgers-page">
-      <h3>Record</h3>
       <p className="muted">What the firm decided, what it knows, and who is doing the work.</p>
 
       <nav className="ic-tabs" data-testid="ledger-tabs">
@@ -60,9 +59,17 @@ export function LedgersPage(): JSX.Element {
         </button>
       </nav>
 
+      {/*
+        A TABBED page, so the tab nav above is what selects the section — which is why the three
+        headings here used to restate their own tab's label ("Decision journal" under a tab reading
+        "Decision journal"), the same wasted line the nine duplicated page titles were. They are now
+        h3, outside the card in LpPage's shape, and phrased as the question a partner is actually
+        asking: a label tells you what a table is called, a question tells you why you would read it.
+      */}
       {view === "decisions" && (
+        <>
+        <h3>What have we decided, and why?</h3>
         <section className="card" data-testid="decision-journal">
-          <h4>Decision journal</h4>
           <p className="muted small">
             Every decision, from all four places the firm records them. Append-only at the database —
             nothing here can be edited after the fact.
@@ -92,11 +99,13 @@ export function LedgersPage(): JSX.Element {
             </p>
           )}
         </section>
+        </>
       )}
 
       {view === "evidence" && (
+        <>
+        <h3>What are we treating as true, and what backs it?</h3>
         <section className="card" data-testid="evidence-ledger">
-          <h4>Evidence ledger</h4>
           <p className="muted small">Every claim, with where it came from.</p>
           {unsourced > 0 && (
             <p className="notice" data-testid="evidence-unsourced-count">
@@ -136,11 +145,13 @@ export function LedgersPage(): JSX.Element {
             </ul>
           )}
         </section>
+        </>
       )}
 
       {view === "queues" && (
+        <>
+        <h3>Who is carrying what right now?</h3>
         <section className="card" data-testid="work-queues">
-          <h4>Work queues</h4>
           <p className="muted small">
             {queues.data?.total_open ?? 0} open{" "}
             {queues.data?.blocked_count ? (
@@ -152,12 +163,13 @@ export function LedgersPage(): JSX.Element {
           ) : (
             queues.data!.queues.map((q) => (
               <div key={`${q.owner_type}:${q.owner_id}`} data-testid={`queue-${q.owner_id ?? "unassigned"}`}>
-                <h5>
+                {/* h4: a thing inside a section. Nothing on any page goes deeper than this. */}
+                <h4>
                   {q.owner_name}{" "}
                   <span className="muted small">
                     {q.owner_type.toLowerCase()} · {q.cards.length} card{q.cards.length === 1 ? "" : "s"}
                   </span>
-                </h5>
+                </h4>
                 <ul className="card-list small">
                   {q.cards.map((c) => (
                     <li key={c.id}>
@@ -173,6 +185,7 @@ export function LedgersPage(): JSX.Element {
             ))
           )}
         </section>
+        </>
       )}
 
       <HowThisWorks

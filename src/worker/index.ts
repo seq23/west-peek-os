@@ -42,6 +42,7 @@ import {
   handleGetFund,
   handleGetPolicyVersion,
   handleListFundEntities,
+  handleFundBasis,
   handleListFunds,
   handleListPolicyVersions,
 } from "./services/funds";
@@ -73,6 +74,9 @@ import {
   handleAddApprovalComment,
   handleAddApprovalEvidence,
   handleApprovalContext,
+  handleBlockApproval,
+  handleReleaseApprovalBlock,
+  handleReopenApproval,
 } from "./services/approvals";
 import { handleDraftCard, handleWorkCard, handleWriteBrief } from "./services/employeeWork";
 import {
@@ -100,8 +104,10 @@ import {
 import {
   handleAcceptAiOutput,
   handleAiOutboundPolicy,
+  handleDiscardAiOutput,
   handleGetAiRun,
   handleListAiRuns,
+  handleListQuarantinedOutputs,
   handleRunAi,
 } from "./services/aiRuns";
 import {
@@ -438,6 +444,7 @@ import {
   handlePauseMachine,
 } from "./services/machines";
 import { handleAllocationStrategyView, handlePortfolioCockpit } from "./services/cockpit";
+import { handleDraftPortfolioSummary, handlePortfolioReporting } from "./services/portfolioReporting";
 import { handleCheckConnector, handleListConnectors, handleMeetingPrepQueue } from "./services/connectors";
 import { handleAcceptEngagement, handleListEngagements, handleOpenEngagement } from "./services/specialist";
 import {
@@ -446,6 +453,7 @@ import {
   handleSetReconciliationSchedule,
   handleUpdateLpEngagement,
 } from "./services/lpOps";
+import { handlePageThread, handlePageReply } from "./services/pageChat";
 import {
   handleAddQuestion,
   handleProposeQuestions,
@@ -502,6 +510,7 @@ import {
   handleCostOverview,
   handleListBudgetScopes,
   handleSetBudgetScope,
+  handleSetFirmBudget,
 } from "./services/costCenter";
 import {
   handleAdoptFirmSkill,
@@ -615,6 +624,8 @@ const router = new Router()
   // P2 — fund + policy substrate (policy versions are immutable by trigger).
   .post("/api/funds", handleCreateFund)
   .get("/api/funds", handleListFunds)
+  // Item 13: what the fund actually is, so a scenario stops being modelled against fiction.
+  .get("/api/funds/:id/basis", handleFundBasis)
   .get("/api/funds/:id", handleGetFund)
   .post("/api/funds/:id/entities", handleCreateFundEntity)
   .get("/api/funds/:id/entities", handleListFundEntities)
@@ -663,6 +674,11 @@ const router = new Router()
   .get("/api/approvals/:id", handleGetApproval)
   .post("/api/approvals/:id/submit", handleSubmitApproval)
   .post("/api/approvals/:id/decide", handleDecideApproval)
+  // Changing a decision, and blocking — two authorities the decide route deliberately does not
+  // carry. See the notes on REOPENABLE_FROM and BLOCKABLE_FROM in services/approvals.ts.
+  .post("/api/approvals/:id/reopen", handleReopenApproval)
+  .post("/api/approvals/:id/block", handleBlockApproval)
+  .post("/api/approvals/:id/release", handleReleaseApprovalBlock)
   // P3 — external effects (execution ONLY via effects/executor.ts + receipt).
   .post("/api/effects/requests", handleCreateEffectRequest)
   .get("/api/effects/requests", handleListEffectRequests)
@@ -686,6 +702,10 @@ const router = new Router()
   .get("/api/ai/runs", handleListAiRuns)
   .get("/api/ai/runs/:id", handleGetAiRun)
   .post("/api/ai/runs/:id/accept-output", handleAcceptAiOutput)
+  // The quarantine's exits. Accept has existed since P4 and had no caller; listing what is waiting
+  // and throwing one away are new, and without all three the queue could only grow.
+  .get("/api/ai/quarantine", handleListQuarantinedOutputs)
+  .post("/api/ai/runs/:id/discard-output", handleDiscardAiOutput)
   // P4 — AI employee lifecycle (no direct status route; activation via approval receipt only).
   .get("/api/ai/employees/on-duty", handleDutyRoster)
   .get("/api/ai/employees", handleListAiEmployees)
@@ -933,6 +953,9 @@ const router = new Router()
   .post("/api/portfolio/metric-definitions", handleCreateMetricDefinition)
   .get("/api/portfolio/metric-definitions", handleListMetricDefinitions)
   .post("/api/portfolio/updates", handleCreatePortfolioUpdate)
+  // Item 12 — reporting off the back of those updates: month on month and quarter on quarter.
+  .get("/api/portfolio/reporting", handlePortfolioReporting)
+  .post("/api/portfolio/reporting/summary", handleDraftPortfolioSummary)
   .post("/api/portfolio/snapshots", handleCreateMetricSnapshot)
   .get("/api/portfolio/snapshots", handleListMetricSnapshots)
   .post("/api/portfolio/companies/:id/evaluate", handleEvaluateAlerts)
@@ -1079,6 +1102,9 @@ const router = new Router()
   .get("/api/ai/budgets", handleListBudgetScopes)
   .post("/api/ai/budgets", handleSetBudgetScope)
   .post("/api/ai/cost-alerts/:id/acknowledge", handleAcknowledgeCostAlert)
+  // The firmwide ceiling — this month and ever. Read back inside GET /api/ai/cost, because a budget
+  // and the spend it governs belong on one payload or they arrive at the page at different times.
+  .post("/api/ai/firm-budget", handleSetFirmBudget)
   // P17 — machine control center. Pause is enforced in the services, not by UI hiding.
   .get("/api/machines/control-center", handleMachineControlCenter)
   .get("/api/machines/:id/state", handleGetMachine)
@@ -1131,6 +1157,9 @@ const router = new Router()
   // The 1:1. Research is a conversation with the analyst, not a form with two buttons.
   .get("/api/research/projects/:id/thread", handleResearchThread)
   .post("/api/research/projects/:id/reply", handleResearchReply)
+  // Item 14: the panel on every hosted page. Keyed by nav key because a page is not a row.
+  .get("/api/pages/:navKey/thread", handlePageThread)
+  .post("/api/pages/:navKey/reply", handlePageReply)
   .post("/api/research/projects/:id/propose-questions", handleProposeQuestions)
   .post("/api/research/projects/:id/questions", handleAddQuestion)
   .post("/api/research/projects/:id/sources", handleAddSource)

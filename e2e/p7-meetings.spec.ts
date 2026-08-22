@@ -60,7 +60,9 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   await expect(page.getByTestId(`approval-card-${cardId}`)).toContainText("meeting.recording_policy.activate");
   await page.getByTestId(`approve-${cardId}`).click();
   await page.getByTestId("approval-filter").selectOption("approved");
-  await expect(page.getByTestId(`approval-card-${cardId}`)).toContainText("approved");
+  // The badge reads "Approved" now: a decided card is collapsed and its state is the badge, not
+  // a raw enum printed twice on the same screen.
+  await expect(page.getByTestId(`approval-card-${cardId}`)).toContainText("Approved");
 
   const activated = await request.post(`/api/meetings/${meetingId}/recording-policy`, { headers: MP, data: { approval_receipt_id: cardId } });
   expect(activated.status()).toBe(200);

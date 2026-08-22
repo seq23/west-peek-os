@@ -1,13 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { readinessFor, type MachineStatus, type ReadinessInputs } from "../src/shared/setup/employeeReadiness";
+import { AI_EMPLOYEE_ROSTER } from "../src/shared/registry/aiEmployees";
+import { MACHINE_REGISTRY } from "../src/shared/registry/machines";
 
-/** Wesley works through exactly one machine: lp_fundraising. */
-const WESLEY_MACHINE = "lp_fundraising";
+/*
+ * WESLEY'S MACHINES ARE READ FROM THE ROSTER, NOT TYPED HERE.
+ *
+ * This was `const WESLEY_MACHINE = "lp_fundraising"` — true when the LP seat worked one machine,
+ * and quietly false the day it worked three. The fixture then described a server that knew one of
+ * his machines, which is a state no real server is ever in, and the READY test only failed because
+ * `MACHINE_MISSING` happened to fire. A fixture that invents its own world agrees with any bug that
+ * shares its imagination — the same failure as the hand-typed roster that invented "Paige".
+ */
+const WESLEY_MACHINES = AI_EMPLOYEE_ROSTER.find((e) => e.name === "Wesley")!.primaryMachineKeys;
+
+function machineMap(status: MachineStatus["status"]): Map<string, MachineStatus> {
+  return new Map<string, MachineStatus>(
+    WESLEY_MACHINES.map((key) => [
+      key,
+      { key, name: MACHINE_REGISTRY.find((m) => m.key === key)?.name ?? key, status },
+    ]),
+  );
+}
 
 function inputs(over: Partial<ReadinessInputs> = {}): ReadinessInputs {
-  const machines = new Map<string, MachineStatus>([
-    [WESLEY_MACHINE, { key: WESLEY_MACHINE, name: "LP & Fundraising", status: "ACTIVE" }],
-  ]);
+  const machines = machineMap("ACTIVE");
   return {
     employeeStatusByName: new Map([["Wesley", "ACTIVE"]]),
     machineStatusByKey: machines,
@@ -27,14 +44,7 @@ describe("employee readiness reflects the real dependency chain", () => {
   it("a paused machine blocks an otherwise-active employee", () => {
     // This is the case a naive UI gets wrong: the employee looks fine, but the server refuses to
     // route work to a paused machine (p17-machines.spec.ts).
-    const r = readinessFor(
-      "Wesley",
-      inputs({
-        machineStatusByKey: new Map([
-          [WESLEY_MACHINE, { key: WESLEY_MACHINE, name: "LP & Fundraising", status: "PAUSED" }],
-        ]),
-      }),
-    )!;
+    const r = readinessFor("Wesley", inputs({ machineStatusByKey: machineMap("PAUSED") }))!;
     expect(r.state).toBe("BLOCKED");
     expect(r.blockers.map((b) => b.kind)).toContain("ALL_MACHINES_PAUSED");
     expect(r.blockers.every((b) => b.action.length > 0)).toBe(true);

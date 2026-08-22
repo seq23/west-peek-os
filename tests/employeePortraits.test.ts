@@ -21,7 +21,10 @@ describe("employee portraits", () => {
     // The lounge can now un-retire somebody. Before all thirty-one portraits were committed, an
     // employee returning arrived with a grey initial on the page whose entire job is making the
     // workforce feel like people.
-    for (const retired of ["Paige", "Priya", "Prue", "Wendy", "Willa", "Wilson", "Winnie", "Winton", "Wynn", "Penn", "Perry", "Perrin"]) {
+    // Piper joined this list on 21 Aug 2026 when LP Sourcing merged into LP Relations. Her seat is
+    // off the roster and her row is RETIRED rather than deleted, so she is exactly the case this
+    // test describes: somebody the firm employed, who must not come back faceless.
+    for (const retired of ["Paige", "Piper", "Priya", "Prue", "Wendy", "Willa", "Wilson", "Winnie", "Winton", "Wynn", "Penn", "Perry", "Perrin"]) {
       expect(portraitFor(retired), `${retired} has no face to come back to`).toBeTruthy();
     }
   });
@@ -45,7 +48,7 @@ describe("employee portraits", () => {
     // never employed, which is dead weight in every build.
     const everEmployed = new Set([
       ...AI_EMPLOYEE_ROSTER.map((e) => e.name.toLowerCase()),
-      "paige", "penn", "perrin", "perry", "priya", "prue",
+      "paige", "penn", "perrin", "perry", "piper", "priya", "prue",
       "wendy", "willa", "wilson", "winnie", "winton", "wynn",
     ]);
     expect(onDisk.filter((f) => !everEmployed.has(f))).toEqual([]);

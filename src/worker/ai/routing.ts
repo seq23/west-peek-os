@@ -182,6 +182,12 @@ export interface SpendDimensions {
   category?: string | null;
 }
 
+/**
+ * Committed cost of one already-status-filtered row. The definition of record — and the reasoning
+ * behind the CASE rather than a COALESCE — is `ai/spend.ts`; this stays a local copy only because
+ * importing it here would close a cycle (spend.ts reads `periodStart` from this file). If the
+ * definition changes, it changes in both, and `tests/aiSpend.test.ts` fails if they diverge.
+ */
 function costOf(row: { cost_estimate_json: string; actual_usage_json: string | null }): number {
   try {
     if (row.actual_usage_json) return (JSON.parse(row.actual_usage_json) as { cost_usd?: number }).cost_usd ?? 0;

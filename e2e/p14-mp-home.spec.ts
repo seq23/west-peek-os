@@ -27,8 +27,7 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   await page.getByRole("button", { name: "Sweeps", exact: true }).click();
   await expect(page.getByTestId("intelligence-page")).toBeVisible();
 
-  // The watchlist FORM lives inside the panel too, so it opens before anything is typed.
-  await page.getByTestId("intel-watchlist-panel").locator("summary").click();
+  // The watchlist is a section of the page now, not a closed disclosure: nothing is opened first.
   await page.getByTestId("intel-watch-label").fill("continuation-probe");
   await page.getByTestId("intel-watch-submit").click();
   await expect(page.getByTestId("intel-watchlist")).toContainText("continuation-probe");
@@ -60,7 +59,7 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   await expect(card.locator('[data-testid^="intel-message-"]')).toContainText("governed AI boundary");
 
   // ── A gated external source is shown as gated, never as working ──
-  await page.getByTestId("intel-sources-panel").locator("summary").click();
+  // Sources are the first section of the page and are on screen without opening anything.
   await expect(page.getByTestId("intel-sources")).toContainText("West Peek firm state");
 
   // ── Home: the item is surfaced, the ten questions are mapped, links work ──

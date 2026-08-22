@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { proposePerson } from "./networkOsClient";
 import { dealFromMessage, intakeDealFromEmail, openRoutingCard } from "../services/dealIntake";
+import { openPortfolioUpdateCard } from "../services/portfolioReporting";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 
 /**
@@ -180,7 +181,28 @@ export async function handleInboundEmail(
    */
   let dealResult: { outcome: string; detail: string } | null = null;
   let routingCardId: string | null = null;
+  let updateCardId: string | null = null;
   const wantsDeal = summary.triggers.includes("#wpdealflow") || summary.triggers.includes("#wpdeck");
+
+  /*
+   * A COMPANY WE ALREADY OWN GOES TO WINTER, and it goes as a job rather than as a figure.
+   *
+   * Handled before the deal ladder because it is a different question. The three older triggers all
+   * ask "is this a new thing for the funnel"; this one is a holding reporting on itself, and running
+   * it through deal intake would open an opportunity in a company the fund already bought.
+   *
+   * `dealFromMessage` is reused only to READ THE NAME out of the message — the same subject line and
+   * `Company:` field convention, so a founder does not have to learn two ways to say who they are.
+   */
+  if (summary.triggers.includes("#wpupdate")) {
+    const named = dealFromMessage(summary.subject, raw, summary.from, false);
+    updateCardId = await openPortfolioUpdateCard(env, {
+      subject: summary.subject,
+      from: summary.from,
+      raw,
+      company: named?.company ?? null,
+    });
+  }
 
   if (wantsDeal) {
     const deal = dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"));
@@ -236,6 +258,7 @@ export async function handleInboundEmail(
       mailbox: INTAKE_MAILBOX,
       known_triggers: EMAIL_TRIGGERS.map((t) => t.tag),
       ...(routingCardId ? { routing_card_id: routingCardId } : {}),
+      ...(updateCardId ? { portfolio_update_card_id: updateCardId } : {}),
       ...(dealResult ? { dealflow: dealResult.outcome, dealflow_detail: dealResult.detail } : {}),
       ...(relayed ? { network_os_relay: relayed.ok ? "PROPOSED" : `REFUSED: ${relayed.detail}` } : {}),
     },

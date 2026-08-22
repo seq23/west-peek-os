@@ -1,5 +1,10 @@
 /**
- * AI Employee roster — v4.0. Seventeen employees, consolidated from thirty-one (ADR-002 revised).
+ * AI Employee roster — v4.1. EIGHTEEN employees.
+ *
+ * The arithmetic, because the number has moved three times and each move was a decision: thirty-one
+ * under ADR-002, consolidated to seventeen in v4.0 (below), nineteen when Whitney and Percy were
+ * un-retired into questions the live roster could not answer, and eighteen now that LP Sourcing and
+ * LP Relations have been merged into one seat — see "PIPER WAS MERGED INTO WESLEY".
  *
  * WHY THE CULL. Thirty-one roles described a firm that does not exist. Several pairs were the same
  * job wearing two titles — a Chief of Staff and an Executive Assistant, a Principal and an
@@ -37,7 +42,8 @@
  * Guard invariant: no entry may carry a Managing Partner name (see managingPartners.ts).
  */
 
-export const AI_EMPLOYEE_ROSTER_VERSION = "4.0";
+/** 4.1 records the Piper→Wesley merge. It is emitted into the 0004 seed provenance line. */
+export const AI_EMPLOYEE_ROSTER_VERSION = "4.1";
 
 export type AIEmployeeLifecycleStatus =
   | "INACTIVE"
@@ -87,9 +93,52 @@ const E = (
  *   ai_employee_performance_lifecycle → Pax, who runs the workforce
  *   research_data_license_quality     → Wells, who owns what the firm knows and how
  *   opportunity_radar_strategic_initiative → Wyatt, who is already the one looking outward
+ */
+
+/*
+ * THE REMAINING TWELVE, 21 Aug 2026 (item 17 finished). Nine took a seat, three were retired, and
+ * NO HEADCOUNT WAS ADDED — every one went to somebody already doing the nearest thing.
  *
- * Twelve machines are still unseated. That is the remainder of item 17, and it is a decision about
- * what the firm actually does rather than about who does it.
+ *   lp_diligence_request      → Wesley. An LP asking for materials is the LP relationship.
+ *   lp_proof_engine           → Wesley. The evidence in an update is written by whoever sends it.
+ *   data_room_control         → Wells. He hosts the Documents page and had no document machine.
+ *   relationship_capital_budget → Waverly. Who the firm may ask, and how recently it last asked.
+ *   meeting_capture_adapter   → Walter. Transcripts are an input to the meeting he already runs.
+ *   external_helper_coordination → Preston. Counsel, administrator, auditor, CPA and bank are
+ *                               already the people he deals with; none of them is an AI employee.
+ *   governance_center_broadcast → Pax. He runs the workforce, so firm-wide notices reach it.
+ *   activity_audit_ledger     → Willow, NOT Pax, and the distinction is the point: it is the audit
+ *                               record of what the workforce did, and it must not sit under the
+ *                               person whose workforce it records.
+ *   approval_center           → Pax, for QUEUE HYGIENE REPORTING ONLY. Nothing there approves
+ *                               anything; approvals are human-reserved and that boundary must not
+ *                               blur. His methods say so in the first line.
+ *
+ * RETIRED, not seated: `prompt_enhancer_intent` (askToCard.ts already does it, and better),
+ * `developer_diagnostics` and `builder_repo_product` (both assume an engineer this firm does not
+ * employ). They stay in the machine registry, flagged, because live history points at them — see
+ * `machines.ts`. After this, every ACTIVE machine has exactly one accountable seat.
+ */
+
+/*
+ * PIPER WAS MERGED INTO WESLEY, and the case is the same one that took the roster from 31 to 19.
+ *
+ * LP Sourcing and LP Relations both sat on `lp_fundraising` and NOTHING ELSE, which means they read
+ * byte-identical guidance and were two seats working the same LP prospect — at a fund with roughly
+ * forty limited partners. In a human firm that split is real because a person has finite hours; here
+ * it produced two colleagues who could only ever disagree with each other about the same name.
+ *
+ * What survived is the half of her that was a different JUDGEMENT rather than a different task: she
+ * would rather rule a prospect out early than carry it for a quarter. That is now Wesley's, in his
+ * biography and in his persona voice, because a relationship seat with no instinct for qualifying
+ * carries everybody forever.
+ *
+ * Her database row is RETIRED, never deleted — `ai_run` attribution and meeting seating point at it,
+ * and removing a name here does NOT remove the row: the seeds are INSERT OR IGNORE into a migration
+ * every database applied long ago. Migration 0126 retires her explicitly, and the roster generator
+ * additionally emits its own retirement expressed as "anybody not on the roster", which is a guarded
+ * no-op after it. The Lounge still lists her, because a retired seat can be brought back from there
+ * and hiding it would remove the only way to do it — `tests/workforce.test.ts` holds both halves.
  */
 export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
   // ── MP Support. One chief of staff each; the EA seats are absorbed. ──
@@ -106,16 +155,19 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "Everything that arrives and everything that syncs. Routes captures to whoever owns them, keeps " +
     "the Network OS mirror honest, and notices when two systems disagree before anyone acts on the " +
     "wrong one. Plumbing, which is why it is one seat rather than three."),
-  E("Waverly", "Relationships & Community", "Firm operations", ["relationship_intelligence", "community_intelligence"], "EXTERNAL_CAPABLE",
+  E("Waverly", "Relationships & Community", "Firm operations", ["relationship_intelligence", "community_intelligence", "relationship_capital_budget"], "EXTERNAL_CAPABLE",
     "Who the firm knows, and who in the community is worth knowing. Finds the warm path into a company " +
     "and records what West Peek actually witnessed a member do. Warm paths and community were always " +
     "one muscle — who do we know — read at two different distances."),
-  E("Wells", "Knowledge Manager", "Firm operations", ["knowledge_memory_promotion", "research_data_license_quality"], "INTERNAL_ONLY",
+  E("Wells", "Knowledge Manager", "Firm operations", ["knowledge_memory_promotion", "research_data_license_quality", "data_room_control"], "INTERNAL_ONLY",
     "What the firm has learned and can still find. Promotes claims into institutional memory once " +
-    "they are evidenced, and keeps what changed since you last looked."),
-  E("Willow", "Compliance & Privacy", "Firm operations", ["legal_compliance_rules", "model_governance_privacy_airlock"], "INTERNAL_ONLY",
+    "they are evidenced, keeps what changed since you last looked, and holds the document vault — " +
+    "which version is current, who was given what, and when their access ends."),
+  E("Willow", "Compliance & Privacy", "Firm operations", ["legal_compliance_rules", "model_governance_privacy_airlock", "activity_audit_ledger"], "INTERNAL_ONLY",
     "The check on everyone else, which is why this seat merges with nothing. Holds the privacy " +
-    "boundary, refuses a model call that would leak, and says no to the firm rather than for it."),
+    "boundary, refuses a model call that would leak, and says no to the firm rather than for it. " +
+    "Keeps the audit ledger too — the record of what the workforce did belongs with the person who " +
+    "checks it, not with the person who runs it."),
 
   // ── Investment. Principal and Associate are a human distinction. ──
   // Screening is deliberately NOT here. It was claimed by this bio and by Wyatt's
@@ -123,7 +175,17 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
   // is two seats owning one job — the duplicated work the roster cull exists to remove. The line is
   // the question being asked: "is this worth the firm's time" is the analyst's and needs nobody;
   // "is the firm going to do this" is this seat's and needs the founder.
-  E("Pierce", "Investment Lead", "Investment", ["early_stage_deal", "ic_decision", "secondaries_investment"], "EXTERNAL_CAPABLE",
+  // `investment_mandate_exclusion` added 21 Aug 2026: Pierce hosts Thesis and his own line is that
+  // he owns what the fund is looking for, yet the mandate machine sat only on Wyatt — so the Thesis
+  // page was hosted by somebody holding no mandate method at all. Wyatt keeps it too; he screens
+  // against it. Shared deliberately, and the two uses do not collide.
+  // `ic_decision` REMOVED, 21 Aug 2026, on the firm's own method rather than on a preference. The
+  // committee machine's `dissent` skill says the champion may not write the kill case — and this
+  // seat is always the champion, because a deal reaches IC precisely because Pierce carried it.
+  // Holding the machine let the same person prepare the packet that argues against himself, which
+  // is the one thing a committee exists to prevent. Poppy keeps it; she facilitates and never
+  // decides, which is the whole job.
+  E("Pierce", "Investment Lead", "Investment", ["early_stage_deal", "secondaries_investment", "investment_mandate_exclusion"], "EXTERNAL_CAPABLE",
     "Takes a company once the firm has decided it is worth real time, and runs it from diligence to " +
     "a decision — what we are underwriting, the memo, the terms. Covers secondaries as well as " +
     "primaries, because underwriting a late-stage block and a pre-seed round are the same discipline " +
@@ -132,23 +194,35 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "Finds companies against the thesis and tells you why each one fits. Runs the research behind a " +
     "deal, keeps the watchlist, and does the arithmetic. Sourcing and research were split across two " +
     "seats that read the same market."),
-  E("Poppy", "IC Facilitator", "Investment", ["ic_decision"], "INTERNAL_ONLY",
+  // `ic_learning_loop` is hers because the committee record is hers. The post-mortem asks what the
+  // committee assumed at 3/6/12/24 months and whether it held — that is the same document read
+  // later, not a separate discipline, and it was sitting on the Professor for want of a teaching
+  // machine to sit on instead.
+  E("Poppy", "IC Facilitator", "Investment", ["ic_decision", "ic_learning_loop"], "INTERNAL_ONLY",
     "Makes the committee work: assembles the packet, surfaces the contradiction nobody wants to raise, " +
-    "and records the decision and its dissent. Never decides anything, which is the job."),
-  E("Walter", "Meeting Buddy", "Investment", ["meeting_intelligence"], "EXTERNAL_CAPABLE",
+    "and records the decision and its dissent. Never decides anything, which is the job. Comes back to " +
+    "the same record months later and asks which of the committee's assumptions actually held."),
+  E("Walter", "Meeting Buddy", "Investment", ["meeting_intelligence", "meeting_capture_adapter"], "EXTERNAL_CAPABLE",
     "Sits in the meeting with you. Preps beforehand, follows what is actually said, and hands back the " +
-    "commitments afterwards with who owes what to whom."),
+    "commitments afterwards with who owes what to whom. Owns the transcription providers too, and " +
+    "treats what they return as an input rather than as the truth about the room."),
 
-  // ── LP and fundraising. ──
-  E("Piper", "LP Sourcing", "LP & fundraising", ["lp_fundraising"], "EXTERNAL_CAPABLE",
-    "Finds and qualifies limited partners, and scores a prospect against what this fund actually needs. " +
-    "Knows what a first-time manager has to prove and how a diligence process on one runs."),
-  // Deliberately lp_fundraising ONLY. Absorbing the outreach-composer seat brought
-  // marketing_pr_content with it, which would let LP relations publish marketing — a scope
-  // widening nobody asked for. The writing Wesley does is LP writing; Communications owns the rest.
-  E("Wesley", "LP Relations", "LP & fundraising", ["lp_fundraising"], "EXTERNAL_CAPABLE",
-    "Carries the LP relationship once it exists — the update, the data room question, the follow-up, " +
-    "and the writing that goes with it. Fluent in what institutional diligence on a Fund I demands."),
+  // ── LP and fundraising. One seat: see "PIPER WAS MERGED INTO WESLEY" above. ──
+  //
+  // Deliberately no marketing_pr_content. Absorbing the outreach-composer seat brought it along,
+  // which would let LP relations publish marketing — a scope widening nobody asked for. The three
+  // machines here are the whole arc of one relationship: find and qualify the prospect, answer what
+  // their diligence asks for, and show them what the platform actually did. Communications owns
+  // everything that goes to the public, and the offering exemption is why that line is hard.
+  E("Wesley", "LP Relations", "LP & fundraising", ["lp_fundraising", "lp_diligence_request", "lp_proof_engine"], "EXTERNAL_CAPABLE",
+    "Owns the limited partner from first name to signed subscription and every quarter after it. " +
+    "Maps the universe, reads fit against what THIS fund needs, and would rather rule a prospect out " +
+    "early than carry a maybe for a quarter — a courtesy meeting nobody qualified is the most " +
+    "expensive thing on a two-partner calendar. Then carries the relationship once it exists: the " +
+    "update, the diligence request, the data room question, the follow-up, and the writing that goes " +
+    "with all of it. Fluent in what institutional diligence on a Fund I demands and what a first-time " +
+    "manager has to prove — track record that is attributable, a story about why this fund and not " +
+    "another, and references who will take the call."),
 
   // ── Portfolio, community and the firm's own operations. ──
   E("Winter", "Portfolio Support", "Portfolio & operations", ["portfolio_support", "portfolio_performance_followon"], "EXTERNAL_CAPABLE",
@@ -158,15 +232,25 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "Proposes the monthly Room and finds the money that pays for it — venues, economics, guests, and " +
     "the sponsor pipeline. A Room and its sponsorship are one job; splitting them made nobody " +
     "accountable for whether it broke even."),
+  // Pippa's machine finally holds Pippa's work. Its only skill used to be a landing-page conversion
+  // rubric written for Percy's reviews of portfolio founders' products, so the seat responsible for
+  // press, embargoes, financing announcements and what may be said publicly during a raise had no
+  // written method about any of it. The rubric moved to `taste_layer`, which is Percy's.
   E("Pippa", "Communications", "Portfolio & operations", ["marketing_pr_content"], "EXTERNAL_CAPABLE",
     "The firm's outward voice, in one seat: what gets published, what gets pitched, and how West Peek " +
-    "sounds. Marketing, PR and content were three names for one judgement about tone."),
-  E("Pax", "Operations Manager", "Portfolio & operations", ["continuity_maintenance", "ai_employee_performance_lifecycle"], "INTERNAL_ONLY",
+    "sounds. Marketing, PR and content were three names for one judgement about tone. Holds the two " +
+    "rules that outrank the tone — a portfolio company's news is the company's to announce, and " +
+    "nothing about the raise goes out while the offering exemption forbids solicitation."),
+  E("Pax", "Operations Manager", "Portfolio & operations", ["continuity_maintenance", "ai_employee_performance_lifecycle", "governance_center_broadcast", "approval_center"], "INTERNAL_ONLY",
     "Keeps the machinery running — scheduled work, what failed overnight, what the workforce costs, " +
-    "and the continuity nobody thinks about until it breaks."),
-  E("Preston", "Finance & Fund Admin", "Portfolio & operations", ["finance_fund_admin", "fund_construction_allocation"], "INTERNAL_ONLY",
+    "and the continuity nobody thinks about until it breaks. Carries firm-wide notices to the " +
+    "workforce, and reports on the approval queue: how long things have waited and what is about to " +
+    "expire. He approves nothing, and the approval methods say so before they say anything else."),
+  E("Preston", "Finance & Fund Admin", "Portfolio & operations", ["finance_fund_admin", "fund_construction_allocation", "external_helper_coordination"], "INTERNAL_ONLY",
     "The fund's own numbers: capital calls, the administrator's records against ours, fees, and the " +
-    "reconciliation exceptions that mean somebody typed something twice."),
+    "reconciliation exceptions that mean somebody typed something twice. Also runs the bench of " +
+    "outside helpers — counsel, fund administrator, auditor, CPA, bank — who do real work for the " +
+    "firm and are emphatically not employees of it."),
 
   // ── Design. Brought back, and re-pointed at the question nobody could answer. ──
   //
@@ -184,7 +268,12 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
   // in shared/design/reviewRubric.ts. Re-pointing an existing seat beats inventing a nineteenth.
   //
   // EXTERNAL_CAPABLE deliberately: the whole point is that a founder can be handed this review.
-  E("Percy", "UX Design & Growth", "Portfolio & operations", ["marketing_pr_content", "taste_layer"], "EXTERNAL_CAPABLE",
+  //
+  // OFF marketing_pr_content, 21 Aug 2026. He was on it only because his rubric happened to live
+  // there, and the effect was that the firm's press machine had a page-conversion method and the
+  // designer had a press machine. The rubric moved with him onto `taste_layer` — where judging
+  // whether a thing is any good already lives — and Communications got its own methods back.
+  E("Percy", "UX Design & Growth", "Portfolio & operations", ["taste_layer"], "EXTERNAL_CAPABLE",
     "The seat a portfolio founder is sent to when their product is good and nobody is converting. " +
     "Two halves of one job: the interface — layout, hierarchy, whether the main action is obvious, " +
     "what survives on a phone — and the growth question underneath it, which is who this is for, " +
@@ -203,7 +292,12 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
   // Un-retiring is the right move over adding an eighteenth seat. The roster was consolidated from
   // thirty-one to seventeen because every seat has to answer a question the others do not, and a
   // new professor would have been a second coach beside a retired one.
-  E("Whitney", "Professor, West Peek University", "Learning", ["ic_learning_loop"], "EXTERNAL_CAPABLE",
+  //
+  // SHE NOW HAS A MACHINE FOR HER OWN SUBJECT. She was seated on `ic_learning_loop`, the committee's
+  // post-mortem, which meant two of the Professor's three methods were investment methods and the
+  // one teaching method she had was filed under investing. There was no teaching machine in the
+  // registry at all. `venture_teaching` (row 46) is hers; the post-mortem went back to Poppy.
+  E("Whitney", "Professor, West Peek University", "Learning", ["venture_teaching"], "EXTERNAL_CAPABLE",
     "Teaches venture — any topic, at whatever depth you need it, and marks you honestly rather than " +
     "encouragingly. Was the firm's Market Intelligence Coach; the coaching is the part that survived, " +
     "pointed at the partners' own understanding instead of at a market map. Will not invent a fact " +

@@ -74,7 +74,7 @@ function SeatingPanel({ meeting, me }: { meeting: MeetingRow; me: MeResponse }) 
 
   return (
     <section className="card" data-testid={`seating-${meeting.id}`}>
-      <h5>Who is in the room</h5>
+      <h4>Who is in the room</h4>
       <p className="muted small">
         Seat an employee to confer with them during the meeting. Seating grants no new authority —
         they see what you see and can do nothing you have not already approved.
@@ -207,7 +207,6 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       </form>
 
       <div className="home-section-head">
-        <h3>Meetings</h3>
       </div>
 
       <ul className="card-list" data-testid="meeting-list">

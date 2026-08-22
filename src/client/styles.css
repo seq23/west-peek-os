@@ -201,6 +201,24 @@ h3:not(:first-child) {
   margin-top: var(--space-xl);
 }
 
+/*
+ * A RULE BETWEEN SECTIONS, which the design standard called for and no page had.
+ *
+ * `hr` is styled two blocks up and was used exactly zero times in forty-odd page files — LP
+ * included. So "sections separated by a rule" existed only as a sentence. Rather than hand-inserting
+ * an <hr> into every page (which every new page would then forget), the rule is carried by the
+ * section heading itself: an h3 opens a section, so an h3 that follows something draws the line
+ * that separates it from what came before.
+ *
+ * REMOVED INSIDE CARDS AND PANELS, below. A card already has a border; a second line just inside it
+ * is a box drawn twice. This is why the reset exists rather than a narrower selector — the rule is
+ * "sections are ruled, containers are not", and it should be legible as that.
+ */
+h3:not(:first-child) {
+  border-top: 1px solid var(--wp-line);
+  padding-top: var(--space-xl);
+}
+
 h4:not(:first-child),
 h5:not(:first-child),
 h6:not(:first-child) {
@@ -630,6 +648,15 @@ hr {
 .module-card h3,
 .module-card h4 {
   margin-top: 0;
+}
+
+/* A card draws its own edge. The section rule would be a second line just inside the first. */
+.card h3,
+.module-card h3,
+.panel h3,
+details h3 {
+  border-top: 0;
+  padding-top: 0;
 }
 
 /* A panel head puts its title and its actions on one baseline. Eyebrow, when present,
@@ -1721,7 +1748,9 @@ hr {
 
 /* — Meeting close-out. The source quote is indented and quiet: it is evidence for the line above
      it, not a second thing to read. */
-.closeout h5 { margin: var(--space-sm) 0 var(--space-2xs); font-size: var(--text-base); }
+/* The h5 rule that used to live here went with the h5s. The page title is an h2, a section is an
+   h3 and a thing inside a section is an h4; nothing goes deeper, so the groups inside this card are
+   labelled lines rather than a fifth rank nobody can navigate to. */
 .closeout-quote { border-left: 2px solid var(--wp-line); padding-left: var(--space-xs); margin-top: var(--space-3xs); font-style: italic; }
 
 /* — IC Decision Portal. Tabs are a horizontal scroller on narrow screens rather than wrapping into
@@ -1883,6 +1912,44 @@ hr {
      supporting material reads as supporting. */
 .approval-context { border-left: 2px solid var(--wp-line); padding-left: var(--space-sm); margin: var(--space-xs) 0; }
 .approval-context h5 { margin: var(--space-xs) 0 var(--space-2xs); font-size: var(--text-sm); }
+
+/* ── The approval queue ────────────────────────────────────────────────────
+   One column, not a grid. An approval is read top to bottom in the order it
+   arrived — the LP page's flat sequence — and two columns would ask a partner
+   to choose a reading direction on the one screen where they should not have
+   to think about the furniture. The cards themselves are the work board's
+   `.work-card-row`: a card is a card, and a second one invented here would
+   drift from it within a month. */
+.approval-queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+/* A standing block and the two secondary controls each get a rule above them,
+   because they are a different rank of thing from the decision buttons: one is
+   why nothing is happening, the others are the ways out that are not a verdict. */
+.approval-block,
+.approval-secondary {
+  border-top: 1px solid var(--wp-line);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+}
+
+.approval-block > :last-child,
+.approval-secondary > :last-child { margin-bottom: 0; }
+
+/* A decision that was later taken back stays on the card — it happened, and the
+   spine is append-only. Marked with a rule rather than dimmed: an audit trail
+   that fades the inconvenient half is not one, and every prior attempt in this
+   product to signal "less important" with opacity ended up unreadable. */
+.approval-trail-superseded {
+  border-left: 2px solid var(--wp-line);
+  padding-left: var(--space-sm);
+}
 
 /* Thesis: label/value pairs that stay readable at any width. Auto-fit rather than a fixed
    column count so a long sector list does not force a scrollbar on a narrow screen. */
@@ -2058,8 +2125,18 @@ hr {
 /* A pass stays legible — recording why we said no is the point — but recedes. */
 .deal-row-out { opacity: 0.72; }
 .deal-name { font-size: var(--text-md); font-weight: 700; }
+/* The company name is a link to its record, and still the row's heading. `.link-button` carries its
+   own weight and an inline-drill-through padding; both are right in a dense row and wrong on a
+   heading, where the 3px indent left the name hanging off the deal type beneath it. */
+.deal-name > button.link-button { font-weight: 700; padding-left: 0; }
 .deal-age { font-size: var(--text-xs); color: var(--wp-muted); margin-top: var(--space-2xs); }
 .deal-age-stalled { color: var(--wp-danger); font-weight: 600; }
+/* The four cells of `.deal-row`, in order. They carried no rule at all, so the
+   grid's own minmax(0,…) was the only thing keeping a long company name from
+   blowing the row out — true by luck rather than by intent. */
+.deal-company,
+.deal-stage,
+.deal-blocker { min-width: 0; }
 .deal-blocker-text { font-size: var(--text-base); }
 .deal-blocker-text.warn { color: var(--wp-warn); }
 .deal-actions { display: flex; align-items: center; gap: var(--space-sm); }
@@ -2259,6 +2336,8 @@ hr {
   border-bottom: 1px solid var(--wp-line);
 }
 .brief-byline-line { font-size: var(--text-md); font-weight: 600; }
+/* Who wrote the brief, beside the line they wrote. Undefined, it stacked. */
+.brief-byline-who { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; }
 .brief-delivery > .daily-brief { border: none; margin: 0; }
 
 .delivery-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-md); }
@@ -3087,6 +3166,176 @@ hr {
   object-fit: cover;
   flex: 0 0 auto;
 }
+
+/* ── Structural classes that were used but never defined ───────────────────
+   Found 21 Aug 2026 while rebuilding Events & Rooms, which alone used nine
+   class names the stylesheet had never heard of — status badges rendered as
+   bare shouting text, a primary button as default grey, an agenda overflowing
+   sideways. Nothing failed. It simply looked wrong, and "looks wrong for no
+   reason you can point at" is a large part of what the operator has been
+   calling jumbled. A repo-wide scan found the same disease in the shared
+   structural classes below, `.page` among them — the wrapper on nine pages.
+   `npm run validate:css-classes` now fails the build on a class with no rule. */
+
+/* The page wrapper. Nine pages set it and got nothing: no flow, no rhythm,
+   every child spaced only by its own margins. */
+.page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A wide table scrolls inside its own box. Undefined, this let the LP
+   commitment table push the whole page sideways on a narrow screen — on the
+   very page held up as the standard. */
+.tablewrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* The quiet label above a value in a card. Used in five files, styled in
+   none, so it read at body weight and competed with the value it labelled. */
+.lbl {
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--wp-muted);
+  margin-bottom: var(--space-3xs);
+}
+
+/* The content region under a card's own title. */
+/* One browser look inside a work card. Undefined, consecutive looks ran together
+   with nothing separating one attempt from the next. */
+.work-look {
+  border-top: 1px solid var(--wp-line);
+  padding-top: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+/* ── Asking the host of a page (item 14) ───────────────────────────────────
+   NOT a panel. The card expands. Operator, on the first attempt — a button
+   floated to the right edge opening a 22rem column inside the card: "i am
+   afraid u ruined the UI... each 1:1 chat panel should just expand the host
+   card as is". A second box inside a card is two boxes where the page had
+   one, and this rides on seventeen pages.
+
+   Closed, the only new pixels are one quiet line in the bottom corner. */
+.page-host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+/* Bottom corner, aligned under the words rather than under the portrait — the
+   face column is 4rem of picture and a control tucked beneath it reads as
+   belonging to the photograph. */
+.host-chat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.host-chat-toggle {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--wp-muted);
+  /* Body size, not one step down. Muted colour already does the quieting, and a
+     size step below the conversation it opens is the adjacent-step drift the
+     operator kept catching by eye: "why is the font not the fucking same size". */
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.host-chat-toggle:hover { color: var(--wp-ink); }
+
+/* Drawn rather than typed: a text chevron sits on the font's own baseline and
+   never quite lines up with the label beside it. */
+.host-chat-chevron {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.host-chat-toggle[aria-expanded="true"] .host-chat-chevron {
+  transform: translateY(1px) rotate(225deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .host-chat-chevron { transition: none; }
+}
+
+/* The conversation CONTINUES the card: a rule, then the words. No border, no
+   background, no width of its own — nothing that makes it a second object. */
+.host-chat-body {
+  border-top: 1px solid var(--wp-line);
+  padding-top: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+/* Scrolls inside itself so a long conversation never pushes the page it is
+   about off the screen. */
+.host-chat-thread {
+  max-height: 18rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.host-chat-thread p {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+  max-width: 62ch;
+}
+
+/* Who said it, on its own line and quiet — a transcript reads badly when the
+   attribution competes with the words. */
+.host-chat-who {
+  display: block;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--wp-muted);
+}
+
+.host-chat-you { color: var(--wp-ink-2); }
+.host-chat-them { color: var(--wp-ink); }
+
+/* A turn that failed or was refused stays in the thread, set apart by a rule
+   rather than a colour: the palette has one accent and it is not for errors,
+   and a red box here would read as louder than the dangerous-switch red that
+   genuinely means something. */
+.host-chat-broke {
+  border-left: 2px solid var(--wp-line-strong);
+  padding-left: var(--space-sm);
+  color: var(--wp-ink-2);
+}
+
+.host-chat-ask {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.host-chat-ask input { flex: 1 1 auto; min-width: 0; }
 
 .professor-face-initial {
   display: inline-flex;
@@ -3960,11 +4209,9 @@ body {
 
 
 /* Proposals the firm turned down. Below and greyed: it is history, so it must not compete with what
-   is live — and it must not be somewhere you have to remember to go and look. */
+   is live — and it must not be somewhere you have to remember to go and look.
+   It is its own h3 section now, so the rule above it is drawn by the heading. It used to draw a
+   second border-top of its own a few pixels under that one, which reads as a mistake. */
 .declined-shelf {
-  margin-top: var(--space-lg);
-  padding-top: var(--space-md);
-  border-top: 1px solid var(--wp-line);
   opacity: 0.72;
 }
-.declined-shelf h4 { color: var(--wp-muted); }

@@ -15,6 +15,7 @@ import {
   recordRouting,
   type RoutingCandidate,
 } from "./routing";
+import { checkFirmBudgets, firmSpend } from "./spend";
 
 /**
  * runAi — THE governed AI boundary (P4). No other module may call a provider
@@ -260,6 +261,11 @@ export interface BudgetPolicyRow {
    * setting allowed to override the brief's frontier pin — see the routing branch below.
    */
   honours_pins?: number;
+  /**
+   * Which way UNPINNED work leans. 1 only under "best available", which is the posture that was
+   * indistinguishable from "balanced" until there was somewhere to record this.
+   */
+  prefers_frontier?: number;
   privacy_mode: PrivacyMode;
   daily_cap_usd: number;
   per_run_cap_usd: number;
@@ -409,36 +415,19 @@ interface CostEstimate {
   surge_applied: boolean;
 }
 
-/** Today's committed spend (actual where known, else estimate) for a firm scope. */
+/**
+ * Today's committed spend for a firm scope.
+ *
+ * This function used to carry its own copy of the definition — and its own day boundary,
+ * `date(created_at) = date('now')`, while the scoped budgets next to it used a UTC midnight ISO
+ * bound. Two of the three figures the operator found disagreeing came from exactly that. It is now
+ * one line over `ai/spend.ts`, which every other reader of "what has this cost" also goes through.
+ *
+ * It now includes vendor spend as well as model spend, because the daily cap is the firm's ceiling
+ * on what it spends, and an image bought outside the model boundary is money the firm spent.
+ */
 export async function dailySpendUsd(env: Env, firmScope: string): Promise<number> {
-  const rows = await env.WP_OS_DB.prepare(
-    `SELECT cost_estimate_json, actual_usage_json
-       FROM ai_run
-      WHERE firm_scope = ?1
-        AND date(created_at) = date('now')
-        AND status IN ('QUEUED','RUNNING','COMPLETED')`,
-  )
-    .bind(firmScope)
-    .all<{ cost_estimate_json: string; actual_usage_json: string | null }>();
-  let total = 0;
-  for (const row of rows.results ?? []) {
-    let cost = 0;
-    if (row.actual_usage_json) {
-      try {
-        cost = (JSON.parse(row.actual_usage_json) as { cost_usd?: number }).cost_usd ?? 0;
-      } catch {
-        cost = 0;
-      }
-    } else {
-      try {
-        cost = (JSON.parse(row.cost_estimate_json) as { estimated_cost_usd?: number }).estimated_cost_usd ?? 0;
-      } catch {
-        cost = 0;
-      }
-    }
-    total += cost;
-  }
-  return total;
+  return (await firmSpend(env, firmScope, "TODAY")).total_usd;
 }
 
 // ── Run recording ──
@@ -1031,17 +1020,41 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
       `Cheapest available used instead: ${cheapest.providerKey}/${cheapest.model}. Quality on pinned work is lower by design.`;
   } else {
     const preferred = input.budgetContext?.preferredModel;
+    /*
+     * THE EXPENSIVE END OF THE LEVER, and this branch is the whole of it.
+     *
+     * "Best available" and "Balanced" wrote identical policy rows and therefore behaved identically:
+     * unpinned work took the cheapest adequate model under both. A partner who chose to spend more
+     * got exactly what the cheap setting gave them, and the page told them they were on Balanced.
+     *
+     * PRICE IS THE ONLY QUALITY SIGNAL THIS SYSTEM HAS, and that is worth saying rather than
+     * dressing up. `provider_model` records a context window and two capability booleans; nothing
+     * records "is this model better". So "best available" means "most expensive priced candidate
+     * that can do the job", which is a proxy — a good one at current catalogue prices, where the
+     * frontier models genuinely are the dear ones, and a proxy that would need revisiting the day
+     * a cheap strong model lands. It is not a benchmark and the explanation on the run says so.
+     *
+     * Only reached when nothing is pinned. A pin is somebody's per-task quality decision and this
+     * posture must never be able to make pinned work worse.
+     */
+    const prefersFrontier = Number(policy.prefers_frontier ?? 0) === 1 && effectiveCostMode !== "CHEAPO";
+    const cheapest = routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+    const dearest = routingCandidates.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
     let head: RoutingCandidate;
     if (effectiveCostMode !== "CHEAPO" && preferred) {
-      head =
-        routingCandidates.find((c) => c.model === preferred) ??
-        routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+      head = routingCandidates.find((c) => c.model === preferred) ?? (prefersFrontier ? dearest : cheapest);
       explanation =
         head.model === preferred
           ? `no routing policy for this task; caller preferred ${preferred}`
-          : `no routing policy for this task; preferred model ${preferred} unavailable, fell to cheapest adequate`;
+          : `no routing policy for this task; preferred model ${preferred} unavailable, fell to ${prefersFrontier ? "the dearest available (spend posture 'best available')" : "cheapest adequate"}`;
+    } else if (prefersFrontier) {
+      head = dearest;
+      explanation =
+        `spend posture is 'best available', so unpinned work takes the dearest priced capable model ` +
+        `rather than the cheapest: ${head.providerKey}/${head.model}. Price is the only quality signal ` +
+        `in the model registry, so this is a proxy for capability and not a benchmark result.`;
     } else {
-      head = routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+      head = cheapest;
       explanation =
         effectiveCostMode === "CHEAPO"
           ? "CHEAPO cost mode: cheapest adequate priced model"
@@ -1139,6 +1152,25 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
         selected.provider.id,
         selected.pricing.model,
       ),
+    };
+  }
+
+  /*
+   * 7a. The firmwide ceilings the operator set: this month, and ever.
+   *
+   * "Persist is the operative word... a budget that displays but does not bind is worse than none"
+   * — item 23. So the ceiling is read here, before the money moves, from the same function that
+   * draws it on the page. No ceiling set means no ceiling applied; nothing is invented.
+   *
+   * A surge does NOT lift these. `daily_cap_usd` is an operational throttle and a surge is exactly
+   * the argument for raising it for a fortnight; the all-time ceiling is the firm saying how much
+   * of its money may ever go to this, and a lever that quietly stepped over it would make it
+   * decorative.
+   */
+  const firmCeiling = await checkFirmBudgets(env, firmScope, estimate.estimated_cost_usd, now);
+  if (!firmCeiling.ok) {
+    return {
+      run: await blocked("BUDGET_BLOCKED", firmCeiling.reason!, estimate, selected.provider.id, selected.pricing.model),
     };
   }
 

@@ -5,6 +5,7 @@ import { json } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { runAi, type AIRunRow, type RunAiDeps } from "../ai/runAi";
+import { committedCostOf } from "../ai/spend";
 import { privacyLabelSchema } from "../../shared/privacy";
 import { aiOutboundSwitches } from "../../shared/policy/aiOutbound";
 
@@ -125,11 +126,89 @@ export async function handleGetAiRun(ctx: RouteContext): Promise<Response> {
 }
 
 /**
+ * The quarantine, and the two ways out of it.
+ *
+ * WHAT WAS WRONG. 51 completed outputs sat quarantined in production and there was no way to accept
+ * one, because the accept route had no button anywhere in the client — and no way to refuse one,
+ * because a reject path did not exist at all. A quarantine with no exit is a queue that only grows,
+ * and every run in it is charged to the firm as rework cost forever.
+ *
+ * ACCEPT flips `output_quarantine` to 0 — the existing, and still the only, promotion path.
+ * DISCARD deliberately does NOT: the whole point of refusing an output is that its text never
+ * becomes usable, so the run stays quarantined and a DISCARDED decision row takes it out of the
+ * queue instead. Both decisions land in `ai_output_decision` with who, when and why.
+ */
+
+/** A quarantined output, with enough context to decide about it without opening anything else. */
+interface QuarantinedRow {
+  id: string;
+  purpose: string;
+  model: string | null;
+  provider_key: string | null;
+  employee_name: string | null;
+  created_at: string;
+  cost_estimate_json: string;
+  actual_usage_json: string | null;
+  output_text: string | null;
+  sensitivity: string;
+}
+
+/**
+ * What is waiting for a person to look at it.
+ *
+ * Ordered oldest first on purpose: the queue's problem is that things sit in it, and a newest-first
+ * list hides exactly the rows that have been ignored longest.
+ */
+export async function handleListQuarantinedOutputs(ctx: RouteContext): Promise<Response> {
+  const visibility = privacyVisibilityClause(ctx.identity!, "r.sensitivity");
+  const rows = await ctx.env.WP_OS_DB.prepare(
+    `SELECT r.id, r.purpose, r.model, r.created_at, r.cost_estimate_json, r.actual_usage_json,
+            r.output_text, r.sensitivity, p.provider_key, e.name AS employee_name
+       FROM ai_run r
+       LEFT JOIN provider_registry p ON p.id = r.provider_id
+       LEFT JOIN ai_employee e ON e.id = r.ai_employee_id
+       LEFT JOIN ai_output_decision d ON d.ai_run_id = r.id
+      WHERE r.status = 'COMPLETED' AND r.output_quarantine = 1 AND d.id IS NULL AND ${visibility}
+      ORDER BY r.created_at ASC
+      LIMIT 100`,
+  ).all<QuarantinedRow>();
+
+  const waiting = rows.results ?? [];
+  const total = await ctx.env.WP_OS_DB.prepare(
+    `SELECT COUNT(*) AS n FROM ai_run r
+       LEFT JOIN ai_output_decision d ON d.ai_run_id = r.id
+      WHERE r.status = 'COMPLETED' AND r.output_quarantine = 1 AND d.id IS NULL`,
+  ).first<{ n: number }>();
+
+  return json({
+    waiting: waiting.map((r) => ({
+      id: r.id,
+      what_it_was_for: r.purpose,
+      who: r.employee_name,
+      model: r.model,
+      provider: r.provider_key,
+      created_at: r.created_at,
+      cost_usd: committedCostOf({ status: "COMPLETED", cost_estimate_json: r.cost_estimate_json, actual_usage_json: r.actual_usage_json }),
+      // A preview, not the document. Enough to recognise the thing; the run page has all of it.
+      preview: r.output_text ? r.output_text.slice(0, 600) : null,
+      truncated: (r.output_text?.length ?? 0) > 600,
+    })),
+    // Counted separately from the list, which is capped: a partner facing 51 of these needs to know
+    // it is 51 rather than "at least 100".
+    waiting_count: Number(total?.n ?? 0),
+    // Some rows may be invisible to this reader under the privacy rules. Said, not silently hidden.
+    listed_count: waiting.length,
+    what_this_is:
+      "Work a model finished that nobody has looked at yet. Nothing here has been used anywhere in the system, and until somebody decides, the firm is charged for it as work done twice.",
+  });
+}
+
+/**
  * Human accept of a quarantined external output. The ONLY promotion path:
  * flips output_quarantine to 0 and appends ai_output.accepted. AI/SYSTEM
  * actors can never accept (service-level check, not just route auth).
  */
-export async function acceptQuarantinedOutput(env: Env, actor: Actor, runId: string): Promise<AIRunRow> {
+export async function acceptQuarantinedOutput(env: Env, actor: Actor, runId: string, reason?: string): Promise<AIRunRow> {
   if (actor.type !== "HUMAN") {
     throw new AiRouteError(403, "forbidden", "quarantined output accept is human-reserved");
   }
@@ -140,8 +219,23 @@ export async function acceptQuarantinedOutput(env: Env, actor: Actor, runId: str
   if (!run) throw new AiRouteError(404, "not_found");
   if (run.status !== "COMPLETED") throw new AiRouteError(409, "not_completed", "only completed runs have acceptable output");
   if (run.output_quarantine !== 1) throw new AiRouteError(409, "not_quarantined", "run output is not quarantined");
+  /*
+   * CHECKED BEFORE THE FLAG IS TOUCHED, and the order is the whole point.
+   *
+   * A discarded run stays quarantined on purpose, so without this check accept would find
+   * output_quarantine = 1, release the text, and only then fail on the duplicate decision row —
+   * having already promoted the exact output somebody refused. The check goes first so a refusal
+   * cannot be undone by pressing the other button.
+   */
+  const decided = await env.WP_OS_DB.prepare("SELECT decision FROM ai_output_decision WHERE ai_run_id = ?1")
+    .bind(runId)
+    .first<{ decision: string }>();
+  if (decided) {
+    throw new AiRouteError(409, "already_decided", `this output was already ${decided.decision.toLowerCase()} and cannot be decided again`);
+  }
 
   await env.WP_OS_DB.prepare("UPDATE ai_run SET output_quarantine = 0 WHERE id = ?1").bind(runId).run();
+  await recordOutputDecision(env, run, actor, "ACCEPTED", reason ?? null);
   await appendEvent(env, {
     eventType: "ai_output.accepted",
     actorType: "firm_user",
@@ -154,10 +248,102 @@ export async function acceptQuarantinedOutput(env: Env, actor: Actor, runId: str
   return (await env.WP_OS_DB.prepare("SELECT * FROM ai_run WHERE id = ?1").bind(runId).first<AIRunRow>())!;
 }
 
+/**
+ * Refuse a quarantined output, permanently, with a stated reason.
+ *
+ * The output_quarantine flag is deliberately left at 1. Clearing it is what ACCEPT means, and a
+ * discard that cleared it would make refused text available to every reader that checks the flag —
+ * the exact opposite of the decision the person just took.
+ *
+ * The text is kept. Same reasoning the firm applied to document delete on 21 Aug 2026: removal is a
+ * tombstone, the thing leaves view and the trail survives, because "why did we throw that away" has
+ * to stay answerable.
+ */
+export async function discardQuarantinedOutput(env: Env, actor: Actor, runId: string, reason: string): Promise<AIRunRow> {
+  if (actor.type !== "HUMAN") {
+    throw new AiRouteError(403, "forbidden", "throwing away an AI output is a person's decision, never an employee's");
+  }
+  const authz = await authorize(env, actor, "ai_output.discard", { objectType: "ai_run", objectId: runId });
+  if (authz.decision === "DENY") throw new AiRouteError(403, "forbidden", authz.reason);
+  // Required, and it is the point of the control: a queue emptied without reasons teaches nobody
+  // why the work was wrong, and the same run gets commissioned again next week.
+  if (reason.trim().length === 0) throw new AiRouteError(400, "reason_required", "say why this is being thrown away");
+
+  const run = await env.WP_OS_DB.prepare("SELECT * FROM ai_run WHERE id = ?1").bind(runId).first<AIRunRow>();
+  if (!run) throw new AiRouteError(404, "not_found");
+  if (run.status !== "COMPLETED") throw new AiRouteError(409, "not_completed", "only a completed run has output to throw away");
+  if (run.output_quarantine !== 1) {
+    throw new AiRouteError(409, "already_accepted", "this output was already accepted, so it is in use and cannot be thrown away here");
+  }
+  const decided = await env.WP_OS_DB.prepare("SELECT decision FROM ai_output_decision WHERE ai_run_id = ?1")
+    .bind(runId)
+    .first<{ decision: string }>();
+  if (decided) {
+    throw new AiRouteError(409, "already_decided", `this output was already ${decided.decision.toLowerCase()} and cannot be decided again`);
+  }
+
+  await recordOutputDecision(env, run, actor, "DISCARDED", reason.trim());
+  await appendEvent(env, {
+    eventType: "ai_output.discarded",
+    actorType: "firm_user",
+    actorId: actor.firmUserId!,
+    objectType: "ai_run",
+    objectId: runId,
+    firmScope: run.firm_scope,
+    payload: { trace_id: run.trace_id, reason: reason.trim() },
+  });
+  return run;
+}
+
+/** One decision per run, enforced by a UNIQUE index. A second attempt is a conflict, not a no-op. */
+async function recordOutputDecision(
+  env: Env,
+  run: AIRunRow,
+  actor: Actor,
+  decision: "ACCEPTED" | "DISCARDED",
+  reason: string | null,
+): Promise<void> {
+  try {
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO ai_output_decision (id, ai_run_id, decision, reason, decided_by, firm_scope)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    )
+      .bind(`aod_${crypto.randomUUID()}`, run.id, decision, reason, actor.firmUserId!, run.firm_scope)
+      .run();
+  } catch (err) {
+    // Nothing may fail silently: a duplicate here means two people decided the same run at once, and
+    // the second one needs to be told that rather than shown a success.
+    throw new AiRouteError(409, "already_decided", `somebody has already decided about this output (${String(err).slice(0, 120)})`);
+  }
+}
+
+const outputDecisionSchema = z.object({ reason: z.string().trim().default("") });
+
 export async function handleAcceptAiOutput(ctx: RouteContext): Promise<Response> {
   try {
-    const run = await acceptQuarantinedOutput(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!);
+    const parsed = outputDecisionSchema.safeParse((await parseJsonBody(ctx.request)) ?? {});
+    const run = await acceptQuarantinedOutput(
+      ctx.env,
+      actorFromIdentity(ctx.identity!),
+      ctx.params.id!,
+      parsed.success ? parsed.data.reason || undefined : undefined,
+    );
     return json(run);
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+export async function handleDiscardAiOutput(ctx: RouteContext): Promise<Response> {
+  try {
+    const parsed = outputDecisionSchema.safeParse((await parseJsonBody(ctx.request)) ?? {});
+    const run = await discardQuarantinedOutput(
+      ctx.env,
+      actorFromIdentity(ctx.identity!),
+      ctx.params.id!,
+      parsed.success ? parsed.data.reason : "",
+    );
+    return json({ run, discarded: true });
   } catch (err) {
     return errorResponse(err);
   }

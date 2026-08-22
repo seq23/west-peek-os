@@ -4,7 +4,7 @@ import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
 import { authorize, type Actor } from "../src/worker/services/authorize";
 import { ApprovalError, decideApproval, requestApproval } from "../src/worker/services/approvals";
-import { MACHINE_REGISTRY, DOMAIN_IDS } from "../src/shared/registry/machines";
+import { ACTIVE_MACHINES, MACHINE_REGISTRY, DOMAIN_IDS } from "../src/shared/registry/machines";
 import { HUMAN_RESERVED_ACTIONS } from "../src/shared/registry/reservedActions";
 import { AI_EMPLOYEE_ROSTER } from "../src/shared/registry/aiEmployees";
 import { MANAGING_PARTNER_NAMES } from "../src/shared/registry/managingPartners";
@@ -243,6 +243,57 @@ describe("4. reserved actions enforce the register's approver roles", () => {
 
 // ── 5. External-effect route cannot bypass authorize() ──
 
+describe("4b. restricted actions are role-gated without raising an approval card", () => {
+  /*
+   * The tier that was missing. Operator, 21 Aug 2026, on who may edit a company: "the MPs should be
+   * able to edit and the host employee and maybe investment lead?"
+   *
+   * Before this, `company.update` fell through to "ordinary internal action: allowed for any actor
+   * inside firm scope" — so the read-only service account behind a Cloudflare Access service token
+   * could rewrite a company record, and `authorize()` returned ALLOW without deciding anything.
+   * Reserved was the wrong fix: it raises an approval card per action, and a card for every spelling
+   * correction is how an approval queue becomes unreadable and then ignored.
+   */
+  const scope = { firmScopes: ["west-peek"] };
+  const target = { objectType: "canonical_company", objectId: "cc_restricted_test", firmScope: "west-peek" };
+
+  it("lets a Managing Partner and the investment team act immediately, with no card raised", async () => {
+    for (const role of ["MANAGING_PARTNER", "INVESTMENT_TEAM"]) {
+      const d = await authorize(env, { type: "HUMAN", firmUserId: "fu_x", roles: [role], ...scope }, "company.update", target);
+      // ALLOW, not REQUIRE_APPROVAL — that distinction is the whole point of the tier.
+      expect(d.decision, role).toBe("ALLOW");
+      expect(d.reason, role).toBe("restricted_action_permitted");
+    }
+  });
+
+  it("refuses an identity with no relevant role, and names who to ask", async () => {
+    const d = await authorize(env, { type: "HUMAN", firmUserId: "fu_ops", roles: ["OPERATIONS"], ...scope }, "company.update", target);
+    expect(d.decision).toBe("DENY");
+    // The refusal carries the list so it tells you who to ask, not merely that you may not.
+    expect(d.requiredApproverRoles).toContain("MANAGING_PARTNER");
+  });
+
+  it("refuses a role-less identity — the service-account hole this closed", async () => {
+    const d = await authorize(env, { type: "HUMAN", firmUserId: "fu_browser_agent", roles: [], ...scope }, "company.update", target);
+    expect(d.decision).toBe("DENY");
+  });
+
+  it("lets the named host employee act, because barring him leaves a host who cannot do his own job", async () => {
+    const wyatt = await authorize(env, { type: "AI", aiEmployeeId: "Wyatt", roles: [], ...scope }, "company.update", target);
+    expect(wyatt.decision).toBe("ALLOW");
+
+    // An AI employee who is NOT named is still refused: the grant is per employee, not per actor type.
+    const other = await authorize(env, { type: "AI", aiEmployeeId: "Winter", roles: [], ...scope }, "company.update", target);
+    expect(other.decision).toBe("DENY");
+  });
+
+  it("leaves the reserved boundary untouched — a restricted grant is not a licence to decide", async () => {
+    const wyatt = await authorize(env, { type: "AI", aiEmployeeId: "Wyatt", roles: [], ...scope }, "investment.approve", target);
+    expect(wyatt.decision).toBe("DENY");
+    expect(wyatt.reason).toBe("reserved_action_ai_actor");
+  });
+});
+
 describe("5. external effects execute only with a valid, object-matching, unconsumed receipt", () => {
   it("refuses without a receipt, with a wrong-object receipt, and on replay", async () => {
     const mk = async () => {
@@ -466,10 +517,33 @@ describe("8. approval card state machine rejects illegal transitions", () => {
 // ── 9. Registry guards (D14, D10) ──
 
 describe("9. registry seeds come from the ONE TypeScript source", () => {
-  it("seeds exactly 45 machines and 15 domains, matching the registry", async () => {
+  it("seeds exactly 46 machines — 43 active and 3 retired — and 15 domains, matching the registry", async () => {
+    /*
+     * 46, not 45, since 21 Aug 2026, and the split is the point.
+     *
+     * Canon §5A.2 has forty-five rows; row 46 (`venture_teaching`) is West Peek's own, added
+     * because the Professor had no teaching machine and had been seated on the committee's
+     * post-mortem instead. Three rows are RETIRED — `prompt_enhancer_intent`,
+     * `developer_diagnostics`, `builder_repo_product` — and they are still SEEDED, deliberately:
+     * work_card and ai_run_attribution point at them, and a row that vanished would orphan live
+     * history. The database therefore holds the whole historical fleet, and `ACTIVE_MACHINES` is
+     * what may take new work.
+     */
     const machines = await t.db.prepare("SELECT COUNT(*) AS n FROM machine").first<{ n: number }>();
-    expect(machines!.n).toBe(45);
+    expect(machines!.n).toBe(46);
     expect(machines!.n).toBe(MACHINE_REGISTRY.length);
+
+    // The flag reaches the database rather than living only in TypeScript, so a retired machine
+    // reads as retired to anything querying the fleet directly.
+    const retired = await t.db
+      .prepare("SELECT key FROM machine WHERE retired_reason IS NOT NULL ORDER BY key")
+      .all<{ key: string }>();
+    expect((retired.results ?? []).map((r) => r.key)).toEqual([
+      "builder_repo_product",
+      "developer_diagnostics",
+      "prompt_enhancer_intent",
+    ]);
+    expect(machines!.n - (retired.results ?? []).length).toBe(ACTIVE_MACHINES.length);
 
     const domains = await t.db.prepare("SELECT COUNT(*) AS n FROM domain").first<{ n: number }>();
     expect(domains!.n).toBe(15);

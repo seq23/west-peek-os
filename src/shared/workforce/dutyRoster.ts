@@ -92,8 +92,10 @@ const WHY_ON_SHIFT: Record<ShiftKey, Record<string, string>> = {
     Waverly: "finds the warm path while people are at their desks",
   },
   EVENING: {
-    Wesley: "the LP follow-ups that should not wait until tomorrow",
-    Piper: "qualifies the day's LP conversations while they are fresh",
+    // One LP line, not two: Piper merged into Wesley, so qualifying and following up are the same
+    // person's evening. Leaving her here would have been silent — `resolveDuty` drops a name the
+    // roster does not have, so the shift would simply have grown shorter with nothing saying why.
+    Wesley: "the LP follow-ups and the qualifying calls, while the day is still fresh",
     Waverly: "the community is awake in the evening and the firm is not",
     Parker: "events and the guest list, which are an evening job",
     Winter: "checks the portfolio asks that came in today",
@@ -112,7 +114,7 @@ const SHIFT_PREFERENCE: Record<ShiftKey, readonly string[]> = {
   // Deal hours: sourcing, screening, the analyst, and the people who prepare a decision.
   MIDDAY: ["Pierce", "Wyatt", "Poppy", "Walter", "Waverly"],
   // What got promised, to whom, and the relationships that carry the firm.
-  EVENING: ["Wesley", "Piper", "Waverly", "Parker", "Winter", "Pippa"],
+  EVENING: ["Wesley", "Waverly", "Parker", "Winter", "Pippa"],
   // Deliberately thin. Compliance and systems, because those are the two things
   // that should notice a problem at 3am; everyone else is off.
   OVERNIGHT: ["Willow", "Porter", "Pax"],

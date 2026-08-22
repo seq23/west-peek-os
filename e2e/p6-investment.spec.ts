@@ -84,7 +84,9 @@ test("P6 investment journey: opportunity → deal math → IC packet → receipt
   await page.getByTestId(`decision-note-${cardId}`).fill("IC approved at committee");
   await page.getByTestId(`approve-${cardId}`).click();
   await page.getByTestId("approval-filter").selectOption("approved");
-  await expect(page.getByTestId(`approval-card-${cardId}`)).toContainText("approved");
+  // The badge reads "Approved" now: a decided card is collapsed and its state is the badge, not
+  // a raw enum printed twice on the same screen.
+  await expect(page.getByTestId(`approval-card-${cardId}`)).toContainText("Approved");
 
   // Record the decision with the receipt (via the API surface the UI posts to).
   const decideRes = await request.post(`/api/ic/packets/${await icPacketIdFor(request, `${marker} seed round`)}/decide`, {

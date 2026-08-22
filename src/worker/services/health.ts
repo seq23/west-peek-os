@@ -6,7 +6,7 @@ import { ago, summarise, worstOf, type HealthCheck } from "../../shared/health/c
 // Reading them through their owning module keeps the one cast in the one file that owns it.
 import { browserConfigured } from "../effects/browserClient";
 import { STALE_AFTER_MINUTES } from "./dailyIntelligence";
-import { workersAiConfigured } from "../ai/runAi";
+import { dailySpendUsd, workersAiConfigured } from "../ai/runAi";
 
 /**
  * GET /api/diagnostics/health — is anything broken, and what do I do about it.
@@ -213,10 +213,24 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
 
   // ── Spend against the cap ──
   const policy = await one<{ daily_cap_usd: number }>("budget_policy", "SELECT daily_cap_usd FROM budget_policy ORDER BY rowid DESC LIMIT 1");
-  const today = await one<{ spent: number }>("ai_run spend", "SELECT COALESCE(SUM(json_extract(actual_usage_json,'$.cost_usd')),0) AS spent FROM ai_run WHERE date(created_at) = date('now')",
-  );
+  /*
+   * READ, NOT RE-DERIVED. This check used to run its own SQL: `SUM(actual_usage_json.cost_usd)` over
+   * runs of ANY status. That counted a run the provider never priced as free and a blocked run as
+   * if it had happened, so Diagnostics and Cockpit reported "today's spend" 28% apart wearing the
+   * same label — and a partner reconciling two screens has no way to tell which is lying.
+   *
+   * `dailySpendUsd` is now one line over `ai/spend.ts`, which is also what the boundary refuses runs
+   * against. If the cap is close on this page, it is close in the gate.
+   */
   const cap = policy?.daily_cap_usd ?? 0;
-  const spent = Number(today?.spent ?? 0);
+  // Diagnostics reports the firm, and there is one. Kept behind the same catch as every other read
+  // here so a spend query that throws shows as unreadable rather than as a comfortable $0.00.
+  let spent = 0;
+  try {
+    spent = await dailySpendUsd(env, "west-peek");
+  } catch {
+    unreadable.push("ai_run spend");
+  }
   const pct = cap > 0 ? (spent / cap) * 100 : 0;
   checks.push({
     key: "spend",

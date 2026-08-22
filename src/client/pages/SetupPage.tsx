@@ -240,7 +240,7 @@ export function SetupPage({ me }: { me: MeResponse }): JSX.Element {
         by itself.
       </p>
 
-      {lounge.loading && <p className="state-loading" data-testid="setup-loading">Reading the live roster…</p>}
+      {lounge.loading && <p className="muted small" data-testid="setup-loading">Reading the live roster…</p>}
 
       {!lounge.loading && !lounge.data && (
         <p className="notice" data-testid="setup-unavailable">

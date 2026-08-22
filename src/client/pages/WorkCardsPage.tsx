@@ -317,7 +317,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
               {busy ? "…" : "Add"}
             </button>
           </div>
-          <label className="muted small work-allow-browser">
+          <label className="muted small">
             <input
               type="checkbox"
               data-testid="work-card-new-browser"

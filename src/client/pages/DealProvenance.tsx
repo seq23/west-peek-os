@@ -120,7 +120,7 @@ export function DealProvenance(): JSX.Element {
           )}
 
           {recorded.length > 0 && (
-            <table className="data">
+            <table className="small">
               <thead>
                 <tr><th>Origin</th><th>Deals</th><th>Average lead time</th></tr>
               </thead>

@@ -121,6 +121,26 @@ export async function getApprovalCard(env: Env, id: string): Promise<ApprovalCar
   return env.WP_OS_DB.prepare("SELECT * FROM approval_card WHERE id = ?1").bind(id).first<ApprovalCardRow>();
 }
 
+/**
+ * Who may take a RESTRICTED action directly. Absent row means the action is not restricted.
+ *
+ * Fails CLOSED on a malformed row: an unparseable `allowed_json` yields nobody, so a corrupted
+ * restriction locks the action rather than opening it. The opposite default would turn a typo into
+ * a silent grant, which is the failure this whole file exists to prevent.
+ */
+async function restrictionFor(env: Env, actionKey: string): Promise<{ roles: string[]; employees: string[] } | null> {
+  const row = await env.WP_OS_DB.prepare("SELECT allowed_json FROM restricted_action WHERE key = ?1")
+    .bind(actionKey)
+    .first<{ allowed_json: string }>();
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.allowed_json) as { roles?: string[]; employees?: string[] };
+    return { roles: parsed.roles ?? [], employees: parsed.employees ?? [] };
+  } catch {
+    return { roles: [], employees: [] };
+  }
+}
+
 /** Required approver roles for an action key (reserved register, else MP default). */
 export async function requiredApproverRolesFor(env: Env, actionKey: string): Promise<string[]> {
   const reserved = await getReservedAction(env, actionKey);
@@ -238,6 +258,33 @@ export async function authorize(
   // (decisions are human-only — enforced in services/approvals.ts).
   if (action.is_external_effect === 1) {
     return { decision: "REQUIRE_APPROVAL", reason: "external_effect_requires_approval", requiredApproverRoles: requiredRoles };
+  }
+
+  /*
+   * RESTRICTED: role-gated, not approval-gated. The tier that was missing.
+   *
+   * Operator, 21 Aug 2026, on who may edit a company: "the MPs should be able to edit and the host
+   * employee and maybe investment lead?" Reserved could not express that — reserved raises an
+   * approval card per action, and a card for every spelling correction is how an approval queue
+   * becomes unreadable and then ignored. Ordinary could not express it either: its last line hands
+   * the action to any authenticated identity in firm scope, service accounts included.
+   *
+   * Named roles and named employees act immediately; everyone else is refused with the list, so the
+   * refusal tells you who to ask rather than only that you may not. Checked BEFORE the ordinary
+   * fallthrough and after reserved, which is exactly where it sits in strictness.
+   */
+  const restricted = await restrictionFor(env, actionKey);
+  if (restricted) {
+    const byRole = restricted.roles.some((r) => actor.roles.includes(r));
+    const byName = actor.aiEmployeeId ? restricted.employees.includes(actor.aiEmployeeId) : false;
+    if (!byRole && !byName) {
+      return {
+        decision: "DENY",
+        reason: "not_permitted_to_act",
+        requiredApproverRoles: restricted.roles,
+      };
+    }
+    return { decision: "ALLOW", reason: "restricted_action_permitted" };
   }
 
   // Ordinary internal action: allowed for any actor inside firm scope.

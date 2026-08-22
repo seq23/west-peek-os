@@ -80,7 +80,7 @@ export function ApprovalContextPanel({ cardId }: { cardId: string }): JSX.Elemen
           : c.expires_at && <>Worth deciding by {new Date(c.expires_at).toLocaleDateString()}.</>}
       </p>
 
-      <h5>Evidence</h5>
+      <h4>Evidence</h4>
       {state.data!.evidence.length === 0 ? (
         <p className="state-empty" data-testid={`approval-no-evidence-${cardId}`}>
           Nothing attached. Deciding without evidence is allowed — it is just on the record that you did.
@@ -112,7 +112,7 @@ export function ApprovalContextPanel({ cardId }: { cardId: string }): JSX.Elemen
         <button type="submit" disabled={busy}>Attach</button>
       </form>
 
-      <h5>Questions</h5>
+      <h4>Questions</h4>
       {state.data!.comments.length === 0 ? (
         <p className="state-empty">No questions yet.</p>
       ) : (

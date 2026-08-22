@@ -19,9 +19,12 @@ describe("Home's attention strip only reports what it can prove", () => {
     expect(out[0]!.severity).toBe("BLOCKING");
     expect(out[0]!.headline).toContain("dead-letter");
     expect(out[0]!.headline).toContain("will not retry");
-    // Was "jobs" until Scheduled Work merged into Work. The route went; this assertion did not,
-    // so it pinned a dead link in place rather than catching one.
-    expect(out[0]!.link).toBe("work-cards");
+    // Was "jobs" until Scheduled Work merged into Work, then "work-cards" — which is the API path
+    // and has never been a route either. The assertion has now pinned a DEAD LINK twice running,
+    // which is worse than no assertion: the router falls back to Home on an unknown key, so a link
+    // that goes nowhere looks like a button that does nothing rather than like a failure. The route
+    // list below is read out of App.tsx, so "work" cannot rot the same way.
+    expect(out[0]!.link).toBe("work");
   });
 
   it("reports refusals and failures as degraded, not as silence", () => {
@@ -97,7 +100,16 @@ describe("attention links point at real destinations", () => {
     // Guards the guard: a refactor that changed the dispatch shape would otherwise make this pass
     // over an empty set.
     expect(routes.size).toBeGreaterThan(20);
-    expect(routes.has("work-cards")).toBe(true);
+    expect(routes.has("work")).toBe(true);
+
+    // Every destination a health check can name must be a real route too. Both dead links found
+    // today — Home's "My open work" module and this label map — were API paths used as nav keys,
+    // and neither failed: the router falls back to Home, so the button simply appeared inert.
+    const destinations = [...app.matchAll(/const HEALTH_DESTINATION[^}]*}/gs)]
+      .flatMap((m) => [...m[0].matchAll(/^\s*"?([a-z-]+)"?:/gm)].map((x) => x[1]!))
+      .filter((k) => k !== "const");
+    expect(destinations.length).toBeGreaterThan(3);
+    expect(destinations.filter((d) => !routes.has(d))).toEqual([]);
   });
 
   it("has no attention item linking to a route that does not exist", () => {

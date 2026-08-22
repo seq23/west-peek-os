@@ -38,7 +38,15 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
   },
   approvals: {
     purpose: "Everything waiting on a human decision. Nothing leaves the firm and no reserved action happens without an approval here.",
-    youCan: ["Approve, reject or ask for changes", "See the evidence behind a request", "Check who is allowed to decide"],
+    // "Block it until something else is sorted" and "Change a decision" are listed because a control
+    // nobody knows exists is a control nobody uses — which is how this queue came to look like it
+    // only had one answer in it.
+    youCan: [
+      "Approve, reject or send it back for changes",
+      "Block it until something else is sorted out",
+      "Change a decision you have already made",
+      "See the evidence behind a request, and who is allowed to decide it",
+    ],
   },
   today: {
     purpose: "What is on today — meetings, due work, and anything with a deadline attached.",
@@ -176,12 +184,22 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Read what someone is for", "Activate or pause an employee", "See how they have been performing"],
   },
   "cockpit": {
-    purpose: "The admin console. Providers, models, how work is routed, and what the firm is spending on AI.",
-    youCan: ["Raise or lower AI spend", "Turn a provider on or off", "See what has cost what", "Change how tasks are routed"],
+    // Operator, 21 Aug 2026: "cockpit is about controlling the app and how much the app spends".
+    // Both halves are now true — the ceilings here refuse work rather than describing it.
+    purpose: "Controlling the system and what it spends. Providers, models, how work is routed, and the limits on the bill.",
+    youCan: [
+      "Say the most it may spend in a month, or ever",
+      "Raise or lower how much it spends per piece of work",
+      "Turn a provider on or off",
+      "Use or throw away work a model finished",
+    ],
   },
   "ai-controls": {
     purpose: "Every AI run the firm has made, and the governance around it.",
-    youCan: ["Inspect a run and its cost", "See why a run was refused", "Accept or reject quarantined output"],
+    // Accepting quarantined output moved to Cockpit with the rest of the spend controls. A page
+    // that lists something you cannot do there sends a partner hunting for a button that is not
+    // on the page — the same class of promise-without-a-control this whole review is closing.
+    youCan: ["Inspect a run and its cost", "See why a run was refused", "Follow a run back to the work that asked for it"],
   },
   "browser-tasks": {
     purpose: "Send an employee to read a live page and report back — does this company still list a VP of Sales, what are their pricing tiers now. Approved by a human each time, because this is the one thing here that touches the live web. Lives inside Work.",

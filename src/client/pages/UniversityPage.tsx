@@ -67,7 +67,6 @@ export function UniversityPage(): JSX.Element {
 
   return (
     <div className="page" data-testid="university-page">
-      <h3>West Peek University</h3>
 
       {/*
         THE PROFESSOR WELCOMES YOU, because a page that teaches ought to have somebody teaching on

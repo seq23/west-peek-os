@@ -134,14 +134,19 @@ const PROPOSALS: readonly JobProposal[] = [
     schedule_kind: "DAILY_AT",
     daily_at_utc: "14:00",
     target_kind: "EMPLOYEE",
-    target_name: "Paige",
+    // Poppy, not "Paige" — who is not, and has never been, on the roster. `requiresEmployees` looks
+    // her up, never finds her, and reports her missing, so this job could never once be proposed:
+    // the firm's only automated route from active diligence to an IC brief was dead on arrival and
+    // silent about it. Poppy is the IC Facilitator and assembling the packet is literally her stated
+    // job, so this is a correction rather than a reassignment.
+    target_name: "Poppy",
     data_class: "INTERNAL",
     purpose:
       "Assembles evidence for companies under active diligence so an IC discussion starts from a " +
       "brief instead of a blank page.",
     cadence: "Every day at 14:00 UTC",
     priority: "DILIGENCE_IC",
-    requiresEmployees: ["Paige"],
+    requiresEmployees: ["Poppy"],
   },
   {
     job_key: "portfolio_support_monitor",

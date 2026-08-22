@@ -3752,3 +3752,439 @@ one path and no surface connected them:
 | Booked | an executed `FOLLOW_ON` transaction | the only stage where money moved |
 
 Typecheck, `tests/cockpit.test.ts` (11), `validate:brand` and `validate:design-tokens` green.
+
+## 21 Aug 2026 — Item 14: a partner can ask whoever runs the page
+
+Item 8 put a named host on 17 pages — picture, title, the machines they are responsible for. A face
+with no way to speak to it is a poster. `PageHostChat` mounts inside `PageHostCard`, so all 17 pages
+got the panel in one change and none of them can forget it.
+
+**Who answers is not a choice the partner makes.** The host of the page answers. A partner's question
+on a page is nearly always about what that page is for, and making them first pick an employee out of
+a roster of nineteen asks them to know the org chart before they can ask anything. `pageHosts.ts`
+already holds the assignment and a test reads the real nav out of `App.tsx`, so there is no second
+list to drift.
+
+**A fourth turn table, which needed defending.** Three already existed and migration `0110` argued
+against adding one. That argument was about reusing a table whose SCOPE was wrong — `meeting_chat_turn`
+requires a meeting and its seated employees. The same objection applies to all three here: a page is
+not a meeting, a course session or a research project, and hanging a page thread off any of them means
+inventing a fake parent row per conversation. What is deliberately NOT new is the shape: same three
+roles, same OK/FAILED/REFUSED, same rule that a provider failure is a visible turn.
+
+**One thread per partner per page.** Two partners typing into one page thread is a ROOM — presence,
+ordering across two clients, the Durable Object machinery `AGENTS.md` forbids without cause. A 1:1
+needs none of it, and it is also the honest reading: Scooter did not hear what Sequoia asked.
+
+**A switched-off host declines, in their own name, as a recorded turn.** The card already refuses to
+smile over a page nobody is working. A box that answered anyway would teach a partner the status is
+decoration.
+
+**Veteran prompting reaches a third call site.** The host is prompted with `guidanceBlock(machineKeys)`
+— the firm's own written methods for their machines — plus `pagePurpose` and their persona voice, none
+of it duplicated into a prompt string. Item 17's standard still reaches only 3 of 33 `runAi` call
+sites; the rest is the item 24 sweep.
+
+**A landmine found on the way.** `ai_run_attribution.category` has a CHECK constraint
+(PROACTIVE/RESEARCH/LEGAL/COMPLIANCE/OPERATIONS/INTELLIGENCE/OTHER) and `routing.ts:364` writes that
+row with `INSERT OR IGNORE`. A category outside the list is therefore not rejected — it is silently
+dropped, and the run goes unattributed forever with nothing saying why. The first draft here used
+`ADVISORY` and would have hit exactly that. Changed to `OPERATIONS`; the `INSERT OR IGNORE` itself is
+still there and is worth removing.
+
+`tests/pageChat.test.ts` — 5 tests, green: refusal is recorded and named, an unhosted page has no
+panel, threads are per partner, turn numbers count past failures so the UNIQUE constraint cannot jam
+the thread, and neither an empty question nor a pasted document is accepted.
+
+## 21 Aug 2026 — Item 25: the spine of the layout pass
+
+An audit read all forty-odd surfaces against `LpPage.tsx`. Two findings applied to every page and
+were worth more than any individual rebuild.
+
+**`<hr>` was styled and used zero times.** `styles.css` defines the rule; not one page file used it,
+LP included. "Sections separated by a rule" existed only as a sentence in the standard. Fixed in CSS
+rather than by hand-inserting `<hr>` into forty files — which every new page would then forget: an
+`h3` opens a section, so an `h3` that follows something now draws the line above itself. Reset inside
+`.card`, `.module-card`, `.panel` and `details`, because a card already draws its own edge and a
+second line just inside the first is a box drawn twice.
+
+**The shell skipped `h2`, and that is why ranks drifted everywhere.** `App.tsx` rendered the page
+title as `<h3>` — which both skipped a level under the `h1` wordmark and, worse, put the page's own
+name at the SAME rank as a section inside it. With no rank left above the sections, pages picked
+`h4`, `h5` or `h3` at random and none of them was wrong relative to the others: Governance and the AI
+page have no `h3` at all, Rooms nests an `h3` two levels inside another `h3`, Meetings runs h3 → h5 →
+h4, and `IntelligencePage` (478 lines), Contradictions, Activity and Documents have no headings
+whatsoever.
+
+The stylesheet had already been written for the right markup — `.shell-header h2 { font-size:
+var(--text-xl) }` sat there unused while the JSX rendered an `h3` and silently picked up
+`--text-lg`. The CSS was right; the markup had drifted. Title is now `h2`, and one rule falls out
+that every page can follow: **a section is an `h3`, a thing inside a section is an `h4`.** That is
+exactly what `LpPage` already did, which is why it is the page the operator says reads well.
+
+`HomePage`'s greeting was a second `<h1>` competing with the wordmark; now `h2`. The accessibility
+suite's "never skips a heading level" check is green again and now guards the rule.
+
+**Nine pages restated their own nav label as their first heading** — Secondaries, Record,
+Cross-office, Meetings, Events, University, Weekly review, Tasks and IC portal each opened with a
+heading naming the tab you had just clicked. Removed. That is the operator's "space isnt being
+wasted" complaint with a precise cause.
+
+## 21 Aug 2026 — Item 13, first half: scenarios stop being modelled against fiction
+
+The worst single defect found in this review, and it was invisible by construction.
+
+Every allocation scenario the client created was hardcoded — `fund_size: 30000000, investable:
+24000000, fund_deployed: 10000000, reserve_modeled_need: 8000000`, written straight into the POST
+body in `App.tsx`. Not form defaults a partner could see and correct: **numbers no partner ever laid
+eyes on.** The constraint engine then answered "does this sleeve fit", "is concentration within
+limit" and "is the reserve sufficient" against a thirty-million-dollar fund the firm does not have,
+and printed the answers with the confidence of arithmetic. West Peek's real recorded fund is four
+orders of magnitude off that figure. Every scenario ever run was a comparison against fiction.
+
+`GET /api/funds/:id/basis` now reads what the fund actually is. Three provenances and no fourth:
+RECORDED (a human typed it into the fund record), DERIVED (computed from executed transactions), or
+MISSING. There is deliberately no "assumed" — an assumption is what got us here.
+
+- **Deployed is DERIVED from cost basis on open positions**, the only number the system genuinely
+  knows: a position exists solely because a transaction was executed against an approval receipt.
+  Marks are not used — what a holding is worth now is a judgement; deployed capital is a fact about
+  money that left. Zero deployed is reported as DERIVED, not MISSING: a fund that has bought nothing
+  has deployed nothing, and calling that MISSING sends the caller hunting a number that does not
+  exist to be found.
+- **Investable stays MISSING** until somebody records a fee model. Substituting the standard one
+  would be the same mistake at a smaller scale.
+- **The client refuses rather than substitutes.** The page already declined to open a scenario
+  without a pinned policy version; it had no business being stricter about a policy id than about
+  the size of the fund. `investable` and `reserve_modeled_need` are now OMITTED rather than zeroed —
+  a zero reads as "the fund has nothing set aside" rather than "we were never told", which is how
+  the last set of invented numbers came to look like facts.
+
+`tests/fundBasis.test.ts` — 5 tests, green.
+
+**Still open on item 13:** folding Deal Math into Fund strategy. Deferred while another agent is
+extracting Portfolio from `App.tsx`; two concurrent rewrites of that file would collide.
+
+## 21 Aug 2026 — Item 24: researching every role found four bugs, not four gaps
+
+The operator asked for the roles to be researched and the machines given another pass, after having
+to hand-write a job description herself: *"i should not have had to give u that. u r an ai and llm
+and u should figure out what the role is."* The research produced the role work — and, on the way,
+four defects that were live and silent.
+
+**1 · The page chat prompted every host with their ENTIRE machine set.** Asking Wyatt a question on
+Research arrived with seventeen skills attached — cap-table waterfall methods and opportunity-radar
+methods alongside the research ones. Not merely wasteful: worse advice. An employee told to follow
+five unrelated disciplines at once follows none of them well. `PAGE_HOSTS` entries now name the
+machines the PAGE is about, defaulting to the seat's whole remit when the seat's remit IS the page.
+
+**2 · Three pages were hosted by somebody holding no method for the page's own subject.** Thesis
+hosted to Pierce while `investment_mandate_exclusion` sat only on Wyatt. Deal Math hosted to Preston
+while `venturedeals_deal_math` — the machine, and the hand-verified arithmetic — sat on Wyatt. So the
+one page in the firm devoted to deal arithmetic was chatting to somebody never given a single method
+about it. Deal Math re-hosted to Wyatt (the library's own rule is deal-level to Wyatt, fund-level to
+Preston, and the page is deal-level); Pierce now genuinely holds the mandate machine he hosts a page
+for. `tests/pageHosts.test.ts` now fails the build if a page names a machine its host does not sit on
+— the mismatch was silent and had shipped.
+
+**3 · A recurring job targeted "Paige", who is not on the roster and never has been.**
+`requiresEmployees` looked her up, never found her, and reported her missing, so
+`diligence_ic_preparation` — the firm's only automated route from active diligence to an IC brief —
+could never once be proposed. **The test suite passed throughout, because the fixture had invented
+her too**: the employed set was a hand-typed list containing her name. A fixture that names people
+the system does not have will agree with any bug that shares its imagination. The job is Poppy's, who
+is the IC Facilitator and whose stated job is assembling the packet. The fixture is now built from
+the real roster, and a new guard rejects any job targeting or requiring a name nobody has.
+
+**4 · The Communications seat's only method belongs to another seat.** Pippa holds one machine,
+`marketing_pr_content`, whose single skill is a landing-page conversion rubric written for Percy's
+work on portfolio founders' products. So the seat responsible for press, embargoes, financing
+announcements and what may be said publicly during a raise has no written method about any of it.
+Not yet fixed — it is roster work, filed below with the rest of item 24.
+
+**Also found, not yet acted on:** Piper and Wesley sit on one machine with byte-identical guidance
+(two people working the same LP prospect); Pierce and Poppy share `ic_decision` while the firm's own
+method says the champion may not write the kill case; and Whitney, the Professor, is seated on
+`ic_learning_loop` — the post-mortem machine — so two of her three methods are investment methods and
+there is no teaching machine in the registry at all.
+
+## 21 Aug 2026 — 29 class names that styled nothing
+
+Found while rebuilding Events & Rooms, which alone used nine class names the stylesheet had never
+heard of. A repo-wide scan found twenty more.
+
+**This is the one front-end mistake with no symptom.** A misspelt or never-written class does not
+error, does not fail a test, and does not blank the element — it renders, unstyled, forever. What was
+actually broken:
+
+- **`.page`** — the wrapper on NINE pages. No flow, no rhythm; every child spaced only by whatever
+  margin it happened to carry.
+- **`.tablewrap`** — undefined ON THE LP PAGE, the surface held up as the layout standard. The
+  commitment table could push the whole page sideways on a narrow screen.
+- **`.lbl`** — used in five files, styled in none, so a label rendered at body weight and competed
+  with the value it was labelling.
+- **`.pill` / `.pill-*` / `.primary`** on Introductions — status badges rendered as bare shouting
+  capitals with no badge around them, and the primary button rendered as default grey. Mapped to
+  `help-tag*` and `btn-strong`, which are what this repo actually has.
+- **`.deal-company` / `.deal-stage` / `.deal-blocker`** — the four cells of `.deal-row`. Only the
+  grid's own `minmax(0, …)` was stopping a long company name blowing the row out: correct by luck
+  rather than by intent.
+- **`.brief-byline-who`**, **`.work-look`**, **`.card-body`**, **`.host-chat`** — all applied, none
+  defined.
+
+Redundant class hooks that merely duplicated a `data-testid` already on the same element were
+removed rather than given a decorative rule.
+
+`npm run validate:css-classes` now fails the build on any className with no rule, with eight
+self-test cases covering the two traps that make this hard to check honestly: a class name appearing
+only inside a CSS comment is NOT a definition, and a literal fragment cut by a `${…}` interpolation
+is a prefix rather than a class.
+
+**This is a large part of what the operator has been calling "jumbled".** Not one badly designed
+page — dozens of small elements silently rendering with no styling at all, on every surface.
+
+## 22 Aug 2026 — a dead duplicate Work page, carrying the live one's test id
+
+`App.tsx` held a second `WorkCardsPage` — 102 lines, rendered by nothing, importing the real one
+alongside it as `WorkSurface`. It carried `data-testid="work-cards-page"`, **the same id as the live
+page**, so any test or e2e selector matching that id could have been asserting against a surface no
+user can reach. It also rendered `WORK_CARD_STATES` raw into a dropdown, which is the machine
+vocabulary the layout pass has been removing everywhere else.
+
+Deleted. This is the third dead duplicate found in this review (the legacy meeting form that filed
+everything as FOUNDER, the `MeetingsPage` copy, and now this), and they share a signature worth
+naming: **a duplicate that keeps the original's test id is invisible to the test suite**. The suite
+cannot tell you which one it exercised.
+
+## 22 Aug 2026 — Item 7 (first half) and item 11's hidden machinery
+
+**"The only way in" was a lie the page told about itself.** Dealflow captioned its Add-a-company
+button "the only way in", which stopped being true the day email intake shipped — and it was worse
+than saying nothing, because a partner who believes this is the single door stops looking for the
+companies that arrived by the other three and does not know to check whether Wyatt has a card
+waiting. It now reads "the one you drive yourself" and names the rest: an email to the intake mailbox
+carrying one of the trigger tags, a company pushed across from Network OS, and Wyatt's own scouting —
+all three of which open a WORK CARD rather than filing themselves, which is the operator's own model.
+The tags and the mailbox are read from `shared/intake/emailTriggers.ts` rather than retyped, so the
+page cannot drift into printing an address the handler no longer answers. `DEAL_INTAKE_EMPLOYEE` and
+`ROUTING_EMPLOYEE` moved to that shared module for the same reason — a client cannot import from
+`src/worker`, and a page that states the routes has to name who they land on.
+
+Item 7's consolidation of the four routes themselves is still open.
+
+**Meetings kept half its surface behind a disclosure.** Prep packets, notes, consent, transcripts,
+debriefs and close-out sat collapsed under a summary reading "Meeting records and close-out", so the
+half of the page that does the work only existed if you guessed to press it. Now a section with a
+heading that says what it is for. The list also rendered `<code>FOUNDER</code> <code>SCHEDULED</code>`
+beside every meeting; a partner reading their own calendar should not be shown a column value.
+
+The FOUNDER-hardcoding create form named in item 11 was already gone — the note in the issues list
+was stale.
+
+## 22 Aug 2026 — `<h5>` no longer exists anywhere in the client
+
+With the shell title corrected to `h2`, one rule covers every page: **a section is `h3`, a thing
+inside a section is `h4`, and nothing goes deeper.** Every `h5` in `App.tsx` and every page file is
+gone.
+
+Promoting them was the smaller half. Several were machine vocabulary wearing a heading:
+
+- "Unresolved material contradictions (HIGH/CRITICAL, OPEN/INVESTIGATING)" → "Disagreements that
+  matter and are still open"
+- "Add claim (source provenance required)" → "Record something the firm believes, and where it came
+  from"
+- "Detect contradictions (deterministic; humans decide)" → "Look for records that disagree"
+- "Local fixture sync (no live system)" → "Practice run against sample data"
+
+They were fixed BEFORE the rank change, so the promotion did not simply preserve them one size
+larger.
+
+**Contradictions** had no heading of any kind, no explanation, and opened on a bare "Refresh" button
+above a list reading `VALUE_DISAGREEMENT · OPEN · HIGH`. A partner arriving there could not tell what
+a contradiction was, why one existed, or what pressing anything would do. It now opens with what the
+page is for, says these open by themselves and that nothing is deleted to settle one, and the refresh
+control sits at the bottom where a thing-you-do-to-the-page belongs.
+
+**Activity** was a table of primary keys shown to a Managing Partner: the Event column printed
+`approval.decided` and the Object column printed `{object_type}/{object_id}`. `actionName()` already
+existed and already promised never to return a raw dotted key — this surface simply never called it.
+The id survives, behind the thing's name rather than as the whole cell, because it is how you find
+the row again.
+
+## 22 Aug 2026 — the AI page had no section headings at all
+
+Audit finding #5, closed. The page's top-level headings were `h4` — a rank BELOW the shell's title —
+so nothing on it read as a section, and one of those "headings" was a live data readout: `Policy:
+BALANCED privacy · NORMAL cost · today $0.0031 / $5`. A heading names a section; a number is not a
+name, and a figure that changes every few minutes cannot be one. It is a sentence now, under a real
+`h3`.
+
+The other two headings carried their own parenthetical documentation — "Providers (kill switch is
+MP-only, logged via approval receipt)" — which is a sentence hiding inside a title. Split: the
+heading asks the question ("Who the firm buys thinking from"), the sentence underneath says what a
+kill switch does and who may throw one.
+
+**`PRIVACY_CHOICES` was already in this file, sixty lines above the picker that ignored it.** The
+sensitivity dropdown hand-typed the seven raw column values — `LP_PRIVATE`, `MNPI_SENSITIVE`,
+`BANKING_RESTRICTED` — while a fully worded list of the same seven, each with what it costs you, sat
+just up the page. A second copy of a list is a list that drifts, and this one already had. Neither
+string reaches the screen any more.
+
+Run rows also printed `<code>{status}</code> · {sensitivity} · {privacy_mode}/{cost_mode}` and
+`output QUARANTINED`; they now read as a badge plus a plain sentence, with the trace id kept but no
+longer competing with the purpose of the run.
+
+## 21 Aug 2026 — Items 17 and 24: the cull, and what "retire" has to mean here
+
+Four operator decisions, and one rule that governs all of them: **nothing is deleted.**
+
+**The rule first, because it is the part that would have caused the damage.** Machines are seeded
+into production D1 and referenced by `work_card`, `ai_run` and `ai_run_attribution`; AI employees are
+referenced by those plus meeting seating. Migrations are append-only and both seed generators only
+ever INSERT — so removing a row from a TypeScript registry does not remove it from any database that
+already exists, it just leaves a row no code will claim again. Deleting instead would be worse: a
+work card from June would lose the name of the machine that made it. So a retired machine keeps its
+row and gains a `retiredReason`, `MACHINE_REGISTRY` is the historical list (46) and `ACTIVE_MACHINES`
+(43) is what may be seated on, scheduled to or routed to. A culled seat goes RETIRED, the lifecycle's
+existing word. `MACHINE_REGISTRY_VERSION` is `3.2.14+wp1` — canon is frozen at 3.2.14 and did not
+move, so the suffix records West Peek's own revision rather than claiming the canon changed.
+
+**1 · Piper merged into Wesley; the roster is 18.** LP Sourcing and LP Relations both sat on
+`lp_fundraising` and NOTHING else, so they read byte-identical guidance and were two seats working
+the same prospect at a fund with roughly forty LPs. The half of her worth keeping was a judgement
+rather than a task — she would rather rule a name out early than carry it a quarter — and it is now
+in Wesley's biography and persona voice. Dangling references found and fixed: `dutyRoster.ts` (the
+evening shift, where a stale name would have been SILENT because `resolveDuty` drops unknown names),
+`meetingTypes.ts` (the LP meeting suggested both), `aiEmployeePersonas.ts`, `CASTING.json`, and the
+portrait test's list of faces the firm keeps for the retired. That silence is the "Paige" failure
+again: a job pointed at somebody who does not exist, failing closed, with a fixture that agreed.
+
+**2 · The Professor got a machine for her own subject.** `venture_teaching` is registry row 46 —
+West Peek's own, the first row not in canon §5A.2. Whitney had been seated on `ic_learning_loop`,
+which is the committee's 3/6/12/24-month post-mortem, so two of the Professor's three methods were
+investment methods and the single teaching method in the library was filed under investing. The
+post-mortem went back to Poppy, who keeps the committee record. **Deviation, named:** the operator
+called this the Learning domain; there is no LEARNING domain and canon §0C fixes fifteen, so it maps
+onto KNOWLEDGE_OS where Research and the record already sit.
+
+**3 · Three machines retired.** `prompt_enhancer_intent` duplicated `askToCard.ts`, which turns a
+partner's sentence into GO / WORK / TELL / BRIEF and does it better — two front doors is what that
+file was written to end. `developer_diagnostics` and `builder_repo_product` assume an engineer on a
+roster that has none. Migration `0126` adds `machine.retired_reason`, marks the three, and PAUSES
+them: pause already has teeth in two independent places (capture routing 409s, `run_ai` refuses to
+spend), so a retired machine stops taking work today rather than only in TypeScript.
+
+**4 · Every remaining unseated machine took a seat, with no new headcount.** `lp_diligence_request`
+and `lp_proof_engine` → Wesley; `data_room_control` → Wells, who hosts Documents and had no document
+machine under it; `relationship_capital_budget` → Waverly; `meeting_capture_adapter` → Walter;
+`external_helper_coordination` → Preston; `governance_center_broadcast` → Pax;
+`activity_audit_ledger` → Willow rather than Pax, deliberately — it records what the workforce did
+and must not sit under the person who runs it; `approval_center` → Pax for queue-hygiene reporting
+ONLY, whose first written line is that nothing in the machine approves anything. After this, all 43
+active machines have exactly one accountable seat and a written method, and the skill library's
+"nothing to say" test now has to use a RETIRED machine as its example — which is the correct end
+state rather than a workaround.
+
+**Two seats also lost a machine on the firm's own method.** Pierce lost `ic_decision`, because the
+committee machine's own `dissent` skill says the champion may not write the kill case and this seat
+is always the champion. Percy came off `marketing_pr_content` entirely: he was on it only because his
+page-conversion rubric happened to be filed there, which left the firm's PRESS machine holding a
+method about buttons and the Communications seat with no written method about press, embargoes,
+financing announcements or what may be said during a raise. The rubric moved to `taste_layer`, and
+Pippa now has three methods that are actually hers — the announcement is the founder's and never
+before the round closes; nothing public about the raise while the exemption forbids solicitation, and
+anything naming a fund size, a close date or an invitation to invest goes to Compliance first; and
+say only what a portfolio company has itself made public, with the date checked.
+
+**Regeneration is owed to the lead, in this order:** `generate-machine-seed.mjs` first (0003's seed
+block, now 46 machines; both expected counts in the script were changed deliberately, 46/43), then
+`generate-ai-employee-seed.mjs` (0004's seed block, 18 employees; `EXPECTED_ROSTER_SIZE` 19 → 18).
+The second will emit its own `_ai_employee_retire.sql`, which is a guarded no-op after 0126 already
+retired Piper. `--check` reports STALE for both, as expected.
+
+## 22 Aug 2026 — Governance: a row id handed over as confirmation
+
+"Issue governance update (MP only)" was a sentence hiding inside a title — and it told the one person
+who could see the form something they already knew, while telling nobody else anything. The heading
+now asks the question and the condition is where it belongs.
+
+Issuing one reported success as **`Issued gov_01H…`** — a primary key, handed to a Managing Partner
+as her confirmation. It now says it landed and where to look. The list of what has actually been
+issued had no heading at all, so the point of the page sat silently below two explainer cards and a
+form.
+
+The non-MP case was already handled correctly and left alone: rather than silently removing the
+middle of the page, it says issuing is reserved, names the roles the reader actually holds, and
+points at the list below.
+
+## 22 Aug 2026 — Items 17 and 24: the cull, and nothing deleted
+
+Operator decisions, taken directly: merge Piper into Wesley, give Whitney a real teaching machine,
+retire three machines.
+
+**Roster 19 → 18. Machines 46 total, 43 active.** Every one of the 43 active machines now has exactly
+one accountable seat and at least two written methods — the "19 machines with no methods and 19 with
+nobody on them are one fact" gap is closed.
+
+**RETIRED IS A FLAG, NEVER A DELETE, and this is the load-bearing decision.** Machines are referenced
+by `work_card`, `ai_run` and `ai_run_attribution`; employees by those plus meeting seating and status
+history. Migrations are append-only and the generators only INSERT, so removing a row from the
+TypeScript registry does not remove it from any database that already exists — it leaves a ghost no
+code will claim again. Deleting instead would be worse: a work card from June would lose the name of
+the machine that produced it. So `MACHINE_REGISTRY` keeps all 46 as the historical list,
+`ACTIVE_MACHINES` (43) is what anything may be seated on or routed to, and migration `0126` marks the
+three retired AND PAUSES them — which gives retirement teeth today (routing 409s, `run_ai` refuses to
+spend) without any UI change.
+
+**The seat had the same trap and I had not said so.** The registry said 18 while the lounge, which
+reads the database, said 19. Caught by `tests/workforce.test.ts` and corrected mid-flight: Piper's row
+is RETIRED, not removed, and the test now asserts the RULE — non-retired rows equal the registry
+exactly, and her row is still present and retired.
+
+**The dangling reference that would have gone unnoticed:** `dutyRoster.ts` listed Piper on the EVENING
+shift. `resolveDuty` silently drops unknown names, so the shift would simply have got shorter, with
+nothing failing and nobody covering the evening. This is the same signature as the phantom "Paige":
+a name that no longer resolves, failing quiet.
+
+**Two contradictions with the research, recorded rather than papered over.** There is no LEARNING
+domain — canon fixes fifteen and the generator hard-guards the count — so `venture_teaching` sits in
+`KNOWLEDGE_OS` beside Research and the record. And `MACHINE_REGISTRY_VERSION` became `3.2.14+wp1`
+rather than a bump: canon 3.2.14 did not move, and the suffix records West Peek's own revision.
+
+**Also fixed while passing:** `unretireAdvice.ts` had the roster size hardcoded as "nineteen seats …
+a twentieth" INSIDE A LIVE PROMPT — an employee reasoning from a number that had just stopped being
+true. Now derived from the roster it is actually given.
+
+## 22 Aug 2026 — compensating for my own swallowed seed
+
+`tests/seededJobs.test.ts` was failing at HEAD, and it was mine. Migrations `0112` and `0113` seeded
+`diagnostics_sweep` with `INSERT OR IGNORE` — the exact pattern that had already, twice, reported a
+successful migration while silently dropping the row on a CHECK failure. `0113` is literally named
+"the diagnostics job actually lands" and used the swallowing form to land it.
+
+Both are applied and cannot be edited, so `0127` compensates: `INSERT … SELECT … WHERE NOT EXISTS`
+creates the job on any database where it was silently dropped, and any constraint failure now aborts
+the deploy loudly. The two files are grandfathered in the test **on the strength of that file, and
+the test now verifies it** — a grandfather list is where bugs go to be forgiven, so the exemption
+checks that the compensation genuinely exists and does not itself use the swallowing form.
+
+Also closed: `firmSkills.ts` let a partner draft a firm-written method for a RETIRED machine. Nobody
+sits on one, so the method would be read by no employee ever, while costing a model run and appearing
+to have been filed. Refused now, with the reason it was retired, and the machine list offers only
+active ones.
+
+## 22 Aug 2026 — Item 13: Deal Math folded, and merged addresses that still resolve
+
+Deal Math was a signpost to the VentureDeals dashboards plus the firm's own figures to carry across
+— which is the step you take WHILE deciding a cheque, not a separate errand. It is now the section
+"What this cheque actually buys", placed BEFORE the scenarios rather than after: you size a cheque by
+what it buys, and only then ask whether the fund can afford it.
+
+**`MERGED_ROUTES` — the part worth keeping.** When two tabs merge, the old address has to keep
+working; people bookmark, and a link in a note from three weeks ago should land somewhere sensible
+rather than dumping the reader on Home. The first version simply rendered Fund strategy's content at
+the `deal-math` address — which meant the page was titled Deal Math, signed by Deal Math's host, and
+carrying Fund strategy's content: **a page signed by the wrong person.** Resolving the alias before
+anything reads the key fixes the title, the host card and the purpose block together. `today` and
+`allocation`, both merged earlier, are now resolved the same way instead of each carrying its own
+render branch.

@@ -4,7 +4,7 @@ import { gotoSurface } from "./support/nav";
 /**
  * P17 browser journey — Machine Control Center + Capability Intelligence (GAP-06, GAP-07).
  *
- * Journey: sign in → Machines → the 45-machine fleet with live queue/spend/failures → open a
+ * Journey: sign in → Machines → the 46-machine fleet with live queue/spend/failures → open a
  * machine → append operating memory → pause it → the +Capture surface then REFUSES to route
  * work to it (the pause is server-enforced, not cosmetic) → resume → register a capability and
  * see it land on the bench as UNTESTED.
@@ -23,7 +23,12 @@ test("the fleet is operable and a pause actually stops work reaching the machine
   await signIn(page);
   await gotoSurface(page, "Machines");
   await expect(page.getByTestId("machines-page")).toBeVisible();
-  await expect(page.getByTestId("machines-note")).toContainText("45 machines");
+  // 46, not 45, since 21 Aug 2026: canon §5A.2's forty-five plus `venture_teaching`, added because
+  // the Professor had no teaching machine and was seated on the committee's post-mortem instead.
+  // Three of the forty-six are RETIRED and still counted here — they keep their rows because live
+  // work cards and ai_run attribution point at them — and they render PAUSED, which is what stops
+  // new work reaching them.
+  await expect(page.getByTestId("machines-note")).toContainText("46 machines");
 
   // Open the Marketing / PR / Content machine (#33) and record an operating note.
   await page.getByTestId("machine-open-33").click();
@@ -65,7 +70,9 @@ test("a capability registers on the bench as untested and the stack stays eviden
   await page.getByTestId("capability-name").fill("Journey capability");
   await page.getByTestId("capability-submit").click();
 
-  await expect(page.getByTestId("capability-message")).toContainText("UNTESTED");
+  // Said in words now, not in enum values (item 25, 21 Aug 2026): the page no longer prints
+  // UNTESTED / ACTIVE / PAUSED at a reader.
+  await expect(page.getByTestId("capability-message")).toContainText("never tested");
   await expect(page.getByTestId("capabilities-bench")).toContainText("Journey capability");
   await expect(page.getByTestId("recommended-stack")).toContainText("not a model opinion");
 });

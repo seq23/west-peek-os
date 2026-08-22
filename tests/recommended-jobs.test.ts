@@ -8,6 +8,7 @@ import {
   TARGET_KINDS,
   recommendJobs,
 } from "../src/shared/setup/recommendedJobs";
+import { AI_EMPLOYEE_ROSTER } from "../src/shared/registry/aiEmployees";
 
 const MIGRATION = readFileSync(
   fileURLToPath(new URL("../migrations/0018_orchestration.sql", import.meta.url)),
@@ -21,7 +22,18 @@ function allowedFromSchema(column: string): string[] {
   return [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
 }
 
-const ALL = recommendJobs(new Set(["Wren", "Wyatt", "Wesley", "Paige", "Winter"]));
+/*
+ * The employed set is built from the REAL ROSTER, not typed by hand.
+ *
+ * It used to be a hand-written list containing "Paige", who is not and never has been on the roster.
+ * So `diligence_ic_preparation` — the firm's only automated route from active diligence to an IC
+ * brief — could never be proposed in production, because `requiresEmployees` looked her up and
+ * always reported her missing. The suite passed throughout, because the suite had invented her too.
+ * A fixture that names people the system does not have will agree with any bug that shares its
+ * imagination.
+ */
+const ROSTER_NAMES = new Set(AI_EMPLOYEE_ROSTER.map((e) => e.name));
+const ALL = recommendJobs(ROSTER_NAMES);
 
 describe("recommended recurring work fits the real schema", () => {
   // The point of these three: a proposal the database would reject must fail here, not when an
@@ -52,6 +64,28 @@ describe("recommended recurring work fits the real schema", () => {
       // CHECK (target_kind = 'SYSTEM' OR target_id IS NOT NULL)
       if (j.target_kind !== "SYSTEM") expect(j.target_name).toBeTruthy();
     }
+  });
+});
+
+describe("recommended recurring work names people who exist", () => {
+  it("targets and requires only employees on the roster", () => {
+    // The guard for the bug above: a job pointed at a name nobody has is not a job, it is a silent
+    // hole in the schedule. It fails closed and says nothing, which is the worst combination.
+    const phantom: string[] = [];
+    for (const j of ALL) {
+      if (j.target_kind === "EMPLOYEE" && j.target_name && !ROSTER_NAMES.has(j.target_name)) {
+        phantom.push(`${j.job_key} targets ${j.target_name}`);
+      }
+      for (const n of j.requiresEmployees ?? []) {
+        if (!ROSTER_NAMES.has(n)) phantom.push(`${j.job_key} requires ${n}`);
+      }
+    }
+    expect(phantom).toEqual([]);
+  });
+
+  it("proposes every job when the whole roster is employed", () => {
+    // If this drops, some job is gated on somebody who cannot be hired.
+    expect(ALL.length).toBeGreaterThan(0);
   });
 });
 

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
@@ -91,11 +92,55 @@ describe("the lounge turns the roster into an operating surface", () => {
       MP,
     );
     expect(res.status).toBe(200);
-    // Counted from the registry, not a literal: the roster went 31 → 17 and will move again.
-    expect(res.body.employees).toHaveLength(AI_EMPLOYEE_ROSTER.length);
-    // max_active is now the whole roster: employment and attention were one number and are not
-    // any more. Everyone may be employed; who is ON DUTY is the short list, and that rotates.
-    expect(res.body.max_active).toBe(res.body.employees.length);
+
+    /*
+     * THE COUNT IS OF LIVE SEATS, NOT OF ROWS, and the difference is the whole rule.
+     *
+     * The lounge lists every row the database holds, RETIRED ones included — a retired seat can be
+     * brought back from this surface, so hiding it would remove the only way to do it. But a seat
+     * that has been culled from the registry does not disappear from the database: ai_employee rows
+     * are seeded by migration, migrations are append-only, and the seed generator only ever
+     * INSERTs. Dropping a name from `aiEmployees.ts` would therefore leave a ghost employee in
+     * production for ever — the same trap as deleting a machine row that live work cards point at.
+     *
+     * So the seat is RETIRED in the database (migration 0126) and the count reconciles here: the
+     * NON-RETIRED rows are exactly the registry, and anything extra is a row that outlived its
+     * seat. Counted from the registry rather than a literal — the roster has been 31, 17, 19 and is
+     * 18 since LP Sourcing merged into LP Relations.
+     */
+    const live = res.body.employees.filter((e: any) => e.status !== "RETIRED");
+    expect(live).toHaveLength(AI_EMPLOYEE_ROSTER.length);
+    expect(new Set(live.map((e: any) => e.name))).toEqual(new Set(AI_EMPLOYEE_ROSTER.map((e) => e.name)));
+
+    /*
+     * THE MERGED SEAT SURVIVES — but that cannot be asserted from a row here, and the distinction
+     * matters more than the assertion did.
+     *
+     * A FRESH database seeds from the regenerated `0004`, which now carries 18 employees: Piper was
+     * never inserted, so migration `0126`'s retirement finds nothing to update and there is no row
+     * to find. PRODUCTION is the opposite case — it seeded 19 back when 0004 said 19, and the
+     * migration turns that row RETIRED rather than deleting it, which is the whole point: deleting
+     * it would break ai_run attribution and meeting seating and erase what she actually did.
+     *
+     * So the guarantee lives in the migration, and that is where it is checked. Asserting a row
+     * here passed only on a database shaped like production and failed everywhere else.
+     */
+    const retire = readFileSync(
+      new URL("../migrations/0129_ai_employee_retire.sql", import.meta.url),
+      "utf8",
+    );
+    expect(retire).toMatch(/UPDATE ai_employee\s+SET status = 'RETIRED'/);
+    expect(retire).not.toMatch(/DELETE\s+FROM ai_employee/i);
+    // And where such a row DOES exist — production, and any database seeded before the merge — the
+    // lounge must report it as retired rather than as a working seat.
+    for (const e of res.body.employees.filter((x: any) => !AI_EMPLOYEE_ROSTER.some((r) => r.name === x.name))) {
+      expect(e.status, `${e.name} is off the roster and must read as retired`).toBe("RETIRED");
+    }
+
+    // max_active is the whole ROSTER: employment and attention were one number and are not any
+    // more. Everyone on the roster may be employed; who is ON DUTY is the short list, and that
+    // rotates. It counts seats, so a retired row does not raise the cap.
+    expect(res.body.max_active).toBe(AI_EMPLOYEE_ROSTER.length);
     expect(res.body.departments.length).toBeGreaterThan(3);
     expect(res.body.activation_law).toContain("ai_employee.activate");
 

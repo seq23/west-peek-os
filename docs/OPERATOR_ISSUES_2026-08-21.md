@@ -41,7 +41,7 @@ already has is a green suite over a product nobody exercised.
 |---|---|---|---|
 | 1 | Fold Today into Home; brief runs at 7am ET without a button | **DONE** | **Root cause found and fixed: 10 ms of CPU per cron trigger on the Workers Free plan.** The manual button was never the same code — it briefs one partner through a request. Now chunked: two sources and one partner's brief per tick, job on INTERVAL 15, `deliver_at_local` as the per-partner gate, regex compilation hoisted and the feed byte cap cut 2 MB → 256 KB. A failed brief retries up to three times rather than costing a partner the day. A scheduled tick has been watched SUCCEEDING in production. Does not close until briefs are watched landing on consecutive days.  **Today is folded in, 21 Aug 2026.** It showed open work, pending approvals and recent activity — all three of which Home already carries as modules (`my_work`, `approvals`, `what_changed`), and the first two of which are now tabs sitting directly above where Today used to be. The review also found it promised a date, meetings and deadlines it never showed, so it read as a page that had stopped working rather than as a smaller copy of Home. The route still resolves to Home so a bookmark lands. |
 | 2 | "I know" and "Stop telling me" do the same thing; one should delete | **DONE** | They now differ: "I know" is quiet for a week (somebody who said it last Tuesday has not said it about today); "Stop telling me, for good" is permanent. Both stay keyed to the exact wording, so the same problem described differently is a different item and still gets said — that is what makes a permanent option safe. |
-| 3 | Approvals: cards, reject/block/send-back/draft, state change after decision; hostile review | IN PROGRESS | **Correction:** Approve, Request revision and Reject all exist — they render only for a `pending_review` card, and production has none, so the queue looked actionless. Decisions no longer swallow their result (a 403 said nothing before). Still missing: changing state *after* a decision, a block distinct from reject, and the card treatment. |
+| 3 | Approvals: cards, reject/block/send-back/draft, state change after decision; hostile review | **DONE (undeployed)** | **Correction:** Approve, Request revision and Reject all exist — they render only for a `pending_review` card, and production has none, so the queue looked actionless. Decisions no longer swallow their result (a 403 said nothing before). Still missing: changing state *after* a decision, a block distinct from reject, and the card treatment. |
 | 4 | Work under Approvals; drop the checkmark | **DONE** | Both answer the same question — what is waiting on a person — so they are adjacent rather than separated by Today, Notifications and the weekly review. The tick was the only icon on any item in the group, which made Approvals read as a state (done) rather than a place, and made every other item look like it was missing one. |
 | 5 | Nav group titles carry no more weight than their items | **DONE** | They were quieter on every axis at once — same colour token, same weight, smaller, dimmed to 0.72. Now brighter and heavier, deliberately still small: a signpost should not compete on SIZE with the things it points at, or the eye scans categories instead of destinations. Verified on screen. |
 | 6 | Thesis formatting | **DONE** | The real defect was not formatting: the page rendered the **oldest** mandate version, so amending said "Saved as version 2" and changed nothing. The API now names `current` explicitly and all eight call sites read it — removing the indexing question rather than answering it eight times. |
@@ -50,9 +50,9 @@ already has is a green suite over a product nobody exercised.
 | 9 | Edit a company; working History; link deal ↔ company; record a dropped "no" | TODO | `PATCH /api/companies/:id` exists with no caller, no authorization and no event. Needs a `company.update` action key. The pass path does not exist anywhere. |
 | 10 | Sectors derived from the thesis, plus a Misc catch-all | **DONE** | Derived at read time from the current mandate through one route, so amending the thesis changes every picker and the two cannot drift. Free text had already diverged: the mandate said `HEALTH_TECH` while the register said "Ed tech" and "Consumer", and three spellings of one taxonomy means "how much of the pipeline is health tech" has no answer. `matchSector` reads the old free text as the sectors it plainly is rather than discarding history. **Off-thesis is a real answer**, always last and always present — a company that does not fit is a fact worth recording, and forcing every one into a mandate sector would make the register lie to keep a dropdown tidy. The key stays `AI` so nothing already filed under it orphans; the label reads "Artificial intelligence". |
 | 11 | Meetings + IC rebuilt | TODO | Spine kept (see decisions). Delete the legacy form on the same route first — it files every meeting as FOUNDER. |
-| 12 | Portfolio sub-tabs: monitoring, and reporting from inbound updates | TODO | Blocked behind the fund being able to record that it owns anything at all. |
-| 13 | Deal Math folded into Fund strategy; rebuilt for a novice GP | TODO | Deal Math contains no math today. Fund strategy fabricates its inputs — every scenario records $10M deployed against a real $10K. |
-| 14 | Per-page AI chat panel, top right | TODO | Ships with #8. The live-help service exists but is mounted only inside a meeting. |
+| 12 | Portfolio sub-tabs: monitoring, and reporting from inbound updates | **DONE (undeployed)** | Unblocked once `RecordInvestment` gave the fund a way to book a position at all. Extracted from 250 inline lines of `App.tsx` into `PortfolioPage.tsx`, in LP's shape — it used to OPEN on a metric-definition form full of `metric_key` and `as_of_date`, and nobody arrives at Portfolio wanting to define a metric. **A real arithmetic bug was found in the new reporting**: month-over-month shifted 30 June back to 30 May, but every figure here is dated month-end, so the 31 May reading fell one day outside the window and the comparison reached back to April — reporting a two-month move as a monthly one, on every 31-day month. |
+| 13 | Deal Math folded into Fund strategy; rebuilt for a novice GP | **DONE (undeployed)** | **The fabricated inputs were the serious half.** Every scenario was created with `fund_size: 30000000, investable: 24000000, fund_deployed: 10000000` HARDCODED IN THE REQUEST BODY — not form defaults a partner could see and correct, numbers no partner ever laid eyes on. The constraint engine then answered "does this sleeve fit", "is concentration within limit" and "is the reserve sufficient" against a thirty-million-dollar fund the firm does not have, and printed the answers with the confidence of arithmetic. `GET /api/funds/:id/basis` now reads what the fund actually is, with three provenances and no fourth — RECORDED, DERIVED, MISSING. There is deliberately no "assumed": an assumption is what got us here. The page REFUSES when the fund's size has not been recorded, exactly as it already refused without a pinned policy version; it had no business being stricter about a policy id than about the size of the fund. **Folded 22 Aug 2026.** Deal Math was a signpost to the VentureDeals dashboards plus the firm's own figures to carry across — which is the step you take WHILE deciding a cheque, not a separate errand. It is now the section "What this cheque actually buys", placed BEFORE the scenarios, because you size a cheque by what it buys and then ask whether the fund can afford it. `MERGED_ROUTES` resolves the old address so a bookmark lands on Fund strategy with the right host and title, rather than rendering merged content under the departed tab's name. |
+| 14 | Per-page AI chat panel, top right | **DONE (undeployed)** | Mounted inside `PageHostCard`, so all 17 hosted pages got it in one change and none can forget it. **It expands the card, it is not a panel** — operator, on the first attempt: *"i am afraid u ruined the UI... each 1:1 chat panel should just expand the host card as is"*. Closed, the only new pixels are one line in the bottom corner; open, a rule appears and the conversation continues the card at the same width. The host of the page answers, because making a partner pick from a roster of nineteen asks them to know the org chart before they can ask a question. One thread per partner per page — two partners in one thread is a ROOM, needing presence and the Durable Object machinery `AGENTS.md` forbids without cause. A switched-off host declines in their own name, as a recorded turn. |
 | 15 | Hostile review as a novice GP | **DONE** | 37 surfaces, five blind reviewers, plus a browser pass as MP. Artifact approved 21 Aug 2026. |
 | 16 | LP page rebuilt in human language; reporting folded in | **DONE (core)** | The vocabulary was the smaller half. There was nowhere in the system to record **how much an LP committed** or **how big the fund is** — "COMMITTED" existed only as a status string on three tables, so the system could say an LP had committed while holding no idea what to or how much. `lp_commitment` now records it in integer minor units (a REAL would put rounding into the one table where the number IS the fact), one live row per LP per fund so a revision edits rather than double-counting, and `fund` carries a target, currency and vintage. Signed and soft are reported as separate figures and never summed: the moment those are one number labelled "raised", the fund's headline is a hope. The page leads with the raise and reads in English — `LP records (LP_PRIVATE)`, `EXTERNAL VDR UNPROVEN — PROVIDER NOT SELECTED`, "Working claim" and "VERIFIED evidence" are all gone, and every LP is no longer silently filed as a family office. **Reporting folded in, 21 Aug 2026.** Operator: "reporting is supposed to be our fund reporting for
 LPs, so its only natural they belong folded into 1 tab." They were two tabs for one relationship —
@@ -74,11 +74,11 @@ disagrees with is the most expensive mistake available on that page, and the che
 different tab.
 
 **Still open:** the claims and data-room machinery is not yet re-surfaced in plain words.|
-| 17 | Cull employees; no duplicated work; veteran prompting from their machine's skills | TODO | 1 of 31 employees has ever run anything; 0 hold a tool; the veteran standard reaches 2 of ~27 call sites. |
-| 18 | Research as a guided conversation; market mapping unburied | **IN PROGRESS** | The engine is now reachable. `POST /api/research/packets` searches live, grounds every finding against the record it came from, drops what the sources did not support and reports how much it dropped — and had no caller anywhere in the client. The only button on the page assembled a document out of findings a person had typed, which is a different job wearing the same word. Both now exist as separate buttons because they answer different questions: "write up what we know" and "go and learn". **The guided half landed 21 Aug 2026.** `POST /api/research/projects/:id/propose-questions` turns a topic into the five to seven questions that would settle it. The page asked the hardest part of research as its first field: a partner who types "AI inference" has said what they are curious about, not what would resolve it, and naming the questions that would is where an analyst earns their place. At least one must DISCONFIRM the obvious thesis — research that can only agree with whoever commissioned it is not research — and each must be answerable with evidence somebody could go and find. Proposed, never added: a research plan nobody agreed to is one nobody uses. |
+| 17 | Cull employees; no duplicated work; veteran prompting from their machine's skills | **DONE (undeployed)** Closed 22 Aug 2026 with the operator's own decisions. **Roster 19 → 18**, Piper merged into Wesley — two seats on one machine with byte-identical guidance is not a division of labour, it is a duplicate row. **Machines 46 total, 43 active**; every active machine now has exactly one accountable seat and at least two written methods, which closes the gap that "19 machines have no methods" and "19 have nobody on them" were one fact. Three machines retired: `prompt_enhancer_intent` (a second front door to intent-parsing, which `askToCard.ts` already does better) and the two that assumed an engineer this firm does not employ. **Retirement is a flag and never a delete** — work cards and AI runs reference these rows, and a June work card must not lose the name of the machine that produced it. Duplicated work resolved: Pierce lost `ic_decision`, because the firm's own method says the champion may not write the kill case and Pierce is always the champion; Percy came off Communications' machine, whose single skill was his landing-page rubric — leaving the seat responsible for press and embargoes with no method about either. |
+| 18 | Research as a guided conversation; market mapping unburied | **DONE (undeployed)** | The engine is now reachable. `POST /api/research/packets` searches live, grounds every finding against the record it came from, drops what the sources did not support and reports how much it dropped — and had no caller anywhere in the client. The only button on the page assembled a document out of findings a person had typed, which is a different job wearing the same word. Both now exist as separate buttons because they answer different questions: "write up what we know" and "go and learn". **The guided half landed 21 Aug 2026.** `POST /api/research/projects/:id/propose-questions` turns a topic into the five to seven questions that would settle it. The page asked the hardest part of research as its first field: a partner who types "AI inference" has said what they are curious about, not what would resolve it, and naming the questions that would is where an analyst earns their place. At least one must DISCONFIRM the obvious thesis — research that can only agree with whoever commissioned it is not research — and each must be answerable with evidence somebody could go and find. Proposed, never added: a research plan nobody agreed to is one nobody uses. **Closed 22 Aug 2026.** Two faults remained, both the same shape as the bug that made this surface invisible the first time. The project DETAIL rendered ABOVE the list that selects it, so with nothing chosen the page was a card and a bare list, and with something chosen the working surface appeared above the row just clicked; the list now comes first and an unopened page says so rather than showing nothing. And market mapping — which item 18 asked to have UNBURIED — had been moved out of its own near-empty tab and then folded straight into a `<details>` here, reproducing the burial the move was meant to end. It is a section now, headed with the question it answers. |
 | 19 | University does not work | **DONE (undeployed)** | Root cause: the Workers AI adapter read a field the model does not return, so the whole cheap tier had never once succeeded. Fixed, proven against the live service, and University pinned to a capable model. **Still broken in production until this ships.** |
 | 20 | Delete documents with a trail; stop filing morning briefs | **DONE** | Archive with a required reason, recording who and when, on the event spine. Not a hard delete: deliverables reference documents by id and the bytes live in R2, so destroying the row would break references and erase the history you asked to keep — it leaves every list, and the trail survives. Morning briefs are no longer filed at all; they live on Home and are superseded daily. Existing noise is yours to clear with the new control. |
-| 21 | Cockpit overhaul; text fits; deterministic adjustable budgets; explain the two blocks | IN PROGRESS | Overflow **fixed** — the four posture cards rendered on top of one another. Remaining: "Best available" writes a policy identical to "Balanced"; spend has three definitions that disagree by 28%; 51 quarantined outputs cannot be accepted because the button does not exist. |
+| 21 | Cockpit overhaul; text fits; deterministic adjustable budgets; explain the two blocks | **DONE (undeployed)** | Overflow **fixed** — the four posture cards rendered on top of one another. The three named defects closed 21 Aug 2026, on `src/client/pages/AiOpsPage.tsx` (nav key `cockpit`, label "Cockpit" — `CockpitPage.tsx` is the portfolio view inside Fund strategy and was not touched).  **"Best available" now means something.** It wrote a policy byte-identical to Balanced — same cost mode, same pin behaviour — so choosing it changed nothing and the page then displayed "Balanced" back at you. Kept rather than deleted, because the operator's own ask was a lever she could "adj higher if i dont mind spending more" and removing it leaves the top of the range at Balanced — still a lie, just quieter. Unpinned work now takes the DEAREST priced capable model instead of the cheapest, recorded on the run with the honest caveat that price is the only quality signal in the model registry. Pins still win: a setting called "best available" must never be able to make the brief worse.  **Spend had three definitions.** `dailySpendUsd` counted actual-or-estimate over queued/running/completed; Diagnostics summed actual cost alone over runs of ANY status; the all-time headline summed actual cost over completed runs only, valuing every unpriced run at zero. One word, three populations — the same shape as "follow-on candidate". `src/worker/ai/spend.ts` is now the single definition, and today / this month / all time / both ceilings / Diagnostics / the boundary's own gate all read it. The sentence saying what is counted is served from that module and printed above every figure, so the page cannot reword the arithmetic.  **The quarantine has an exit.** `GET /api/ai/quarantine` lists what is waiting, oldest first, with what leaving it there has already cost. "Use it" is the existing accept route, which had no caller anywhere in the client. "Throw it away" is new and deliberately does NOT clear the quarantine flag — refused text must never become usable — so an `ai_output_decision` row takes it out of the queue instead, with a required reason. A run already decided cannot be decided again, checked before the flag is touched so the other button cannot undo a refusal.  **Firmwide budget (item 23) landed with it:** monthly and all-time, integer cents, versioned, and enforced in the AI preflight — a ceiling below what is already spent is refused naming both figures, and a breach names the limit rather than saying "over budget". Migration `0121`. Not deployed, and no e2e run. |
 | 22 | Fix the three red diagnostics; decide the interval; escalate to MPs; show what was escalated | **DONE** | Corrected by the browser pass: Diagnostics **does** detect — it reports "Broken — Scooter's brief". It never tells anyone, and Home says "Nothing outstanding" at the same moment. Two cards are green while wrong.  **Escalation landed 21 Aug 2026.** The interval is decided and documented: every tick, fifteen minutes — the checks are COUNT queries costing nothing, and what they catch sits unnoticed for days otherwise, so there is no argument for checking the firm's own health less often than the cheapest job on the schedule. It escalates only what PERSISTS: a fault must be seen DOWN on two consecutive runs before anybody is told, because alerting on one bad tick trains a partner to ignore the alert. Told once, not every quarter of an hour, and both partners — "somebody will see it" is how a thing goes unowned. It also says when a fault RECOVERS, since an alert with no all-clear leaves you unable to tell a fixed fault from one nobody has mentioned lately. Watched running in production: `13 checked · 0 down`. |
 
 ---
@@ -388,6 +388,47 @@ worth laying out twice.
 
 ---
 
+
+### The audit, 21 Aug 2026 — every surface read against LpPage.tsx
+
+Two findings apply to EVERY page and are worth more than any single rebuild:
+
+**1 · `<hr>` is styled and used zero times.** `styles.css:268` defines the rule; not one page file uses
+it, LP included. "Rules between sections" was written into the standard and never written into the
+code. Sections are currently separated only by `h3:not(:first-child) { margin-top: --space-xl }`, so
+any page that sections with `h4` or `h5` silently gets the smaller `--space-lg` gap and reads as one
+undivided run. That is most of them.
+
+**2 · Ten pages restate the nav label as their own first heading.** The shell already prints the page
+title (`App.tsx:4120` renders `<h3>{activeItem.label}</h3>`), so Secondaries, Record, Cross-office,
+Meetings, Events, University, Weekly review, Tasks, IC portal and Community each open with a heading
+that says what the tab you just clicked is called. Pure wasted space at the top of the fold, which is
+the operator's "space isnt being wasted" complaint with a precise cause.
+
+**3 · Rank does not mean depth.** Many pages use `h4` or `h5` for their TOP-level sections, which
+ranks them below the shell's `h3` title, so nothing on the page reads as a section. `AiOpsPage` and
+Governance have no `h3` at all. Rooms nests an `h3` two levels inside another `h3`. Meetings runs
+h3 → h5 → h4. `IntelligencePage` (478 lines) and Contradictions and Activity and Documents have no
+headings whatsoever.
+
+**Worst ten, in order:** Events & Rooms (the operator's own example — four nesting levels, an `h3`
+inside an `h4`, and the whole Events page mounted inside a Rooms subsection); Cockpit/AI controls;
+Integrations; Contradictions; the AI page; Network; Machines; Sources & sweeps; Meetings; and
+Activity + Documents together.
+
+**Machine vocabulary reaching the screen**, quoted from the audit: `PROPOSED`, `BREACH`, `DISABLED`,
+`OVER TARGET`, `VALUE_DISAGREEMENT · OPEN · HIGH`, `LP_PRIVATE` in a dropdown, `relationship_owner`,
+`fixture_contact_1`, `metric_key`, `as_of_date`, `task_class`, `pricing_state`, `max_data_class`,
+`diligence_note`, `approval.decided`, and object rows printed as `{object_type}/{object_id}` — a
+table of primary keys shown to a Managing Partner.
+
+**Things hidden that should not be:** Machines puts every method behind a row click AND has a second
+department-skills section that only appears once a filter is moved off its default. Sources & sweeps
+is entirely `<details>` closed on load. Research still renders the project detail ABOVE the list that
+selects it, so with nothing selected the page is inverted. Meetings hides seating behind a click with
+nothing saying employees can be seated. Rooms hides venues, seed questions and the decision itself
+behind guessing that a row is clickable.
+
 ## Item 24 — every role researched, every machine given another pass
 
 > "i should not have had to give u that. u r an ai and llm and u should figure out what the role is
@@ -671,3 +712,86 @@ Ordered by consequence. These are not optional extras; the first two outrank mos
 - University, market maps and research packets pinned to a capable model, fallback off.
 - The three Workers AI catalogue rows that silently failed a NOT NULL constraint, backfilled.
 - The spend-posture cards no longer render on top of one another.
+
+## Who may edit a company · settled 21 Aug 2026
+
+Operator, asked directly: *"the MPs should be able to edit and the host employee and maybe
+investment lead?"* — Managing Partners, `INVESTMENT_TEAM`, and Wyatt, who hosts Companies.
+
+**This needed a new tier in `authorize()`, and the gap is worth recording.** The model had two
+levels above nothing: RESERVED (never for an AI actor; a human needs the approver role and even then
+it executes only behind an approved approval card) and everything else, whose final line reads
+*"ordinary internal action: allowed for any actor inside firm scope"*. `company.update` was ordinary,
+so any authenticated identity in the firm could rewrite a company record — including the read-only
+service account a Cloudflare Access service token resolves to. The choke point ran and decided
+nothing.
+
+Reserved was the wrong instrument: it raises an approval card per action, and a card for every
+spelling correction is how an approval queue becomes unreadable and then ignored.
+
+So RESTRICTED — role-gated, not approval-gated. Named roles and named employees act immediately,
+everyone else is refused with the list so the refusal says who to ask. Safe to act immediately
+because the edit was already attributed and already lands on the event spine with per-field from→to.
+An AI employee may hold a restricted role, which is the point: barring Wyatt from the register would
+leave the firm with a host who cannot do the work his own page is for. What an AI still cannot do is
+anything RESERVED — that boundary is untouched. Malformed restrictions fail CLOSED.
+
+## Work cards have no bottleneck, and that is deliberate · 21 Aug 2026
+
+Operator: *"so right now can any employee open a work card? i guess that is how it should be no
+bottle neck"*. Confirmed and kept. `work_card.create` is an ordinary internal action — any actor
+inside firm scope, AI employees included, no approval.
+
+The line is in the right place. Opening a card is only saying *this needs doing*; the governance
+bites on what the card DOES, where reserved and external-effect actions still require a receipt.
+Wyatt can open a card for Porter unattended; neither can spend money or send mail because of it.
+
+**Open, not fixed — operator, same conversation: "but all work cards do not need approval right?
+file this away too ----maybe over a certain number of them needs approval? and cant do dupes".**
+Confirmed: no work card needs approval, and none should. Two guards to build, and they are different
+in kind — worth not conflating.
+
+**Duplicates — a correctness guard, always on.** The same employee opening the same card twice is
+never intended; it is a retry, a re-read of the same inbox, or a job that ran twice. So it is not a
+threshold at all, it is a uniqueness rule: at most one OPEN card per (machine, object, employee).
+A second attempt should find the existing card and add to it rather than fail — an employee told
+"denied, duplicate" will simply reword the title and file it anyway. Note that `INSERT OR IGNORE`
+must NOT be the mechanism: it would swallow the collision silently, which is the exact failure this
+repo has shipped twice.
+
+**Volume — a health signal, not a permission.** A threshold ("over N cards needs approval") is worth
+building, but it should be understood as detecting a MALFUNCTION, not policing a decision. An
+employee opening forty cards in an hour is not exercising judgement the firm needs to review; it is
+looping. So the right response is to pause that employee's card-opening and tell both partners, not
+to queue forty approval cards for a human to click through — which would deliver the flood to the
+partners rather than stop it. The existing `healthEscalation.ts` is the right home: it already
+escalates only what persists, tells both MPs once, and announces recovery.
+
+Threshold to be set with the operator. It cannot be guessed from an empty system, and setting it too
+low turns a working employee off in their first busy hour.
+
+## Found by the layout pass, not on any list · 21 Aug 2026
+
+Three defects that no complaint named, because none of them produces a symptom you can point at.
+
+**Twenty-nine class names styled nothing.** A misspelt or never-written CSS class does not error,
+does not fail a test, and does not blank the element — it renders unstyled, forever. `.page` was the
+wrapper on nine pages. `.tablewrap` was undefined ON THE LP PAGE, so the commitment table on the
+surface held up as the standard could push the page sideways. Status badges on Introductions rendered
+as bare shouting capitals with no badge; its primary button rendered default grey. The four cells of
+a deal row had no rule at all — only the grid's own `minmax(0, …)` kept a long company name from
+blowing the row out, which was correct by luck. `npm run validate:css-classes` now fails the build on
+any className with no rule.
+
+**Two dead links that looked like inert buttons.** Home's "My open work" module and a health-check
+destination both linked to `work-cards` — which is the API path and has never been a route. The
+router falls back to Home on an unknown key, so pressing them appeared to do nothing rather than to
+fail. The test covering this had pinned a dead link TWICE running (first `jobs`, then `work-cards`),
+holding the bug in place instead of catching it. Every destination is now checked against the real
+route list read out of `App.tsx`, and the guard was verified by reintroducing the bug and watching it
+fail.
+
+**Integrations fetched two lists and rendered neither.** `outstanding_diligence` and
+`data_room_access` were requested, returned, and dropped on the floor. The whole investor block also
+collapsed to a single line of prose when its API returned 403, so the sections did not appear at all
+and a reader could not tell they existed.

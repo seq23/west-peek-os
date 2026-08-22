@@ -48,7 +48,7 @@ export function FundPicker({ selected, label }: { selected: SelectedFund; label?
   }
 
   return (
-    <div className="fund-picker" data-testid="fund-picker">
+    <div data-testid="fund-picker">
       <div className="form-row" style={{ alignItems: "baseline" }}>
         {selected.hasChoice ? (
           <label>

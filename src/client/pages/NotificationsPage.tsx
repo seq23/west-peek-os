@@ -260,7 +260,7 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
           </button>
         </form>
 
-        <h5>What gets sent, and when</h5>
+        <h4>What gets sent, and when</h4>
         <ul className="small muted" data-testid="notification-rules">
           {Object.entries(prefs.data?.rules ?? {}).map(([k, v]) => (
             <li key={k}>

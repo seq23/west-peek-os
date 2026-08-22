@@ -450,9 +450,11 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           <div className="home-date">
             {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
           </div>
-          <h1 data-testid="home-greeting">
+          {/* h2: the shell's page title. A second h1 on the page competed with the wordmark, and
+              a greeting is not the name of the application. */}
+          <h2 data-testid="home-greeting">
             {greetingFor(new Date().getHours())}, {me.fullName.split(" ")[0]}
-          </h1>
+          </h2>
         </div>
         {/* The byline used to live here, floating in the corner, nowhere near the thing it
             described. It now sits ON the briefing, the way a byline sits on an article. */}

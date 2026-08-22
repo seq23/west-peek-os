@@ -34,6 +34,11 @@ export interface PostureDef {
   costMode: "NORMAL" | "CHEAPO" | "CRITICAL_ONLY";
   /** Whether a routing pin still wins. This is the half that was missing. */
   honoursPins: boolean;
+  /**
+   * Which way to lean when NOTHING has been pinned. This is the half that was missing from the
+   * expensive end, and its absence made two of the four postures the same policy — see below.
+   */
+  prefersFrontier: boolean;
 }
 
 export const SPEND_POSTURES: readonly PostureDef[] = [
@@ -47,6 +52,7 @@ export const SPEND_POSTURES: readonly PostureDef[] = [
       "tier once invented a market figure and stated it as fact — this posture removes that protection.",
     costMode: "CHEAPO",
     honoursPins: false,
+    prefersFrontier: false,
   },
   {
     key: "CHEAP",
@@ -56,6 +62,7 @@ export const SPEND_POSTURES: readonly PostureDef[] = [
     tradeoff: "Employees working cards will be less sharp than they are today.",
     costMode: "CHEAPO",
     honoursPins: true,
+    prefersFrontier: false,
   },
   {
     key: "BALANCED",
@@ -65,15 +72,33 @@ export const SPEND_POSTURES: readonly PostureDef[] = [
     tradeoff: "None worth naming. This is the setting to leave it on.",
     costMode: "NORMAL",
     honoursPins: true,
+    prefersFrontier: false,
   },
+  /*
+   * KEPT, AND MADE TO MEAN SOMETHING. Reported by the operator: choosing this wrote a policy row
+   * byte-identical to Balanced — same cost_mode, same pin behaviour — and the page then showed
+   * "Balanced" as current, because nothing stored could tell them apart. Two choices, one policy.
+   *
+   * The argument for DELETING it was real: its own downside line admits you are paying frontier
+   * rates to re-file an agenda item. The argument that won is the operator's original ask, which is
+   * quoted at the top of this file — "i can adj higher if i dont mind spending more". Removing this
+   * removes the half of the lever she asked for and leaves the top of the range at Balanced, so the
+   * control would still be lying, just more quietly. So it stays and it now does the one thing its
+   * label promises: where nothing has been pinned, take the best model instead of the cheapest.
+   *
+   * Pins are still honoured. A pin is already somebody's per-task quality decision; overriding one
+   * from the expensive end would mean this posture could make the morning brief WORSE, which is
+   * absurd for a setting called "best available".
+   */
   {
     key: "BEST",
     label: "Best available",
-    what: "Frontier models everywhere, including work that does not really need one.",
-    cost: "Several times Balanced, for a difference you will mostly not notice.",
+    what: "Work nobody has pinned takes the strongest model instead of the cheapest. Pinned work keeps its model.",
+    cost: "Several times Balanced. Routine work costs frontier rates instead of nearly nothing.",
     tradeoff: "You are paying frontier rates to route a capture and re-file an agenda item.",
     costMode: "NORMAL",
     honoursPins: true,
+    prefersFrontier: true,
   },
 ];
 
@@ -84,11 +109,12 @@ export function postureDef(key: string): PostureDef {
 /**
  * Which posture a stored policy corresponds to.
  *
- * `cost_mode` alone cannot distinguish FREE from CHEAP — they share CHEAPO and differ only in
- * whether pins survive — so the pin behaviour is stored beside it. Older policies with nothing
- * stored read as BALANCED, which is what they behaved as.
+ * `cost_mode` alone cannot distinguish any of these. FREE and CHEAP share CHEAPO and differ only in
+ * whether pins survive; BALANCED and BEST share NORMAL and differ only in which way unpinned work
+ * leans. Both of those extra bits are stored beside the mode, so this is a lookup rather than a
+ * guess. Older policies carrying neither read as BALANCED, which is what they behaved as.
  */
-export function postureFor(costMode: string, honoursPins: boolean): SpendPosture {
+export function postureFor(costMode: string, honoursPins: boolean, prefersFrontier = false): SpendPosture {
   if (costMode === "CHEAPO") return honoursPins ? "CHEAP" : "FREE";
-  return "BALANCED";
+  return prefersFrontier ? "BEST" : "BALANCED";
 }

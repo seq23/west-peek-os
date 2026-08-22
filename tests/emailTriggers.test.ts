@@ -12,8 +12,8 @@ import { SKILL_LIBRARY } from "../src/shared/skills/library";
  */
 
 describe("what a hashtag means is defined once", () => {
-  it("carries the two triggers already used across the family, plus the deck one", () => {
-    expect(EMAIL_TRIGGERS.map((t) => t.tag)).toEqual(["#wpdealflow", "#wpnetwork", "#wpdeck"]);
+  it("carries the two triggers already used across the family, the deck one, and the portfolio one", () => {
+    expect(EMAIL_TRIGGERS.map((t) => t.tag)).toEqual(["#wpdealflow", "#wpnetwork", "#wpdeck", "#wpupdate"]);
   });
 
   it("sends people to Network OS and companies here, and never both", () => {
@@ -21,6 +21,13 @@ describe("what a hashtag means is defined once", () => {
     expect(owner("#wpnetwork")).toBe("NETWORK_OS");
     expect(owner("#wpdealflow")).toBe("WEST_PEEK_OS");
     expect(owner("#wpdeck")).toBe("WEST_PEEK_OS");
+    expect(owner("#wpupdate")).toBe("WEST_PEEK_OS");
+  });
+
+  it("keeps a portfolio update separate from a deal, because they are read by different people", () => {
+    // The failure this prevents: a founder's monthly numbers arriving at the top of the funnel as a
+    // fresh opportunity in a company the fund already owns.
+    expect(triggersIn("Q1 numbers attached #wpupdate").map((t) => t.tag)).toEqual(["#wpupdate"]);
   });
 
   it("routes every trigger in a message, because one mail can introduce a founder AND their company", () => {

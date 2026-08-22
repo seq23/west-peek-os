@@ -5,12 +5,14 @@ import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import { runAi } from "../src/worker/ai/runAi";
 import { isMachinePaused } from "../src/worker/services/machines";
+import { MACHINE_REGISTRY } from "../src/shared/registry/machines";
 
 /**
  * P17 — Machine Control Center + Capability Intelligence (GAP-06, GAP-07).
  *
  * Rules under test:
- * - All 45 registry machines appear with real operating state, queue, spend, and failures.
+ * - Every registry machine appears with real operating state, queue, spend, and failures — the
+ *   retired ones included, because live work cards point at them (see the count assertion).
  * - PAUSE HAS TEETH, in two independent places: capture routing refuses a paused machine
  *   (409 machine_paused) and `run_ai` refuses to spend anything attributed to it. Neither
  *   is UI hiding; both are checked in the service.
@@ -62,12 +64,37 @@ afterAll(async () => {
   await disposeTestDb(t);
 });
 
-describe("the control center makes the 45-machine registry operable", () => {
+describe("the control center makes the whole machine registry operable", () => {
   it("returns every machine with operating state, queue, spend, and failure counts", async () => {
     const res = await call<{ machines: any[]; note: string }>("/api/machines/control-center", MP);
     expect(res.status).toBe(200);
-    expect(res.body.machines).toHaveLength(45);
+    /*
+     * 46, AND THE THREE RETIRED ONES ARE STILL HERE ON PURPOSE.
+     *
+     * Canon §5A.2 has forty-five machines; row 46 (`venture_teaching`) is West Peek's own, added
+     * because the Professor had no teaching machine and had been seated on the committee's
+     * post-mortem instead. Three rows are retired — `prompt_enhancer_intent`,
+     * `developer_diagnostics`, `builder_repo_product` — and they stay in the registry, the
+     * database and this list because work_card and ai_run_attribution point at them: an operator
+     * reading an old card has to be able to see what produced it. `ACTIVE_MACHINES` (43) is what
+     * may take NEW work, and the retired rows are PAUSED so the two enforcement points below
+     * refuse them.
+     */
+    expect(res.body.machines).toHaveLength(MACHINE_REGISTRY.length);
+    expect(res.body.machines).toHaveLength(46);
     expect(res.body.note).toContain("cannot spend AI budget");
+
+    // Retirement has teeth in the running system, not only in TypeScript: routing and run_ai both
+    // refuse a paused machine, which is what stops new work reaching a retired one today.
+    for (const key of ["prompt_enhancer_intent", "developer_diagnostics", "builder_repo_product"]) {
+      const retired = res.body.machines.find((m: any) => m.key === key)!;
+      expect(retired, key).toBeTruthy();
+      expect(retired.status, key).toBe("PAUSED");
+      expect(retired.pause_reason, key).toContain("RETIRED");
+    }
+
+    const teaching = res.body.machines.find((m: any) => m.key === "venture_teaching")!;
+    expect(teaching.status).toBe("ACTIVE");
 
     const research = res.body.machines.find((m: any) => m.key === "research_intelligence")!;
     expect(research.status).toBe("ACTIVE");

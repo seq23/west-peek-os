@@ -564,13 +564,19 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
 
       {message && <p className="notice" data-testid="research-page-message">{message}</p>}
 
-      {selected && <ProjectDetail id={selected} onChanged={projects.reload} />}
-
-      <h3>Projects</h3>
+      {/*
+        THE LIST COMES BEFORE THE THING IT SELECTS. The detail panel used to render ABOVE the list
+        that opens it, so with nothing selected the page was a delivered-research card and a bare
+        list, and with something selected the working surface appeared above the row you had just
+        clicked. This is the same inversion that made the whole research surface invisible once
+        before, when every control lived inside a panel that never opened with zero projects.
+      */}
+      <h3>What we are looking into</h3>
       <ul className="card-list small" data-testid="research-projects">
         {(projects.data?.projects ?? []).map((p) => (
           <li key={p.id}>
-            <span className="badge">{p.status}</span>{" "}
+            {/* Was the raw column value — ACTIVE, DRAFT. */}
+            <span className="help-tag">{p.status.split("_").join(" ").toLowerCase()}</span>{" "}
             <button type="button" className="link-button" data-testid={`research-open-${p.id}`} onClick={() => setSelected(p.id)}>
               {p.title}
             </button>{" "}
@@ -579,12 +585,27 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         ))}
         {!projects.loading && (projects.data?.projects ?? []).length === 0 && <li className="state-empty">Nothing yet. Start one above and it opens straight away, with Wyatt ready to scope it.</li>}
       </ul>
+
+      {selected ? (
+        <ProjectDetail id={selected} onChanged={projects.reload} />
+      ) : (
+        (projects.data?.projects ?? []).length > 0 && (
+          <p className="state-empty" data-testid="research-none-open">
+            Open one above to see its questions, its sources and what Wyatt has found.
+          </p>
+        )
+      )}
       {/* MARKET MAPPING FOLDED IN. It had its own tab and almost nothing on it, which made it
           look like a feature that had been abandoned rather than one you had not used yet. It is
           the same activity as everything else here — finding out what is true about a market —
           so it belongs beside the rest of it rather than one click away in a tab of its own. */}
-      <details className="card" data-testid="research-market-map">
-        <summary>Map a market</summary>
+      {/*
+        OUT OF THE ACCORDION — item 18 asked for exactly this. Market mapping had its own tab with
+        almost nothing on it, was folded in here to stop it looking abandoned, and then folded again
+        into a disclosure, which reproduced the burial the move was meant to end. It is a section.
+      */}
+      <h3>Who else is already doing this?</h3>
+      <section className="card" data-testid="research-market-map">
         <p className="muted small">
           A market map is the picture of who is already doing the thing a founder just pitched you:
           the incumbents, the challengers, who is funded and by whom, and where the gap is that
@@ -597,7 +618,7 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           live on the same page.
         </p>
         <MarketMapPage />
-      </details>
+      </section>
     </section>
   );
 }

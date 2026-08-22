@@ -1,12 +1,26 @@
 import { useState } from "react";
+import { readableDate, shortDate } from "../lib/dates";
 import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 
 /**
- * Daily Intelligence surface (P14, GAP-05).
+ * Where the daily brief gets its material — sources, watchlist, what was gathered, and the runs.
  *
- * Shows the engine as it actually is: which sources are readable and which are gated,
- * what a run acquired/deduped/kept, why each item ranked where it did, and where the
- * item came from. Nothing here presents a gated source as a working one.
+ * WHAT WAS WRONG (operator, item 25: "make sure the pages are not jumbled like the events tab and
+ * look more like the LP tab"). This file had 478 lines and not one heading. It was an intro
+ * sentence followed by five `<details>` cards, every one of them closed on load, so a page whose
+ * whole job is to explain where the brief comes from announced nothing at all: you had to open
+ * five disclosures to discover it held sources, a watchlist, items, a manual sweep and a history.
+ *
+ * IT NOW READS IN THE ORDER SOMEBODY ASKS THE QUESTIONS. Where does the material come from → what
+ * are we looking for → what came in → get more now → what has run before. Every section is a
+ * plain `<h3>`, always rendered, with its own sentence for the empty case, exactly like the LP
+ * page. `<details>` survives in two places only, both of them genuinely secondary detail INSIDE a
+ * section that is already on screen: adding an item by hand, and a source's own status note.
+ *
+ * NO WORD FROM INSIDE THE MACHINE IS ON SCREEN. `EGRESS_GATED`, `HTTP_FEED`, `DISABLED`,
+ * `CONFIDENTIAL`, `AI_ACCEPTED`, `SUCCEEDED` and a raw ISO timestamp all rendered here verbatim.
+ * Each now has one sentence-cased phrase a first-time reader can act on, mapped in one place at
+ * the top of the file so the words cannot drift apart across the page.
  */
 
 interface SourceRow {
@@ -59,7 +73,85 @@ interface WatchRow {
   active: number;
 }
 
-function statusTone(status: string): string {
+/**
+ * The vocabulary, in one place.
+ *
+ * Every one of these was previously printed raw. A partner reading "EGRESS_GATED" cannot tell
+ * whether something is broken, forbidden, or simply not built yet — which are three different
+ * decisions. The phrasing says which.
+ */
+const SOURCE_STATE: Record<string, string> = {
+  CONFIGURED: "Working",
+  UNCONFIGURED: "Not set up yet",
+  EGRESS_GATED: "Cannot reach the internet from here",
+  FAILED: "Failed last time it was tried",
+};
+
+const SOURCE_KIND: Record<string, string> = {
+  MANUAL: "Things you paste in yourself",
+  INTERNAL: "West Peek's own records",
+  HTTP_FEED: "A feed from outside",
+};
+
+/** Lower case, because it reads as an aside beside the thing being watched. */
+const WATCH_WORD: Record<string, string> = { TOPIC: "topic", COMPANY: "company", SECTOR: "sector", PERSON: "person" };
+
+const WATCH_KINDS = [
+  { key: "TOPIC", label: "A topic" },
+  { key: "COMPANY", label: "A company" },
+  { key: "SECTOR", label: "A sector" },
+  { key: "PERSON", label: "A person" },
+] as const;
+
+const CATEGORIES = [
+  { key: "MARKET", label: "Markets" },
+  { key: "SECONDARIES", label: "Secondaries" },
+  { key: "FUNDING_MA", label: "Funding and M&A" },
+  { key: "WATCHLIST", label: "Watchlist" },
+  { key: "AI_TECH", label: "AI and technology" },
+  { key: "REGULATORY", label: "Regulation" },
+  { key: "PORTFOLIO", label: "Our portfolio" },
+  { key: "COMPETITOR", label: "Other funds" },
+  { key: "LP_SIGNAL", label: "Investor signals" },
+  { key: "OPPORTUNITY", label: "An opportunity" },
+  { key: "OTHER", label: "Something else" },
+] as const;
+
+/** Who may see the item. The label is a permission, so it is written as one. */
+const SENSITIVITY: Record<string, string> = {
+  PUBLIC: "Anyone may see this",
+  INTERNAL: "The firm only",
+  CONFIDENTIAL: "The firm only, handle with care",
+  RESTRICTED: "Restricted",
+  LP_PRIVATE: "Investor-private",
+  MNPI_SENSITIVE: "Market-sensitive",
+  BANKING_RESTRICTED: "Banking-restricted",
+};
+
+const WHY_ORIGIN: Record<string, string> = {
+  DETERMINISTIC: "written from the item itself",
+  AI_ACCEPTED: "drafted by an employee and accepted",
+  AI_QUARANTINED: "drafted by an employee, not yet accepted",
+  NONE: "not written yet",
+};
+
+const RUN_RESULT: Record<string, string> = {
+  RUNNING: "still running",
+  SUCCEEDED: "every source answered",
+  PARTIAL: "some sources did not answer",
+  FAILED: "failed",
+};
+
+function label(map: Record<string, string>, key: string | null | undefined): string {
+  if (!key) return "—";
+  return map[key] ?? key.toLowerCase().split("_").join(" ");
+}
+
+function categoryLabel(key: string): string {
+  return CATEGORIES.find((c) => c.key === key)?.label ?? key.toLowerCase().split("_").join(" ");
+}
+
+function sourceTone(status: string): string {
   if (status === "CONFIGURED") return "badge badge-ok";
   if (status === "EGRESS_GATED") return "badge badge-gate";
   return "badge badge-bad";
@@ -76,19 +168,20 @@ function ItemCard({ item, onChanged }: { item: ItemRow; onChanged: () => void })
     <li className="card" data-testid={`intel-item-${item.id}`}>
       <p>
         <strong>{item.title}</strong>{" "}
-        <span className="badge">{item.category}</span> <span className="badge">{item.privacy_label}</span>
+        <span className="badge">{categoryLabel(item.category)}</span>{" "}
+        <span className="badge">{label(SENSITIVITY, item.privacy_label)}</span>
       </p>
       <p className="muted small" data-testid={`intel-reason-${item.id}`}>
-        score {item.relevance_score.toFixed(2)} — {item.relevance_reason}
+        Matched {item.relevance_score.toFixed(2)} out of 1 — {item.relevance_reason}
       </p>
       {item.why_matters && (
         <p className="small">
-          {item.why_matters} <code>{item.why_matters_origin}</code>
+          {item.why_matters} <span className="muted">({label(WHY_ORIGIN, item.why_matters_origin)})</span>
         </p>
       )}
       <div className="form-row">
         <button type="button" className="link-button" data-testid={`intel-detail-${item.id}`} onClick={() => setOpen((o) => !o)}>
-          {open ? "Hide sources" : "Sources"}
+          {open ? "Hide where this came from" : "Where this came from"}
         </button>
         <button
           type="button"
@@ -115,7 +208,7 @@ function ItemCard({ item, onChanged }: { item: ItemRow; onChanged: () => void })
             const failed = mutationError(
               await api(`/api/intelligence/items/${item.id}/feedback`, { method: "POST", body: { signal: "USEFUL" } }),
             );
-            setMessage(failed ?? "Feedback recorded.");
+            setMessage(failed ?? "Noted — more like this.");
           }}
         >
           Useful
@@ -130,7 +223,7 @@ function ItemCard({ item, onChanged }: { item: ItemRow; onChanged: () => void })
             const failed = mutationError(
               await api(`/api/intelligence/items/${item.id}/feedback`, { method: "POST", body: { signal: "NOT_RELEVANT" } }),
             );
-            setMessage(failed ?? "Feedback recorded.");
+            setMessage(failed ?? "Noted — less like this.");
           }}
         >
           Not relevant
@@ -140,28 +233,32 @@ function ItemCard({ item, onChanged }: { item: ItemRow; onChanged: () => void })
           data-testid={`intel-archive-${item.id}`}
           onClick={async () => {
             const res = await api(`/api/intelligence/items/${item.id}/archive`, { method: "POST" });
-            setMessage(res.status === 200 ? "Archived. The record is preserved." : `Archive refused (HTTP ${res.status}).`);
+            setMessage(res.status === 200 ? "Put away. The record is kept; it just stops being ranked." : `Could not put it away (HTTP ${res.status}).`);
             onChanged();
           }}
         >
-          Archive
+          Put away
         </button>
       </div>
       {message && <p className="small" data-testid={`intel-message-${item.id}`}>{message}</p>}
       {open && (
         <div data-testid={`intel-citations-${item.id}`}>
-          {detail.loading && <p className="muted small">Loading provenance…</p>}
+          {detail.loading && <p className="muted small">Looking it up…</p>}
           <ul className="card-list small">
             {(detail.data?.citations ?? []).map((c) => (
               <li key={c.id}>
-                <code>{c.source_name}</code> ({c.source_kind}) — {c.locator}
+                <strong>{c.source_name}</strong> <span className="muted">({label(SOURCE_KIND, c.source_kind)})</span> — {c.locator}
                 {c.quote ? `: “${c.quote}”` : ""}
               </li>
             ))}
+            {!detail.loading && (detail.data?.citations ?? []).length === 0 && (
+              <li className="state-empty">Nothing was recorded about where this came from.</li>
+            )}
           </ul>
           {(detail.data?.feedback ?? []).length > 0 && (
             <p className="muted small">
-              Feedback: {(detail.data?.feedback ?? []).map((f) => f.signal).join(", ")}
+              You have said this is{" "}
+              {(detail.data?.feedback ?? []).map((f) => (f.signal === "USEFUL" ? "useful" : "not relevant")).join(", ")}.
             </p>
           )}
         </div>
@@ -196,52 +293,64 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
   // A screenful at a time. Several hundred items rendered at once was the complaint.
   const [itemLimit, setItemLimit] = useState(25);
 
+  const sourceRows = sources.data?.sources ?? [];
+  const watchRows = watchlist.data?.watchlist ?? [];
+  const itemRows = items.data?.items ?? [];
+  const runRows = runs.data?.runs ?? [];
+
   return (
     <section data-testid="intelligence-page">
-      {/* THE BRIEF IS NOT HERE ANY MORE. It was a second, always-expanded copy of what Home
-          already carries in full — Home shows the one-minute version and expands the whole report
-          in place — so this page was holding a duplicate of the read while calling itself Sources.
-          What is left is genuinely setup: where material comes from, and what was done with it.
-          That is why it now lives under Admin. */}
+      {/* THE BRIEF IS NOT HERE. It was a second, always-expanded copy of what Home already carries
+          in full, so this page held a duplicate of the read while calling itself Sources. What is
+          left is genuinely the plumbing, which is why it lives under Admin. */}
       <p className="muted small">
-        Where your briefing gets its material. Nothing here is something to read — the brief itself
-        is on Home, and this is the plumbing behind it.
+        Where your morning brief gets its material. Nothing here is something to read — the brief
+        itself is on Home. This is what feeds it, and it is all yours to change.
       </p>
 
-
-      {/* Sources, watchlist and history are REFERENCE, not the point of the page — they were
-          taking most of the screen above the items you actually came to read. Collapsed by
-          default using native <details> so they stay keyboard-operable and findable. */}
-      <details className="card intel-panel" data-testid="intel-sources-panel">
-        <summary>
-          Sources <span className="muted small">{(sources.data?.sources ?? []).length}</span>
-        </summary>
-        {sources.loading && <p>Loading sources…</p>}
-        <ul className="card-list" data-testid="intel-sources">
-        {(sources.data?.sources ?? []).map((s) => (
+      <h3>Where the material comes from</h3>
+      <p className="small">
+        Each morning these are checked for anything new. A source that cannot be reached says so
+        here rather than quietly returning nothing.
+      </p>
+      <ul className="card-list" data-testid="intel-sources">
+        {sourceRows.map((s) => (
           <li key={s.id} className="card" data-testid={`intel-source-${s.source_key}`}>
             <p>
-              <strong>{s.name}</strong> <span className="badge">{s.kind}</span>{" "}
-              <span className={statusTone(s.status)} data-testid={`intel-source-status-${s.source_key}`}>
-                {s.status}
+              <strong>{s.name}</strong>{" "}
+              <span className={sourceTone(s.status)} data-testid={`intel-source-status-${s.source_key}`}>
+                {label(SOURCE_STATE, s.status)}
               </span>{" "}
-              {s.enabled ? "" : <span className="badge badge-bad">DISABLED</span>}
+              {s.enabled ? null : <span className="badge badge-bad">Switched off</span>}
             </p>
-            {s.status_detail && <p className="muted small">{s.status_detail}</p>}
-            {s.last_checked_at && <p className="muted small">last checked {s.last_checked_at}</p>}
+            <p className="muted small">
+              {label(SOURCE_KIND, s.kind)}
+              {s.last_checked_at ? ` · last looked at ${readableDate(s.last_checked_at)}` : " · never looked at yet"}
+            </p>
+            {/* The status note is the one genuinely secondary thing on a source: it explains a
+                state the badge has already named, in the engine's own detail. */}
+            {s.status_detail && (
+              <details>
+                <summary className="muted small">Why it says that</summary>
+                <p className="muted small">{s.status_detail}</p>
+              </details>
+            )}
           </li>
         ))}
+        {!sources.loading && sourceRows.length === 0 && (
+          <li className="state-empty" data-testid="intel-no-sources">
+            No sources are registered. Until one is, the only material a sweep can gather is what
+            you add by hand below.
+          </li>
+        )}
       </ul>
-        {sources.data?.note && <p className="muted small">{sources.data.note}</p>}
-      </details>
+      {sources.data?.note && <p className="muted small">{sources.data.note}</p>}
 
-      <details className="card intel-panel" data-testid="intel-watchlist-panel">
-        <summary>
-          Watchlist <span className="muted small">{(watchlist.data?.watchlist ?? []).length}</span>
-        </summary>
-        <p className="muted small">
-          Anything on this list scores higher when a sweep ranks new items.
-        </p>
+      <h3>What we are watching for</h3>
+      <p className="small">
+        Anything on this list scores higher when a sweep ranks what it found, so this is the dial
+        that decides what your brief is about.
+      </p>
       <form
         className="form-row"
         data-testid="intel-watch-form"
@@ -251,27 +360,34 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
             method: "POST",
             body: { kind: watchKind, label: watchLabel, keywords: [watchLabel] },
           });
-          setMessage(res.status === 201 ? `Watching “${watchLabel}”.` : `Refused: ${res.data?.error ?? res.status}`);
+          setMessage(res.status === 201 ? `Watching “${watchLabel}” from the next sweep on.` : `Not added: ${res.data?.error ?? res.status}`);
           setWatchLabel("");
           watchlist.reload();
         }}
       >
-        <select data-testid="intel-watch-kind" aria-label="Kind of thing to watch" value={watchKind} onChange={(e) => setWatchKind(e.target.value)}>
-          {["TOPIC", "COMPANY", "SECTOR", "PERSON"].map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
-        <input data-testid="intel-watch-label" aria-label="What to watch" value={watchLabel} onChange={(e) => setWatchLabel(e.target.value)} placeholder="What should we watch?" />
+        <label>
+          What kind of thing{" "}
+          <select data-testid="intel-watch-kind" value={watchKind} onChange={(e) => setWatchKind(e.target.value)}>
+            {WATCH_KINDS.map((k) => (
+              <option key={k.key} value={k.key}>
+                {k.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          What to watch{" "}
+          <input data-testid="intel-watch-label" value={watchLabel} onChange={(e) => setWatchLabel(e.target.value)} placeholder="Continuation funds" />
+        </label>
         <button type="submit" className="btn-strong" data-testid="intel-watch-submit">
-          Watch
+          Watch it
         </button>
       </form>
       <ul className="card-list" data-testid="intel-watchlist">
-        {(watchlist.data?.watchlist ?? []).map((w) => (
+        {watchRows.map((w) => (
           <li key={w.id}>
-            {w.label} <span className="badge">{w.kind}</span>{" "}
+            <strong>{w.label}</strong> <span className="muted small">{label(WATCH_WORD, w.kind)}</span>{" "}
+            {w.active === 1 ? null : <span className="muted small">— paused</span>}{" "}
             <button
               type="button"
               className="link-button"
@@ -285,138 +401,124 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
             </button>
           </li>
         ))}
-        {!watchlist.loading && (watchlist.data?.watchlist ?? []).length === 0 && (
-          <li className="state-empty">Nothing on your watchlist. Watchlist matches are the strongest ranking signal.</li>
+        {!watchlist.loading && watchRows.length === 0 && (
+          <li className="state-empty">
+            Nothing on your watchlist. A watchlist match is the strongest thing a sweep can go on,
+            so until you add one the ranking is working from general relevance alone.
+          </li>
         )}
       </ul>
-      </details>
 
-      {/* WHAT AN ITEM IS was never stated anywhere, and the page rendered every one of several
-          hundred at full height. The operator's verdict — too long, not understood, overbearing —
-          was all three true at once. It is raw material, so it reads as raw material: folded away,
-          explained, and shown a screenful at a time. */}
-      <details className="card intel-panel" data-testid="intel-items-panel">
-        <summary>
-          Everything gathered <span className="muted small">{(items.data?.items ?? []).length}</span>
-        </summary>
-        <p className="muted small">
-          One headline each, as the sweep found it — before anything was written. Your brief is
-          drawn from the top of this list, so this is where you check what it was working from, or
-          find something it left out. You do not need to read it.
+      <h3>What the sweeps have gathered</h3>
+      <p className="small">
+        One headline each, as the sweep found it, before anything was written about it. Your brief
+        is drawn from the top of this list — this is where you check what it was working from, or
+        find something it left out. You do not need to read it.
+      </p>
+      <p className="muted small">
+        The match score is how closely something lines up with what you and the firm follow.
+        Putting an item away does not delete it; it only takes it out of tomorrow's ranking.
+      </p>
+      {items.loading && <p className="muted small">Looking…</p>}
+      {!items.loading && itemRows.length === 0 && (
+        <p className="state-empty" data-testid="intel-no-items">
+          Nothing gathered yet. Sweeps run each morning; you can run one yourself below.
         </p>
-        <p className="muted small">
-          The score is how closely an item matched what you and the firm follow. Nothing here is
-          deleted when a brief is written; archiving one only takes it out of tomorrow's ranking.
-        </p>
-
-        {items.loading && <p>Loading…</p>}
-        {!items.loading && (items.data?.items ?? []).length === 0 && (
-          <p className="state-empty" data-testid="intel-no-items">
-            Nothing gathered yet. Sweeps run each morning; there is a manual one below.
-          </p>
-        )}
-        <ul className="card-list" data-testid="intel-items">
-          {(items.data?.items ?? []).slice(0, itemLimit).map((i) => (
-            <ItemCard key={i.id} item={i} onChanged={reloadAll} />
-          ))}
-        </ul>
-        {(items.data?.items ?? []).length > itemLimit && (
-          <button
-            type="button"
-            className="link-button"
-            data-testid="intel-items-more"
-            onClick={() => setItemLimit((n) => n + 25)}
-          >
-            Show 25 more — {itemLimit} of {(items.data?.items ?? []).length} shown
-          </button>
-        )}
-      </details>
-
-      <details className="card intel-panel" data-testid="intel-sweep-panel">
-        <summary>Gather now, by hand</summary>
-        <p className="muted small">
-          Sweeps run on their own every morning before your brief is written. This is here for the
-          days you want fresh material immediately — after adding a source, or when something has
-          happened and you do not want to wait for tomorrow.
-        </p>
-        <p className="muted small">
-          A run acquires from enabled sources, drops duplicates firm-wide, scores against your watchlists, and stores a
-          citation for every item kept. Running twice with the same key replays the first run instead of acquiring again.
-        </p>
-        <form
-          data-testid="intel-run-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setBusy(true);
-            setMessage(null);
-            const manual =
-              manualTitle.trim().length > 0
-                ? [
-                    {
-                      title: manualTitle,
-                      url: manualUrl.trim().length > 0 ? manualUrl : undefined,
-                      body: manualBody,
-                      category: manualCategory,
-                      citation_locator: manualLocator.trim().length > 0 ? manualLocator : "operator desk entry",
-                    },
-                  ]
-                : [];
-            const res = await api<{ run: RunRow; items: ItemRow[]; replayed: boolean; error?: string; detail?: string }>(
-              "/api/intelligence/runs",
-              {
-                method: "POST",
-                body: {
-                  idempotency_key: `manual-${new Date().toISOString()}-${Math.random().toString(36).slice(2, 8)}`,
-                  manual_items: manual,
-                },
-              },
-            );
-            setBusy(false);
-            if (res.data?.run) {
-              const r = res.data.run;
-              setMessage(
-                `Run ${r.status}: ${r.sources_attempted} source(s) attempted, ${r.sources_failed} failed, ${r.items_acquired} acquired, ${r.items_duplicate} duplicate, ${r.items_kept} kept.`,
-              );
-              setManualTitle("");
-              setManualUrl("");
-              setManualBody("");
-              setManualLocator("");
-              reloadAll();
-            } else {
-              setMessage(`Run failed: ${res.data?.detail ?? res.data?.error ?? res.status}`);
-            }
-          }}
+      )}
+      <ul className="card-list" data-testid="intel-items">
+        {itemRows.slice(0, itemLimit).map((i) => (
+          <ItemCard key={i.id} item={i} onChanged={reloadAll} />
+        ))}
+      </ul>
+      {itemRows.length > itemLimit && (
+        <button
+          type="button"
+          className="link-button"
+          data-testid="intel-items-more"
+          onClick={() => setItemLimit((n) => n + 25)}
         >
-          {/* The form does TWO things and used to look like one, which is why nobody could tell what
-              "Run a sweep" would do. The button checks your sources; the fields below add a single
-              item you found yourself. They are now labelled and separated. */}
-          <p className="muted small" data-testid="intel-sweep-explainer">
-            <strong>Run a sweep</strong> checks every enabled source below for anything published
-            since the last sweep, drops duplicates, ranks what is left against your watchlist, and
-            adds it to Items. It sends nothing and changes nothing outside this page.
-          </p>
+          Show 25 more — {itemLimit} of {itemRows.length} shown
+        </button>
+      )}
 
-          {/* Styled as a real button. As a bare <summary> this read as a line of prose and the
-              operator's verdict was that it did not look like a button at all — which is the whole
-              job of the control, since nothing else on the page tells you that you can add to what
-              gets read for you. */}
-          <details className="intel-manual-add summary-button" data-testid="intel-manual-add">
-            <summary>Add something I found myself</summary>
-            <p className="muted small">
-              Use this when you read something the sources will not pick up — a conversation, a
-              paywalled article, a document. It is added to this sweep as one item.
-            </p>
-            <div className="form-row">
+      <h3>Gather something now</h3>
+      <p className="small">
+        Sweeps run on their own every morning before your brief is written. This is for the days you
+        want fresh material immediately — after adding a source, or when something has happened and
+        tomorrow is too late.
+      </p>
+      <form
+        data-testid="intel-run-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setMessage(null);
+          const manual =
+            manualTitle.trim().length > 0
+              ? [
+                  {
+                    title: manualTitle,
+                    url: manualUrl.trim().length > 0 ? manualUrl : undefined,
+                    body: manualBody,
+                    category: manualCategory,
+                    citation_locator: manualLocator.trim().length > 0 ? manualLocator : "operator desk entry",
+                  },
+                ]
+              : [];
+          const res = await api<{ run: RunRow; items: ItemRow[]; replayed: boolean; error?: string; detail?: string }>(
+            "/api/intelligence/runs",
+            {
+              method: "POST",
+              body: {
+                idempotency_key: `manual-${new Date().toISOString()}-${Math.random().toString(36).slice(2, 8)}`,
+                manual_items: manual,
+              },
+            },
+          );
+          setBusy(false);
+          if (res.data?.run) {
+            const r = res.data.run;
+            // Counts, in the order somebody wants them: what came in, what was already known,
+            // what survived. The run's own status word is spelled out rather than shouted.
+            setMessage(
+              `Done — ${label(RUN_RESULT, r.status)}. ${r.sources_attempted} source${r.sources_attempted === 1 ? "" : "s"} checked, ` +
+                `${r.items_acquired} found, ${r.items_duplicate} already known, ${r.items_kept} kept.`,
+            );
+            setManualTitle("");
+            setManualUrl("");
+            setManualBody("");
+            setManualLocator("");
+            reloadAll();
+          } else {
+            setMessage(`The sweep did not run: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+          }
+        }}
+      >
+        <p className="muted small" data-testid="intel-sweep-explainer">
+          A sweep checks every source above for anything published since the last one, drops what it
+          already has, ranks the rest against your watchlist, and adds it to the list above. It
+          sends nothing out and changes nothing outside this page.
+        </p>
+
+        {/* Adding one item by hand is genuinely secondary to the button beside it, and folding it
+            away is what stopped "Run a sweep" reading as an ambiguous two-in-one form. */}
+        <details className="intel-manual-add summary-button" data-testid="intel-manual-add">
+          <summary>Add something I found myself</summary>
+          <p className="muted small">
+            Use this when you read something the sources will not pick up — a conversation, a
+            paywalled article, a document. It joins this sweep as one item.
+          </p>
+          <div className="form-row">
             <label>
               Headline{" "}
               <input data-testid="intel-manual-title" value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} />
             </label>
             <label>
-              Category{" "}
+              What it is about{" "}
               <select data-testid="intel-manual-category" value={manualCategory} onChange={(e) => setManualCategory(e.target.value)}>
-                {["MARKET", "SECONDARIES", "FUNDING_MA", "WATCHLIST", "AI_TECH", "REGULATORY", "PORTFOLIO", "COMPETITOR", "LP_SIGNAL", "OPPORTUNITY", "OTHER"].map((c) => (
-                  <option key={c} value={c}>
-                    {c}
+                {CATEGORIES.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
                   </option>
                 ))}
               </select>
@@ -432,13 +534,13 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
                 data-testid="intel-manual-locator"
                 value={manualLocator}
                 onChange={(e) => setManualLocator(e.target.value)}
-                placeholder="citation, e.g. 'FT, 12 Aug'"
+                placeholder="e.g. FT, 12 Aug"
               />
             </label>
           </div>
           <div className="form-row">
             <textarea
-              data-testid="intel-manual-body" aria-label="The item to add by hand"
+              data-testid="intel-manual-body" aria-label="What the item says"
               rows={2}
               style={{ width: "100%" }}
               value={manualBody}
@@ -446,33 +548,41 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
               placeholder="Context"
             />
           </div>
-          </details>
+        </details>
 
-          <button type="submit" className="btn-strong" data-testid="intel-run-submit" disabled={busy}>
-            {busy ? "Sweeping…" : "Run a sweep"}
-          </button>
-        </form>
-        {message && <p className="notice" data-testid="intel-run-message">{message}</p>}
-        {lastRun && (
-          <p className="muted small" data-testid="intel-last-run">
-            Last run {lastRun.status} at {lastRun.started_at}
-            {lastRun.failure_reason ? ` — ${lastRun.failure_reason}` : ""}
-          </p>
-        )}
-      </details>
+        <button type="submit" className="btn-strong" data-testid="intel-run-submit" disabled={busy}>
+          {busy ? "Sweeping…" : "Run a sweep"}
+        </button>
+      </form>
+      {message && <p className="notice" data-testid="intel-run-message" role="status">{message}</p>}
+      {lastRun && (
+        <p className="muted small" data-testid="intel-last-run">
+          Last sweep {readableDate(lastRun.started_at)} — {label(RUN_RESULT, lastRun.status)}
+          {lastRun.failure_reason ? ` (${lastRun.failure_reason})` : ""}
+        </p>
+      )}
 
-      <details className="card intel-panel" data-testid="intel-history-panel">
-        <summary>Sweep history</summary>
+      <h3>Every sweep that has run</h3>
+      <p className="small">
+        The record of what was gathered and when. If your brief looks thin, this says whether a
+        sweep ran at all and whether a source failed in it.
+      </p>
       <ul className="card-list small" data-testid="intel-runs">
-        {(runs.data?.runs ?? []).map((r) => (
+        {runRows.map((r) => (
           <li key={r.id}>
-            <code>{r.status}</code> {r.started_at} — {r.items_kept} kept / {r.items_duplicate} duplicate /{" "}
-            {r.sources_failed} source failure(s)
+            <strong>{shortDate(r.started_at)}</strong> — {label(RUN_RESULT, r.status)}: {r.items_kept} kept,{" "}
+            {r.items_duplicate} already known
+            {r.sources_failed > 0 ? `, ${r.sources_failed} source${r.sources_failed === 1 ? "" : "s"} did not answer` : ""}
           </li>
         ))}
-        {!runs.loading && (runs.data?.runs ?? []).length === 0 && <li className="state-empty">No sweeps yet. A sweep gathers items from your sources; the Daily Brief is what you read.</li>}
+        {!runs.loading && runRows.length === 0 && (
+          <li className="state-empty">
+            No sweep has run yet. A sweep gathers material from your sources; the brief on Home is
+            what you actually read.
+          </li>
+        )}
       </ul>
-      </details>
+      <p className="muted small">Signed in as {me.fullName}.</p>
     </section>
   );
 }

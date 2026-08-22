@@ -59,9 +59,37 @@ const { MACHINE_REGISTRY, MACHINE_REGISTRY_VERSION, DOMAIN_IDS } = machines;
 const { HUMAN_RESERVED_ACTIONS } = reserved;
 const { ORDINARY_ACTION_TYPES, EXTERNAL_EFFECT_ACTION_TYPES } = actionTypes;
 
-// Hard guards: the generated SQL must reflect the registry counts exactly.
-if (MACHINE_REGISTRY.length !== 45) {
-  console.error(`FATAL: machine registry count is ${MACHINE_REGISTRY.length}, expected 45 (D14).`);
+/**
+ * Hard guards: the generated SQL must reflect the registry counts exactly.
+ *
+ * 46, NOT 45, SINCE 21 AUG 2026, and the number is changed deliberately rather than incidentally.
+ * Canon §5A.2 has forty-five rows and row 46 (`venture_teaching`) is West Peek's own addition — the
+ * Professor had no teaching machine to sit on, so she was seated on the committee's post-mortem.
+ * Three of the forty-six are RETIRED and 43 are active, which is a registry flag rather than
+ * anything this generator does: retired rows are still SEEDED, because live work cards and ai_run
+ * attribution point at them and a deleted row would orphan them. The seed emits the whole
+ * historical list on purpose; `ACTIVE_MACHINES` is what may take new work.
+ *
+ * The guard's real job is catching an ACCIDENTAL loss — a bad merge, a deleted block — which a bare
+ * "whatever length the array is" would wave through. Changing these numbers is a deliberate act and
+ * should arrive with the registry change that justifies it.
+ */
+const EXPECTED_MACHINE_COUNT = 46;
+const EXPECTED_ACTIVE_MACHINE_COUNT = 43;
+
+if (MACHINE_REGISTRY.length !== EXPECTED_MACHINE_COUNT) {
+  console.error(
+    `FATAL: machine registry count is ${MACHINE_REGISTRY.length}, expected ${EXPECTED_MACHINE_COUNT} (D14).\n` +
+      "If the fleet was deliberately resized, update EXPECTED_MACHINE_COUNT in this file with it.",
+  );
+  process.exit(1);
+}
+const activeCount = MACHINE_REGISTRY.filter((m) => m.retiredReason === undefined).length;
+if (activeCount !== EXPECTED_ACTIVE_MACHINE_COUNT) {
+  console.error(
+    `FATAL: ${activeCount} machines carry no retirement reason, expected ${EXPECTED_ACTIVE_MACHINE_COUNT}.\n` +
+      "Retiring or un-retiring a machine is a decision; update EXPECTED_ACTIVE_MACHINE_COUNT with it.",
+  );
   process.exit(1);
 }
 if (DOMAIN_IDS.length !== 15) {
@@ -80,7 +108,9 @@ lines.push(
   DOMAIN_IDS.map((id, i) => `  (${esc(id)}, ${esc(titleCaseDomain(id))})${i === DOMAIN_IDS.length - 1 ? ";" : ","}`).join("\n"),
 );
 lines.push("");
-lines.push("-- Machines (1–45, canonical row order):");
+lines.push("-- Machines (1–46: canon rows 1–45 plus West Peek's own row 46, in registry order).");
+lines.push("-- Retired machines are seeded too: work_card and ai_run_attribution point at them, and a");
+lines.push("-- row that vanished would orphan them. `ACTIVE_MACHINES` is what may take new work.");
 lines.push("INSERT OR IGNORE INTO machine (id, key, name, domain_id, purpose, in_initial_scope) VALUES");
 lines.push(
   MACHINE_REGISTRY.map((m, i) => {

@@ -72,8 +72,12 @@ export function buildUnretirePrompt(ctx: UnretireContext): string {
     "",
     "RULES:",
     "- Reason only from the roster above. Do not invent an employee, a need, or a capability.",
-    "- Prefer DECLINE and RE_POINT. A firm with nineteen seats does not usually need a twentieth,",
-    "  and the burden is on the un-retirement.",
+    // Counted from what was actually passed in, not written as a word. It read "a firm with
+    // nineteen seats does not usually need a twentieth" and was stale within a day of the LP
+    // seats merging — a hardcoded roster size in a live prompt tells the model something false
+    // about the firm, and nothing would ever have said so.
+    `- Prefer DECLINE and RE_POINT. A firm with ${ctx.current.length} seats does not usually need`,
+    "  another one, and the burden is on the un-retirement.",
     "- If the partners have not said what they need, say that the answer depends on it and give the",
     "  best reading you can — do not pretend to more certainty than the input supports.",
     "- No preamble, no flattery, no restating the question.",

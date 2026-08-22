@@ -3,6 +3,7 @@ import { readableDate, shortDate } from "./lib/dates";
 import { api, getDevUser, mutationError, signOut, useApi, type MeResponse } from "./lib/api";
 import { RecordInvestment } from "./pages/RecordInvestment";
 import { LpPage } from "./pages/LpPage";
+import { PortfolioPage } from "./pages/PortfolioPage";
 import { PageHostCard } from "./pages/PageHostCard";
 import { HomePage } from "./pages/HomePage";
 import { IntelligencePage } from "./pages/IntelligencePage";
@@ -19,12 +20,15 @@ import { WeeklyReviewPage } from "./pages/WeeklyReviewPage";
 import { CrossOfficePage } from "./pages/CrossOfficePage";
 import { SecondariesPage } from "./pages/SecondariesPage";
 import { PagePurposeBlock } from "./pages/PagePurposeBlock";
-import { actionDescription, actionName, actorName, approvalStateWords, roleWords } from "@shared/help/actionNames";
+import { actionName, actorName } from "@shared/help/actionNames";
 import { stateMeaning } from "@shared/work/workCards";
 import { SignInCard, SignedOutPage } from "./pages/AuthSurfaces";
 import { UniversityPage } from "./pages/UniversityPage";
 import { MarketMapPage } from "./pages/MarketMapPage";
-import { ApprovalContextPanel } from "./pages/ApprovalContextPanel";
+// The approvals queue is its own surface file, like every other page. It left App.tsx when the
+// cards became collapsible and grew a block, a release and a change-your-mind path: three hundred
+// lines of one surface inside the shell is where a file stops being readable.
+import { ApprovalsPage } from "./pages/ApprovalsPage";
 import { AiOpsPage } from "./pages/AiOpsPage";
 import { MachinesPage } from "./pages/MachinesPage";
 import { IntentPage } from "./pages/IntentPage";
@@ -254,8 +258,11 @@ const NAV_GROUPS = [
       // Allocation merged into Fund strategy. Two tabs answered one question — "what the portfolio
       // is made of" and "where the fund goes" lived on one, "allocation decision view" on the
       // other — so you had to visit both to be sure you had seen everything. The route stays live.
+      // Deal Math merged in, 22 Aug 2026 (item 13). It was a signpost to the VentureDeals
+      // dashboards plus the firm's own figures to carry across — which is the step you take WHILE
+      // deciding a cheque, not a separate errand. Two tabs meant reading the fund's position on one
+      // and the numbers to model it with on the other. The route stays live so a bookmark lands.
       { key: "fund-strategy", label: "Fund strategy" },
-      { key: "deal-math", label: "Deal Math" },
     ],
   },
   {
@@ -712,7 +719,7 @@ function CapturePage({ onChanged, onNavigate }: { me: MeResponse; onChanged: () 
       {result && (
         <div className="card" data-testid="capture-result">
           <p>
-            Kept. <strong>{kind.label}</strong> · {privacy.value.replace(/_/g, " ").toLowerCase()} · <code>{result.id}</code>
+            Kept. <strong>{kind.label}</strong> · {privacy.value.replace(/_/g, " ").toLowerCase()}
           </p>
           <ResolveCapture captureId={result.id} onResolved={onChanged} />
           {result.status === "NEW" && (
@@ -788,335 +795,53 @@ function CapturePage({ onChanged, onNavigate }: { me: MeResponse; onChanged: () 
   );
 }
 
-function WorkCardsPage({ me, onChanged }: { me: MeResponse; onChanged: () => void }) {
-  const [stateFilter, setStateFilter] = useState("ALL");
-  const [message, setMessage] = useState<string | null>(null);
-  const cards = useApi<{ work_cards: WorkCardRow[] }>("/api/work-cards");
-
-  const visible = (cards.data?.work_cards ?? []).filter((c) => stateFilter === "ALL" || c.state === stateFilter);
-
-  return (
-    <section data-testid="work-cards-page">
-      <div className="form-row">
-        <label>
-          State{" "}
-          <select data-testid="work-card-filter" value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-            {["ALL", ...WORK_CARD_STATES].map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="button" className="btn-ghost" onClick={() => cards.reload()}>
-          Refresh
-        </button>
-      </div>
-      {message && <p className="notice" data-testid="work-card-message">{message}</p>}
-      <ul data-testid="work-card-list" className="card-list">
-        {visible.map((c) => (
-          <li key={c.id} className="card" data-testid={`work-card-${c.id}`}>
-            <p>
-              <strong>{c.title}</strong> — <code>{c.state}</code> · {c.priority} · {c.privacy_label}
-            </p>
-            <p>
-              owner: {c.owner_type}
-              {c.owner_id ? `/${c.owner_id}` : ""}
-              {c.next_action ? ` · next: ${c.next_action}` : ""}
-            </p>
-            <div className="form-row">
-              <select
-                aria-label={`transition-${c.id}`}
-                data-testid={`transition-select-${c.id}`}
-                defaultValue=""
-                onChange={async (e) => {
-                  const next = e.target.value;
-                  if (!next) return;
-                  const { status, data } = await api<WorkCardRow & { error?: string; detail?: string }>(`/api/work-cards/${c.id}`, {
-                    method: "PATCH",
-                    body: { state: next },
-                  });
-                  setMessage(status === 200 ? `${c.title}: → ${next}` : `Transition refused: ${data?.detail ?? data?.error ?? status}`);
-                  cards.reload();
-                  onChanged();
-                  e.target.value = "";
-                }}
-              >
-                <option value="" disabled>
-                  Transition…
-                </option>
-                {WORK_CARD_STATES.filter((s) => s !== c.state).map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-              {c.owner_id !== me.id && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await api(`/api/work-cards/${c.id}`, { method: "PATCH", body: { owner_type: "HUMAN", owner_id: me.id } });
-                    cards.reload();
-                  }}
-                >
-                  Assign to me
-                </button>
-              )}
-              <button
-                type="button"
-                data-testid={`request-approval-${c.id}`}
-                onClick={async () => {
-                  const { status, data } = await api<ApprovalCardRow & { error?: string }>("/api/approvals", {
-                    method: "POST",
-                    body: {
-                      action_key: "external_effect.execute",
-                      object_type: "work_card",
-                      object_id: c.id,
-                      title: `Approval for work card: ${c.title}`,
-                      submit: true,
-                    },
-                  });
-                  setMessage(status === 201 ? `Approval card ${data!.id} submitted for review.` : `Approval request failed: ${data?.error ?? status}`);
-                  onChanged();
-                }}
-              >
-                Request approval
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
-      {visible.length === 0 && <p className="state-empty">No work cards match this filter. Change the state filter above, or open +Capture to route new work.</p>}
-    </section>
-  );
-}
-
-function ApprovalCard({ card, me, onDecided }: { card: ApprovalCardRow; me: MeResponse; onDecided: () => void }) {
-  const [note, setNote] = useState("");
-  const [failure, setFailure] = useState<string | null>(null);
-  const detail = useApi<ApprovalCardRow>(`/api/approvals/${card.id}`);
-  const decisions = detail.data?.decisions ?? [];
-  const requiredRoles: string[] = (() => {
-    try {
-      return JSON.parse(card.required_approver_roles_json) as string[];
-    } catch {
-      return [];
-    }
-  })();
-  const canDecide = card.state === "pending_review" && requiredRoles.some((r) => me.roles.includes(r));
-  // "requested by HUMAN/fu_sequoia_taylor" is you. Saying so beats printing your own row id back.
-  const whoRequested =
-    card.requested_by_id === me.id ? "you" : card.requested_by_type === "HUMAN" ? "your partner" : card.requested_by_id;
-
-  /*
-   * THE RESULT IS READ, and that is not a refinement.
-   *
-   * This used to `await api(...)` and discard the status. `handleDecideApproval` answers 400, 403
-   * and 409 as JSON — a card that expired, a role the reader does not hold, a decision someone
-   * else already made — and every one of them looked identical to success: the card reloaded
-   * unchanged and nothing was said. On the page where the firm records its binding decisions, a
-   * refusal that presents as a completed act is the worst failure this client can have.
-   */
-  const decide = async (decision: "approved" | "rejected" | "revise_requested") => {
-    setFailure(null);
-    const failed = mutationError(
-      await api(`/api/approvals/${card.id}/decide`, { method: "POST", body: { decision, note: note || undefined } }),
-      [200, 201],
-    );
-    if (failed) {
-      setFailure(failed);
-      return; // The note is kept: the operator wrote it and the decision did not happen.
-    }
-    setNote("");
-    onDecided();
-  };
-
-  return (
-    <li className="card" data-testid={`approval-card-${card.id}`}>
-      <div className="panel-head">
-        <h5>{card.title}</h5>
-        <span className={approvalStateBadge(card.state)} title={approvalStateWords(card.state).means}>{approvalStateWords(card.state).label}</span>
-      </div>
-
-      {/* Risk, evidence and questions, on the card. Canon §24.2 asks for these because an approval
-          you have to leave the page to evaluate is one you end up rubber-stamping. */}
-      <ApprovalContextPanel cardId={card.id} />
-      {/* WHAT YOU ARE ACTUALLY DECIDING, in English. This line used to read
-          `action effect.email.send on external_effect/eff_01J… · requested by HUMAN/fu_sequoia_taylor`
-          — six facts, all true, none of them readable, on the one page where a Managing Partner
-          makes the firm's binding decisions. Every one of those keys has a human name written down
-          in the action registries; the page had simply never joined to them. */}
-      <p className="small">
-        <strong>{actionName(card.action_key)}</strong>
-        {actionDescription(card.action_key) ? ` — ${actionDescription(card.action_key)}` : ""}
-      </p>
-      <p className="muted small">
-        Asked for by {card.requested_by_type === "AI" ? card.requested_by_id : whoRequested}
-        {" · "}
-        {requiredRoles.length === 0
-          ? "no particular role is required"
-          : `only ${requiredRoles.map(roleWords).join(" or ")} can decide this`}
-      </p>
-      {/* The key stays, because when something goes wrong it is what you search for. */}
-      <p className="muted small approval-keys">
-        <code>{card.action_key}</code> on <code>{card.object_type}/{card.object_id}</code>
-      </p>
-
-      {/* WHY THE BUTTONS ARE OFF. Three disabled buttons and no reason is the same failure as an
-          empty page with no explanation: the operator cannot tell whether the system is broken,
-          whether they lack permission, or whether the decision has already been made. */}
-      {!canDecide && (
-        <p className="notice small" data-testid={`approval-why-locked-${card.id}`}>
-          {card.state !== "pending_review"
-            ? `Nothing to decide — this is ${approvalStateWords(card.state).label.toLowerCase()}. ${approvalStateWords(card.state).means}`
-            : `This needs ${requiredRoles.map(roleWords).join(" or ")}, and you do not hold that role.`}
-        </p>
-      )}
-      {failure && (
-        <p className="notice notice-gate small" data-testid={`decision-failed-${card.id}`} role="alert">
-          {failure}
-        </p>
-      )}
-      {card.state === "pending_review" && (
-        <>
-          <div className="form-row">
-            <label>
-              Decision note
-              <input
-                placeholder="decision note"
-                aria-label={`note-${card.id}`}
-                data-testid={`decision-note-${card.id}`}
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              className="btn-primary"
-              data-testid={`approve-${card.id}`}
-              disabled={!canDecide}
-              onClick={() => decide("approved")}
-            >
-              Approve
-            </button>
-            <button
-              type="button"
-              data-testid={`revise-${card.id}`}
-              disabled={!canDecide}
-              onClick={() => decide("revise_requested")}
-            >
-              Request revision
-            </button>
-            <button
-              type="button"
-              className="btn-danger"
-              data-testid={`reject-${card.id}`}
-              disabled={!canDecide}
-              onClick={() => decide("rejected")}
-            >
-              Reject
-            </button>
-          </div>
-          {/* A disabled control must say why it is disabled — never a dead button. */}
-          {!canDecide && (
-            <p className="notice notice-gate small" data-testid={`decision-blocked-${card.id}`}>
-              You cannot decide this card. It is reserved for {requiredRoles.join(" or ") || "a role you do not hold"};
-              you hold {me.roles.join(", ") || "no roles"}.
-            </p>
-          )}
-        </>
-      )}
-      {decisions.length > 0 && (
-        <ul className="card-list small" data-testid={`decision-history-${card.id}`}>
-          {decisions.map((d) => (
-            <li key={d.id}>
-              <code>{d.decision}</code> by {d.decided_by}
-              {d.note ? ` — ${d.note}` : ""} ({d.created_at})
-            </li>
-          ))}
-        </ul>
-      )}
-    </li>
-  );
-}
-
-/** Approval state is the product's core fact: it gets a tone, not just a word. */
-function approvalStateBadge(state: string): string {
-  if (state === "approved" || state === "executed") return "badge badge-ok";
-  if (state === "rejected" || state === "blocked") return "badge badge-bad";
-  if (state === "pending_review" || state === "revise_requested") return "badge badge-gate";
-  return "badge";
-}
-
-function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNonce: number }) {
-  const [stateFilter, setStateFilter] = useState("pending_review");
-  const approvals = useApi<{ approvals: ApprovalCardRow[] }>(`/api/approvals?state=${stateFilter}`, [refreshNonce]);
-
-  return (
-    <section data-testid="approvals-page">
-      <div className="form-row">
-        <label>
-          State{" "}
-          <select data-testid="approval-filter" value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-            {["pending_review", "drafted", "approved", "rejected", "revise_requested", "executed", "blocked"].map((s) => (
-              <option key={s} value={s}>
-                {approvalStateWords(s).label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="button" className="btn-ghost" onClick={() => approvals.reload()}>
-          Refresh
-        </button>
-      </div>
-      <ul className="card-list" data-testid="approval-list">
-        {(approvals.data?.approvals ?? []).map((c) => (
-          <ApprovalCard key={c.id} card={c} me={me} onDecided={() => approvals.reload()} />
-        ))}
-      </ul>
-      {!approvals.loading && (approvals.data?.approvals ?? []).length === 0 && (
-        <p className="state-message" data-testid="approvals-empty">
-          {/* The dropdown two lines above already turns `pending_review` into "Waiting on you"; this
-              sentence printed the raw enum instead, so the page named the same state two ways in
-              one screen and one of them was a database value. */}
-          Nothing is {approvalStateWords(stateFilter).label.toLowerCase()}. Cards arrive here when a reserved action is
-          requested — from a work card, a transaction, an LP claim, an allocation option, or a policy change. Nothing
-          executes without one.
-        </p>
-      )}
-    </section>
-  );
-}
 
 function ActivityPage({ refreshNonce }: { me: MeResponse; refreshNonce: number }) {
   const activity = useApi<{ events: ActivityEvent[] }>("/api/activity?limit=100", [refreshNonce]);
   return (
-    <section data-testid="activity-page">
+    <section className="page" data-testid="activity-page">
+      {/*
+        The page had no heading, no prose and no empty state: a bare table whose Event column
+        printed `approval.decided` and whose Object column printed `{object_type}/{object_id}` —
+        a table of primary keys shown to a Managing Partner. `actionName` already existed and
+        already promised never to return a raw dotted key; this surface simply never called it.
+      */}
+      <h3>Everything the firm has done, newest first</h3>
+      <p className="muted small">
+        The append-only record. Nothing here can be edited or removed after the fact, which is what
+        makes it worth reading — it is the one account of the firm that cannot be tidied.
+      </p>
+
       <div className="table-wrap">
         <table data-testid="activity-feed">
           <thead>
             <tr>
               <th>When</th>
-              <th>Event</th>
-              <th>Actor</th>
-              <th>Object</th>
+              <th>What happened</th>
+              <th>Who</th>
+              <th>To what</th>
             </tr>
           </thead>
           <tbody>
             {(activity.data?.events ?? []).map((e) => (
               <tr key={e.id} data-testid={`activity-event-${e.event_type}`}>
                 <td>{new Date(e.created_at).toLocaleString()}</td>
+                <td>{actionName(e.event_type)}</td>
+                <td>{actorName(e.actor_id)}</td>
+                {/* The id stays — it is how you find the row again — but behind the thing's name
+                    rather than as the whole cell. */}
                 <td>
-                  <code>{e.event_type}</code>
-                </td>
-                <td className="mono">
-                  {actorName(e.actor_id)}
-                </td>
-                <td className="mono">
-                  {e.object_type}/{e.object_id}
+                  {e.object_type.split("_").join(" ")} <span className="muted small">{e.object_id}</span>
                 </td>
               </tr>
             ))}
+            {!activity.loading && (activity.data?.events ?? []).length === 0 && (
+              <tr>
+                <td colSpan={4} className="state-empty">
+                  Nothing has happened yet. Every approval, decision and recorded fact lands here as it occurs.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -1166,7 +891,7 @@ function GovernancePage({ me }: { me: MeResponse }) {
 
       {isMp && RECOMMENDED_GOVERNANCE.length > 0 && (
         <section className="card" data-testid="governance-recommended">
-          <h4>Worth writing down</h4>
+          <h3>Worth writing down</h3>
           <p className="muted small">
             Three suggestions, not a checklist. Each is somewhere this firm&apos;s own history
             already shows the cost of not having written it down.
@@ -1206,7 +931,9 @@ function GovernancePage({ me }: { me: MeResponse }) {
               method: "POST",
               body: { update_type: updateType, title, body },
             });
-            setMessage(status === 201 ? `Issued ${data!.id}` : `Failed: ${data?.error ?? status}`);
+            // Was `Issued gov_01H…` — a row id handed to the operator as confirmation. What she
+            // needs to know is that it landed and where to look, not its primary key.
+            setMessage(status === 201 ? "Issued. It is in the list below and every employee reads it." : `Failed: ${data?.error ?? status}`);
             if (status === 201) {
               setTitle("");
               setBody("");
@@ -1214,7 +941,10 @@ function GovernancePage({ me }: { me: MeResponse }) {
             }
           }}
         >
-          <h4>Issue governance update (MP only)</h4>
+          {/* The "(MP only)" was documentation inside a title. The form only renders for a
+              Managing Partner, so saying so in the heading told the one person who could see it
+              something they already knew, and told nobody else anything. */}
+          <h3>Write something down for the firm</h3>
           <div className="form-row">
             <label>
               Type{" "}
@@ -1261,6 +991,9 @@ function GovernancePage({ me }: { me: MeResponse }) {
           acknowledging one is your own act.
         </p>
       )}
+      {/* The list of what has actually been issued had no heading, so the page's whole point sat
+          below two explainer cards and a form with nothing announcing it. */}
+      <h3>What the firm has told everyone</h3>
       <ul className="card-list" data-testid="governance-list">
         {(updates.data?.governance_updates ?? []).map((u) => (
           <li key={u.id} className="card">
@@ -1413,10 +1146,22 @@ function AiPage({ me }: { me: MeResponse }) {
           </label>
           <label>
             Sensitivity{" "}
-            <select data-testid="ai-sensitivity" value={sensitivity} onChange={(e) => setSensitivity(e.target.value)}>
-              {["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED", "LP_PRIVATE", "MNPI_SENSITIVE", "BANKING_RESTRICTED"].map((l) => (
-                <option key={l} value={l}>
-                  {l}
+            {/*
+              `PRIVACY_CHOICES` — the same seven labels, already written in a partner's words with
+              what each one costs them — sat sixty lines up in this very file while this picker
+              hand-typed the raw column values beside it. A second copy of a list is a list that
+              drifts; this one had already drifted into showing `LP_PRIVATE` and `MNPI_SENSITIVE`
+              to a Managing Partner.
+            */}
+            <select
+              data-testid="ai-sensitivity"
+              aria-label="How sensitive this material is"
+              value={sensitivity}
+              onChange={(e) => setSensitivity(e.target.value)}
+            >
+              {PRIVACY_CHOICES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
                 </option>
               ))}
             </select>
@@ -1438,18 +1183,35 @@ function AiPage({ me }: { me: MeResponse }) {
       </form>
       {message && <p className="notice" data-testid="ai-message">{message}</p>}
 
-      <h4>
-        Policy: <code>{budget.data?.policy.privacy_mode ?? "…"}</code> privacy · <code>{budget.data?.policy.cost_mode ?? "…"}</code> cost
-        {budget.data ? ` · today $${budget.data.today.spent_usd.toFixed(4)} / $${budget.data.today.daily_cap_usd}` : ""}
-      </h4>
+      {/*
+        THIS WAS AN <h4> WHOSE CONTENT WAS A LIVE DATA READOUT — "Policy: `BALANCED` privacy ·
+        `NORMAL` cost · today $0.0031 / $5". A heading names a section; a number is not a name, and
+        a figure that changes every few minutes cannot be one. It is a sentence now, under a real
+        heading, and the page has headings at section rank at all — it previously had none.
+      */}
+      <h3>What the firm has told the models it may do</h3>
+      <p className="muted small" data-testid="ai-policy-line">
+        {budget.data
+          ? `Privacy is set to ${budget.data.policy.privacy_mode.toLowerCase()} and cost to ${budget.data.policy.cost_mode.toLowerCase()}. Spent today: $${budget.data.today.spent_usd.toFixed(4)} of $${budget.data.today.daily_cap_usd}.`
+          : "Reading the current policy…"}
+      </p>
 
-      <h4>Providers (kill switch is MP-only, logged via approval receipt)</h4>
+      <h3>Who the firm buys thinking from</h3>
+      <p className="muted small">
+        A kill switch stops a provider immediately and for everyone. Only a Managing Partner can
+        throw one, and doing so is recorded against an approval receipt.
+      </p>
       <ul data-testid="ai-provider-list" className="card-list">
         {(providers.data?.providers ?? []).map((p) => (
           <li key={p.provider_key} className="card" data-testid={`provider-${p.provider_key}`}>
             <p>
-              <strong>{p.display_name}</strong> — enabled: <code>{p.enabled ? "yes" : "no"}</code> · kill-switched:{" "}
-              <code data-testid={`provider-ks-${p.provider_key}`}>{p.kill_switched ? "yes" : "no"}</code>
+              <strong>{p.display_name}</strong>{" "}
+              <span
+                className={p.kill_switched ? "help-tag help-tag-warn" : p.enabled ? "help-tag help-tag-good" : "help-tag help-tag-muted"}
+                data-testid={`provider-ks-${p.provider_key}`}
+              >
+                {p.kill_switched ? "stopped" : p.enabled ? "in use" : "switched off"}
+              </span>
             </p>
             {isMp && !p.kill_switched && (
               <button type="button" data-testid={`kill-switch-${p.provider_key}`} onClick={() => killSwitch(p.provider_key)}>
@@ -1460,21 +1222,24 @@ function AiPage({ me }: { me: MeResponse }) {
         ))}
       </ul>
 
-      <h4>AI runs</h4>
-      <button type="button" className="btn-ghost" onClick={() => runs.reload()}>
-        Refresh
-      </button>
+      <h3>Every run the firm has made</h3>
       <ul data-testid="ai-run-list" className="card-list">
         {(runs.data?.runs ?? []).map((r) => (
           <li key={r.id} className="card" data-testid={`ai-run-${r.id}`}>
             <p>
-              <strong>{r.purpose}</strong> — <code>{r.status}</code> · {r.sensitivity} · {r.privacy_mode}/{r.cost_mode}
+              <strong>{r.purpose}</strong>{" "}
+              <span className={r.status === "COMPLETED" ? "help-tag help-tag-good" : r.status === "REFUSED" ? "help-tag help-tag-muted" : "help-tag help-tag-warn"}>
+                {r.status.split("_").join(" ").toLowerCase()}
+              </span>
+              {r.output_quarantine ? <span className="help-tag help-tag-warn"> held back</span> : null}
             </p>
-            <p>
-              trace <code>{r.trace_id}</code> · model {r.model ?? "none"}
-              {r.output_quarantine ? " · output QUARANTINED" : ""}
+            <p className="muted small">
+              {r.sensitivity.split("_").join(" ").toLowerCase()} · {r.privacy_mode.toLowerCase()} privacy ·{" "}
+              {r.cost_mode.toLowerCase()} cost · {r.model ?? "no model reached"}
             </p>
-            {r.failure_reason && <p data-testid={`ai-run-reason-${r.id}`}>reason: {r.failure_reason}</p>}
+            {/* The trace id is how support finds the run; kept, but not competing with the purpose. */}
+            <p className="muted small">{r.trace_id}</p>
+            {r.failure_reason && <p className="notice small" data-testid={`ai-run-reason-${r.id}`}>{r.failure_reason}</p>}
           </li>
         ))}
       </ul>
@@ -1503,7 +1268,10 @@ const HEALTH_WORD: Record<string, string> = { OK: "Working", DEGRADED: "Needs a 
    brief" is a place to go; "Go to morning brief" is the check's title said twice. */
 const HEALTH_DESTINATION: Record<string, string> = {
   home: "Open the morning brief",
-  "work-cards": "Open scheduled work",
+  // Keyed "work", which is what health.ts actually emits and what the nav actually has.
+  // "work-cards" is the API path; keyed by that, this entry never matched and the check fell back
+  // to the generic "Go and look" — a lookup that misses is indistinguishable from one with no entry.
+  work: "Open scheduled work",
   employees: "Open the employee lounge",
   "cockpit": "Open spend and routing",
   record: "Open the record",
@@ -1586,7 +1354,7 @@ function DiagnosticsPage({ onNavigate }: { onNavigate: (page: string) => void })
           </tbody>
         </table>
       </div>
-      <h5>Weekly rollup</h5>
+      <h4>The week in one place</h4>
       <ul>
         {(volume.data?.weekly ?? []).map((w) => (
           <li key={w.week}>
@@ -1724,11 +1492,12 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
               .map(([s, n]) => `${s}: ${n}`)
               .join(" · ")}
           </p>
-          <h5>Unresolved material contradictions (HIGH/CRITICAL, OPEN/INVESTIGATING)</h5>
+          <h4>Disagreements that matter and are still open</h4>
           <ul data-testid="unresolved-contradictions">
             {summary.data.unresolved_material_contradictions.map((c) => (
               <li key={c.id} data-testid={`summary-contradiction-${c.id}`}>
-                <code>{c.materiality}</code> <code>{c.status}</code> {c.topic}
+<span className={c.status === "OPEN" ? "help-tag help-tag-warn" : "help-tag"}>{c.status.toLowerCase()}</span>{" "}
+                <span className="muted small">{c.materiality.toLowerCase()}</span> {c.topic}
                 <ResolveContradictionForm contradiction={c} onDone={reloadAll} />
               </li>
             ))}
@@ -1737,7 +1506,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
         </div>
       )}
 
-      <h5>Add claim (source provenance required)</h5>
+      <h4>Record something the firm believes, and where it came from</h4>
       <form
         className="card"
         data-testid="claim-form"
@@ -1802,7 +1571,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
         {message && <p className="notice" data-testid="claim-message">{message}</p>}
       </form>
 
-      <h5>Claims</h5>
+      <h4>What the firm is treating as true</h4>
       <ul data-testid="claim-list" className="card-list">
         {(summary.data?.claims ?? []).map((c) => (
           <li key={c.id} className="card" data-testid={`claim-${c.id}`}>
@@ -1827,7 +1596,7 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
         ))}
       </ul>
 
-      <h5>Detect contradictions (deterministic; humans decide)</h5>
+      <h4>Look for records that disagree</h4>
       <button
         type="button"
         data-testid="detect-contradictions"
@@ -1842,7 +1611,10 @@ function CompanyDetail({ company, me }: { company: CompanyRow; me: MeResponse })
         <ul data-testid="contradiction-candidates">
           {candidates.map((cand, i) => (
             <li key={i} data-testid={`candidate-${i}`}>
-              <code>{cand.contradiction_type}</code> {cand.rationale}{" "}
+              <span className="muted small">
+                {CONTRADICTION_KINDS[cand.contradiction_type] ?? cand.contradiction_type.split("_").join(" ").toLowerCase()}
+              </span>{" "}
+              {cand.rationale}{" "}
               <button
                 type="button"
                 data-testid={`open-contradiction-${i}`}
@@ -2021,26 +1793,60 @@ function DocumentsPage() {
   );
 }
 
+/** The stored kind, said in words. The raw values are `VALUE_DISAGREEMENT` and friends. */
+const CONTRADICTION_KINDS: Record<string, string> = {
+  VALUE_DISAGREEMENT: "two sources give different numbers",
+  PERIOD_DISAGREEMENT: "the same figure is dated differently",
+  DEFINITION_DISAGREEMENT: "the same word is being used two ways",
+};
+
 function ContradictionsPage() {
   const contradictions = useApi<{ contradictions: ContradictionRow[] }>("/api/contradictions");
   return (
-    <section data-testid="contradictions-page">
-      <button type="button" className="btn-ghost" onClick={() => contradictions.reload()}>
-        Refresh
-      </button>
+    <section className="page" data-testid="contradictions-page">
+      {/*
+        The page had NO HEADING OF ANY KIND, no explanation, and opened on a bare "Refresh" button
+        followed by a raw list reading `VALUE_DISAGREEMENT · OPEN · HIGH`. A partner arriving here
+        could not tell what a contradiction was, why one existed, or what pressing anything would do.
+      */}
+      <h3>Where the firm's own records disagree</h3>
+      <p className="muted small">
+        These open by themselves when two sourced claims say different things about the same value,
+        period or definition. Nothing is deleted to settle one — you say which reading the firm is
+        going with, and both stay on the record.
+      </p>
+
       <ul data-testid="contradiction-list" className="card-list">
         {(contradictions.data?.contradictions ?? []).map((c) => (
           <li key={c.id} className="card" data-testid={`contradiction-${c.id}`}>
             <p>
-              <strong>{c.topic}</strong> — <code>{c.contradiction_type}</code> · <code data-testid={`contradiction-status-${c.id}`}>{c.status}</code> ·{" "}
-              {c.materiality}
+              <strong>{c.topic}</strong>{" "}
+              {/* Was `<code>VALUE_DISAGREEMENT</code> · <code>OPEN</code> · HIGH`. */}
+              <span className={c.status === "OPEN" ? "help-tag help-tag-warn" : "help-tag help-tag-good"} data-testid={`contradiction-status-${c.id}`}>
+                {c.status === "OPEN" ? "not settled" : c.status.split("_").join(" ").toLowerCase()}
+              </span>
             </p>
-            {c.human_disposition_by && <p>disposition by {c.human_disposition_by}</p>}
+            <p className="muted small">
+              {CONTRADICTION_KINDS[c.contradiction_type] ?? c.contradiction_type.split("_").join(" ").toLowerCase()} ·{" "}
+              {c.materiality.toLowerCase()} materiality
+            </p>
+            {c.human_disposition_by && <p className="muted small">Settled by {c.human_disposition_by}.</p>}
             <ResolveContradictionForm contradiction={c} onDone={() => contradictions.reload()} />
           </li>
         ))}
-        {(contradictions.data?.contradictions ?? []).length === 0 && <li className="state-empty">No contradictions recorded. They open automatically when two sourced claims disagree on a value, a period, or a definition.</li>}
+        {(contradictions.data?.contradictions ?? []).length === 0 && (
+          <li className="state-empty">
+            Nothing is in conflict. One will appear here the moment two sourced claims disagree.
+          </li>
+        )}
       </ul>
+
+      {/* At the bottom, because it is a thing you do to the page rather than the point of it. */}
+      <p>
+        <button type="button" className="btn-ghost" onClick={() => contradictions.reload()}>
+          Check again
+        </button>
+      </p>
     </section>
   );
 }
@@ -2105,7 +1911,7 @@ function Company360Panel({ companyId }: { companyId: string }) {
   const v = view.data;
   return (
     <div className="card" data-testid="company-360">
-      <h5>{v.company.canonical_name} — 360</h5>
+      <h4>{v.company.canonical_name} — 360</h4>
       <p data-testid="company-360-counts">
         opportunities: {v.opportunities.length} · transactions: {v.transactions.length} · positions: {v.positions.length} · share classes:{" "}
         {v.security_classes.length} · pricing observations: {v.pricing_observations.length} · IC packets: {v.ic_packets.length}
@@ -2113,7 +1919,10 @@ function Company360Panel({ companyId }: { companyId: string }) {
       <ul data-testid="company-360-positions">
         {v.positions.map((p) => (
           <li key={p.id} data-testid={`position-${p.id}`}>
-            class {p.security_class_id} — qty {p.quantity} · basis {p.cost_basis} · <code>{p.status}</code>
+            {p.quantity} shares · cost {p.cost_basis}{" "}
+            <span className={p.status === "OPEN" ? "help-tag help-tag-good" : "help-tag help-tag-muted"}>
+              {p.status === "OPEN" ? "still held" : "closed out"}
+            </span>
           </li>
         ))}
         {v.positions.length === 0 && <li className="state-empty" data-testid="no-positions">No positions. A position row appears when a transaction is executed against an approved receipt.</li>}
@@ -2133,7 +1942,9 @@ function IcPacketPanel({ packetId, onChanged }: { packetId: string; onChanged: (
   return (
     <div className="card" data-testid={`ic-packet-${p.id}`}>
       <p>
-        IC packet <code>{p.id}</code> — <code data-testid="ic-packet-status">{p.status}</code> · drafted by {p.drafted_by_type}
+        IC packet{" "}
+        <span className="help-tag" data-testid="ic-packet-status">{p.status.split("_").join(" ").toLowerCase()}</span>{" "}
+        · drafted by {p.drafted_by_type.split("_").join(" ").toLowerCase()}
       </p>
       {/* Never filtered: an unresolved material contradiction always reaches the decision. */}
       <p data-testid="ic-unresolved-contradictions">
@@ -2187,7 +1998,8 @@ function IcPacketPanel({ packetId, onChanged }: { packetId: string; onChanged: (
         <ul data-testid="ic-decisions">
           {(p.decisions ?? []).map((d) => (
             <li key={d.id} data-testid={`ic-decision-${d.id}`}>
-              <code>{d.decision}</code> by {d.decided_by} — {d.rationale ?? "no rationale"}
+              <strong>{d.decision.split("_").join(" ").toLowerCase()}</strong> by {d.decided_by} —{" "}
+              {d.rationale ?? "no reason recorded"}
             </li>
           ))}
         </ul>
@@ -2485,13 +2297,13 @@ function InvestmentPage({ me, initialCompanyId }: { me: MeResponse; initialCompa
       </details>
 
       <div className="deal-record-section">
-        <h5>What the firm knows about them</h5>
+        <h4>What the firm knows about them</h4>
         <p className="muted small">Everything on record, and where each part of it came from.</p>
         <Company360Panel key={`${companyId}-${nonce}`} companyId={companyId} />
       </div>
 
       <div className="deal-record-section">
-      <h5>Its deals</h5>
+      <h4>Its deals</h4>
       <p className="muted small">Pick one to open its record. That is where the real numbers go.</p>
       <ul className="card-list" data-testid="opportunity-list">
         {(opportunities.data?.opportunities ?? []).map((o) => (
@@ -2720,11 +2532,11 @@ function MeetingDetail({ meetingId }: { meetingId: string }) {
 
   return (
     <div data-testid="meeting-detail">
-      <h5>
+      <h4>
         {m.title} — <code data-testid="meeting-status">{m.status}</code> · recording{" "}
         <code data-testid="meeting-recording">{m.recording_enabled === 1 ? "ACTIVE" : "NOT ACTIVATED"}</code> · transcription consent{" "}
         <code data-testid="meeting-consent">{transcription?.state ?? "NOT RECORDED"}</code>
-      </h5>
+      </h4>
 
       <div className="form-row">
         <button
@@ -2867,7 +2679,11 @@ function MeetingsPage({ me }: { me: MeResponse }) {
             <button type="button" className="link-button" data-testid={`meeting-open-${m.id}`} onClick={() => setSelected(m.id)}>
               {m.title}
             </button>{" "}
-            — <code>{m.meeting_type}</code> <code>{m.status}</code>
+            {/* Was `<code>FOUNDER</code> <code>SCHEDULED</code>`. A partner reading their own
+                calendar should not be shown a column value. */}
+            <span className="muted small">
+              {m.meeting_type.split("_").join(" ").toLowerCase()} · {m.status.split("_").join(" ").toLowerCase()}
+            </span>
           </li>
         ))}
         {(meetings.data?.meetings ?? []).length === 0 && <li className="state-empty" data-testid="no-meetings">No meetings.</li>}
@@ -2875,232 +2691,6 @@ function MeetingsPage({ me }: { me: MeResponse }) {
 
       {selected && <MeetingDetail meetingId={selected} />}
     </section>
-  );
-}
-
-// ── P8: portfolio monitoring and support ──
-
-interface AlertRow {
-  id: string;
-  company_id: string;
-  alert_type: string;
-  metric_key: string | null;
-  severity: string;
-  status: string;
-  occurrence_count: number;
-  escalated_from: string | null;
-  detail_json: string;
-}
-
-interface SupportRequestRow {
-  id: string;
-  company_id: string;
-  request_type: string;
-  description: string;
-  status: string;
-  matches?: Array<{ id: string; target_label: string; status: string; proposed_by_type: string; approval_card_id: string | null }>;
-  outcomes?: Array<{ id: string; outcome_type: string; value_note: string | null; relationship_note: string | null }>;
-}
-
-function PortfolioPage({ me }: { me: MeResponse }) {
-  const companies = useApi<{ companies: CompanyRow[] }>("/api/companies");
-  const [companyId, setCompanyId] = useState("");
-  const [nonce, setNonce] = useState(0);
-  const alerts = useApi<{ alerts: AlertRow[] }>(companyId ? `/api/portfolio/alerts?company_id=${companyId}` : "/api/portfolio/alerts", [companyId, nonce]);
-  const requests = useApi<{ support_requests: SupportRequestRow[] }>(companyId ? `/api/support/requests?company_id=${companyId}` : "/api/support/requests", [companyId, nonce]);
-  const [metricKey, setMetricKey] = useState("arr");
-  const [asOf, setAsOf] = useState("2026-01-31");
-  const [value, setValue] = useState("100");
-  const [message, setMessage] = useState<string | null>(null);
-  const [selectedRequest, setSelectedRequest] = useState<string | null>(null);
-  void me;
-
-  const post = async (path: string, body: unknown, okStatus: number, label: string) => {
-    const { status, data } = await api<{ error?: string }>(path, { method: "POST", body });
-    setMessage(status === okStatus ? `${label} ok.` : `${label} refused: ${data?.error ?? status}`);
-    setNonce((n) => n + 1);
-    return { status, data };
-  };
-
-  return (
-    <section data-testid="portfolio-page">
-      <form
-        className="form-row"
-        data-testid="metric-definition-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await post(
-            "/api/portfolio/metric-definitions",
-            { metric_key: metricKey, name: metricKey.toUpperCase(), direction: "HIGHER_IS_BETTER", severity_bands: { MEDIUM: 5, HIGH: 15, CRITICAL: 30 }, stale_after_days: 120 },
-            201,
-            "Metric definition",
-          );
-        }}
-      >
-        <label>
-          Company{" "}
-          <select data-testid="portfolio-company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
-            <option value="">— select —</option>
-            {(companies.data?.companies ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.canonical_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Metric <input data-testid="metric-key" value={metricKey} onChange={(e) => setMetricKey(e.target.value)} />
-        </label>
-        <button type="submit" className="btn-strong" data-testid="metric-define">
-          Define metric (operator bands)
-        </button>
-      </form>
-
-      <form
-        className="form-row"
-        data-testid="snapshot-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await post(
-            "/api/portfolio/snapshots",
-            { company_id: companyId, metric_key: metricKey, as_of_date: asOf, value: Number(value), source: "portfolio update" },
-            201,
-            "Snapshot",
-          );
-        }}
-      >
-        <label>
-          As of <input data-testid="snapshot-date" value={asOf} onChange={(e) => setAsOf(e.target.value)} />
-        </label>
-        <label>
-          Value <input data-testid="snapshot-value" value={value} onChange={(e) => setValue(e.target.value)} />
-        </label>
-        <button type="submit" className="btn-strong" data-testid="snapshot-submit">
-          Record dated snapshot
-        </button>
-        <button type="button" data-testid="evaluate-alerts" onClick={() => post(`/api/portfolio/companies/${companyId}/evaluate`, {}, 201, "Evaluation")}>
-          Evaluate alerts
-        </button>
-        {message && <span data-testid="portfolio-message">{message}</span>}
-      </form>
-
-      <h5>Alerts</h5>
-      <ul className="card-list" data-testid="alert-list">
-        {(alerts.data?.alerts ?? []).map((a) => (
-          <li key={a.id} className="card" data-testid={`alert-${a.id}`}>
-            <code>{a.alert_type}</code> <code data-testid={`alert-severity-${a.id}`}>{a.severity}</code> <code>{a.status}</code> · {a.metric_key ?? "—"} · seen{" "}
-            {a.occurrence_count}×{a.escalated_from ? ` · escalated from ${a.escalated_from}` : ""}
-            <button type="button" data-testid={`alert-ack-${a.id}`} onClick={() => post(`/api/portfolio/alerts/${a.id}/decide`, { to: "ACKNOWLEDGED" }, 200, "Alert acknowledged")}>
-              Acknowledge
-            </button>
-            <button
-              type="button"
-              data-testid={`alert-support-${a.id}`}
-              onClick={() =>
-                post(
-                  "/api/support/requests",
-                  { company_id: a.company_id, request_type: "OPERATIONS", description: `Support triggered by ${a.alert_type} on ${a.metric_key ?? "portfolio"}`, alert_id: a.id },
-                  201,
-                  "Support request",
-                )
-              }
-            >
-              Open support request
-            </button>
-          </li>
-        ))}
-        {(alerts.data?.alerts ?? []).length === 0 && <li className="state-empty" data-testid="no-alerts">No alerts.</li>}
-      </ul>
-
-      <h5>Support requests</h5>
-      <ul className="card-list" data-testid="support-list">
-        {(requests.data?.support_requests ?? []).map((r) => (
-          <li key={r.id} className="card" data-testid={`support-${r.id}`}>
-            {r.description} — <code>{r.status}</code>
-            <button type="button" data-testid={`support-open-${r.id}`} onClick={() => setSelectedRequest(r.id)}>
-              Open
-            </button>
-          </li>
-        ))}
-        {(requests.data?.support_requests ?? []).length === 0 && <li className="state-empty" data-testid="no-support-requests">No support requests.</li>}
-      </ul>
-
-      {selectedRequest && <SupportRequestDetail requestId={selectedRequest} onChanged={() => setNonce((n) => n + 1)} />}
-    </section>
-  );
-}
-
-function SupportRequestDetail({ requestId, onChanged }: { requestId: string; onChanged: () => void }) {
-  const request = useApi<SupportRequestRow>(`/api/support/requests/${requestId}`, [requestId]);
-  const [target, setTarget] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-  if (!request.data) return <p>Loading support request…</p>;
-  const r = request.data;
-
-  const post = async (path: string, body: unknown, okStatus: number, label: string) => {
-    const { status, data } = await api<{ error?: string; approval_card_id?: string }>(path, { method: "POST", body });
-    setMessage(status === okStatus ? `${label} ok${data?.approval_card_id ? ` — approval card ${data.approval_card_id}` : ""}.` : `${label} refused: ${data?.error ?? status}`);
-    request.reload();
-    onChanged();
-  };
-
-  return (
-    <div data-testid="support-detail">
-      <h5>{r.description}</h5>
-      <form
-        className="form-row"
-        data-testid="match-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await post(`/api/support/requests/${r.id}/matches`, { match_type: "PERSON", target_label: target, rationale: "proposed from the firm network" }, 201, "Match proposed");
-          setTarget("");
-        }}
-      >
-        <input data-testid="match-target" aria-label="Who or what to match against" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="who could help" />
-        <button type="submit" className="btn-strong" data-testid="match-submit">
-          Propose match
-        </button>
-      </form>
-      <ul data-testid="match-list">
-        {(r.matches ?? []).map((m) => (
-          <li key={m.id} data-testid={`match-${m.id}`}>
-            {m.target_label} — <code data-testid={`match-status-${m.id}`}>{m.status}</code> · proposed by {m.proposed_by_type}
-            {m.approval_card_id ? ` · introduction approval ${m.approval_card_id}` : ""}
-            {m.status === "PROPOSED" && (
-              <button type="button" data-testid={`match-accept-${m.id}`} onClick={() => post(`/api/support/matches/${m.id}/decide`, { decision: "ACCEPTED" }, 200, "Match accepted")}>
-                Accept (opens MP introduction approval)
-              </button>
-            )}
-          </li>
-        ))}
-        {(r.matches ?? []).length === 0 && <li className="state-empty" data-testid="no-matches">No matches proposed.</li>}
-      </ul>
-      <form
-        className="form-row"
-        data-testid="outcome-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await post(
-            `/api/support/requests/${r.id}/outcomes`,
-            { outcome_type: "PARTIALLY_HELPED", value_note: "one intro converted", relationship_note: "founder felt supported" },
-            201,
-            "Outcome recorded",
-          );
-        }}
-      >
-        <button type="submit" className="btn-strong" data-testid="outcome-submit">
-          Record outcome
-        </button>
-      </form>
-      <ul data-testid="outcome-list">
-        {(r.outcomes ?? []).map((o) => (
-          <li key={o.id} data-testid={`outcome-${o.id}`}>
-            <code>{o.outcome_type}</code> {o.value_note} · {o.relationship_note}
-          </li>
-        ))}
-      </ul>
-      {message && <p className="notice" data-testid="support-message">{message}</p>}
-    </div>
   );
 }
 
@@ -3276,7 +2866,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
         </p>
       )}
 
-      <h5>Local fixture sync (no live system)</h5>
+      <h4>Practice run against sample data</h4>
       <form
         className="form-row"
         data-testid="fixture-form"
@@ -3309,7 +2899,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
         {message && <span data-testid="network-message">{message}</span>}
       </form>
 
-      <h5>Sync state</h5>
+      <h4>Sync state</h4>
       <ul data-testid="sync-state">
         {(syncState.data?.cursors ?? []).map((c) => (
           <li key={c.resource} data-testid={`cursor-${c.resource}`}>
@@ -3320,7 +2910,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
         {(syncState.data?.cursors ?? []).length === 0 && <li className="state-empty" data-testid="no-cursors">No sync has run.</li>}
       </ul>
 
-      <h5>Conflict resolver</h5>
+      <h4>Conflict resolver</h4>
       <ul className="card-list" data-testid="conflict-list">
         {(conflicts.data?.conflicts ?? []).map((c) => (
           <li key={c.id} className="card" data-testid={`conflict-${c.id}`}>
@@ -3452,7 +3042,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="allocation-page">
-      <h5>Scenarios (each pins its policy versions)</h5>
+      <h4>Scenarios (each pins its policy versions)</h4>
       <form
         className="form-row"
         data-testid="scenario-form"
@@ -3481,6 +3071,25 @@ function AllocationPage({ me }: { me: MeResponse }) {
             }
             pins[kind] = latest.id;
           }
+
+          // THE FUND'S OWN NUMBERS, READ RATHER THAN INVENTED. What stood here was
+          // `fund_size: 30000000, investable: 24000000, fund_deployed: 10000000` — hardcoded, in
+          // the request body, where no partner ever saw them. The constraint engine then answered
+          // "does the sleeve fit" and "is the reserve sufficient" against a thirty-million-dollar
+          // fund the firm does not have, and printed the answers as arithmetic. This page already
+          // refused to open a scenario without a pinned policy version; it had no business being
+          // stricter about a policy id than about the size of the fund.
+          const { data: basis } = await api<{
+            fund_size: number | null;
+            fund_deployed: number;
+            ready: boolean;
+            blocked_because: string | null;
+          }>(`/api/funds/${fundId}/basis`);
+          if (!basis?.ready) {
+            setMessage(`Scenario refused: ${basis?.blocked_because ?? "the fund's own numbers could not be read."}`);
+            return;
+          }
+
           const { status, data } = await post<{ id: string }>(
             "/api/allocation/scenarios",
             {
@@ -3490,10 +3099,12 @@ function AllocationPage({ me }: { me: MeResponse }) {
               sleeve_version_id: pins.sleeve,
               reserve_version_id: pins.reserve,
               concentration_version_id: pins.concentration,
-              fund_size: 30000000,
-              investable: 24000000,
-              fund_deployed: 10000000,
-              reserve_modeled_need: 8000000,
+              fund_size: basis.fund_size,
+              fund_deployed: basis.fund_deployed,
+              // Investable and the modelled reserve need are OMITTED, not zeroed. Nobody has
+              // recorded a fee model or a reserve plan, and a zero would be read as "the fund has
+              // nothing set aside" rather than "we were never told" — which is how the last set of
+              // invented numbers came to look like facts.
             },
             201,
             "Scenario",
@@ -3538,7 +3149,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
             <code>{detail.data.concentration_version_id}</code>
           </p>
           <p data-testid="scenario-outcome-label">{detail.data.outcome_label}</p>
-          <h5>Assumptions (stated, append-only)</h5>
+          <h4>Assumptions (stated, append-only)</h4>
           <ul data-testid="assumption-list">
             {detail.data.assumptions.map((a) => (
               <li key={a.id} data-testid={`assumption-${a.id}`}>
@@ -3564,7 +3175,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
         </div>
       )}
 
-      <h5>Capital options (initial, follow-on, reserve, secondary, exit — one framework)</h5>
+      <h4>Capital options (initial, follow-on, reserve, secondary, exit — one framework)</h4>
       <form
         className="form-row"
         data-testid="option-form"
@@ -3637,7 +3248,7 @@ function AllocationPage({ me }: { me: MeResponse }) {
         </div>
       )}
 
-      <h5>Options — humans decide</h5>
+      <h4>Options — humans decide</h4>
       {/* The receipt is typed in, not remembered for you: an approval card is
           presented deliberately, and it survives leaving this page to approve it. */}
       <label>
@@ -3832,6 +3443,15 @@ function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
       <PortfolioComposition />
       <PortfolioAllocation />
 
+      {/* DEAL MATH, FOLDED IN (item 13). Before the scenarios, because you size a cheque by what it
+          buys: what this round does to ownership, and what an exit would have to be for it to
+          return the fund. The scenarios below then ask whether the fund can afford it. */}
+      <div className="home-section-head">
+        <h3>What this cheque actually buys</h3>
+        <span className="muted small">ownership, dilution, and what it takes to return the fund</span>
+      </div>
+      <ModelingPage me={me} />
+
       <div className="home-section-head">
         <h3>Modelling the next cheque</h3>
         <span className="muted small">scenarios, and what each one breaks</span>
@@ -3869,9 +3489,25 @@ function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
  * An unknown key falls back to Home rather than rendering nothing, because a stale link somebody
  * saved should land somewhere real.
  */
+/**
+ * Addresses that outlived their tab.
+ *
+ * When two tabs merge, the old address has to keep working — people bookmark, and a link in a note
+ * from three weeks ago should still land somewhere sensible rather than dumping the reader on Home
+ * with no explanation. Resolving the ALIAS rather than merely rendering the merged page also keeps
+ * the host card, the purpose block and the page title consistent: `deal-math` used to render Fund
+ * strategy's content under Deal Math's host, which is a page signed by the wrong person.
+ */
+const MERGED_ROUTES: Readonly<Record<string, string>> = {
+  "deal-math": "fund-strategy",
+  today: "home",
+  allocation: "fund-strategy",
+};
+
 function keyFromHash(known: (key: string) => boolean): string {
   const raw = window.location.hash.replace(/^#\/?/, "").trim();
-  return raw && known(raw) ? raw : "home";
+  const resolved = MERGED_ROUTES[raw] ?? raw;
+  return resolved && known(resolved) ? resolved : "home";
 }
 
 export function App() {
@@ -4117,7 +3753,17 @@ export function App() {
         <main className="shell-main">
           <header className="shell-header">
             <p className="surface-eyebrow">{activeItem.group}</p>
-            <h3>{activeItem.label}</h3>
+            {/*
+              h2, not h3, and this one character is the spine of the whole layout pass.
+              The rail wordmark is the h1. This title used to be an h3, which skipped h2 outright
+              and — worse — put the page's own name at the SAME rank as a section inside it. That is
+              why ranks drifted everywhere below: with the title at h3, some pages made their
+              sections h4, some h5, some h3 again, and none of them was wrong relative to the others.
+              With the title at h2, one rule falls out and every page can follow it: a section is an
+              h3, and a thing inside a section is an h4. LpPage already did exactly that, which is
+              why it is the page the operator says reads well.
+            */}
+            <h2>{activeItem.label}</h2>
             <div className="surface-identity">
               <IdentityPanel me={me.data} status={me.status} loading={me.loading} onSignOut={handleSignOut} />
               {authed && <StatusBar onNavigate={navigate} refreshNonce={refreshNonce} />}
@@ -4200,7 +3846,9 @@ export function App() {
           )}
           {authed && active === "research" && <ResearchPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
-          {authed && active === "deal-math" && <ModelingPage me={me.data!} />}
+          {/* The old Deal Math address, kept working. `MERGED_ROUTES` normally resolves it to
+              fund-strategy before it gets here; this stays so a direct jump cannot land nowhere. */}
+          {authed && active === "deal-math" && <FundStrategyPage me={me.data!} />}
           {authed && active === "dealflow" && (
             <>
               {/*
@@ -4236,23 +3884,24 @@ export function App() {
           {authed && active === "meetings" && (
             <>
               <MeetingsSurface me={me.data!} onNavigate={navigate} />
-              {/* The older meeting record keeps prep packets, notes, debriefs and close-out —
-                  real machinery that belongs to one meeting rather than to the list. */}
-              <details className="card" data-testid="meeting-records">
-                <summary>Meeting records and close-out</summary>
-                <MeetingsPage me={me.data!} />
-              </details>
+              {/*
+                NOT BEHIND A DISCLOSURE ANY MORE. Prep packets, notes, consent, transcripts, debriefs
+                and close-out are the machinery of this page, and they sat collapsed behind a
+                summary reading "Meeting records and close-out" — so the half of the surface that
+                does the work only existed if you guessed to press it. That is the same defect the
+                layout pass removed from Sources & sweeps, Machines and Rooms; a section is not
+                secondary detail just because it is second.
+              */}
+              <h3>What happened in each meeting, and what came out of it</h3>
+              <MeetingsPage me={me.data!} />
             </>
           )}
-          {authed && active === "portfolio" && (
-            <>
-              {/* Where the fund goes, before how the companies are doing: the plan is the frame
-                  the positions are read against. */}
-              <PortfolioAllocation />
-              <PortfolioComposition />
-              <PortfolioPage me={me.data!} />
-            </>
-          )}
+          {/* ITEM 12: Portfolio is its own file and its own two sub-tabs — how the companies are
+              doing, and what they have reported. The fund-allocation ring and the composition bars
+              that used to sit above it are the PLAN, and they already have a home on Fund strategy;
+              composition also counts closed opportunities while the holdings list counts booked
+              positions, so the two could print different portfolios on one screen. */}
+          {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
           {authed && active === "fund-strategy" && <FundStrategyPage me={me.data!} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}
           {authed && active === "integrations" && <IntegrationsPage me={me.data!} />}

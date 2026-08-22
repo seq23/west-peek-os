@@ -372,9 +372,17 @@ export async function handleUpdateCompany(ctx: RouteContext): Promise<Response> 
   if (!company) return json({ error: "not_found" }, { status: 404 });
 
   const actor = actorFromIdentity(ctx.identity!);
+  /*
+   * The company's OWN scope, not the home one. Omitting it made `authorize` fall back to
+   * HOME_FIRM_SCOPE, so the §11.7 isolation check compared west-peek against west-peek and passed
+   * for every company in the table — including one belonging to another firm. Every other write in
+   * this system hands the row's scope in (`mustAuthorize(..., row.firm_scope)`); this one did not,
+   * which made the choke-point call look present and do nothing.
+   */
   const authz = await authorize(env, actor, "company.update", {
     objectType: "canonical_company",
     objectId: company.id,
+    firmScope: company.firm_scope,
   });
   if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
 
@@ -791,23 +799,46 @@ export async function handleReverseMerge(ctx: RouteContext): Promise<Response> {
  * amount — but Sensori's are placeholders, so the amount is returned WITH a flag saying the
  * arithmetic rests on stand-ins. A number that cannot be trusted is worse than no number when
  * nothing on screen says which it is.
+ *
+ * THE PASS COMES BACK WITH THE COMPANY, and it is the reason this query was rewritten.
+ *
+ * Operator, item 9: a company the firm passed on must leave the working list and KEEP everything —
+ * "greyed out, below, not deleted". The register could not do that, because it returned no way to
+ * tell a passed company from a live one beyond a raw status string, and returned neither the reason
+ * nor the date. So `exit_reason` and the date the deal last moved come back with each row: "we
+ * passed in August" is a fact, "we passed because the second founder had already left and nobody
+ * would say why" is what you want in front of you when they come back raising.
+ *
+ * ONE LATEST DEAL INSTEAD OF FIVE. The five correlated subqueries each said "latest opportunity"
+ * separately and could disagree: `ORDER BY created_at DESC` with no tiebreak is arbitrary when two
+ * deals share a timestamp, which they do whenever a batch import writes them, so the status could
+ * come from one deal and the money from another. One join, one tiebreak on id, one deal.
+ *
+ * ARCHIVED DEALS ARE NOT THE LATEST DEAL. A record removed as a duplicate or a typo (0098) is not a
+ * fact about the company, and letting one win the "latest" race made the register describe a row
+ * somebody had already taken off the board.
  */
 export async function handleCompanyRegister(ctx: RouteContext): Promise<Response> {
   const visibility = privacyVisibilityClause(ctx.identity!, "c.privacy_label");
 
   const rows = await ctx.env.WP_OS_DB.prepare(
     `SELECT c.id, c.canonical_name, c.sector, c.one_liner, c.website, c.status, c.created_at,
-            (SELECT o.status FROM investment_opportunity o
-              WHERE o.company_id = c.id ORDER BY o.created_at DESC LIMIT 1) AS deal_status,
-            (SELECT o.price_per_share * o.quantity FROM investment_opportunity o
-              WHERE o.company_id = c.id AND o.price_per_share IS NOT NULL AND o.quantity IS NOT NULL
-              ORDER BY o.created_at DESC LIMIT 1) AS amount_usd,
-            (SELECT o.placeholder_fields FROM investment_opportunity o
-              WHERE o.company_id = c.id ORDER BY o.created_at DESC LIMIT 1) AS placeholder_fields,
-            (SELECT o.relationship_origin FROM investment_opportunity o
-              WHERE o.company_id = c.id ORDER BY o.created_at DESC LIMIT 1) AS origin,
+            d.id AS deal_id,
+            d.status AS deal_status,
+            d.relationship_origin AS origin,
+            d.exit_reason,
+            d.placeholder_fields,
+            CASE WHEN d.price_per_share IS NOT NULL AND d.quantity IS NOT NULL
+                 THEN d.price_per_share * d.quantity END AS amount_usd,
+            (SELECT MAX(e.created_at) FROM event_record e
+              WHERE e.object_type = 'investment_opportunity' AND e.object_id = d.id
+                AND e.event_type = 'investment.opportunity_transitioned') AS deal_moved_at,
             (SELECT COUNT(*) FROM meeting m WHERE m.company_id = c.id) AS meetings
        FROM canonical_company c
+       LEFT JOIN investment_opportunity d
+              ON d.id = (SELECT o.id FROM investment_opportunity o
+                          WHERE o.company_id = c.id AND o.archived_at IS NULL
+                          ORDER BY o.created_at DESC, o.id DESC LIMIT 1)
       WHERE ${visibility} AND c.status <> 'MERGED'
       ORDER BY c.canonical_name
       LIMIT 500`,
@@ -826,6 +857,14 @@ export async function handleCompanyRegister(ctx: RouteContext): Promise<Response
       // The amount is arithmetic over values that may be stand-ins. Say so rather than showing a
       // confident number nobody can tell is invented.
       amount_is_provisional: provisional.length > 0,
+      /*
+       * When the firm said no. Read from the event spine rather than stored on the row: the deal
+       * carries `exit_reason` but nothing records WHEN it left, and the transition that moved it is
+       * already on the spine with its timestamp. Null where the deal never moved, which is the
+       * honest answer — a date invented from `created_at` would read as the day of the decision.
+       */
+      left_pipeline_at: r.deal_status === "PASS" || r.deal_status === "WITHDRAWN" ? r.deal_moved_at ?? null : null,
+      deal_moved_at: undefined,
     };
   });
 

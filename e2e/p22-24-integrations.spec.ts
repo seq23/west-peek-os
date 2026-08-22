@@ -25,9 +25,10 @@ test("integrations state what is connected, what is gated, and what has never ru
   await gotoSurface(page, "Integrations");
   await expect(page.getByTestId("integrations-page")).toBeVisible();
 
-  // Every connector is unconfigured and names its gate.
-  await expect(page.getByTestId("connector-network_os")).toContainText("NOT_CONFIGURED");
-  await expect(page.getByTestId("connector-transcription")).toContainText("consent required");
+  // Every connector is unconfigured and names its gate — in words, not in enum values. The page
+  // stopped printing NOT_CONFIGURED / NO_CONTRACT / UNPROVEN at a reader (item 25, 21 Aug 2026).
+  await expect(page.getByTestId("connector-network_os")).toContainText("Not set up");
+  await expect(page.getByTestId("connector-transcription")).toContainText("the other side must agree");
   await expect(page.getByTestId("connector-fund_admin")).toContainText("no source contract has been agreed");
   await expect(page.getByTestId("connector-rules")).toContainText("No secret value is read");
 
@@ -39,12 +40,13 @@ test("integrations state what is connected, what is gated, and what has never ru
   await expect(page.getByTestId("network-os-authority")).toContainText("never overwrites it");
 
   // The specialist lane is labelled honestly.
-  await expect(page.getByTestId("specialist-status")).toContainText("UNPROVEN — VENDOR ACCESS GATE");
+  await expect(page.getByTestId("specialist-status")).toContainText("never been called");
   await expect(page.getByTestId("specialist-gate")).toContainText("have never been called");
-  await expect(page.getByTestId("specialist-providers")).toContainText("0 data class(es) allowed to egress");
+  await expect(page.getByTestId("specialist-providers")).toContainText("0 kinds of firm information may leave");
 
   // LP operations show the administrator and VDR gaps as product state.
   await expect(page.getByTestId("lp-ops-authority")).toContainText("never overwrites an administrator figure");
-  await expect(page.getByTestId("lp-ops-sources")).toContainText("NO_CONTRACT");
-  await expect(page.getByTestId("lp-ops-gates")).toContainText("PROVIDER NOT SELECTED");
+  await expect(page.getByTestId("lp-ops-sources")).toContainText("no agreement yet");
+  await expect(page.getByTestId("lp-ops-gates")).toContainText("The data room");
+  await expect(page.getByTestId("lp-ops-gates")).toContainText("never delivered a document");
 });

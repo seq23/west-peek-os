@@ -1,6 +1,11 @@
 import { useMemo, useState } from "react";
 import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 import { DEAL_FILTERS, EXITS, SPINE, dealTypeLabel, originLabel, stage, stallRead } from "@shared/investment/pipeline";
+import { openOnRegister } from "./CompaniesPage";
+// Read from the intake registry rather than retyped: the tags and the mailbox are enforced by the
+// email handler, and a page that names them from its own string literal drifts the first time one
+// changes and then quietly tells partners the wrong address.
+import { DEAL_INTAKE_EMPLOYEE, EMAIL_TRIGGERS, INTAKE_MAILBOX } from "@shared/intake/emailTriggers";
 
 /**
  * Dealflow — where every company stands, and what is stopping the next decision.
@@ -41,6 +46,8 @@ interface Deal {
   recommendation: "PASS" | "LOOK_CLOSER" | null;
   recommendation_note: string | null;
   recommended_by: string | null;
+  /** Why the firm passed or the deal went away. Required on the way out, so never empty in practice. */
+  exit_reason: string | null;
   /** Arrived by email and has not moved since. Derived, so it clears itself the moment it does. */
   unreviewed: boolean;
 }
@@ -114,8 +121,15 @@ function Spine({ counts, onShowExit }: { counts: Record<string, number>; onShowE
  */
 const PASSABLE: readonly string[] = ["NEW", "SCREENING", "DILIGENCE", "IC_READY"];
 
-function DealRow({ deal, onChanged, onFixNumbers }: { deal: Deal; onChanged: () => void; onFixNumbers: (companyId: string, name: string) => void }) {
+function DealRow({ deal, onChanged, onFixNumbers, onOpenCompany }: {
+  deal: Deal;
+  onChanged: () => void;
+  onFixNumbers: (companyId: string, name: string) => void;
+  /** Open this company's own record — its sector, what it does, and everything done to it. */
+  onOpenCompany: (companyId: string) => void;
+}) {
   const s = stage(deal.status);
+  const left = Boolean(s?.isExit);
   const stall = stallRead(deal.status, deal.in_stage_since);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -138,9 +152,30 @@ function DealRow({ deal, onChanged, onFixNumbers }: { deal: Deal; onChanged: () 
   }
 
   return (
-    <li className={deal.status === "PASS" || deal.status === "WITHDRAWN" ? "deal-row deal-row-out" : "deal-row"} data-testid={`deal-${deal.id}`}>
+    <li className={left ? "deal-row deal-row-out" : "deal-row"} data-testid={`deal-${deal.id}`}>
       <div className="deal-company">
-        <div className="deal-name">{deal.company_name}</div>
+        {/*
+          THE NAME IS THE WAY TO THE COMPANY. Operator, item 9: a deal and the company it is about
+          were two records with nothing joining them on screen — the pipeline printed the name as
+          dead text, and getting from "Sensori's deal is stalled" to "what do we actually know about
+          Sensori, and who changed it" meant leaving for another page and finding it by eye. The
+          name is the obvious thing to click, so it is the thing that works.
+
+          NESTED RATHER THAN BOTH CLASSES ON THE BUTTON. `.link-button` sets `font-size: inherit` at
+          a specificity that beats `.deal-name`, so `className="link-button deal-name"` silently
+          shrank the most important text on the row to body size. Inside the heading it inherits it.
+        */}
+        <div className="deal-name">
+          <button
+            type="button"
+            className="link-button"
+            data-testid={`deal-company-${deal.id}`}
+            title={`Open ${deal.company_name}'s record — what they do, and everything done to it`}
+            onClick={() => onOpenCompany(deal.company_id)}
+          >
+            {deal.company_name}
+          </button>
+        </div>
         <div className="muted small">{dealTypeLabel(deal.opportunity_type)}</div>
       </div>
 
@@ -155,7 +190,18 @@ function DealRow({ deal, onChanged, onFixNumbers }: { deal: Deal; onChanged: () 
       </div>
 
       <div className="deal-blocker">
-        {deal.placeholder_fields.length > 0 ? (
+        {/* WHY IT LEFT, WHERE THE BLOCKER WOULD BE. A deal out of the pipeline has no blocker, and
+            this column was showing it where we met them — true, and not the question anybody asks
+            about a company the firm declined. The reason was recorded, required, and then never
+            shown anywhere, which made every pass in the pile read as a bare "no". */}
+        {left ? (
+          <>
+            <div className="lbl">{deal.status === "WITHDRAWN" ? "Why it went away" : "Why we said no"}</div>
+            <div className="deal-blocker-text" data-testid={`deal-exit-reason-${deal.id}`}>
+              {deal.exit_reason ?? "No reason was recorded — which is the part that would have been worth keeping."}
+            </div>
+          </>
+        ) : deal.placeholder_fields.length > 0 ? (
           <>
             <div className="lbl">Needs from you</div>
             {/*
@@ -547,8 +593,21 @@ export function DealflowPage({
           <button type="button" className="btn-strong btn-lg" data-testid="dealflow-add-toggle" onClick={() => setAdding((a) => !a)}>
             {adding ? "Cancel" : "Add a company"}
           </button>
-          <span className="muted small">the only way in</span>
+          {/*
+            IT WAS NEVER THE ONLY WAY IN, and saying so was worse than saying nothing — a partner
+            who believes this is the single door stops looking for the companies that arrived by the
+            other three, and does not know to check whether Wyatt has a card waiting. Item 7 asked
+            for the routes to be consolidated before any were added; the honest first step is to
+            state the ones that already exist and say where each lands.
+          */}
+          <span className="muted small">the one you drive yourself</span>
         </div>
+        <p className="muted small" data-testid="dealflow-other-routes">
+          Companies also arrive three other ways, and all three open a work card for {DEAL_INTAKE_EMPLOYEE} rather
+          than filing themselves: an email to {INTAKE_MAILBOX} tagged {EMAIL_TRIGGERS.map((t) => t.tag).join(" or ")};
+          a company pushed across from Network OS; and {DEAL_INTAKE_EMPLOYEE}'s own scouting. Nothing enters the funnel
+          without somebody deciding it should.
+        </p>
       </section>
 
       {/* THE PIPELINE ITSELF, under the door it comes through.
@@ -677,7 +736,16 @@ export function DealflowPage({
 
       <ul className="deal-list" data-testid="deal-list">
         {shown.map((d) => (
-          <DealRow key={d.id} deal={d} onChanged={board.reload} onFixNumbers={onFixNumbers} />
+          <DealRow
+            key={d.id}
+            deal={d}
+            onChanged={board.reload}
+            onFixNumbers={onFixNumbers}
+            onOpenCompany={(companyId) => {
+              openOnRegister(companyId);
+              onNavigate("companies");
+            }}
+          />
         ))}
         {shown.length === 0 && (
           <li className="state-empty" data-testid="dealflow-empty">

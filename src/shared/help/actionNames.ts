@@ -63,8 +63,13 @@ export const APPROVAL_STATE_WORDS: Readonly<Record<string, { label: string; mean
   revise_requested: { label: "Sent back", means: "You asked for changes. It comes back here once it has been rewritten." },
   approved: { label: "Approved", means: "You said yes. The action itself has not run yet." },
   executed: { label: "Done", means: "Approved, and the action actually happened." },
-  rejected: { label: "Rejected", means: "You said no. This is the end of it." },
-  blocked: { label: "Blocked", means: "Approved, then something stopped it before it ran." },
+  // "This is the end of it" was true when a decision could never be changed. It can now: a later
+  // decision supersedes it, the original stays on the card, and saying otherwise here would send a
+  // partner looking for a control the page does say they have.
+  rejected: { label: "Rejected", means: "You said no. You can still change that later — the original answer stays on the record." },
+  // Not a rejection, and the difference is the whole point: a rejection is a verdict on the request,
+  // a block is a statement that something ELSE has to happen first. It names what, and it lifts.
+  blocked: { label: "Blocked", means: "Something else has to be resolved before this can go anywhere. The card says what, and the block can be released." },
 };
 
 export function approvalStateWords(state: string): { label: string; means: string } {

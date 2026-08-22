@@ -30,6 +30,12 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "work_card.update", name: "Update work card", description: "Change work-card state, owner, priority, or next action.", isExternalEffect: false },
   { key: "approval.request", name: "Request approval", description: "Draft or submit an approval card for a governed action.", isExternalEffect: false },
   { key: "approval.decide", name: "Decide approval", description: "Approve, reject, or request revision on a pending approval card (human with required role only).", isExternalEffect: false },
+  // Changing a decision and blocking one are separate authorities from making a decision, because
+  // they answer to different people. Reversing yesterday's approval is not the same power as giving
+  // one, and holding the firm's work until counsel replies is not the same power as saying no.
+  { key: "approval.reopen", name: "Change a decision already made", description: "Record a new decision that supersedes an earlier one on the same card, with a required reason. The original decision is never edited or erased, and something already carried out can never be reopened.", isExternalEffect: false },
+  { key: "approval.block", name: "Block an approval", description: "Stop an approval proceeding until a named blocker is resolved. Unlike a rejection this is not a verdict on the request: it names what the firm is waiting for, and it can be released.", isExternalEffect: false },
+  { key: "approval.block_release", name: "Release a block", description: "Record that what an approval was waiting on is resolved, returning the card to exactly the state it was in when the block landed.", isExternalEffect: false },
   { key: "governance_update.issue", name: "Issue governance update", description: "Issue an MP rule, bulletin, or broadcast to the firm.", isExternalEffect: false },
   { key: "ai.run", name: "Run AI task", description: "Run an AI task through the governed run_ai boundary (privacy/cost/egress pipeline).", isExternalEffect: false },
   { key: "ai_employee.tool_scope.grant", name: "Grant AI tool scope", description: "Grant a tool to an AI employee. An employee can never grant scope to itself.", isExternalEffect: false },
@@ -197,6 +203,11 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "routing_policy.set", name: "Set a task routing policy", description: "Publish a new version of the ordered provider/model routing policy for a task class.", isExternalEffect: false },
   { key: "machine_model_policy.set", name: "Set a machine model policy", description: "Set the preferred provider/model and maximum data class for one machine.", isExternalEffect: false },
   { key: "budget_scope.set", name: "Set a scoped AI budget", description: "Publish a new version of a per-employee/machine/provider/model/category budget.", isExternalEffect: false },
+  // Item 21/23 — the Cockpit overhaul. Separate keys because they are separate decisions: refusing
+  // an output is not the same act as accepting one, and setting the firm's ceiling is not the same
+  // act as capping one employee.
+  { key: "ai_output.discard", name: "Throw away a quarantined AI output", description: "Refuse a completed AI output so it is never used, with a stated reason. The run and its text stay on the record.", isExternalEffect: false },
+  { key: "firm_budget.set", name: "Set what the firm will spend", description: "Publish a new version of the firmwide monthly or all-time spending ceiling. Enforced at the AI boundary, not just displayed.", isExternalEffect: false },
   { key: "cost_alert.decide", name: "Acknowledge a cost alert", description: "Acknowledge or resolve a budget-threshold alert.", isExternalEffect: false },
   // P17 — machine control center + capability intelligence.
   { key: "machine_state.configure", name: "Configure a machine", description: "Set a machine's owner, SLA, priority, allowed tools, data access, or evidence expectation.", isExternalEffect: false },

@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS human_reserved_action (
 );
 
 -- BEGIN GENERATED SEEDS (scripts/seed/generate-machine-seed.mjs) — do not hand-edit
--- Registry provenance: machines v3.2.14 (canon §5A.2), reserved-action register v3.2.14 §3.1–3.4.
+-- Registry provenance: machines v3.2.14+wp1 (canon §5A.2), reserved-action register v3.2.14 §3.1–3.4.
 
 -- Domains (canon §0C 15-domain map, order preserved):
 INSERT OR IGNORE INTO domain (id, name) VALUES
@@ -64,7 +64,9 @@ INSERT OR IGNORE INTO domain (id, name) VALUES
   ('BRAND_MARKETING_OS', 'Brand Marketing OS'),
   ('OPERATIONS_OS', 'Operations OS');
 
--- Machines (1–45, canonical row order):
+-- Machines (1–46: canon rows 1–45 plus West Peek's own row 46, in registry order).
+-- Retired machines are seeded too: work_card and ai_run_attribution point at them, and a
+-- row that vanished would orphan them. `ACTIVE_MACHINES` is what may take new work.
 INSERT OR IGNORE INTO machine (id, key, name, domain_id, purpose, in_initial_scope) VALUES
   (1, 'command_center', 'Command Center Machine', 'COMMAND_MP_OFFICE', 'Calm daily operating surface for each MP: priorities, meetings, approvals, capture, activity, system health.', 1),
   (2, 'mp_personal_office', 'Managing Partner Personal Office Machines', 'COMMAND_MP_OFFICE', 'Scoped personal support for each MP; private assistant interactions unless promoted into firm work.', 0),
@@ -110,7 +112,8 @@ INSERT OR IGNORE INTO machine (id, key, name, domain_id, purpose, in_initial_sco
   (42, 'prompt_enhancer_intent', 'Prompt Enhancer + Intent-to-Execution Machine', 'COMMAND_MP_OFFICE', 'Messy human intent → better prompts, machine assignments, privacy-safe prompts, prompt library.', 0),
   (43, 'builder_repo_product', 'Builder / Repo / Product Machine', 'BUILDER_SYSTEMS_OS', 'Canonical plans → code, repo work, implementation contracts, validation matrices, snapshot-first delivery.', 1),
   (44, 'continuity_maintenance', 'Continuity + System Maintenance Machine', 'OPERATIONS_OS', 'Emergency sovereignty, backups, offline/reduced modes, continuity drills, failure playbooks.', 1),
-  (45, 'opportunity_radar_strategic_initiative', 'Opportunity Radar + Strategic Initiative Machine', 'OPPORTUNITY_INTELLIGENCE', 'AI-surfaced opportunities and Opportunity Briefs; separates opportunity review from workflow approval. (Proactive radar deferred P13+; record type exists.)', 0);
+  (45, 'opportunity_radar_strategic_initiative', 'Opportunity Radar + Strategic Initiative Machine', 'OPPORTUNITY_INTELLIGENCE', 'AI-surfaced opportunities and Opportunity Briefs; separates opportunity review from workflow approval. (Proactive radar deferred P13+; record type exists.)', 0),
+  (46, 'venture_teaching', 'Venture Teaching Machine', 'KNOWLEDGE_OS', 'West Peek University: teaching venture to the partners themselves — explanation at a chosen depth, assessment that marks honestly, and case work run against real firm decisions rather than invented companies.', 0);
 
 -- Action types: human-reserved register first (is_reserved=1), then ordinary
 -- internal actions, then external-effect action keys (is_external_effect=1).
@@ -176,6 +179,9 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('work_card.update', 'Update work card', 'Change work-card state, owner, priority, or next action.', 0, 0),
   ('approval.request', 'Request approval', 'Draft or submit an approval card for a governed action.', 0, 0),
   ('approval.decide', 'Decide approval', 'Approve, reject, or request revision on a pending approval card (human with required role only).', 0, 0),
+  ('approval.reopen', 'Change a decision already made', 'Record a new decision that supersedes an earlier one on the same card, with a required reason. The original decision is never edited or erased, and something already carried out can never be reopened.', 0, 0),
+  ('approval.block', 'Block an approval', 'Stop an approval proceeding until a named blocker is resolved. Unlike a rejection this is not a verdict on the request: it names what the firm is waiting for, and it can be released.', 0, 0),
+  ('approval.block_release', 'Release a block', 'Record that what an approval was waiting on is resolved, returning the card to exactly the state it was in when the block landed.', 0, 0),
   ('governance_update.issue', 'Issue governance update', 'Issue an MP rule, bulletin, or broadcast to the firm.', 0, 0),
   ('ai.run', 'Run AI task', 'Run an AI task through the governed run_ai boundary (privacy/cost/egress pipeline).', 0, 0),
   ('ai_employee.tool_scope.grant', 'Grant AI tool scope', 'Grant a tool to an AI employee. An employee can never grant scope to itself.', 0, 0),
@@ -295,6 +301,8 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('routing_policy.set', 'Set a task routing policy', 'Publish a new version of the ordered provider/model routing policy for a task class.', 0, 0),
   ('machine_model_policy.set', 'Set a machine model policy', 'Set the preferred provider/model and maximum data class for one machine.', 0, 0),
   ('budget_scope.set', 'Set a scoped AI budget', 'Publish a new version of a per-employee/machine/provider/model/category budget.', 0, 0),
+  ('ai_output.discard', 'Throw away a quarantined AI output', 'Refuse a completed AI output so it is never used, with a stated reason. The run and its text stay on the record.', 0, 0),
+  ('firm_budget.set', 'Set what the firm will spend', 'Publish a new version of the firmwide monthly or all-time spending ceiling. Enforced at the AI boundary, not just displayed.', 0, 0),
   ('cost_alert.decide', 'Acknowledge a cost alert', 'Acknowledge or resolve a budget-threshold alert.', 0, 0),
   ('machine_state.configure', 'Configure a machine', 'Set a machine''s owner, SLA, priority, allowed tools, data access, or evidence expectation.', 0, 0),
   ('machine_state.pause', 'Pause or resume a machine', 'Stop or restart work routing and AI spend for one machine.', 0, 0),

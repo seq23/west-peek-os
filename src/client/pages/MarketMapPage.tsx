@@ -107,7 +107,7 @@ export function MarketMapPage(): JSX.Element {
             <div className="mkt-map" data-testid="mkt-map">
               {panels.map((p) => (
                 <section key={p.segment} className="mkt-panel" data-testid={`mkt-panel-${p.segment}`}>
-                  <h5>{p.segment} <span className="muted small">{p.companies.length}</span></h5>
+                  <h4>{p.segment} <span className="muted small">{p.companies.length}</span></h4>
                   <ul className="mkt-tiles">{p.companies.map(tile)}</ul>
                 </section>
               ))}
@@ -115,7 +115,7 @@ export function MarketMapPage(): JSX.Element {
           )}
 
           {view === "table" && (
-            <div className="scroller">
+            <div className="tablewrap">
               <table data-testid="mkt-table">
                 <thead>
                   <tr><th>Company</th><th>Segment</th><th>Stage</th><th>Raised</th><th>Last round</th><th>Source</th></tr>

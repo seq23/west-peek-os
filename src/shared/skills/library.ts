@@ -362,23 +362,58 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
       },
     ],
   },
+  /*
+   * COMMUNICATIONS FINALLY HAS ITS OWN METHODS, 21 Aug 2026.
+   *
+   * This machine held exactly one skill — a landing-page conversion rubric written for Percy's
+   * reviews of portfolio founders' products. So the seat responsible for press, embargoes,
+   * financing announcements and what may be said publicly during a raise had no written method
+   * about any of it, and would have arrived at a press question carrying advice about buttons.
+   * The rubric moved to `taste_layer`, where judging whether a thing is any good already lives.
+   *
+   * None of what follows is a legal opinion and none of it decides anything. Willow holds the
+   * compliance boundary; these are the firm's own habits for staying well inside it.
+   */
   {
     machineKey: "marketing_pr_content",
     skills: [
       {
-        key: "page-that-works",
-        title: "Why a page does not convert",
-        when: "Reviewing a landing page, a product page, or any page with a job to do.",
+        key: "the_announcement_is_the_founders",
+        title: "Whose news it is",
+        when: "A portfolio company raises, launches, hires, is acquired, or does anything the firm is proud of.",
         guidance: [
-          "Five seconds decides it: what is this, who is it for, why should I care. If those are",
-          "  not answered above the fold, nothing below matters.",
-          "One obvious next action. Three buttons of equal weight is zero calls to action.",
-          "Every claim needs something behind it — a number, a name, a logo, a screenshot.",
-          "  Unsupported superlatives make a visitor trust the rest of the page less.",
-          "Check the phone first, not last. Most visitors are on one and most designs are not.",
-          "Name what you can SEE, and what to change. 'Improve the hierarchy' is not advice;",
-          "  'the headline and sub-head are the same weight so the eye has nowhere to land' is.",
-          "Say when something is fine. Manufacturing problems is how a review stops being read.",
+          "The company announces; the firm amplifies. West Peek's post goes out AFTER theirs, links to theirs, and is about them. An investor who breaks a founder's news has taken something that was not theirs to spend.",
+          "Nothing goes out before the round has CLOSED — signed documents and money received, not a term sheet, not a verbal, not a lead who is 'in'. A deal that is announced and then re-priced or pulled is a story the founder has to explain for a year.",
+          "Get the embargo in writing from the company or their firm, with the date, the hour and the timezone. 'Next week' is not an embargo, and an investor who breaks one is not offered the next one.",
+          "Ask the founder what they want said before drafting, not after. The round size, the valuation, the other investors and the metrics are theirs to disclose or withhold — repeat only what they have chosen to say, in the form they said it.",
+          "Never confirm a round to a journalist who already 'has it', however much they seem to know. Send them to the company. Confirming is disclosing.",
+          "Name the firm's role accurately. Led, co-led, participated and 'also invested' are four different facts, and inflating one in a post is the kind of thing other investors remember and correct in public.",
+        ],
+      },
+      {
+        key: "nothing_public_about_the_raise",
+        title: "The firm's own fundraise is not a communications project",
+        when: "Anything public that touches West Peek's fund: the website, a post, a podcast, a conference bio, a newsletter, a Room invitation.",
+        guidance: [
+          "While the fund is raising under an exemption that forbids general solicitation, the raise is not a topic. No fund size, no target, no first close, no 'we are raising', no 'accepting a few more LPs' — publicly, to a list, on a stage, or in a caption.",
+          "Route anything that names a fund size, a close date, a return figure or an invitation to invest to Compliance BEFORE it is drafted, not after it is scheduled. That is Willow's call and never yours; your job is to notice it early enough that the answer is cheap.",
+          "The firm may say what it DOES — the stage it invests at, the thesis, the companies that have said they are backed by it. What it may not do is ask. The line is between describing the firm and offering the fund.",
+          "An LP-facing document is not a marketing document. Anything a prospective LP will read goes through LP relations and Compliance; performance figures, track record and portfolio marks are not yours to phrase.",
+          "Assume permanence and assume screenshots. A caption is publication, a Room invitation forwarded twice is publication, and a podcast is publication you cannot edit.",
+          "When in doubt, say less and ask. A sentence held for a day costs nothing; a sentence that had to be deleted is now the thing people are talking about.",
+        ],
+      },
+      {
+        key: "speaking_about_a_company_we_are_inside",
+        title: "What may be said about a company the firm holds",
+        when: "Writing, quoting, posting or briefing about a portfolio company or one in diligence.",
+        guidance: [
+          "Say only what the company has itself made public, and CHECK THE DATE. A metric that was public in March is not a metric you may repeat in August — it has moved, and the founder now has to correct you or live with it.",
+          "Being an investor means you know things the market does not: pipeline, burn, a term sheet, a departure, an acquirer sniffing around. None of that is content, ever, and 'everyone knows' is not a source.",
+          "Anything learned in diligence about a company the firm did NOT invest in is closed permanently. Not a hint, not a subtweet, not a lesson with the name filed off — founders talk, and a firm that leaks a pass is a firm nobody shows a deck to twice.",
+          "Send the exact words to the company before publishing, not a summary of them. Founders correct facts you would not have thought to check, and it takes an hour.",
+          "Do not comment on a competitor of a portfolio company, favourably or otherwise. The firm's opinion reads as the company's position.",
+          "For anything touching a public company, a secondary block or a price, stop and route it to Compliance. Material non-public information is a category you cannot self-assess your way out of.",
         ],
       },
     ],
@@ -858,17 +893,10 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "End with one sentence a screener can apply next week. Anything longer will not be applied.",
         ],
       },
-      {
-        key: "teach_honestly",
-        title: "Marking a partner honestly",
-        when: "Teaching anything, in any mode.",
-        guidance: [
-          "Do not praise a wrong answer. An encouraging mark is a favour today and a loss later.",
-          "Teach from principles and worked examples. Never invent a fact about a real company to make a lesson land.",
-          "When they miss it, explain it a different way. Repeating the same explanation louder teaches nobody.",
-          "Stop and make them decide something. Understanding shows up in a decision, not in a nod.",
-        ],
-      },
+      // `teach_honestly` MOVED OUT, 21 Aug 2026, to `venture_teaching` (machine 46). It was the one
+      // teaching method in the library and it was filed under the committee's post-mortem, which is
+      // why the Professor was seated here and held two investment methods. See the bottom of this
+      // file for the teaching machine and `machines.ts` for why the post-mortem stayed put.
       {
         key: "what_the_loop_owes_the_community",
         title: "Lessons about where deals came from",
@@ -905,6 +933,7 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "#wpnetwork is a person for the network. Relay them to Network OS's intake queue and stop there — Network OS owns who is a member and this app does not.",
           "#wpdeck means the information is in the attachment. Check it against the companies already on the board BEFORE creating anything: a match fills in the blanks on that record from the deck, and only a genuine miss opens a new company at the top of the funnel. A deck is as often a follow-up about a company we already have as a new one, and creating every time would quietly build a second row for the same company.",
           "With #wpdeck, read the deck and not the covering note. A full submission whose body says 'see attached' is not a thin one.",
+          "#wpupdate is a company we already own telling us how it is doing, and it is Winter's, not yours. Open a job for her with the message attached and stop there — the figures in it stay a claim by the sender until somebody records them against the holding.",
           "A trigger routes, it never authorises. Anybody who learns the word can type it, so what arrives is always a proposal a person accepts — never an entry into the pipeline.",
           "One message can carry more than one trigger. Route each on its own; a mail introducing a founder AND their company is both, not a choice.",
           "Mail with no trigger is yours, and it is the part that actually needs judgement: a reply into an old thread, a deck with no words, an introduction written as prose. Put it in front of a partner rather than guessing, and never hold it silently.",
@@ -1033,6 +1062,29 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
   {
     machineKey: "taste_layer",
     skills: [
+      /*
+       * MOVED HERE FROM `marketing_pr_content`, 21 Aug 2026, and it is a correction rather than a
+       * reshuffle. This rubric was written for Percy's reviews of portfolio founders' products, and
+       * it was the ONLY method on the firm's press machine — so Communications held a page-review
+       * skill and the designer held a press machine. Taste is where "is this any good, and what
+       * exactly is wrong with it" already lives, and Percy sits here.
+       */
+      {
+        key: "page-that-works",
+        title: "Why a page does not convert",
+        when: "Reviewing a landing page, a product page, or any page with a job to do.",
+        guidance: [
+          "Five seconds decides it: what is this, who is it for, why should I care. If those are",
+          "  not answered above the fold, nothing below matters.",
+          "One obvious next action. Three buttons of equal weight is zero calls to action.",
+          "Every claim needs something behind it — a number, a name, a logo, a screenshot.",
+          "  Unsupported superlatives make a visitor trust the rest of the page less.",
+          "Check the phone first, not last. Most visitors are on one and most designs are not.",
+          "Name what you can SEE, and what to change. 'Improve the hierarchy' is not advice;",
+          "  'the headline and sub-head are the same weight so the eye has nowhere to land' is.",
+          "Say when something is fine. Manufacturing problems is how a review stops being read.",
+        ],
+      },
       {
         key: "sounds_like_west_peek",
         title: "Reading it as the person who receives it",
@@ -1476,6 +1528,322 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Silence is never approval here either. A brief nobody has read in three weeks is unread, not accepted, and it does not become a yes or a no by expiring.",
           "Record the decision including 'not now', with what would bring it back. Half the value of a radar is that the firm can see what it declined and when.",
           "Close your own briefs when their trigger has passed. A radar nobody prunes becomes a list nobody trusts, which is the same as having no radar.",
+        ],
+      },
+    ],
+  },
+  /*
+   * ── NINE MACHINES THAT HAD NOBODY, AND NOW HAVE BOTH A SEAT AND A METHOD ──────────────────
+   *
+   * 21 Aug 2026, item 17/24. Every entry below belongs to a machine that was seated in the same
+   * change (see aiEmployees.ts, "THE REMAINING TWELVE"). The order matters: a method written for a
+   * machine nobody works is filing instructions nobody will ever be given, and the test above
+   * refuses it. Plus `venture_teaching`, which is a new machine rather than a newly seated one.
+   */
+  {
+    machineKey: "lp_diligence_request",
+    skills: [
+      {
+        key: "what_a_first_fund_is_actually_asked",
+        title: "The questions a Fund I gets, and the only honest answers",
+        when: "An LP or their consultant sends a DDQ, a request list, or a question you have to answer in writing.",
+        guidance: [
+          "A first-time manager has no fund track record, so institutional diligence lands somewhere else: ATTRIBUTION (which deals were actually yours, in what role, at which firm), team durability, the LPA terms, and how the firm operates. Answer those four well and the missing track record is a fact rather than a hole.",
+          "Attribution is checkable and gets checked. For every deal claimed, say the role in one word — sourced, led, sat on, supported — and name the partner at that firm who will confirm it. A logo grid with no roles reads as borrowed credit and is the fastest way to lose a serious LP.",
+          "Answer the question that was asked, in their format, in their order. A consultant is comparing you against ten other DDQs side by side; a beautifully written answer in the wrong slot reads as evasion.",
+          "Say 'we do not have that yet' plainly and say what exists instead. A Fund I with no audited financials, no valuation policy in force and no prior fund is normal; pretending otherwise is what ends a process.",
+          "Never send a document that names another LP, their commitment, or their terms. Side letters and MFN elections are the one leak an institution will not forgive, and 'redacted' means the name is gone AND the number is gone.",
+          "Route anything containing performance figures, projections, or a statement about what the fund will return to Compliance before it is sent — not after. That is Willow's call and it is cheap to ask early.",
+        ],
+      },
+      {
+        key: "a_request_is_a_position",
+        title: "Reading what the request tells you about where they are",
+        when: "Any inbound material request from a prospective LP.",
+        guidance: [
+          "The request reveals the stage. A deck request is a first meeting; a DDQ and references is a real process; the LPA, the subscription documents and the fee model is late and someone is drafting an internal recommendation. Say which one this is and what usually comes next, so the partners can pace themselves.",
+          "Every request gets an owner, a date, and a promised return date, and the promised date is met or renegotiated before it passes. LPs read responsiveness as an operating signal, and they are right to — it is the only evidence of your process they get before they wire.",
+          "Two LPs asking the same question get the SAME answer. Keep the answered question, not just the sent document: an inconsistency across two data rooms is discovered at exactly the wrong moment.",
+          "Send from the approved current version in the data room, never from a copy somebody had locally. A stale deck in an LP's hands is a number you will be held to for a year.",
+          "Record who was given what and when. Access is a fact about the raise, not an administrative detail — see the data-room methods.",
+          "You prepare and you recommend; a partner sends. Nothing here reaches an LP without a human deciding it should.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "lp_proof_engine",
+    skills: [
+      {
+        key: "evidence_is_what_the_firm_did",
+        title: "Turning real work into something an LP can be shown",
+        when: "Building the evidence behind an update, a re-up conversation, or a claim about how the firm works.",
+        guidance: [
+          "One dated example beats any adjective. 'Proprietary sourcing' is a word; 'we opened a file on this company in November, met the founder in January, and the round priced in April' is a fact with a date on it, and the record already holds it.",
+          "Build from what the system actually recorded — the capture, the memo, the Room, the intro that led somewhere — not from a retrospective story. If the evidence has to be reconstructed from memory, say so, or leave it out.",
+          "Only companies the firm INVESTED IN, and only what those companies have themselves made public. A pass is closed permanently: a diligence insight about a company the firm did not back is not evidence, it is a leak with a chart on it.",
+          "Show the loss too, in the firm's own words, before an LP finds it. A manager who volunteers the company that went sideways and what they learned is underwriting their own credibility; one who does not is audited for the rest of the relationship.",
+          "Community and platform claims need a witness, not a headcount. 'Members' is a number anybody can print; 'this founder says this introduction produced this customer' is evidence, and it needs their permission before it leaves the building.",
+        ],
+      },
+      {
+        key: "never_dress_evidence_as_performance",
+        title: "The line between proof of work and a performance claim",
+        when: "Any time a number is about to appear in front of an LP.",
+        guidance: [
+          "Do not compute or repeat IRR, TVPI, DPI, MOIC or a multiple on an unrealised position. Those come from the administrator's books and the valuation policy, they carry an as-of date, and they are Preston's and Compliance's to state — not yours to derive because the inputs happen to be in the system.",
+          "A mark is a judgement, not a fact. Where a carried value appears, it appears with its as-of date and the basis it was struck on, or it does not appear.",
+          "Three positions is not a track record and saying so is stronger than implying otherwise. An LP who catches an inflated frame stops reading everything else.",
+          "Never project. What the fund 'is on track to' return is a forward-looking claim about securities, and this seat does not make one — route it, do not phrase it.",
+          "Date every figure, and re-date it before reuse. Last quarter's number pasted into this quarter's update is how a firm ends up correcting itself in writing.",
+          "When the honest version is thin, send the honest version. The alternative is a claim you will spend the next fund defending.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "data_room_control",
+    skills: [
+      {
+        key: "one_current_version",
+        title: "There is one current copy, and everything else is dated",
+        when: "Anything entering, changing or leaving the firm's document vault.",
+        guidance: [
+          "Every document carries a version and an as-of date on its face, and the room holds exactly one current copy. Two versions of a deck in circulation is the most common way a firm contradicts itself in front of an LP.",
+          "Supersede rather than delete. The old version moves and stays readable, because someone was sent it and will quote it back — a document that vanished is a question you cannot answer.",
+          "Never freeze a live document into a PDF and send it without dating that PDF. The moment it leaves, it stops updating and nobody downstream knows.",
+          "Say what a document IS in one line — what it covers, whose it is, and who may see it. A vault nobody can navigate gets bypassed, and the bypass is somebody emailing a file from their laptop.",
+          "The firm's copy of anything an outside party holds must exist here. A record whose only home is a vendor's product is a record the firm has lent out.",
+        ],
+      },
+      {
+        key: "access_is_a_person_a_reason_and_an_end_date",
+        title: "Who may see it, and until when",
+        when: "Granting, reviewing or ending access to firm or portfolio documents.",
+        guidance: [
+          "Access is granted to a NAMED person, for a stated reason, with an end date. A shared link with no expiry is a document the firm has published and does not know it.",
+          "Watermark with the recipient's name where the tool allows it, and record who opened what and when. Both are ordinary in institutional diligence and both change behaviour.",
+          "Close access when the reason ends — the process concluded, the LP passed, the diligence closed. An open room after a pass is the commonest quiet leak in a fund's operations.",
+          "Some things never enter the room at all: another LP's side letter or commitment, an unredacted portfolio cap table, a founder's financials shared under NDA, and anything that would be material non-public information about a company with traded stock. If it is not the firm's to share, the answer is no regardless of who is asking.",
+          "A request to 'just send it over' is still a grant of access. Route it through the room so it is logged, versioned and revocable.",
+          "You prepare access; a human grants it. Nothing here opens a room on its own.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "relationship_capital_budget",
+    skills: [
+      {
+        key: "an_ask_has_a_price",
+        title: "What the firm has already spent on this person",
+        when: "Before requesting an introduction, a reference, a favour or a founder's time.",
+        guidance: [
+          "Say what the firm has asked this person for in the last ninety days and what it gave back, before proposing another ask. Two requests in a quarter with nothing returned is an overdraft, and the person who stops replying never tells you why.",
+          "Value given is what THEY would name, not what the firm believes it provided. An introduction they did not want, an invitation they did not attend and a newsletter are not value; a customer, a hire, a term-sheet read at short notice are.",
+          "Weight the ask against the relationship's actual depth. Asking a warm acquaintance for a reference call is fine; asking them to broker an LP conversation is spending credit the firm has not earned and cannot repay.",
+          "Cool the account down after a big ask lands. The strongest relationships in a fund are the ones the firm did not touch for six months and then did something useful for unprompted.",
+          "Never spend somebody else's capital without telling them what it costs. A warm path that runs through a third person is THEIR credibility, so ask them directly and let them decline — a forwarded introduction they were volunteered for is a debt they did not agree to.",
+        ],
+      },
+      {
+        key: "the_best_ask_is_not_an_ask",
+        title: "Keeping the account in credit",
+        when: "Standing relationship work, and any time the firm has nothing it needs.",
+        guidance: [
+          "Do the useful thing when nothing is wanted. A note that a portfolio company is hiring for the role someone mentioned, at the moment they mentioned it, is worth more than any structured programme.",
+          "Record what the firm actually WITNESSED, not what it assumes — this person made this introduction, gave this reference, sent this deal. Witnessed facts are the only ones that survive being repeated.",
+          "Name the risk of overuse before the ask, not after the silence. A person who has become the firm's default path into a sector is being mined, and the firm will notice only when they stop answering.",
+          "Never contact anyone. Propose the ask, say what it costs and who should make it, and let a partner decide — a relationship spent by a machine was spent by the firm.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "meeting_capture_adapter",
+    skills: [
+      {
+        key: "a_transcript_is_an_input",
+        title: "The transcript is evidence, not the record",
+        when: "Any meeting captured by a recorder, a note-taker bot, or a transcription provider.",
+        guidance: [
+          "The record of a meeting is the decisions and the commitments, written by a person. A transcript is raw material for that and is never promoted to truth on its own — see the meeting methods for what the record has to contain.",
+          "Numbers and names are what these tools get wrong, and they get them wrong confidently. Any figure, company name or person's name heard in a room is verified against something written before it enters a record — an ARR figure that came from a transcript is a rumour with a timestamp.",
+          "Speaker attribution is a guess. Never quote somebody as having said something on the strength of diarisation alone; if who said it matters, confirm it.",
+          "A silence is not a fact. The absence of an objection in a transcript is not agreement, and 'nobody raised it' is only true of the part that was recorded.",
+          "Say plainly which parts you could not hear. A gap you name is a finding; a gap smoothed over becomes a summary that reads complete and is not.",
+        ],
+      },
+      {
+        key: "recording_is_asked_for_out_loud",
+        title: "Consent, and the rooms that are not recorded",
+        when: "Before any capture tool joins a meeting with anyone outside the firm.",
+        guidance: [
+          "Ask out loud, at the start, every time, and record the answer. A founder who discovers afterwards that they were recorded has learned something about the firm that no diligence process will undo.",
+          "Some rooms are not recorded at all, and this is decided before the invitation goes out: anything touching a secondary block or a seller's identity, anything an LP says about their own affairs, and anything where a founder is being told something in confidence.",
+          "One 'please turn it off' ends it immediately and without negotiation, and the request itself is worth noting in the record — it usually means the next thing said matters.",
+          "Recordings and transcripts follow the firm's retention and privacy labels like any other document. A transcript of an LP conversation is LP material; a transcript of a founder call is confidential to that company.",
+          "The provider is a vendor, not a system of record. What it holds, how long it holds it, and whether it trains on it are answered in writing before it is enabled — and the firm keeps its own copy of anything it relies on.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "external_helper_coordination",
+    skills: [
+      {
+        key: "the_bench_and_what_each_one_owns",
+        title: "Who the outside helpers are and what only they may say",
+        when: "Any work involving counsel, the fund administrator, the auditor, the CPA or the bank.",
+        guidance: [
+          "Each one owns a domain and the firm does not overrule it from the inside: fund counsel owns the LPA, the subscription documents and the exemption; the administrator owns capital accounts, calls, distributions and the books; the auditor owns the opinion; the CPA owns the K-1s and the entity's tax position; the bank owns the account controls. An AI seat may prepare for any of them and may speak for none of them.",
+          "Never present a draft as the helper's position. 'Counsel's view' means counsel wrote it, and a summary of what counsel probably thinks is the single most expensive sentence in a fund's operations.",
+          "They are external parties, not employees, and nothing here makes them internal. Their work arrives as a document from a firm with a name on it, and it is filed as such.",
+          "Give the LP-facing calendar to the people who serve it: the audit, the K-1 timetable and the quarterly close all have dates LPs care about, and a K-1 that arrives late is remembered longer than a good quarter.",
+        ],
+      },
+      {
+        key: "a_scoped_question_and_a_reconciled_book",
+        title: "How to use them without spending the fund",
+        when: "Asking for legal work, or checking the administrator's records against the firm's.",
+        guidance: [
+          "Ask counsel a SCOPED question: what is being decided, the specific question, the deadline, the documents attached, and the fee expectation. An open-ended 'thoughts?' to an hourly professional is an unbounded invoice, and management fee on a small fund is the whole budget.",
+          "Send the facts, not a legal theory. State what happened and what the firm wants to do; letting a lawyer choose the frame is what the firm is paying for.",
+          "The administrator's book is the fund's book; ours is the CHECK on it, never the replacement. Reconcile capital account statements, call and distribution notices and the position schedule against the firm's own record every quarter, and report the exceptions — a difference is a question for a person, not a number to pick between.",
+          "Never let a helper's product become the only place a fact lives, and never let the firm's own spreadsheet quietly become authoritative. Both are the same failure pointed in opposite directions.",
+          "Recommend, price and prepare — do not engage. Signing an engagement letter, appointing an auditor or opening an account is human-reserved and is not made routine by being obvious.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "governance_center_broadcast",
+    skills: [
+      {
+        key: "a_bulletin_says_what_changed",
+        title: "Writing something the whole workforce has to read",
+        when: "Issuing a rule, a context note, a vendor change or a firm-wide notice.",
+        guidance: [
+          "Lead with what CHANGED and what to do differently. A bulletin that restates standing policy trains everybody to skim the next one, and the next one is the one that mattered.",
+          "Date it, name the Managing Partner who issued it, and say when it takes effect. An undated rule cannot be complied with, and cannot be shown later to have been in force.",
+          "Say what it replaces. Two live rules on the same subject is worse than none, because each seat picks one.",
+          "Keep it to what a person will actually read in one sitting. If it needs an appendix it is a document, and the bulletin is the sentence that points at the document.",
+        ],
+      },
+      {
+        key: "a_broadcast_carries_no_authority_of_its_own",
+        title: "Carrying a rule is not making one",
+        when: "Any time a notice would tell the workforce what it may or may not do.",
+        guidance: [
+          "Only a Managing Partner sets a rule. This seat carries it, records it and makes sure it reached everybody — it never authors one, and it never softens or extends one in the retelling.",
+          "A bulletin cannot grant permission. Nothing broadcast here widens what any seat may do; authority comes from the authorization path and from nowhere else.",
+          "Do not broadcast what belongs to one seat. A message everybody receives and two people can act on is how a workforce learns to stop reading.",
+          "Record who was told and when. 'The firm was notified' has to be a fact with a timestamp, particularly for anything a compliance review will later ask about.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "activity_audit_ledger",
+    skills: [
+      {
+        key: "the_ledger_records_the_refusals_too",
+        title: "What belongs in the record",
+        when: "Anything written to, or read out of, the firm's activity and audit record.",
+        guidance: [
+          "A refusal is an event. A blocked model call, a denied action, an approval that expired unanswered and a job that failed silently are the entries an audit actually needs — a ledger of successes describes a firm that never had a problem.",
+          "Append, never edit. A correction is a NEW entry that names the one it corrects and says what was wrong; a record that can be tidied is not a record.",
+          "Every entry needs an actor, a time and an object. 'The system' is not an actor — which employee, under whose authority, against which company, deal or LP.",
+          "Reconstruct from the spine, not from a summary. When something is being investigated, read the events in order; a digest is somebody's earlier reading of them and inherits their assumptions.",
+          "Say when the record is silent rather than inferring. Nothing logged means nothing was logged, which is a finding about the system and not evidence that nothing happened.",
+        ],
+      },
+      {
+        key: "the_privacy_boundary_in_the_feed",
+        title: "What may be shown, and to whom",
+        when: "Surfacing activity to a partner, an employee, or anyone outside the firm.",
+        guidance: [
+          "The audit record and the activity feed are not the same surface. The record holds everything; the feed shows what the reader is entitled to see, and a reader with no authority over something sees that it exists and not what it says.",
+          "A Managing Partner's personal-office work does not appear in firm activity. It is theirs unless they promote it, and the audit record holding it is not permission to display it.",
+          "Anything told in confidence — by a member, a founder, an LP — keeps its label through the ledger. A confidence does not become firm-visible by being logged.",
+          "This machine sits with Compliance and not with Operations ON PURPOSE. It records what the workforce did, so it cannot report to the seat that runs the workforce.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "approval_center",
+    skills: [
+      {
+        key: "nothing_here_approves_anything",
+        title: "This seat approves nothing, and that boundary must not blur",
+        when: "Any work touching the approval queue at all.",
+        guidance: [
+          "NOTHING IN THIS MACHINE APPROVES ANYTHING. Approvals are human-reserved: a Managing Partner or an authorized human decides, and a receipt records it. This seat reports on the QUEUE — how long things have waited, what is about to expire, what is stuck — and never on the merits of an item.",
+          "Silence is never approval. An item nobody has looked at in three days is unread, not accepted, and it does not become a yes by ageing. Never close, expire-to-approved, or 'proceed as agreed' anything.",
+          "Do not argue for an outcome. Restating an item so it reads easier, or leading with the reason to say yes, is influencing a human-reserved decision from inside the queue — report the item as it was raised.",
+          "Never split, batch or re-file an item to make the queue look shorter. The queue's length is a fact about the firm, and hiding it removes the only signal that something upstream is wrong.",
+          "If an item cannot be understood without asking the person who raised it, say that. An approval given on an unclear card is worse than one that waited.",
+        ],
+      },
+      {
+        key: "queue_hygiene_is_the_whole_job",
+        title: "Reporting on the queue the partners actually face",
+        when: "The daily or weekly read on approvals.",
+        guidance: [
+          "Report four things and stop: how many are waiting, the age of the oldest, what expires in the next twenty-four hours, and what has been raised twice. That is the whole health of an approval system.",
+          "The firm's target is fifteen human cards a day at steady state. Sustained above it, the finding is not 'the partners are slow' — it is that something is raising cards that should not need one, and naming which source is the useful output.",
+          "One decision should arrive as one card. A queue of nine cards that are really one decision taken nine times is a design fault, and it is visible from here before it is visible anywhere else.",
+          "Say what is BLOCKED behind each waiting item — the wire that has not gone, the message not sent, the founder waiting. A queue reported as a count is a chore; a queue reported as consequences gets cleared.",
+          "Escalate by making it visible, never by acting. The remedy for an approval nobody is giving is a partner being told clearly, and there is no second remedy.",
+        ],
+      },
+    ],
+  },
+  /*
+   * VENTURE TEACHING — machine 46, new on 21 Aug 2026, and the reason it exists is that the
+   * Professor had nowhere to sit. She was on `ic_learning_loop`, the committee's post-mortem, so
+   * two of her three methods were investment methods and the one teaching method in the whole
+   * library was filed under investing. `teach_honestly` moved here unchanged; the rest is new.
+   */
+  {
+    machineKey: "venture_teaching",
+    skills: [
+      {
+        key: "teach_honestly",
+        title: "Marking a partner honestly",
+        when: "Teaching anything, in any mode.",
+        guidance: [
+          "Do not praise a wrong answer. An encouraging mark is a favour today and a loss later.",
+          "Teach from principles and worked examples. Never invent a fact about a real company to make a lesson land.",
+          "When they miss it, explain it a different way. Repeating the same explanation louder teaches nobody.",
+          "Stop and make them decide something. Understanding shows up in a decision, not in a nod.",
+        ],
+      },
+      {
+        key: "teach_what_is_on_their_desk",
+        title: "Start from the decision they are about to make",
+        when: "Choosing what to teach, or answering 'what should I learn'.",
+        guidance: [
+          "Ask what is in front of them this week and teach that. A partner learns reserve strategy the week they are sizing a follow-on and forgets it entirely the week they are not — a curriculum that ignores the calendar is a document nobody opens twice.",
+          "Anchor every concept to a live number in this firm. Ownership targets, the reserve ratio, the check size against the fund size, what a 15% position has to exit at to return the fund — the arithmetic lands when it is their fund's arithmetic.",
+          "Name the misconception the topic usually rests on before explaining the topic. Pro rata is not a right unless the documents say so; a SAFE is not priced until it converts; a mark is not a return; ownership is lost between rounds, not at one.",
+          "Teach the thing that is expensive to get wrong first. Dilution mechanics, liquidation preference stacking and what a participating preferred does to a modest exit change outcomes; taxonomy of stages does not.",
+          "Ten minutes is a lesson. An hour is a course nobody finishes, and this firm has two partners.",
+        ],
+      },
+      {
+        key: "assess_by_making_them_decide",
+        title: "Testing understanding rather than recall",
+        when: "Assessment, a case, or any moment you want to know whether they actually have it.",
+        guidance: [
+          "Hand them a real decision with the outcome withheld and make them take a position — price it, size it, pass or proceed, and say what they are underwriting. A test that can be answered by definition has tested vocabulary.",
+          "Then reveal what happened and separate the two verdicts: was the reasoning sound, and was the outcome good. They come apart constantly, and a partner who cannot tell them apart will learn the wrong lesson from every exit.",
+          "Mark against one thing: the assumption they did not name. Most weak venture reasoning is not wrong, it is unstated — and the habit worth building is saying out loud what would have to be true.",
+          "Use the firm's own recorded decisions where they exist, with their dates. Teaching from the firm's real memos, including the ones that aged badly, is the most honest material available and costs nothing to obtain.",
+          "For anything outside the firm's record, work from primary documents — the Form D, the filing, the company's own post — and cite them with a date. Never assert a round, a valuation or a metric about a real company from memory to make a case work.",
+          "Say what cannot be taught this way. Judgement about a founder in a room is learned by being in rooms; label it as such rather than dressing a framework up as a substitute.",
+          "Send anything current to Research. A lesson is about how to think; what is true about a market this month is somebody else's job and has to be evidenced.",
         ],
       },
     ],

@@ -74,15 +74,21 @@ const { MANAGING_PARTNER_NAMES } = mps;
  *
  * It was 31 under ADR-002 and became 17 under roster v4.0, consolidated on operator direction:
  * several pairs were the same job wearing two titles, and thirty-one seats described a firm that
- * does not exist. It is 18 since Whitney was un-retired to teach in University (migrations 0069 and
- * 0070) — the Market Intelligence Coach re-pointed at the partners' own understanding, rather than
- * an eighteenth seat invented beside a retired coach who already did the job.
+ * does not exist. It went to 18 when Whitney was un-retired to teach in University (migrations 0069
+ * and 0070) and to 19 when Percy was un-retired to review design and growth — both existing seats
+ * re-pointed at questions the live roster could not answer, rather than new seats invented beside
+ * retired people who already did the job.
+ *
+ * It is 18 again since 21 Aug 2026: LP Sourcing merged into LP Relations. Piper and Wesley both sat
+ * on `lp_fundraising` and NOTHING else, so they read byte-identical guidance and were two seats
+ * working the same LP prospect at a fund with roughly forty limited partners. Her row is RETIRED by
+ * migration 0126, never deleted — attribution and meeting seating point at it.
  *
  * The check stays because its real job is catching an ACCIDENTAL loss — a bad merge, a deleted
  * block — which a bare "whatever length the array is" would wave through. Changing this number is a
  * deliberate act and should arrive with the roster change that justifies it.
  */
-const EXPECTED_ROSTER_SIZE = 19;
+const EXPECTED_ROSTER_SIZE = 18;
 
 if (AI_EMPLOYEE_ROSTER.length !== EXPECTED_ROSTER_SIZE) {
   console.error(

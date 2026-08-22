@@ -194,7 +194,6 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
 
   return (
     <div className="page" data-testid="weekly-review-page">
-      <h3>Weekly review</h3>
       {failure && (
         <p className="notice notice-gate small" data-testid="weekly-review-failed" role="alert">
           {failure}
@@ -377,7 +376,7 @@ export function WeeklyReviewPage({ onNavigate }: { onNavigate: (k: string) => vo
           "what does that mean" — fair, since "records" could mean anything in a system with two
           hundred tables. Naming the eight places it looks is the whole explanation, and the
           reassurance underneath is the half people actually worry about. */}
-      <details className="card weekly-refresh-explainer" data-testid="weekly-refresh-explainer">
+      <details className="card" data-testid="weekly-refresh-explainer">
         <summary className="muted small">What that pulls in</summary>
         <p className="small">It reads eight places and raises anything that needs the two of you:</p>
         <ul className="card-list small">

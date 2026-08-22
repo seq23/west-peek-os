@@ -1,6 +1,39 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { originLabel, stage } from "@shared/investment/pipeline";
+
+/**
+ * Which company the register should open on, handed over from another page.
+ *
+ * WHY A HANDOVER AND NOT A PROP. Navigation in this app is a nav key and nothing else —
+ * `onNavigate("companies")` — and the router falls back to Home for any hash that is not a bare
+ * key, so there is nowhere in the URL to put a company id. Threading one through the shell would
+ * add a second piece of page state to App for the sake of one link. This is read once and cleared,
+ * so it cannot outlive the click that set it, and a stale one can never reopen a card by surprise.
+ *
+ * It lives here rather than in a shared module because the REGISTER is what is being opened: the
+ * page that honours the request owns the way to ask for it.
+ */
+const OPEN_ON_REGISTER = "wp-register-open";
+
+/** Open the register on this company — used by the deal rows on Dealflow. */
+export function openOnRegister(companyId: string): void {
+  try {
+    window.sessionStorage.setItem(OPEN_ON_REGISTER, companyId);
+  } catch {
+    // Storage refused. The register still opens; it just will not have picked the company out.
+  }
+}
+
+function takeRegisterRequest(): string | null {
+  try {
+    const id = window.sessionStorage.getItem(OPEN_ON_REGISTER);
+    if (id) window.sessionStorage.removeItem(OPEN_ON_REGISTER);
+    return id;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The register, as something a partner can scan.
@@ -25,12 +58,20 @@ interface RegisterCompany {
   one_liner: string | null;
   website: string | null;
   status: string;
+  deal_id: string | null;
   deal_status: string | null;
   amount_usd: number | null;
   amount_is_provisional: boolean;
   origin: string | null;
   meetings: number;
+  /** Why the firm said no. Required when the deal was passed, so it is never empty in practice. */
+  exit_reason: string | null;
+  /** When it left. Null where the deal never moved — the register does not invent a date. */
+  left_pipeline_at: string | null;
 }
+
+/** Passed or withdrawn: out of the working list, still in the register. */
+const hasLeft = (c: RegisterCompany): boolean => Boolean(c.deal_status && stage(c.deal_status)?.isExit);
 
 const usd = (n: number | null): string =>
   n === null || !Number.isFinite(n)
@@ -63,12 +104,18 @@ interface HistoryEntry {
  * SECTOR IS A LIST NOW, not free text — see item 10. Typing it was how "Ed tech" and "ED_TECH" came
  * to be two sectors.
  */
-function CompanyEditor({ company, sectors, onSaved }: {
+function CompanyEditor({ company, sectors, onSaved, arrivedHere }: {
   company: RegisterCompany;
   sectors: Array<{ key: string; label: string }>;
   onSaved: () => void;
+  /**
+   * Somebody clicked this company's name on a deal and was sent here. Open the record rather than
+   * landing them on a closed card they have to find and click again — the click already said what
+   * they wanted, and asking for it twice is how a link stops feeling like a link.
+   */
+  arrivedHere: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(arrivedHere);
   const [showHistory, setShowHistory] = useState(false);
   const [form, setForm] = useState({ sector: company.sector ?? "", one_liner: company.one_liner ?? "", website: "" });
   const [busy, setBusy] = useState(false);
@@ -147,6 +194,68 @@ function CompanyEditor({ company, sectors, onSaved }: {
   );
 }
 
+/** One company, the same four facts in the same places whether it is live or passed. */
+function CompanyCard({ company: c, sectors, arrivedHere, onSaved }: {
+  company: RegisterCompany;
+  sectors: Array<{ key: string; label: string }>;
+  arrivedHere: boolean;
+  onSaved: () => void;
+}) {
+  const s = c.deal_status ? stage(c.deal_status) : null;
+  const left = hasLeft(c);
+  return (
+    <article
+      /* `deal-row-out` is the dimming the pipeline already uses for a deal that has left it, reused
+         rather than duplicated: the two lists are showing the same fact and should read the same. */
+      className={left ? "card company-card deal-row-out" : "card company-card"}
+      data-testid={`company-${c.id}`}
+    >
+      <header className="company-card-head">
+        <h4>{c.canonical_name}</h4>
+        {c.sector ? <span className="badge">{c.sector}</span> : <span className="muted small">no sector</span>}
+      </header>
+
+      <p className="company-oneliner">
+        {c.one_liner ?? <span className="muted">Nothing recorded about what they do.</span>}
+      </p>
+
+      {/* THE REASON, ON THE CARD. A passed company whose card looks like every other card is the
+          thing the operator asked to be able to see at a glance, and the reason is what makes the
+          pile worth keeping — a list of names the firm declined answers nothing. */}
+      {left && (
+        <p className="company-oneliner" data-testid={`company-passed-${c.id}`}>
+          <strong>{s?.key === "WITHDRAWN" ? "It went away" : "We said no"}</strong>
+          {c.left_pipeline_at ? ` on ${new Date(c.left_pipeline_at).toLocaleDateString()}` : ""} —{" "}
+          {c.exit_reason ?? <span className="muted">no reason was recorded, which is the part worth having.</span>}
+        </p>
+      )}
+
+      <dl className="company-facts">
+        <div>
+          <dt>Stage</dt>
+          <dd>{s?.label ?? "Not in the pipeline"}</dd>
+        </div>
+        <div>
+          <dt>In it</dt>
+          <dd data-testid={`company-amount-${c.id}`}>
+            {usd(c.amount_usd)}
+            {c.amount_is_provisional && c.amount_usd !== null && <span className="muted small"> · placeholder</span>}
+          </dd>
+        </div>
+        <div>
+          <dt>Met via</dt>
+          <dd>{c.origin ? originLabel(c.origin) : "—"}</dd>
+        </div>
+        <div>
+          <dt>Meetings</dt>
+          <dd>{c.meetings}</dd>
+        </div>
+      </dl>
+      <CompanyEditor company={c} sectors={sectors} onSaved={onSaved} arrivedHere={arrivedHere} />
+    </article>
+  );
+}
+
 export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
   const register = useApi<{ companies: RegisterCompany[]; sectors: string[]; count: number }>("/api/companies/register");
   const [sector, setSector] = useState("ALL");
@@ -155,6 +264,8 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
   const sectors = sectorList.data?.options ?? [];
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  /* Read once, on the way in. See openOnRegister above for why this is not a prop. */
+  const [openOn] = useState<string | null>(() => takeRegisterRequest());
 
   const all = register.data?.companies ?? [];
   const shown = useMemo(() => {
@@ -170,8 +281,31 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
     });
   }, [all, sector, query]);
 
+  /*
+   * THE PASS PILE IS BELOW, NOT MIXED IN.
+   *
+   * Operator, item 9, verbatim: a company the firm passed on "should drop out of the active
+   * pipeline but keep its history", and the pass pile must be "clearly visible and easy to get to"
+   * — greyed out, below, not deleted. It was mixed into the same grid at full strength, so the
+   * working register and the record of what was declined were one undifferentiated list.
+   *
+   * Both halves obey the filter and the search box. Narrowing to health tech and then not seeing
+   * the health-tech company you passed on last month would make the pile look empty when it is not.
+   */
+  const working = shown.filter((c) => !hasLeft(c));
+  const passed = shown.filter(hasLeft);
   const owned = all.filter((c) => c.deal_status === "CLOSED");
+  const passedInAll = all.filter(hasLeft);
 
+  /*
+   * Arriving from a deal, land ON the company rather than at the top of a grid containing it. The
+   * card opens itself (see CompanyEditor); this puts it on screen, which the open state alone does
+   * not do once the register runs past one screenful.
+   */
+  useEffect(() => {
+    if (!openOn || !register.data) return;
+    document.querySelector(`[data-testid="company-${openOn}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [openOn, register.data]);
 
   if (register.loading && !register.data) return <p data-testid="companies-loading">Loading the register…</p>;
 
@@ -179,7 +313,8 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
     <section data-testid="companies-page">
       <p className="muted small">
         Every company the firm has a record of, {me.fullName.split(" ")[0]} — {all.length} in all,{" "}
-        {owned.length} the fund has money in.
+        {owned.length} the fund has money in
+        {passedInAll.length > 0 && `, ${passedInAll.length} it turned down`}.
       </p>
 
       <div className="form-row">
@@ -221,55 +356,22 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
 
 
       <div className="company-grid" data-testid="company-grid">
-        {shown.map((c) => {
-          const s = c.deal_status ? stage(c.deal_status) : null;
-          return (
-            <article className="card company-card" key={c.id} data-testid={`company-${c.id}`}>
-              <header className="company-card-head">
-                <h4>{c.canonical_name}</h4>
-                {c.sector ? (
-                  <span className="badge">{c.sector}</span>
-                ) : (
-                  <span className="muted small">no sector</span>
-                )}
-              </header>
-
-              <p className="company-oneliner">
-                {c.one_liner ?? <span className="muted">Nothing recorded about what they do.</span>}
-              </p>
-
-              <dl className="company-facts">
-                <div>
-                  <dt>Stage</dt>
-                  <dd>{s?.label ?? "Not in the pipeline"}</dd>
-                </div>
-                <div>
-                  <dt>In it</dt>
-                  <dd data-testid={`company-amount-${c.id}`}>
-                    {usd(c.amount_usd)}
-                    {c.amount_is_provisional && c.amount_usd !== null && (
-                      <span className="muted small"> · placeholder</span>
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Met via</dt>
-                  <dd>{c.origin ? originLabel(c.origin) : "—"}</dd>
-                </div>
-                <div>
-                  <dt>Meetings</dt>
-                  <dd>{c.meetings}</dd>
-                </div>
-              </dl>
-              <CompanyEditor company={c} sectors={sectors} onSaved={() => register.reload()} />
-            </article>
-          );
-        })}
-        {shown.length === 0 && (
+        {working.map((c) => (
+          <CompanyCard
+            key={c.id}
+            company={c}
+            sectors={sectors}
+            arrivedHere={c.id === openOn}
+            onSaved={() => register.reload()}
+          />
+        ))}
+        {working.length === 0 && (
           <p className="state-empty" data-testid="companies-empty">
             {all.length === 0
-              ? "No companies yet. Add one above, or capture one as you meet them."
-              : "Nothing matches that filter."}
+              ? "No companies yet. The first one enters on Dealflow, with its deal."
+              : passed.length > 0
+                ? "Nothing live matches that. What the firm passed on is below."
+                : "Nothing matches that filter."}
           </p>
         )}
       </div>
@@ -277,6 +379,39 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
       <button type="button" className="link-button" onClick={() => onNavigate("dealflow")}>
         See where these stand in the pipeline →
       </button>
+
+      {/* WHAT THE FIRM TURNED DOWN, kept and readable.
+          A pass is one of the more valuable things a fund owns — it is the only record of the
+          judgement, and it is the first thing you want when the same founder comes back raising.
+          Below the live register and dimmed, so it never competes with the working list; open by
+          default and headed with a count, so it is never something you have to know to look for. */}
+      {passedInAll.length > 0 && (
+        <section data-testid="companies-passed">
+          <div className="home-section-head">
+            <h3>Who did we turn down, and why?</h3>
+            <span className="muted small">
+              {passedInAll.length} {passedInAll.length === 1 ? "company" : "companies"} · out of the pipeline,
+              still on the record
+            </span>
+          </div>
+          <div className="company-grid">
+            {passed.map((c) => (
+              <CompanyCard
+                key={c.id}
+                company={c}
+                sectors={sectors}
+                arrivedHere={c.id === openOn}
+                onSaved={() => register.reload()}
+              />
+            ))}
+            {passed.length === 0 && (
+              <p className="state-empty" data-testid="companies-passed-empty">
+                None of the {passedInAll.length} the firm turned down match that filter.
+              </p>
+            )}
+          </div>
+        </section>
+      )}
     </section>
   );
 }
