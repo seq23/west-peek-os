@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Env } from "../env";
-import { networkOsConfigured, pullSnapshot, type NetworkSnapshot } from "../effects/networkOsClient";
+import { networkOsConfigured, proposePerson, pullSnapshot, type NetworkSnapshot } from "../effects/networkOsClient";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import type { FirmUserIdentity } from "../auth";
@@ -660,8 +660,36 @@ export function configuredClient(env: Env): NetworkOsClient | null {
         provider_version: result.source ?? "network_os_snapshot",
       };
     },
-    async push() {
-      throw new Error("Network OS writeback is not enabled (canon §12A.5 governs it separately).");
+    /**
+     * Outbound is PROPOSAL ONLY, and only for a person.
+     *
+     * `contact` is proposed to Network OS's intake queue, where a human over there decides. Every
+     * other resource still throws: a relationship or a touch is Network OS's own observation of the
+     * world, and this app has no standing to assert one. Narrow on purpose — the reason push()
+     * threw at all was that a pull client able to push anything is one bug away from mutating the
+     * firm's system of record, and that argument only stops applying for the one case where the far
+     * end still gets to say no.
+     */
+    async push(resource: NetworkResource, record: { external_id: string; fields: Record<string, unknown> }) {
+      if (resource !== "contact") {
+        throw new Error(
+          `Network OS writeback is proposal-only and only for a person; ${resource} is Network OS's own observation to make.`,
+        );
+      }
+      const f = record.fields as Record<string, string | null | undefined>;
+      const name = (f.name ?? f.full_name ?? "").toString().trim();
+      if (!name) throw new Error("a person needs a name before they can be proposed to Network OS");
+
+      const result = await proposePerson(env, {
+        name,
+        email: f.email ?? record.external_id ?? null,
+        phone: f.phone ?? null,
+        company: f.company ?? null,
+        title: f.title ?? null,
+        context: f.context ?? f.note ?? null,
+      });
+      if (!result.ok) throw new Error(result.detail);
+      return { ok: true, response: result.response };
     },
   };
 }

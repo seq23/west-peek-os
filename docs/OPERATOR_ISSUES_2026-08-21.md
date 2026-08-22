@@ -249,6 +249,59 @@ the pipeline — carrying the person who introduced it, so provenance survives.
 
 Two systems never both claim the same write.
 
+**4 · One mailbox, both triggers, routed by who owns the record.**
+
+> "we should be able to email os@westpeek.ventures too with #wpnetwork #wpdealflow and get companies
+> added to the funnel and sync to the network OS database"
+
+`os@westpeek.ventures` is this app's address, so this app receives the mail and then routes each
+trigger to whichever system owns that kind of record. One email may carry both.
+
+| Trigger in the email | Lands in | Why |
+|---|---|---|
+| `#wpdealflow` | this app's funnel, as a **proposed** company | West Peek OS owns deal flow |
+| `#wpnetwork` | relayed to Network OS `POST /api/intake/create`, as a **proposal** | Network OS owns people |
+
+This does not contradict the rule above — it honours it. The mailbox is a front door, not a store:
+nothing is written twice, each record goes to its one owner, and both arrive as proposals a human
+reviews rather than as direct writes.
+
+**BLOCKED ON CONFIGURATION, and named honestly.** There is no inbound email path in this Worker at
+all today — `src/worker/index.ts` exports `fetch` and `scheduled` and no `email()` handler, and
+`wrangler.toml` has only the OUTBOUND `send_email` binding, still commented out. Receiving mail
+needs Cloudflare **Email Routing** enabled on `westpeek.ventures` with a route for
+`os@westpeek.ventures` pointing at this Worker. The handler is ordinary work; the DNS and Email
+Routing setup is a dashboard action on the domain and is the actual gate. Until it is done, the
+email route is UNPROVEN and must not be described as working.
+
+**5 · No email-routing employee. Porter already is one.**
+
+> "should there be an employee who just handles email routing? routing to employees or wherever the
+> emails go?"
+
+**No new seat**, and the roster already made this decision. Porter is "Systems & Intake Operator",
+his machines are `global_capture_routing`, `network_os_sync_verification` and
+`systems_data_integration`, and his own bio reads: *"Everything that arrives and everything that
+syncs. Routes captures to whoever owns them... Plumbing, which is why it is one seat rather than
+three."* Adding a mail-room seat beside that is precisely the duplicated work item 17 exists to
+remove.
+
+**And most of the routing should not be an employee at all.** `#wpdealflow` → funnel and
+`#wpnetwork` → Network OS is a rule, not a judgement. A deterministic dispatch is cheaper, faster
+and cannot hallucinate a destination; paying for an AI call to read a hashtag would be a bad trade
+made on every message.
+
+**What DOES need Porter is the exception**, and that is the real work: mail with no trigger, mail
+with a conflicting one, a deck attached with no covering text, a founder replying into an old
+thread, the same person arriving twice under two addresses. Those are judgement calls on the firm's
+behalf, which is what an employee is for. So the mail room is a machine and Porter owns the pile it
+cannot decide — with the exceptions surfaced on **Needs your attention**, because an unrouted email
+sitting in a queue nobody opens is the same failure as a stuck job.
+
+**Order of build.** The outbound relay (crossing 2) comes first, because the `#wpnetwork` half of
+this email route is the same call. Deal flow intake (crossing 3) reuses item 7's proposal door. The
+email handler is last and only after Email Routing exists.
+
 ---
 
 ## Operator notes filed 21 Aug 2026, not yet built

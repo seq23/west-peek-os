@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  composeIntakeText,
   mintSession,
   networkOsBlockedReason,
   networkOsConfigured,
+  proposePerson,
   pullSnapshot,
 } from "../src/worker/effects/networkOsClient";
 import type { Env } from "../src/worker/env";
@@ -127,5 +129,64 @@ describe("pulling a snapshot", () => {
     const r = await pullSnapshot(CONFIGURED, boom);
     expect(r.ok).toBe(false);
     expect(r.detail).toMatch(/could not reach/i);
+  });
+});
+
+// ── Proposing a person outward ──
+
+describe("capture proposes a person to Network OS rather than writing one", () => {
+  /**
+   * Operator direction, 21 Aug 2026: "the capture tab needs to integrate also with network OS and
+   * allow new people to go the other way and go into the network OS database."
+   *
+   * The governance question is whether "go into" means write. It does not: Network OS owns the
+   * contact record, so this app proposes and the far end decides. These assert on the ENDPOINT and
+   * the composed message, because both are where that distinction actually lives.
+   */
+  const PERSON = { name: "Dana Reyes", email: "dana@example.com", company: "Northwind", title: "Founder" };
+
+  it("composes the message in the shape Network OS parses, carrying the operator's own trigger", () => {
+    const text = composeIntakeText(PERSON);
+    expect(text.startsWith("#wpnetwork")).toBe(true);
+    expect(text).toContain("Name: Dana Reyes");
+    expect(text).toContain("Email: dana@example.com");
+    expect(text).toContain("Company: Northwind");
+    // A reviewer over there should not have to ask where a queued person came from.
+    expect(text).toContain("Source: West Peek OS capture");
+  });
+
+  it("posts to the intake queue, never to the contact table", async () => {
+    let seenUrl = "";
+    let seenBody: any = null;
+    const fake = (async (url: string, init: RequestInit) => {
+      seenUrl = String(url);
+      seenBody = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const res = await proposePerson(CONFIGURED, PERSON, fake);
+    expect(res.ok).toBe(true);
+    expect(seenUrl).toContain("/api/intake/create");
+    // The distinction the whole boundary rests on.
+    expect(seenUrl).not.toContain("/api/contacts/create");
+    expect(seenBody.raw_text).toContain("#wpnetwork");
+  });
+
+  it("names a rejected session as a rejected session, and proposes nothing", async () => {
+    const fake = (async () =>
+      new Response(JSON.stringify({ ok: false, error: "Authentication required." }), { status: 401 })) as unknown as typeof fetch;
+    const res = await proposePerson(CONFIGURED, PERSON, fake);
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain("rejected the session");
+  });
+
+  it("says so precisely when Network OS does not recognise the trigger, because that fix is on this side", async () => {
+    const fake = (async () =>
+      new Response(JSON.stringify({ ok: false, error: "No accepted West Peek Network trigger found." }), {
+        status: 422,
+      })) as unknown as typeof fetch;
+    const res = await proposePerson(CONFIGURED, PERSON, fake);
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain("#wpnetwork");
   });
 });

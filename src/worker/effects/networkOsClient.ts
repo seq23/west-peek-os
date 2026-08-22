@@ -28,12 +28,30 @@ import type { Env } from "../env";
  * If that trade stops being acceptable, the fix is a service token in Network OS, not a workaround
  * here.
  *
- * NEVER WRITES. Read-only by construction — there is no POST in this file. Canon §12A.5 puts
- * writeback behind its own law and approval path, and a pull client that could also push would be
- * one bug away from mutating the firm's system of record.
+ * IT NOW PROPOSES, AND THAT IS NOT THE SAME AS WRITING. This file was read-only by construction,
+ * with the note that a pull client which could also push would be one bug away from mutating the
+ * firm's system of record. That reasoning still holds and is why the one write here targets Network
+ * OS's INTAKE QUEUE rather than its contact table: the far end still decides. Everything governing
+ * it — the reserved `network_os.writeback` action, the MP approval receipt, single-use idempotency,
+ * and a receipt on refusal and failure alike — was already built in `networkAdapter.ts` and is
+ * unchanged. What was missing was only the last call.
  */
 
 const SNAPSHOT_PATH = "/api/sheets/snapshot";
+
+/**
+ * Network OS's intake queue. Deliberately NOT `/api/contacts/create`.
+ *
+ * Operator direction, 21 Aug 2026: "the capture tab needs to integrate also with network OS and
+ * allow new people to go the other way and go into the network OS database."
+ *
+ * They go in as a PROPOSAL. Network OS owns the contact record; this app proposing somebody must
+ * not be the same act as this app writing them. `/api/intake/create` appends to the queue a human
+ * reviews over there, which keeps exactly one system able to say who is a member — the thing the
+ * whole boundary exists to protect. `/api/contacts/create` would have been one line shorter and
+ * would have made West Peek OS a second writer of the firm's relationship record.
+ */
+const INTAKE_PATH = "/api/intake/create";
 const TIMEOUT_MS = 15_000;
 
 /** Tabs Network OS returns. Only the ones West Peek OS has a use for are mapped. */
@@ -151,6 +169,98 @@ export async function pullSnapshot(env: Env, fetchImpl: typeof fetch = fetch): P
       ? `Network OS did not respond within ${TIMEOUT_MS / 1000}s.`
       : `Could not reach Network OS: ${err instanceof Error ? err.message : String(err)}`;
     return { ok: false, snapshot: null, source: null, detail };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+
+/**
+ * Propose a person to Network OS's intake queue, using the operator's own trigger.
+ *
+ * Network OS parses `key: value` lines out of free text and requires a recognised trigger word, so
+ * the message is composed in exactly the shape a person would have typed into an email — which is
+ * also why the same call will serve the `#wpnetwork` half of inbound mail to os@westpeek.ventures
+ * without a second code path.
+ */
+export const NETWORK_TRIGGER = "#wpnetwork";
+
+/** The field names Network OS's `parseFields` recognises. Anything else is carried as free text. */
+export interface ProposedPerson {
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  company?: string | null;
+  title?: string | null;
+  context?: string | null;
+}
+
+export function composeIntakeText(person: ProposedPerson, trigger: string = NETWORK_TRIGGER): string {
+  const lines = [trigger, `Name: ${person.name}`];
+  if (person.email) lines.push(`Email: ${person.email}`);
+  if (person.phone) lines.push(`Phone: ${person.phone}`);
+  if (person.company) lines.push(`Company: ${person.company}`);
+  if (person.title) lines.push(`Title: ${person.title}`);
+  if (person.context) lines.push(`Context: ${person.context}`);
+  // Named so a reviewer in Network OS can see where it came from without asking.
+  lines.push("Source: West Peek OS capture");
+  return lines.join("\n");
+}
+
+export interface ProposeResult {
+  ok: boolean;
+  detail: string;
+  response: unknown;
+}
+
+export async function proposePerson(
+  env: Env,
+  person: ProposedPerson,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ProposeResult> {
+  const blocked = networkOsBlockedReason(env);
+  if (blocked) return { ok: false, detail: blocked, response: null };
+
+  const base = env.WP_OS_NETWORK_OS_BASE_URL!.replace(/\/+$/, "");
+  const session = await mintSession(env.WP_OS_NETWORK_OS_SESSION_SECRET!, env.WP_OS_NETWORK_OS_USER_EMAIL!);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(`${base}${INTAKE_PATH}`, {
+      method: "POST",
+      headers: { cookie: `wpn_session=${session}`, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        raw_text: composeIntakeText(person),
+        captured_by: env.WP_OS_NETWORK_OS_USER_EMAIL,
+        source_user_email: env.WP_OS_NETWORK_OS_USER_EMAIL,
+      }),
+      signal: controller.signal,
+    });
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+
+    if (res.status === 401) {
+      return { ok: false, detail: "Network OS rejected the session, so nothing was proposed.", response: body };
+    }
+    // 422 means the trigger was not recognised — a contract mismatch worth naming precisely rather
+    // than reporting as a generic failure, because the fix is in this file and not over there.
+    if (res.status === 422) {
+      return {
+        ok: false,
+        detail: `Network OS did not recognise the ${NETWORK_TRIGGER} trigger in the message this app composed.`,
+        response: body,
+      };
+    }
+    if (!res.ok || body?.ok === false) {
+      return { ok: false, detail: body?.error ?? `Network OS returned HTTP ${res.status}.`, response: body };
+    }
+    return { ok: true, detail: "Proposed to the Network OS intake queue for review.", response: body };
+  } catch (err) {
+    const detail =
+      err instanceof Error && err.name === "AbortError"
+        ? `Network OS did not respond within ${TIMEOUT_MS / 1000}s.`
+        : `Could not reach Network OS: ${err instanceof Error ? err.message : String(err)}`;
+    return { ok: false, detail, response: null };
   } finally {
     clearTimeout(timer);
   }
