@@ -1,5 +1,11 @@
 import type { Env } from "./env";
 import { handleInboundEmail } from "./effects/inboundEmail";
+import {
+  handleFundraisingSummary,
+  handleListCommitments,
+  handleRecordCommitment,
+  handleSetFundSize,
+} from "./services/lpCommitments";
 import { resolveFirmUser } from "./auth";
 import { Router, json, type RouteContext } from "./router";
 import {
@@ -918,6 +924,12 @@ const router = new Router()
   .post("/api/network/conflicts/:id/resolve", handleResolveConflict)
   .post("/api/network/writeback", handleWriteBack)
   // P10 — LP / fundraising. LP data is LP_PRIVATE by default.
+  // What an LP actually committed, and how big the fund is — the two questions the LP surface
+  // could not answer at all before 21 Aug 2026.
+  .post("/api/lp/commitments", handleRecordCommitment)
+  .get("/api/lp/commitments", handleListCommitments)
+  .get("/api/lp/fundraising", handleFundraisingSummary)
+  .patch("/api/funds/:id/size", handleSetFundSize)
   .post("/api/lp/records", handleCreateLpRecord)
   .get("/api/lp/records", handleListLpRecords)
   .get("/api/lp/records/:id", handleGetLpRecord)

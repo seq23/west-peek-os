@@ -116,6 +116,12 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // P10 — LP / fundraising / claims / data-room control.
   { key: "lp_record.create", name: "Create LP record", description: "Record an LP entity (LP_PRIVATE by default).", isExternalEffect: false },
   { key: "lp_opportunity.create", name: "Create LP opportunity", description: "Track a fundraising conversation with an LP.", isExternalEffect: false },
+  // Recording what an LP committed, and the fund's stated target. Not reserved: writing down a
+  // number somebody signed is bookkeeping, and gating it behind an approval card would mean the
+  // fund's own total is the one figure nobody can keep current. What IS governed sits downstream —
+  // a position is still only created by an executed transaction.
+  { key: "lp_commitment.record", name: "Record an LP commitment", description: "Record or revise how much a limited partner has committed to a fund.", isExternalEffect: false },
+  { key: "fund.set_size", name: "Set the fund's target size", description: "State what the fund is raising. What has actually been committed is derived from signed commitments, never typed.", isExternalEffect: false },
   { key: "lp_opportunity.transition", name: "Transition LP opportunity", description: "Move an LP opportunity through its governed stages.", isExternalEffect: false },
   { key: "lp_diligence_request.create", name: "Record LP diligence request", description: "Record a diligence question or document request from an LP.", isExternalEffect: false },
   { key: "lp_diligence_request.respond", name: "Respond to LP diligence request", description: "Record the firm response to an LP diligence request.", isExternalEffect: false },

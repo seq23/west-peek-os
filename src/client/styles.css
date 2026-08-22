@@ -955,6 +955,12 @@ hr {
   min-width: 0;
 }
 
+/* A money or quantity field is as wide as the number, not as wide as the row. `flex` below makes
+   free text grow, which is right for a name and wrong for an amount — an input sized for a
+   paragraph invites one. */
+.form-row > label:has(> .input-money) { flex: 0 1 14rem; }
+.input-money { font-variant-numeric: tabular-nums; }
+
 /*
  * A TEXT FIELD FILLS THE ROW IT IS IN.
  *

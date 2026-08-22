@@ -584,3 +584,78 @@ describe("4. LP workflow stays governed and private", () => {
     }
   });
 });
+
+// ── What an LP actually committed ──
+
+describe("the fund can record what an LP committed, and how big it is", () => {
+  /**
+   * Operator, on the LP page: "i have no idea what a claim is." The vocabulary was the smaller
+   * half — there was nowhere in this system to record how much money an LP had committed, or the
+   * fund's size. "COMMITTED" existed only as a status string on three different tables, so the
+   * system could say an LP had committed while holding no idea what to, or how much.
+   */
+  let fundId = "";
+  let lpA = "";
+  let lpB = "";
+
+  it("sets the fund's target, which is the one number a partner states rather than derives", async () => {
+    const f = await call<{ id: string }>("/api/funds", MP, "POST", { name: "West Peek Fund I" });
+    expect(f.status).toBe(201);
+    fundId = f.body.id;
+
+    const res = await call(`/api/funds/${fundId}/size`, MP, "PATCH", { target_size: 30_000_000, vintage_year: 2026 });
+    expect(res.status).toBe(200);
+  });
+
+  it("records a commitment against a real LP and a real fund", async () => {
+    const a = await call<{ id: string }>("/api/lp/records", MP, "POST", { legal_name: "Cedar Family Office", lp_type: "FAMILY_OFFICE" });
+    const b = await call<{ id: string }>("/api/lp/records", MP, "POST", { legal_name: "Meridian Endowment", lp_type: "INSTITUTION" });
+    lpA = a.body.id;
+    lpB = b.body.id;
+
+    expect((await call(`/api/lp/commitments`, MP, "POST", { lp_record_id: lpA, fund_id: fundId, amount: 5_000_000, state: "SIGNED" })).status).toBe(201);
+    expect((await call(`/api/lp/commitments`, MP, "POST", { lp_record_id: lpB, fund_id: fundId, amount: 2_000_000, state: "SOFT" })).status).toBe(201);
+  });
+
+  it("keeps signed and soft apart, because one is banked and the other is hoped", async () => {
+    const res = await call<{ funds: Array<{ target: number; signed: number; soft: number; percent_of_target: number }> }>("/api/lp/fundraising", MP);
+    const f = res.body.funds.find((x: any) => x.id === fundId)!;
+    expect(f.target).toBe(30_000_000);
+    expect(f.signed).toBe(5_000_000);
+    expect(f.soft).toBe(2_000_000);
+    // Never added together into one "raised" figure — that is what removes the distinction.
+    expect(f.percent_of_target).toBe(16.7);
+  });
+
+  it("revises rather than duplicating, so the fund's total cannot double-count", async () => {
+    const again = await call(`/api/lp/commitments`, MP, "POST", { lp_record_id: lpA, fund_id: fundId, amount: 8_000_000, state: "SIGNED" });
+    expect(again.status).toBe(200);
+
+    const res = await call<{ funds: Array<{ signed: number; signed_count: number }> }>("/api/lp/fundraising", MP);
+    const f = res.body.funds.find((x: any) => x.id === fundId)!;
+    expect(f.signed).toBe(8_000_000);
+    expect(f.signed_count).toBe(1);
+  });
+
+  it("keeps money exact — no float drift on the number that ends up in an LP letter", async () => {
+    const cents = await call(`/api/lp/commitments`, MP, "POST", { lp_record_id: lpB, fund_id: fundId, amount: 1_234_567.89, state: "SIGNED" });
+    expect(cents.status).toBe(200);
+    const res = await call<{ commitments: Array<{ lp_record_id: string; amount: number }> }>("/api/lp/commitments", MP);
+    const row = res.body.commitments.find((c) => c.lp_record_id === lpB)!;
+    expect(row.amount).toBe(1_234_567.89);
+  });
+
+  it("refuses a commitment to an LP or a fund that does not exist", async () => {
+    expect((await call("/api/lp/commitments", MP, "POST", { lp_record_id: "lp_nope", fund_id: fundId, amount: 1 })).status).toBe(404);
+    expect((await call("/api/lp/commitments", MP, "POST", { lp_record_id: lpA, fund_id: "fund_nope", amount: 1 })).status).toBe(404);
+  });
+
+  it("has no percentage when nobody has said what the fund is raising", async () => {
+    const f2 = await call<{ id: string }>("/api/funds", MP, "POST", { name: "West Peek Opportunities" });
+    const res = await call<{ funds: Array<{ id: string; target: null; percent_of_target: null }> }>("/api/lp/fundraising", MP);
+    const f = res.body.funds.find((x: any) => x.id === f2.body.id)!;
+    // Not zero per cent. A percentage of nothing is a question nobody has answered yet.
+    expect(f.target).toBeNull();
+    expect(f.percent_of_target).toBeNull();
+  });
+});
