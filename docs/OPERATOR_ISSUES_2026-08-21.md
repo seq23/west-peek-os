@@ -274,8 +274,26 @@ Porter's `the_inbox_triggers` method is written from it, and a test asserts the 
 three copies of a routing rule is three chances for the inbox to do something the documentation says
 it does not.
 
+**THE MAILBOX MOVED TO `os@joinwestpeek.com`, and the reason matters.**
+
+`westpeek.ventures` MX points at Google Workspace. Cloudflare Email Routing installs its own MX at
+the zone apex, so enabling it there would have taken mail away from `sequoia@`, `scooter@` and
+`info@westpeek.ventures` — the fund's actual email — in exchange for a machine inbox. Not a trade
+worth making, and the operator confirmed the move: *"ok then we can change it to
+os@joinwestpeek.com if we need to."*
+
+`joinwestpeek.com` carries no mail (verified: zero MX records) and is already the app's own domain —
+`os.joinwestpeek.com` and `network.joinwestpeek.com` both live there — so the address now matches the
+system it belongs to.
+
+**One thing to watch when enabling.** That domain is deliberately locked down for SENDING:
+`v=spf1 -all`, `_dmarc p=reject` with strict alignment, and a null DKIM key. Receiving is governed by
+MX so none of that blocks us, but Cloudflare's enable flow adds its own SPF record, which collides
+with `-all` — only one SPF record per domain is valid. Delivery here is to a **Worker**, not a
+forward to another mailbox, so nothing is ever re-sent and that SPF is not needed. Keep `-all`.
+
 **STILL NOT RECEIVING.** The table, the routes and the method are built and tested. Mail to
-`os@westpeek.ventures` does not reach this Worker yet, because Cloudflare Email Routing has never
+`os@joinwestpeek.com` does not reach this Worker yet, because Cloudflare Email Routing has never
 been enabled on the domain. Until it is, sending a triggered email does nothing at all and must not
 be described as working.
 

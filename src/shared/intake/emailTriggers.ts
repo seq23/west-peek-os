@@ -15,11 +15,19 @@
  * word safe to publish.
  *
  * WHY THREE AND NOT TWO. `#wpdealflow` and `#wpnetwork` already exist across the family and mean
- * what they say. The third earns its place by answering a different question — not *what is this*
- * but *where is the information*. A mail carrying `#wpdeck` is telling the analyst that the content
- * is in the attachment and the body is just a covering note, which changes what they do first.
- * Without it, a deck arrives under `#wpdealflow` with an empty-looking body and reads as a bad
- * submission rather than a full one.
+ * what they say. The third earns its place twice over.
+ *
+ * First, it answers a different question — not *what is this* but *where is the information*. A mail
+ * carrying `#wpdeck` tells the analyst the content is in the attachment and the body is a covering
+ * note. Without it a deck arrives under `#wpdealflow` with an empty-looking body and reads as a poor
+ * submission rather than a complete one.
+ *
+ * Second, and this is the part that makes it structural rather than cosmetic: **a deck is as often
+ * about a company already on the board as a new one.** Operator, 21 Aug 2026: "#wpdeck is for the
+ * analyst to add deal flow to the top of the funnel for a new company or fill in blanks for a
+ * company already added with info missing." So the route is match-first, not create-first. A trigger
+ * that always created would quietly build a second Sensori every time somebody forwarded a follow-up
+ * deck — and duplicate companies are exactly what the CanonicalCompany model exists to prevent.
  */
 
 export type TriggerOwner = "WEST_PEEK_OS" | "NETWORK_OS";
@@ -54,10 +62,14 @@ export const EMAIL_TRIGGERS: readonly EmailTrigger[] = [
   },
   {
     tag: "#wpdeck",
-    means: "A deck to read. The information is in the attachment, not the message.",
+    means: "A deck to read. The information is in the attachment, and it is either a new company or the missing half of one already on the board.",
     owner: "WEST_PEEK_OS",
-    does: "Hands the attachment to the analyst to parse into a company record, rather than reading the covering note as the submission.",
-    lands: "Dealflow, as a proposal built from the deck, with the deck filed against it.",
+    does:
+      "Matches the deck against the companies already on record FIRST. A match fills the blanks on that record from the deck; " +
+      "no match opens a new company at the top of the funnel. Either way the analyst reads the attachment, not the covering note.",
+    lands:
+      "Dealflow — a proposal at the top of the funnel for a new company, or proposed answers to the empty fields on an existing " +
+      "one. Never a second row for a company already there.",
   },
 ] as const;
 
@@ -81,5 +93,17 @@ export const NO_TRIGGER_ROUTE = {
   lands: "Needs your attention, so it is never silently held.",
 };
 
-/** The mailbox itself, named once so nothing hard-codes it. */
-export const INTAKE_MAILBOX = "os@westpeek.ventures";
+/**
+ * The mailbox itself, named once so nothing hard-codes it.
+ *
+ * ON joinwestpeek.com AND NOT westpeek.ventures, deliberately. `westpeek.ventures` MX points at
+ * Google Workspace, and Cloudflare Email Routing installs its own MX at the zone apex — enabling it
+ * there would have taken mail away from sequoia@, scooter@ and info@westpeek.ventures. That is not a
+ * trade worth making for a machine inbox.
+ *
+ * `joinwestpeek.com` carries no mail at all (checked: zero MX records) and is already the app's own
+ * domain — `os.joinwestpeek.com` and `network.joinwestpeek.com` both live there. So the address
+ * matches the system it belongs to and the firm's email is never at risk. Confirmed with the
+ * operator, 21 Aug 2026: "ok then we can change it to os@joinwestpeek.com if we need to."
+ */
+export const INTAKE_MAILBOX = "os@joinwestpeek.com";

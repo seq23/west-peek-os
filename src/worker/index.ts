@@ -1,4 +1,5 @@
 import type { Env } from "./env";
+import { handleInboundEmail } from "./effects/inboundEmail";
 import { resolveFirmUser } from "./auth";
 import { Router, json, type RouteContext } from "./router";
 import {
@@ -1146,6 +1147,26 @@ export default {
    * function is also reachable via POST /api/jobs/tick and is called directly in tests — remote
    * firing itself remains UNPROVEN until deployment.
    */
+  /**
+   * Inbound mail to the firm's machine inbox, delivered by Cloudflare Email Routing.
+   *
+   * Reads what arrived and records where each trigger says it belongs. It creates nothing: a
+   * hashtag is a public word, so it may route but must never authorise, and every route lands as a
+   * proposal a person accepts. See shared/intake/emailTriggers.ts for the table both this and
+   * Porter's method read.
+   *
+   * UNPROVEN until Email Routing is enabled on joinwestpeek.com — no mail reaches this yet.
+   */
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      handleInboundEmail(message, env).catch((err) => {
+        // A handler that throws silently drops the message. Logged, because an inbox that loses
+        // mail without saying so is worse than one that does not exist.
+        console.error("inbound email failed", err);
+      }),
+    );
+  },
+
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       runDueJobs(env, new Date())

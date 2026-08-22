@@ -29,6 +29,8 @@
  * skill. "Name the one assumption the thesis rests on, and say what would falsify it" is.
  */
 
+import { INTAKE_MAILBOX } from "../intake/emailTriggers";
+
 export interface Skill {
   key: string;
   title: string;
@@ -657,11 +659,12 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
       {
         key: "the_inbox_triggers",
         title: "What a hashtag in the inbox means",
-        when: `Mail arriving at ${"os@westpeek.ventures"}.`,
+        when: `Mail arriving at ${INTAKE_MAILBOX}.`,
         guidance: [
           "#wpdealflow is a company for the funnel. Read the company out of the message, check it against what is already on record, and open a PROPOSED opportunity with the sender recorded as the source.",
           "#wpnetwork is a person for the network. Relay them to Network OS's intake queue and stop there — Network OS owns who is a member and this app does not.",
-          "#wpdeck means the information is in the attachment and the body is only a covering note. Parse the deck first; do not read the covering note as the submission and conclude it is thin.",
+          "#wpdeck means the information is in the attachment. Check it against the companies already on the board BEFORE creating anything: a match fills in the blanks on that record from the deck, and only a genuine miss opens a new company at the top of the funnel. A deck is as often a follow-up about a company we already have as a new one, and creating every time would quietly build a second row for the same company.",
+          "With #wpdeck, read the deck and not the covering note. A full submission whose body says 'see attached' is not a thin one.",
           "A trigger routes, it never authorises. Anybody who learns the word can type it, so what arrives is always a proposal a person accepts — never an entry into the pipeline.",
           "One message can carry more than one trigger. Route each on its own; a mail introducing a founder AND their company is both, not a choice.",
           "Mail with no trigger is yours, and it is the part that actually needs judgement: a reply into an old thread, a deck with no words, an introduction written as prose. Put it in front of a partner rather than guessing, and never hold it silently.",
