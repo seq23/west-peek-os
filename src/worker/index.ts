@@ -449,6 +449,8 @@ import {
 import {
   handleAddQuestion,
   handleProposeQuestions,
+  handleResearchReply,
+  handleResearchThread,
   handleAddSource,
   handleAnswerQuestion,
   handleAssemblePacket,
@@ -1126,6 +1128,9 @@ const router = new Router()
   .get("/api/research/projects", handleListProjects)
   .get("/api/research/projects/:id", handleGetProject)
   // Wyatt names what would settle the topic. Proposed, never created.
+  // The 1:1. Research is a conversation with the analyst, not a form with two buttons.
+  .get("/api/research/projects/:id/thread", handleResearchThread)
+  .post("/api/research/projects/:id/reply", handleResearchReply)
   .post("/api/research/projects/:id/propose-questions", handleProposeQuestions)
   .post("/api/research/projects/:id/questions", handleAddQuestion)
   .post("/api/research/projects/:id/sources", handleAddSource)

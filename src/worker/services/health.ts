@@ -1,3 +1,4 @@
+import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { ago, summarise, worstOf, type HealthCheck } from "../../shared/health/checks";
@@ -21,8 +22,15 @@ import { workersAiConfigured } from "../ai/runAi";
  * page that fixes it, because "AI provider unavailable" without a destination is a puzzle rather
  * than a report.
  */
-export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
-  const { env } = ctx;
+/**
+ * Run every check. Takes `env` rather than a request so a scheduled job can call it.
+ *
+ * ITEM 22: "Fix the three red diagnostics; decide the check interval; escalate to MPs." The review
+ * corrected the operator's guess about the first part and found something worse about the rest —
+ * Diagnostics DOES detect, accurately. It runs only when somebody opens the page, and it tells
+ * nobody. A monitor that checks while you are watching is a mirror.
+ */
+export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
   const checks: HealthCheck[] = [];
   /*
    * A QUERY THAT THREW MUST NOT READ AS A ZERO. This page exists because failures were being
@@ -273,5 +281,10 @@ export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
     });
   }
 
+  return checks;
+}
+
+export async function handleSystemHealth(ctx: RouteContext): Promise<Response> {
+  const checks = await runHealthChecks(ctx.env);
   return json({ overall: worstOf(checks), summary: summarise(checks), checks, checked_at: new Date().toISOString() });
 }

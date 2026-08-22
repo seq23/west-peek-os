@@ -3940,3 +3940,20 @@ body {
 /* The row had no gap at all, so the company name ran into the date: "Northwind Roboticsentered". */
 .card-head-static { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-sm); justify-content: space-between; }
 .deal-entered { white-space: nowrap; }
+
+
+/* The three steps on Research, stated before anything exists — everything the guided flow adds
+   lives inside a project, so a page with none used to read exactly as it did before. */
+.research-steps {
+  margin: var(--space-sm) 0 var(--space-md);
+  padding-left: var(--space-lg);
+  font-size: var(--text-sm);
+  color: var(--wp-ink-2);
+}
+.research-steps li { margin-bottom: var(--space-2xs); }
+
+/* The research 1:1. Read as a conversation, so turns are spaced and the partner's own are marked —
+   a thread where both sides look identical is a transcript, not a conversation. */
+.research-thread { margin: var(--space-md) 0; }
+.research-thread .turn { padding: var(--space-xs) 0; line-height: var(--lh-normal); }
+.research-thread .turn-mine { color: var(--wp-ink-2); }

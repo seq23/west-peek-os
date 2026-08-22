@@ -93,6 +93,23 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
   const [proposing, setProposing] = useState(false);
   /** Held in memory until kept — nothing is written by proposing. */
   const [proposed, setProposed] = useState<string[]>([]);
+  const [ask, setAsk] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [threadNonce, setThreadNonce] = useState(0);
+  const thread = useApi<{ turns: Array<{ id: string; role: string; body: string; state: string; detail: string | null }> }>(
+    `/api/research/projects/${id}/thread`,
+    [id, threadNonce],
+  );
+
+  async function send() {
+    const q = ask.trim();
+    if (q.length < 2) return;
+    setAsking(true);
+    setAsk("");
+    await api(`/api/research/projects/${id}/reply`, { method: "POST", body: { message: q } });
+    setAsking(false);
+    setThreadNonce((n) => n + 1);
+  }
 
   if (detail.loading && !detail.data) return <p>Loading project…</p>;
   if (!detail.data) return <p className="muted">Could not load this project.</p>;
@@ -108,6 +125,50 @@ function ProjectDetail({ id, onChanged }: { id: string; onChanged: () => void })
         {d.project.title} <span className="badge">{d.project.status}</span>
       </h3>
       <p className="muted small">{d.project.question}</p>
+
+      {/*
+        THE 1:1. Operator: "i dont see the chat 1:1 for research", and of the two buttons that were
+        here before it: "this is confusing." Correctly — neither was a conversation. Talking to the
+        analyst is the thing the page was described as and did not have, so it goes first.
+      */}
+      <div className="research-thread" data-testid="research-thread">
+        <h4>Talk to Wyatt about this</h4>
+        <ul className="card-list small">
+          {(thread.data?.turns ?? []).map((t) => (
+            <li key={t.id} className={t.role === "PARTNER" ? "turn turn-mine" : "turn"}>
+              <strong>{t.role === "PARTNER" ? "You" : "Wyatt"}</strong>{" "}
+              {t.state === "OK" ? (
+                <span style={{ whiteSpace: "pre-wrap" }}>{t.body}</span>
+              ) : (
+                <span className="muted">{t.body} {t.detail ? `(${t.detail})` : ""}</span>
+              )}
+            </li>
+          ))}
+          {(thread.data?.turns ?? []).length === 0 && (
+            <li className="state-empty">
+              Nothing asked yet. Ask him about the sector or the company — he has the project in
+              front of him and answers with what is actually true, marking what he is inferring.
+            </li>
+          )}
+        </ul>
+        <div className="form-row">
+          <label className="field-wide">
+            <span className="sr-only">Ask Wyatt</span>
+            <input
+              data-testid="research-ask"
+              value={ask}
+              onChange={(e) => setAsk(e.target.value)}
+              placeholder="Ask about the sector or the company"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !asking) void send();
+              }}
+            />
+          </label>
+          <button type="button" className="btn-strong" disabled={asking || ask.trim().length < 2} data-testid="research-ask-send" onClick={() => void send()}>
+            {asking ? "…" : "Ask"}
+          </button>
+        </div>
+      </div>
 
       {/*
         THE GUIDED HALF. Operator, item 18: "Research as a guided conversation" with the employee
@@ -480,6 +541,27 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           </button>
         </div>
       </form>
+      {/*
+        SAY WHAT HAPPENS NEXT, BEFORE ANYTHING EXISTS.
+        Everything the guided flow added lives inside a project's detail panel, which only opens once
+        a project exists — so on a page with none, this read exactly as it did before and the
+        operator reported seeing no change at all. It was deployed and invisible. The three steps are
+        now stated here, where somebody deciding whether to type anything can read them.
+      */}
+      <ol className="research-steps" data-testid="research-how">
+        <li>
+          <strong>Say what you want to know.</strong> A topic and the question behind it.
+        </li>
+        <li>
+          <strong>Wyatt names what would settle it</strong> — five or six questions, including at
+          least one that could disprove the obvious answer.
+        </li>
+        <li>
+          <strong>He goes and answers them</strong>, grounding every finding in a source and telling
+          you what he threw away for not being supported.
+        </li>
+      </ol>
+
       {message && <p className="notice" data-testid="research-page-message">{message}</p>}
 
       {selected && <ProjectDetail id={selected} onChanged={projects.reload} />}
@@ -495,7 +577,7 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             <span className="muted">{p.question}</span>
           </li>
         ))}
-        {!projects.loading && (projects.data?.projects ?? []).length === 0 && <li className="state-empty">No research projects yet. Launch one with the question it exists to answer; findings promote into the evidence substrate, never a second store.</li>}
+        {!projects.loading && (projects.data?.projects ?? []).length === 0 && <li className="state-empty">Nothing yet. Start one above and it opens straight away, with Wyatt ready to scope it.</li>}
       </ul>
       {/* MARKET MAPPING FOLDED IN. It had its own tab and almost nothing on it, which made it
           look like a feature that had been abandoned rather than one you had not used yet. It is

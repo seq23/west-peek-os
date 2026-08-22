@@ -689,3 +689,127 @@ export async function handleProposeQuestions(ctx: RouteContext): Promise<Respons
     note: "Proposed, not added. Keep the ones worth answering.",
   });
 }
+
+// ── The 1:1 with the analyst ──
+
+/**
+ * Ask Wyatt something about this project, and keep the thread with the project.
+ *
+ * Operator: "i dont see the chat 1:1 for research", and on the two buttons that were there:
+ * "this is confusing." Correctly — neither was a conversation. One returned a list of proposed
+ * questions, the other produced a packet. Calling the page a guided conversation while it held
+ * neither was precisely the gap between claim and behaviour this review exists to close.
+ *
+ * HE ANSWERS WITH THE PROJECT IN FRONT OF HIM — its question, its open questions, its findings so
+ * far. An analyst who has to be re-told the brief every message is a search box with a nicer font.
+ *
+ * A FAILED TURN IS A VISIBLE TURN. Same rule as University: a provider failure must never lose the
+ * conversation, and the honest way to do that is to show that it happened rather than to drop the
+ * message and leave the thread looking as though nothing was asked.
+ */
+export async function handleResearchReply(ctx: RouteContext): Promise<Response> {
+  const body = (await ctx.request.json().catch(() => null)) as { message?: unknown } | null;
+  const message = typeof body?.message === "string" ? body.message.trim() : "";
+  if (message.length < 2) return json({ error: "invalid_input", detail: "Say something." }, { status: 400 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "ai.run", { objectType: "research_project", objectId: ctx.params.id! });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const visible = await visibleProject(ctx, ctx.params.id!);
+  if (!visible) return json({ error: "not_found" }, { status: 404 });
+  const project = await ctx.env.WP_OS_DB.prepare("SELECT title, question FROM research_project WHERE id = ?1")
+    .bind(ctx.params.id!)
+    .first<{ title: string; question: string }>();
+  if (!project) return json({ error: "not_found" }, { status: 404 });
+
+  const priorTurns = (
+    await ctx.env.WP_OS_DB.prepare(
+      "SELECT role, body FROM research_turn WHERE project_id = ?1 AND state = 'OK' ORDER BY turn_no ASC LIMIT 30",
+    )
+      .bind(ctx.params.id!)
+      .all<{ role: string; body: string }>()
+  ).results ?? [];
+
+  const open = (
+    await ctx.env.WP_OS_DB.prepare("SELECT question, status, answer FROM research_question WHERE project_id = ?1")
+      .bind(ctx.params.id!)
+      .all<{ question: string; status: string; answer: string | null }>()
+  ).results ?? [];
+
+  const nextNo = priorTurns.length + 1;
+  const askId = `rt_${crypto.randomUUID()}`;
+  await ctx.env.WP_OS_DB.prepare(
+    "INSERT INTO research_turn (id, project_id, turn_no, role, body) VALUES (?1, ?2, ?3, 'PARTNER', ?4)",
+  )
+    .bind(askId, ctx.params.id!, nextNo, message)
+    .run();
+
+  const { run } = await runAi(ctx.env, {
+    purpose: `Research 1:1 on ${project.title}`,
+    actor,
+    inputs: [
+      [
+        "You are Wyatt, the analyst at an early-stage venture fund, in a working conversation with a",
+        "partner about a piece of research you are running for them.",
+        "",
+        `The project: ${project.title}`,
+        `What they want answered: ${project.question}`,
+        open.length > 0
+          ? `Questions on the plan: ${open.map((q) => `${q.question} [${q.status}${q.answer ? `: ${q.answer}` : ""}]`).join(" | ")}`
+          : "No questions have been set on the plan yet.",
+        "",
+        "ANSWER THE QUESTION ABOUT THE SUBJECT. This page exists to get deep research on a sector or",
+        "a company, so a partner asking about one wants what is actually true about it — not a work",
+        "plan. Operator, on an early answer that described a methodology: \"why would u ask wyatt that",
+        "as a test for research? this tab is about getting deep research on a sector or company.\"",
+        "",
+        "So: lead with what you know and how confident you are in it. Name the specific companies,",
+        "numbers and dates you are drawing on. Mark anything you are inferring rather than citing.",
+        "Only mention what you would go and check when the answer genuinely is not available, and",
+        "then in one line at the end rather than as the substance of the reply.",
+        "",
+        "Direct, short, never padded. When you do not know, say so — a guess dressed as an answer is",
+        "the one thing that makes research worthless. Do not restate the question back at them.",
+        "",
+        "The conversation so far:",
+        ...priorTurns.map((t) => `${t.role === "PARTNER" ? "Partner" : "You"}: ${t.body}`),
+        `Partner: ${message}`,
+      ].join("\n"),
+    ],
+    sensitivity: "INTERNAL" as never,
+    budgetContext: { expectedOutputTokens: 700 },
+    routing: { category: "RESEARCH", taskClass: "research_conversation" },
+  });
+
+  const ok = run.status === "COMPLETED" && Boolean(run.output_text);
+  await ctx.env.WP_OS_DB.prepare(
+    "INSERT INTO research_turn (id, project_id, turn_no, role, body, state, detail, ai_run_id) VALUES (?1, ?2, ?3, 'ANALYST', ?4, ?5, ?6, ?7)",
+  )
+    .bind(
+      `rt_${crypto.randomUUID()}`,
+      ctx.params.id!,
+      nextNo + 1,
+      ok ? run.output_text! : "Wyatt could not answer that just now.",
+      ok ? "OK" : "FAILED",
+      ok ? null : (run.failure_reason ?? `run ${run.status}`),
+      run.id,
+    )
+    .run();
+
+  return json({ ok, reply: ok ? run.output_text : null, detail: ok ? null : run.failure_reason });
+}
+
+/** The thread, oldest first — it is read as a conversation. */
+export async function handleResearchThread(ctx: RouteContext): Promise<Response> {
+  const visible = await visibleProject(ctx, ctx.params.id!);
+  if (!visible) return json({ error: "not_found" }, { status: 404 });
+  const turns = (
+    await ctx.env.WP_OS_DB.prepare(
+      "SELECT id, turn_no, role, body, state, detail, created_at FROM research_turn WHERE project_id = ?1 ORDER BY turn_no ASC",
+    )
+      .bind(ctx.params.id!)
+      .all()
+  ).results ?? [];
+  return json({ turns });
+}
