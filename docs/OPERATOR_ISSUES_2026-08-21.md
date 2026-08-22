@@ -54,7 +54,26 @@ already has is a green suite over a product nobody exercised.
 | 13 | Deal Math folded into Fund strategy; rebuilt for a novice GP | TODO | Deal Math contains no math today. Fund strategy fabricates its inputs — every scenario records $10M deployed against a real $10K. |
 | 14 | Per-page AI chat panel, top right | TODO | Ships with #8. The live-help service exists but is mounted only inside a meeting. |
 | 15 | Hostile review as a novice GP | **DONE** | 37 surfaces, five blind reviewers, plus a browser pass as MP. Artifact approved 21 Aug 2026. |
-| 16 | LP page rebuilt in human language; reporting folded in | **DONE (core)** | The vocabulary was the smaller half. There was nowhere in the system to record **how much an LP committed** or **how big the fund is** — "COMMITTED" existed only as a status string on three tables, so the system could say an LP had committed while holding no idea what to or how much. `lp_commitment` now records it in integer minor units (a REAL would put rounding into the one table where the number IS the fact), one live row per LP per fund so a revision edits rather than double-counting, and `fund` carries a target, currency and vintage. Signed and soft are reported as separate figures and never summed: the moment those are one number labelled "raised", the fund's headline is a hope. The page leads with the raise and reads in English — `LP records (LP_PRIVATE)`, `EXTERNAL VDR UNPROVEN — PROVIDER NOT SELECTED`, "Working claim" and "VERIFIED evidence" are all gone, and every LP is no longer silently filed as a family office. **Still open:** the claims and data-room machinery is not yet re-surfaced in plain words, and reporting is not folded in.|
+| 16 | LP page rebuilt in human language; reporting folded in | **DONE (core)** | The vocabulary was the smaller half. There was nowhere in the system to record **how much an LP committed** or **how big the fund is** — "COMMITTED" existed only as a status string on three tables, so the system could say an LP had committed while holding no idea what to or how much. `lp_commitment` now records it in integer minor units (a REAL would put rounding into the one table where the number IS the fact), one live row per LP per fund so a revision edits rather than double-counting, and `fund` carries a target, currency and vintage. Signed and soft are reported as separate figures and never summed: the moment those are one number labelled "raised", the fund's headline is a hope. The page leads with the raise and reads in English — `LP records (LP_PRIVATE)`, `EXTERNAL VDR UNPROVEN — PROVIDER NOT SELECTED`, "Working claim" and "VERIFIED evidence" are all gone, and every LP is no longer silently filed as a family office. **Reporting folded in, 21 Aug 2026.** Operator: "reporting is supposed to be our fund reporting for
+LPs, so its only natural they belong folded into 1 tab." They were two tabs for one relationship —
+an LP is somebody who gave the fund money and whom the fund owes an account of it — so answering
+"what has Cedar been told?" required knowing that packets lived somewhere else entirely.
+
+The old page opened with two shouted disclaimers, verbatim: `NO FINANCIAL, ACCOUNTING, OR VALUATION
+CORRECTNESS IS CERTIFIED — this surface records process, review, and discrepancy only` and
+`UNPROVEN — FUND-ADMIN SOURCE CONTRACT GATE (no live administrator system is configured; West Peek
+OS never writes to one)`. Both true, neither a sentence. They now read: *"This records what was sent
+and who signed it off. It does not check whether the numbers in it are right"* and *"No administrator
+system is connected, so both numbers are typed in by hand."*
+
+A period is the quarter you owe a letter for; the packet is the letter; the reviews are who has to
+read it first. Naming a period `Q1 2026` derives its dates, because typing two ISO dates to say "Q1"
+is the small tax that stops a thing being used. The administrator NAV check moved across with it,
+because it is the step BEFORE a letter goes out — telling investors a figure the administrator
+disagrees with is the most expensive mistake available on that page, and the check for it was on a
+different tab.
+
+**Still open:** the claims and data-room machinery is not yet re-surfaced in plain words.|
 | 17 | Cull employees; no duplicated work; veteran prompting from their machine's skills | TODO | 1 of 31 employees has ever run anything; 0 hold a tool; the veteran standard reaches 2 of ~27 call sites. |
 | 18 | Research as a guided conversation; market mapping unburied | TODO | The AI research engine is built and reachable from no button. Wire it before redesigning around it. |
 | 19 | University does not work | **DONE (undeployed)** | Root cause: the Workers AI adapter read a field the model does not return, so the whole cheap tier had never once succeeded. Fixed, proven against the live service, and University pinned to a capable model. **Still broken in production until this ships.** |

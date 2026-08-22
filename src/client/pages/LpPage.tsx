@@ -73,6 +73,283 @@ function money(amount: number, currency = "USD"): string {
   return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
 }
 
+
+interface PeriodRow {
+  id: string;
+  fund_id: string;
+  label: string;
+  period_start: string;
+  period_end: string;
+  status: string;
+}
+
+interface PacketRow {
+  id: string;
+  period_id: string;
+  version: number;
+  title: string;
+  status: string;
+  distributed_at: string | null;
+}
+
+/**
+ * What the fund has told its investors, folded into the page about the investors.
+ *
+ * Operator, item 16: "LP page rebuilt in human language; reporting folded in." They were two tabs
+ * for one relationship — an LP is somebody who gave the fund money and whom the fund owes an
+ * account of it, and splitting those meant answering "what has Cedar been told?" required knowing
+ * that packets live somewhere else.
+ *
+ * WHAT THE OLD PAGE OPENED WITH, verbatim: "NO FINANCIAL, ACCOUNTING, OR VALUATION CORRECTNESS IS
+ * CERTIFIED — this surface records process, review, and discrepancy only" and "UNPROVEN — FUND-ADMIN
+ * SOURCE CONTRACT GATE". Both are true and neither is a sentence. They said the same thing a
+ * partner needs to know — this records what you sent, it does not audit your numbers — in a voice
+ * nobody reads twice.
+ *
+ * A PERIOD IS A QUARTER YOU OWE A LETTER FOR. A packet is the letter. Reviews are the people who
+ * have to read it before it goes. That is the whole model, and it did not need three headings of
+ * vocabulary to say.
+ */
+function ReportingSection({ funds }: { funds: FundRaise[] }) {
+  const [nonce, setNonce] = useState(0);
+  const periods = useApi<{ periods: PeriodRow[] }>("/api/reporting/periods", [nonce]);
+  const packets = useApi<{ packets: PacketRow[] }>("/api/reporting/packets", [nonce]);
+  const [fundId, setFundId] = useState("");
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const rows = periods.data?.periods ?? [];
+  const packs = packets.data?.packets ?? [];
+
+  async function openPeriod() {
+    const fund = fundId || funds[0]?.id;
+    if (!fund || label.trim().length < 2) {
+      setMessage("Which fund, and what do you call this period? “Q1 2026” is enough.");
+      return;
+    }
+    setBusy(true);
+    // Dates are derived from the label where it looks like a quarter, because typing two ISO dates
+    // to say "Q1" is the kind of small tax that stops a thing being used.
+    const quarter = /Q([1-4])\s*(20\d\d)/i.exec(label);
+    const bounds = quarter
+      ? {
+          period_start: `${quarter[2]}-${String((Number(quarter[1]) - 1) * 3 + 1).padStart(2, "0")}-01`,
+          period_end: `${quarter[2]}-${String(Number(quarter[1]) * 3).padStart(2, "0")}-${Number(quarter[1]) === 1 ? "31" : Number(quarter[1]) === 2 ? "30" : Number(quarter[1]) === 3 ? "30" : "31"}`,
+        }
+      : null;
+    if (!bounds) {
+      setBusy(false);
+      setMessage("Name it like “Q1 2026” so the dates can be worked out.");
+      return;
+    }
+    const failed = mutationError(
+      await api("/api/reporting/periods", { method: "POST", body: { fund_id: fund, label: label.trim(), ...bounds } }),
+      201,
+    );
+    setBusy(false);
+    setMessage(failed ?? `${label.trim()} opened. Draft the letter, then it needs its reviews before it goes out.`);
+    if (!failed) {
+      setLabel("");
+      setNonce((n) => n + 1);
+    }
+  }
+
+  return (
+    <>
+      <h3>What we have told them</h3>
+      <div className="card">
+        <p className="small">
+          Each quarter the fund owes its investors an account of it. A period is that quarter; the
+          letter is what goes out; the reviews are who has to read it first.
+        </p>
+        {/* The disclaimer, said once and in a sentence. It used to be shouted twice in capitals. */}
+        <p className="muted small">
+          This records what was sent and who signed it off. It does not check whether the numbers in
+          it are right — that is the administrator's job, and comparing the two is below.
+        </p>
+
+        <div className="form-row" data-testid="period-form">
+          <label>
+            Fund{" "}
+            <select data-testid="period-fund" value={fundId} onChange={(e) => setFundId(e.target.value)}>
+              {funds.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Which period{" "}
+            <input
+              className="input-money"
+              data-testid="period-label"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Q1 2026"
+            />
+          </label>
+          <button type="button" disabled={busy || funds.length === 0} data-testid="period-open" onClick={() => void openPeriod()}>
+            Start this period's letter
+          </button>
+        </div>
+
+        <ul className="card-list small" data-testid="period-list">
+          {rows.map((p) => {
+            const mine = packs.filter((k) => k.period_id === p.id);
+            const out = mine.find((k) => k.distributed_at);
+            return (
+              <li key={p.id} data-testid={`period-${p.id}`}>
+                <strong>{p.label}</strong>{" "}
+                {out ? (
+                  <span className="muted">sent {new Date(out.distributed_at!).toLocaleDateString()}</span>
+                ) : mine.length > 0 ? (
+                  <span className="muted">drafted, not sent yet — {mine[0]!.status.toLowerCase().split("_").join(" ")}</span>
+                ) : (
+                  <span className="muted">nothing drafted yet</span>
+                )}
+              </li>
+            );
+          })}
+          {rows.length === 0 && (
+            <li className="state-empty">
+              No period has been opened. Investors are owed an account each quarter; this is where it
+              starts.
+            </li>
+          )}
+        </ul>
+
+        {message && (
+          <p className="notice small" data-testid="reporting-message" role="status">
+            {message}
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
+
+interface ExceptionRow {
+  id: string;
+  record_kind: string;
+  field: string;
+  administrator_value: string;
+  internal_value: string;
+  difference: string | null;
+  status: string;
+}
+
+/**
+ * Whether the administrator's books agree with ours.
+ *
+ * KEPT, and moved here with the rest of reporting, because it is the step BEFORE a letter goes out.
+ * Telling investors a number the fund administrator disagrees with is the single most expensive
+ * mistake available on this page, and the check for it lived on a different tab.
+ *
+ * WHAT THE OLD PAGE SAID: "UNPROVEN — FUND-ADMIN SOURCE CONTRACT GATE (no live administrator system
+ * is configured; West Peek OS never writes to one)". True, and unreadable. It means: nobody has
+ * connected an administrator yet, so the numbers are typed in by hand — which is worth knowing and
+ * is not worth a line of capitals.
+ *
+ * A DIFFERENCE IS A FINDING, NOT AN ERROR. The two systems disagreeing is normal and is exactly what
+ * this is for; what matters is that it is written down and resolved by a person rather than
+ * flattened by whichever number was entered second.
+ */
+function ReconciliationSection({ funds }: { funds: FundRaise[] }) {
+  const [nonce, setNonce] = useState(0);
+  const exceptions = useApi<{ exceptions: ExceptionRow[] }>("/api/reconciliation/exceptions", [nonce]);
+  const [fundId, setFundId] = useState("");
+  const [adminNav, setAdminNav] = useState("");
+  const [ourNav, setOurNav] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const rows = exceptions.data?.exceptions ?? [];
+
+  async function compare() {
+    const fund = fundId || funds[0]?.id;
+    if (!fund || !adminNav.trim() || !ourNav.trim()) {
+      setMessage("Both numbers, please — there is nothing to compare with one.");
+      return;
+    }
+    setBusy(true);
+    const failed = mutationError(
+      await api("/api/reconciliation/runs", {
+        method: "POST",
+        body: {
+          fund_id: fund,
+          source_system: "fund_administrator",
+          source_reference: "entered by hand",
+          administrator_records: [{ record_kind: "NAV", record_key: "fund", field: "nav", value: adminNav.trim() }],
+          internal_records: [{ record_kind: "NAV", record_key: "fund", field: "nav", value: ourNav.trim() }],
+        },
+      }),
+      201,
+    );
+    setBusy(false);
+    setMessage(failed ?? "Compared. Anything the two systems disagree about is listed below.");
+    if (!failed) setNonce((n) => n + 1);
+  }
+
+  return (
+    <>
+      <h3>Do the administrator's numbers agree with ours</h3>
+      <div className="card">
+        <p className="small">
+          Check this before a letter goes out. Telling investors a figure the administrator disagrees
+          with is the most expensive mistake available on this page.
+        </p>
+        <p className="muted small">
+          No administrator system is connected, so both numbers are typed in by hand. Nothing here is
+          ever written back to them.
+        </p>
+
+        <div className="form-row" data-testid="reconciliation-form">
+          <label>
+            Fund{" "}
+            <select data-testid="reconciliation-fund" value={fundId} onChange={(e) => setFundId(e.target.value)}>
+              {funds.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            What the administrator says{" "}
+            <input className="input-money" inputMode="decimal" data-testid="admin-nav" value={adminNav} onChange={(e) => setAdminNav(e.target.value)} placeholder="31500000" />
+          </label>
+          <label>
+            What we say{" "}
+            <input className="input-money" inputMode="decimal" data-testid="our-nav" value={ourNav} onChange={(e) => setOurNav(e.target.value)} placeholder="31000000" />
+          </label>
+          <button type="button" disabled={busy || funds.length === 0} data-testid="reconciliation-run" onClick={() => void compare()}>
+            Compare
+          </button>
+        </div>
+
+        <ul className="card-list small" data-testid="reconciliation-exceptions">
+          {rows.map((x) => (
+            <li key={x.id} data-testid={`exception-${x.id}`}>
+              <strong>{x.field}</strong> — they say {x.administrator_value}, we say {x.internal_value}
+              {x.difference ? ` (${x.difference} apart)` : ""} · {x.status.toLowerCase().split("_").join(" ")}
+            </li>
+          ))}
+          {rows.length === 0 && <li className="state-empty">Nothing is in dispute.</li>}
+        </ul>
+
+        {message && (
+          <p className="notice small" data-testid="reconciliation-message" role="status">
+            {message}
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function LpPage({ me }: { me: MeResponse }) {
   const raise = useApi<{ funds: FundRaise[] }>("/api/lp/fundraising");
   const commitments = useApi<{ commitments: CommitmentRow[] }>("/api/lp/commitments");
@@ -321,6 +598,10 @@ export function LpPage({ me }: { me: MeResponse }) {
           </tbody>
         </table>
       </div>
+
+      <ReportingSection funds={funds} />
+
+      <ReconciliationSection funds={funds} />
 
       <h3>Add an investor</h3>
       <div className="card">

@@ -117,8 +117,15 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     youCan: ["Pull the latest from Network OS", "Resolve a conflict between records"],
   },
   lp: {
-    purpose: "Limited partners — who they are, where each conversation stands, and what the fund owes them.",
-    youCan: ["Track an LP conversation", "Prepare reporting", "See what is committed and what is not"],
+    // Reporting folded in here (item 16). An LP is somebody who gave the fund money and whom the
+    // fund owes an account of it; those were two tabs for one relationship.
+    purpose: "Your investors — what each committed, where the raise stands, and what the fund has told them.",
+    youCan: [
+      "See what is signed and what is only spoken for",
+      "Record what somebody committed",
+      "Start the quarter's letter and see what has gone out",
+      "Check the administrator's numbers against ours",
+    ],
   },
   introductions: {
     purpose: "Suggested introductions between people we know, where one person's need meets another's experience. Deliberately rare, never sent by a machine, and now part of Community.",

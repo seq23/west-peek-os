@@ -63,7 +63,8 @@ export const PAGE_HOSTS: Readonly<Record<string, PageHost>> = {
   rooms: { employee: "Parker", because: "Plans the Rooms and the evenings the firm puts its name on." },
   community: { employee: "Waverly", because: "Knows who the firm knows, and who introduced whom." },
   employees: { employee: "Pax", because: "Runs the workforce — who is employed, on what, and whether it is working." },
-  reporting: { employee: "Preston", because: "Prepares what goes to the people the fund reports to." },
+  // Reporting is now part of LP. The key stays so an old link still resolves to a hosted page.
+  reporting: { employee: "Wesley", because: "Holds the relationships with the people whose money this is." },
   record: { employee: "Wells", because: "Keeps the firm's memory: what was decided, claimed and evidenced." },
 
   // ── Learn ──
