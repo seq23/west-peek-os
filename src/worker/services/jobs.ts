@@ -195,6 +195,29 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     };
   }
 
+  /*
+   * Diagnostics, on the clock. Item 22.
+   *
+   * INTERVAL DECIDED: every tick, fifteen minutes. The checks are a handful of COUNT queries and
+   * cost nothing, and what they catch — a dead binding, a job whose employee is switched off, a
+   * provider with no credential — is exactly the class that sits unnoticed for days. There is no
+   * argument for checking less often than the cheapest thing on the schedule.
+   */
+  if (job.job_key === "diagnostics_sweep") {
+    const { runHealthEscalation } = await import("./healthEscalation");
+    const out = await runHealthEscalation(env, now);
+    return {
+      status: "SUCCEEDED",
+      // A clean sweep is a success worth recording quietly, not an alert. The interesting line is
+      // the one that names what was escalated.
+      summary:
+        out.escalated.length > 0 || out.recovered.length > 0
+          ? `${out.checked} checked · ${out.down} down · escalated ${out.escalated.join(", ") || "none"}${out.recovered.length ? ` · recovered ${out.recovered.join(", ")}` : ""}`
+          : `${out.checked} checked · ${out.down} down · nothing new`,
+      artifacts,
+    };
+  }
+
   // Parker's monthly Room proposal. Same job_key-before-kind reasoning as above, and the same
   // shape as weekly_mp_review: it fires daily and generates only when the current month has no
   // proposal yet. schedule_kind has no MONTHLY value and adding one would mean rebuilding

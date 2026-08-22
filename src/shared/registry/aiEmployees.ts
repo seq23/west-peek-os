@@ -70,6 +70,27 @@ const E = (
   bio: string,
 ): AIEmployeeRosterEntry => ({ name, role, layer, primaryMachineKeys, status: "INACTIVE", face, bio });
 
+/*
+ * SEVEN MACHINES GAINED A SEAT, 21 Aug 2026, and the reason is a finding rather than a tidy-up.
+ *
+ * The skill library and the set of machines an employee actually sits on were the SAME 26. So
+ * "nineteen machines have no methods" and "nineteen machines have nobody on them" are one fact read
+ * from two directions — and writing methods for an unseated machine is filing instructions nobody
+ * will ever be given. The library's own guard says so: it refuses methods for a machine no employee
+ * works.
+ *
+ * Each of these went to the seat that already owns the nearest thing, rather than to a new hire:
+ *   fund_construction_allocation      → Preston, who already owns finance and fund admin
+ *   portfolio_performance_followon    → Winter, who already watches the companies
+ *   source_of_truth_resolver          → Porter, who already keeps two systems agreeing
+ *   vendor_risk_build_vs_buy          → Porter, same discipline pointed at suppliers
+ *   ai_employee_performance_lifecycle → Pax, who runs the workforce
+ *   research_data_license_quality     → Wells, who owns what the firm knows and how
+ *   opportunity_radar_strategic_initiative → Wyatt, who is already the one looking outward
+ *
+ * Twelve machines are still unseated. That is the remainder of item 17, and it is a decision about
+ * what the firm actually does rather than about who does it.
+ */
 export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
   // ── MP Support. One chief of staff each; the EA seats are absorbed. ──
   E("Walker", "Scooter's Chief of Staff", "MP Support", ["command_center", "mp_personal_office"], "INTERNAL_ONLY",
@@ -81,7 +102,7 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "one and against the decision coming. Owns the Wednesday cadence and signs the morning delivery."),
 
   // ── Firm operations. Intake, systems and network sync were one job pretending to be three. ──
-  E("Porter", "Systems & Intake Operator", "Firm operations", ["global_capture_routing", "network_os_sync_verification", "systems_data_integration"], "INTERNAL_ONLY",
+  E("Porter", "Systems & Intake Operator", "Firm operations", ["global_capture_routing", "network_os_sync_verification", "systems_data_integration", "source_of_truth_resolver", "vendor_risk_build_vs_buy"], "INTERNAL_ONLY",
     "Everything that arrives and everything that syncs. Routes captures to whoever owns them, keeps " +
     "the Network OS mirror honest, and notices when two systems disagree before anyone acts on the " +
     "wrong one. Plumbing, which is why it is one seat rather than three."),
@@ -89,7 +110,7 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "Who the firm knows, and who in the community is worth knowing. Finds the warm path into a company " +
     "and records what West Peek actually witnessed a member do. Warm paths and community were always " +
     "one muscle — who do we know — read at two different distances."),
-  E("Wells", "Knowledge Manager", "Firm operations", ["knowledge_memory_promotion"], "INTERNAL_ONLY",
+  E("Wells", "Knowledge Manager", "Firm operations", ["knowledge_memory_promotion", "research_data_license_quality"], "INTERNAL_ONLY",
     "What the firm has learned and can still find. Promotes claims into institutional memory once " +
     "they are evidenced, and keeps what changed since you last looked."),
   E("Willow", "Compliance & Privacy", "Firm operations", ["legal_compliance_rules", "model_governance_privacy_airlock"], "INTERNAL_ONLY",
@@ -107,7 +128,7 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "a decision — what we are underwriting, the memo, the terms. Covers secondaries as well as " +
     "primaries, because underwriting a late-stage block and a pre-seed round are the same discipline " +
     "pointed at different risk."),
-  E("Wyatt", "Analyst & Scout", "Investment", ["research_intelligence", "investment_mandate_exclusion", "venturedeals_deal_math"], "EXTERNAL_CAPABLE",
+  E("Wyatt", "Analyst & Scout", "Investment", ["research_intelligence", "investment_mandate_exclusion", "venturedeals_deal_math", "opportunity_radar_strategic_initiative"], "EXTERNAL_CAPABLE",
     "Finds companies against the thesis and tells you why each one fits. Runs the research behind a " +
     "deal, keeps the watchlist, and does the arithmetic. Sourcing and research were split across two " +
     "seats that read the same market."),
@@ -130,7 +151,7 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "and the writing that goes with it. Fluent in what institutional diligence on a Fund I demands."),
 
   // ── Portfolio, community and the firm's own operations. ──
-  E("Winter", "Portfolio Support", "Portfolio & operations", ["portfolio_support"], "EXTERNAL_CAPABLE",
+  E("Winter", "Portfolio Support", "Portfolio & operations", ["portfolio_support", "portfolio_performance_followon"], "EXTERNAL_CAPABLE",
     "How the companies are actually doing and where they need help. Watches the metrics that matter, " +
     "takes the founder's ask seriously, and tracks whether the help ever landed."),
   E("Parker", "Event Marketing Coordinator", "Portfolio & operations", ["west_peek_live_events", "brand_sponsorship_revenue"], "EXTERNAL_CAPABLE",
@@ -140,10 +161,10 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
   E("Pippa", "Communications", "Portfolio & operations", ["marketing_pr_content"], "EXTERNAL_CAPABLE",
     "The firm's outward voice, in one seat: what gets published, what gets pitched, and how West Peek " +
     "sounds. Marketing, PR and content were three names for one judgement about tone."),
-  E("Pax", "Operations Manager", "Portfolio & operations", ["continuity_maintenance"], "INTERNAL_ONLY",
+  E("Pax", "Operations Manager", "Portfolio & operations", ["continuity_maintenance", "ai_employee_performance_lifecycle"], "INTERNAL_ONLY",
     "Keeps the machinery running — scheduled work, what failed overnight, what the workforce costs, " +
     "and the continuity nobody thinks about until it breaks."),
-  E("Preston", "Finance & Fund Admin", "Portfolio & operations", ["finance_fund_admin"], "INTERNAL_ONLY",
+  E("Preston", "Finance & Fund Admin", "Portfolio & operations", ["finance_fund_admin", "fund_construction_allocation"], "INTERNAL_ONLY",
     "The fund's own numbers: capital calls, the administrator's records against ours, fees, and the " +
     "reconciliation exceptions that mean somebody typed something twice."),
 

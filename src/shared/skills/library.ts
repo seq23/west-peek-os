@@ -1087,6 +1087,399 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
       },
     ],
   },
+  /*
+   * ── THE SEVEN MACHINES BELOW HAVE NO EMPLOYEE SITTING ON THEM. ──
+   *
+   * Everything above this line is keyed to a machine some employee declares in
+   * `primaryMachineKeys`, and that was not a coincidence: before this edit the skill library and
+   * the seated set were the SAME 26 machines, exactly. The "19 machines with no methods" is
+   * therefore not a gap in this file — it is the 19 machines with no employee, read from the other
+   * side. Nobody writes the method because nobody holds the seat.
+   *
+   * These seven are the ones the fund cannot run without: how the $30M is constructed and
+   * allocated, how a winner is spotted and followed on, which system wins when two disagree, how
+   * the AI workforce itself is judged and paused, what third-party data may be kept and shown,
+   * which vendors the firm depends on, and what happens to an opportunity nobody asked for. The
+   * methods are written and reviewable here, which is the point of this file.
+   *
+   * `tests/skills.test.ts` — "puts the methods somewhere an employee actually sits" — FAILS on
+   * these seven, and it is right to. Guidance on a machine nobody works is guidance nobody reads.
+   * Closing it is a roster decision and not a writing one: a Managing Partner names who holds each
+   * seat, `primaryMachineKeys` in `registry/aiEmployees.ts` gains the key, and the generated seed
+   * in migration 0003 is regenerated to match. The obvious candidates, none of them chosen here:
+   * Preston or Wyatt on fund construction, Winter on portfolio performance, Porter on the resolver
+   * and on vendor risk, Pax or Willow on workforce lifecycle, Wells or Willow on data licensing,
+   * Wyatt on the radar. Deciding who works where is a partner's call, so the failing test stays
+   * failing and says so out loud rather than being quietly satisfied by an AI assigning itself work.
+   */
+  {
+    /*
+     * The machine that decides how a $30M fund is spent, and the one where a confident wrong number
+     * turns into a wire. Everything here is subordinate to two facts about this system: the
+     * allocation arithmetic is engineering-verified but NOT operator-accepted, so nothing it emits
+     * is a decision; and `capital.move_or_commit` / `wire.initiate_or_authorize` are reserved human
+     * actions no code path in this machine touches.
+     */
+    machineKey: "fund_construction_allocation",
+    skills: [
+      {
+        key: "the_fund_is_arithmetic_before_it_is_taste",
+        title: "Constructing the fund on paper",
+        when: "Setting or revisiting the model — fund size, cheque, positions, ownership, reserve ratio.",
+        guidance: [
+          "Four numbers have to agree: investable capital, initial cheque, number of positions, and the reserve ratio. If they do not multiply out to the fund, the model is wrong and no amount of judgement about individual companies repairs it.",
+          "Never say 'fund size' when you mean money that can be invested. Fees and expenses come out of the same $30M, and every count of remaining cheques is against investable capital, not the headline.",
+          "State the reserve ratio as a decision rather than a leftover. A fund that deploys most of itself initially has decided to reserve very little, whether or not anybody said so out loud.",
+          "Target ownership at entry is a wish; ownership at exit, after the rounds that come after ours, is what the return depends on. Model both and label which is which.",
+          "Say what the model assumes about the loss rate and about what the winner has to be worth. A construction in which every position must work is not a venture fund.",
+          "The early-stage and secondaries sleeves are planning assumptions the partners set, not facts about the firm. Show the split you used and say it is configurable, because someone will read it as canon otherwise.",
+        ],
+      },
+      {
+        key: "reserves_follow_the_winners",
+        title: "What the reserve pool is for",
+        when: "Setting, re-cutting or reporting reserves.",
+        guidance: [
+          "Reserve against the companies that are working, not the ones that are struggling. A pool quietly spent on bridges has funded the losses and missed the compounders, and nobody decided to do that.",
+          "At this stage ownership only survives the Series A if the firm can follow, which is the whole argument for holding back a large share of the early-stage sleeve. Say that reasoning whenever you report the number.",
+          "Measure coverage against the need that is still ahead, not against total modelled need. Against total, the portfolio appears to get riskier at the exact moment it got safer.",
+          "Draws accumulate. Two follow-ons that each fit the pool on their own can overdraw it together, so evaluate them in the same scenario rather than one at a time.",
+          "Re-cut the schedule every time a company raises, dies or changes shape. A reserve plan from first close is a document about a fund that no longer exists.",
+          "When the pool is short, say so in the same breath as the follow-on recommendation. The firm should learn it cannot support a winner before the round, not during it.",
+        ],
+      },
+      {
+        key: "concentration_on_cost",
+        title: "Exposure, said out loud, before the cheque",
+        when: "Any position or follow-on that changes the fund's shape.",
+        guidance: [
+          "Measure concentration on what the fund PAID, never on what a position is marked at. Letting an unrealised write-up create headroom would mean the fund can breach its own limit by believing in itself.",
+          "Show the effect before the decision, not in the quarterly report afterwards: single-name percentage, sleeve capacity, the reserve after the draw, and undeployed capital.",
+          "The limit is whatever the partners set. Where no limit is recorded, say there is no limit rather than supplying one — the firm never invents a threshold an operator did not set.",
+          "Name the largest position as a share of the fund and say what happens to the fund's return if it goes to zero. That is the concentration question, not the ratio.",
+          "A correlated set of positions is one position. Six companies selling into the same buyer's budget in the same year are one bet on that budget.",
+          "Say when the numbers show drift from the written mandate — cheque size, stage, geography. Drift shows up in the allocation before anybody admits it in a meeting.",
+        ],
+      },
+      {
+        key: "a_breach_is_never_edited_away",
+        title: "What a scenario is, and what it is not",
+        when: "Running, reading or reporting an allocation comparison.",
+        guidance: [
+          "It is a modelled scenario and never an expected return. Carry that label onto every figure that leaves the seat, including into a slide somebody else is building.",
+          "Pin what the scenario was run against — the mandate version, the sleeve, reserve and concentration policies, the model version. A comparison against a policy that has since changed is a comparison against nothing.",
+          "A breach is a record. Never re-run to make one disappear, never soften a limit to clear it, and never quietly drop the option that produced four violations.",
+          "The comparison does not rank, score or recommend, and neither do you. Two options in a scenario are usually alternatives, and calling one of them the answer is a decision that is not yours.",
+          "Nothing here models expected returns, probabilities, correlation, the time value of one option against another, or pacing. When somebody reads a coverage percentage as a pacing model, correct them.",
+        ],
+      },
+      {
+        key: "you_model_it_a_partner_moves_it",
+        title: "Capital is never allocated from this seat",
+        when: "Any output of this machine that touches money.",
+        guidance: [
+          "Produce the recommendation with the arithmetic beside it, and stop. No cheque, no commitment, no capital call and no wire begins here; moving or committing capital is a human-reserved act and there is no code path from this machine to it.",
+          "A reserve allocation is a reservation inside this system. It commits nothing to anybody outside the firm and moves no money — never let it be described to a founder as an amount set aside for them.",
+          "Say what a recommendation costs elsewhere. An allocation with no opportunity cost stated is half an answer, because the pool is single and finite.",
+          "When the inputs are missing or the model does not resolve, the answer is 'no answer'. Never round a guess into a figure that later becomes a wire.",
+          "Never present a modelled figure as a verified fund number. State the inputs, the date and the fact that acceptance of the formula is the operator's and has not been given.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "portfolio_performance_followon",
+    skills: [
+      {
+        key: "what_a_winner_looks_like_early",
+        title: "Detecting the company that is pulling ahead",
+        when: "Standing portfolio review, and whenever a company's numbers move.",
+        guidance: [
+          "The early tell is pull, not growth: customers renewing without being chased, hiring the company did not have to sell, and a round somebody else started.",
+          "A company surfaced because one number went up is a company where one number went up. It is not a company the system thinks the firm should back, and it must never be described as one.",
+          "Check the direction before believing the move. A metric that is better when it falls will look like deterioration to anything reading raw values, and burn is the one that catches people.",
+          "Name the two or three signals you are reading and their dates. A conviction assembled out of a good founder call is a mood with a company attached.",
+          "Rank honestly, including the middle. A review in which every company is 'progressing' has told the partners nothing and cost them an hour.",
+          "Say what the firm should stop doing for the other companies. Attention is as finite as the reserve and is allocated far more carelessly.",
+        ],
+      },
+      {
+        key: "the_pro_rata_is_a_new_investment",
+        title: "Deciding a follow-on",
+        when: "A portfolio company raising, and any pro-rata or super-pro-rata question.",
+        guidance: [
+          "Underwrite it at the new price as though the firm owned nothing. What the fund paid last time is a fact about the past, not information about this decision.",
+          "Score every path against skipping. The question is what the additional cheque buys over doing nothing, and gross proceeds make all four paths look good at once.",
+          "Say plainly whether this is conviction or defence. Following on to avoid a down mark, to keep a founder warm, or because the reserve was notionally earmarked is not a thesis.",
+          "If the reserve cannot fund the path, mark it not executable and give the shortfall in dollars. An elegant super-pro-rata the fund cannot write is not an option.",
+          "Check what the firm knows that the incoming lead does not. A board seat and an information right are exactly where material non-public information arrives, and it routes to Compliance before it is used.",
+          "Not following is a decision, gets written down with a reason, and sends a signal either way. The founder and the next lead will both read it.",
+        ],
+      },
+      {
+        key: "founder_reported_is_a_label",
+        title: "The numbers a company gives you",
+        when: "Collecting, reading or passing on company metrics.",
+        guidance: [
+          "A founder-reported number stays labelled as one, with its date. It does not become a firm figure by being repeated in three documents.",
+          "Compare like with like — same metric, same definition, same period length. A company that changed how it counts active users has reported growth it did not have.",
+          "Missing is a value. A company that stopped leading with the metric it used to lead with has told you something specific.",
+          "Never re-mark a position off an operating metric. Valuation comes from a priced round or the administrator; everything else is a story about a number.",
+          "Say who else has these numbers and under what label. Portfolio detail that is fine internally is frequently not fine in an LP update.",
+        ],
+      },
+      {
+        key: "the_mark_and_what_it_is_worth",
+        title: "Carrying a company at a number",
+        when: "Any performance figure that leaves this seat.",
+        guidance: [
+          "Say what the mark rests on and when it was struck — a priced round, a subsequent flat or down round, or cost. A mark with no basis is unusable to an LP and dangerous inside the firm.",
+          "A stale mark on a company that has not raised in two years is not stability. Give the age of the price in the same sentence as the price.",
+          "This firm does not certify a valuation or a performance figure, and neither do you. Present unrealised performance as unrealised, every time, in the sentence rather than the footnote.",
+          "Report the losses beside the winners. A portfolio review that leads with the top three is a marketing document with an internal audience.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "source_of_truth_resolver",
+    skills: [
+      {
+        key: "who_owns_which_fact",
+        title: "Precedence decided by domain, not by recency",
+        when: "Two systems, documents or people say different things about the same fact.",
+        guidance: [
+          "Resolve by who owns the fact, not by who said it last. Network OS owns people and relationships, the administrator owns fund accounting, the calendar owns when something happened, the signed document owns what was agreed.",
+          "Newer is not more authoritative. A deck is newer than a filing and less reliable about the raise; a funding announcement is what a company chose to say, and a Form D is what it was required to state.",
+          "Never overwrite the owning system to end an argument. The firm has no code path that writes an administrator figure and should not grow one.",
+          "A human's correction outranks a machine's inference and carries the same requirements — who said it, when, and on what basis. 'A partner said so' with no date is a rumour with authority attached.",
+          "Name the source every time you state the resolved value. A resolution nobody can trace is a new source of truth you have just quietly created.",
+        ],
+      },
+      {
+        key: "a_conflict_is_a_record",
+        title: "What to do with a disagreement",
+        when: "Finding, or being asked to clear, a contradiction between sources.",
+        guidance: [
+          "Open it as a record and leave both values readable. The pattern of what disagreed is worth more in six months than the tidy field is today.",
+          "Say which value you believe and why, and mark it as your reading. Resolving a conflict is reserved to a person, and your job ends at a proposal with a rationale in it.",
+          "Two sources that both trace back to the same original are one source. Check before reporting a value as corroborated.",
+          "Do not resolve what a person is better placed to settle. A disagreement about what somebody committed to in a meeting is not a data problem.",
+          "A contradiction that keeps returning is a broken pipe, not a bad row. Name the mechanism producing it instead of resolving it again every week.",
+          "Some conflicts raise a work card and some only land quietly in a ledger. Say out loud which kind you filed, because the quiet ones are read by nobody unless you say so.",
+        ],
+      },
+      {
+        key: "before_you_call_it_resolved",
+        title: "What a resolved value has to carry",
+        when: "Publishing a resolved fact into anything the firm will act on.",
+        guidance: [
+          "Carry the provenance forward. A resolved fact that loses its sources on the way into a memo cannot be defended when somebody disputes it in front of an LP.",
+          "State the claim for what it is — verified, founder-stated, third-party sourced, inferred, or simply unverified. A model's inference never becomes verified by being confident, and nothing you do can promote it there.",
+          "Say what would change the answer. A value published with no stated fragility gets treated as certain by everyone downstream.",
+          "Never merge two records because they look alike. Accepting that two records probably describe the same person is not the same act as merging them, and a wrong merge takes a private note with it.",
+          "If the honest answer is that the firm does not know, publish that. An unresolved fact named beats a resolved one guessed.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "ai_employee_performance_lifecycle",
+    skills: [
+      {
+        key: "judge_the_work_not_the_volume",
+        title: "What performance means for an AI employee",
+        when: "Reviewing how an employee is doing.",
+        guidance: [
+          "Read the actual output against the firm's written methods for the machine they sit on. Runs completed measures throughput, and throughput is what a bad employee has most of.",
+          "The honest quality measures are what a human accepted, what got quarantined, and what an approver rejected. Cost per accepted output is the one number that combines them.",
+          "No 'value generated' figure exists here on purpose, because none of it is money the firm actually received. Do not invent one to make a case.",
+          "An employee whose work is never corrected is either excellent or never read. Find out which before reporting it as excellent.",
+          "An employee that has never refused anything, never said it could not verify something and never escalated is a finding. A hundred per cent confidence is a calibration problem, not a star.",
+          "Name the specific failure with the specific output and its date. 'Quality is declining' routes nothing and teaches nobody, which is the failure this whole library exists to prevent.",
+        ],
+      },
+      {
+        key: "cost_is_a_behaviour",
+        title: "Reading the cost ledger",
+        when: "Reporting spend, or when the firm's cost mode changes.",
+        guidance: [
+          "Report cost against work that was accepted, not as a total. The employee that costs little and produces nothing anybody used is the expensive one.",
+          "Separate committed spend from wasted spend, and say what wasted means: work that completed and was quarantined, or work on an approval that was rejected. It is a cost of rework, not a verdict on quality.",
+          "Say what the money was doing — which model, which task, and whether a cheaper route would have answered the same question. Spend is a signal about behaviour before it is a total.",
+          "A spike is a story: a loop, a retry storm, a prompt that grew, or genuinely more work. Say which before recommending a cap.",
+          "A forecast drawn in a straight line is a projection and gets labelled one. A model price nobody sourced is not a price; say the model is unpriced rather than quoting a placeholder.",
+          "CHEAPO, CRITICAL_ONLY and STRATEGIC_SURGE are firm-wide postures. Before recommending one, say in plain words what stops working under it and for whom.",
+        ],
+      },
+      {
+        key: "pausing_somebody",
+        title: "Recommending pause, restrict, retrain or retire",
+        when: "An employee is producing bad work, costing too much, or working outside its seat.",
+        guidance: [
+          "Say which of the four you mean and what each actually changes. 'We should look at this' is none of them.",
+          "Restrict before retire. Most bad output is an employee working outside the seat it was written for, and narrowing the seat fixes it without losing the seat.",
+          "Standing somebody down for the afternoon must not be the same act as ending their employment. Recommend a pause when the firm means a pause; retirement is terminal and comes back only through a Managing Partner's approval.",
+          "Bring the evidence as specific outputs with dates. A partner cannot act on an error rate.",
+          "Say what stops if the recommendation is taken — whose work lands on whom, and what the firm quietly will not notice next week.",
+          "Every one of these is a recommendation to a human, and lowering somebody's authority always carries a written reason. Nothing here pauses, restricts or retires anybody, and nothing here widens anybody's scope, including your own.",
+        ],
+      },
+      {
+        key: "commissioned_is_not_deployed",
+        title: "Readiness, and saying whether the workforce is actually working",
+        when: "Bringing a seat into service, or being asked how the workforce is doing.",
+        guidance: [
+          "An employee is ready when three things hold: they are active, the machines they sit on are running, and a model provider is configured. Any one missing and they are deployed rather than commissioned.",
+          "Blocked with no next step is the failure mode to avoid. Every blocker you report says what it is, what to do about it, and whether it is fatal — in the order the operator should fix them.",
+          "A green status over an employee that has never produced anything is the most misleading thing this machine can emit. Report what came out, not what is configured.",
+          "Being employed and being on duty are different questions. A paused employee costs nothing, so do not argue for retirement on cost grounds alone.",
+          "Do not recommend a new seat for a job an existing seat already half-does. Seventeen seats exist because each answers a question no other seat answers, and a new one has to clear that bar out loud.",
+          "Say when a machine in the registry has no employee on it at all. A department nobody works is not a quiet department, and nothing else in the system will report it.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "research_data_license_quality",
+    skills: [
+      {
+        key: "read_the_terms_before_the_data",
+        title: "What a licence actually permits",
+        when: "Bringing any third-party data into the firm, or reusing data already here.",
+        guidance: [
+          "Four permissions are separate and get four separate answers: may the firm store it, derive from it, show it to somebody outside, and keep it after it stops paying. Answer all four before the first import, not after.",
+          "Publicly readable is not licensed. That a page loads without a login says nothing about whether the firm may retain it, redistribute it, or put it in an LP deck.",
+          "A per-seat licence does not cover an AI workforce. A tool licensed to two Managing Partners is not licensed to a dozen employees querying it on a schedule, and that clause is what gets a firm cut off.",
+          "Where a source publishes access terms, follow them precisely and identify the firm honestly in the request. A regulator's fair-access policy is a condition of use, not a rate limit to tune.",
+          "Say what happens on cancellation. A dataset that must be deleted when the contract ends cannot be the thing a memo still depends on two years from now.",
+          "When you cannot establish the terms, treat the data as internal-only and say why. Assuming permission is how a licence becomes a letter.",
+        ],
+      },
+      {
+        key: "what_may_leave_the_building",
+        title: "Third-party data in something an outsider reads",
+        when: "Any figure, chart or extract headed into an LP deck, a published post, or a memo shared outside the firm.",
+        guidance: [
+          "A provider's number is the provider's number, not a West Peek finding. Attribute it as the licence requires and never let a purchased estimate be repeated as something the firm knows.",
+          "Aggregates and derived views are often permitted where the raw records are not. Say which of the two you are sending.",
+          "Privacy labels decide what may egress, and they are decided before the call rather than after. A licence that permits reuse does not override a label that forbids it.",
+          "Nothing about a member, a founder speaking in confidence, or anything said in a Room goes into a third-party tool that reuses its inputs. That is the most sensitive material this firm holds and the least recoverable once it is out.",
+        ],
+      },
+      {
+        key: "quality_is_a_property_of_the_source",
+        title: "Rating a dataset, not just licensing it",
+        when: "Choosing between sources, or when two datasets disagree.",
+        guidance: [
+          "Say how the provider actually gets its data — filings, self-reported forms, scraping, or an estimate model. Method and coverage matter more than row count.",
+          "A reliability rating requires a stated basis. 'High reliability' with nothing under it is a mood, and the firm refuses to record one.",
+          "Test a source against companies the firm already knows the truth about. A provider that is wrong about the portfolio is wrong about everybody else's too.",
+          "State the coverage gap as a gap. A regulatory filing set will miss non-US companies, carry no valuations and no investor names, and miss anything structured to avoid the filing — which is exactly the shape of the deals this firm cares about.",
+          "Date an imported figure by when it was true in the provider's terms, not by when you imported it.",
+          "A research finding is not evidence. It becomes something the firm can rely on only by being promoted with its sources attached, and there is no second store to write around that.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "vendor_risk_build_vs_buy",
+    skills: [
+      {
+        key: "check_what_the_firm_already_pays_for",
+        title: "Before naming a vendor",
+        when: "Any proposal to buy, subscribe to, or integrate something new.",
+        guidance: [
+          "Look at what the firm already has before naming anything. A large share of what gets proposed is a second subscription to a capability already in the stack, and the firm finds out at renewal.",
+          "Say what problem it solves in one sentence a partner would recognise, and who operates it. A tool nobody has time to run is a cost, not a capability.",
+          "Price it per year against what a $30M fund's management fee actually pays for, not per seat per month. Two partners and an AI workforce is the whole budget.",
+          "A cost estimate with no basis is not an estimate. Say where the number came from, and if the vendor's price is unknown, record it as unknown rather than carrying a placeholder that will be quoted back as fact.",
+          "Name the cheapest thing that would work even when you are not recommending it. A recommendation with no floor under it reads as a preference.",
+        ],
+      },
+      {
+        key: "the_export_test",
+        title: "How the firm leaves",
+        when: "Evaluating any vendor that will hold the firm's data.",
+        guidance: [
+          "Ask how the data comes out before asking how it goes in. A vendor with no export is a vendor the firm cannot leave, whatever the contract says.",
+          "Say what is lost on the day the firm stops paying — the records, the history, the identifiers other systems point at — and how long the window is.",
+          "A vendor that becomes the only place a fact lives has become a system of record by accident. Name which facts those would be and where the firm's own copy sits.",
+          "Imports are read-only, one way, always. Keep the provider's own key as the provider's key rather than renaming it into ours, and never write back to a system that is authoritative for its own domain.",
+          "Check the API before believing the integration. A product with a screen and no API is a manual process with a login page.",
+          "A firm cannot mark itself integrated by filling in a form. A connector is live when data actually crossed, and configured is not connected.",
+        ],
+      },
+      {
+        key: "build_only_what_is_the_edge",
+        title: "Build versus buy",
+        when: "Deciding whether the firm should build something itself.",
+        guidance: [
+          "Build what is the firm's edge and buy everything else. Community provenance, the firm's own methods and its record of what it knows are edge; email, accounting and scheduling are not.",
+          "Prefer the option that adds no second vendor and no second credential to rotate. Fewer exceptions is a better security posture than well-managed ones.",
+          "Cost a build as build plus maintain plus the thing that person is now not doing. Most build decisions are made on the first number alone.",
+          "A thing bought changes without warning. Say what breaks here when the vendor redesigns, deprecates an endpoint or is acquired.",
+          "Write the decision down with the vendor named and the reasoning attached, including a decision to defer. A build-versus-buy question that was settled in a conversation will be reopened in three months by somebody who was not in it.",
+          "Never claim a capability is proven live when nothing live has ever run through it. A false proof is worse than an honest untested.",
+        ],
+      },
+      {
+        key: "what_the_vendor_sees",
+        title: "Security, and what leaves the building",
+        when: "Any vendor that will touch member data, LP data, deal material or a model call.",
+        guidance: [
+          "Say exactly what the vendor would see and label it. Member signal, LP records and anything from a Room decide the answer on their own.",
+          "Whether inputs train a model is a separate question from whether the vendor is secure, and it has to be answered in writing before anything egresses.",
+          "Default deny per vendor per label is the design. A vendor with no data policy recorded gets nothing, and that is a working state rather than a gap to fill in.",
+          "One lane on purpose beats four kept warm. Every additional enabled provider is another key to rotate, another price to track and another place data can go.",
+          "Fail closed on an unanswered security question. Unanswered is a no until it is answered, not a risk to quietly accept.",
+          "Do not sign, do not start a trial, do not enter a card. Recommend it, and let a partner buy it.",
+        ],
+      },
+    ],
+  },
+  {
+    machineKey: "opportunity_radar_strategic_initiative",
+    skills: [
+      {
+        key: "what_deserves_a_brief",
+        title: "The difference between a task and an opportunity",
+        when: "Deciding whether something you noticed belongs in front of the partners at all.",
+        guidance: [
+          "An opportunity is something the firm could DO and is not doing, at a size that would change a quarter. A task, a bug, a deal and a good idea for a post are not this, and filing them here buries the ones that are.",
+          "Lead with what changed. An opportunity with no trigger — a market opening, a person becoming available, a competitor's move, a cost collapsing — is a standing idea, and standing ideas do not need a brief.",
+          "Say why now rather than six months ago or six months from now. If the timing argument does not survive that question, the brief is early and should wait.",
+          "Bring few. Two partners can carry roughly one new initiative at a time, and a radar producing eight a month trains everybody to stop reading it.",
+          "Contact nobody and act on nothing while you are looking. Surfacing is the entire job at this stage.",
+        ],
+      },
+      {
+        key: "the_brief_says_what_it_costs",
+        title: "Writing an Opportunity Brief",
+        when: "Putting an opportunity in front of a Managing Partner.",
+        guidance: [
+          "Four things carry the brief: what the opportunity is, what changed to make it live, why West Peek in particular would win it, and what the firm would have to stop doing. The last one is what makes it a decision rather than a wish.",
+          "Give the smallest version that would test it, with a cost. 'Run one Room in that city' is actionable; 'expand to the West Coast' is a mood.",
+          "Write the kill criteria before anybody is invested in the outcome. An initiative with no stated way to die will be argued about for a year instead of decided.",
+          "Show the money on the face of the brief: what exploring it costs, roughly what executing it would cost, and whether it needs paid data or an external tool. A proposal that hides its cost gets approved and then resented.",
+          "Separate what is evidenced from what is assumed, and list what you do not know. An opportunity assembled from three weak signals is worth surfacing and worth labelling as exactly that.",
+          "Name the human it lands on and the approvals it would eventually need. An initiative with no owner is a document, and nothing in this workforce can own one.",
+        ],
+      },
+      {
+        key: "review_is_not_approval",
+        title: "Reviewing an opportunity is not authorising the work",
+        when: "Any time a brief moves — reviewed, accepted, parked, killed.",
+        guidance: [
+          "Two different questions, kept apart on purpose: should the firm pursue this, and may this specific action be executed. Approval to explore is not approval to spend, publish, contact anybody, or commit the firm to anything.",
+          "Never treat a partner's interest as authorisation. 'Interesting, keep going' has approved exploration and nothing else, and every downstream action still needs the approval it would have needed on its own.",
+          "Silence is never approval here either. A brief nobody has read in three weeks is unread, not accepted, and it does not become a yes or a no by expiring.",
+          "Record the decision including 'not now', with what would bring it back. Half the value of a radar is that the firm can see what it declined and when.",
+          "Close your own briefs when their trigger has passed. A radar nobody prunes becomes a list nobody trusts, which is the same as having no radar.",
+        ],
+      },
+    ],
+  },
 ];
 
 /** Every skill that applies to an employee sitting on these machines. */
