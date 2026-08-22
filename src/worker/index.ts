@@ -95,7 +95,13 @@ import {
   handleExecuteEffectRequest,
   handleListEffectRequests,
 } from "./services/effects";
-import { handleAcceptAiOutput, handleGetAiRun, handleListAiRuns, handleRunAi } from "./services/aiRuns";
+import {
+  handleAcceptAiOutput,
+  handleAiOutboundPolicy,
+  handleGetAiRun,
+  handleListAiRuns,
+  handleRunAi,
+} from "./services/aiRuns";
 import {
   handleAskLiveHelp,
   handleGetLiveHelp,
@@ -683,6 +689,7 @@ const router = new Router()
   .post("/api/ai/employees/:id/running", handleSetEmployeeRunning)
   .post("/api/ai/employees/:id/tools", handleGrantToolScope)
   // P4 — provider registry governance (reserved governance.policy_change + receipt).
+  .get("/api/ai/outbound-policy", handleAiOutboundPolicy)
   .get("/api/ai/providers", handleListAiProviders)
   .post("/api/ai/providers/:key/kill-switch", handleProviderKillSwitch)
   .post("/api/ai/providers/:key/enable", handleProviderEnable)

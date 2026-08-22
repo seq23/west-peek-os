@@ -6,6 +6,8 @@ import { consumeApprovalCard } from "../services/approvals";
 import { fromAddressFor } from "../services/sendAs";
 import { trySendAsPartner } from "../services/googleConnect";
 import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
+import { aiOutboundSwitches, mayAiEmail } from "../../shared/policy/aiOutbound";
+import { MANAGING_PARTNERS } from "../../shared/registry/managingPartners";
 import type { EmailSendResult } from "./emailTransport";
 import {
   cloudflareEmailBlockedReason,
@@ -215,6 +217,37 @@ export async function executeExternalEffect(
     throw new EffectError(409, "unknown_effect_type", request.effect_type);
   }
 
+  /*
+   * AN AI EMPLOYEE MAY NOT EMAIL ANYBODY, and the two switches that will one day change that are
+   * separate.
+   *
+   * Operator, 21 Aug 2026: "no ai employee should be able to email anything to anyone right now, but
+   * the plumbing and structure and scaffolding should be there for them to a) email the MPs and
+   * b) one day later email the outside world with a separate flip switch for each."
+   *
+   * Checked HERE rather than in a transport because this is the one place every external effect
+   * passes through. A transport-level check would have to be repeated in each of the two senders and
+   * would be missed by the third one somebody adds.
+   *
+   * Refused BEFORE the authorize call on purpose: the reason a partner sees should be "employees
+   * cannot email people", which is a policy they set, rather than "forbidden", which reads as a
+   * permissions bug.
+   */
+  if (request.effect_type === "email.send" && actor.type !== "HUMAN") {
+    const decision = mayAiEmail(aiOutboundSwitches(env), request.destination, managingPartnerEmails(env));
+    if (!decision.allowed) {
+      await appendEvent(env, {
+        eventType: "email.refused_ai_sender",
+        actorType: actor.type === "AI" ? "ai_employee" : "system",
+        actorId: actor.aiEmployeeId ?? "system",
+        objectType: "external_effect_request",
+        objectId: request.id,
+        payload: { audience: decision.audience, to: request.destination, reason: decision.reason },
+      });
+      throw new EffectError(403, "ai_email_disabled", decision.reason);
+    }
+  }
+
   const actionKey = EFFECT_TYPE_ACTION_KEYS[request.effect_type]!;
   const authz = await authorize(
     env,
@@ -272,4 +305,17 @@ export async function executeExternalEffect(
     .bind(request.id)
     .first<ExternalEffectRequestRow>();
   return { request: updated!, delivery, receipt_id: receiptId! };
+}
+
+
+/**
+ * The addresses that count as "the partners" for the outbound switch.
+ *
+ * Derived from the roster rather than typed, so adding a partner does not require remembering this
+ * list — and configurable, because a firm's mail domain is not something to hard-code. Anything not
+ * on it is EXTERNAL, which is the safe direction to be wrong in.
+ */
+function managingPartnerEmails(env: Env): string[] {
+  const domain = env.WP_OS_PARTNER_EMAIL_DOMAIN ?? "westpeek.ventures";
+  return MANAGING_PARTNERS.map((mp) => `${mp.firstName.toLowerCase()}@${domain}`);
 }

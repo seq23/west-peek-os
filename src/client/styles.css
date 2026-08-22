@@ -3867,3 +3867,35 @@ body {
   border-radius: var(--radius-sm);
   font-size: var(--text-sm);
 }
+
+
+/* — The two outbound switches.
+     RED, and deliberately off-palette. The brand is black and white with one orange accent, and
+     orange here would make these read like every other emphasis in the product. These are the two
+     settings that let a machine speak on the firm's behalf; they should not look like anything
+     else. `--wp-danger` is already in the token block, so the colour rule holds. */
+.danger-switches { list-style: none; padding: 0; margin: var(--space-sm) 0; display: flex; flex-direction: column; gap: var(--space-xs); }
+.danger-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  border: 1px solid var(--wp-danger-line);
+  border-left: 3px solid var(--wp-danger);
+  border-radius: var(--radius-sm);
+  background: var(--wp-danger-tint);
+  font-size: var(--text-sm);
+}
+.danger-switch-state {
+  flex: 0 0 auto;
+  min-width: 3rem;
+  padding: var(--space-3xs) var(--space-2xs);
+  border: 1px solid var(--wp-danger);
+  border-radius: var(--radius-xs);
+  color: var(--wp-danger);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-align: center;
+}
+/* ON is the state that should be uncomfortable to look at. */
+.danger-switch-on .danger-switch-state { background: var(--wp-danger); color: var(--wp-surface); }

@@ -6,6 +6,7 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { runAi, type AIRunRow, type RunAiDeps } from "../ai/runAi";
 import { privacyLabelSchema } from "../../shared/privacy";
+import { aiOutboundSwitches } from "../../shared/policy/aiOutbound";
 
 /**
  * AI run routes (P4). POST /api/ai/run is available to any authenticated firm
@@ -160,4 +161,42 @@ export async function handleAcceptAiOutput(ctx: RouteContext): Promise<Response>
   } catch (err) {
     return errorResponse(err);
   }
+}
+
+// ── Whether an employee may email anybody ──
+
+/**
+ * The two outbound switches, read back for the partner who has to decide about them.
+ *
+ * They are ENVIRONMENT settings and not database rows on purpose. A switch that lets an AI email
+ * the outside world should require a deploy to flip — something with a diff, a review and a
+ * timestamp — rather than a click that any session with an MP cookie can make. The page shows their
+ * state and says how to change them; it deliberately cannot change them itself.
+ */
+export async function handleAiOutboundPolicy(ctx: RouteContext): Promise<Response> {
+  const s = aiOutboundSwitches(ctx.env);
+  return json({
+    to_partners: {
+      on: s.toPartners,
+      what: "An AI employee may email Scooter and Sequoia.",
+      risk: "Low. The worst case is a partner reads something wrong, in their own inbox, and says so.",
+      variable: "WP_OS_AI_EMAIL_PARTNERS",
+    },
+    to_external: {
+      on: s.toExternal,
+      what: "An AI employee may email founders, LPs, co-investors — anybody outside the firm.",
+      risk: "This is the firm speaking, and there is no undo.",
+      variable: "WP_OS_AI_EMAIL_EXTERNAL",
+    },
+    // Said plainly, because "both off" is the fact a partner most needs and the shape of the
+    // response should not be the only thing conveying it.
+    summary:
+      !s.toPartners && !s.toExternal
+        ? "No AI employee can email anyone. Both switches are off."
+        : s.toExternal
+          ? "AI employees can email outside the firm. This is the setting with no undo."
+          : "AI employees can email the partners, and nobody else.",
+    how_to_change:
+      "These are deployment settings rather than buttons: set the variable to exactly \"enabled\" in wrangler.toml and deploy. A switch this consequential should leave a diff.",
+  });
 }

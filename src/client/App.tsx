@@ -292,7 +292,9 @@ const NAV_GROUPS = [
     secondary: true,
     items: [
       { key: "ai-ops", label: "Cockpit" },
-      { key: "ai", label: "AI" },
+      // "AI" named nothing — it is where the provider kill switches, the spend ceiling and
+      // the outbound-email switches live, all of which are controls rather than a subject.
+      { key: "ai", label: "AI controls" },
       { key: "intelligence", label: "Sources & sweeps" },
       // "Go and look" moved to Work. Admin is where you configure the system; sending an employee
       // to read a live page is work that produces something you act on. The route stays live.
@@ -1386,6 +1388,63 @@ function GovernancePage({ me }: { me: MeResponse }) {
   );
 }
 
+interface OutboundSwitch {
+  on: boolean;
+  what: string;
+  risk: string;
+  variable: string;
+}
+
+/**
+ * Whether an AI employee may email anybody.
+ *
+ * Operator, 21 Aug 2026: "no ai employee should be able to email anything to anyone right now, but
+ * the plumbing should be there for them to a) email the MPs and b) one day later email the outside
+ * world with a separate flip switch for each", and "those switches should be in red because they
+ * are dangerous — red gets attention for the MPs and humans in the app."
+ *
+ * RED, DELIBERATELY OFF-PALETTE. The brand is black and white with one orange accent, and orange
+ * here would make these read like every other emphasis on the page. These are the two settings that
+ * let a machine speak on the firm's behalf, and they should not look like anything else in the
+ * product. `--wp-danger` is already declared in the token block, so the palette rule holds.
+ *
+ * READ-ONLY ON PURPOSE. They are deployment settings, so flipping one leaves a diff, a review and a
+ * timestamp instead of being a click any session with an MP cookie can make. The page says what
+ * they are and how to change them, and cannot change them itself.
+ */
+function OutboundSwitches() {
+  const policy = useApi<{ to_partners: OutboundSwitch; to_external: OutboundSwitch; summary: string; how_to_change: string }>(
+    "/api/ai/outbound-policy",
+  );
+  const p = policy.data;
+  if (!p) return null;
+
+  const row = (s: OutboundSwitch, label: string) => (
+    <li key={s.variable} className={s.on ? "danger-switch danger-switch-on" : "danger-switch"} data-testid={`outbound-${s.variable}`}>
+      <span className="danger-switch-state">{s.on ? "ON" : "OFF"}</span>
+      <span>
+        <strong>{label}</strong> — {s.what}
+        <br />
+        <span className="muted small">{s.risk}</span>
+        <br />
+        <code className="small">{s.variable}</code>
+      </span>
+    </li>
+  );
+
+  return (
+    <section className="card" data-testid="ai-outbound">
+      <h3>Can an employee email anybody</h3>
+      <p className="small">{p.summary}</p>
+      <ul className="danger-switches">
+        {row(p.to_partners, "The partners")}
+        {row(p.to_external, "Outside the firm")}
+      </ul>
+      <p className="muted small">{p.how_to_change}</p>
+    </section>
+  );
+}
+
 function AiPage({ me }: { me: MeResponse }) {
   const [purpose, setPurpose] = useState("");
   const [inputText, setInputText] = useState("");
@@ -1427,6 +1486,9 @@ function AiPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="ai-page">
+      {/* First on the page, because it is the answer to the question a partner walks in with. */}
+      <OutboundSwitches />
+
       <h3>Run AI task (governed boundary)</h3>
       <form
         className="card"

@@ -53,6 +53,15 @@ export interface Env {
   // ── Google OAuth (P51) ──
   // One client for the whole firm; each partner still grants access to their own account. Scopes
   // are read-only, so nothing this system holds can alter anybody's calendar.
+  /**
+   * Whether an AI employee may email the Managing Partners. Off unless exactly "enabled".
+   * Separate from the one below on purpose — see shared/policy/aiOutbound.ts.
+   */
+  /** Domain the partners' addresses live on. Derived list, not a hard-coded one. */
+  WP_OS_PARTNER_EMAIL_DOMAIN?: string;
+  WP_OS_AI_EMAIL_PARTNERS?: string;
+  /** Whether an AI employee may email anybody outside the firm. The one with no undo. */
+  WP_OS_AI_EMAIL_EXTERNAL?: string;
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
 

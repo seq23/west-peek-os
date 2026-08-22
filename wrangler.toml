@@ -155,6 +155,18 @@ binding = "BROWSER"
 # allowed_sender_addresses = ["os@westpeek.ventures"]
 
 [env.production.vars]
+# ── Whether an AI employee may email anybody (P33) ──
+#
+# BOTH OFF, and separate because they are different decisions. An employee emailing the partners is
+# an internal convenience — worst case a partner reads something wrong in their own inbox and says
+# so. An employee emailing the outside world is the firm speaking to a founder, an LP or a
+# co-investor, and there is no undo.
+#
+# Deployment settings rather than buttons on a page, on purpose: flipping one should leave a diff, a
+# review and a timestamp, not be a click any session with an MP cookie can make. Anything other than
+# exactly "enabled" is off, so a typo fails safe.
+WP_OS_AI_EMAIL_PARTNERS = "off"
+WP_OS_AI_EMAIL_EXTERNAL = "off"
 # Not "local": the dev identity header `x-wpos-dev-user` is refused outside local,
 # and identity comes from `Cf-Access-Authenticated-User-Email` (src/worker/auth.ts).
 WP_OS_ENV = "production"
