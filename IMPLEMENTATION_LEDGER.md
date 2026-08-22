@@ -4850,3 +4850,79 @@ of a visible pass pile is that a decision to stop stays stopped.
 **Worth naming as a practice, not just a bug:** an agent testing against PRODUCTION mutates the
 firm's real records. The review that found so much this week also cancelled two live deal-flow cards
 and nobody noticed for eighteen hours. A read-only identity for review passes would have prevented it.
+
+## 22 Aug 2026 — DEPLOYED. E2E ran for the first time, and found eight defects no unit test could
+
+`npm run deploy:production` — ten migrations applied, **`6ff58052` deployed and verified**. Unit
+suite **110 files / 1,682 tests / 0 skipped**, all green. GitHub `main` pushed to match.
+
+### The e2e suite could not start, which is why it was never proven
+
+Every honest "UNPROVEN" label this week understated it. `npm run e2e` **failed to boot**: wrangler
+proxies the `[ai]` binding remotely, the proxy session dies on *"west-peek-os.seq-taylor.workers.dev
+is behind Cloudflare Access"*, and Playwright reported only `Process from config.webServer was not
+able to start`. Fixed with `--local`. With it booting, the real baseline was 38 passed / 37 failed /
+3 silently skipped. Final: **95 passed, 0 failed, run twice back to back.**
+
+### Eight defects found by a browser and by nothing else
+
+1. **Every inbound email was lost.** The handler ran inside `ctx.waitUntil`, so `message.raw` was
+   already gone — `ReadableStream received over RPC disconnected prematurely`. No event, no card, no
+   capture. Now awaited.
+2. **Decks were silently dropped.** The MIME boundary escape `/[.*+?^${}()|[\\]\\\\]/` matched
+   nothing — the `\\` closed the escape and the `]` closed the class — so boundaries went into
+   `new RegExp` unescaped. RFC 2046 permits `( ) + ? .`: a `+` mis-split the message, an unbalanced
+   `(` threw and lost the whole email.
+3. **My own Sensori fix never worked.** `R2.put(key, message.raw)` throws *"must have a known
+   length"* every time and my `catch` swallowed it, so the card would have said "this system did not
+   keep a copy" — the exact silent failure the fix existed to end. Now piped through
+   `FixedLengthStream(message.rawSize)`.
+4. **The whole committee surface 500'd.** `title LIKE ?` with a wildcard-free pattern; D1 caps LIKE
+   patterns near 64 characters and `"Assemble the IC packet: " + title` exceeds that for any ordinary
+   company. Meetings said *"No deal has reached the committee"* for deals AT the committee.
+5. **Two dead links on Home** — `intelligence` and `reporting`, neither a route.
+6. **Guided setup called the system broken**: it read `m.machine_key` where the endpoint serves
+   `key`, so every recommended role reported machines "not present on the server". All 46 were.
+7. **ADR-018 was violated in the interface.** `delegable` arrives from SQL as `0`, and `0 !== false`,
+   so reserved actions and external effects both offered "Approve, and don't ask again…" — and
+   neither showed the sentence saying why they cannot be delegated. The choke point still refused, so
+   nothing was ever delegated; the UI simply lied about it.
+8. A missing testid that let a blank-state regression suite point at nothing.
+
+### And three of mine, fixed before deploying
+
+**A deck for a NEW company was thrown away** — `if (!companyId) break;` — which is precisely half of
+the operator's sentence ("if its a new company they create a new one"), while the card raised in the
+same breath told the analyst to read a deck that had been discarded. `pending_deck.company_id` is now
+nullable and the deck is kept against the work card until a company exists. Losing an attachment is
+not an acceptable way to respect a boundary.
+
+**No allocation scenario could be opened at all.** `investable` is `NOT NULL` and required by the
+schema, and I had deliberately omitted it because no fee model is recorded — so every press answered
+`invalid_input`. There were only three options: invent a number (which is what put a $30M fund into
+every scenario in the first place), refuse Fund strategy entirely, or ask. The form now asks for the
+one figure the system genuinely cannot derive.
+
+**A unit test pinning a dead link** — `cockpit.test.ts` asserted `links.get("intelligence") ===
+"intelligence"`, holding defect 5 in place.
+
+### Repairs confirmed in production after the deploy
+
+Helios Grid and Vantage Robotics are **OPEN and owned by `aie_wyatt`** — workable for the first time
+since they arrived. The two cards a person cancelled stayed cancelled, exactly as scoped.
+
+### Still open, asserted with `test.fail()` so they cannot be forgotten
+
+- Three governed workflows have **no interface at all** while their routes stay live and enforcing:
+  LP marketing claims + the data-room access ledger, the LP reporting packet and its certification
+  disclaimer, and the work packet lens gate. Anything with an API client can share LP-private
+  material and nothing in the UI shows it.
+- "How long have we known them" was dropped from the Dealflow create form, so it became the separate
+  errand that page exists to prevent — and `DealProvenance` measures lead time from that field.
+
+### Recommended, not done
+
+`validate:sql` spawns one remote `wrangler d1 execute` per statement — **1,091 statements** is the
+10+ minutes, essentially all process spawn and round trip. EXPLAINing all 1,091 against the local
+migration-built D1 took **6.3 seconds, 0 rejected**, needs no credentials, and the migrations ARE
+production's schema. It could move from a rarely-run remote script into `npm test`.
