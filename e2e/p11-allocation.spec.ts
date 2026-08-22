@@ -187,12 +187,14 @@ test("P11 allocation journey: pinned policy versions → visible breach → rece
  *
  * Both halves are defensible on their own — the page is right that inventing an investable figure
  * is how the last set of made-up numbers came to look like facts, and the schema is right that the
- * constraint engine cannot answer "does the sleeve fit" without one — so this is a decision for
- * whoever owns allocation, not something to patch from a test. Remove `test.fail()` when a scenario
- * can be opened from the page it is opened from.
+ * constraint engine cannot answer "does the sleeve fit" without one.
+ *
+ * FIXED 22 Aug 2026 by ASKING. There were only three options — invent the number, refuse to open
+ * scenarios at all, or ask the partner for it — and inventing is exactly what put a $30M fund into
+ * every scenario in the first place. The form now asks for the one figure the system genuinely
+ * cannot derive, and this spec fills it like a partner would. The marker is removed.
  */
 test("a scenario can be opened from the Fund strategy page", async ({ page, request }) => {
-  test.fail();
   const marker = `E2E-P11-UI-${Date.now()}`;
   const fund = await (await request.post("/api/funds", { headers: MP, data: { name: `${marker} Fund` } })).json();
   const sized = await request.patch(`/api/funds/${fund.id}/size`, {
@@ -220,6 +222,8 @@ test("a scenario can be opened from the Fund strategy page", async ({ page, requ
   await gotoSurface(page, "Fund strategy");
   await page.getByTestId("scenario-fund").selectOption({ label: `${marker} Fund` });
   await page.getByTestId("scenario-name").fill(`${marker} construction`);
+  // The one number nobody has recorded a fee model for, so the form asks rather than inventing it.
+  await page.getByTestId("scenario-investable").fill("24000000");
   await page.getByTestId("scenario-create").click();
   await expect(page.getByTestId("allocation-message")).not.toContainText("refused");
 });

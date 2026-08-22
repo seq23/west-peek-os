@@ -241,6 +241,12 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // was wrong. Archive rather than delete: transactions, deal math packets and the event spine all
   // reference an opportunity by id.
   { key: "opportunity.archive", name: "Archive a deal record", description: "Take a deal record off the board, keeping who removed it and why.", isExternalEffect: false },
+  // Removing a meeting that should not be on the record — a test, or one entered twice. The same
+  // argument as a document, and stronger: a meeting is referenced by its consent records, its
+  // transcripts, its notes, the employees who were seated in it and any work card its close-out
+  // produced. Destroying the row would break those references and erase the trail the archive
+  // exists to keep, so the meeting leaves every list and everything taken out of it stays.
+  { key: "meeting.archive", name: "Archive a meeting", description: "Take a meeting off the record, keeping who removed it, when, and why. Nothing already taken out of it is removed.", isExternalEffect: false },
   { key: "capability.assign", name: "Assign a capability", description: "Assign a capability to an AI employee or a machine.", isExternalEffect: false },
   { key: "capability_after_action.record", name: "Record capability after-action", description: "Record what actually happened when a capability was used.", isExternalEffect: false },
   { key: "build_vs_buy.decide", name: "Record a build-vs-buy decision", description: "Record a build, buy, or defer decision for a capability with its rationale.", isExternalEffect: false },

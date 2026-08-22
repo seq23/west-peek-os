@@ -177,6 +177,60 @@ interface HistoryEntry {
   said: string | null;
 }
 
+/* ── The committee's view of this deal ────────────────────────────────────────────────────────
+      Shapes mirror `GET /api/ic/deals/:opportunityId`, which is the same read the Meetings surface
+      renders. Two surfaces, one query — they cannot disagree about a deal, which for a decision
+      record matters more than either of them being convenient. ─────────────────────────────── */
+
+interface CommitteeQuestion {
+  id: string;
+  question: string;
+  because: string;
+  owed_by_kind: string;
+  owed_by: string | null;
+  state: string;
+  answer: string | null;
+  withdrawn_reason: string | null;
+}
+
+interface CommitteeDeal {
+  opportunity_id: string;
+  stage: string;
+  packet_id: string | null;
+  packet_state: string;
+  questions: CommitteeQuestion[];
+  seats: Array<{ name: string; role: string; decides: boolean }>;
+  decision: { id: string; decision: string; rationale: string | null; created_at: string; decided_by: string } | null;
+  packet_evidence: {
+    assembled_at: string;
+    drafted_by: string;
+    claims_seen: number;
+    claims_unsourced: number;
+    contradictions_at_assembly: number;
+    contradictions_now: number;
+    deal_math_attached: boolean;
+  } | null;
+  dissents: Array<{ id: string; decision: string; dissenter: string; dissent_text: string; created_at: string }>;
+  facilitator_card: { id: string; state: string; title: string } | null;
+}
+
+/** Who owes an answer, in words. The stored marker is never printed at a partner. */
+function owedInWords(q: CommitteeQuestion): string {
+  if (q.owed_by) return q.owed_by;
+  switch (q.owed_by_kind) {
+    case "PARTNER": return "a partner who is not carrying this deal";
+    case "CHAMPION": return "whoever is carrying the deal";
+    case "AI_EMPLOYEE": return "an employee";
+    case "COUNTERPARTY": return "the company";
+    default: return "nobody yet — it has not been given to anybody";
+  }
+}
+
+/** A work card's state, said rather than shouted. */
+function cardStateInWords(state: string): string {
+  return state.toLowerCase().split("_").join(" ");
+}
+
 /* ── Money, counts and dates are shown the way a person writes them, never the way SQLite stores
       them. `1250000` is not a price and `2026-08-22T09:14:03.221Z` is not a date. ─────────────── */
 
@@ -761,6 +815,9 @@ function CompanyDealRecord({
   const intel = useApi<CompanyIntelligence>(`/api/companies/${companyId}/intelligence`, [companyId]);
   const questions = useApi<{ contradictions: OpenQuestion[] }>(`/api/contradictions?company_id=${companyId}`, [companyId]);
   const history = useApi<{ entries: HistoryEntry[] }>(`/api/companies/${companyId}/history`, [companyId]);
+  // The committee's file on THIS deal, keyed on the deal rather than the company: a follow-on and a
+  // secondary in the same company go to the committee separately and decide separately.
+  const committee = useApi<{ deal: CommitteeDeal | null }>(dealId ? `/api/ic/deals/${dealId}` : null, [dealId]);
   const classes = useApi<{ security_classes: Array<{ id: string; class_name: string }> }>(
     `/api/security-classes?company_id=${companyId}`,
     [companyId],
@@ -774,6 +831,14 @@ function CompanyDealRecord({
 
   const rows = deals.data?.opportunities ?? [];
   const d = detail.data && detail.data.id === dealId ? detail.data : null;
+  /*
+   * NULL UNTIL IT IS THIS DEAL'S ANSWER. `useApi` keeps the previous body while the next request is
+   * in flight, so without the id check a reader switching deals would read the outgoing deal's
+   * committee record under the incoming deal's name for one frame — and a decision shown against
+   * the wrong company is the one mistake this section must never make.
+   */
+  const committeeDeal =
+    committee.data?.deal && committee.data.deal.opportunity_id === dealId ? committee.data.deal : null;
 
   /*
    * THE RECORD OPENS WITH THE COMPANY, and it opens on the deal that is still live.
@@ -1563,23 +1628,188 @@ function CompanyDealRecord({
 
       {/*
         ── 5 · THE COMMITTEE ───────────────────────────────────────────────────────────────────
-        PLACEHOLDER, AND NOT MINE TO FILL. Another agent is bringing the committee's view of a deal
-        across from the meetings side — what the committee has seen, what it asked for, what it
-        decided and who dissented. It belongs exactly here: after the open questions, because the
-        committee is what happens once they are answered, and before the history, because a decision
-        is a thing that HAS happened rather than a thing that is happening.
+        It belongs exactly here: after the open questions, because the committee is what happens once
+        they are answered, and before the history, because a decision is a thing that HAS happened
+        rather than a thing that is happening.
 
-        Whoever picks this up: the section heading is an h3 like every other section on this record,
-        anything inside it is an h4, and h5 does not exist on this page. `d` is the opportunity being
-        shown and `d.ic_packets` on the detail response already carries this deal's packets.
+        WHY THIS IS NOT READ OUT OF `d.ic_packets`. The detail response carries `{ id, status }` per
+        packet and nothing else — not the questions, not the seats, not the decision, and above all
+        not the dissent. A section built on that would have had to invent the rest on the client,
+        and a committee record that disagrees with the committee's own surface is worse than no
+        record. `GET /api/ic/deals/:opportunityId` returns the SAME read Meetings renders, so the
+        two surfaces cannot drift; `d.ic_packets` is now only how this page knows whether to ask.
+
+        DISSENT IS NOT SUMMARISED, ANYWHERE. It is printed whole, beside the decision it was
+        recorded against, and a decision with none says so — because "nobody disagreed" and "nobody
+        wrote down that they disagreed" are different facts and only one of them is in the database.
       */}
       <h3>Where this deal stands with the committee</h3>
       <section className="card" data-testid="deal-committee">
-        <p className="state-empty" data-testid="deal-committee-placeholder">
-          What the committee has seen, what it asked for and what it decided is being brought across
-          from the meetings side and is not on this record yet. Said plainly rather than dressed up:
-          there is nowhere else in the product to read it today either.
+        <p className="muted small record-lede">
+          What the committee has seen, what it asked for and who owes each answer, who sits in the
+          room, what it decided and who disagreed. A deal arrives here by moving to the committee
+          stage above — nothing else puts it in front of them.
         </p>
+
+        {committeeDeal === null ? (
+          <p className="state-empty" data-testid="deal-committee-none">
+            {committee.loading
+              ? "Reading the committee's file…"
+              : `${companyName} has not been to the committee on this deal. Move it to the committee stage above and a packet opens on its own, with a card for the facilitator to assemble it.`}
+          </p>
+        ) : (
+          <>
+            <h4>What the committee has seen</h4>
+            <ul className="card-list small" data-testid="deal-committee-packet">
+              <li>
+                <strong>{committeeDeal.packet_state}</strong>
+                <div className="muted">
+                  {committeeDeal.stage}
+                  {committeeDeal.facilitator_card
+                    ? ` · the facilitator is holding a card to assemble it — ${cardStateInWords(committeeDeal.facilitator_card.state)}`
+                    : ""}
+                </div>
+              </li>
+              {committeeDeal.packet_evidence && (
+                <li data-testid="deal-committee-evidence">
+                  <strong>
+                    {count(committeeDeal.packet_evidence.claims_seen)} claim
+                    {committeeDeal.packet_evidence.claims_seen === 1 ? "" : "s"} were in front of them
+                    {committeeDeal.packet_evidence.claims_unsourced > 0
+                      ? `, ${count(committeeDeal.packet_evidence.claims_unsourced)} of them with nothing under them`
+                      : ", all of them with a source attached"}
+                    .
+                  </strong>
+                  <div className="muted">
+                    Put together by {committeeDeal.packet_evidence.drafted_by} on{" "}
+                    {day(committeeDeal.packet_evidence.assembled_at)} ·{" "}
+                    {committeeDeal.packet_evidence.deal_math_attached
+                      ? "the arithmetic is attached"
+                      : "no arithmetic is attached"}
+                  </div>
+                </li>
+              )}
+              {committeeDeal.packet_evidence && (
+                <li data-testid="deal-committee-contradictions">
+                  <strong>
+                    {committeeDeal.packet_evidence.contradictions_now === 0
+                      ? "The record does not contradict itself in any material place."
+                      : `The record contradicts itself in ${count(committeeDeal.packet_evidence.contradictions_now)} material place${committeeDeal.packet_evidence.contradictions_now === 1 ? "" : "s"} right now.`}
+                  </strong>
+                  {/* THE TWO COUNTS TRAVEL SEPARATELY ON PURPOSE. A contradiction opened after the
+                      packet was written is the one nobody in the room knows about. */}
+                  <div className="muted">
+                    {committeeDeal.packet_evidence.contradictions_at_assembly} were open when the
+                    packet was put together
+                    {committeeDeal.packet_evidence.contradictions_now >
+                    committeeDeal.packet_evidence.contradictions_at_assembly
+                      ? " — the rest were raised since, so nobody in the room has seen them"
+                      : ""}
+                  </div>
+                </li>
+              )}
+            </ul>
+
+            <h4>What it asked for, and who owes each answer</h4>
+            <ul className="card-list small" data-testid="deal-committee-questions">
+              {committeeDeal.questions.map((q) => (
+                <li key={q.id} className="ic-question" data-testid={`deal-committee-question-${q.id}`}>
+                  <span
+                    className={
+                      q.state === "OPEN"
+                        ? "help-tag help-tag-warn"
+                        : q.state === "ANSWERED"
+                          ? "help-tag help-tag-good"
+                          : "help-tag help-tag-muted"
+                    }
+                  >
+                    {q.state === "OPEN" ? "open" : q.state === "ANSWERED" ? "answered" : "not needed"}
+                  </span>{" "}
+                  <strong>{q.question}</strong>
+                  <div className="muted">{q.because}</div>
+                  <div className="ic-owes">Owed by {owedInWords(q)}</div>
+                  {q.answer && <div className="closeout-quote">{q.answer}</div>}
+                  {q.withdrawn_reason && <div className="muted">Not needed because {q.withdrawn_reason}</div>}
+                </li>
+              ))}
+              {committeeDeal.questions.length === 0 && (
+                <li className="state-empty">
+                  Nothing has been named as missing. A packet with no gaps is either finished or has
+                  not been started — the state above says which.
+                </li>
+              )}
+            </ul>
+
+            <h4>Who is in the room</h4>
+            <ul className="card-list small" data-testid="deal-committee-seats">
+              {committeeDeal.seats.map((s) => (
+                <li key={s.name}>
+                  <strong>{s.name}</strong> {s.decides && <span className="badge badge-gate">decides</span>}
+                  <div className="muted">{s.role}</div>
+                </li>
+              ))}
+              {committeeDeal.seats.length === 0 && (
+                <li className="state-empty">
+                  Nobody is seated. A committee with no named members is one nobody has agreed to sit on.
+                </li>
+              )}
+            </ul>
+
+            <h4>What it decided</h4>
+            <ul className="card-list small" data-testid="deal-committee-decision">
+              {committeeDeal.decision ? (
+                <li>
+                  <strong>{committeeDeal.decision.decision === "APPROVE"
+                    ? "The firm is investing."
+                    : committeeDeal.decision.decision === "REJECT"
+                      ? "The firm passed."
+                      : "Not yet — deferred."}</strong>
+                  <div className="muted">
+                    {committeeDeal.decision.rationale ?? "No reason was written down."}
+                  </div>
+                  <div className="muted">
+                    Recorded by {committeeDeal.decision.decided_by} · {day(committeeDeal.decision.created_at)}
+                  </div>
+                </li>
+              ) : (
+                <li className="state-empty">
+                  Nothing decided. The decision is made against the packet, by the partners, with an
+                  approval receipt behind it — and a pass keeps its reason for good.
+                </li>
+              )}
+            </ul>
+
+            <h4>Who disagreed</h4>
+            <ul className="card-list small" data-testid="deal-committee-dissent">
+              {committeeDeal.dissents.map((ds) => (
+                <li key={ds.id} data-testid={`deal-committee-dissent-${ds.id}`}>
+                  <strong>{ds.dissenter} disagreed — {ds.decision.toLowerCase()}</strong>
+                  {/* Printed in their own words, never condensed. A committee that records "we
+                      agreed" over somebody who did not is wrong about the one thing worth going
+                      back for. */}
+                  <div className="closeout-quote">{ds.dissent_text}</div>
+                  <div className="muted">{day(ds.created_at)}</div>
+                </li>
+              ))}
+              {committeeDeal.dissents.length === 0 && (
+                <li className="state-empty">
+                  {committeeDeal.decision
+                    ? "Nobody recorded a disagreement with this decision. That is not the same as everybody agreeing — it is the same as nobody having written one down, and it can still be added against the decision from Meetings."
+                    : "There is no decision to disagree with yet."}
+                </li>
+              )}
+            </ul>
+
+            <button
+              type="button"
+              className="link-button"
+              data-testid="deal-committee-open-meetings"
+              onClick={() => onNavigate("meetings")}
+            >
+              Answer a question, put the packet forward, or record what was decided in Meetings
+            </button>
+          </>
+        )}
       </section>
 
       {/* ── 6 · ITS HISTORY ────────────────────────────────────────────────────────────────── */}
@@ -1684,6 +1914,9 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const [message, setMessage] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState("");
   const [startsAt, setStartsAt] = useState("NEW");
+  // Blank by default: an invented date is worse than an absent one, and "today" would quietly claim
+  // every company was met the day it was filed.
+  const [knownSince, setKnownSince] = useState("");
   const [origin, setOrigin] = useState("UNRECORDED");
   // Blank company id means "the name below is new". One form, both cases.
   const [newName, setNewName] = useState("");
@@ -1808,6 +2041,10 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         opportunity_type: sleeve,
         title: `${name || "Opportunity"} — ${stage(startsAt)?.label ?? startsAt}`,
         relationship_origin: origin,
+        // Sent only when given. An absent date is honest; a default would claim every company was
+        // met the day somebody happened to file it, and `DealProvenance` measures lead time from
+        // exactly this field.
+        ...(knownSince ? { relationship_started_at: knownSince } : {}),
       },
     });
     if (created.status !== 201 || !created.data?.id) {
@@ -2005,6 +2242,24 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
                 <option key={o} value={o}>{originLabel(o)}</option>
               ))}
             </select>
+          </label>
+          {/*
+            HOW LONG WE HAVE KNOWN THEM, asked at the moment the deal is created.
+            
+            It was dropped in the rebuild and survived only on the deal's terms or on adding a SECOND
+            deal — which turned it into the separate errand this form exists to prevent.
+            `DealProvenance` measures lead time from exactly this field, so every deal opened through
+            the ordinary door was contributing nothing to the panel sitting underneath it. Asked here,
+            beside how we met them, because they are one thought: who introduced us, and how long ago.
+          */}
+          <label>
+            Known since{" "}
+            <input
+              type="date"
+              data-testid="dealflow-known-since"
+              value={knownSince}
+              onChange={(e) => setKnownSince(e.target.value)}
+            />
           </label>
           <button type="submit" className="btn-strong" data-testid="dealflow-add-submit">Add</button>
           <span className="muted small">

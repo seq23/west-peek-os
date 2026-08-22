@@ -66,6 +66,10 @@ export interface MeetingRow {
   firm_scope: string;
   created_by: string;
   created_at: string;
+  /** Migration 0140. Set means the meeting is off the record; the three always travel together. */
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 }
 
 export interface ConsentRecordRow {
@@ -693,10 +697,27 @@ export async function handleCreateMeeting(ctx: RouteContext): Promise<Response> 
 export async function handleListMeetings(ctx: RouteContext): Promise<Response> {
   const url = new URL(ctx.request.url);
   const companyId = url.searchParams.get("company_id");
-  const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
+  const visibility = privacyVisibilityClause(ctx.identity!, "m.privacy_label");
+  /*
+   * ARCHIVED IS OFF THE RECORD (migration 0140). `?archived=1` is the other half of the honesty:
+   * what was taken off, by whom and why, exactly as the pass pile works on Dealflow. Nothing is
+   * destroyed, so nothing has to be believed on trust.
+   *
+   * THE FOUR COUNTS TRAVEL WITH EVERY ROW because the confirm has to say what stops being shown
+   * and what stays. A partner archiving a test meeting must not find out six weeks later that a
+   * real work card went with it — so the count is on screen BEFORE the press, not implied after.
+   */
+  const wantArchived = url.searchParams.get("archived") === "1";
+  const shelf = wantArchived ? "m.archived_at IS NOT NULL" : "m.archived_at IS NULL";
+  const select = `SELECT m.*,
+      (SELECT COUNT(*) FROM meeting_note n WHERE n.meeting_id = m.id) AS note_count,
+      (SELECT COUNT(*) FROM meeting_commitment c WHERE c.meeting_id = m.id) AS commitment_count,
+      (SELECT COUNT(*) FROM meeting_commitment c WHERE c.meeting_id = m.id AND c.work_card_id IS NOT NULL) AS work_card_count,
+      (SELECT COUNT(*) FROM transcript_import t WHERE t.meeting_id = m.id) AS transcript_count
+     FROM meeting m`;
   const rows = companyId
-    ? await ctx.env.WP_OS_DB.prepare(`SELECT * FROM meeting WHERE company_id = ?1 AND ${visibility} ORDER BY created_at DESC, id LIMIT 500`).bind(companyId).all<MeetingRow>()
-    : await ctx.env.WP_OS_DB.prepare(`SELECT * FROM meeting WHERE ${visibility} ORDER BY created_at DESC, id LIMIT 500`).all<MeetingRow>();
+    ? await ctx.env.WP_OS_DB.prepare(`${select} WHERE m.company_id = ?1 AND ${visibility} AND ${shelf} ORDER BY m.created_at DESC, m.id LIMIT 500`).bind(companyId).all<MeetingRow>()
+    : await ctx.env.WP_OS_DB.prepare(`${select} WHERE ${visibility} AND ${shelf} ORDER BY m.created_at DESC, m.id LIMIT 500`).all<MeetingRow>();
   // WHERE THE FIRM IS IN THE IC SEQUENCE. Four counts, so the page can say "you are here" rather
   // than showing four steps and leaving the operator to work out which one is blocked. Cheap
   // aggregates, and the alternative is a page that cannot tell "nothing has reached this yet" from
@@ -767,6 +788,92 @@ export async function handleTransitionMeeting(ctx: RouteContext): Promise<Respon
   } catch (err) {
     return errorResponse(err);
   }
+}
+
+/**
+ * POST /api/meetings/:id/archive — take a meeting off the record.
+ *
+ * NOT A DELETE, and the difference is the point. Operator, 22 Aug 2026: "the call with scooter
+ * meeting has no way to delete it. it was a test and some meetings i want to delete....we need a way
+ * to delete them and we can have an audit trail if someone deletes." A meeting is referenced by its
+ * consent records, its transcript imports, its notes, the employees seated in it, its commitments
+ * and every work card a close-out made out of one — destroying the row would break all of that and
+ * erase the trail the audit exists to keep. So it leaves every list and the record survives: who,
+ * when, and why.
+ *
+ * A REASON IS REQUIRED. "It was a test" is a perfectly good reason, and typing it is the half
+ * second that stops an accidental press.
+ *
+ * HUMAN ONLY. An employee does not get to remove the firm's record of a conversation, and that is
+ * checked here rather than left to the action key, which is ordinary for everybody who may do it.
+ *
+ * ARCHIVING TWICE IS A NO-OP THAT SAYS SO. A second press is somebody who could not tell whether
+ * the first one worked; answering it with an error teaches them the product is broken.
+ */
+export async function handleArchiveMeeting(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") {
+    return json(
+      { error: "forbidden", detail: "Taking a meeting off the record is a person's decision. An employee cannot make it." },
+      { status: 403 },
+    );
+  }
+  const meeting = await getMeeting(ctx.env, ctx.params.id!);
+  if (!meeting) return json({ error: "not_found" }, { status: 404 });
+  if (!canAccessPrivacyLabel(ctx.identity!, meeting.privacy_label)) return json({ error: "not_found" }, { status: 404 });
+
+  const authz = await authorize(ctx.env, actor, "meeting.archive", {
+    objectType: "meeting",
+    objectId: meeting.id,
+    firmScope: meeting.firm_scope,
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const body = (await parseJsonBody(ctx.request)) as { reason?: unknown } | null;
+  const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+  if (reason.length < 3) {
+    return json(
+      {
+        error: "reason_required",
+        detail: "Say why in a few words. Six months from now the reason is the only part of this that still helps.",
+      },
+      { status: 400 },
+    );
+  }
+
+  if (meeting.archived_at) {
+    return json({
+      id: meeting.id,
+      archived: true,
+      already_archived: true,
+      note: "This one is already off the record — it was taken off on " + meeting.archived_at + ". Nothing changed.",
+    });
+  }
+
+  await ctx.env.WP_OS_DB.prepare(
+    `UPDATE meeting
+        SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), archived_by = ?2, archive_reason = ?3
+      WHERE id = ?1`,
+  )
+    .bind(meeting.id, actor.firmUserId ?? "system", reason.slice(0, 400))
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: "meeting.archived",
+    actorType: "firm_user",
+    actorId: actor.firmUserId ?? "system",
+    objectType: "meeting",
+    objectId: meeting.id,
+    firmScope: meeting.firm_scope,
+    payload: { title: meeting.title, meeting_type: meeting.meeting_type, reason: reason.slice(0, 400) },
+  });
+
+  return json({
+    id: meeting.id,
+    archived: true,
+    already_archived: false,
+    note: "Off the record. Nothing was destroyed — the notes, the transcript and any work card made out of it are untouched, and what you typed is on the trail with your name and the time.",
+  });
 }
 
 const consentSchema = z.object({

@@ -4926,3 +4926,46 @@ since they arrived. The two cards a person cancelled stayed cancelled, exactly a
 10+ minutes, essentially all process spawn and round trip. EXPLAINing all 1,091 against the local
 migration-built D1 took **6.3 seconds, 0 rejected**, needs no credentials, and the migrations ARE
 production's schema. It could move from a rarely-run remote script into `npm test`.
+
+## 22 Aug 2026 — Verifying e2e rather than trusting the report
+
+The operator asked to hold the deck until the suite genuinely worked. Run directly rather than taken
+on report: **95 tests, 94 passed, 1 "failed"** — and the failure was `Expected to fail, but passed`
+on *"a deck for a company we have never heard of is still KEPT"*. The fix landed; the marker
+asserting it was broken had gone stale. Removed.
+
+That is the good kind of red, and worth naming: a `test.fail()` left on a behaviour somebody has
+since fixed reports as a failure, which is exactly right — it forces the claim to be revisited rather
+than quietly becoming untrue.
+
+**Two more markers cleared, both mine.**
+
+*A scenario could not be opened from Fund strategy.* The spec pre-dated the fix: `investable` is NOT
+NULL and I had deliberately omitted it because no fee model is recorded, so the form now ASKS for the
+one figure the system cannot derive — inventing it is what put a $30M fund into every scenario in the
+first place. The spec now fills it as a partner would.
+
+*"How long have we known them" was dropped from the Dealflow create form.* It survived only on the
+deal's terms or on adding a SECOND deal — i.e. it became the separate errand that form exists to
+prevent — and `DealProvenance` measures lead time from exactly that field, so **every deal opened
+through the ordinary door contributed nothing to the panel sitting underneath it.** Restored beside
+"how we met them", because they are one thought: who introduced us, and how long ago. Blank by
+default and sent only when given: a defaulted date would claim every company was met on the day it
+happened to be filed, and an absent date is honest where an invented one is not.
+
+### A test that pinned scaffolding
+
+`tests/dealRecordLayout.test.ts` asserted the committee section CONTAINED a placeholder and that the
+file still said "PLACEHOLDER, AND NOT MINE TO FILL". Correct while the section was owned by another
+agent; wrong the instant it was filled.
+
+**A test that pins scaffolding holds the scaffolding in place.** It went red on the fix and read as
+though the fix were the defect — the same shape as the assertion that pinned a dead link, and the
+fixture that invented an employee. It now asserts the section does its job: the questions and who
+owes them, who is seated, the decision, dissent by name (because `ic.ts`'s rule is that dissent
+survives the meeting rather than being smoothed into consensus), and an empty state for a deal that
+has not reached the committee.
+
+Three `test.fail()` markers cleared today by fixing the product rather than the test: the thrown-away
+deck, the un-openable scenario, and "how long have we known them". Three remain, all LP or
+work-packet surfaces whose ROUTES ARE LIVE AND ENFORCING while nothing in the interface shows them.

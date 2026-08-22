@@ -928,7 +928,39 @@ export interface IcDealView {
   questions: OpenQuestionRow[];
   open_question_count: number;
   seats: CommitteeSeat[];
-  decision: { decision: string; rationale: string | null; created_at: string } | null;
+  /**
+   * The latest decision on the packet. `id` travels because dissent is recorded AGAINST a decision:
+   * a surface that shows the verdict without the handle to disagree with it is a surface that only
+   * records agreement.
+   */
+  decision: { id: string; decision: string; rationale: string | null; created_at: string; decided_by: string } | null;
+  /**
+   * WHAT THE COMMITTEE ACTUALLY SAW, counted rather than described.
+   *
+   * A packet is a snapshot of the record on the day it was assembled, and "the committee has a
+   * packet" is not the same statement as "the committee saw the four contradictions that were open
+   * when it was written". Both counts travel: the number at assembly and the number right now, so a
+   * contradiction raised AFTER the packet was drafted cannot reach the decision unannounced.
+   */
+  packet_evidence: {
+    assembled_at: string;
+    /** A name, never an id, and never a raw HUMAN/AI marker. */
+    drafted_by: string;
+    claims_seen: number;
+    claims_unsourced: number;
+    contradictions_at_assembly: number;
+    contradictions_now: number;
+    deal_math_attached: boolean;
+  } | null;
+  /**
+   * DISSENT, KEPT WHOLE.
+   *
+   * It travels beside the decision rather than inside it, and it is never folded into the
+   * rationale — a committee that records "we agreed" over a partner who did not is a committee
+   * whose record is wrong about the one thing worth going back for. `dissent_record` is append-only
+   * at the database, and this read never summarises it.
+   */
+  dissents: Array<{ id: string; decision: string; dissenter: string; dissent_text: string; created_at: string }>;
   /** The card Poppy holds for this packet, so the page can say whether anybody has started. */
   facilitator_card: { id: string; state: string; title: string } | null;
   /**
@@ -950,6 +982,34 @@ function packetStateInWords(status: string | null): string {
   }
 }
 
+/** What the committee did, in the words a partner would use. The stored value never reaches a page. */
+export function decisionInWords(decision: string): string {
+  switch (decision) {
+    case "APPROVE": return "The firm is investing";
+    case "REJECT": return "The firm passed";
+    case "DEFER": return "Not yet";
+    default: return decision.split("_").join(" ").toLowerCase();
+  }
+}
+
+/**
+ * A person's name from whichever roster they are on.
+ *
+ * Two rosters, one question. `drafted_by_id` and `dissenter_id` hold a firm user id or an employee
+ * id depending on who acted, and printing either raw is exactly the defect this file has already
+ * paid for twice — the id/name divergence that made Poppy's work card invisible. Unresolvable ids
+ * come back as a sentence rather than as the id itself.
+ */
+async function nameFor(env: Env, kind: "HUMAN" | "AI" | "SYSTEM", id: string | null): Promise<string> {
+  if (!id) return "Nobody recorded";
+  if (kind === "AI") {
+    const row = await env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1 OR name = ?1").bind(id).first<{ name: string }>();
+    return row?.name ?? "An employee whose seat has since been removed";
+  }
+  const row = await env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1").bind(id).first<{ full_name: string }>();
+  return row?.full_name ?? "Somebody who has since left the firm";
+}
+
 function stageInWords(status: string): string {
   switch (status) {
     case "IC_READY": return "At the committee";
@@ -967,16 +1027,31 @@ function stageInWords(status: string): string {
  * directly: what happens to the page once a deal is at the IC stage. What happens is that it appears
  * here, with its packet, its unanswered questions and who owes each one.
  */
-export async function icDealSurface(env: Env): Promise<IcDealView[]> {
-  const deals = await env.WP_OS_DB.prepare(
-    `SELECT o.id, o.title, o.status, c.canonical_name
-       FROM investment_opportunity o
-       LEFT JOIN canonical_company c ON c.id = o.company_id
-      WHERE o.status IN ('IC_READY','IC_DECIDED')
-         OR EXISTS (SELECT 1 FROM ic_packet p WHERE p.opportunity_id = o.id)
-      ORDER BY o.created_at DESC, o.id
-      LIMIT 50`,
-  ).all<{ id: string; title: string; status: string; canonical_name: string | null }>();
+export async function icDealSurface(env: Env, opportunityId?: string): Promise<IcDealView[]> {
+  /*
+   * ONE READ, TWO CALLERS. Meetings asks for every deal at committee; a deal record asks about the
+   * one deal it is showing. Giving the record its own query would let the two surfaces drift into
+   * disagreeing about the same deal, which is the failure the whole committee section exists to
+   * prevent — so the filter is a bind, not a second function.
+   */
+  const deals = opportunityId
+    ? await env.WP_OS_DB.prepare(
+        `SELECT o.id, o.title, o.status, c.canonical_name
+           FROM investment_opportunity o
+           LEFT JOIN canonical_company c ON c.id = o.company_id
+          WHERE o.id = ?1`,
+      )
+        .bind(opportunityId)
+        .all<{ id: string; title: string; status: string; canonical_name: string | null }>()
+    : await env.WP_OS_DB.prepare(
+        `SELECT o.id, o.title, o.status, c.canonical_name
+           FROM investment_opportunity o
+           LEFT JOIN canonical_company c ON c.id = o.company_id
+          WHERE o.status IN ('IC_READY','IC_DECIDED')
+             OR EXISTS (SELECT 1 FROM ic_packet p WHERE p.opportunity_id = o.id)
+          ORDER BY o.created_at DESC, o.id
+          LIMIT 50`,
+      ).all<{ id: string; title: string; status: string; canonical_name: string | null }>();
 
   const out: IcDealView[] = [];
   for (const deal of deals.results ?? []) {
@@ -987,13 +1062,94 @@ export async function icDealSurface(env: Env): Promise<IcDealView[]> {
       .first<IcPacketRow>();
 
     const questions = packet ? await listOpenQuestions(env, packet.id) : [];
-    const decision = packet
-      ? await env.WP_OS_DB.prepare(
-          "SELECT decision, rationale, created_at FROM ic_decision WHERE ic_packet_id = ?1 ORDER BY created_at DESC, id LIMIT 1",
-        )
-          .bind(packet.id)
-          .first<{ decision: string; rationale: string | null; created_at: string }>()
+    const decisions = packet
+      ? (
+          await env.WP_OS_DB.prepare(
+            "SELECT id, decision, rationale, decided_by, created_at FROM ic_decision WHERE ic_packet_id = ?1 ORDER BY created_at DESC, id",
+          )
+            .bind(packet.id)
+            .all<{ id: string; decision: string; rationale: string | null; decided_by: string; created_at: string }>()
+        ).results ?? []
+      : [];
+    const latest = decisions[0] ?? null;
+    const decision = latest
+      ? {
+          id: latest.id,
+          decision: latest.decision,
+          rationale: latest.rationale,
+          created_at: latest.created_at,
+          decided_by: await nameFor(env, "HUMAN", latest.decided_by),
+        }
       : null;
+
+    /*
+     * DISSENT IS READ FOR EVERY DECISION ON THE PACKET, not just the last one.
+     *
+     * A deferred deal comes round again, so a packet can carry several decisions, and a dissent
+     * recorded against the first one is exactly the thing somebody wants in front of them when the
+     * second is being taken. Hanging dissent off `decision` alone would drop it the moment the
+     * committee met twice.
+     */
+    const dissentRows = decisions.length
+      ? (
+          await env.WP_OS_DB.prepare(
+            `SELECT d.id, d.ic_decision_id, d.dissenter_id, d.dissent_text, d.created_at
+               FROM dissent_record d
+              WHERE d.ic_decision_id IN (${decisions.map((_, i) => `?${i + 1}`).join(", ")})
+              ORDER BY d.created_at DESC, d.id`,
+          )
+            .bind(...decisions.map((d) => d.id))
+            .all<{ id: string; ic_decision_id: string; dissenter_id: string; dissent_text: string; created_at: string }>()
+        ).results ?? []
+      : [];
+    const dissents: IcDealView["dissents"] = [];
+    for (const row of dissentRows) {
+      const against = decisions.find((d) => d.id === row.ic_decision_id);
+      dissents.push({
+        id: row.id,
+        decision: decisionInWords(against?.decision ?? ""),
+        dissenter: await nameFor(env, "HUMAN", row.dissenter_id),
+        dissent_text: row.dissent_text,
+        created_at: row.created_at,
+      });
+    }
+
+    let packetEvidence: IcDealView["packet_evidence"] = null;
+    if (packet) {
+      let snapshot: { total_claims?: number; claims?: Array<unknown>; unresolved_material_contradictions?: unknown[] } = {};
+      try {
+        snapshot = JSON.parse(packet.evidence_summary_json || "{}");
+      } catch {
+        // A packet whose snapshot cannot be read still has to say so rather than vanish from the
+        // record; the counts below fall back to zero and the page reports what it can.
+        snapshot = {};
+      }
+      const claims = Array.isArray(snapshot.claims) ? (snapshot.claims as Array<{ id?: string }>) : [];
+      const unsourced = claims.length
+        ? Number(
+            (
+              await env.WP_OS_DB.prepare(
+                `SELECT COUNT(*) AS n FROM diligence_claim c
+                  WHERE c.id IN (${claims.map((_, i) => `?${i + 1}`).join(", ")})
+                    AND NOT EXISTS (SELECT 1 FROM claim_source s WHERE s.claim_id = c.id)`,
+              )
+                .bind(...claims.map((c) => c.id ?? ""))
+                .first<{ n: number }>()
+            )?.n ?? 0,
+          )
+        : 0;
+      packetEvidence = {
+        assembled_at: packet.created_at,
+        drafted_by: await nameFor(env, packet.drafted_by_type, packet.drafted_by_id),
+        claims_seen: Number(snapshot.total_claims ?? claims.length),
+        claims_unsourced: unsourced,
+        contradictions_at_assembly: Array.isArray(snapshot.unresolved_material_contradictions)
+          ? snapshot.unresolved_material_contradictions.length
+          : 0,
+        contradictions_now: (await currentUnresolvedContradictions(env, packet)).length,
+        deal_math_attached: packet.deal_math_packet_id !== null,
+      };
+    }
 
     /*
      * THE OWNER IS LOOKED UP BY ID, because that is what the column holds.
@@ -1045,7 +1201,9 @@ export async function icDealSurface(env: Env): Promise<IcDealView[]> {
       questions,
       open_question_count: questions.filter((q) => q.state === "OPEN").length,
       seats: await committeeSeats(env, packet ?? null),
-      decision: decision ?? null,
+      decision,
+      packet_evidence: packetEvidence,
+      dissents,
       facilitator_card: card ?? null,
       approval_card: packet ? await pendingCardFor(env, packet.id) : null,
     });
@@ -1131,4 +1289,16 @@ export async function handleResolveIcQuestion(ctx: RouteContext): Promise<Respon
 /** GET /api/ic/deals — every deal at or past the committee, and what each is waiting on. */
 export async function handleIcDealSurface(ctx: RouteContext): Promise<Response> {
   return json({ deals: await icDealSurface(ctx.env) });
+}
+
+/**
+ * GET /api/ic/deals/:id — the committee's view of ONE deal, for the deal's own record.
+ *
+ * `deal` is null rather than a 404 for an opportunity the committee has never seen, because "this
+ * deal has not been to the committee" is an answer and a 404 is a malfunction. The record renders
+ * the two states differently and cannot do that if they arrive the same way.
+ */
+export async function handleIcDealForOpportunity(ctx: RouteContext): Promise<Response> {
+  const [deal] = await icDealSurface(ctx.env, ctx.params.id!);
+  return json({ deal: deal ?? null });
 }

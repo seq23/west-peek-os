@@ -35,6 +35,20 @@ interface MeetingRow {
   occurred_at: string | null;
   company_id: string | null;
   recording_enabled?: number;
+  /**
+   * What this meeting has already produced (migration 0140's list read).
+   *
+   * They exist so the archive confirm can say what stops being shown and what stays. A partner
+   * clearing out a test call must not discover six weeks later that a real work card went with it,
+   * and "are you sure?" does not tell her that — a count does.
+   */
+  note_count?: number;
+  commitment_count?: number;
+  work_card_count?: number;
+  transcript_count?: number;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 }
 
 interface MeetingsResponse {
@@ -87,7 +101,9 @@ interface IcDeal {
   questions: OpenQuestion[];
   open_question_count: number;
   seats: CommitteeSeat[];
-  decision: { decision: string; rationale: string | null; created_at: string } | null;
+  decision: { id: string; decision: string; rationale: string | null; created_at: string; decided_by: string } | null;
+  /** Kept whole and never folded into the decision. The rule `ic.ts` holds, made visible. */
+  dissents: Array<{ id: string; decision: string; dissenter: string; dissent_text: string; created_at: string }>;
   facilitator_card: { id: string; state: string; title: string } | null;
   approval_card: { id: string; state: string } | null;
 }
@@ -108,6 +124,37 @@ function whenInWords(value: string | null): string {
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
 }
 
+/** Where a meeting stands, in words. Lower-casing a stored value is still printing it. */
+function statusInWords(status: string | null): string {
+  switch (status) {
+    case "SCHEDULED": return "on the calendar";
+    case "HELD": return "it happened";
+    case "CANCELLED": return "it did not happen";
+    default: return "no state recorded";
+  }
+}
+
+/** Whether anybody may write this conversation down, in words. */
+function consentInWords(state: string | null): string {
+  switch (state) {
+    case "GRANTED": return "They agreed to it being written down";
+    case "DENIED": return "They said no, and that is on the file";
+    case "REVOKED": return "They took their permission back";
+    case "REQUESTED": return "Permission has been asked for and not answered";
+    default: return "Nobody has been asked yet";
+  }
+}
+
+/** What became of a transcript somebody tried to bring in. */
+function importInWords(status: string): string {
+  switch (status) {
+    case "IMPORTED": return "brought in";
+    case "REFUSED": return "refused";
+    case "PENDING": return "waiting";
+    default: return "not brought in";
+  }
+}
+
 /** Where a transcript came from, in words. The stored value is never printed at a partner. */
 function sourceInWords(source: string, provider: string | null): string {
   if (provider === "FIREFLIES") return "Fireflies export";
@@ -117,6 +164,28 @@ function sourceInWords(source: string, provider: string | null): string {
     case "UPLOAD": return "A file somebody uploaded";
     default: return "Typed in by hand";
   }
+}
+
+/**
+ * What taking a meeting off the record does NOT remove, counted from what it actually holds.
+ *
+ * A confirm that says "are you sure?" tells a partner nothing. This one names the notes, the
+ * transcripts, the promises and — the one that matters — the work cards already made out of it,
+ * because those belong to whoever is working them and go on existing. The alternative is somebody
+ * clearing out a test call and finding out weeks later what left with it.
+ */
+function whatSurvives(m: MeetingRow): string {
+  const kept: string[] = [];
+  const say = (n: number, one: string, many: string) => {
+    if (n > 0) kept.push(`${n} ${n === 1 ? one : many}`);
+  };
+  say(m.note_count ?? 0, "note", "notes");
+  say(m.transcript_count ?? 0, "transcript", "transcripts");
+  say(m.commitment_count ?? 0, "recorded promise", "recorded promises");
+  say(m.work_card_count ?? 0, "work card already made from it", "work cards already made from it");
+  if (kept.length === 0) return "Nothing has been taken out of this one yet, so nothing goes with it.";
+  const list = kept.length === 1 ? kept[0] : `${kept.slice(0, -1).join(", ")} and ${kept[kept.length - 1]}`;
+  return `It stops appearing in these lists. The ${list} stay exactly where they are.`;
 }
 
 /** Who owes an answer, in words. The stored value is never printed. */
@@ -574,15 +643,25 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
     <div className="card" data-testid="meeting-detail">
       <h4>
         {m?.title ?? "Loading the record…"}{" "}
-        <span className="muted small" data-testid="meeting-status">{(m?.status ?? "").toLowerCase()}</span>
+        <span className="muted small" data-testid="meeting-status">{statusInWords(m?.status ?? null)}</span>
       </h4>
       <p className="muted small">
-        Recording is{" "}
-        <span data-testid="meeting-recording">{m?.recording_enabled === 1 ? "ACTIVE" : "NOT ACTIVATED"}</span>
-        {" · "}permission to transcribe:{" "}
-        <span data-testid="meeting-consent">{m?.consent_current?.TRANSCRIPTION?.state ?? "NOT RECORDED"}</span>
+        {/* TWO GATES, NAMED IN WORDS. Both have to be open before anything can be written down, and
+            a partner has to be able to see which one is shut without reading the schema. */}
+        <span data-testid="meeting-recording">
+          {m?.recording_enabled === 1
+            ? "The firm has switched recording on for this meeting"
+            : "Recording has not been switched on for this meeting"}
+        </span>
+        {" · "}
+        <span data-testid="meeting-consent">{consentInWords(m?.consent_current?.TRANSCRIPTION?.state ?? null)}</span>
       </p>
 
+      <p className="muted small record-lede">
+        Four things you can do to this meeting before you write anything down: record that the other
+        side agreed, record that they took it back, note that a transcript of it exists somewhere
+        else, or have a prep sheet put together for it.
+      </p>
       <div className="form-row">
         <button
           type="button"
@@ -637,7 +716,7 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
         {(m?.notes ?? []).map((n) => (
           <li key={n.id} data-testid={`note-${n.id}`}>
             <span className={n.note_type === "OFF_RECORD" ? "help-tag help-tag-muted" : "help-tag help-tag-good"}>
-              {n.note_type === "OFF_RECORD" ? "off record" : n.note_type === "TRANSCRIPT_DERIVED" ? "MANUAL from the recording" : "MANUAL"}
+              {n.note_type === "OFF_RECORD" ? "off the record" : n.note_type === "TRANSCRIPT_DERIVED" ? "out of the recording" : "on the record"}
             </span>{" "}
             {n.body}
           </li>
@@ -654,7 +733,7 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
       <ul className="card-list small" data-testid="transcript-list">
         {(m?.transcript_imports ?? []).map((tr) => (
           <li key={tr.id} data-testid={`transcript-${tr.id}`}>
-            <span className={tr.status === "IMPORTED" ? "help-tag help-tag-good" : "help-tag help-tag-warn"}>{tr.status}</span>{" "}
+            <span className={tr.status === "IMPORTED" ? "help-tag help-tag-good" : "help-tag help-tag-warn"}>{importInWords(tr.status)}</span>{" "}
             {sourceInWords(tr.source, tr.provider_name)}
             {tr.refusal_reason ? <span className="muted small"> — {tr.refusal_reason.split("_").join(" ")}</span> : null}
             {/* WHO RECORDED IT is evidence, not trivia. A turn West Peek captured was recorded with
@@ -695,7 +774,7 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
           <li key={c.id} data-testid={`commitment-${c.id}`}>
             {c.commitment_text}{" "}
             <span className={c.status === "CONVERTED" ? "help-tag help-tag-good" : "help-tag help-tag-warn"}>
-              {c.status === "CONVERTED" ? "CONVERTED into a work card" : "waiting on you"}
+              {c.status === "CONVERTED" ? "now a work card" : "waiting on you"}
             </span>
             {c.status === "OPEN" && (
               <button type="button" className="link-button" data-testid={`commitment-convert-${c.id}`} onClick={() => post(`/api/meeting-commitments/${c.id}/convert`, {}, 200, "Converted to work card")}>
@@ -737,6 +816,21 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const [answer, setAnswer] = useState("");
   const [deciding, setDeciding] = useState<string | null>(null);
   const [rationale, setRationale] = useState("");
+  const [dissenting, setDissenting] = useState<string | null>(null);
+  const [dissent, setDissent] = useState("");
+  /**
+   * TAKING A MEETING OFF THE RECORD. Operator, 22 Aug 2026: "the call with scooter meeting has no
+   * way to delete it. it was a test and some meetings i want to delete….we need a way to delete them
+   * and we can have an audit trail if someone deletes."
+   *
+   * Not a delete. The confirm is a reason box rather than an "are you sure?", because a reason is
+   * the only part of this that is still worth anything six months later, and typing one is also the
+   * half second that stops an accidental press.
+   */
+  const [archiving, setArchiving] = useState<string | null>(null);
+  const [archiveReason, setArchiveReason] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const archived = useApi<MeetingsResponse>(showArchived ? "/api/meetings?archived=1" : null, [showArchived]);
 
   const rows = meetings.data?.meetings ?? [];
   const upcoming = rows.filter((m) => m.status === "SCHEDULED");
@@ -776,6 +870,47 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
     meetings.reload();
     if (startsNow) setLive(res.data.id);
     else setOpen(res.data.id);
+  }
+
+  /** Off the record, with a reason, and nothing taken out of it is touched. */
+  async function archiveMeeting(id: string) {
+    const res = await api<{ already_archived?: boolean; note?: string; error?: string; detail?: string }>(
+      `/api/meetings/${id}/archive`,
+      { method: "POST", body: { reason: archiveReason.trim() } },
+    );
+    if (res.status !== 200) {
+      setMessage(res.data?.detail ?? res.data?.error ?? `Not taken off the record (HTTP ${res.status}).`);
+      return;
+    }
+    setMessage(res.data?.note ?? "Off the record.");
+    setArchiving(null);
+    setArchiveReason("");
+    if (open === id) setOpen(null);
+    if (live === id) setLive(null);
+    meetings.reload();
+    if (showArchived) archived.reload();
+  }
+
+  /**
+   * A partner disagreeing, in her own words, against the decision she disagreed with.
+   *
+   * The rule this exists to keep is the one `ic.ts` already holds: dissent is append-only and is
+   * never folded into the rationale. Without a control it was a rule about a table nobody could
+   * write to — a committee record that could only ever record agreement.
+   */
+  async function recordDissent(decisionId: string) {
+    const res = await api<{ error?: string; detail?: string }>(`/api/ic/decisions/${decisionId}/dissent`, {
+      method: "POST",
+      body: { dissent_text: dissent.trim() },
+    });
+    if (res.status !== 201) {
+      setMessage(res.data?.detail ?? res.data?.error ?? `Not recorded (HTTP ${res.status}).`);
+      return;
+    }
+    setMessage("Recorded, in your words, against that decision. It cannot be edited or removed by anybody.");
+    setDissenting(null);
+    setDissent("");
+    committee.reload();
   }
 
   async function resolveQuestion(id: string, state: "ANSWERED" | "WITHDRAWN") {
@@ -837,6 +972,11 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         <h3>What is coming up</h3>
         <span className="muted small">meetings on the calendar that have not happened yet</span>
       </div>
+      <p className="muted small record-lede" data-testid="upcoming-lede">
+        Two things you can do to anything on this list. Say it is happening now and the permission
+        prompt and the recorder open further down the page; open its record and you can prepare for
+        it, write what was said, and seat an employee you want to be able to ask during the call.
+      </p>
       <ul className="card-list" data-testid="meetings-upcoming">
         {upcoming.map((m) => (
           <li key={m.id} className="card" data-testid={`upcoming-${m.id}`}>
@@ -866,6 +1006,12 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         <h3>What happened, and what came out of it</h3>
         <span className="muted small">every meeting on the record, newest first</span>
       </div>
+      <p className="muted small record-lede" data-testid="past-lede">
+        Open one by its name. Its record holds what was said, what was promised, who is holding each
+        promise, any transcript brought in and the close-out that turns a promise into a work card.
+        A meeting that should never have been on the record — a test, or one entered twice — can be
+        taken off it here, with a reason.
+      </p>
       <ul className="card-list" data-testid="meeting-list">
         {past.map((m) => (
           <li key={m.id} className="card" data-testid={`meeting-${m.id}`}>
@@ -874,6 +1020,42 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             </button>{" "}
             <span className="badge">{meetingType(m.meeting_type)?.label ?? m.meeting_type}</span>{" "}
             <span className="muted small">{whenInWords(m.occurred_at ?? m.scheduled_at)}</span>
+            {archiving === m.id ? (
+              <div className="form-row">
+                {/* WHAT STAYS IS SAID BEFORE THE PRESS, not implied afterwards. */}
+                <span className="muted small" data-testid={`archive-keeps-${m.id}`}>{whatSurvives(m)}</span>
+                <label>
+                  Why{" "}
+                  <input
+                    data-testid={`archive-reason-${m.id}`}
+                    value={archiveReason}
+                    onChange={(e) => setArchiveReason(e.target.value)}
+                    placeholder="it was a test"
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn-strong"
+                  disabled={archiveReason.trim().length < 3}
+                  data-testid={`archive-confirm-${m.id}`}
+                  onClick={() => void archiveMeeting(m.id)}
+                >
+                  Take it off the record
+                </button>
+                <button type="button" data-testid={`archive-cancel-${m.id}`} onClick={() => { setArchiving(null); setArchiveReason(""); }}>
+                  Keep it
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="link-button"
+                data-testid={`archive-${m.id}`}
+                onClick={() => { setArchiving(m.id); setArchiveReason(""); }}
+              >
+                Take it off the record
+              </button>
+            )}
           </li>
         ))}
         {past.length === 0 && (
@@ -883,6 +1065,45 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           </li>
         )}
       </ul>
+
+      {/*
+        WHAT WAS TAKEN OFF, on the pass-pile pattern rather than as a second tab. Nothing here is
+        destroyed, so the page can afford to show it — and a removal nobody can see afterwards is
+        indistinguishable from a deletion, which is the thing this deliberately is not.
+      */}
+      <div className="form-row">
+        <button
+          type="button"
+          className="link-button"
+          data-testid="meetings-archived-toggle"
+          onClick={() => setShowArchived((v) => !v)}
+        >
+          {showArchived ? "Hide what was taken off the record" : "Show what was taken off the record"}
+        </button>
+      </div>
+      {showArchived && (
+        <ul className="card-list" data-testid="meetings-archived">
+          {(archived.data?.meetings ?? []).map((m) => (
+            <li key={m.id} className="card" data-testid={`archived-${m.id}`}>
+              <strong>{m.title}</strong>{" "}
+              <span className="badge">{meetingType(m.meeting_type)?.label ?? m.meeting_type}</span>
+              <div className="muted small">
+                Taken off the record {whenInWords(m.archived_at ?? null)} — {m.archive_reason ?? "no reason recorded"}
+              </div>
+              <div className="muted small">
+                Nothing was destroyed. {whatSurvives(m)}
+              </div>
+            </li>
+          ))}
+          {(archived.data?.meetings ?? []).length === 0 && (
+            <li className="state-empty" data-testid="no-archived-meetings">
+              {archived.loading
+                ? "Reading what was taken off…"
+                : "Nothing has been taken off the record. When something is, it appears here with who removed it, when, and why."}
+            </li>
+          )}
+        </ul>
+      )}
       {open && <MeetingRecord meetingId={open} me={me} />}
 
       {/* ── 3 ─────────────────────────────────────────────────────────────── */}
@@ -890,6 +1111,12 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         <h3>Start a meeting now</h3>
         <span className="muted small">permission first, then the recording</span>
       </div>
+      <p className="muted small record-lede" data-testid="start-lede">
+        Give it a name and say whether it is happening now or is going on the calendar. Starting one
+        opens three things underneath: the words to ask permission with, the recorder — which stays
+        switched off until somebody has said yes — and the employees you can seat so you can ask them
+        something while the call is still running.
+      </p>
       <form className="card" data-testid="meeting-create-form" onSubmit={create}>
         <div className="form-row">
           <label>
@@ -949,6 +1176,58 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       <div className="home-section-head">
         <h3>Where a deal stands with the committee</h3>
         <span className="muted small">the packet, what it does not know, and who owes each answer</span>
+      </div>
+
+      {/*
+        THE FOUR QUESTIONS, ANSWERED WHERE THEY ARE ASKED. Operator, 22 Aug 2026: "the IC flow ----
+        who makes the packet how does that get done? how do we get thru the pipeline and what happens
+        to the page once a deal is at the IC stage?" The sequence at the foot of this page describes
+        the chain in the abstract; this answers the four questions beside the deals they are about,
+        and it renders whether or not any deal has got here — because the commonest moment somebody
+        needs the answer is when the list below is empty and they cannot tell why.
+      */}
+      <div className="card" data-testid="ic-how-it-works">
+        <h4>Who makes the packet, and how a deal gets here</h4>
+        <ul className="card-list small">
+          <li>
+            <strong>{facilitator?.name ?? "The committee's facilitator"} makes it, and never decides anything.</strong>
+            <div className="muted">
+              She is the one seat whose job is the committee itself: she assembles the packet, raises
+              the contradiction nobody wants to raise, and writes down who disagreed. The partners
+              decide.
+            </div>
+          </li>
+          <li>
+            <strong>It is drafted from what the firm already holds, and every gap becomes a question with a name on it.</strong>
+            <div className="muted">
+              Nothing is written to fill a hole. A packet that invents its missing half reads as
+              complete, so nobody goes looking — so each gap is listed below as a question, with what
+              was looked at and who owes the answer. The case against the deal is always one of them,
+              and whoever is carrying the deal may never be the one to write it.
+            </div>
+          </li>
+          <li>
+            <strong>A deal gets here by one move, made by a person, on Dealflow.</strong>
+            <div className="muted">
+              Moving it from diligence to the committee stage is the whole trigger — it opens the
+              packet and hands the facilitator a work card to assemble it. Nothing else puts a deal
+              in front of the committee, and arriving here decides nothing.{" "}
+              <button type="button" className="link-button" data-testid="ic-how-open-dealflow" onClick={() => onNavigate("dealflow")}>
+                Move a deal on Dealflow
+              </button>
+            </div>
+          </li>
+          <li>
+            <strong>Once it is here, the questions are what is holding it up — and the decision goes back to the pipeline.</strong>
+            <div className="muted">
+              The deal appears below and the same file appears on its own record under Dealflow.
+              Answering a question, putting the packet in front of the partners and recording what
+              was decided all happen below. Investing marks the deal decided; passing sends it to the
+              pass pile carrying the reason you typed, so it is readable the day they come back
+              raising; not yet leaves the deal exactly where it is.
+            </div>
+          </li>
+        </ul>
       </div>
 
       {facilitator && facilitator.status !== "ACTIVE" && (
@@ -1042,13 +1321,71 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             </ul>
 
             {d.decision ? (
-              <p className="notice small" data-testid={`ic-decision-${d.opportunity_id}`}>
-                <strong>
-                  {d.decision.decision === "APPROVE" ? "The firm is investing." : d.decision.decision === "REJECT" ? "The firm passed." : "Not yet — deferred."}
-                </strong>{" "}
-                {d.decision.rationale}
-                <span className="muted small"> · {whenInWords(d.decision.created_at)}</span>
-              </p>
+              <>
+                <p className="notice small" data-testid={`ic-decision-${d.opportunity_id}`}>
+                  <strong>
+                    {d.decision.decision === "APPROVE" ? "The firm is investing." : d.decision.decision === "REJECT" ? "The firm passed." : "Not yet — deferred."}
+                  </strong>{" "}
+                  {d.decision.rationale}
+                  <span className="muted small"> · {d.decision.decided_by} · {whenInWords(d.decision.created_at)}</span>
+                </p>
+
+                {/*
+                  DISSENT SURVIVES, and it needed a control to survive through. `dissent_record` is
+                  append-only and human-only and there was nothing anywhere in the product that
+                  wrote to it — a rule about a table nobody could reach, which is to say a committee
+                  record that could only ever record agreement.
+                */}
+                <p className="small"><strong>Who disagreed</strong></p>
+                <ul className="card-list small" data-testid={`ic-dissents-${d.opportunity_id}`}>
+                  {d.dissents.map((ds) => (
+                    <li key={ds.id} data-testid={`ic-dissent-${ds.id}`}>
+                      <strong>{ds.dissenter}</strong> <span className="muted small">· {whenInWords(ds.created_at)}</span>
+                      <div className="closeout-quote">{ds.dissent_text}</div>
+                    </li>
+                  ))}
+                  {d.dissents.length === 0 && (
+                    <li className="state-empty">
+                      Nobody has written down a disagreement. That is not the same as everybody
+                      agreeing — it is only the same as nobody having said so here.
+                    </li>
+                  )}
+                </ul>
+                {dissenting === d.opportunity_id ? (
+                  <div className="form-row">
+                    <label>
+                      What you disagreed with{" "}
+                      <input
+                        value={dissent}
+                        data-testid={`ic-dissent-text-${d.opportunity_id}`}
+                        onChange={(e) => setDissent(e.target.value)}
+                        placeholder="the churn figure came from the founder and nothing else"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn-strong"
+                      disabled={dissent.trim().length < 4}
+                      data-testid={`ic-dissent-save-${d.opportunity_id}`}
+                      onClick={() => void recordDissent(d.decision!.id)}
+                    >
+                      Record it
+                    </button>
+                    <button type="button" data-testid={`ic-dissent-cancel-${d.opportunity_id}`} onClick={() => { setDissenting(null); setDissent(""); }}>
+                      Never mind
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="link-button"
+                    data-testid={`ic-dissent-open-${d.opportunity_id}`}
+                    onClick={() => { setDissenting(d.opportunity_id); setDissent(""); }}
+                  >
+                    Record that you disagreed with this
+                  </button>
+                )}
+              </>
             ) : (
               <>
                 <p className="muted small">

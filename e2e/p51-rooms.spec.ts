@@ -130,10 +130,11 @@ test("a deal captures where the relationship started, at the moment it is create
  * test exists to prevent. `DealProvenance` measures lead time from exactly that field, so every
  * deal opened through the ordinary door contributes nothing to the panel below it.
  *
- * Remove `test.fail()` when the create form asks again.
+ * FIXED 22 Aug 2026 and the marker removed: the create form asks again, beside "how we met them",
+ * because they are one thought — who introduced us, and how long ago. Blank by default and sent only
+ * when given, since a defaulted date would claim every company was met on the day it was filed.
  */
 test("a deal also captures HOW LONG we have known them, at the moment it is created", async ({ page }) => {
-  test.fail();
   await signIn(page);
   await gotoSurface(page, "Dealflow");
   await page.getByTestId("dealflow-add-toggle").click();

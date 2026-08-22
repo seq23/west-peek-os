@@ -386,11 +386,13 @@ import {
   handlePromoteToClaim,
   handleRecordConsent,
   handleTransitionMeeting,
+  handleArchiveMeeting,
 } from "./services/meetings";
 import {
   handleAssembleIcPacket,
   handleGetIcPacket,
   handleIcDealSurface,
+  handleIcDealForOpportunity,
   handleListIcPackets,
   handleListIcQuestions,
   handleRaiseIcQuestion,
@@ -859,6 +861,7 @@ const router = new Router()
   // ADR-019 — the gaps a packet drafted from the record cannot fill, each owed by somebody, and the
   // read behind "where a deal stands with the committee".
   .get("/api/ic/deals", handleIcDealSurface)
+  .get("/api/ic/deals/:id", handleIcDealForOpportunity)
   .get("/api/ic/packets/:id/questions", handleListIcQuestions)
   .post("/api/ic/packets/:id/questions", handleRaiseIcQuestion)
   .post("/api/ic/questions/:id/resolve", handleResolveIcQuestion)
@@ -869,6 +872,8 @@ const router = new Router()
   .get("/api/meetings", handleListMeetings)
   .get("/api/meetings/:id", handleGetMeeting)
   .post("/api/meetings/:id/transition", handleTransitionMeeting)
+  // Migration 0140 — off the record, not destroyed. Reason required, human only.
+  .post("/api/meetings/:id/archive", handleArchiveMeeting)
   .get("/api/meetings/:id/live-help", handleGetLiveHelp)
   .post("/api/meetings/:id/live-help", handleAskLiveHelp)
   .post("/api/meetings/:id/employees", handleSeatEmployee)

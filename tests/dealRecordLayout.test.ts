@@ -158,11 +158,24 @@ describe("the record is the sequence of questions a partner actually asks", () =
     expect(all.indexOf("The pipeline")).toBeGreaterThan(all.indexOf("Top of the funnel"));
   });
 
-  it("leaves the committee section for the meetings side to fill, and says so", () => {
+  it("shows what the committee has seen, asked and decided — not a placeholder", () => {
+    /*
+     * This asserted the PLACEHOLDER, which was right while the section was owned by another agent
+     * and became wrong the moment it was filled. A test that pins scaffolding holds the scaffolding
+     * in place: it would have gone red on the fix and read as though the fix were the defect.
+     *
+     * It now asserts the section does its job — the questions and who owes them, who is seated, and
+     * the decision. Dissent is checked by name because `ic.ts`'s rule is that it survives the
+     * meeting rather than being smoothed into consensus, and a summary that quietly drops it is the
+     * failure that rule exists to prevent.
+     */
     const committee = sectionSource(DEALFLOW, "deal-committee");
+    expect(DEALFLOW_RAW).not.toMatch(/PLACEHOLDER, AND NOT MINE TO FILL/);
+    expect(committee).toMatch(/question/i);
+    expect(committee).toMatch(/seat/i);
+    expect(committee).toMatch(/decision|decided/i);
+    // Still has an empty state: a deal that has not reached the committee must say so plainly.
     expect(committee).toContain("state-empty");
-    // A placeholder that does not say it is one reads as a broken section.
-    expect(DEALFLOW_RAW).toMatch(/PLACEHOLDER, AND NOT MINE TO FILL/);
   });
 });
 

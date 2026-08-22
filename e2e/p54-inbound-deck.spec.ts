@@ -170,11 +170,12 @@ test("a deck emailed about a company we already have is stored, queued, and read
  * says otherwise. The oversize path already solved it — stream the bytes to R2 and put the key on
  * the card — and nothing here does.
  *
- * Left asserting the behaviour that SHOULD hold, marked expected-to-fail. Remove `test.fail()` when
- * an emailed deck for an unknown company is kept.
+ * FIXED 22 Aug 2026, and the marker removed. `pending_deck.company_id` is nullable and the deck is
+ * kept against the WORK CARD until a company exists — the EMAIL route deliberately does not write
+ * the pipeline, so a brand-new company has no record to attach a deck to at the moment it arrives.
+ * Losing the attachment is not an acceptable way to respect that boundary.
  */
 test("a deck for a company we have never heard of is still KEPT, not thrown away", async ({ request }) => {
-  test.fail();
   const company = `Unheard Of Labs ${Date.now()}`;
 
   await deliverMail(request, {
