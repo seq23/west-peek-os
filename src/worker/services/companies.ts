@@ -349,10 +349,34 @@ export async function handleGetCompany(ctx: RouteContext): Promise<Response> {
 }
 
 /** Update non-identity fields only. canonical_name and status are rejected (400). */
+/**
+ * Editing a company — authorized, and on the record.
+ *
+ * WHAT WAS WRONG, and it is the reason item 9 could not be built on top of it: this route had NO
+ * authorize() call and appended NO event. Anybody who could reach the API could change what the
+ * firm records about a company, and nothing anywhere would say it had happened. In production all
+ * three companies had been modified with no record of by whom.
+ *
+ * That made it the only entity in a CanonicalCompany-first model that could change without a
+ * trace — in a system whose whole premise is that the company record is the thing everything else
+ * hangs off.
+ *
+ * THE EVENT IS THE HISTORY. Every changed field is recorded with its old and new value, because
+ * "somebody edited this company" is not a useful sentence: the question a partner asks months later
+ * is "who changed the sector, and what was it before". Unchanged fields are not recorded — an event
+ * that lists everything makes the one thing that moved impossible to find.
+ */
 export async function handleUpdateCompany(ctx: RouteContext): Promise<Response> {
   const { env } = ctx;
   const company = await getCompanyById(env, ctx.params.id!);
   if (!company) return json({ error: "not_found" }, { status: 404 });
+
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(env, actor, "company.update", {
+    objectType: "canonical_company",
+    objectId: company.id,
+  });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
 
   const body = await parseJsonBody(ctx.request);
   const parsed = updateCompanySchema.safeParse(body);
@@ -365,10 +389,15 @@ export async function handleUpdateCompany(ctx: RouteContext): Promise<Response> 
   const input = parsed.data;
   const sets: string[] = [];
   const binds: unknown[] = [];
+  // Only what actually MOVED, with its previous value. An event listing every field makes the one
+  // thing that changed impossible to find in it.
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  const before = company as unknown as Record<string, unknown>;
   for (const field of ["legal_name", "website", "description", "privacy_label", "sector", "one_liner"] as const) {
-    if (input[field] !== undefined) {
+    if (input[field] !== undefined && input[field] !== before[field]) {
       sets.push(`${field} = ?${binds.length + 2}`);
       binds.push(input[field]);
+      changes[field] = { from: before[field] ?? null, to: input[field] };
     }
   }
   if (sets.length === 0) return json({ error: "invalid_input", detail: "no updatable fields provided" }, { status: 400 });
@@ -378,6 +407,16 @@ export async function handleUpdateCompany(ctx: RouteContext): Promise<Response> 
   )
     .bind(company.id, ...binds)
     .run();
+
+  await appendEvent(env, {
+    eventType: "company.updated",
+    actorType: actor.type === "HUMAN" ? "firm_user" : actor.type === "AI" ? "ai_employee" : "system",
+    actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+    objectType: "canonical_company",
+    objectId: company.id,
+    payload: { changes },
+  });
+
   return json(await companyView(env, (await getCompanyById(env, company.id))!));
 }
 
@@ -792,4 +831,78 @@ export async function handleCompanyRegister(ctx: RouteContext): Promise<Response
 
   const sectors = [...new Set(companies.map((c) => c.sector).filter(Boolean))].sort();
   return json({ companies, sectors, count: companies.length });
+}
+
+// ── What has been done to this company ──
+
+/**
+ * The record of every change to a company, read back.
+ *
+ * Operator, item 9: "History button does nothing" and "need an edit trail". There was no history to
+ * show — `handleUpdateCompany` appended no event, so nothing was ever written to read back. The
+ * button was not broken; the trail did not exist.
+ *
+ * EVERYTHING ABOUT THE COMPANY, not only edits to it. A partner asking "what has happened with
+ * Sensori" means the deal moving, the deck arriving, the pass, and the sector being corrected — all
+ * of it. Splitting those across four surfaces is how a person ends up reconstructing a timeline by
+ * memory.
+ */
+export async function handleCompanyHistory(ctx: RouteContext): Promise<Response> {
+  const company = await getCompanyById(ctx.env, ctx.params.id!);
+  if (!company) return json({ error: "not_found" }, { status: 404 });
+
+  const rows = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT e.id, e.event_type, e.actor_type, e.actor_id, e.created_at, e.payload_json,
+              COALESCE(u.full_name, e.actor_id) AS actor_name
+         FROM event_record e
+         LEFT JOIN firm_user u ON u.id = e.actor_id
+        WHERE (e.object_type = 'canonical_company' AND e.object_id = ?1)
+           OR (e.object_type = 'investment_opportunity' AND e.object_id IN (
+                 SELECT id FROM investment_opportunity WHERE company_id = ?1))
+        ORDER BY e.created_at DESC
+        LIMIT 200`,
+    )
+      .bind(company.id)
+      .all<{
+        id: string;
+        event_type: string;
+        actor_type: string;
+        actor_id: string;
+        actor_name: string;
+        created_at: string;
+        payload_json: string;
+      }>()
+  ).results ?? [];
+
+  return json({
+    company: company.canonical_name,
+    entries: rows.map((r) => {
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(r.payload_json) as Record<string, unknown>;
+      } catch {
+        payload = {};
+      }
+      /*
+       * A field-by-field line for an edit, because "somebody edited this company" is not a useful
+       * sentence. The question a partner asks months later is "who changed the sector, and what was
+       * it before" — so the answer is written out rather than left as JSON for them to read.
+       */
+      const changes = payload.changes as Record<string, { from: unknown; to: unknown }> | undefined;
+      const said =
+        r.event_type === "company.updated" && changes
+          ? Object.entries(changes)
+              .map(([f, c]) => `${f.split("_").join(" ")}: ${c.from ?? "(blank)"} → ${c.to ?? "(blank)"}`)
+              .join("; ")
+          : null;
+      return {
+        id: r.id,
+        at: r.created_at,
+        by: r.actor_type === "ai_employee" ? `${r.actor_id} (AI)` : r.actor_name,
+        what: r.event_type,
+        said,
+      };
+    }),
+  });
 }

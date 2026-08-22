@@ -241,6 +241,7 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('network_os.propose_person', 'Propose a person to Network OS', 'Send a captured person to Network OS''s intake queue for a human there to review. Never writes a contact.', 1, 0),
   ('lp_record.create', 'Create LP record', 'Record an LP entity (LP_PRIVATE by default).', 0, 0),
   ('lp_opportunity.create', 'Create LP opportunity', 'Track a fundraising conversation with an LP.', 0, 0),
+  ('company.update', 'Edit a company', 'Change what the firm records about a company. Identity fields are not editable by this path.', 0, 0),
   ('position.mark', 'Mark a holding', 'Record what a position is worth now, on what basis, as of when. Append-only; a mark is superseded, never edited.', 0, 0),
   ('capital_call.record', 'Record a capital call', 'Record capital called from a limited partner against their commitment.', 0, 0),
   ('capital_distribution.record', 'Record a distribution', 'Record cash paid back to a limited partner.', 0, 0),

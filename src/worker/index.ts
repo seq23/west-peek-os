@@ -30,6 +30,7 @@ import {
   handleResolveCompany,
   handleCompanyRegister,
   handleReverseMerge,
+  handleCompanyHistory,
   handleUpdateCompany,
 } from "./services/companies";
 import {
@@ -599,6 +600,8 @@ const router = new Router()
   .get("/api/me/calendar/today", handleTodaysCalendar)
   .get("/api/companies/:id", handleGetCompany)
   .patch("/api/companies/:id", handleUpdateCompany)
+  // The trail item 9 asked for. It did not exist because nothing was ever written.
+  .get("/api/companies/:id/history", handleCompanyHistory)
   .post("/api/companies/:id/aliases", handleAddAlias)
   .get("/api/companies/:id/aliases", handleListAliases)
   .post("/api/companies/:sourceId/merge-into/:targetId", handleMergeCompanies)

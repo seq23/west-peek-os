@@ -176,7 +176,9 @@ function UnrecordedDeal(props: {
           <strong>{props.deal.title}</strong>
           {props.deal.company && <span className="muted"> · {props.deal.company}</span>}
         </span>
-        <span className="muted">entered {props.deal.created_at.slice(0, 10)}</span>
+        {/* A gap, because the flex row had none and this rendered as
+            "Northwind Roboticsentered 2026-08-22". */}
+        <span className="muted deal-entered">entered {props.deal.created_at.slice(0, 10)}</span>
       </div>
       <div className="card-body row">
         <select value={origin} onChange={(e) => setOrigin(e.target.value)} aria-label={`Origin for ${props.deal.title}`}>

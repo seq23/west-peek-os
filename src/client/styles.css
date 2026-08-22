@@ -3899,3 +3899,44 @@ body {
 }
 /* ON is the state that should be uncomfortable to look at. */
 .danger-switch-on .danger-switch-state { background: var(--wp-danger); color: var(--wp-surface); }
+
+/* The edit and history controls on a company card. Quiet by default: the card's job is to show what
+   the firm knows, and editing is something you go looking for rather than something offered at you. */
+.company-edit {
+  margin-top: var(--space-xs);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--wp-line);
+}
+
+
+/* — Deal records and tooling.
+     Operator: "this page needs dividers between the sections, its just all feeling so jumbled" and
+     "everything needs to be crystal clear like on the LP page — that one flows well". The sections
+     were always distinct and the page never showed it: a rule and real space between them is most
+     of the difference, and each one now says what it is for rather than naming its table. */
+.deal-record-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+  border: 1px solid var(--wp-line);
+  border-left: 3px solid var(--wp-orange);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface);
+}
+
+.deal-record-section {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--wp-line);
+}
+
+/* Adding a second deal is the rare case, so it stays shut and quiet. */
+.deal-record-new { margin-bottom: var(--space-md); }
+
+
+/* The row had no gap at all, so the company name ran into the date: "Northwind Roboticsentered". */
+.card-head-static { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-sm); justify-content: space-between; }
+.deal-entered { white-space: nowrap; }

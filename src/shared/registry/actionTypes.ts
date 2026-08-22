@@ -130,6 +130,10 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // numbers need an approval card to stay current is a fund whose numbers are always stale. The
   // reserved `official_valuation_or_capital_account.change` still governs changing an OFFICIAL
   // valuation or capital account, which is the act with consequences.
+  // Editing a company. It had NO authorization and NO event at all — the only entity in a
+  // CanonicalCompany-first model that could change without a trace, and all three companies on
+  // record had been modified with no record of by whom.
+  { key: "company.update", name: "Edit a company", description: "Change what the firm records about a company. Identity fields are not editable by this path.", isExternalEffect: false },
   { key: "position.mark", name: "Mark a holding", description: "Record what a position is worth now, on what basis, as of when. Append-only; a mark is superseded, never edited.", isExternalEffect: false },
   { key: "capital_call.record", name: "Record a capital call", description: "Record capital called from a limited partner against their commitment.", isExternalEffect: false },
   { key: "capital_distribution.record", name: "Record a distribution", description: "Record cash paid back to a limited partner.", isExternalEffect: false },

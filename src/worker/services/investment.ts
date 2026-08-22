@@ -2265,6 +2265,9 @@ export async function handleDealProvenance(ctx: RouteContext): Promise<Response>
             AVG(CASE WHEN relationship_started_at IS NOT NULL
                      THEN julianday(created_at) - julianday(relationship_started_at) END) AS avg_lead_days
      FROM investment_opportunity
+     -- Archived means the record should not exist — a duplicate, a typo, a test. Counting it here
+     -- puts a row nobody wants into the firm's own measure of where its deals come from.
+     WHERE archived_at IS NULL
      GROUP BY relationship_origin
      ORDER BY deals DESC`,
   ).all<{ origin: string; deals: number; dated: number; avg_lead_days: number | null }>();
@@ -2275,7 +2278,7 @@ export async function handleDealProvenance(ctx: RouteContext): Promise<Response>
     `SELECT o.id, o.title, o.created_at, c.canonical_name AS company
      FROM investment_opportunity o
      LEFT JOIN canonical_company c ON c.id = o.company_id
-     WHERE o.relationship_origin = 'UNRECORDED'
+     WHERE o.relationship_origin = 'UNRECORDED' AND o.archived_at IS NULL
      ORDER BY o.created_at DESC LIMIT 50`,
   ).all();
 

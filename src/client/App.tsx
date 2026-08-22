@@ -2344,6 +2344,57 @@ function InvestmentPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="investment-page">
+      {/*
+        RESTRUCTURED, 21 Aug 2026. Operator: "this page needs dividers between the sections, its
+        just all feeling so jumbled — and the opportunities is weird just sitting there empty until
+        a deal is chosen from the drop down."
+
+        WHAT WAS WRONG WITH THE ORDER. The page led with a form for CREATING a deal, whose first
+        field happened to be the company picker — so the control that gates the entire rest of the
+        page was buried inside the one action you least often want. Everything below it then sat
+        empty, headed "Opportunities", with no indication that it was waiting on you rather than
+        broken.
+
+        The first step is picking a company, so that is now the first thing, said as a step. Nothing
+        below renders until one is chosen, and what does render is grouped under headings with rules
+        between them — the sections were always distinct and the page never showed it.
+
+        Creating a deal moved to a disclosure beneath the company's existing deals, where it belongs:
+        Dealflow's own "Add a company" is the primary door, and this is the rarer case of adding a
+        second deal to a company already on the board.
+      */}
+      <div className="deal-record-step" data-testid="deal-record-pick">
+        <label>
+          <strong>Which company?</strong>{" "}
+          <select data-testid="deal-record-company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
+            <option value="">— pick one —</option>
+            {(companies.data?.companies ?? []).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.canonical_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="muted small">
+          Its deal math, its IC packet, what the fund owns of it — and where the real numbers go.
+        </span>
+      </div>
+
+      {!companyId && (
+        <p className="state-empty" data-testid="no-company-picked">
+          Nothing is shown until you pick one. This is the page where a deal's actual numbers are
+          entered — the placeholder figures on the pipeline above are replaced here.
+        </p>
+      )}
+
+      {companyId && (
+        <>
+      <details className="card deal-record-new" data-testid="opportunity-create-details">
+        <summary>Add another deal for this company</summary>
+        <p className="muted small">
+          Only for a second deal in a company already on the board — a follow-on, or a secondary.
+          A company new to the firm goes in through “Add a company” at the top of this page.
+        </p>
       <form
         className="form-row"
         data-testid="opportunity-create-form"
@@ -2367,17 +2418,6 @@ function InvestmentPage({ me }: { me: MeResponse }) {
           }
         }}
       >
-        <label>
-          Company{" "}
-          <select data-testid="opportunity-company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
-            <option value="">— select —</option>
-            {(companies.data?.companies ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.canonical_name}
-              </option>
-            ))}
-          </select>
-        </label>
         <label>
           Type{" "}
           <select data-testid="opportunity-type" value={dealType} onChange={(e) => setDealType(e.target.value)}>
@@ -2417,10 +2457,17 @@ function InvestmentPage({ me }: { me: MeResponse }) {
         </button>
         {message && <span data-testid="investment-message">{message}</span>}
       </form>
+      </details>
 
-      {companyId && <Company360Panel key={`${companyId}-${nonce}`} companyId={companyId} />}
+      <div className="deal-record-section">
+        <h4>What the firm knows about them</h4>
+        <p className="muted small">Everything on record, and where each part of it came from.</p>
+        <Company360Panel key={`${companyId}-${nonce}`} companyId={companyId} />
+      </div>
 
-      <h4>Opportunities</h4>
+      <div className="deal-record-section">
+      <h4>Its deals</h4>
+      <p className="muted small">Pick one to open its record. That is where the real numbers go.</p>
       <ul className="card-list" data-testid="opportunity-list">
         {(opportunities.data?.opportunities ?? []).map((o) => (
           <li key={o.id} className="card" data-testid={`opportunity-${o.id}`}>
@@ -2439,26 +2486,25 @@ function InvestmentPage({ me }: { me: MeResponse }) {
           </li>
         ))}
         {/*
-          "No opportunities" was said whether the firm had none or the reader had simply not picked
-          a company yet — and the second is the usual case, because the list is not fetched at all
-          until one is chosen. So this block read "No opportunities" directly beneath a pipeline
-          showing three, on the same screen. Absence and "not asked yet" are different facts.
+          Absence and "not asked yet" are different facts, and this list used to say the same thing
+          for both — "No opportunities" directly beneath a pipeline showing three. The second case is
+          now handled before the section renders at all, so what is left here means what it says.
         */}
-        {!companyId && (
-          <li className="state-empty" data-testid="no-company-picked">
-            Pick a company above to see its deal record — the deal math, the IC packet, and what the fund owns of it.
-          </li>
-        )}
-        {companyId && (opportunities.data?.opportunities ?? []).length === 0 && (
+        {(opportunities.data?.opportunities ?? []).length === 0 && (
           <li className="state-empty" data-testid="no-opportunities">
             Nothing recorded against this company yet. Create one to start its investment record.
           </li>
         )}
       </ul>
+      </div>
 
       {selected && (
-        <div data-testid="opportunity-detail">
-          <h4>{selected.title} — deal math and IC</h4>
+        <div className="deal-record-section" data-testid="opportunity-detail">
+          <h4>The deal record: {selected.title}</h4>
+          <p className="muted small">
+            What the fund would own and at what price, what it actually owns, and the packet the
+            committee decides on.
+          </p>
           {/*
             THE MISSING RUNG. A `position` is created only when a transaction is executed, and every
             route in that lifecycle was built, authorized and tested with nothing able to reach it.
@@ -2572,6 +2618,9 @@ function InvestmentPage({ me }: { me: MeResponse }) {
           {icPacketId && <IcPortalPage packetId={icPacketId} />}
         </div>
       )}
+        </>
+      )}
+
       <DealProvenance />
     </section>
   );

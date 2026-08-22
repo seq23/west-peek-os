@@ -41,9 +41,118 @@ const usd = (n: number | null): string =>
         ? `$${Math.round(n / 1_000)}K`
         : `$${Math.round(n)}`;
 
+
+interface HistoryEntry {
+  id: string;
+  at: string;
+  by: string;
+  what: string;
+  said: string | null;
+}
+
+/**
+ * Editing a company, and the record of who changed what.
+ *
+ * Operator, item 9: "Can't edit Sensori's numbers; History does nothing; need an edit trail."
+ *
+ * ALL THREE HAD THE SAME CAUSE. `PATCH /api/companies/:id` existed and no button called it; the
+ * route had no authorization and appended no event, so there was no trail for a History control to
+ * show; and with nothing written, a History button could only ever have done nothing. Fixing the
+ * route was the prerequisite for both halves of what was asked for.
+ *
+ * SECTOR IS A LIST NOW, not free text — see item 10. Typing it was how "Ed tech" and "ED_TECH" came
+ * to be two sectors.
+ */
+function CompanyEditor({ company, sectors, onSaved }: {
+  company: RegisterCompany;
+  sectors: Array<{ key: string; label: string }>;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [form, setForm] = useState({ sector: company.sector ?? "", one_liner: company.one_liner ?? "", website: "" });
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const history = useApi<{ entries: HistoryEntry[] }>(showHistory ? `/api/companies/${company.id}/history` : null, [showHistory, note]);
+
+  async function save() {
+    setBusy(true);
+    const body: Record<string, string> = {};
+    if (form.sector) body.sector = form.sector;
+    if (form.one_liner.trim()) body.one_liner = form.one_liner.trim();
+    if (form.website.trim()) body.website = form.website.trim();
+    const res = await api<{ error?: string; detail?: string }>(`/api/companies/${company.id}`, { method: "PATCH", body });
+    setBusy(false);
+    setNote(res.status === 200 ? "Saved." : `Not saved: ${res.data?.detail ?? res.data?.error ?? `HTTP ${res.status}`}`);
+    if (res.status === 200) {
+      setOpen(false);
+      onSaved();
+    }
+  }
+
+  return (
+    <div className="company-edit">
+      <button type="button" className="link-button" data-testid={`company-edit-${company.id}`} onClick={() => setOpen((v) => !v)}>
+        {open ? "never mind" : "Edit"}
+      </button>{" "}
+      <button type="button" className="link-button" data-testid={`company-history-${company.id}`} onClick={() => setShowHistory((v) => !v)}>
+        {showHistory ? "hide history" : "History"}
+      </button>
+
+      {open && (
+        <div className="form-row" data-testid={`company-edit-form-${company.id}`}>
+          <label>
+            Sector{" "}
+            <select value={form.sector} onChange={(e) => setForm((f) => ({ ...f, sector: e.target.value }))}>
+              <option value="">— not said —</option>
+              {sectors.map((o) => (
+                <option key={o.key} value={o.key}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            What they do{" "}
+            <input value={form.one_liner} onChange={(e) => setForm((f) => ({ ...f, one_liner: e.target.value }))} placeholder="in one line" />
+          </label>
+          <label>
+            Website{" "}
+            <input className="input-money" value={form.website} onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))} placeholder="optional" />
+          </label>
+          <button type="button" className="btn-strong" disabled={busy} onClick={() => void save()}>
+            Save
+          </button>
+        </div>
+      )}
+
+      {showHistory && (
+        <ul className="card-list small" data-testid={`company-history-list-${company.id}`}>
+          {(history.data?.entries ?? []).map((e) => (
+            <li key={e.id}>
+              <span className="muted">{new Date(e.at).toLocaleDateString()}</span> · {e.by} ·{" "}
+              {e.said ?? e.what.split(".").join(" ").split("_").join(" ")}
+            </li>
+          ))}
+          {history.data && history.data.entries.length === 0 && (
+            <li className="state-empty">
+              Nothing recorded yet. Every change from now on is, with who made it and what it was before.
+            </li>
+          )}
+        </ul>
+      )}
+
+      {note && <p className="muted small">{note}</p>}
+    </div>
+  );
+}
+
 export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
   const register = useApi<{ companies: RegisterCompany[]; sectors: string[]; count: number }>("/api/companies/register");
   const [sector, setSector] = useState("ALL");
+  /* Derived from the thesis — see shared/investment/sectors.ts and item 10. */
+  const sectorList = useApi<{ options: Array<{ key: string; label: string }> }>("/api/thesis/sectors");
+  const sectors = sectorList.data?.options ?? [];
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState<string | null>(null);
 
@@ -152,6 +261,7 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
                   <dd>{c.meetings}</dd>
                 </div>
               </dl>
+              <CompanyEditor company={c} sectors={sectors} onSaved={() => register.reload()} />
             </article>
           );
         })}
