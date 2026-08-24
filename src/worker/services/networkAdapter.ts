@@ -247,7 +247,12 @@ export interface PullSummary {
   applied: number;
   duplicates: number;
   conflicts: number;
-  status: "OK" | "DEGRADED_READ_ONLY" | "FAILED";
+  /*
+   * IN_PROGRESS is a real outcome, and leaving it out of this type is how the caller could not tell
+   * a finished sync from a quarter of one. The cursor has been written IN_PROGRESS on every partial
+   * pass since paging was added; only the return value and the CHECK constraint disagreed.
+   */
+  status: "OK" | "IN_PROGRESS" | "DEGRADED_READ_ONLY" | "FAILED";
   failure_reason?: string;
   cursor: string | null;
   /** How far through the far end's table this pass got. Absent when nothing was read. */
@@ -484,7 +489,9 @@ export async function pullResource(
     applied,
     duplicates,
     conflicts,
-    status: "OK",
+    // Matches what was just written to the cursor. Returning "OK" for a partial pass told the caller
+    // the community was loaded when 250 of it were.
+    status: reachedEnd ? "OK" : "IN_PROGRESS",
     cursor: page.next_cursor,
     progress: { done: from + window.length, total, complete: reachedEnd },
   };
@@ -1032,10 +1039,10 @@ export async function handleNetworkCompanyPush(ctx: RouteContext): Promise<Respo
  * Network OS is a fact the operator needs on the page, not an exception that kills the tick and
  * takes the other jobs with it.
  */
-export async function runNetworkSync(env: Env): Promise<{ resource: string; applied: number; detail: string }> {
+export async function runNetworkSync(env: Env): Promise<{ resource: string; applied: number; detail: string; ok: boolean }> {
   const client = configuredClient(env);
   if (!client) {
-    return { resource: "contact", applied: 0, detail: networkOsBlockedReason(env) ?? "Network OS is not configured." };
+    return { resource: "contact", applied: 0, ok: false, detail: networkOsBlockedReason(env) ?? "Network OS is not configured." };
   }
 
   // A system identity, because nobody typed this in. MANAGING_PARTNER because `network_sync.pull`
@@ -1052,15 +1059,20 @@ export async function runNetworkSync(env: Env): Promise<{ resource: string; appl
 
   try {
     const summary = await pullResource(env, identity, "contact", client);
+    const more = summary.progress && !summary.progress.complete
+      ? ` — ${summary.progress.done} of ${summary.progress.total}, the rest on later ticks`
+      : "";
     return {
       resource: "contact",
       applied: summary.applied ?? 0,
-      detail: `${summary.applied ?? 0} applied${summary.conflicts ? `, ${summary.conflicts} disagreement(s) raised` : ""}`,
+      ok: summary.status === "OK" || summary.status === "IN_PROGRESS",
+      detail: `${summary.applied ?? 0} applied${summary.conflicts ? `, ${summary.conflicts} disagreement(s) raised` : ""}${more}`,
     };
   } catch (err) {
     return {
       resource: "contact",
       applied: 0,
+      ok: false,
       detail: err instanceof Error ? err.message : String(err),
     };
   }

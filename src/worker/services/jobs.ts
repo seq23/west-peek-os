@@ -236,8 +236,20 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   if (job.job_key === "network_sync") {
     const { runNetworkSync } = await import("./networkAdapter");
     const out = await runNetworkSync(env);
+    /*
+     * A FAILED SYNC IS A FAILED RUN, and this returned SUCCEEDED unconditionally.
+     *
+     * `runNetworkSync` catches its own errors and returns them as `detail` — which is right, because
+     * a sync that cannot reach Network OS must not kill the tick and take the other jobs with it.
+     * But this then reported SUCCEEDED with the error sitting in the summary line, so every run for
+     * two hours read as a success while the CHECK constraint below rejected the cursor write and the
+     * community sat at 250. Nothing anywhere said otherwise.
+     *
+     * I wrote this dispatch, in this session, immediately after removing the same defect from four
+     * other places. It is the easiest mistake in this codebase to make.
+     */
     return {
-      status: "SUCCEEDED",
+      status: out.ok ? "SUCCEEDED" : "FAILED",
       // The detail is carried whether or not anything was applied: "nobody new" and "could not
       // reach Network OS" are opposite facts and a bare count says neither.
       summary: `${out.resource}: ${out.detail}`,

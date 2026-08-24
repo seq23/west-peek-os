@@ -2,8 +2,16 @@
 
 ## Roots
 
-- Project root (cumulative authority container): the directory containing this `west-peek-os/` folder.
-- Application root: `west-peek-os/` (this directory). It must be packageable independently.
+- Application root: `west-peek-os/` (this directory), at
+  `/Users/sequoiataylor/Github/west-peek-os`. It must be packageable independently.
+- **Parent authority container:**
+  `/Users/sequoiataylor/REPO_OPERATOR_PROJECTS/west-peek-os-odysseus/WORK/WEST_PEEK_OS_v3_2_14_AND_ODYSSEUS_IMPL_v1_11_FULL_ARTIFACT_PACKAGE/`
+
+  **Corrected 24 Aug 2026.** This said "the directory containing this `west-peek-os/` folder", and
+  the two load-bearing authorities are not there and never have been — the parent of this repo is
+  `Github/`, which holds forty unrelated projects. Anybody following the manifest to re-verify would
+  have found both files missing and read that as the tampering the hash check exists to catch. Both
+  are byte-identical to their recorded hashes at the real path; only the pointer was wrong.
 
 ## Parent authority baseline (SHA-256, recorded at P0 bootstrap 2026-08-10)
 
@@ -16,8 +24,8 @@ Full baseline (all root files) is held by the Repo Operator run receipt. These t
 authorities and are re-hashed at every snapshot boundary; mismatch halts the run.
 
 Re-verified byte-identical at the P12 boundary (2026-08-12), at the **P25 boundary (2026-08-13)**,
-and again at the **D1–D4 design-overhaul boundary (2026-08-13)**. Both hashes above match the files
-on disk exactly.
+at the **D1–D4 design-overhaul boundary (2026-08-13)**, and at the **operator-review boundary
+(2026-08-24)**. Both hashes above match the files on disk exactly.
 
 ## Brand authority (added at the D1–D4 design overhaul, 2026-08-13)
 
@@ -93,3 +101,43 @@ the repairs read back afterwards rather than assumed.
   built.
 - `validate:sql` was not run: it takes 10+ minutes against production, and the recommendation to move
   it local (6.3s, 0 rejected) is recorded in `IMPLEMENTATION_LEDGER.md`, not adopted.
+
+
+---
+
+## Snapshot boundary — operator review, 24 Aug 2026
+
+The 22-item operator list closed, Network OS connected, and the emailed-deck journey proven on real
+mail. Recorded here because a snapshot that cannot be named cannot be returned to.
+
+| What | SHA / id |
+|---|---|
+| Commit | `664f5c8fbd7d8239710a5706c45d3fcd54d146fa` |
+| Branch | `review/silent-failures-and-the-deck-journey` (PR #16) |
+| Deployed Worker version | `02b86175-6e1e-4bbb-a23c-5398cfef07c8` |
+| Migrations | 138 in repo, 138 applied to production |
+
+### Authority files re-verified at this boundary
+
+Re-hashed on disk, not copied forward from the rows above:
+
+| File | SHA-256 | Verdict |
+|---|---|---|
+| `WEST_PEEK_OS_v3_2_14_CANONICAL_MASTER_PLAN.md` | `01d94450fa9689f51be445cf4ed13b4ac2284ae0cab9fbeda875ca125b211121` | matches |
+| `WEST_PEEK_OS_ODYSSEUS_AUDIT_AND_IMPLEMENTATION_PLAN_v1_11.md` | `a7681dc0b28ef86bae30f42d7fe6f1f61a36b405a20756ff1c4a64d9bbaa9179` | matches |
+| `WEST_PEEK_BRAND_SYSTEM.md` | `6b8e3c0a33b6ff22c34a5713181f28066d0255006c9d24b4e66b33936125f589` | matches |
+| `src/client/public/wp-mark.svg` | `bf90a100c0e71687426763798f0ad6912bdec579dc2ae1d51b095b8bede3d78c` | matches |
+
+### What the repo does and does not reproduce
+
+Code and schema are **identical** to production at this commit: `wrangler d1 migrations list` reports
+nothing pending, and the applied set matches the repo file-for-file.
+
+Production also holds **operational data** that no migration reproduces, and should not — companies,
+work cards, events, the 245 synced contacts. Two rows are worth naming because they were written by
+hand rather than by the product: `pending_deck.pdk_recover_sensori` and `pdk_recover_vynlo`, inserted
+to recover two decks already in R2 after a bug queued neither. They are deliberately NOT seeded into
+a migration: both are now `READ`, and seeding them would put rows matching `inbound-email/%` into
+every fresh test database — which would make the `p54` assertion that an oversized deck gets queued
+pass without the product doing anything. A seed that hollows out a test is worse than a gap in a
+snapshot.
