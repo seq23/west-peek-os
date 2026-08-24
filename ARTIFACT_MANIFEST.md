@@ -114,7 +114,7 @@ mail. Recorded here because a snapshot that cannot be named cannot be returned t
 |---|---|
 | Deployed Worker version | `c3926df7-875e-484e-b293-c5326caa9cbb` |
 | Branch | `review/the-silent-failures` |
-| Migrations | 141 in repo, 141 applied to production |
+| Migrations | 140 in repo, 140 applied to production |
 
 The **Worker version id** is the snapshot identity here, not a commit SHA. A manifest that pins its
 own commit cannot be written: recording the SHA changes the tree and therefore the SHA. The Worker
