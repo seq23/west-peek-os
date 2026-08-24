@@ -112,10 +112,14 @@ mail. Recorded here because a snapshot that cannot be named cannot be returned t
 
 | What | SHA / id |
 |---|---|
-| Commit | `664f5c8fbd7d8239710a5706c45d3fcd54d146fa` |
-| Branch | `review/silent-failures-and-the-deck-journey` (PR #16) |
-| Deployed Worker version | `02b86175-6e1e-4bbb-a23c-5398cfef07c8` |
-| Migrations | 138 in repo, 138 applied to production |
+| Deployed Worker version | `c3926df7-875e-484e-b293-c5326caa9cbb` |
+| Branch | `review/the-silent-failures` |
+| Migrations | 141 in repo, 141 applied to production |
+
+The **Worker version id** is the snapshot identity here, not a commit SHA. A manifest that pins its
+own commit cannot be written: recording the SHA changes the tree and therefore the SHA. The Worker
+version is stable, is what production is actually running, and is the thing you would roll back to.
+The commit is the tip of the branch above.
 
 ### Authority files re-verified at this boundary
 
