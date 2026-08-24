@@ -34,6 +34,8 @@ import { MANAGING_PARTNERS } from "../../shared/registry/managingPartners";
 /** The state carried between runs, so "still down" can be told from "down again". */
 interface FaultRow {
   check_key: string;
+  /** What a person calls it. Stored since 0111 and, until now, never read back. */
+  label: string | null;
   first_seen_at: string;
   escalated_at: string | null;
 }
@@ -47,7 +49,11 @@ export async function runHealthEscalation(
   const downKeys = new Set(down.map((c) => c.key));
 
   const open = (
-    await env.WP_OS_DB.prepare("SELECT check_key, first_seen_at, escalated_at FROM health_fault WHERE resolved_at IS NULL").all<FaultRow>()
+    await env.WP_OS_DB.prepare(// `label` is selected because the ALL-CLEAR needs it. The escalation used `check.label` and the
+    // recovery used `fault.check_key`, so a fault announced as "Scooter's morning brief is down"
+    // came back as "daily_brief_fu_scooter_taylor is working again" — the same event, twice, in two
+    // vocabularies, one of which is a column value.
+    "SELECT check_key, label, first_seen_at, escalated_at FROM health_fault WHERE resolved_at IS NULL").all<FaultRow>()
   ).results ?? [];
   const openByKey = new Map(open.map((f) => [f.check_key, f]));
 
@@ -73,7 +79,28 @@ export async function runHealthEscalation(
       .bind(check.key, stamp, check.reading)
       .run();
 
-    for (const mp of MANAGING_PARTNERS) {
+    /*
+     * ADDRESSED TO EACH PARTNER, and until now it was not.
+     *
+     * `MANAGING_PARTNERS` holds names and ownership percentages — there is no `firm_user.id` on it —
+     * so `notifyQuietly` was called with no `firmUserId`, which means FIRM-WIDE. The loop therefore
+     * sent the same firm-wide notice twice and addressed nobody: "escalate to both MPs" was doubling
+     * the noise rather than reaching two people. The dedupe key differed only by first name, which is
+     * why nothing caught it.
+     *
+     * Resolved by name against `firm_user`, which is the only place the id lives. A partner who is
+     * not on the roster is skipped rather than silently becoming a firm-wide broadcast — and if none
+     * resolve, one firm-wide notice is sent, because a fault nobody hears about is worse than a
+     * fault everybody hears about.
+     */
+    const recipients = await env.WP_OS_DB.prepare(
+      `SELECT id, full_name FROM firm_user WHERE full_name IN (${MANAGING_PARTNERS.map(() => "?").join(", ")})`,
+    )
+      .bind(...MANAGING_PARTNERS.map((mp) => mp.fullName))
+      .all<{ id: string; full_name: string }>();
+    const addressed = recipients.results ?? [];
+
+    for (const mp of addressed.length > 0 ? addressed : [{ id: "", full_name: "the firm" }]) {
       await notifyQuietly(env, {
         // PROVIDER_FAILURE rather than a new kind: the notification kinds are a CHECK constraint
         // in the database, and widening it for one caller would be a migration to say a thing the
@@ -85,7 +112,9 @@ export async function runHealthEscalation(
         objectType: "health_fault",
         objectId: check.key,
         // One per fault per partner, so a fault that lasts a week does not send 672 notifications.
-        dedupeKey: `health_fault:${check.key}:${existing.first_seen_at}:${mp.firstName}`,
+        // Keyed by the RECIPIENT, so each partner gets one and neither gets two.
+        dedupeKey: `health_fault:${check.key}:${existing.first_seen_at}:${mp.id || "firm"}`,
+        ...(mp.id ? { firmUserId: mp.id } : {}),
         firmScope: "west-peek",
       });
     }
@@ -104,7 +133,7 @@ export async function runHealthEscalation(
       await notifyQuietly(env, {
         kind: "PROVIDER_FAILURE",
         severity: "INFO",
-        title: `${fault.check_key} is working again`,
+        title: `${fault.label || fault.check_key} is working again`,
         body: "It had been reported as down. Nothing else was changed by this check.",
         objectType: "health_fault",
         objectId: fault.check_key,

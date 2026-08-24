@@ -205,6 +205,52 @@ export async function notifyQuietly(env: Env, input: NotifyInput): Promise<void>
   }
 }
 
+/**
+ * Tell each partner, as a notice ADDRESSED TO THEM.
+ *
+ * WHY THIS EXISTS, AND WHAT WAS BROKEN. A notification written with no `firmUserId` is a firm-wide
+ * row — `handleListNotifications` shows it to everybody with `firm_user_id IS NULL OR = ?1`. It
+ * reads fine. But `notify()` can only load a preference row for a named person, so a firm-wide
+ * notice skips the preference block ENTIRELY: the per-kind switches, the minimum-severity rule and
+ * quiet hours are all dead for it. Ten call sites existed and six of them were firm-wide, including
+ * all three approval notices — the highest-volume kind in the system. The operator asked for quiet
+ * hours and per-kind control, both were built correctly, and neither applied to the notifications
+ * she gets most.
+ *
+ * The fix is addressing, not a new rule: a notice meant for the partners is written once per
+ * partner, keyed by the recipient so each gets exactly one and neither gets two. Each partner then
+ * has their own quiet hours honoured, in their own timezone, which is the whole point of a setting
+ * that follows you when you travel.
+ *
+ * Falls back to ONE firm-wide row if no partner can be resolved. Saying nothing would be worse than
+ * saying it to everybody, and a notification system that can drop a message when a lookup fails is
+ * not one anybody should rely on.
+ */
+export async function notifyPartners(
+  env: Env,
+  input: Omit<NotifyInput, "firmUserId"> & { dedupeKey: string },
+): Promise<void> {
+  // Read from the ROLE JOIN, not a name list. `MANAGING_PARTNERS` in the registry holds names and
+  // ownership, and a notification needs a `firm_user.id` — the sixth place in this codebase where a
+  // name was used where an id was required. Whoever actually holds the role is the audience.
+  const partners = await env.WP_OS_DB.prepare(
+    `SELECT fu.id FROM firm_user fu
+       JOIN firm_user_role fur ON fur.firm_user_id = fu.id
+       JOIN role r ON r.id = fur.role_id
+      WHERE r.key = 'MANAGING_PARTNER' AND fu.status = 'ACTIVE'
+      ORDER BY fu.id`,
+  ).all<{ id: string }>();
+
+  const recipients = partners.results ?? [];
+  if (recipients.length === 0) {
+    await notifyQuietly(env, input);
+    return;
+  }
+  for (const p of recipients) {
+    await notifyQuietly(env, { ...input, firmUserId: p.id, dedupeKey: `${input.dedupeKey}:${p.id}` });
+  }
+}
+
 // ── HTTP handlers ──
 
 async function parseJsonBody(request: Request): Promise<unknown | null> {

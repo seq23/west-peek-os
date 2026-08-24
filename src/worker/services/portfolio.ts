@@ -3,7 +3,7 @@ import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
-import { notifyQuietly } from "./notifications";
+import { notifyPartners } from "./notifications";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { requestApproval } from "./approvals";
 import { privacyLabelSchema } from "../../shared/privacy";
@@ -345,7 +345,7 @@ export async function raiseAlert(
   });
   // P20: an OPEN alert is an exception a human should see. A suppressed one is not.
   if (!suppressing) {
-    await notifyQuietly(env, {
+    await notifyPartners(env, {
       kind: "PORTFOLIO_RISK",
       severity: input.severity === "CRITICAL" ? "CRITICAL" : input.severity === "HIGH" ? "WARNING" : "INFO",
       title: `${input.severity} portfolio alert: ${input.alert_type}`,

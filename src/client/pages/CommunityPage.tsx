@@ -212,6 +212,25 @@ export function CommunityPage(): JSX.Element {
           once opening the purpose line. A third was noise, and the sentence it introduced says the
           same thing the purpose line already said. */}
 
+      {/*
+        WHERE THE COMMUNITY ACTUALLY LIVES, said before anything on this page is read.
+        
+        Operator, 23 Aug 2026: a reader who wants a closer look has to open Network OS in another
+        tab. That is not a limitation to apologise for — it is the boundary this system is built on.
+        Network OS OWNS who is a member; everything here is West Peek's read on them. Saying so at
+        the top stops this page being mistaken for the record, which is the mistake that would end
+        with somebody editing a contact in the wrong system.
+      */}
+      <p className="notice" data-testid="community-network-os">
+        The people themselves live in <strong>Network OS</strong>, which is where they are added and
+        edited. This page is West Peek's read on them and never the other way round.{" "}
+        <a href="https://network.joinwestpeek.com" target="_blank" rel="noreferrer noopener" data-testid="community-network-os-link">
+          Open Network OS in another tab
+        </a>{" "}
+        for a closer look at anyone here — it is a separate sign-in, so it opens alongside this
+        rather than replacing it.
+      </p>
+
       <PopulationPanel />
 
       {/* INTRODUCTIONS LIVES HERE NOW, and first, because it is the only thing on this page anybody

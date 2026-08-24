@@ -32,8 +32,28 @@ test("integrations state what is connected, what is gated, and what has never ru
   await expect(page.getByTestId("connector-fund_admin")).toContainText("no source contract has been agreed");
   await expect(page.getByTestId("connector-rules")).toContainText("No secret value is read");
 
-  // A check is explicitly a configuration check.
+  /*
+   * A CHECK REPORTS WHAT IT ACTUALLY DID, and the two connectors below do different things.
+   *
+   * The Network OS check became a LIVE one on 22 Aug 2026 — it mints a session and contacts the
+   * partner system, reading nothing. Under `wrangler dev --local` there is no origin configured, so
+   * the honest outcome is a NAMED refusal rather than either a green light or a shrug: it says which
+   * setting is missing and that a pull would refuse. That is the property asserted, not the
+   * sentence — a check that came back reassuring with nothing configured would be the failure.
+   */
   await page.getByTestId("connector-check-network_os").click();
+  const networkCheck = page.getByTestId("integrations-message");
+  await expect(networkCheck).toContainText("WP_OS_NETWORK_OS_BASE_URL");
+  // The one sentence a passing check prints. Asserting its ABSENCE is what proves the refusal, and
+  // it survives the other half of the message changing with whether a contract happens to exist.
+  await expect(networkCheck, "an unconfigured connector must not read as working").not.toContainText("pulls can run");
+
+  /*
+   * The fund administrator's check is still a CONFIGURATION check and says so. Nothing is contacted,
+   * because there is no agreement with an administrator and there is no code path that could write
+   * to one — which is the honesty this page exists for.
+   */
+  await page.getByTestId("connector-check-fund_admin").click();
   await expect(page.getByTestId("integrations-message")).toContainText("Nothing was contacted");
 
   // Network OS authority is restated, not quietly assumed.

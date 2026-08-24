@@ -84,6 +84,15 @@ function OwnerChip({ name }: { name: string | null }): JSX.Element {
   );
 }
 
+interface WorkCardNote {
+  id: string;
+  body: string;
+  response: string | null;
+  acknowledged_at: string | null;
+  created_at: string;
+  author: string | null;
+}
+
 export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; onChanged: () => void; onNavigate: (k: string) => void }) {
   const board = useApi<{
     cards: WorkCardRow[];
@@ -93,6 +102,17 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   const [message, setMessage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [looking, setLooking] = useState<string | null>(null);
+  /**
+   * WHICH CARD YOU ARE SAYING SOMETHING TO, and what has already been said on it.
+   *
+   * The note itself has existed since 22 Aug — the table, both routes, and the employee loop that
+   * re-reads unanswered notes on every step and must answer them to mark them seen. What never
+   * existed was any way to leave one. The operator asked for this in her own words and it shipped
+   * as API surface with no screen, which is the same failure as an approval you cannot revoke.
+   */
+  const [steering, setSteering] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const [notes, setNotes] = useState<Record<string, WorkCardNote[]>>({});
   /**
    * WHICH CARDS ARE OPEN, by id. Collapsed is the default and that is the whole point: a board with
    * twenty cards on it, each carrying a next action, an origin line, an owner line, an assignment
@@ -254,6 +274,32 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
     if (res.status !== 200) setMessage(`Could not move it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
     board.reload();
     onChanged();
+  }
+
+  /** What has been said on a card, loaded only when you open the form — never on every render. */
+  async function openSteering(id: string) {
+    if (steering === id) { setSteering(null); return; }
+    setSteering(id);
+    setNoteText("");
+    const res = await api<{ notes: WorkCardNote[] }>(`/api/work-cards/${id}/notes`);
+    setNotes((n) => ({ ...n, [id]: res.data?.notes ?? [] }));
+  }
+
+  async function sendNote(id: string) {
+    const res = await api<{ error?: string; detail?: string }>(`/api/work-cards/${id}/notes`, {
+      method: "POST",
+      body: { body: noteText },
+    });
+    if (res.status !== 201) {
+      setMessage(res.data?.detail ?? `Could not leave that note (${res.status}).`);
+      return;
+    }
+    // The work is NOT stopped and the board is not reloaded: the whole point is that steering
+    // something in motion does not interrupt it. Only this card's thread changes.
+    setNoteText("");
+    const fresh = await api<{ notes: WorkCardNote[] }>(`/api/work-cards/${id}/notes`);
+    setNotes((n) => ({ ...n, [id]: fresh.data?.notes ?? [] }));
+    setMessage("Passed on. They will pick it up on their next step and say what they changed.");
   }
 
   return (
@@ -514,6 +560,20 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         Drop
                       </button>
                     )}
+                    {/* SAY SOMETHING TO WHOEVER IS CARRYING IT. Offered only while the work is
+                        actually in flight, because the loop re-reads notes only on a card it is
+                        still working — a note on finished work would be written into a void, and
+                        the server refuses it for the same reason. */}
+                    {c.owner_type === "AI" && ["OPEN", "IN_PROGRESS", "BLOCKED"].includes(c.state) && (
+                      <button
+                        type="button"
+                        data-testid={`work-card-steer-${c.id}`}
+                        title="They pick this up on their next step, without stopping the work"
+                        onClick={() => void openSteering(c.id)}
+                      >
+                        {steering === c.id ? "Never mind" : `Tell ${c.owner_name ?? "them"} something`}
+                      </button>
+                    )}
                     {/* LOOKING AT A PAGE BELONGS ON THE CARD THAT NEEDS IT. It used to be a
                         disclosure floating between the bands, answering a question nobody asks at
                         that moment — nobody opens Work wanting to read a webpage, they want to know
@@ -571,6 +631,46 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         </button>
                       )}
                     </details>
+                  )}
+
+                  {steering === c.id && (
+                    <div className="work-card-look" data-testid={`work-card-steer-form-${c.id}`}>
+                      {/* WHAT HAS ALREADY BEEN SAID, and what came back. An acknowledgement here is
+                          never a bare tick: the table's CHECK makes seen-and-answered one event, so
+                          an employee cannot dismiss a partner's instruction without saying what it
+                          changed about the work. Showing the answer is what makes that visible. */}
+                      {(notes[c.id] ?? []).length > 0 && (
+                        <ul className="card-list small" data-testid={`work-card-notes-${c.id}`}>
+                          {(notes[c.id] ?? []).map((n) => (
+                            <li key={n.id}>
+                              <strong>{n.author ?? "A partner"}:</strong> {n.body}
+                              <div className="muted small">
+                                {n.acknowledged_at
+                                  ? `${c.owner_name ?? "They"} answered: ${n.response}`
+                                  : "Not picked up yet — they will read it on their next step."}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <form onSubmit={(e) => { e.preventDefault(); void sendNote(c.id); }}>
+                        <input
+                          value={noteText}
+                          onChange={(e) => setNoteText(e.target.value)}
+                          placeholder="What should they do differently?"
+                          aria-label={`Tell whoever is carrying ${c.title} something`}
+                          data-testid={`work-card-steer-input-${c.id}`}
+                        />
+                        <div className="form-row">
+                          <button type="submit" className="btn-strong" data-testid={`work-card-steer-send-${c.id}`} disabled={noteText.trim().length < 2}>
+                            Send it over
+                          </button>
+                          {/* Said plainly, because the natural fear is that saying something stops
+                              the work or starts it again from the top. It does neither. */}
+                          <span className="muted small">They keep working. This lands on their next step.</span>
+                        </div>
+                      </form>
+                    </div>
                   )}
 
                   {looking === c.id && (

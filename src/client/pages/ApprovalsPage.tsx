@@ -48,6 +48,19 @@ interface BlockRow {
   release_note: string | null;
 }
 
+interface StandingGrant {
+  id: string;
+  action_key: string;
+  action_name: string | null;
+  work_card_title: string | null;
+  granted_by_name: string | null;
+  reason: string;
+  uses: number;
+  max_uses: number;
+  revoked_at: string | null;
+  spent: boolean;
+}
+
 export interface ApprovalCardRow {
   /** Whether this may be delegated ahead of time (ADR-018) — computed by the server from
    *  `action_type`, never re-derived here. A reserved action or an external effect is 0. */
@@ -646,8 +659,111 @@ const FILTER_HEADINGS: Readonly<Record<string, string>> = {
   executed: "What actually happened?",
 };
 
+/**
+ * What the partners have delegated, and how to stop it.
+ *
+ * WHY THIS HAD TO EXIST. The delegate control promises "you can stop it at any time" and there was
+ * no screen on which she could — `GET /api/standing-authority` and the revoke route were registered
+ * and the only thing the client ever called was the POST that CREATES a grant. Standing authority's
+ * own rule is that a control making the system do LESS must never be harder to reach than the one
+ * that made it do more, and a promise with no control behind it is worse than no promise.
+ *
+ * LIVE GRANTS ONLY, by default. What is spent or expired is history and is one press away; a list
+ * that opens on everything ever granted buries the two that are currently acting.
+ */
+function StandingAuthority({ nonce }: { nonce: number }): JSX.Element | null {
+  /*
+   * REFETCHED ON EVERY DECISION, and the first version was not.
+   *
+   * Delegating happens on this page, one card down from here — so a panel that loaded once on mount
+   * showed "nothing is delegated" for the rest of the session, including immediately after the
+   * partner delegated something. The control she was promised existed and was invisible at the one
+   * moment she would look for it. Caught by `e2e/p55-delegate-and-steer.spec.ts`, which navigates
+   * back to Approvals after delegating exactly as a person would.
+   */
+  const state = useApi<{ live: StandingGrant[]; finished: StandingGrant[] }>("/api/standing-authority", [nonce]);
+  const [showFinished, setShowFinished] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const live = state.data?.live ?? [];
+  const finished = state.data?.finished ?? [];
+  if (live.length === 0 && finished.length === 0) return null;
+
+  const revoke = async (id: string) => {
+    setFailure(null);
+    const failed = mutationError(await api(`/api/standing-authority/${id}/revoke`, { method: "POST", body: {} }), [200]);
+    // Stopping needs no reason and no approval — the same rule that governs pausing an employee.
+    if (failed) setFailure(failed);
+    else state.reload();
+  };
+
+  return (
+    <>
+      <h3>What you have delegated</h3>
+      <section className="card" data-testid="standing-authority">
+        <p className="muted small">
+          Anything covered by one of these is approved without asking you, up to its limit, until it
+          expires. Stopping one takes effect immediately and needs no reason.
+        </p>
+        {failure && <p className="notice small" data-testid="standing-authority-failure">{failure}</p>}
+
+        {live.length === 0 ? (
+          <p className="state-empty" data-testid="standing-authority-none">
+            Nothing is delegated right now. Everything comes back to you.
+          </p>
+        ) : (
+          <ul className="card-list small" data-testid="standing-authority-live">
+            {live.map((g) => (
+              <li key={g.id} data-testid={`standing-authority-${g.id}`}>
+                <strong>{g.action_name ?? g.action_key}</strong>
+                {g.work_card_title ? ` — until "${g.work_card_title}" is done` : ""}
+                <div className="muted small">
+                  {g.max_uses - g.uses} of {g.max_uses} left · granted by {g.granted_by_name ?? "a partner"} ·{" "}
+                  {g.reason}
+                </div>
+                <button type="button" data-testid={`standing-authority-revoke-${g.id}`} onClick={() => void revoke(g.id)}>
+                  Stop this
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {finished.length > 0 && (
+          <>
+            <button
+              type="button"
+              className="link-button"
+              data-testid="standing-authority-finished-toggle"
+              onClick={() => setShowFinished((v) => !v)}
+            >
+              {showFinished ? "Hide" : `Show ${finished.length} that ${finished.length === 1 ? "has" : "have"} finished`}
+            </button>
+            {showFinished && (
+              <ul className="card-list small" data-testid="standing-authority-finished">
+                {finished.map((g) => (
+                  <li key={g.id} className="deal-row-out">
+                    <strong>{g.action_name ?? g.action_key}</strong>
+                    <div className="muted small">
+                      {/* Three different reasons a grant stops doing anything, said apart: a list
+                          showing only a date makes a partner work out which one applies. */}
+                      {g.revoked_at ? "stopped by hand" : g.spent ? "used up" : "expired"} · {g.reason}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
+    </>
+  );
+}
+
 export function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNonce: number }): JSX.Element {
   const [stateFilter, setStateFilter] = useState("pending_review");
+  // Bumped on every decision so the delegated-authority panel above re-reads with the queue.
+  const [reloadCount, setReloadCount] = useState(0);
   const approvals = useApi<{ approvals: ApprovalCardRow[] }>(`/api/approvals?state=${stateFilter}`, [refreshNonce]);
   const cards = useMemo(() => approvals.data?.approvals ?? [], [approvals.data]);
 
@@ -669,6 +785,8 @@ export function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNon
 
   return (
     <section data-testid="approvals-page">
+      <StandingAuthority nonce={refreshNonce + reloadCount} />
+
       <div className="home-section-head">
         <h4>
           {FILTER_HEADINGS[stateFilter] ?? "What is in the queue?"} <span className="count-pill">{cards.length}</span>
@@ -704,7 +822,7 @@ export function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNon
             card={c}
             me={me}
             startOpen={c.state === "pending_review"}
-            onDecided={() => approvals.reload()}
+            onDecided={() => { approvals.reload(); setReloadCount((n) => n + 1); }}
           />
         ))}
       </ul>

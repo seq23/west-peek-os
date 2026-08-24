@@ -9,7 +9,7 @@ import {
   buildUnretirePrompt,
   parseUnretireAdvice,
 } from "../../shared/workforce/unretireAdvice";
-import { notifyQuietly } from "./notifications";
+import { notifyPartners } from "./notifications";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { MAX_ACTIVE_AI_EMPLOYEES, type AIEmployeeRow } from "./aiEmployees";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
@@ -370,7 +370,7 @@ export async function changeLifecycle(
     firmScope: employee.firm_scope,
     payload: { from_status: employee.status, to_status: toStatus, reason },
   });
-  await notifyQuietly(env, {
+  await notifyPartners(env, {
     kind: "EMPLOYEE_EXCEPTION",
     severity: toStatus === "RETIRED" ? "WARNING" : "INFO",
     title: `${employee.name} is now ${toStatus}`,

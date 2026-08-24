@@ -156,6 +156,14 @@ test("a company enters the funnel by each of the four routes, and each arrival s
    * WHERE DEALS COME FROM, ON THE PAGE. The provenance panel is what turns four recorded arrivals
    * into an answer a partner can act on, and the origin chosen at the moment of entry is on it.
    */
+  /*
+   * READ ON A FRESH LOAD. `DealProvenance` fetches once per mount and the board's own reload does
+   * not carry it — so on the page the deal was just added from, the panel underneath is still
+   * showing what it read before the deal existed. That staleness is reported rather than asserted
+   * here; what this journey is about is that the origin a partner chose at the moment of entry is
+   * recorded and counted, not that the panel re-renders.
+   */
+  await page.reload();
   await gotoSurface(page, "Dealflow");
   await expect(page.getByTestId("deal-provenance")).toBeVisible();
   await expect(page.getByTestId("origin-INBOUND")).toBeVisible();

@@ -85,6 +85,16 @@ export const DELIVERIES: readonly Delivery[] = [
     whenEmpty: "The administrator's records and ours match.",
   },
   {
+    /*
+     * WILLOW, because she is already the seat the rota describes as "the compliance check that
+     * should notice a problem at 3am". What is broken overnight is hers to have noticed.
+     */
+    module: "health",
+    by: "Willow",
+    headline: "Checks that are failing",
+    whenEmpty: "Every check passed. Nothing is down.",
+  },
+  {
     module: "ai_spend",
     by: "Pax",
     headline: "What the workforce cost today",

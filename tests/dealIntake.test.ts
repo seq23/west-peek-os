@@ -15,6 +15,7 @@ import {
   type IntakeRoute,
 } from "../src/worker/services/dealIntake";
 import { intakeCompanyFromNetworkOs } from "../src/worker/services/networkAdapter";
+import { companyFromSubject } from "../src/worker/effects/inboundEmail";
 
 /**
  * ITEM 7 — every route into the funnel converges on one governed entry point.
@@ -241,9 +242,32 @@ describe("route 2 · email — a hashtag routes and never authorises", () => {
     });
     const card = await cardOf(cardId);
     expect(card.owner_id).toBe("aie_porter");
+    expect(card.title).toBe("Unclear email: #wpdealflow");
     // And if Porter cannot either, it has to reach a partner rather than sit.
     expect(card.next_action).toContain("BLOCKED");
     expect(card.prompt).toContain("confident wrong route");
+  });
+
+  it("says WHY it could not be handled, and does not call a clear email unclear", async () => {
+    /*
+     * A 14MB deck from a named founder is not unclear. It is clear and too large, and those two
+     * have different fixes — one needs a human to read it, one needs the file fetched out of R2.
+     * The oversize path used to pass a subject already reading "Too big to read: …" into a function
+     * that hardcoded "Unclear email: ", so the card read BOTH. Home counts oversize cards with
+     * `title LIKE 'Too big to read:%'`, which the doubled prefix made unmatchable.
+     */
+    const cardId = await openRoutingCard(env, {
+      headline: "Too big to read",
+      subject: "Sensori — updated deck",
+      from: "scooter@example.com",
+      raw: "",
+      triggers: ["#wpdeck"],
+      why: "It is 14.2MB — too large to open inside one request.",
+    });
+    const card = await cardOf(cardId);
+    expect(card.title).toBe("Too big to read: Sensori — updated deck");
+    expect(card.title).not.toContain("Unclear email");
+    expect(card.owner_id).toBe("aie_porter");
   });
 });
 
@@ -469,6 +493,62 @@ describe("all four routes converge on one entry point", () => {
     expect(
       (await t.db.prepare("SELECT COUNT(*) AS n FROM canonical_company WHERE canonical_name LIKE 'Shared Match%'").first<{ n: number }>())!.n,
     ).toBe(1);
+  });
+
+  it("matches when the suffix sits in the MIDDLE of the name, not only at the end", async () => {
+    /*
+     * "Shared Match Co" put the suffix last, which the normaliser handled, and every test used that
+     * shape. Stripping a suffix from the middle left a double space behind it — "acme  labs" against
+     * "acme labs" — so "Acme Inc Labs" and "Acme Labs" read as two different companies and the
+     * funnel grew a duplicate. A suffix is least recognisable as a suffix exactly where it is not
+     * last, which is why this case is the one that shipped broken.
+     */
+    await t.db
+      .prepare("INSERT INTO canonical_company (id, canonical_name, privacy_label, created_by) VALUES ('cc_middle','Acme Labs','INTERNAL','test')")
+      .run();
+
+    const match = await matchFunnelCompany(env, "Acme Inc Labs");
+    expect(match?.id).toBe("cc_middle");
+
+    const arrival = await intakeDealFromEmail(env, {
+      company: "Acme, Inc. Labs", sector: null, one_liner: null, website: null,
+      from: "a@b.co", isDeck: false, raw: "",
+    });
+    expect(arrival.company_id).toBe("cc_middle");
+    expect(
+      (await t.db.prepare("SELECT COUNT(*) AS n FROM canonical_company WHERE canonical_name LIKE 'Acme%'").first<{ n: number }>())!.n,
+    ).toBe(1);
+  });
+
+  it("matches a subject line EXACTLY, and leaves the guessing to the deck", async () => {
+    /*
+     * WHAT THIS TEST USED TO ASSERT, AND WHY IT NO LONGER DOES.
+     *
+     * Production, 23 Aug 2026: Scooter emailed a deck with the subject "Sensori Deck". Sensori had
+     * been on the board since 18 Aug. The reader matched on the whole subject — `sensori deck` is
+     * not `sensori` — and created a SECOND company called "Sensori Deck".
+     *
+     * My first fix stripped words like "deck", "pitch" and "v2" out of the subject before matching.
+     * It passed, and it was the wrong mechanism: a subject is whatever somebody typed while
+     * forwarding, and the operator had already said "the subjects will all be different". A word
+     * list settles the shapes I thought of and misses the next one.
+     *
+     * Her question settled it — "shouldnt the deck itself be the deciding factor on what the name
+     * is?" `deckQueue` now READS the deck before deciding whose it is and matches on the company's
+     * own name for itself. So this function's job shrank back to the honest one: if a subject
+     * happens to name a company the register already holds, say so.
+     */
+    await t.db
+      .prepare("INSERT INTO canonical_company (id, canonical_name, privacy_label, created_by) VALUES ('cc_subj','Sensori','INTERNAL','test')")
+      .run();
+
+    expect((await companyFromSubject(env, "#wpdeck Sensori"))?.id, "the tag is stripped, the name is not").toBe("cc_subj");
+    expect((await companyFromSubject(env, "Fwd: Re: Sensori"))?.id, "forwarding prefixes are not part of the name").toBe("cc_subj");
+
+    // NOT MATCHED HERE, and deliberately. "Sensori Deck" is resolved by the deck's own name in
+    // `deckQueue`, which is evidence rather than a guess about what a human meant by a subject.
+    expect(await companyFromSubject(env, "Sensori Deck"), "a subject is not a name; the deck decides").toBeNull();
+    expect(await companyFromSubject(env, "Vynlo Deck"), "it may only find what the register holds").toBeNull();
   });
 
   it("gives two different companies two different cards, and one company twice a single card", async () => {

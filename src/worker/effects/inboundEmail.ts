@@ -4,7 +4,7 @@ import { proposePerson } from "./networkOsClient";
 import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openRoutingCard } from "../services/dealIntake";
 import { pdfAttachments } from "./mimeAttachments";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
-import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
+import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 
 /**
  * Mail arriving at the firm's machine inbox.
@@ -134,11 +134,45 @@ export function classifyInbound(input: { to: string; from: string; subject: stri
  * the case that most needs a person, and the failure this repo has already had once is work sitting
  * in a queue nobody opens — so an unrouted message is recorded loudly rather than discarded.
  */
+/**
+ * The company a subject is about — an EXACT match on the register, and nothing cleverer.
+ *
+ * THIS USED TO GUESS, and the guess was the wrong mechanism. It stripped words like "deck", "pitch"
+ * and "v2" out of a subject before matching, so "Sensori Deck" would find Sensori. That worked for
+ * the shapes I thought of and would have missed the next one, because a subject is whatever somebody
+ * typed while forwarding.
+ *
+ * Operator, 23 Aug 2026: "shouldnt the deck itself be the deciding factor on what the name is?" It
+ * should. `deckQueue` now READS the deck before deciding who it is for and matches on the company's
+ * own name for itself, which settles the same case with evidence instead of a word list — and settles
+ * every other subject shape at the same time. What is left here is the honest job of a subject line:
+ * if it happens to name a company the register already holds, say so.
+ */
+export async function companyFromSubject(
+  env: Env,
+  subject: string,
+): Promise<{ id: string; canonical_name: string } | null> {
+  const whole = strippedSubject(subject);
+  if (whole.length < 2) return null;
+  return await matchFunnelCompany(env, whole);
+}
+
 export async function handleInboundEmail(
   message: { from: string; to: string; headers: Headers; raw: ReadableStream; rawSize: number },
   env: Env,
 ): Promise<void> {
-  const subject = message.headers.get("subject") ?? "";
+  /*
+   * DECODED HERE, at the one place the raw header is read.
+   *
+   * `classifyInbound` decodes its own input, so the ordinary path was fine and the OVERSIZE path —
+   * which reads this variable directly — was not. Scooter's forwarded Vynlo deck opened a card
+   * titled `Too big to read: =?utf-8?Q?Fwd:_Vynlo_=E2=80=94_pre-seed_|_live_social_music...?=`,
+   * which is unreadable to a partner, and worse: the company match, the trigger scan and the
+   * forwarding-prefix strip all ran against that encoded string, so a subject naming the company
+   * could not match it. Any subject with an em dash or an accent arrives encoded, which is most
+   * forwards from founders.
+   */
+  const subject = decodeMimeHeader(message.headers.get("subject") ?? "");
   const firmScope = "west-peek";
 
   /*
@@ -181,8 +215,7 @@ export async function handleInboundEmail(
      * path never REGISTERS a company, because a name read out of a subject with no body to confirm
      * it is the weakest evidence the system takes, and a wrong new company is worse than none.
      */
-    const oversizeName = strippedSubject(subject);
-    const oversizeMatch = oversizeName.length >= 2 ? await matchFunnelCompany(env, oversizeName) : null;
+    const oversizeMatch = await companyFromSubject(env, subject);
     const oversizeCompanyId = oversizeMatch?.id ?? null;
     await appendEvent(env, {
       eventType: "inbound_email.too_large_to_read",
@@ -252,24 +285,9 @@ export async function handleInboundEmail(
      * Only when a company was matched from the headers: a deck for a company nobody can name has
      * nothing to fill in, and the routing card below is the right home for that.
      */
-    if (storedKey && oversizeCompanyId) {
-      await env.WP_OS_DB.prepare(
-        `INSERT INTO pending_deck (id, company_id, filename, object_key, bytes, firm_scope)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-      )
-        .bind(
-          `pdk_${crypto.randomUUID()}`,
-          oversizeCompanyId,
-          `${subject || "message"}.eml`.slice(0, 200),
-          storedKey,
-          message.rawSize,
-          firmScope,
-        )
-        .run();
-    }
-
-    await openRoutingCard(env, {
-      subject: `Too big to read: ${subject || "(no subject)"}`,
+    const oversizeCard = await openRoutingCard(env, {
+      headline: "Too big to read",
+      subject,
       from: sender,
       raw: "",
       triggers: oversizeSummary.triggers,
@@ -286,6 +304,39 @@ export async function handleInboundEmail(
           : "It could NOT be stored here. Ask the sender to send it again once this is fixed, or get it from their sent mail — this system did not keep a copy.",
       ].join(" "),
     });
+
+    /*
+     * QUEUED WHETHER OR NOT A COMPANY WAS MATCHED — and requiring one was throwing decks away.
+     *
+     * `0135` made `company_id` nullable and said why at length: "an emailed deck for a company
+     * nobody has opened yet has no company to belong to… Requiring a company here meant the bytes
+     * were discarded for exactly the case the operator described, while the card raised in the same
+     * breath told the analyst to read a deck that had been thrown away." The schema was written to
+     * fix this and the code kept the old rule — the migration's comment was stricter than the code
+     * it shipped with.
+     *
+     * Scooter's two decks on 23 Aug proved it: both reached R2, neither reached `pending_deck`, and
+     * both cards told Porter to go and read something nothing pointed at. Sensori is ON the board.
+     *
+     * The card id goes with it, so an analyst who opens the company later has the deck already
+     * attached to the thing they are working, rather than having to find it.
+     */
+    if (storedKey) {
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO pending_deck (id, company_id, work_card_id, filename, object_key, bytes, firm_scope)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      )
+        .bind(
+          `pdk_${crypto.randomUUID()}`,
+          oversizeCompanyId,
+          oversizeCard,
+          `${subject || "message"}.eml`.slice(0, 200),
+          storedKey,
+          message.rawSize,
+          firmScope,
+        )
+        .run();
+    }
     return;
   }
 
@@ -604,21 +655,3 @@ export function forwardedOrigin(raw: string): { from: string | null; subject: st
   };
 }
 
-/**
- * A subject with every forwarding prefix removed.
- *
- * `Fwd: FW: Re: Sensori` is one message about Sensori. The old rule stripped a single `re|fwd` and
- * left the rest, so a twice-forwarded deck opened a company called "FW: Re: Sensori" — a name that
- * would never match the company already on the board, which is exactly how a register grows a second
- * row for a company the firm already screened.
- */
-export function strippedSubject(subject: string): string {
-  let out = subject.replace(/#wp[a-z]+/gi, "").trim();
-  // Repeated rather than once: mail clients stack these, and each pass removes one layer.
-  for (let i = 0; i < 6; i += 1) {
-    const next = out.replace(/^\s*(re|fwd?|fw)\s*:\s*/i, "").trim();
-    if (next === out) break;
-    out = next;
-  }
-  return out;
-}

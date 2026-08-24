@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
+import { networkOsBlockedReason, probeNetworkOs } from "../effects/networkOsClient";
 import { actorFromIdentity, authorize, privacyVisibilityClause } from "./authorize";
 
 /**
@@ -11,16 +12,42 @@ import { actorFromIdentity, authorize, privacyVisibilityClause } from "./authori
  * gate stands in front of it.
  *
  * Two rules the code enforces rather than describes:
- * - A check reports credential PRESENCE by name and never a value, and can only ever be
- *   LOCAL_FIXTURE here: nothing in this environment can reach an external system.
+ * - A check reports credential PRESENCE by name and never a value.
  * - Nothing in this module writes to Network OS, a calendar, a mailbox, a VDR, or an
- *   administrator. It is a read-only status surface over West Peek's own records.
+ *   administrator. It is a read-only status surface.
+ *
+ * NETWORK OS IS NO LONGER HYPOTHETICAL, and this module said it was until 22 Aug 2026. Five of the
+ * six connectors here are still registrations — a name, a credential nobody has created, and a
+ * gate — and for those a LOCAL_FIXTURE check is the only honest kind. Network OS is built,
+ * credentialed and live, so it gets a LIVE check that actually contacts it, and its status is
+ * COMPUTED from the environment rather than read out of the row. The row drifted from reality for
+ * a month precisely because it was a copy; a connector's state has to be derived from the thing it
+ * describes or it becomes a second source of truth that nobody updates.
  */
 
 function credentialConfigured(env: Env, name: string | null): boolean {
   if (!name) return false;
   const value = (env as unknown as Record<string, unknown>)[name];
   return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Network OS's real state, derived — never read out of `connector.status`, which is only ever as
+ * fresh as the last time somebody happened to press a button.
+ *
+ * This deliberately does NOT contact Network OS: a page load must not depend on a far end being up,
+ * and an operator opening Integrations has not asked to make an outbound call. What it can settle
+ * for free is whether this machine holds everything a call would need. Pressing the button is what
+ * asks the far end.
+ */
+function networkOsStatus(env: Env): { status: string; detail: string } {
+  const blocked = networkOsBlockedReason(env);
+  if (blocked) return { status: "NOT_CONFIGURED", detail: `${blocked} Until it is set, live calls fail closed.` };
+  return {
+    status: "CONFIGURED",
+    detail:
+      "Configured on this machine: address, session secret, and an approved Network OS user. Press the button below to make Network OS confirm it — that is the only thing that proves it, and nothing on a page load contacts it.",
+  };
 }
 
 export async function handleListConnectors(ctx: RouteContext): Promise<Response> {
@@ -49,13 +76,32 @@ export async function handleListConnectors(ctx: RouteContext): Promise<Response>
   const cursors = (await ctx.env.WP_OS_DB.prepare("SELECT * FROM network_sync_cursor").all()).results ?? [];
   const conflicts = await ctx.env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM network_conflict WHERE status = 'OPEN'").first<{ n: number }>();
   const mappings = await ctx.env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM network_external_mapping").first<{ n: number }>();
+  // What the last real check found, per connector. One query, not one per row.
+  const lastChecks = new Map<string, { mode: string; detail: string }>();
+  for (const row of (
+    await ctx.env.WP_OS_DB.prepare(
+      // SQLite's bare-column-with-MAX rule: the row picked is the one MAX(created_at) came from.
+      `SELECT connector_id, mode, detail, MAX(created_at) AS at FROM connector_check GROUP BY connector_id`,
+    ).all<{ connector_id: string; mode: string; detail: string; at: string }>()
+  ).results ?? []) {
+    lastChecks.set(row.connector_id, { mode: row.mode, detail: row.detail });
+  }
 
   return json({
-    connectors: connectors.map((c) => ({
-      ...c,
-      credential_configured: credentialConfigured(ctx.env, c.credential_name),
-      scopes: JSON.parse(c.scopes_json) as string[],
-    })),
+    connectors: connectors.map((c) => {
+      const live = c.kind === "NETWORK_OS" ? networkOsStatus(ctx.env) : null;
+      return {
+        ...c,
+        // The live status supersedes the stored one; the stored `detail` describes what the
+        // connector IS, the live one describes what it can do right now.
+        ...(live ? { status: live.status, live_detail: live.detail } : {}),
+        can_be_reached: live !== null,
+        last_check_mode: lastChecks.get(c.id)?.mode ?? null,
+        last_check_detail: lastChecks.get(c.id)?.detail ?? null,
+        credential_configured: live ? live.status === "CONFIGURED" : credentialConfigured(ctx.env, c.credential_name),
+        scopes: JSON.parse(c.scopes_json) as string[],
+      };
+    }),
     network_os: {
       contract_declared: contract !== null,
       contract_version: contract?.version ?? null,
@@ -66,16 +112,61 @@ export async function handleListConnectors(ctx: RouteContext): Promise<Response>
     },
     rules: {
       credentials: "Status reports whether a secret NAME is populated. No secret value is read, returned, or logged.",
-      checks: "Only LOCAL_FIXTURE checks are possible here. They verify configuration coherence, never reachability.",
+      checks: "Network OS is the one system this machine can actually reach, and its check contacts it for real. Every other check verifies configuration coherence only, and says so.",
       writes: "This surface performs no external writes of any kind.",
     },
   });
 }
 
 /**
- * Check a connector's configuration. LOCAL_FIXTURE only: it verifies that the credential name is
- * populated, that required scopes are declared, and that the gate in front of it is recorded.
- * It contacts nothing.
+ * The Network OS check, which is a LIVE one: it mints a session, contacts network.joinwestpeek.com,
+ * and reports what came back.
+ *
+ * IT READS NOTHING. `probeNetworkOs` cancels the response body before parsing, so this exercises no
+ * authority a pull would need and brings no contact data across. That is why it sits behind plain
+ * `connector.check` and not `network_sync.pull` — asking whether a system is up is not the same act
+ * as taking its records, and making an operator hold pull authority to see a status light would be
+ * the kind of gate that teaches people to stop looking.
+ *
+ * The adapter contract is reported alongside rather than folded into the verdict: a missing
+ * contract stops a PULL, it does not mean the connection is broken, and one sentence covering both
+ * is how "not set up" came to mean four different things.
+ */
+async function checkNetworkOs(
+  ctx: RouteContext,
+  connector: { id: string; connector_key: string },
+): Promise<Response> {
+  const probe = await probeNetworkOs(ctx.env);
+  const contract = await ctx.env.WP_OS_DB.prepare("SELECT id FROM network_adapter_contract LIMIT 1").first();
+
+  const problems: string[] = [];
+  if (!probe.reachable || !/accepted us/.test(probe.detail)) problems.push(probe.detail);
+  if (!contract) problems.push("No adapter contract has been declared, so a pull would refuse even though the connection works.");
+
+  const ok = problems.length === 0;
+  const detail = ok
+    ? `LIVE: ${probe.detail} The adapter contract is declared, so pulls can run.`
+    : `LIVE: ${problems.join(" ")}`;
+
+  // Only the verdict and the clock are stored on the row. Overwriting `detail` with a check result
+  // is what turned the description into a stale claim in the first place.
+  await ctx.env.WP_OS_DB.prepare("UPDATE connector SET status = ?2, last_checked_at = ?3 WHERE id = ?1")
+    .bind(connector.id, ok ? "CONFIGURED" : "FAILED", new Date().toISOString())
+    .run();
+  await ctx.env.WP_OS_DB.prepare(
+    "INSERT INTO connector_check (id, connector_id, mode, ok, detail, checked_by) VALUES (?1, ?2, 'LIVE', ?3, ?4, ?5)",
+  )
+    .bind(`ccheck_${crypto.randomUUID()}`, connector.id, ok ? 1 : 0, detail, ctx.identity!.id)
+    .run();
+
+  return json({ connector_key: connector.connector_key, mode: "LIVE", ok, status: ok ? "CONFIGURED" : "FAILED", problems, detail }, { status: 201 });
+}
+
+/**
+ * Check a connector. Network OS is checked LIVE by `checkNetworkOs`; every other connector is a
+ * registration rather than an integration, so the check is LOCAL_FIXTURE — it verifies that the
+ * credential name is populated, that required scopes are declared, and that the gate in front of it
+ * is recorded, and it contacts nothing.
  */
 export async function handleCheckConnector(ctx: RouteContext): Promise<Response> {
   const actor = actorFromIdentity(ctx.identity!);
@@ -86,6 +177,9 @@ export async function handleCheckConnector(ctx: RouteContext): Promise<Response>
     .bind(ctx.params.key!)
     .first<{ id: string; connector_key: string; kind: string; credential_name: string | null; scopes_json: string; consent_required: number; approval_gate: string }>();
   if (!connector) return json({ error: "not_found" }, { status: 404 });
+
+  // Network OS can be asked rather than guessed about, so it is.
+  if (connector.kind === "NETWORK_OS") return await checkNetworkOs(ctx, connector);
 
   const problems: string[] = [];
   if (!connector.credential_name) problems.push("no credential name is declared");
@@ -98,12 +192,6 @@ export async function handleCheckConnector(ctx: RouteContext): Promise<Response>
   }
   if (scopes.length === 0) problems.push("no scopes are declared");
   if (connector.consent_required === 1) problems.push("counterparty consent is required and is recorded per meeting, not per connector");
-
-  // Network OS additionally needs its declared adapter contract before any pull is legitimate.
-  if (connector.kind === "NETWORK_OS") {
-    const contract = await ctx.env.WP_OS_DB.prepare("SELECT id FROM network_adapter_contract LIMIT 1").first();
-    if (!contract) problems.push("no adapter contract has been declared (P9)");
-  }
 
   const ok = problems.length === 0;
   const status = ok ? "CONFIGURED" : "NOT_CONFIGURED";

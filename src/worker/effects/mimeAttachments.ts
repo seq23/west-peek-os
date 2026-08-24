@@ -46,6 +46,49 @@ export const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
  * `headerIn` unfolds for exactly this reason; the function that runs FIRST and gates everything did
  * not. The operator's own note is that most of this mailbox is forwards from those two clients.
  */
+/** The boundary declared by a PART's own headers, used to descend into a nested multipart. */
+function nestedBoundaryOf(part: string): string | null {
+  const headerEnd = part.search(/\r?\n\r?\n/);
+  const headers = (headerEnd === -1 ? part : part.slice(0, headerEnd)).replace(/\r?\n[ \t]+/g, " ");
+  const m = /content-type:\s*multipart\/[^\n]*boundary\s*=\s*"?([^";\r\n]+)"?/i.exec(headers);
+  return m ? m[1]! : null;
+}
+
+/**
+ * MIME nests, and this file used to pretend it did not.
+ *
+ * Scooter forwarded a deck from Apple Mail on 23 Aug 2026 and it arrived shaped like this:
+ *
+ *   multipart/alternative          <- the boundary the top-level header declares
+ *   ├── text/plain
+ *   └── multipart/mixed            <- and the deck is in HERE
+ *       ├── text/html
+ *       ├── application/pdf        <- Vynlo_PreSeed_Deck_Outreach_2026-08-22.pdf
+ *       └── text/html
+ *
+ * Splitting on the top boundary yields the whole nested block as ONE opaque part whose own
+ * Content-Type reads `multipart/mixed` — not `application/pdf` — so nothing matched and the message
+ * was reported as carrying no readable PDF. The deck was in the bytes the entire time.
+ *
+ * This is not an edge case. It is what every mail client produces when you forward a message that
+ * has an attachment, and the operator's own words are "most will be forwards from founders".
+ *
+ * Depth is capped because a malicious or broken message can declare a boundary that contains itself,
+ * and this runs inside a Worker with 10ms of CPU.
+ */
+const MAX_MIME_DEPTH = 6;
+
+/** Every leaf part of a message, flattened — descending into nested multiparts. */
+function leafParts(raw: string, boundary: string, depth = 0): string[] {
+  const out: string[] = [];
+  for (const part of raw.split(`--${boundary}`)) {
+    const inner = depth < MAX_MIME_DEPTH ? nestedBoundaryOf(part) : null;
+    if (inner) out.push(...leafParts(part, inner, depth + 1));
+    else out.push(part);
+  }
+  return out;
+}
+
 function boundaryOf(raw: string): string | null {
   const m = /content-type:\s*multipart\/[^\n]*boundary\s*=\s*"?([^";\r\n]+)"?/i.exec(unfoldHeaders(raw));
   return m ? m[1]! : null;
@@ -109,7 +152,7 @@ export function pdfAttachments(raw: string): { attachments: Attachment[]; unread
    * `String.prototype.split` with a plain string needs no escaping at all, cannot throw on a legal
    * boundary, and is what this always wanted. The regex was never buying anything.
    */
-  const parts = raw.split(`--${boundary}`);
+  const parts = leafParts(raw, boundary);
 
   for (const part of parts) {
     const type = (headerIn(part, "content-type") ?? "").toLowerCase();
@@ -153,4 +196,106 @@ export function pdfAttachments(raw: string): { attachments: Attachment[]; unread
   }
 
   return { attachments, unread };
+}
+
+
+/**
+ * The readable text of a message: its subject, and every text part of the body.
+ *
+ * WHY THE OVERSIZE PATH NEEDS THIS. Operator, 23 Aug 2026: *"the subjects will all be different its
+ * the #hashtag trigger that matters"*, and *"the hashtag can be in the subject or the body"*. A
+ * message over the size cap is routed from its HEADERS ALONE, because walking a seven-megabyte MIME
+ * tree does not fit in a Worker's 10ms of CPU — so a `#wpdeck` written in the body is invisible at
+ * arrival, and both of Scooter's decks opened cards reading "It carries no trigger tag."
+ *
+ * The whole message is already stored, and the scheduled reader has its own CPU budget. So the
+ * trigger scan happens THERE, over this text, rather than being missed at the door.
+ *
+ * Attachments are skipped deliberately: a hashtag inside a PDF is not a routing instruction, and
+ * decoding megabytes of base64 to look for one is the cost this split exists to avoid.
+ */
+export function messageText(raw: string): { subject: string; body: string } {
+  const subject = headerIn(unfoldHeaders(raw.split(/\r?\n\r?\n/)[0] ?? ""), "subject") ?? "";
+
+  const boundary = boundaryOf(raw);
+  if (!boundary) {
+    // Not multipart: everything after the first blank line is the body.
+    const split = raw.indexOf("\r\n\r\n") >= 0 ? raw.indexOf("\r\n\r\n") + 4 : raw.indexOf("\n\n") + 2;
+    return { subject, body: split > 1 ? raw.slice(split, split + MAX_SCANNED_BODY) : "" };
+  }
+
+  const chunks: string[] = [];
+  // Flattened for the same reason as the attachments above: on a forward the readable body sits
+  // inside a nested multipart, and a one-level scan returns the wrapper instead of the words.
+  for (const part of leafParts(raw, boundary)) {
+    const type = (headerIn(part, "content-type") ?? "").toLowerCase();
+    // text/plain and text/html only. An empty content-type is the preamble, not a part.
+    if (!type.startsWith("text/")) continue;
+    const encoding = (headerIn(part, "content-transfer-encoding") ?? "").toLowerCase();
+    if (encoding.includes("base64")) continue; // Not decoded here; a trigger is rarely base64-only.
+    const blank = part.indexOf("\r\n\r\n") >= 0 ? part.indexOf("\r\n\r\n") + 4 : part.indexOf("\n\n") + 2;
+    if (blank > 1) chunks.push(part.slice(blank));
+    if (chunks.join("").length > MAX_SCANNED_BODY) break;
+  }
+  return { subject, body: chunks.join("\n").slice(0, MAX_SCANNED_BODY) };
+}
+
+/** Enough to carry a forwarded chain and its tags; not so much that scanning it costs real time. */
+const MAX_SCANNED_BODY = 256 * 1024;
+
+
+/**
+ * A deck that arrived as something this cannot open — named precisely, never as silence.
+ *
+ * Operator, 24 Aug 2026, on the PDF-only limit: decks also arrive as `.pptx`, as Keynote, and as
+ * Docsend or Google Slides LINKS. The reader refuses anything that is not `application/pdf`, which
+ * is correct — handing a model a file it cannot open and believing the answer is worse than
+ * refusing — but the refusal read "The message carried no PDF this can read", which is true of the
+ * parser and useless to a partner. It does not say a 9MB Keynote was sitting right there.
+ *
+ * This does not convert anything and does not pretend to. It reports WHAT ARRIVED so the card can
+ * say it, which is the difference between "we cannot read this" and "nothing was there".
+ */
+const DECK_LIKE_TYPES: ReadonlyArray<{ match: RegExp; called: string }> = [
+  { match: /presentationml|\.pptx?$/i, called: "a PowerPoint file" },
+  { match: /keynote|\.key$/i, called: "a Keynote file" },
+  { match: /opendocument\.presentation|\.odp$/i, called: "an OpenDocument presentation" },
+  { match: /msword|wordprocessingml|\.docx?$/i, called: "a Word document" },
+];
+
+export function unreadableDeckAttachments(raw: string): string[] {
+  const boundary = boundaryOf(raw);
+  if (!boundary) return [];
+
+  const found: string[] = [];
+  for (const part of leafParts(raw, boundary)) {
+    const type = (headerIn(part, "content-type") ?? "").toLowerCase();
+    if (!type || type.includes("application/pdf") || type.startsWith("text/") || type.startsWith("multipart/")) continue;
+    const filename = filenameIn(part);
+    const known = DECK_LIKE_TYPES.find((k) => k.match.test(type) || k.match.test(filename));
+    if (known) found.push(`${filename} (${known.called})`);
+  }
+  return found.slice(0, MAX_ATTACHMENTS);
+}
+
+/**
+ * Deck links in the body, which is how a lot of decks travel now.
+ *
+ * SURFACED, NOT FETCHED, and that boundary is deliberate. Docsend gates on an email address and
+ * Google Slides needs paging through slides — the browser tool this system has reads one page of
+ * text and shoots above the fold, which would capture a title slide and nothing else. Reporting the
+ * link so a person can open it is honest; claiming to have read a deck from a screenshot of slide
+ * one would be the same over-claim this whole review keeps removing.
+ */
+const DECK_HOSTS = /https:\/\/(?:www\.)?(docsend\.com|drive\.google\.com|docs\.google\.com|dropbox\.com|notion\.so|figma\.com|canva\.com|pitch\.com)\/[^\s"'<>)\]]+/gi;
+
+export function deckLinks(text: string): string[] {
+  const seen = new Set<string>();
+  for (const m of text.matchAll(DECK_HOSTS)) {
+    // Trailing punctuation from prose, and the tracking noise a forward adds.
+    const url = m[0].replace(/[.,;:]+$/, "");
+    seen.add(url.slice(0, 300));
+    if (seen.size >= 5) break;
+  }
+  return [...seen];
 }

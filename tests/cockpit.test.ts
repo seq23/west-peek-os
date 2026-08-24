@@ -204,6 +204,11 @@ describe("MP command coherence — all ten questions", () => {
       "my_work",
       "employees",
       "reconciliation",
+      // "What is broken?" used to resolve to `reconciliation` — LP figures disagreeing with the
+      // administrator, which is a MONEY problem. The system that actually knows what is broken is
+      // `health_fault`, and it had no module at all, so the one question with a live escalation
+      // loop behind it was the one Home could not answer.
+      "health",
     ];
     const saved = await call("/api/mp-home/preferences", MP, "POST", { modules: all, briefing: {} });
     expect(saved.status).toBe(201);

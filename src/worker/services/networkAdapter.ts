@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Env } from "../env";
-import { networkOsConfigured, proposePerson, pullSnapshot, type NetworkSnapshot } from "../effects/networkOsClient";
+import { networkOsBlockedReason, networkOsConfigured, proposePerson, pullSnapshot, type NetworkSnapshot } from "../effects/networkOsClient";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import type { FirmUserIdentity } from "../auth";
@@ -1009,5 +1009,59 @@ export async function handleNetworkCompanyPush(ctx: RouteContext): Promise<Respo
     return json(await intakeCompanyFromNetworkOs(ctx.env, parsed.data), { status: 201 });
   } catch (err) {
     return errorResponse(err);
+  }
+}
+
+/**
+ * The scheduled contact pull — the job that did not exist.
+ *
+ * WHAT WAS MISSING, and it was the whole loop. Every piece of this was built: the adapter, the
+ * client, the cursor, the receipts, the conflict rows, the Community page with a progress bar
+ * reading "Reading your community from Network OS". **Nothing ever called it on a schedule.** The
+ * only pull that had ever run was the one triggered by hand on 22 Aug to prove the connection, and
+ * `scheduled_job` held no row for it at all — so Community would have sat at zero for ever while a
+ * page told the operator it was loading.
+ *
+ * Operator, 23 Aug 2026: "i added all our contacts into network OS and the community tab should
+ * begin processing them."
+ *
+ * ONE RESOURCE PER TICK, and contacts first. `pullResource` already bounds each pull to a page
+ * sized for the CPU budget and advances a cursor, so a large community loads across ticks rather
+ * than trying to arrive in one — which is the same shape as the deck reader, and for the same
+ * reason. Failure is recorded on the cursor and returned, never thrown: a sync that cannot reach
+ * Network OS is a fact the operator needs on the page, not an exception that kills the tick and
+ * takes the other jobs with it.
+ */
+export async function runNetworkSync(env: Env): Promise<{ resource: string; applied: number; detail: string }> {
+  const client = configuredClient(env);
+  if (!client) {
+    return { resource: "contact", applied: 0, detail: networkOsBlockedReason(env) ?? "Network OS is not configured." };
+  }
+
+  // A system identity, because nobody typed this in. MANAGING_PARTNER because `network_sync.pull`
+  // is role-gated and a sync that cannot authorize is a community that never loads — the same
+  // reasoning, and the same shape, as the inbound-mail identity in dealIntake.
+  const identity: FirmUserIdentity = {
+    id: "system:network_sync",
+    email: "os@joinwestpeek.com",
+    fullName: "Network OS sync",
+    status: "ACTIVE",
+    roles: ["MANAGING_PARTNER"],
+    authorityScopes: [{ scopeKey: "firm_scope", scopeValue: "west-peek" }],
+  };
+
+  try {
+    const summary = await pullResource(env, identity, "contact", client);
+    return {
+      resource: "contact",
+      applied: summary.applied ?? 0,
+      detail: `${summary.applied ?? 0} applied${summary.conflicts ? `, ${summary.conflicts} disagreement(s) raised` : ""}`,
+    };
+  } catch (err) {
+    return {
+      resource: "contact",
+      applied: 0,
+      detail: err instanceof Error ? err.message : String(err),
+    };
   }
 }

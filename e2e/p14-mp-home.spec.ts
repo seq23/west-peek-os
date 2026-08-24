@@ -128,4 +128,28 @@ test("mp-home never widens privacy: an investment-team member gets no LP module"
   for (const m of body.modules) {
     expect(typeof m.link).toBe("string");
   }
+
+  /*
+   * EVERY QUESTION IS ACTUALLY ANSWERED, which nothing checked.
+   *
+   * The old assertion counted ten questions and stopped, so a question whose module was not enabled
+   * still counted. The operator read her own Home on 23 Aug and found FOUR of the ten saying "no
+   * module enabled for this yet" — what is at risk, what the employees are doing, what is costing
+   * money, and what is broken. A page that names ten questions as its purpose and answers six is
+   * indicting itself, and the test agreed it was fine because it only counted the list.
+   *
+   * Counting a list is not checking it. This asserts the thing the page promises.
+   */
+  const unanswered = body.questions.filter((q: { module: string | null }) => !q.module);
+  expect(
+    unanswered.map((q: { question: string }) => q.question),
+    "every question this page names must resolve to a module by default",
+  ).toEqual([]);
+
+  // And "What is broken?" is answered by the system that CHECKS, not by a list that sounds like it
+  // might. It used to resolve to `reconciliation` — LP figures disagreeing with the administrator,
+  // which is a money problem — while `health_fault`, with a live escalation loop behind it, had no
+  // module at all.
+  const broken = body.questions.find((q: { question: string }) => q.question === "What is broken?");
+  expect(broken.module).toBe("health");
 });

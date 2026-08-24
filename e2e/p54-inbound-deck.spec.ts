@@ -263,6 +263,68 @@ test("a message too large to parse is stored, routed from its headers, and opens
   await expect(body).toContainText("#wpdealflow");
   // Where the message itself is kept, said explicitly — the operator must not have to go and hunt.
   await expect(body).toContainText("inbound-email/");
+
+  /*
+   * AND IT IS QUEUED FOR READING, which this test never checked and which production was not doing.
+   *
+   * Scooter sent two real decks on 23 Aug. Both reached R2, both opened a card — and neither reached
+   * `pending_deck`, so the card told Porter to go and read something nothing pointed at. The handler
+   * queued only when a company had already been matched from the subject, while migration `0135` had
+   * made `company_id` nullable specifically to stop that: "requiring a company here meant the bytes
+   * were discarded for exactly the case the operator described". The migration's comment was
+   * stricter than the code that shipped with it.
+   *
+   * Everything above this line passed throughout. An R2 object nothing points at is the same as no
+   * object, and this suite proved the pointer existed on the CARD without ever checking the QUEUE.
+   */
+  const queued = queryLocalD1<{ n: number; company_id: string | null; work_card_id: string | null }>(
+    `SELECT COUNT(*) AS n, company_id, work_card_id FROM pending_deck WHERE object_key LIKE 'inbound-email/%'`,
+  );
+  expect(Number(queued[0]!.n), "an oversized deck must be queued for reading, not only stored").toBeGreaterThan(0);
+  // Attached to the card, so an analyst opening the company later finds the deck already on the
+  // thing they are working rather than having to go looking for it.
+  expect(queued[0]!.work_card_id, "the queued deck names the card it arrived with").toBeTruthy();
+});
+
+test("an oversized deck is kept and routed even when the tag is in the body and the subject is encoded", async ({ request }) => {
+  /*
+   * SCOOTER'S ACTUAL MESSAGE, 23 Aug 2026, and every assumption in the path was wrong for it.
+   *
+   * Operator: "the subjects will all be different its the #hashtag trigger that matters", and "the
+   * hashtag can be in the subject or the body". The oversize path routes from HEADERS ALONE, because
+   * walking a multi-megabyte MIME tree does not fit in a Worker's 10ms of CPU — so a tag written in
+   * the body could not be seen, and both real cards read "It carries no trigger tag."
+   *
+   * Worse, the raw header was never MIME-decoded on this path. A forward carrying an em dash arrives
+   * as `=?utf-8?Q?Fwd:_Vynlo_=E2=80=94_pre-seed?=`, which is what the card title actually said — and
+   * the company match, the trigger scan and the prefix strip all ran against that encoded string.
+   *
+   * The scan now happens in the scheduled reader, which has its own budget and the whole message.
+   */
+  const marker = `Vynlo ${Date.now()}`;
+  await deliverMail(request, {
+    from: `Scooter Taylor <scooter@westpeek.ventures>`,
+    // Encoded, with no tag in it — exactly what a forwarded founder email looks like.
+    subject: `=?utf-8?Q?Fwd:_${marker.replace(/ /g, "_")}_=E2=80=94_pre-seed?=`,
+    parts: [
+      { contentType: "text/plain; charset=utf-8", body: `#wpdeck\n\nCompany: ${marker}\n\nPassing this on.` },
+      { contentType: "application/pdf", filename: "vynlo.pdf", encoding: "base64", body: tinyPdfBase64(40_000) },
+    ],
+  });
+
+  // Kept, whatever the headers said — the bytes are the part that cannot be recovered later.
+  const queued = queryLocalD1<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM pending_deck WHERE object_key LIKE 'inbound-email/%'`,
+  );
+  expect(Number(queued[0]!.n), "a deck must be kept even when nothing in the headers named a company").toBeGreaterThan(0);
+
+  // And the title a partner reads is words, not an encoding. The card used to carry the raw
+  // `=?utf-8?Q?...?=` string, which is unreadable and made every downstream match run on gibberish.
+  const cards = queryLocalD1<{ title: string }>(
+    `SELECT title FROM work_card WHERE title LIKE 'Too big to read:%' ORDER BY created_at DESC LIMIT 1`,
+  );
+  expect(cards[0]!.title).not.toContain("=?utf-8?");
+  expect(cards[0]!.title).toContain(marker.split(" ")[0]);
 });
 
 test("a #wpnetwork message whose person cannot be read opens a card instead of failing quietly", async ({ page, request }) => {

@@ -28,6 +28,19 @@ import { runAi } from "../ai/runAi";
  */
 
 export interface DeckReading {
+  /**
+   * THE COMPANY'S OWN NAME FOR ITSELF, and the reason this field exists.
+   *
+   * Until 23 Aug 2026 the deck settled sector, one-liner, website and stage — everything EXCEPT the
+   * name. So a company was named from the EMAIL SUBJECT, which is the weakest evidence in the whole
+   * message: a label somebody typed while forwarding. Scooter sent "Sensori Deck" and the register
+   * grew a company called Sensori Deck alongside the Sensori it already had.
+   *
+   * Operator, 23 Aug: "shouldnt the deck itself be the deciding factor on what the name is?" It
+   * should. A deck is a company's own account of itself, and the cover page is the one place the
+   * name is stated by the only party entitled to state it.
+   */
+  company_name: string | null;
   sector: string | null;
   one_liner: string | null;
   website: string | null;
@@ -42,9 +55,12 @@ export interface DeckReading {
 const PROMPT = [
   "You are reading a startup's pitch deck for an early-stage venture fund.",
   "Return ONLY a JSON object with these keys and no prose around it:",
-  '{"sector":string|null,"one_liner":string|null,"website":string|null,"stage":string|null,',
-  '"raising":string|null,"claims":string[],"missing":string[]}',
+  '{"company_name":string|null,"sector":string|null,"one_liner":string|null,"website":string|null,',
+  '"stage":string|null,"raising":string|null,"claims":string[],"missing":string[]}',
   "",
+  "company_name: the company's own name for itself, as the deck writes it. The name of the company,",
+  "  not the name of a product, and not the title of the deck. Drop Inc/Ltd/LLC and any tagline.",
+  "  Null if the deck never states it plainly.",
   "one_liner: what the company does, in one sentence, in plain words. Not the tagline.",
   "stage: pre-seed, seed, Series A and so on, only if the deck says so.",
   "raising: the amount and instrument if stated, verbatim.",
@@ -97,6 +113,7 @@ export async function readDeck(
     return {
       ok: true,
       reading: {
+        company_name: typeof raw.company_name === "string" && raw.company_name.trim() ? raw.company_name.trim().slice(0, 120) : null,
         sector: raw.sector ?? null,
         one_liner: raw.one_liner ?? null,
         website: raw.website ?? null,

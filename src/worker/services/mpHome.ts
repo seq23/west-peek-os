@@ -47,8 +47,20 @@ export const HOME_MODULE_KEYS = [
   "ai_spend",
   "what_changed",
   "my_work",
+  "health",
 ] as const;
 
+/*
+ * THE DEFAULT ANSWERS ALL TEN QUESTIONS, which it did not.
+ *
+ * Operator, 23 Aug 2026, reading her own Home: four of the ten read "no module enabled for this
+ * yet" — what is at risk, what the employees are doing, what is costing money, and what is broken.
+ * The page names ten questions as its purpose and then leaves four of them unanswered, which makes
+ * the list an indictment of the page rather than a description of it.
+ *
+ * `employees`, `ic_priorities` and `health` are added; every question below now resolves to a
+ * module. A partner may still switch any of them off — this is the starting point, not a rule.
+ */
 export const DEFAULT_HOME_MODULES: readonly string[] = [
   "approvals",
   "intelligence",
@@ -57,6 +69,9 @@ export const DEFAULT_HOME_MODULES: readonly string[] = [
   "my_work",
   "ai_spend",
   "what_changed",
+  "employees",
+  "ic_priorities",
+  "health",
 ];
 
 async function approvalsModule(env: Env, identity: FirmUserIdentity): Promise<HomeModule> {
@@ -231,7 +246,15 @@ async function reconciliationModule(env: Env): Promise<HomeModule> {
   return {
     key: "reconciliation",
     title: "Reconciliation exceptions",
-    answers: "What is broken?",
+    /*
+     * IT ANSWERED THE WRONG QUESTION. This module claimed "What is broken?", so as long as it was
+     * enabled that question read as answered — by a list of places where the firm's figures and the
+     * administrator's disagree. That is a MONEY problem, and a real one, but a partner asking what
+     * is broken means the system: is the brief running, are the jobs alive, did anything fail
+     * overnight. `health_fault` is what knows that, and had no module at all, so the one question
+     * with a live escalation system behind it was the one Home could not answer.
+     */
+    answers: "Where is money or execution at risk?",
     // Same as the intelligence module above: reporting folded into LP, "reporting" resolves to
     // nothing, and Open silently bounced back to Home.
     link: "lp",
@@ -241,6 +264,48 @@ async function reconciliationModule(env: Env): Promise<HomeModule> {
       items.length === 0
         ? "No open reconciliation exceptions."
         : "Administrator figures are authoritative; nothing here overwrites them.",
+  };
+}
+
+/**
+ * What is broken, from the system that checks — not from a list that sounds like it might.
+ *
+ * `runHealthEscalation` runs every tick, keeps a `health_fault` row per failing check, escalates
+ * only what persists across two runs, and announces recoveries. All of that existed and none of it
+ * reached Home: Diagnostics said "Broken — Scooter's brief" on one tab while Home said nothing on
+ * another, which is exactly the split the operator reported as item 22.
+ *
+ * UNRESOLVED FAULTS ONLY, and it says when it last looked. An empty list here has to mean "checked,
+ * and nothing is down" rather than "nothing has been checked" — those are opposite facts and a
+ * silent zero reads as the good one.
+ */
+async function healthModule(env: Env): Promise<HomeModule> {
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT check_key, label, reading, remedy, first_seen_at, escalated_at
+         FROM health_fault
+        WHERE resolved_at IS NULL
+        ORDER BY first_seen_at ASC
+        LIMIT 8`,
+    ).all<Record<string, unknown>>()
+  ).results ?? [];
+  const lastRun = await env.WP_OS_DB.prepare(
+    "SELECT MAX(created_at) AS at FROM health_fault",
+  ).first<{ at: string | null }>();
+
+  return {
+    key: "health",
+    title: "What is broken",
+    answers: "What is broken?",
+    link: "diagnostics",
+    count: rows.length,
+    items: rows,
+    note:
+      rows.length === 0
+        ? lastRun?.at
+          ? "Every check passed the last time they ran. Nothing is down."
+          : "No check has ever recorded a fault here. If that looks wrong, open Diagnostics — an empty history is not the same as a clean one."
+        : "Each of these was seen down on two runs in a row before it was raised; a single bad tick is not reported.",
   };
 }
 
@@ -469,6 +534,9 @@ export async function buildHome(
         break;
       case "my_work":
         modules.push(await myWorkModule(env, identity));
+        break;
+      case "health":
+        modules.push(await healthModule(env));
         break;
       default:
         break;

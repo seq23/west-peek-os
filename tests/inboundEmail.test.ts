@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyInbound, decodeMimeHeader, extractAddress, forwardedOrigin, MAX_BODY_BYTES, personFromMessage } from "../src/worker/effects/inboundEmail";
-import { pdfAttachments } from "../src/worker/effects/mimeAttachments";
+import { deckLinks, messageText, pdfAttachments, unreadableDeckAttachments } from "../src/worker/effects/mimeAttachments";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import { defuseTriggers, wouldLoop } from "../src/worker/effects/emailTransport";
 
@@ -279,5 +279,148 @@ describe("the forwarding trail records a forward and only a forward", () => {
       "Deck attached.",
     ].join("\r\n");
     expect(forwardedOrigin(raw)?.from).toBe("ada@sensori.example");
+  });
+});
+
+
+/*
+ * A FORWARD FROM A REAL MAIL CLIENT, which is the shape most of this inbox receives.
+ *
+ * Operator: "most will be forwards from founders." Scooter forwarded a deck from Apple Mail on
+ * 23 Aug 2026 and it was reported as carrying no readable PDF. The deck was in the bytes the whole
+ * time — the message nests, and this parser walked exactly one level:
+ *
+ *   multipart/alternative       <- the boundary declared in the top-level header
+ *   ├── text/plain
+ *   └── multipart/mixed         <- and the deck is in HERE
+ *       ├── text/html
+ *       ├── application/pdf
+ *       └── text/html
+ *
+ * Splitting on the top boundary yields the nested block as ONE part whose own Content-Type reads
+ * `multipart/mixed`, so nothing matched `application/pdf` and the attachment was invisible.
+ *
+ * The header shapes below are copied from the real message rather than idealised: Apple writes the
+ * filename UNQUOTED and folded onto a continuation line, and adds an `x-apple-part-url` parameter
+ * after it. A parser that only handles `filename="…"` on one line reads the name as everything to
+ * the end of the line, which is how a deck ends up filed under a URL.
+ */
+describe("a forwarded deck, nested the way real mail clients nest it", () => {
+  const OUTER = "Apple-Mail-183CAC3F-A531-4CD3-80A2-60F12ED586D2";
+  const INNER = "Apple-Mail-B77552A8-69AE-4737-A9CD-A72466D9F37B";
+  const forwarded = [
+    "Content-Type: multipart/alternative; boundary=" + OUTER,
+    "Subject: Fwd: Vynlo",
+    "",
+    "--" + OUTER,
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "#wpdeck",
+    "",
+    "Passing this on.",
+    "--" + OUTER,
+    "Content-Type: multipart/mixed; boundary=" + INNER,
+    "",
+    "--" + INNER,
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    "<p>Sent from my iPhone</p>",
+    "--" + INNER,
+    "Content-Type: application/pdf;",
+    "\tname=Vynlo_PreSeed_Deck_Outreach_2026-08-22.pdf;",
+    "\tx-apple-part-url=1B206B7B-3BC0-4D2A-A461-DFE0E47226AD",
+    "Content-Disposition: attachment;",
+    "\tfilename=Vynlo_PreSeed_Deck_Outreach_2026-08-22.pdf",
+    "Content-Transfer-Encoding: base64",
+    "",
+    "JVBERi0xLjQK",
+    "--" + INNER + "--",
+    "--" + OUTER + "--",
+  ].join("\r\n");
+
+  it("finds the deck inside the nested part", () => {
+    const { attachments, unread } = pdfAttachments(forwarded);
+    expect(attachments, `nothing was found; unread said: ${unread.join("; ")}`).toHaveLength(1);
+    expect(attachments[0]!.dataBase64).toBe("JVBERi0xLjQK");
+  });
+
+  it("reads the filename as a filename, not as the rest of the line", () => {
+    // Unquoted, folded, and followed by another parameter — all three at once, as Apple sends it.
+    expect(pdfAttachments(forwarded).attachments[0]!.filename).toBe("Vynlo_PreSeed_Deck_Outreach_2026-08-22.pdf");
+  });
+
+  it("reads the body text out of the nested message too, so a tag in it still routes", () => {
+    // The trigger is in the body on a forward, which is the operator's stated common case.
+    const { subject, body } = messageText(forwarded);
+    expect(subject).toBe("Fwd: Vynlo");
+    expect(body).toContain("#wpdeck");
+  });
+});
+
+
+/*
+ * A DECK THAT IS NOT A PDF, said precisely rather than as an absence.
+ *
+ * The refusal used to read "The message carried no PDF this can read." True of the parser, useless
+ * to a partner: it does not say whether a 9MB Keynote was sitting right there, whether the deck was
+ * a Docsend link, or whether the message really was empty. Three different next actions — ask for a
+ * PDF, open the link, check the sender — collapsed into the least useful of them.
+ *
+ * Nothing here converts or fetches. A .pptx cannot be read by the models this system uses, and a
+ * linked deck is behind an email gate or needs paging through slides the browser tool cannot do.
+ * Naming them is the honest half, and the half somebody can act on.
+ */
+describe("a deck that arrived as something we cannot open", () => {
+  const withAttachment = (contentType: string, filename: string) =>
+    [
+      "Content-Type: multipart/mixed; boundary=B",
+      "Subject: Deck",
+      "",
+      "--B",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Deck attached.",
+      "--B",
+      `Content-Type: ${contentType};`,
+      `\tname=${filename}`,
+      "Content-Disposition: attachment;",
+      `\tfilename=${filename}`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      "UEsDBBQ=",
+      "--B--",
+    ].join("\r\n");
+
+  it("names a PowerPoint rather than reporting nothing", () => {
+    const found = unreadableDeckAttachments(
+      withAttachment("application/vnd.openxmlformats-officedocument.presentationml.presentation", "Vynlo.pptx"),
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain("Vynlo.pptx");
+    expect(found[0]).toContain("PowerPoint");
+  });
+
+  it("names a Keynote too, which is the other half of what founders send", () => {
+    expect(unreadableDeckAttachments(withAttachment("application/x-iwork-keynote-sffkey", "Deck.key"))[0]).toContain("Keynote");
+  });
+
+  it("does not report a PDF as unreadable — that path reads it", () => {
+    expect(unreadableDeckAttachments(withAttachment("application/pdf", "Deck.pdf"))).toEqual([]);
+  });
+
+  it("finds the deck link when the deck is a link", () => {
+    const body = "Hi — deck here: https://docsend.com/view/abc123xyz. Happy to talk.";
+    // The trailing full stop belongs to the sentence, not the URL; a link that carries it 404s.
+    expect(deckLinks(body)).toEqual(["https://docsend.com/view/abc123xyz"]);
+  });
+
+  it("finds a Google Slides link and does not claim to have read it", () => {
+    const links = deckLinks("https://docs.google.com/presentation/d/1AbC/edit?usp=sharing");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toContain("docs.google.com/presentation");
+  });
+
+  it("says nothing about ordinary links, so the card is not filled with noise", () => {
+    expect(deckLinks("Our site is https://example.com and my calendar is https://cal.com/x")).toEqual([]);
   });
 });

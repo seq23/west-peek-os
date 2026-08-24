@@ -51,7 +51,7 @@ import { createOpportunity, type CreateOpportunityInput, type OpportunityRow } f
 
 // Both seats now live in `shared/intake/emailTriggers.ts` — the Dealflow page has to name them and
 // a client cannot import from `src/worker`. Re-exported so existing importers here are unaffected.
-import { DEAL_INTAKE_EMPLOYEE, INTAKE_MAILBOX, ROUTING_EMPLOYEE, seatId } from "../../shared/intake/emailTriggers";
+import { DEAL_INTAKE_EMPLOYEE, INTAKE_MAILBOX, ROUTING_EMPLOYEE, seatId, strippedSubject } from "../../shared/intake/emailTriggers";
 export { DEAL_INTAKE_EMPLOYEE, ROUTING_EMPLOYEE };
 
 /** "Accepts unstructured input… and routes to the right machine." */
@@ -243,18 +243,9 @@ export function dealFromMessage(subject: string, body: string, from: string, isD
   };
 
   const named = field("company");
-  /*
-   * EVERY forwarding prefix, not one. Mail clients stack them, and the old rule removed a single
-   * `re|fwd` — so a twice-forwarded deck opened a company called "FW: Re: Sensori", a name that
-   * could never match the company already on the board. That is exactly how a register grows a
-   * second row for a company the firm has already screened. `FW:` was not matched at all.
-   */
-  let fromSubject = subject.replace(/#wp[a-z]+/gi, "").trim();
-  for (let i = 0; i < 6; i += 1) {
-    const next = fromSubject.replace(/^\s*(re|fwd?|fw)\s*:\s*/i, "").trim();
-    if (next === fromSubject) break;
-    fromSubject = next;
-  }
+  // Every forwarding prefix, not one — and the SAME rule the header-only path uses. See
+  // `strippedSubject`; it lives in one place now because it was inlined here and there at once.
+  const fromSubject = strippedSubject(subject);
 
   const company = named ?? (fromSubject.length >= 2 ? fromSubject : null);
   if (!company) return null;
@@ -270,9 +261,22 @@ export function dealFromMessage(subject: string, body: string, from: string, isD
   };
 }
 
-/** Case- and punctuation-insensitive, because "Acme, Inc." and "Acme Inc" are one company. */
+/**
+ * Case- and punctuation-insensitive, because "Acme, Inc." and "Acme Inc" are one company.
+ *
+ * THE COLLAPSE AT THE END IS LOAD-BEARING. Stripping a suffix word leaves a hole where it was, and
+ * `trim()` only closes the hole at the ends. "Acme Inc Labs" normalised to `acme  labs` and "Acme
+ * Labs" to `acme labs`, so the two failed to match and the same company was created twice — the
+ * exact duplicate this function exists to prevent, triggered by a suffix appearing anywhere but
+ * last, which is where it least looks like a suffix.
+ *
+ * And if the name is NOTHING BUT suffix words, the stripped form is kept rather than the empty
+ * string: an empty key matches every other empty key, so two unrelated companies would fuse.
+ */
 function normalise(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(inc|llc|ltd|corp|co)\b/g, "").trim();
+  const bare = name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const stripped = bare.replace(/\b(inc|llc|ltd|corp|co)\b/g, " ").replace(/\s+/g, " ").trim();
+  return stripped || bare;
 }
 
 export interface CompanyMatch {
@@ -300,8 +304,13 @@ export async function matchFunnelCompany(env: Env, name: string, companyId?: str
   const wanted = normalise(name);
   if (!wanted) return null;
 
+  /*
+   * A MERGED COMPANY MUST NEVER WIN A MATCH. It is the husk of a name somebody already decided was
+   * a duplicate, and matching it would file a new arrival against a record nothing else reads —
+   * quietly undoing the merge one deck at a time.
+   */
   const companies = (
-    await env.WP_OS_DB.prepare("SELECT id, canonical_name FROM canonical_company").all<{ id: string; canonical_name: string }>()
+    await env.WP_OS_DB.prepare("SELECT id, canonical_name FROM canonical_company WHERE status <> 'MERGED'").all<{ id: string; canonical_name: string }>()
   ).results ?? [];
   const byName = companies.find((c) => normalise(c.canonical_name) === wanted);
   if (byName) return { ...byName, matched_via: "canonical_name" };
@@ -733,10 +742,20 @@ export async function handleScoutedIntake(ctx: RouteContext): Promise<Response> 
  */
 export async function openRoutingCard(
   env: Env,
-  input: { subject: string; from: string; raw: string; triggers: string[]; why: string },
+  input: { subject: string; from: string; raw: string; triggers: string[]; why: string; headline?: string },
 ): Promise<string> {
+  /*
+   * THE HEADLINE IS THE CALLER'S, because not every routing card is an unclear email.
+   *
+   * This function hardcoded "Unclear email: " and the oversize path passed a subject that already
+   * began "Too big to read: ", so the card an operator actually saw read "Unclear email: Too big to
+   * read: Sensori deck". Two prefixes, and the first one wrong — a 14MB deck from a named founder
+   * is not unclear, it is clear and too large, and those have different fixes. Home's counter was
+   * looking for `title LIKE 'Too big to read:%'`, which could never match because of the prefix in
+   * front of it; the count survived only because the other clause caught everything.
+   */
   const card = await createWorkCardInternal(env, systemIdentity(), {
-    title: `Unclear email: ${input.subject || "(no subject)"}`,
+    title: `${input.headline ?? "Unclear email"}: ${input.subject || "(no subject)"}`,
     description: [
       `Arrived by email from ${input.from}.`,
       input.why,

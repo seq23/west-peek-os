@@ -115,9 +115,19 @@ export async function handleFollowOnCentre(ctx: RouteContext): Promise<Response>
   // improved against its own previous reading. Anything cleverer would be a judgement the system
   // is not entitled to make on the partners' behalf.
   const candidates = await ctx.env.WP_OS_DB.prepare(
+    /*
+     * THE POSITION TRAVELS WITH THE CANDIDATE, so the review can be opened from here.
+     *
+     * Detection worked, the review worked, the decision worked — and a partner could not get from
+     * the first to the second, because `FollowOnPage` only LISTED candidates. Opening a review needs
+     * the holding it is a follow-on TO, and the row already joins `position` to find the candidate
+     * at all. Carrying those columns out is what turns a list into a place you can act.
+     */
     `SELECT c.id AS company_id, c.canonical_name AS company_name,
             m.metric_key, m.value AS latest_value, m.as_of_date,
-            prev.value AS previous_value
+            prev.value AS previous_value,
+            p.id AS position_id, p.quantity AS held_shares, p.cost_basis AS existing_cost,
+            p.fund_id AS fund_id
        FROM position p
        JOIN canonical_company c ON c.id = p.company_id
        JOIN portfolio_metric_snapshot m ON m.company_id = c.id

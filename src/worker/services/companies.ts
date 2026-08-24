@@ -345,7 +345,17 @@ export async function handleListCompanies(ctx: RouteContext): Promise<Response> 
       )
         .bind(status)
         .all<CompanyRow>()
-    : await ctx.env.WP_OS_DB.prepare("SELECT * FROM canonical_company ORDER BY created_at, id").all<CompanyRow>();
+    /*
+     * MERGED COMPANIES ARE NOT IN THE REGISTER, and this list was showing them.
+     *
+     * A merge retires the source row rather than deleting it — work cards and events reference it,
+     * and dropping the row would erase the trail the merge exists to keep. But retired means GONE
+     * FROM THE REGISTER: leaving it in the default list means a partner sees the same company twice,
+     * one of which is the husk of a name somebody already decided was a duplicate.
+     *
+     * `?status=MERGED` still returns them, so the history stays one query away rather than lost.
+     */
+    : await ctx.env.WP_OS_DB.prepare("SELECT * FROM canonical_company WHERE status <> 'MERGED' ORDER BY created_at, id").all<CompanyRow>();
   return json({ companies: rows.results ?? [] });
 }
 

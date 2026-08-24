@@ -5180,3 +5180,158 @@ the authority, which is the honest answer: she made it in advance, and the grant
 the increment carried no condition, so two submissions between read and write would both spend. The
 condition moved into the UPDATE and the result is checked; a card that loses the race takes the
 ordinary path rather than riding authority that no longer exists.
+
+---
+
+## 22 Aug 2026 — Network OS connected, and five things that reported success
+
+### Network OS is live, and the page had been lying about it for a month
+
+Operator, reading the Integrations tab: *"the integrations tab is not telling the truth about network
+OS."* It said **Not set up · reads only · `NETWORK_OS_API_TOKEN` is not populated · No client is
+configured, so live calls fail closed.**
+
+`NETWORK_OS_API_TOKEN` **has never existed** — not in `wrangler.toml`, not in the vault, not in
+`env.ts`, not in one line of code. It was a placeholder written into migration `0021` when Network OS
+was still a hypothesis, and nothing updated it when the real client landed. The page was checking for
+a credential that could never be present and reporting its absence for ever. A test pinned the
+placeholder string, so the suite defended it.
+
+The real bindings are `WP_OS_NETWORK_OS_BASE_URL` / `_SESSION_SECRET` / `_USER_EMAIL`, all three set
+in production. Fixed in three parts:
+
+- **`0142`** corrects the row: real credential name, `BIDIRECTIONAL` (it pulls a snapshot *and*
+  proposes people into Network OS's intake queue), honest gates.
+- **Status is derived, never remembered.** `connector.status` was only as fresh as the last time
+  somebody pressed a button — which is how the row drifted. Network OS's state is now computed from
+  the environment on every read.
+- **The check contacts the far end.** New `probeNetworkOs()` mints the session, makes the request,
+  reads the status line and **cancels the body before a single contact is parsed** — so it exercises
+  no authority a pull would need and brings no data across, which is why it sits behind plain
+  `connector.check` rather than `network_sync.pull`. Three distinct answers because they have three
+  different fixes: unreachable, 401 (secret or approved-user list), other HTTP (their side).
+
+A check result no longer overwrites the row's description. **Confirmed live by the operator the same
+day: "accepted us."** First proof the integration works end to end.
+
+### Five bugs of one shape: machinery that reports success
+
+- **A forwarded deck could open a duplicate company.** `normalise()` stripped suffix words and only
+  trimmed the ends, so `Acme Inc Labs` → `acme␣␣labs` while `Acme Labs` → `acme␣labs`. Every existing
+  test used `Shared Match Co`, with the suffix *last*, which worked. A suffix is least recognisable
+  as a suffix exactly where it is not last.
+- **Wyatt could never edit a company** (`0143`). `0125` wrote `{"employees":["Wyatt"]}`; every Actor
+  carries `aie_wyatt`. The named half of the rule was false for everybody, for ever, and it failed in
+  the SAFE direction — a denial from a rule written to permit him looks identical to the rule
+  working. **The test agreed with the bug**, passing `aiEmployeeId: "Wyatt"`, an Actor shape that
+  occurs nowhere. Sixth instance of this divergence; names are now canonicalised to seat ids as the
+  restriction row is read.
+- **Healthy jobs pushed into tomorrow.** The sweep's comment said "ONLY THE JOBS WHOSE RUNS WERE JUST
+  REAPED"; the `EXISTS` matched an abandoned run from any point in history. A job that died once
+  months ago and was legitimately due now was moved to tomorrow — hitting hardest the jobs most
+  likely to have died before. Bounded to rows this call stamped. A job whose schedule yields no
+  future time is now **reported** rather than skipped in silence.
+- **"Unclear email: Too big to read: Sensori deck."** Two prefixes, the first one wrong; Home's
+  counter looked for `title LIKE 'Too big to read:%'`, which the doubled prefix made unmatchable.
+- **The forwarding-prefix rule existed twice**, character for character, on the two paths a forwarded
+  deck can take — and had already been wrong in both at once. One copy now, in `shared/intake`.
+
+For the two subtlest fixes the source was reverted to confirm the new test actually FAILS against the
+bug. The first version of the jobs test did not: the job was not overdue past the 30-minute window,
+so it never entered the query and the test passed either way.
+
+### Two features that were built, routed, tested — and unreachable
+
+- **The work-card steering note.** Operator, 22 Aug: *"can the MPs give feedback on a work card that
+  we want the ai employee to acknowledge while they are doing the work?"* Built properly: a table,
+  two routes, an employee loop re-reading unanswered notes on every step, and a CHECK making
+  "acknowledged" and "answered" one event so an instruction cannot be ticked off without saying what
+  it changed. **There was no button.** Nothing in `src/client` ever called it.
+- **Standing-authority revoke.** The delegate panel promised *"and you can stop it at any time"* and
+  the only thing the client ever called was the POST that CREATES a grant.
+
+Both had passing e2e tests. **Both tests asserted only through `request` and never opened a browser**,
+so they proved the machine worked and could not tell that nobody could reach it. That is the lesson
+worth keeping: an API-only e2e test is worth less than it looks.
+
+Both screens built; both now driven through the browser in `e2e/p55-delegate-and-steer.spec.ts`. The
+revoke test immediately caught a third bug — the panel loaded once on mount and never refetched, so
+it read "nothing is delegated" **immediately after the partner delegated something**, invisible at
+the one moment she would look for it.
+
+---
+
+## 23 Aug 2026 — the suite could not be trusted, and Home answered six of its ten questions
+
+### Two days of "failures" that were never failures
+
+The e2e suite gave 4 passed out of 129, then 129 of 129, then 126, then 6 failed, on an unchanged
+tree. Three separate causes, none of them the product:
+
+- **Two runs destroying each other.** `prepare-local.mjs` SIGKILLs the repo's wrangler and deletes
+  the local D1 — correct when the previous run is over, catastrophic while one is going. It now
+  refuses to start while another Playwright run is in flight, converting the worst failure mode (a
+  wall of meaningless red) into the mildest (a sentence saying wait).
+- **The schema was sometimes never built.** `wrangler d1 migrations apply` prints its plan and waits
+  for confirmation; without a terminal it cannot ask, so it prints the table of pending migrations
+  and applies **nothing** — exit 0, empty stderr, and a list that reads like a report of work done.
+  `wrangler dev` then served a database with almost no tables and 125 specs failed at once. Wrangler
+  skips the prompt only when it believes it is in CI, so `npm run e2e` now sets `CI=true` on the
+  apply and **verifies afterwards that nothing is pending**, refusing to run otherwise. The apply is
+  done by the shell, not from node: spawned from node the process is killed by a signal part-way
+  through (status 143) whatever stdio it is given — and a migration killed half-way is precisely the
+  state the check exists to catch.
+- **The browser was missing.** Playwright had updated; Chromium was not installed.
+
+The unit suite had the same illness in milder form: three identical runs gave 359 failed, 57 failed,
+then 1705 passed. All contention, zero assertions. **112 files, 1708/1708, and two consecutive clean
+129/129 e2e runs** now stand behind this deploy.
+
+The principle is worth stating: a green suite is worthless if a red one might mean nothing.
+
+### Home named ten questions and answered six
+
+Operator: *"on the home screen make sure all the items here have a module."* Four of the ten read
+"no module enabled for this yet" — what is at risk, what the employees are doing, what is costing
+money, what is broken. Two causes:
+
+- **"What is broken?" was answered by RECONCILIATION** — places where the firm's figures and the
+  administrator's disagree. A money problem, and a real one, but a partner asking what is broken
+  means the system: is the brief running, did anything fail overnight. `health_fault` is what knows
+  that — it runs every tick, escalates only what persists across two runs, and announces recoveries
+  — and it **had no module at all**. So the one question with a live checking system behind it was
+  the one Home could not answer, while a module that merely sounded right occupied the slot.
+  Reconciliation now answers "Where is money or execution at risk?", which is what it reports.
+- **The default carried seven of twelve modules**, and both partners had saved layouts predating the
+  health module, so widening the default alone would have reached neither. `0144` appends the
+  missing modules as a NEW VERSION per partner — the table refuses UPDATE by trigger — keeping their
+  chosen order and adding what was absent after it.
+
+**`0144` then gave Scooter `portfolio_risk` twice, and my own comment was stricter than my code** —
+the exact defect I had spent two days removing from other people's work. The comment claimed
+`json_insert` "leaves an existing path alone, so a partner who already has one does not get it
+twice"; `json_insert` skips when the PATH exists, and `$[#]` is the append path, which never does.
+`0145` rebuilds each list keeping first-appearance order and dropping repeats — guarding the VALUE
+rather than the array, so it holds for any layout rather than the two rows that were wrong.
+
+The test that should have caught the original gap counted ten questions and stopped, so a question
+whose module was not enabled still counted. **Counting a list is not checking it.** It now asserts
+that every question resolves to a module, and that "What is broken?" resolves to `health`.
+
+### Quiet hours were set, stored, described — and applied to almost nothing
+
+`notify()` reads a partner's preferences only when the notification names a recipient, and **six of
+the ten call sites never did** — approvals (all three), portfolio alerts, dead-lettered jobs, LP
+chasers, employee lifecycle. A notification with no `firm_user_id` is a firm-wide row: it reads
+perfectly well on the page and has nobody whose preferences could be consulted. So quiet hours, the
+per-kind switches and the minimum-severity rule were all dead for the kinds the operator sees most.
+
+The fix is addressing, not a new rule. `notifyPartners()` writes a notice meant for the partners
+**once per partner**, keyed by the recipient so each gets exactly one and neither gets two — reading
+`firm_user` through the ROLE JOIN rather than a name list, because a notification needs an id and the
+registry holds names. Seventh instance of that divergence.
+
+One claim was trimmed rather than fixed, because it was larger than the truth: the page said quiet
+hours "hold everything back". Nothing is removed from the notification centre by holding, and no push
+service, VAPID key or subscription exists in this environment — so the only channel that could
+actually interrupt her is UNAVAILABLE at every hour. The copy now says what it does.

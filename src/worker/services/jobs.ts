@@ -5,7 +5,7 @@ import { json } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { isMachinePaused } from "./machines";
-import { notifyQuietly } from "./notifications";
+import { notifyPartners } from "./notifications";
 import { runIntelligence } from "./intelligence";
 import { evaluateCompanyAlerts } from "./portfolio";
 import { runAi } from "../ai/runAi";
@@ -226,6 +226,25 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
    * has 10ms of CPU. The bytes were stored when the mail landed — nearly free — and this reads them
    * with its own budget. Store now, read later.
    */
+  /*
+   * THE COMMUNITY LOADS ON A TICK, because until now nothing loaded it at all.
+   *
+   * Every part of the Network OS pull was built — adapter, client, cursor, receipts, conflicts, and
+   * a Community page with a progress bar reading "Reading your community from Network OS". No job
+   * ever ran it. The single pull on record was triggered by hand to prove the connection worked.
+   */
+  if (job.job_key === "network_sync") {
+    const { runNetworkSync } = await import("./networkAdapter");
+    const out = await runNetworkSync(env);
+    return {
+      status: "SUCCEEDED",
+      // The detail is carried whether or not anything was applied: "nobody new" and "could not
+      // reach Network OS" are opposite facts and a bare count says neither.
+      summary: `${out.resource}: ${out.detail}`,
+      artifacts,
+    };
+  }
+
   if (job.job_key === "deck_reading") {
     const { runDeckReading } = await import("./deckQueue");
     const out = await runDeckReading(env);
@@ -528,7 +547,7 @@ export async function runJob(
   // every time a job completed normally.
 
   if (finalStatus === "DEAD_LETTER") {
-    await notifyQuietly(env, {
+    await notifyPartners(env, {
       kind: "PROVIDER_FAILURE",
       severity: "CRITICAL",
       title: `Scheduled job stopped: ${job.name}`,
@@ -608,8 +627,14 @@ const ABANDONED_AFTER_MINUTES = 30;
 export async function closeAbandonedRuns(
   env: Env,
   now: Date = new Date(),
-): Promise<{ jobRuns: number; aiRuns: number; rescheduled: number }> {
+): Promise<{ jobRuns: number; aiRuns: number; rescheduled: number; unrepairable: string[] }> {
   const cutoff = new Date(now.getTime() - ABANDONED_AFTER_MINUTES * 60_000).toISOString();
+
+  // The database's own clock, read before the sweep, so "reaped just now" means exactly the rows
+  // this call stamped. A JS timestamp would be a different clock from the one the UPDATE uses.
+  const sweepStart = (
+    await env.WP_OS_DB.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS t").first<{ t: string }>()
+  )!.t;
 
   const jobs = await env.WP_OS_DB.prepare(
     `UPDATE job_run
@@ -641,10 +666,17 @@ export async function closeAbandonedRuns(
    * tick for ever. Any job still overdue after its runs were swept is moved to its next real
    * occurrence.
    */
-  // ONLY THE JOBS WHOSE RUNS WERE JUST REAPED. Rescheduling every overdue job would push a healthy
-  // one — one that is merely due and waiting for this very tick to run it — into tomorrow, and the
-  // job would never run again. Caught by `runDueJobs is the same path the cron trigger calls`,
-  // which is exactly the kind of thing that test exists for.
+  /*
+   * ONLY THE JOBS WHOSE RUNS WERE JUST REAPED. Rescheduling every overdue job would push a healthy
+   * one — one that is merely due and waiting for this very tick to run it — into tomorrow, and the
+   * job would never run again.
+   *
+   * THE COMMENT SAID THAT; THE QUERY DID NOT. The EXISTS matched an abandoned run from ANY point in
+   * history, so a job abandoned once in March and legitimately due today was treated as freshly
+   * reaped and pushed to tomorrow — the precise failure this paragraph exists to prevent, on the
+   * jobs most likely to have died before. `r.finished_at >= sweepStart` is what makes the code say
+   * what the comment claims: only rows THIS call stamped.
+   */
   const overdue =
     (
       await env.WP_OS_DB.prepare(
@@ -656,21 +688,27 @@ export async function closeAbandonedRuns(
               SELECT 1 FROM job_run r
                WHERE r.job_id = j.id
                  AND r.error = 'abandoned: the run stopped part-way through and never finished'
+                 AND r.finished_at >= ?2
             )`,
       )
-        .bind(cutoff)
+        .bind(cutoff, sweepStart)
         .all<ScheduledJobRow>()
     ).results ?? [];
   let rescheduled = 0;
+  const unrepairable: string[] = [];
   for (const job of overdue) {
     const next = computeNextRun(job, now);
     if (next && next > now.toISOString()) {
       await env.WP_OS_DB.prepare("UPDATE scheduled_job SET next_run_at = ?2 WHERE id = ?1").bind(job.id, next).run();
       rescheduled += 1;
+    } else {
+      // A job whose schedule cannot produce a future time stays overdue for ever and is retried on
+      // every tick. Silently skipping it is how a permanently broken job looks like a working one.
+      unrepairable.push(job.job_key);
     }
   }
 
-  return { jobRuns: jobs.meta?.changes ?? 0, aiRuns: ai.meta?.changes ?? 0, rescheduled };
+  return { jobRuns: jobs.meta?.changes ?? 0, aiRuns: ai.meta?.changes ?? 0, rescheduled, unrepairable };
 }
 
 export async function runDueJobs(env: Env, now: Date): Promise<Array<{ job_key: string; status: string; summary: string }>> {
@@ -700,11 +738,18 @@ export async function runDueJobs(env: Env, now: Date): Promise<Array<{ job_key: 
 
   // Reported rather than done quietly: a tick that closed abandoned work is a fact the operator
   // wants, and a tick that closes some every time is a symptom rather than housekeeping.
-  if (swept.jobRuns > 0 || swept.aiRuns > 0 || sweptReports > 0 || swept.rescheduled > 0) {
+  if (swept.jobRuns > 0 || swept.aiRuns > 0 || sweptReports > 0 || swept.rescheduled > 0 || swept.unrepairable.length > 0) {
     results.push({
       job_key: "_sweep",
-      status: "SWEPT",
-      summary: `closed ${swept.jobRuns} abandoned job run(s), ${swept.aiRuns} AI run(s), ${sweptReports} report(s); rescheduled ${swept.rescheduled} overdue job(s)`,
+      // A job whose schedule cannot yield a future time is not housekeeping — it will be retried on
+      // every tick for ever and nothing else would say so.
+      status: swept.unrepairable.length > 0 ? "SWEPT_WITH_PROBLEM" : "SWEPT",
+      summary:
+        `closed ${swept.jobRuns} abandoned job run(s), ${swept.aiRuns} AI run(s), ${sweptReports} report(s); ` +
+        `rescheduled ${swept.rescheduled} overdue job(s)` +
+        (swept.unrepairable.length > 0
+          ? `. Could NOT reschedule ${swept.unrepairable.join(", ")} — the schedule produced no future time, so it stays overdue and is retried every tick.`
+          : ""),
     });
   }
   for (const job of due) {

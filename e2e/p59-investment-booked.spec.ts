@@ -178,6 +178,29 @@ test("a partner books an investment end to end, and the fund holds a position af
   await gotoSurface(page, "Activity");
   await expect(page.locator('[data-testid="activity-event-investment.transaction_executed"]').first()).toBeVisible();
   await expect(page.locator('[data-testid="activity-event-investment.position_opened"]').first()).toBeVisible();
+
+  /*
+   * ── RUNG 6: AND THERE IS A WAY BACK, on the same screen. ─────────────────────────────────────
+   *
+   * `POST /api/transactions/:id/void` was live, governed and correct — MP-reserved, receipt-gated,
+   * and it REVERSES the position rather than deleting it — and nothing in `src/client` ever called
+   * it. The only mention of voiding anywhere in the product was a past-tense line on the activity
+   * feed describing something no control could cause. Same defect as the missing "Book it" rung
+   * this file was written for, one step further along and worse: a booking is a mistake somebody
+   * notices AFTER the fund's own records say it owns something.
+   *
+   * Asserted HERE rather than in a test of its own, because the control must appear exactly when
+   * there is something to undo. A standalone test on a fresh firm proved only that a button was
+   * absent from a screen with nothing booked on it, which is correct behaviour.
+   */
+  await gotoSurface(page, "Dealflow");
+  await page.getByTestId("deal-record-company").selectOption({ label: companyName });
+  const panelAfter = page.getByTestId("record-investment");
+  const undo = panelAfter.getByTestId(`txn-void-${txnId}`);
+  await expect(undo, "a booking must be reversible from the screen that made it").toBeVisible();
+  // It says what it does. "Void" is the record's word; the partner is undoing a booking, and the
+  // difference between reversing a position and deleting a row is the thing to be plain about.
+  await expect(undo).toContainText("Undo this booking");
 });
 
 test("a booked deal cannot have its record quietly removed, and voiding it reverses the holding", async ({ request }) => {
