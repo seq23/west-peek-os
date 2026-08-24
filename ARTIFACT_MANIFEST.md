@@ -116,10 +116,25 @@ mail. Recorded here because a snapshot that cannot be named cannot be returned t
 | Branch | `review/the-silent-failures` |
 | Migrations | 140 in repo, 140 applied to production |
 
-The **Worker version id** is the snapshot identity here, not a commit SHA. A manifest that pins its
-own commit cannot be written: recording the SHA changes the tree and therefore the SHA. The Worker
-version is stable, is what production is actually running, and is the thing you would roll back to.
-The commit is the tip of the branch above.
+### The artifact hash, and why it is not a commit SHA
+
+| | |
+|---|---|
+| **Built artifact (`dist/`, SHA-256 of the file manifest)** | `c44a5f210a3be2e221569e1e1f90eabe7c654e9579223e16fa5493e3d142407a` |
+
+**A manifest cannot pin its own commit.** Recording the SHA changes the tree, which changes the SHA.
+So the identity recorded here is the hash of the BUILT ARTIFACT — every file under `dist/`, hashed
+and then hashed together — which is reproducible with `npm run build` and stable across any commit
+that does not change what ships.
+
+That last property is what makes it useful rather than a workaround. The Worker bundle contains
+`src/` only; this file is documentation and is not in it. So a documentation commit — including the
+one that writes this line — leaves the artifact hash untouched, and the hash continues to identify
+exactly what production is running.
+
+**Verified at this boundary:** built at the deployed commit and again two documentation commits
+later; both produced `c44a5f21…`, byte-identical. Deployment, PR and working tree are the same
+artifact.
 
 ### Authority files re-verified at this boundary
 
