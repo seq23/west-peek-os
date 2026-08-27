@@ -352,6 +352,91 @@ describe("a finished AI output can be used or thrown away", () => {
     expect(event?.payload_json).toContain("it answered a different question");
   });
 
+  it("throws the WHOLE queue away in one press, releases none of it, and reasons every one", async () => {
+    /*
+     * Operator, 22 Aug 2026: "'What is waiting for somebody to look at it?' in the cockpit — we need
+     * a throw all away option." Production held 51 of these from commissioning, and answering them
+     * one at a time guarantees the fiftieth is answered without thought.
+     *
+     * This is the BATCH path and it had no test anywhere. Single-item discard was covered three ways
+     * above; the button a partner actually presses on a queue of 51 was not covered at all.
+     */
+    // Relative to whatever earlier tests in this block left waiting — the point is that the batch
+    // clears EVERYTHING undecided, so an absolute count would be asserting test order instead.
+    const before = (await call<{ waiting_count: number }>("/api/ai/quarantine", MP)).body.waiting_count;
+    const first = await quarantinedRun();
+    const second = await quarantinedRun();
+    const third = await quarantinedRun();
+
+    const res = await call<{ discarded: number; failed: Array<{ id: string }> }>(
+      "/api/ai/quarantine/discard-all",
+      MP,
+      "POST",
+      { reason: "commissioning noise — none of it was asked for" },
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.discarded).toBe(before + 3);
+    // Partial success is REPORTED rather than rounded up: 49 of 51 is not "done".
+    expect(res.body.failed).toHaveLength(0);
+
+    const gone = await call<{ waiting_count: number }>("/api/ai/quarantine", MP);
+    expect(gone.body.waiting_count).toBe(0);
+
+    for (const id of [first, second, third]) {
+      // NOTHING IS RELEASED. Emptying the queue must never be a back door to promotion — the flag
+      // stays on and a decision row is what takes the run out of the list.
+      const row = await t.db
+        .prepare("SELECT output_quarantine FROM ai_run WHERE id = ?1")
+        .bind(id)
+        .first<{ output_quarantine: number }>();
+      expect(row?.output_quarantine, "a discarded output must stay quarantined").toBe(1);
+
+      // One reason covers the batch, and it is recorded against every item — "why did we throw that
+      // away" has to stay answerable per run, not per press.
+      const decision = await t.db
+        .prepare("SELECT decision, reason FROM ai_output_decision WHERE ai_run_id = ?1")
+        .bind(id)
+        .first<{ decision: string; reason: string }>();
+      expect(decision?.decision).toBe("DISCARDED");
+      expect(decision?.reason).toContain("commissioning noise");
+    }
+  });
+
+  it("cannot undo a refusal: a run already decided is left alone by the batch", async () => {
+    /*
+     * The dangerous interaction between the two buttons. If "throw all away" could touch a run that
+     * had already been ACCEPTED, one press would overwrite a considered decision with a blanket one.
+     * The queue query excludes anything already decided, so the batch cannot reach it at all.
+     */
+    const accepted = await quarantinedRun();
+    const untouched = await call<{ output_quarantine: number }>(`/api/ai/runs/${accepted}/accept-output`, MP, "POST", {});
+    expect(untouched.status).toBe(200);
+
+    // Accepting took it OUT of the queue, so what remains is everything else plus the one below.
+    const before = (await call<{ waiting_count: number }>("/api/ai/quarantine", MP)).body.waiting_count;
+    const waiting = await quarantinedRun();
+
+    const res = await call<{ discarded: number }>("/api/ai/quarantine/discard-all", MP, "POST", {
+      reason: "clearing what nobody has looked at",
+    });
+    expect(res.status).toBe(200);
+    // The undecided ones only. The accepted run was never a candidate for the batch.
+    expect(res.body.discarded).toBe(before + 1);
+
+    const decision = await t.db
+      .prepare("SELECT decision FROM ai_output_decision WHERE ai_run_id = ?1")
+      .bind(accepted)
+      .first<{ decision: string }>();
+    expect(decision?.decision, "an accepted output must not be re-decided by a batch discard").toBe("ACCEPTED");
+
+    const still = await t.db
+      .prepare("SELECT output_quarantine FROM ai_run WHERE id = ?1")
+      .bind(accepted)
+      .first<{ output_quarantine: number }>();
+    expect(still?.output_quarantine, "and it must stay released").toBe(0);
+    expect(waiting).toBeTruthy();
+  });
+
   it("refuses a discard with no reason, and says what is missing", async () => {
     const id = await quarantinedRun();
     const res = await call<{ error: string; detail: string }>(`/api/ai/runs/${id}/discard-output`, MP, "POST", { reason: "   " });

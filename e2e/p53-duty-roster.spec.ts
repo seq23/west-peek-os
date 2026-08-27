@@ -144,3 +144,56 @@ test("the shift card itself offers the way back, not only the list of changes", 
   await expect(page.getByTestId("duty-overrides-empty")).toBeVisible();
   await expect(page.getByTestId(`duty-entry-${duty.now.label}-${recruit}`)).toHaveCount(0);
 });
+
+/*
+ * ── 4 · THE ROTA IS THE OPERATOR'S TO CHANGE ────────────────────────────────────────────────────
+ *
+ * Operator: "i want a default flow and one that i can change in the admin section — i should be
+ * able to adj hours for an employee." The design decision being protected here is that the DATABASE
+ * STORES ONLY DIFFERENCES from the code default. A table that copied the roster would drift from
+ * the registry within a month, so an override is a row and reverting is deleting it.
+ */
+test("a partner gives one employee their own hours, and the default is left alone", async ({ page, request }) => {
+  await signIn(page);
+  await gotoSurface(page, "AI controls");
+
+  const panel = page.getByTestId("duty-roster-control");
+  await expect(panel).toBeVisible();
+  // WHO IS ON RIGHT NOW, in a sentence — the rota exists to answer that and nothing else.
+  await expect(page.getByTestId("duty-now-line")).toBeVisible();
+  // And the WHOLE day, not just this moment: four shifts, with the current one marked. A rota a
+  // partner cannot see ahead of is one she cannot disagree with, which is half its purpose.
+  await expect(page.getByTestId("duty-day")).toBeVisible();
+  await expect(page.getByTestId("duty-day").locator("article")).toHaveCount(4);
+  // The rule is stated from the one place it is declared, rather than restated by the page.
+  await expect(panel).toContainText("stored as a difference from that default");
+
+  const form = page.getByTestId("duty-hours-form");
+  const who = page.getByTestId("duty-hours-who");
+  const name = (await who.locator("option").nth(1).getAttribute("value"))!;
+  expect(name, "the roster must offer somebody to adjust").toBeTruthy();
+
+  await who.selectOption(name);
+  await page.getByTestId("duty-hours-from").selectOption("9");
+  await page.getByTestId("duty-hours-to").selectOption("18");
+  // A REASON IS PART OF THE CHANGE. A rota that changed for reasons nobody wrote down cannot be
+  // reviewed later, which is the same rule that governs every other authority change here.
+  await page.getByTestId("duty-hours-reason").fill("E2E: covering the London morning");
+  await form.getByTestId("duty-hours-save").click();
+
+  await expect(page.getByTestId("duty-message")).toContainText(name);
+
+  // IT SHOWS AS A CHANGE YOU MADE, not as the way things have always been — the page can tell the
+  // difference between the default and an override precisely because only differences are stored.
+  const overrides = page.getByTestId("duty-overrides");
+  await expect(overrides).toBeVisible();
+  await expect(overrides).toContainText(name);
+  await expect(overrides).toContainText("covering the London morning");
+
+  const stored = (await (await request.get("/api/ai/duty", { headers: MP })).json()) as {
+    overrides: Array<{ kind: string; employee_name: string; reason: string; set_by?: string }>;
+  };
+  const mine = stored.overrides.find((o) => o.employee_name === name && o.kind === "HOURS");
+  expect(mine, "an override must be findable as a row of its own").toBeTruthy();
+  expect(mine!.reason).toContain("London morning");
+});

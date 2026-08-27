@@ -481,6 +481,37 @@ describe("work whose invocation died is closed out rather than left running", ()
     const row = await t.db.prepare("SELECT status FROM job_run WHERE id = 'jrun_live'").first<{ status: string }>();
     expect(row?.status).toBe("RUNNING");
   });
+
+  it("does not push a healthy job into tomorrow because it died once months ago", async () => {
+    /*
+     * The comment above this query has always said "ONLY THE JOBS WHOSE RUNS WERE JUST REAPED",
+     * and the query matched an abandoned run from ANY point in history. So a job that died once in
+     * the past and is legitimately due right now — waiting for this very tick to run it — was read
+     * as freshly reaped and moved to tomorrow. It never ran again, and it hit hardest the jobs most
+     * likely to have died before. The comment was stricter than the code, which is the shape of
+     * every bug this file has had.
+     */
+    const job = await t.db.prepare("SELECT id, next_run_at FROM scheduled_job LIMIT 1").first<{ id: string; next_run_at: string }>();
+    // Overdue by more than the 30-minute abandonment window, which is what puts a job in front of
+    // this repair at all — anything more recent is simply waiting for the next tick.
+    const dueNow = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    await t.db.prepare("UPDATE scheduled_job SET status = 'ACTIVE', next_run_at = ?2 WHERE id = ?1").bind(job!.id, dueNow).run();
+    // An abandonment already closed long ago — outside this sweep.
+    await t.db
+      .prepare(
+        `INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, started_at, finished_at, error, requested_by)
+         VALUES (?1, ?2, ?3, 'SCHEDULED', 'FAILED', ?4, ?4, 'abandoned: the run stopped part-way through and never finished', 'system')`,
+      )
+      .bind("jrun_old_abandon", job!.id, `old_${crypto.randomUUID()}`, longAgo)
+      .run();
+
+    const { closeAbandonedRuns } = await import("../src/worker/services/jobs");
+    const swept = await closeAbandonedRuns(env, new Date());
+    expect(swept.rescheduled).toBe(0);
+
+    const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE id = ?1").bind(job!.id).first<{ next_run_at: string }>();
+    expect(after?.next_run_at).toBe(dueNow);
+  });
 });
 
 /*

@@ -205,6 +205,44 @@ test("a delegable card offers it, insists on a reason, and the next one of its k
   await gotoSurface(page, "Approvals");
   await page.getByTestId("approval-filter").selectOption("pending_review");
   await expect(page.getByTestId(`approval-card-${secondCard}`)).toHaveCount(0);
+
+  /*
+   * AND SHE CAN STOP IT, ON A SCREEN.
+   *
+   * The delegate panel promises "and you can stop it at any time". The route to revoke existed and
+   * the only thing the client ever called was the POST that CREATES a grant — so the promise was
+   * true of the system and false of the product, and every test above this line went through
+   * `request` and could not tell the difference. Standing authority's own rule is that a control
+   * making the system do LESS must never be harder to reach than the one that made it do more.
+   */
+  const panel = page.getByTestId("standing-authority");
+  await expect(panel).toBeVisible();
+  const row = page.getByTestId(`standing-authority-${grant!.id}`);
+  await expect(row).toBeVisible();
+  // What is left of it, said as a count rather than a percentage nobody can act on.
+  await expect(row).toContainText("routine edits");
+
+  await page.getByTestId(`standing-authority-revoke-${grant!.id}`).click();
+
+  // Gone from what is live — immediately, and with no reason asked for. Stopping is always safe.
+  await expect(page.getByTestId(`standing-authority-revoke-${grant!.id}`)).toHaveCount(0);
+  const after = (await (await request.get("/api/standing-authority", { headers: MP })).json()) as {
+    live: Array<{ id: string }>;
+    finished: Array<{ id: string; revoked_at: string | null }>;
+  };
+  expect(after.live.some((g) => g.id === grant!.id)).toBe(false);
+  // Kept, not deleted: a revoked authority is part of the record of what the firm once allowed.
+  expect(after.finished.find((g) => g.id === grant!.id)?.revoked_at).toBeTruthy();
+
+  // And the next card of that kind waits again, which is the only proof revocation MEANT anything.
+  const thirdCard = await raiseCard(request, {
+    action_key: "work_card.update",
+    object_type: "work_card",
+    object_id: workCardId,
+    title: `${marker} third`,
+  });
+  const third = (await (await request.get(`/api/approvals/${thirdCard}`, { headers: MP })).json()) as { state: string };
+  expect(third.state).toBe("pending_review");
 });
 
 test("a partner's note on running work reaches the employee and waits to be answered", async ({ request }) => {
@@ -255,4 +293,49 @@ test("a partner's note on running work reaches the employee and waits to be answ
   // still working, so a note on finished work would never be read by anybody.
   expect(tooLate.status()).toBe(409);
   expect(await tooLate.text()).toContain("Reopen the card first");
+});
+
+test("a partner can actually leave that note — through the screen, not the API", async ({ page, request }) => {
+  /*
+   * WHY THIS TEST EXISTS AND THE ONE ABOVE WAS NOT ENOUGH.
+   *
+   * The test above proves the note is stored, unanswered, attributed, and refused on finished work.
+   * Every assertion in it goes through `request` — it never opens a browser. So it passed, in full,
+   * over a feature that had NO INTERFACE AT ALL: a table, two routes, and a loop that re-reads the
+   * notes, with no button anywhere in `src/client` to leave one. The operator asked for this in her
+   * own words and could not do it.
+   *
+   * That is the same failure as an approval you cannot revoke, and it is the reason an API-only e2e
+   * test is worth less than it looks: it proves the machine works, not that anyone can reach it.
+   * This test drives the screen a partner actually uses.
+   */
+  const marker = `E2E-STEER-UI-${Date.now()}`;
+  const cardId = await openWorkCard(request, marker);
+
+  await signIn(page);
+  await gotoSurface(page, "Work");
+
+  // Cards rest collapsed, so the control lives one press in — the same press a person makes.
+  await page.getByTestId(`work-card-toggle-${cardId}`).click();
+  const steer = page.getByTestId(`work-card-steer-${cardId}`);
+  await expect(steer).toBeVisible();
+  // Named, not generic: "Tell Wyatt something" says who is listening.
+  await expect(steer).toContainText("Wyatt");
+
+  await steer.click();
+  await page.getByTestId(`work-card-steer-input-${cardId}`).fill("Go through the introducer, not the founder.");
+  await page.getByTestId(`work-card-steer-send-${cardId}`).click();
+
+  // It appears in the thread, and says plainly that nobody has picked it up yet — an operator who
+  // cannot tell whether it landed will send it twice.
+  const thread = page.getByTestId(`work-card-notes-${cardId}`);
+  await expect(thread).toContainText("Go through the introducer");
+  await expect(thread).toContainText("Not picked up yet");
+
+  // And it is really on the card, not only on the screen.
+  const stored = (await (await request.get(`/api/work-cards/${cardId}/notes`, { headers: MP })).json()) as {
+    notes: Array<{ body: string; author: string | null }>;
+  };
+  expect(stored.notes).toHaveLength(1);
+  expect(stored.notes[0]!.author).toBe("Scooter Taylor");
 });

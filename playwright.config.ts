@@ -42,7 +42,15 @@ export default defineConfig({
      * The consequence is honest and intended: `env.AI` cannot reach Workers AI, so any journey that
      * ends in a real model call must assert up to that boundary rather than through it.
      */
-    command: `npm run build && npx wrangler d1 migrations apply WP_OS_DB --local && npx wrangler dev --local --port ${PORT}`,
+    /*
+     * `CI=true` on the migration step, because Playwright hands this command a piped stdin and
+     * `wrangler d1 migrations apply` silently applies NOTHING when it cannot show its confirmation
+     * prompt — it prints the pending list and exits 0. `wrangler dev` then serves a database with
+     * almost no tables. `scripts/e2e/prepare-local.mjs` now builds and VERIFIES the schema before
+     * this runs, so this apply is a fast no-op and a second line of defence rather than the thing
+     * the suite depends on.
+     */
+    command: `npm run build && CI=true npx wrangler d1 migrations apply WP_OS_DB --local && npx wrangler dev --local --port ${PORT}`,
     url: `http://localhost:${PORT}/api/health`,
     reuseExistingServer: false,
     timeout: 240_000,

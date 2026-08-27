@@ -161,6 +161,58 @@ test("a company pulling ahead becomes a follow-on candidate, a review, and a par
   await expect(settled, "the partner's own words are the record of what was decided").toContainText("pro-rata only");
 });
 
+/*
+ * THE OTHER HALF OF THE FOLLOW-ON JOURNEY, AND IT HAS NO SURFACE.
+ *
+ * The journey above opens the review through `POST /api/allocation/scenarios/:id/follow-on-reviews`,
+ * because that is the only way in: `FollowOnPage` LISTS reviews and candidates and offers no control
+ * to open one, and nothing anywhere else in `src/client` posts to that route. So the product can
+ * tell a partner "Sensori is pulling ahead" and give her nowhere to press.
+ *
+ * The gap was the join, not the machinery: detection worked, the review worked, the decision
+ * worked, and a person could not get from the first to the second.
+ *
+ * FIXED 23 Aug 2026. The candidate row carries the control, and the position it is a follow-on TO
+ * now travels with the candidate so the shares and cost are taken from the record rather than
+ * retyped. It is a FORM and not a button on purpose: the review IS the economics — the route
+ * computes and stores a modelled path — so a one-press version would have had to invent a round
+ * size, which is exactly the fabricated-inputs defect that had Fund strategy answering against a
+ * fund the firm does not have.
+ */
+test("a partner can open a follow-on review from the candidate that prompted it", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
+  await page.getByTestId("dev-login-submit").click();
+  await gotoSurface(page, "Fund strategy");
+  await expect(page.getByTestId("follow-on-rule")).toBeVisible();
+
+  const candidates = page.locator('[data-testid^="follow-on-candidate-"]');
+  if ((await candidates.count()) === 0) {
+    /*
+     * NO CANDIDATE IS A REAL STATE, and it is asserted rather than skipped. The rule is "an open
+     * position whose latest metric beat its previous reading" — deliberately narrow, so an empty
+     * list is the common case and must say so rather than showing a bare gap.
+     */
+    await expect(page.getByTestId("follow-on-candidates-empty")).toBeVisible();
+    return;
+  }
+
+  const opener = page.locator('[data-testid^="follow-on-open-review-"]').first();
+  await expect(
+    opener,
+    "a company pulling ahead must be openable into a review from the page that named it",
+  ).toBeVisible();
+  await opener.click();
+
+  // The form says what it already knows before it asks for anything, and will not submit on
+  // invented figures — the guard against the defect that made Fund strategy model a fund the firm
+  // does not have.
+  const form = page.locator('[data-testid^="follow-on-form-"]').first();
+  await expect(form).toBeVisible();
+  await expect(form).toContainText("shares the fund already");
+  await expect(page.locator('[data-testid^="follow-on-submit-"]').first()).toBeDisabled();
+});
+
 test("an employee is employed, given a card, works it — and the run is attributed to them and a machine", async ({
   page,
   request,
@@ -183,30 +235,49 @@ test("an employee is employed, given a card, works it — and the run is attribu
   await gotoSurface(page, "Employees");
   await expect(page.getByTestId(`employee-card-${SEAT.id}`)).toHaveAttribute("data-status", "INACTIVE");
 
-  // ── Employed, through the governed chain: requested, approved by a partner, then activated. ──
-  const requested = await request.post(`/api/ai/employees/${SEAT.id}/request-activation`, {
-    headers: MP,
-    data: { reason: `${marker}: needed for this week's work` },
-  });
-  expect(requested.status(), await requested.text()).toBe(201);
-  const card = (await requested.json()) as { id: string; action_key: string };
-  expect(card.action_key).toBe("ai_employee.activate");
+  /*
+   * ── EMPLOYED, THROUGH THE SCREEN, AT EVERY RUNG ──────────────────────────────────────────────
+   *
+   * Driven in the browser rather than through `request`, deliberately. An API-only version of this
+   * passes over a chain with no interface at all — which is exactly what happened here once before:
+   * `request-activation` and `activate` were both live and correct, Approvals could approve the
+   * card, and NOTHING in `src/client` ever called the last one. The approved receipt sat unspent,
+   * the employee stayed INACTIVE for ever, and no error anywhere explained why. A test that proves
+   * the machine works is not a test that proves anybody can reach it.
+   */
+  await openRecord(page, SEAT.id);
+  await page.getByTestId(`employee-request-activation-${SEAT.id}`).click();
+  await expect(page.getByTestId(`employee-detail-${SEAT.id}`)).toContainText("Managing Partner must approve");
+
+  const card = await cardFor(request, SEAT.id);
+  expect(card, "asking for an employee must raise the reserved activation card").toBeTruthy();
 
   await gotoSurface(page, "Approvals");
-  await page.getByTestId(`decision-note-${card.id}`).fill(`${marker}: approved`);
-  await page.getByTestId(`approve-${card.id}`).click();
+  await page.getByTestId(`decision-note-${card!.id}`).fill(`${marker}: approved`);
+  await page.getByTestId(`approve-${card!.id}`).click();
   await expect
-    .poll(async () => ((await (await request.get(`/api/approvals/${card.id}`, { headers: MP })).json()) as { state: string }).state)
+    .poll(async () => ((await (await request.get(`/api/approvals/${card!.id}`, { headers: MP })).json()) as { state: string }).state)
     .toBe("approved");
 
-  const activated = await request.post(`/api/ai/employees/${SEAT.id}/activate`, {
-    headers: MP,
-    data: { approval_receipt_id: card.id, reason: `${marker}: switching them on` },
-  });
-  expect(activated.status(), await activated.text()).toBe(200);
-
+  /*
+   * AND THE LAST RUNG, PRESSED. The control appears only once an approved receipt exists — which is
+   * the property that makes it a completion step rather than a switch.
+   */
   await page.reload();
   await gotoSurface(page, "Employees");
+  /*
+   * OPEN THE RECORD, AND WAIT FOR IT TO BE OPEN.
+   *
+   * The completion control lives inside the detail panel and the panel is a toggle, so a click that
+   * lands before the roster has painted opens nothing and the control is simply absent — which
+   * reads as "the button is missing" and is really "the record never opened". Asserting the panel
+   * first separates those two, and they need different fixes.
+   */
+  await openRecord(page, SEAT.id);
+  const activate = page.getByTestId(`employee-activate-${SEAT.id}`);
+  await expect(activate).toBeVisible();
+  await activate.click();
+  await expect(page.getByTestId(`employee-detail-${SEAT.id}`)).toContainText("ACTIVE");
   await expect(page.getByTestId(`employee-card-${SEAT.id}`)).toHaveAttribute("data-status", "ACTIVE");
 
   // ── Given a card, by name, on the machine they sit on ────────────────────────────────────────
@@ -291,11 +362,18 @@ test("a retired employee's work still resolves, and reads as retired", async ({ 
   );
   expect(Number(before[0]!.n), "this needs the seat to have done something first").toBeGreaterThan(0);
 
-  const retired = await request.post(`/api/workforce/employees/${SEAT.id}/lifecycle`, {
-    headers: MP,
-    data: { to_status: "RETIRED", reason: `E2E-P63: the work moved to another seat` },
-  });
-  expect(retired.status(), await retired.text()).toBe(200);
+  /*
+   * RETIRED FROM THE LOUNGE, not through the API. The lifecycle controls "only lower authority, so
+   * they fail safe" — and a control that lowers authority is precisely the one an operator must be
+   * able to reach in a hurry.
+   */
+  await page.goto("/");
+  await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
+  await page.getByTestId("dev-login-submit").click();
+  await gotoSurface(page, "Employees");
+  await openRecord(page, SEAT.id);
+  await page.getByTestId(`employee-lifecycle-retired-${SEAT.id}`).click();
+  await expect(page.getByTestId(`employee-detail-${SEAT.id}`)).toContainText("Now RETIRED");
 
   try {
     // The record still answers, and it answers "retired" rather than 404.
@@ -316,9 +394,7 @@ test("a retired employee's work still resolves, and reads as retired", async ({ 
     expect(theirs.length, "their cards are still on the board").toBeGreaterThan(0);
     expect(theirs[0]!.owner_name, "and still resolve to their name").toBe(SEAT.name);
 
-    await page.goto("/");
-    await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
-    await page.getByTestId("dev-login-submit").click();
+    await page.reload();
     await gotoSurface(page, "Employees");
 
     /*
@@ -349,6 +425,28 @@ test("a retired employee's work still resolves, and reads as retired", async ({ 
 // ── helpers ────────────────────────────────────────────────────────────────────────────────────
 
 type Ctx = import("@playwright/test").APIRequestContext;
+
+/**
+ * Open one employee's record and wait until it is open.
+ *
+ * The roster is a grid of toggles: pressing one that is already open CLOSES it, and pressing before
+ * the grid has painted does nothing at all. Both failures look identical afterwards — a missing
+ * control — so this presses only when the panel is shut and then proves it opened.
+ */
+async function openRecord(page: import("@playwright/test").Page, employeeId: string): Promise<void> {
+  const detail = page.getByTestId(`employee-detail-${employeeId}`);
+  if (await detail.isVisible().catch(() => false)) return;
+  await page.getByTestId(`employee-open-${employeeId}`).click();
+  await expect(detail).toBeVisible();
+}
+
+/** The reserved activation card raised for THIS seat — never "the first one of its kind". */
+async function cardFor(request: Ctx, employeeId: string): Promise<{ id: string } | null> {
+  const body = (await (await request.get("/api/approvals?state=pending_review", { headers: MP })).json()) as {
+    approvals: Array<{ id: string; action_key: string; object_id: string }>;
+  };
+  return body.approvals.find((a) => a.action_key === "ai_employee.activate" && a.object_id === employeeId) ?? null;
+}
 
 function machineIdFor(key: string): number {
   const rows = queryLocalD1<{ id: number }>(`SELECT id FROM machine WHERE key = '${key}'`);

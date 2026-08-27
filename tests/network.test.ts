@@ -10,6 +10,7 @@ import {
   resolveConflict,
   writeBack,
   REQUIRED_CONTRACT_CLAUSES,
+  RECORDS_PER_PULL,
   type NetworkOsClient,
   type NetworkRecord,
 } from "../src/worker/services/networkAdapter";
@@ -469,5 +470,64 @@ describe("5. there is no direct cross-repo storage coupling", () => {
       expect(names, forbidden).not.toContain(forbidden);
     }
     expect(names).toContain("network_external_mapping");
+  });
+});
+
+
+/*
+ * THE COMMUNITY COULD NEVER GET PAST ITS FIRST PAGE.
+ *
+ * `pullResource` writes `last_status = 'IN_PROGRESS'` when more records remain, and the CHECK on
+ * `network_sync_cursor` allowed only NEVER_RUN, OK, DEGRADED_READ_ONLY and FAILED. So every partial
+ * sync threw on the write that records where it got to, `cursor_value` stayed NULL, `readProgress`
+ * returned offset 0, and the next tick re-applied the same first 250 records. For ever.
+ *
+ * In production it failed on every run for two hours while the job reported SUCCEEDED, because the
+ * dispatch returned SUCCEEDED unconditionally and the error travelled in the summary line. The
+ * operator found it by asking how long a full sync would take. The honest answer was: it never
+ * finishes.
+ *
+ * This is the test that would have caught it: a community larger than one page.
+ */
+describe("a community that does not fit in one pull", () => {
+  it("advances the cursor, reports IN_PROGRESS, and resumes where it stopped", async () => {
+    const records: NetworkRecord[] = Array.from({ length: RECORDS_PER_PULL + 40 }, (_, i) => ({
+      external_id: `bigsync_${i}`,
+      identity_key: `p${i}@example.test`,
+      delivery_id: `bigsync_delivery_${i}`,
+      fields: { email: `p${i}@example.test`, full_name: `Person ${i}` },
+    }));
+    // One page from the far end carrying everybody: the paging under test is OURS, applied across
+    // ticks so a large community does not have to arrive inside one CPU budget.
+    const client = fixtureClient({ contact: [{ records, next_cursor: null }, { records, next_cursor: null }] });
+
+    const first = await pullResource(env, MP_IDENTITY, "contact", client);
+    expect(first.status, "a partial pass is IN_PROGRESS, never OK").toBe("IN_PROGRESS");
+    expect(first.progress?.complete).toBe(false);
+    expect(first.applied).toBe(RECORDS_PER_PULL);
+
+    // THE CURSOR MOVED. This is the assertion that fails against the bug: the write that records
+    // progress was rejected by the CHECK, so it stayed null and the next pass started from zero.
+    const cursor = await t.db
+      .prepare("SELECT cursor_value, last_status FROM network_sync_cursor WHERE resource = 'contact'")
+      .first<{ cursor_value: string | null; last_status: string }>();
+    expect(cursor?.cursor_value, "without this the next tick re-reads the same page for ever").toBeTruthy();
+    expect(cursor?.last_status).toBe("IN_PROGRESS");
+
+    const second = await pullResource(env, MP_IDENTITY, "contact", client);
+    expect(second.applied, "the remainder, not the same page again").toBe(40);
+    expect(second.status).toBe("OK");
+    expect(second.progress?.complete).toBe(true);
+
+    // Everybody arrived exactly once.
+    const mapped = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM network_external_mapping WHERE resource = 'contact'")
+      .first<{ n: number }>();
+    // Everybody arrived exactly once — plus whatever earlier tests in this file mapped.
+    expect(mapped!.n).toBeGreaterThanOrEqual(records.length);
+    const mine = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM network_external_mapping WHERE resource = 'contact' AND external_id LIKE 'bigsync/_%' ESCAPE '/'")
+      .first<{ n: number }>();
+    expect(mine?.n).toBe(records.length);
   });
 });

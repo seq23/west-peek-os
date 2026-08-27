@@ -194,7 +194,16 @@ test("P12 reporting journey: review gates → receipted distribution → reconci
  * exists — which is what this asserts, because a promise that only appears once there is something
  * to disclaim is not a promise.
  */
-test("the LP surface states what it does not certify, and lets a reviewed packet be sent", async ({ page }) => {
+/*
+ * TITLE NARROWED 22 Aug 2026 TO WHAT THIS ACTUALLY ASSERTS. It read "…and lets a reviewed packet be
+ * sent", which no line in it proves — it opens the page and reads one sentence. The drafting, the
+ * three named reviews and the send behind a partner's signature are all driven in the browser in
+ * `p61-lp-raise-and-letter.spec.ts`; what is left here is the property that belongs here, and it is
+ * a real one: the certification is printed on FIRST PAINT, whether or not any letter exists.
+ * A promise that only appears once there is something to disclaim is a promise made to nobody,
+ * which is precisely what it was for as long as no page rendered it.
+ */
+test("the LP surface states what it does not certify, before there is anything to disclaim", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
   await page.getByTestId("dev-login-submit").click();

@@ -75,6 +75,7 @@ const MODULE_LABELS: Record<string, string> = {
   what_changed: "What changed",
   my_work: "My open work",
   employees: "AI workforce",
+  health: "What is broken",
 };
 
 

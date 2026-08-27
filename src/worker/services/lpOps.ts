@@ -3,7 +3,7 @@ import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, canAccessPrivacyLabel } from "./authorize";
-import { notifyQuietly } from "./notifications";
+import { notifyPartners } from "./notifications";
 
 /**
  * LP / fund-admin / VDR operating surface (P24, GAP-18).
@@ -272,7 +272,7 @@ export async function handleUpdateLpEngagement(ctx: RouteContext): Promise<Respo
   });
 
   if (parsed.data.state === "AWAITING_DECISION") {
-    await notifyQuietly(ctx.env, {
+    await notifyPartners(ctx.env, {
       kind: "LP_ISSUE",
       severity: "WARNING",
       title: `${lp.legal_name} is awaiting a decision`,

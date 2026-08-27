@@ -28,6 +28,18 @@ export const LEGIBLE_CHARS = 80;
  */
 export const SKIP_DESTINATIONS = new Set(["Help"]);
 
+/**
+ * The visibility test, and why `offsetParent` alone is not it.
+ *
+ * Everything under a closed `<details>` is in the DOM and not on screen — and Chrome still reports
+ * a non-null `offsetParent` and a non-zero `offsetHeight` for it, while `innerText` comes back as
+ * the empty string. Measured 22 Aug 2026 on the Companies register, which lives inside the
+ * `company-identity` disclosure: a perfectly good empty-state row read as an unexplained blank
+ * because the lid above it was shut.
+ *
+ * So a closed disclosure is checked for explicitly. A lid nobody has opened is not a blank, and a
+ * sweep that says it is will report the same false defect on every page that folds a workflow away.
+ */
 /** Every destination the rail offers, in both tiers, by its visible label. */
 export async function allDestinations(page: Page): Promise<string[]> {
   await openNavIfCollapsed(page);
@@ -40,31 +52,53 @@ export async function allDestinations(page: Page): Promise<string[]> {
   return Array.from(new Set(labels));
 }
 
-/** Visible lists with literally nothing inside them — the ambiguous blank, in the DOM. */
+/**
+ * Visible lists with nothing inside them AND nothing beside them — the ambiguous blank, in the DOM.
+ *
+ * TWO SHAPES ARE BOTH CORRECT, and an early version of this sweep only allowed one of them. A page
+ * may put the explanation INSIDE the list as a `state-empty` row, which is what most of them do; or
+ * it may put it BESIDE the list as a sibling paragraph, which is what the AI run list and the
+ * intelligence item list do. A reader cannot tell the difference and neither should this. What is
+ * never acceptable is an empty list with no explanation anywhere near it.
+ */
 export async function blankLists(page: Page): Promise<string[]> {
   return await page.evaluate(() => {
     const body = document.querySelector(".surface-body");
     if (!body) return [] as string[];
+    const visible = (el: Element): boolean =>
+      (el as HTMLElement).offsetParent !== null && el.closest("details:not([open])") === null;
     return Array.from(body.querySelectorAll("ul.card-list, ol.card-list"))
       .filter((ul) => {
         const el = ul as HTMLElement;
-        // Only what a reader can actually see. Anything under a closed <details> is in the DOM and
-        // not on screen, and a lid nobody has opened is not a blank.
-        if (el.offsetParent === null) return false;
-        return el.children.length === 0 && el.innerText.trim().length === 0;
+        // Only what a reader can actually see — see VISIBLE_IN_PAGE above for why `offsetParent`
+        // alone gets this wrong.
+        if (!visible(el)) return false;
+        if (el.children.length > 0 || el.innerText.trim().length > 0) return false;
+        // Explained by something standing next to it?
+        const beside = Array.from(el.parentElement?.children ?? []).some(
+          (sib) => sib !== el && visible(sib) && sib.matches(".state-empty, .state-message"),
+        );
+        return !beside;
       })
       .map((ul) => (ul as HTMLElement).dataset.testid ?? "an unnamed list");
   });
 }
 
-/** Every visible empty/loading slot the design system draws, as the text a reader sees. */
-export async function emptySlots(page: Page): Promise<string[]> {
+/**
+ * Every visible empty/loading slot the design system draws — the text a reader sees, and enough to
+ * find it again. A failure that says only `""` costs somebody an afternoon working out which slot.
+ */
+export async function emptySlots(page: Page): Promise<Array<{ what: string; text: string }>> {
   return await page.evaluate(() => {
     const body = document.querySelector(".surface-body");
-    if (!body) return [] as string[];
+    if (!body) return [] as Array<{ what: string; text: string }>;
     return Array.from(body.querySelectorAll(".state-empty, .state-message"))
-      .filter((el) => (el as HTMLElement).offsetParent !== null)
-      .map((el) => (el as HTMLElement).innerText.trim());
+      .filter((el) => (el as HTMLElement).offsetParent !== null && el.closest("details:not([open])") === null)
+      .map((el) => {
+        const node = el as HTMLElement;
+        const named = node.dataset.testid ?? node.parentElement?.dataset.testid ?? node.tagName.toLowerCase();
+        return { what: named, text: node.innerText.trim() };
+      });
   });
 }
 
@@ -87,13 +121,20 @@ export async function visitSurface(page: Page, label: string): Promise<boolean> 
   await target.click();
   await page.waitForLoadState("networkidle").catch(() => undefined);
 
+  /*
+   * FIVE SECONDS, and the budget is deliberately generous. Measured 22 Aug 2026: at a load average
+   * of 42 this sweep reported four Employees lists as unexplained blanks that were simply still
+   * being fetched, and every one of them was a page that renders its empty state correctly. A sweep
+   * that reports a busy machine as a product defect costs somebody an afternoon and teaches them
+   * the suite lies, which is more expensive than the seconds this spends.
+   */
   let last = "";
-  for (let i = 0; i < 12; i += 1) {
+  for (let i = 0; i < 20; i += 1) {
     const now = JSON.stringify([await blankLists(page), await emptySlots(page)]);
     // Settled when two consecutive reads agree AND nothing is still announcing that it is reading.
     if (now === last && !/…|\.\.\./.test(now)) return true;
     last = now;
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(250);
   }
   return true;
 }

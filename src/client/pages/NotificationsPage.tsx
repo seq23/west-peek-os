@@ -343,9 +343,19 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
       <details className="card" data-testid="notifications-settings">
         <summary>When you hear from us</summary>
 
+        {/*
+          SAYS WHAT IT ACTUALLY DOES. The old sentence — "quiet hours hold everything back" — was
+          more than this can currently deliver, in two ways. Nothing is removed from this page: a
+          held notice is still here to be read, because holding is about not INTERRUPTING you, not
+          about hiding what happened. And there is no push service, VAPID key or subscription in this
+          environment, so the only channel that could interrupt you is recorded UNAVAILABLE on every
+          notification. Quiet hours are real and applied; what they govern today is smaller than the
+          old sentence implied, and a setting that overstates itself is one you stop trusting.
+        */}
         <p className="muted small">
-          Quiet hours hold everything back except CRITICAL, which is always delivered — the point of
-          the label is that it wakes you.
+          Quiet hours mark everything except CRITICAL as held until they end, so nothing chases you
+          overnight. Held notices still appear on this page — holding means not interrupting you, not
+          hiding it. Nothing is sent to a phone yet by any route, at any hour.
         </p>
 
         <form

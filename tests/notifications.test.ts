@@ -236,10 +236,27 @@ describe("real subsystems emit notifications", () => {
     });
     expect(card.status).toBe(201);
 
-    const row = await t.db.prepare("SELECT * FROM notification WHERE dedupe_key = ?1").bind(`approval:${card.body.id}`).first<{ kind: string; title: string }>();
-    expect(row).not.toBeNull();
-    expect(row!.kind).toBe("APPROVAL");
-    expect(row!.title).toContain("Kill-switch OpenAI");
+    /*
+     * ONE ROW PER PARTNER, keyed by the recipient. A firm-wide notification (no `firm_user_id`)
+     * reads fine on the page and skips the preference block entirely — `notify()` can only load a
+     * preference row for a NAMED person — so quiet hours, the per-kind switches and the
+     * minimum-severity rule were all dead for approvals, the highest-volume kind in the system.
+     * The old assertion matched on the bare `approval:<id>` key and so pinned that shape in place.
+     */
+    const rows = await t.db
+      .prepare("SELECT * FROM notification WHERE dedupe_key LIKE ?1")
+      .bind(`approval:${card.body.id}%`)
+      .all<{ kind: string; title: string; firm_user_id: string | null }>();
+    const addressed = rows.results ?? [];
+    expect(addressed.length).toBeGreaterThan(0);
+    for (const row of addressed) {
+      expect(row.kind).toBe("APPROVAL");
+      expect(row.title).toContain("Kill-switch OpenAI");
+      // Addressed to a person, which is the only way that person's quiet hours can be consulted.
+      expect(row.firm_user_id, "an approval notice must name who it is for").toBeTruthy();
+    }
+    // And nobody is told twice about the same card.
+    expect(new Set(addressed.map((r) => r.firm_user_id)).size).toBe(addressed.length);
   });
 
   it("a dead-lettered scheduled job raises a CRITICAL notification", async () => {
@@ -272,13 +289,58 @@ describe("real subsystems emit notifications", () => {
     const run = await call<{ run: { id: string; status: string } }>("/api/jobs/notify_dead_letter/run", MP, "POST");
     expect(run.body.run.status).toBe("DEAD_LETTER");
 
-    const row = await t.db
-      .prepare("SELECT * FROM notification WHERE dedupe_key = ?1")
-      .bind(`job_dead_letter:${run.body.run.id}`)
-      .first<{ severity: string; kind: string }>();
-    expect(row).not.toBeNull();
-    expect(row!.severity).toBe("CRITICAL");
-    expect(row!.kind).toBe("PROVIDER_FAILURE");
+    // Filtered in JS rather than with LIKE: the key carries a UUID whose underscores are LIKE
+    // wildcards, and D1 refused the pattern outright ("LIKE or GLOB pattern too complex").
+    const rows = await t.db
+      .prepare("SELECT * FROM notification WHERE kind = 'PROVIDER_FAILURE'")
+      .all<{ severity: string; kind: string; firm_user_id: string | null; dedupe_key: string }>();
+    const addressed = (rows.results ?? []).filter((r) => r.dedupe_key.startsWith(`job_dead_letter:${run.body.run.id}`));
+    expect(addressed.length).toBeGreaterThan(0);
+    for (const row of addressed) {
+      expect(row.severity).toBe("CRITICAL");
+      expect(row.kind).toBe("PROVIDER_FAILURE");
+      expect(row.firm_user_id).toBeTruthy();
+    }
+  });
+
+  it("a partner's own quiet hours apply to the notifications she actually gets", async () => {
+    /*
+     * THE POINT OF ALL THE ADDRESSING. Quiet hours, the per-kind switches and the minimum-severity
+     * rule were written correctly and could never fire for approvals, portfolio alerts, dead-letter
+     * jobs, LP chasers or employee lifecycle notices — six of the ten call sites — because a
+     * firm-wide row has nobody whose preferences could be read. This proves the loop closes for the
+     * kind the operator sees most.
+     */
+    const saved = await call("/api/notifications/preferences", MP, "POST", {
+      // A window covering the whole clock, so this does not depend on when the suite runs.
+      quiet_hours: { start: 0, end: 23, timezone: "UTC" },
+      push_enabled: false,
+    });
+    expect(saved.status).toBe(201);
+
+    const card = await call<{ id: string }>("/api/approvals", MP, "POST", {
+      action_key: "governance.policy_change",
+      object_type: "provider_registry",
+      object_id: "anthropic",
+      title: "Quiet-hours check",
+      submit: true,
+    });
+    expect(card.status).toBe(201);
+
+    const scooter = await t.db
+      .prepare("SELECT id FROM firm_user WHERE email = 'scooter@westpeek.ventures'")
+      .first<{ id: string }>();
+    const mine = await t.db
+      .prepare("SELECT delivery_status FROM notification WHERE dedupe_key LIKE ?1 AND firm_user_id = ?2")
+      .bind(`approval:${card.body.id}%`, scooter!.id)
+      .first<{ delivery_status: string }>();
+    expect(mine?.delivery_status, "her quiet hours must reach the notice she was sent").toBe("HELD_QUIET_HOURS");
+
+    // HELD, NEVER HIDDEN. Holding is about not interrupting her, not about losing the record — the
+    // notice is still on the page, which is what the copy now says.
+    const listed = await call<{ notifications: Array<{ id: string }> }>("/api/notifications", MP);
+    expect(listed.status).toBe(200);
+    expect(listed.body.notifications.length).toBeGreaterThan(0);
   });
 });
 

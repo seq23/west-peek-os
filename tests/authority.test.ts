@@ -279,16 +279,26 @@ describe("4b. restricted actions are role-gated without raising an approval card
   });
 
   it("lets the named host employee act, because barring him leaves a host who cannot do his own job", async () => {
-    const wyatt = await authorize(env, { type: "AI", aiEmployeeId: "Wyatt", roles: [], ...scope }, "company.update", target);
+    /*
+     * THIS TEST USED TO PASS `aiEmployeeId: "Wyatt"` — an Actor shape that does not occur anywhere
+     * in this system. Every real Actor carries a seat id, `aie_wyatt`, and the restriction row said
+     * `["Wyatt"]`, so in production the comparison was "Wyatt" against "aie_wyatt" and the named
+     * half of this rule denied everybody for ever. The test made itself agree with the row instead
+     * of with the system, so a dead branch read as a covered one.
+     *
+     * The seat id is now the only spelling used here, which is the only spelling that arrives.
+     */
+    const wyatt = await authorize(env, { type: "AI", aiEmployeeId: "aie_wyatt", roles: [], ...scope }, "company.update", target);
     expect(wyatt.decision).toBe("ALLOW");
+    expect(wyatt.reason).toBe("restricted_action_permitted");
 
     // An AI employee who is NOT named is still refused: the grant is per employee, not per actor type.
-    const other = await authorize(env, { type: "AI", aiEmployeeId: "Winter", roles: [], ...scope }, "company.update", target);
+    const other = await authorize(env, { type: "AI", aiEmployeeId: "aie_winter", roles: [], ...scope }, "company.update", target);
     expect(other.decision).toBe("DENY");
   });
 
   it("leaves the reserved boundary untouched — a restricted grant is not a licence to decide", async () => {
-    const wyatt = await authorize(env, { type: "AI", aiEmployeeId: "Wyatt", roles: [], ...scope }, "investment.approve", target);
+    const wyatt = await authorize(env, { type: "AI", aiEmployeeId: "aie_wyatt", roles: [], ...scope }, "investment.approve", target);
     expect(wyatt.decision).toBe("DENY");
     expect(wyatt.reason).toBe("reserved_action_ai_actor");
   });

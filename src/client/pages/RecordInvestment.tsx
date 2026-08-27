@@ -181,6 +181,38 @@ export function RecordInvestment({
     if (!failed) transactions.reload();
   }
 
+  /**
+   * Undoing a booking, which the interface had no way to do.
+   *
+   * `POST /api/transactions/:id/void` is live, governed and correct — MP-reserved, receipt-gated,
+   * and it REVERSES the recorded position rather than deleting the row. Nothing in `src/client`
+   * called it. The only mention of voiding anywhere in the product was a past-tense line on the
+   * activity feed describing something no control here could cause.
+   *
+   * That is the same defect as the missing "Book it" rung above, one step further along and worse:
+   * a booking is a mistake somebody notices AFTER the fund's own records say it owns something, and
+   * the only way to correct it was an API client.
+   *
+   * The receipt field is shared with Book it deliberately — both are MP-reserved acts on the same
+   * transaction, and a second box for the same kind of token would invite pasting the wrong one.
+   */
+  async function voidTxn(id: string) {
+    setBusy(true);
+    const failed = mutationError(
+      await api(`/api/transactions/${id}/void`, {
+        method: "POST",
+        body: receipt.trim() ? { approval_receipt_id: receipt.trim() } : {},
+      }),
+      [200, 201],
+    );
+    setBusy(false);
+    setMessage(
+      failed ??
+        "Reversed. The transaction is kept as VOID and the position it created has been backed out — nothing was deleted.",
+    );
+    if (!failed) transactions.reload();
+  }
+
   async function execute(id: string) {
     if (!receipt.trim()) {
       setMessage("Paste the approval receipt id from the decided card. Executing is what books the position.");
@@ -359,6 +391,32 @@ export function RecordInvestment({
                 <button type="button" className="btn-strong" disabled={busy} data-testid={`txn-execute-${t.id}`} onClick={() => void execute(t.id)}>
                   Book it
                 </button>
+              </div>
+            )}
+            {/*
+              REVERSING IT. Offered only once something has actually been booked: a draft is
+              cancelled by not submitting it, and voiding a transaction that never moved a position
+              is a governance act with nothing to govern.
+
+              Destructive-sounding and deliberately not styled as the strong action — the strong
+              action on this row is booking. The server is still the gate: `transaction.void` is
+              MP-reserved and re-checked through `authorize()` on every call.
+            */}
+            {t.status === "EXECUTED" && isPartner && (
+              <div className="form-row">
+                <button
+                  type="button"
+                  data-testid={`txn-void-${t.id}`}
+                  title="Reverses the position this created. The record is kept, marked VOID."
+                  disabled={busy}
+                  onClick={() => void voidTxn(t.id)}
+                >
+                  Undo this booking
+                </button>
+                <span className="muted small">
+                  Backs the position out and keeps the record. Needs a Managing Partner's approval
+                  receipt in the box above.
+                </span>
               </div>
             )}
           </li>

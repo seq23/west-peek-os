@@ -1695,6 +1695,19 @@ function CompaniesPage({ me }: { me: MeResponse }) {
             — {c.status}
           </li>
         ))}
+        {/*
+          A LIST WITH NOTHING IN IT AND NOTHING BESIDE IT. On a firm with no companies this rendered
+          an empty <ul> and stopped — the one shape the design system forbids outright (§7: an empty
+          slot is a stated fact, never a gap the reader has to interpret). Every sibling list on this
+          page already said what would fill it; this one, the register a person types the first
+          company into, said nothing at all on the only day it is certain to be empty.
+        */}
+        {(companies.data?.companies ?? []).length === 0 && (
+          <li className="state-empty" data-testid="company-list-empty">
+            No company is on the register yet. Add the first one above, or let one arrive by email —
+            everything the firm knows about a company hangs off its entry here.
+          </li>
+        )}
       </ul>
       {selected && <CompanyDetail company={selected} me={me} />}
     </section>

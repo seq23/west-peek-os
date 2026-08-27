@@ -94,11 +94,29 @@ and are neither:
   acknowledgement line, so `p55-delegate-and-steer.spec.ts` proves the note is stored, unanswered and
   refused on finished work, and stops there.
 
+**An API-only assertion is worth less than it looks.** It proves the machine works, not that anybody
+can reach it — and this suite has twice passed, in full, over a feature with no interface at all
+(the steering note in `p55`, the "Book it" rung in `p59`). Whenever a journey ends in something a
+PERSON is supposed to do, drive the screen. Reach for `request` for setup, for a refusal a person
+should never meet, and for reading back a fact no surface shows.
+
 `test.fail()` is the tool for a gap that must stay open: leave the assertion stating the behaviour
-that should hold, and a comment naming what must change. There are none in the suite today — the four
-that were here (LP claims and the data-room ledger in `p10`, the reporting packet in `p12`, the work
-packet and its lens gate in `p18`, opening an allocation scenario in `p11`) all closed when those
-surfaces were built, and the specs now drive them in the browser.
+that should hold, and a comment naming what must change. Three are open today, and each is a live
+route with no way for a person to reach it:
+
+- `p59` — a booked investment cannot be VOIDED from anywhere in the interface. The route is
+  governed and correct; the only mention of voiding in `src/client` is a past-tense line on the
+  activity feed describing something no control can cause.
+- `p63` — a follow-on candidate cannot be opened into a REVIEW from the page that named it.
+  Detection works, the review works, the decision works, and a partner cannot get from the first to
+  the second.
+- `p20` — quiet hours never hold anything back. `notify()` reads preferences only when
+  `firmUserId` is set, and nothing in the worker ever sets it, so the whole preference surface —
+  quiet hours, per-kind switches, minimum severity — is decorative.
+
+The four that used to be here (LP claims and the data-room ledger in `p10`, the reporting packet in
+`p12`, the work packet and its lens gate in `p18`, opening an allocation scenario in `p11`) all
+closed when those surfaces were built, and the specs now drive them in the browser.
 
 ## Journeys, and where each one lives
 
@@ -131,3 +149,5 @@ The suite is organised by what would cost the firm a deal, money, or an LP relat
 | A duplicate arrival joins; a different one never does | `p64` |
 | A reopened decision supersedes and the original stays | `p64` |
 | A retired employee's rows still resolve and read as retired | `p63` |
+| A 1:1 teaching session never goes silent, and never loses the question | `p65` |
+| The quarantine queue can be thrown away with a reason, releasing nothing | `p67` |

@@ -180,3 +180,27 @@ export const ROUTING_EMPLOYEE = "Porter";
 export function seatId(name: string): string {
   return name.startsWith("aie_") ? name : `aie_${name.toLowerCase()}`;
 }
+
+/**
+ * A subject with every forwarding prefix removed.
+ *
+ * ONE COPY, because there were two. This rule lived inline in `dealIntake.dealFromMessage` and
+ * again in `inboundEmail`, character for character, on the two paths a forwarded deck can take. It
+ * had already been wrong once in both places at the same time. Two copies of a rule that has been
+ * wrong before is a divergence waiting for whoever fixes only the copy they happened to open.
+ *
+ * `Fwd: FW: Re: Sensori` is one message about Sensori. The old rule stripped a single `re|fwd` and
+ * left the rest, so a twice-forwarded deck opened a company called "FW: Re: Sensori" — a name that
+ * would never match the company already on the board, which is exactly how a register grows a second
+ * row for a company the firm already screened.
+ */
+export function strippedSubject(subject: string): string {
+  let out = subject.replace(/#wp[a-z]+/gi, "").trim();
+  // Repeated rather than once: mail clients stack these, and each pass removes one layer.
+  for (let i = 0; i < 6; i += 1) {
+    const next = out.replace(/^\s*(re|fwd?|fw)\s*:\s*/i, "").trim();
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}

@@ -4,6 +4,7 @@ import {
   mintSession,
   networkOsBlockedReason,
   networkOsConfigured,
+  probeNetworkOs,
   proposePerson,
   pullSnapshot,
 } from "../src/worker/effects/networkOsClient";
@@ -188,5 +189,73 @@ describe("capture proposes a person to Network OS rather than writing one", () =
     const res = await proposePerson(CONFIGURED, PERSON, fake);
     expect(res.ok).toBe(false);
     expect(res.detail).toContain("#wpnetwork");
+  });
+});
+
+/**
+ * The reachability probe behind the Integrations page. Its whole reason for existing is that the
+ * page spent a month reporting a live integration as "not set up" because it was looking for a
+ * credential name that had never existed. A status surface has to ask the far end.
+ */
+describe("probing whether Network OS is there", () => {
+  it("refuses without contacting anything, and says which setting is missing", async () => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      return new Response("{}");
+    }) as unknown as typeof fetch;
+
+    const probe = await probeNetworkOs({} as Env, fetchImpl);
+    expect(called).toBe(false);
+    expect(probe.reachable).toBe(false);
+    expect(probe.detail).toMatch(/BASE_URL/);
+  });
+
+  it("separates 'answered and accepted us' from 'answered and rejected us'", async () => {
+    const ok = await probeNetworkOs(CONFIGURED, respond({ ok: true, data: {} }));
+    expect(ok.reachable).toBe(true);
+    expect(ok.detail).toContain("accepted us");
+    expect(ok.detail).toContain("sequoia@westpeek.ventures");
+
+    const rejected = await probeNetworkOs(CONFIGURED, respond({ error: "unauthorized" }, 401));
+    // Reachable is still TRUE: the far end is up, and conflating that with "down" sends whoever
+    // reads it to check the wrong thing.
+    expect(rejected.reachable).toBe(true);
+    expect(rejected.detail).toContain("approved-users list");
+
+    const broken = await probeNetworkOs(CONFIGURED, respond({}, 500));
+    expect(broken.reachable).toBe(true);
+    expect(broken.detail).toContain("its side");
+  });
+
+  it("reads the status line and never the body", async () => {
+    let bodyRead = false;
+    const fetchImpl = (async () => {
+      const res = new Response(JSON.stringify({ ok: true, data: { contacts: [{ email: "someone@example.test" }] } }));
+      const original = res.json.bind(res);
+      Object.defineProperty(res, "json", {
+        value: async () => {
+          bodyRead = true;
+          return original();
+        },
+      });
+      return res;
+    }) as unknown as typeof fetch;
+
+    const probe = await probeNetworkOs(CONFIGURED, fetchImpl);
+    expect(probe.reachable).toBe(true);
+    // No contact crosses the boundary on this path, which is why it does not need pull authority.
+    expect(bodyRead).toBe(false);
+  });
+
+  it("reports a far end that never answers as unreachable", async () => {
+    const fetchImpl = (async () => {
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      throw err;
+    }) as unknown as typeof fetch;
+    const probe = await probeNetworkOs(CONFIGURED, fetchImpl);
+    expect(probe.reachable).toBe(false);
+    expect(probe.detail).toContain("did not answer");
   });
 });

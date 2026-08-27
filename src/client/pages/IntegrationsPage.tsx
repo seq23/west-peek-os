@@ -36,6 +36,10 @@ interface Connector {
   direction: string;
   credential_name: string | null;
   credential_configured: boolean;
+  can_be_reached: boolean;
+  live_detail?: string;
+  last_check_mode: string | null;
+  last_check_detail: string | null;
   scopes: string[];
   consent_required: number;
   approval_gate: string;
@@ -175,9 +179,9 @@ export function IntegrationsPage({ me }: { me: MeResponse }) {
   return (
     <section data-testid="integrations-page">
       <p className="muted small">
-        Everything West Peek OS would reach on the outside — the systems, the meetings they serve,
-        outside specialists, and the investor back office. Nothing on this page is connected today,
-        and each entry says exactly what is missing.
+        Everything West Peek OS reaches on the outside — the systems, the meetings they serve,
+        outside specialists, and the investor back office. Network OS is connected and live; the
+        rest are registered but not connected, and each one says exactly what is missing.
       </p>
 
       <h3>What we are connected to</h3>
@@ -199,11 +203,20 @@ export function IntegrationsPage({ me }: { me: MeResponse }) {
                 : c.credential_configured
                   ? "Its key is set on this machine."
                   : "Its key has not been set on this machine, so it cannot be used."}
-              {c.scopes.length > 0 ? ` It would ask for: ${c.scopes.join(", ")}.` : ""}
+              {c.scopes.length > 0 ? ` It ${c.can_be_reached ? "asks" : "would ask"} for: ${c.scopes.join(", ")}.` : ""}
             </p>
+            {c.live_detail && <p className="muted small">{c.live_detail}</p>}
             {c.approval_gate && <p className="muted small">Before it can run: {c.approval_gate}</p>}
             <p className="muted small">{c.detail}</p>
-            {c.last_checked_at && <p className="muted small">Last checked {readableDate(c.last_checked_at)}.</p>}
+            {c.last_checked_at && (
+              <p className="muted small">
+                {/* Which KIND of check ran matters more than when: one contacted the far end and
+                    one read this machine's own configuration, and they are not the same evidence. */}
+                Last checked {readableDate(c.last_checked_at)}
+                {c.last_check_mode === "LIVE" ? ", by contacting it" : ", without contacting it"}.
+                {c.last_check_detail ? ` ${c.last_check_detail.replace(/^(LIVE|LOCAL_FIXTURE): /, "")}` : ""}
+              </p>
+            )}
             <button
               type="button"
               data-testid={`connector-check-${c.connector_key}`}
@@ -213,7 +226,7 @@ export function IntegrationsPage({ me }: { me: MeResponse }) {
                 connectors.reload();
               }}
             >
-              Check what is missing
+              {c.can_be_reached ? "Check the connection now" : "Check what is missing"}
             </button>
           </li>
         ))}

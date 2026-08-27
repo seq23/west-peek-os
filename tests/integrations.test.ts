@@ -58,9 +58,15 @@ describe("P22 — connectors are configuration, not integration", () => {
     expect(res.status).toBe(200);
     expect(res.body.connectors).toHaveLength(6);
     for (const c of res.body.connectors) {
+      // Network OS is a real integration whose status is derived from the environment; the other
+      // five are registrations that are NOT_CONFIGURED until somebody creates their credential.
       expect(c.status).toBe("NOT_CONFIGURED");
       expect(c.credential_configured).toBe(false);
     }
+    const networkOs = res.body.connectors.find((c: any) => c.connector_key === "network_os")!;
+    expect(networkOs.can_be_reached).toBe(true);
+    expect(networkOs.credential_name).toBe("WP_OS_NETWORK_OS_SESSION_SECRET");
+    expect(networkOs.live_detail).toContain("WP_OS_NETWORK_OS_BASE_URL is not set");
     const transcription = res.body.connectors.find((c: any) => c.connector_key === "transcription")!;
     expect(transcription.consent_required).toBe(1);
     expect(transcription.approval_gate).toContain("consent is a second, independent gate");
@@ -74,17 +80,42 @@ describe("P22 — connectors are configuration, not integration", () => {
     expect(res.body.network_os.open_conflicts).toBe(0);
   });
 
-  it("runs a LOCAL_FIXTURE check that names every missing precondition and contacts nothing", async () => {
-    const res = await call<{ mode: string; ok: boolean; problems: string[]; detail: string }>("/api/connectors/network_os/check", MP, "POST");
+  it("runs a LOCAL_FIXTURE check on a connector that is only a registration, and contacts nothing", async () => {
+    const res = await call<{ mode: string; ok: boolean; problems: string[]; detail: string }>("/api/connectors/vdr/check", MP, "POST");
     expect(res.status).toBe(201);
     expect(res.body.mode).toBe("LOCAL_FIXTURE");
     expect(res.body.ok).toBe(false);
-    expect(res.body.problems.join(" ")).toContain("NETWORK_OS_API_TOKEN is not populated");
-    expect(res.body.problems.join(" ")).toContain("no adapter contract has been declared");
+    expect(res.body.problems.join(" ")).toContain("VDR_API_KEY is not populated");
     expect(res.body.detail).toContain("Nothing was contacted");
 
     const check = await t.db.prepare("SELECT mode FROM connector_check ORDER BY created_at DESC LIMIT 1").first<{ mode: string }>();
     expect(check!.mode).toBe("LOCAL_FIXTURE");
+  });
+
+  /*
+   * The old version of this test asserted that checking Network OS reports `NETWORK_OS_API_TOKEN is
+   * not populated` — a credential name that never existed in this repository. The test passed for a
+   * month over a page telling the operator her live, working integration was not set up. Pinning a
+   * placeholder is how a fixture starts defending a bug.
+   */
+  it("checks Network OS live, and with nothing configured says which piece is missing without contacting anything", async () => {
+    const res = await call<{ mode: string; ok: boolean; problems: string[]; detail: string }>("/api/connectors/network_os/check", MP, "POST");
+    expect(res.status).toBe(201);
+    expect(res.body.mode).toBe("LIVE");
+    expect(res.body.ok).toBe(false);
+    // Names the real binding, not an invented token, and names the FIRST missing piece only.
+    expect(res.body.problems.join(" ")).toContain("WP_OS_NETWORK_OS_BASE_URL is not set");
+    expect(res.body.problems.join(" ")).not.toContain("NETWORK_OS_API_TOKEN");
+    expect(res.body.problems.join(" ")).toContain("adapter contract");
+
+    const check = await t.db.prepare("SELECT mode FROM connector_check ORDER BY created_at DESC LIMIT 1").first<{ mode: string }>();
+    expect(check!.mode).toBe("LIVE");
+
+    // A check result is a separate fact from the description. Overwriting the row's `detail` with
+    // the last check is what let a stale sentence masquerade as a current one.
+    const row = await t.db.prepare("SELECT detail FROM connector WHERE connector_key = 'network_os'").first<{ detail: string }>();
+    expect(row!.detail).not.toContain("LIVE:");
+    expect(row!.detail).toContain("mints a Network OS session");
   });
 
   it("reports meeting prep and consent state as facts from the P7 substrate", async () => {

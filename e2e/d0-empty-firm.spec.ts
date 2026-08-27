@@ -68,10 +68,11 @@ test("no empty slot is a bare placeholder — every one of them is a stated fact
   for (const label of destinations) {
     if (SKIP_DESTINATIONS.has(label)) continue;
     if (!(await visitSurface(page, label))) continue;
-    for (const text of await emptySlots(page)) {
+    for (const slot of await emptySlots(page)) {
       stated += 1;
+      const text = slot.text;
       const bare = text.length === 0 || !/\s/.test(text) || /^(none|n\/a|na|-|—|–|0|empty|nothing)\.?$/i.test(text);
-      if (bare) tokens.push(`${label}: "${text}"`);
+      if (bare) tokens.push(`${label} → ${slot.what}: "${text}"`);
     }
   }
 

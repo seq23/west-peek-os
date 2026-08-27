@@ -9,7 +9,7 @@
     "dev": "npm run build && wrangler dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "e2e": "node scripts/e2e/prepare-local.mjs && playwright test",
+    "e2e": "node scripts/e2e/prepare-local.mjs && CI=true npx wrangler d1 migrations apply WP_OS_DB --local && node scripts/e2e/prepare-local.mjs --verify-only && playwright test",
     "validate": "npm run typecheck && npm run test",
     "validate:authority": "node scripts/validate/no-unauthorized-effects.mjs && node scripts/validate/no-unauthorized-effects.mjs --self-test && node scripts/seed/generate-machine-seed.mjs --check",
     "validate:ai-boundary": "node scripts/validate/no-direct-provider-calls.mjs && node scripts/validate/no-direct-provider-calls.mjs --self-test && node scripts/seed/generate-ai-employee-seed.mjs --check",

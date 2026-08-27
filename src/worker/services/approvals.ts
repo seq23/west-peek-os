@@ -4,7 +4,7 @@ import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
-import { notifyQuietly } from "./notifications";
+import { notifyPartners } from "./notifications";
 import {
   actorFromIdentity,
   authorize,
@@ -302,7 +302,7 @@ export async function submitApproval(env: Env, actor: Actor, cardId: string): Pr
   });
   // P20: the people who can decide this need to know it is waiting. Failure to notify never
   // rolls back the submission.
-  await notifyQuietly(env, {
+  await notifyPartners(env, {
     kind: "APPROVAL",
     severity: "WARNING",
     title: `Approval waiting: ${card.title}`,
@@ -519,7 +519,7 @@ export async function reopenApproval(env: Env, actor: Actor, cardId: string, rea
 
   // It is waiting on a person again, so the people who can decide it are told again — the same
   // reason submitting raises one. A card that quietly re-entered the queue is one nobody works.
-  await notifyQuietly(env, {
+  await notifyPartners(env, {
     kind: "APPROVAL",
     severity: "WARNING",
     title: `Decision reopened: ${card.title}`,
@@ -676,7 +676,7 @@ export async function releaseApprovalBlock(env: Env, actor: Actor, cardId: strin
   });
 
   if (standing.state_before === "pending_review") {
-    await notifyQuietly(env, {
+    await notifyPartners(env, {
       kind: "APPROVAL",
       severity: "WARNING",
       title: `Unblocked and waiting again: ${card.title}`,

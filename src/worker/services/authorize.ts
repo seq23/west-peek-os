@@ -152,7 +152,24 @@ async function restrictionFor(env: Env, actionKey: string): Promise<{ roles: str
   if (!row) return null;
   try {
     const parsed = JSON.parse(row.allowed_json) as { roles?: string[]; employees?: string[] };
-    return { roles: parsed.roles ?? [], employees: parsed.employees ?? [] };
+    /*
+     * NAMES ARE CANONICALISED TO SEAT IDS HERE, at the one place that reads the row.
+     *
+     * `0125` wrote `{"employees":["Wyatt"]}` and an Actor carries `aie_wyatt`, so the named-employee
+     * half of this check could never match anybody. It failed silently and in the safe direction,
+     * which is why nothing noticed: Wyatt — the host employee the operator explicitly named as
+     * someone who should be able to edit a company — was denied by a rule written to permit him,
+     * and the denial looked exactly like a rule working.
+     *
+     * This is the same name-versus-id divergence that has now surfaced six times in this codebase.
+     * Canonicalising on the way IN rather than comparing loosely at the call site means a row may
+     * be written either way and the comparison stays an exact one — a fuzzy match inside an
+     * authorization check is how a near-miss becomes a grant.
+     */
+    return {
+      roles: parsed.roles ?? [],
+      employees: (parsed.employees ?? []).map((e) => (e.startsWith("aie_") ? e : `aie_${e.toLowerCase()}`)),
+    };
   } catch {
     return { roles: [], employees: [] };
   }

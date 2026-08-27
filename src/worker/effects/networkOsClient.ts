@@ -114,6 +114,61 @@ export function networkOsBlockedReason(env: Env): string | null {
   return null;
 }
 
+export interface NetworkProbe {
+  reachable: boolean;
+  /** One sentence an operator can act on, never a stack trace and never a secret. */
+  detail: string;
+}
+
+/**
+ * Ask Network OS whether it is there and whether it accepts us — and read NOTHING.
+ *
+ * WHY THIS IS NOT `pullSnapshot`. A pull is gated on `network_sync.pull` because it brings the
+ * firm's relationship record across the boundary. A status page must not need that authority just
+ * to answer "is it on?", and it must not quietly acquire the data as a side effect of asking. So
+ * this mints the same session, makes the same request, reads the STATUS LINE, and cancels the body
+ * before a single contact is parsed. No contact data enters this system on this path.
+ *
+ * The three answers are deliberately distinct because they have three different fixes: unreachable
+ * is the far end or the network, 401 is the secret or the approved-user list, and any other HTTP
+ * code is Network OS itself having a problem. "Not configured" collapsing all of those into one
+ * sentence is exactly the thing that wasted a day.
+ */
+export async function probeNetworkOs(env: Env, fetchImpl: typeof fetch = fetch): Promise<NetworkProbe> {
+  const blocked = networkOsBlockedReason(env);
+  if (blocked) return { reachable: false, detail: blocked };
+
+  const base = env.WP_OS_NETWORK_OS_BASE_URL!.replace(/\/+$/, "");
+  const session = await mintSession(env.WP_OS_NETWORK_OS_SESSION_SECRET!, env.WP_OS_NETWORK_OS_USER_EMAIL!);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(`${base}${SNAPSHOT_PATH}`, {
+      method: "GET",
+      headers: { cookie: `wpn_session=${session}`, accept: "application/json" },
+      signal: controller.signal,
+    });
+    // Cancelled, not read: this call is allowed to learn the status code and nothing else.
+    await res.body?.cancel().catch(() => undefined);
+
+    if (res.status === 401 || res.status === 403) {
+      return {
+        reachable: true,
+        detail: `Network OS answered but rejected us (HTTP ${res.status}). Either the session secret does not match Network OS's APP_SESSION_SECRET, or ${env.WP_OS_NETWORK_OS_USER_EMAIL} is not on its approved-users list.`,
+      };
+    }
+    if (!res.ok) return { reachable: true, detail: `Network OS answered with HTTP ${res.status}, which is a problem on its side.` };
+    return { reachable: true, detail: `Network OS answered and accepted us as ${env.WP_OS_NETWORK_OS_USER_EMAIL}. Contacts, relationships and touches can be pulled.` };
+  } catch (err) {
+    const detail = err instanceof Error && err.name === "AbortError"
+      ? `Network OS did not answer within ${TIMEOUT_MS / 1000}s.`
+      : `Could not reach Network OS: ${err instanceof Error ? err.message : String(err)}`;
+    return { reachable: false, detail };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Read the current snapshot. Returns a result rather than throwing on an expected failure —
  * unconfigured and unreachable are both normal states the adapter records as a receipt, not
