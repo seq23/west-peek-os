@@ -132,7 +132,15 @@ describe("xirr", () => {
     expectClose(r!, 0.2101579902005981, IRR_TOL);
   });
   it("three-flow series matches an independent bisection root", () => {
-    // −1000 @2026-01-01, +500 @2026-07-01, +700 @2027-01-01 → 0.2625189521680761 (200-step bisection)
+    // −1000 @2026-01-01, +500 @2026-07-01, +700 @2027-01-01 → 0.26249965247425011
+    // (200-step bisection, UTC-anchored dates — see src/shared/dealmath/index.ts toTime()).
+    //
+    // CONFIRMED 3 Sep 2026: this fixture passed on a CDT machine and missed by ~1.93e-5 on a
+    // UTC CI runner. Jan → Jul → Jan crosses exactly one US DST transition; a date-only string
+    // parsed without an explicit "Z" resolves to LOCAL midnight, so the year-fraction between
+    // the Jul flow and the others shifted by an hour depending on where the code ran. Fixed at
+    // the source (toTime anchors date-only strings to UTC); this constant is the bisection root
+    // recomputed under that fix and is now timezone-invariant.
     const flows = [
       { date: "2026-01-01", amount: -1000 },
       { date: "2026-07-01", amount: 500 },
@@ -140,7 +148,7 @@ describe("xirr", () => {
     ];
     const r = xirr(flows);
     expect(r).not.toBeNull();
-    expectClose(r!, 0.2625189521680761, IRR_TOL);
+    expectClose(r!, 0.26249965247425011, IRR_TOL);
     expect(Math.abs(xnpv(r!, flows))).toBeLessThan(1e-6);
   });
   it("sign-change requirement: all-positive, all-negative, and single-flow series return null", () => {
