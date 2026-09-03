@@ -5422,3 +5422,35 @@ itself first failed 111/129 with `Executable doesn't exist at …chrome-headless
 this machine's Playwright browser cache was missing, so a manual `npm run e2e` here would have
 silently produced 111 believable-looking product failures until someone thought to check for that
 line. `npx playwright install chromium`, then **129/129 clean.**
+
+### Merged, deployed, verified
+
+PR #18 merged to `main` (a0a55bc), CI green on the merge commit itself (confirmed the push
+trigger fires, not just `pull_request`). While driving it, CI caught two more real, previously
+undetected environment-dependent bugs — both fixed and reverified in the same PR before merge:
+
+- **`xirr`'s three-flow fixture** (`src/shared/dealmath/index.ts`): date-only strings parsed in
+  the calling machine's local zone, not UTC, so the year-fraction between flows depended on
+  whether a DST transition fell between them. Constant recomputed by independent bisection and
+  confirmed identical under three different zones.
+- **The quiet-hours zone picker** (`src/client/pages/NotificationsPage.tsx`): `zoneChoices()`
+  returned its fixed list unchanged whenever the browser's own zone happened to already be in
+  it, silently defaulting to `"America/New_York"` for most of the firm and every CI runner
+  instead of the reader's real zone. Fixed to always put the reader's zone first.
+
+The e2e job itself crashed twice on GitHub's Linux runners with a message-less `workerd`
+internal error (never on macOS, 4/4 clean local runs) — added a whole-suite retry in CI, which
+is safe here because `npm run e2e` resets the local D1 on every invocation; a Playwright
+per-test retry would not be, given this suite's single shared database.
+
+Deployed via `npm run deploy:production` (the one documented path) — first attempt hit the
+transient `migration apply failed` Cloudflare flake `docs/DEPLOYING.md` already names, a plain
+retry cleared it. All four steps passed: no pending migrations, build, deploy (version
+`d150684f`), and the post-deploy health probe. This shipped `4e6fa79` (the deck/community fix
+that had sat undeployed since 24 Aug) plus everything in PR #18.
+
+Verified live in the browser as the operator, not by reading code: the "Loading the community
+from Network OS" scheduled job flipped from `Degraded` to `SUCCEEDED` (4,712 contacts now
+synced, vs. the pre-fix 250-contact cap), and an open work card ("Deck: Vynlo") showed Wyatt's
+actual extracted findings from a real inbound deck — sector, product description, and company
+status — confirming both journeys the operator asked about are live and working on real data.
