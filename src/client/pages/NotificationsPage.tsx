@@ -177,7 +177,16 @@ function zoneChoices(): string[] {
   } catch {
     here = "UTC";
   }
-  return COMMON_ZONES.includes(here) ? COMMON_ZONES : [here, ...COMMON_ZONES];
+  // CONFIRMED 3 Sep 2026: `here` is already one of the nine COMMON_ZONES entries for anyone in
+  // New York, Chicago, Denver, LA, London, Paris, Singapore, Tokyo, or UTC — which is most of
+  // this firm — and the old `includes` check then returned COMMON_ZONES UNCHANGED, silently
+  // defaulting a fresh picker to whatever sits first in that fixed list ("America/New_York")
+  // instead of the reader's own zone. A partner in Chicago got New York's hour, one hour off;
+  // a browser reporting UTC (any headless CI runner) got New York's hour, four hours off — which
+  // is exactly why "quiet hours actually hold something back" failed the browser-computed
+  // current-hour check on a UTC runner while happening to half-overlap and pass locally in
+  // Chicago. Always put `here` first, deduped, so the comment above ("offered first") is true.
+  return [here, ...COMMON_ZONES.filter((zone) => zone !== here)];
 }
 
 /** "America/New_York" reads badly in a sentence; "New York" does. */

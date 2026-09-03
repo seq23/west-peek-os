@@ -132,7 +132,7 @@ npm run validate:authority
 npm run validate:ai-boundary
 npm run validate:network-boundary
 npm run validate:brand
-npm run validate:sql          # needs network: parses every statement against the live schema
+npm run validate:sql          # local only since 22 Aug 2026: parses against the schema the migrations build
 ```
 
 The validators are not optional decoration. Each one refuses a specific class of change: egress

@@ -172,7 +172,19 @@ if (process.argv.includes("--self-test")) {
   process.exit(0);
 }
 
-const violations = checkSources(scanRealTree());
+const realTree = scanRealTree();
+const scannedCount = Object.keys(realTree).length;
+// A scan that finds nothing to check is not a pass — it is a scan that stopped reaching its own
+// target. If SRC_DIR is ever renamed, moved, or the walk silently returns nothing, this used to
+// print "PASSED" having examined zero files. Reproduced 2026-09: pointing the scan at an empty
+// directory still printed "AI BOUNDARY SCAN PASSED". A guard on the count, not just the content.
+if (scannedCount === 0) {
+  console.error(`AI BOUNDARY SCAN FAILED — examined 0 source files under ${path.relative(ROOT, SRC_DIR)}.`);
+  console.error("A scan that checks nothing is not a passing scan. Confirm SRC_DIR resolves to the real");
+  console.error("source tree before trusting this result.");
+  process.exit(1);
+}
+const violations = checkSources(realTree);
 if (violations.length > 0) {
   console.error("AI BOUNDARY SCAN FAILED — direct-provider-call violations:");
   for (const v of violations) console.error(`  ✗ ${v}`);

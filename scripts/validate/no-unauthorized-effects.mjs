@@ -212,7 +212,18 @@ if (process.argv.includes("--self-test")) {
   process.exit(0);
 }
 
-const violations = checkSources(scanRealTree());
+const realTree = scanRealTree();
+const scannedCount = Object.keys(realTree).length;
+// A scan that finds nothing to check is not a pass. The named-file checks above already fail
+// closed when specific files are missing, but this guard makes that explicit and covers a walk
+// that returns nothing for any reason — not just the files this scan happens to name.
+if (scannedCount === 0) {
+  console.error(`AUTHORITY SCAN FAILED — examined 0 source files under ${path.relative(ROOT, WORKER_DIR)}.`);
+  console.error("A scan that checks nothing is not a passing scan. Confirm WORKER_DIR resolves to the real");
+  console.error("worker tree before trusting this result.");
+  process.exit(1);
+}
+const violations = checkSources(realTree);
 if (violations.length > 0) {
   console.error("AUTHORITY SCAN FAILED — unauthorized-effect violations:");
   for (const v of violations) console.error(`  ✗ ${v}`);

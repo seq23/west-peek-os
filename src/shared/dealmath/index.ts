@@ -45,8 +45,19 @@ export function safeDiv(a: number, b: number): number {
 
 export const DAYS_PER_YEAR = 365.25;
 
+/**
+ * A date-only string (`"2026-01-01"`) carries no timezone, and appending a bare
+ * `T00:00:00` makes `Date` parse it in the CALLING MACHINE's local zone — so the same deal
+ * dates produced a different year-fraction, and therefore a different XIRR, depending on
+ * where the code happened to run and whether a DST transition fell between two flow dates.
+ * CONFIRMED 3 Sep 2026: the three-flow XIRR fixture matched on this (CDT) machine and missed
+ * by ~2e-5 on a UTC CI runner — Jan → Jul → Jan crosses one DST transition; Jan → Jan does
+ * not, which is why the two-flow fixture never showed it. A deal dated "2026-01-01" must mean
+ * the same instant everywhere a Cloudflare Worker runs, not one that drifts with the runner's
+ * clock, so date-only strings are anchored to UTC midnight explicitly.
+ */
 function toTime(date: Date | string): number | null {
-  const d = typeof date === "string" ? new Date(`${date}T00:00:00`) : date;
+  const d = typeof date === "string" ? new Date(`${date}T00:00:00Z`) : date;
   const t = d.getTime();
   return Number.isNaN(t) ? null : t;
 }

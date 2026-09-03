@@ -95,9 +95,19 @@ and one negative amount (sign-change requirement), non-finite/zero-derivative br
 1. Two flows −1,000 @2026-01-01 / +1,210 @2027-01-01. Closed form: NPV = 0 ⇔
    (1+r)^T = 1.21 with T = 365/365.25 → r = 1.21^(365.25/365) − 1 = **0.2101579902005981**.
 2. Three flows −1,000 @2026-01-01 / +500 @2026-07-01 / +700 @2027-01-01. No closed
-   form; an independent 200-step bisection on the restated NPV gives
-   r = **0.2625189521680761** (NPV at root ≈ 1.1e-13). The Newton implementation must
-   land within 1e-6 and its XNPV residual must be < 1e-6 (self-consistency).
+   form; an independent 200-step bisection on the restated NPV, with dates anchored to UTC
+   midnight, gives r = **0.26249965247425011** (NPV at root ≈ −1.1e-13). The Newton
+   implementation must land within 1e-6 and its XNPV residual must be < 1e-6
+   (self-consistency).
+   **Corrected 3 Sep 2026** (was `0.2625189521680761`, off by ~1.93e-5): `yearsBetweenDates`
+   parsed a date-only string with no timezone suffix, which `Date` resolves in the CALLING
+   MACHINE's local zone. Jan → Jul → Jan crosses exactly one US DST transition, so the
+   year-fraction — and this constant — depended on where the verification was run and shifted
+   by roughly an hour's worth of a year. The two-flow fixture above never showed it (Jan → Jan,
+   no DST crossing between them). Fixed at the source: date-only strings are now parsed as UTC
+   midnight explicitly, and this constant is the bisection root recomputed under that fix —
+   confirmed identical under `TZ=UTC`, the machine's local zone, and `TZ=Pacific/Auckland`
+   (a DST-active zone on the opposite hemisphere and offset).
 3. Sign-change requirement: all-positive, all-negative, single-flow, empty → **null**.
 4. Degenerate series (both flows same date): NPV constant, derivative 0 → break →
    **null**, no hang.
