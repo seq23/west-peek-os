@@ -105,6 +105,16 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       # `npm run e2e` resets the local D1 and starts its own `wrangler dev --local` — offline,
-      # no credentials, safe to re-run back to back (AGENTS.md).
+      # no credentials, safe to re-run back to back (AGENTS.md: "that is a hard requirement, not
+      # a nicety"). The retry here is for `wrangler dev` itself, not for a failing assertion:
+      # observed twice on GitHub's Linux runners, never on macOS — `workerd` throws an internal,
+      # message-less error ("please create an issue at workers-sdk") and either drops the server
+      # outright or serves a stretch of requests before dying later, taking down every test after
+      # it with ECONNREFUSED. Neither occurrence traced to a real test failure once the retry ran
+      # clean. A single retry re-runs the WHOLE command, which is what actually resets state
+      # safely here — Playwright's own per-test retry would replay a test against a database a
+      # crashed server already half-mutated, which is unsafe for this suite's single shared D1
+      # (see playwright.config.ts). A journey that fails on its own merits fails the step: this
+      # tolerates the tool crashing, never a wrong assertion.
       - name: Playwright journeys
-        run: npm run e2e
+        run: npm run e2e || (echo "::warning::wrangler dev crashed or a journey failed — retrying the whole suite once" && npm run e2e)
