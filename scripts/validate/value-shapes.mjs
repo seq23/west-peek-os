@@ -443,9 +443,29 @@ async function main() {
     selfTest();
     return;
   }
-  const files = sourceFiles(SRC);
   process.stdout.write(`Reading the live schema and data (${DB}, ${ENV})…\n`);
   const tables = await loadSchema();
+
+  // A scan against zero tables is not a pass — every audit below returns empty against an empty
+  // schema, so a bad DB name, a dropped credential, or a connectivity failure that returns no
+  // rows would otherwise print "VALUE SHAPE SCAN PASSED" having checked nothing, against
+  // PRODUCTION. Guard on the count, not just the content.
+  if (tables.size === 0) {
+    process.stdout.write(`\nVALUE SHAPE SCAN FAILED — read 0 tables from ${DB} (${ENV}).\n`);
+    process.stdout.write("A scan against zero tables is not a passing scan. Confirm the database name, the\n");
+    process.stdout.write("--env, and wrangler auth before trusting this result.\n");
+    process.exitCode = 1;
+    return;
+  }
+
+  const files = sourceFiles(SRC);
+  if (files.length === 0) {
+    process.stdout.write(`\nVALUE SHAPE SCAN FAILED — examined 0 source files under ${SRC}.\n`);
+    process.stdout.write("A scan that checks nothing is not a passing scan. Confirm SRC resolves to the real\n");
+    process.stdout.write("source tree before trusting this result.\n");
+    process.exitCode = 1;
+    return;
+  }
 
   const drift = constantDriftAudit(tables);
   const literals = sqlLiteralAudit(tables, files);

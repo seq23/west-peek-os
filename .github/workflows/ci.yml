@@ -1,0 +1,110 @@
+# West Peek OS — continuous validation.
+#
+# Runs the repo's real gate (typecheck, unit/integration tests, every static validator, the
+# client build, and the Playwright journeys) on every push and pull request against `main`.
+#
+# Deliberately NOT in this workflow: a deploy step. BACKLOG.md records the decision already made
+# here — Cloudflare Workers Builds was connected on 14 Aug 2026 and switched off on 18 Aug 2026,
+# on purpose, because auto-deploy-on-push cannot run the safe migrate-then-deploy sequence
+# (`npm run deploy:production`) without a long-lived Cloudflare API token with D1 write access
+# living in the CI environment — real blast radius, for a firm that deploys from one laptop.
+# GitHub is source history and a validation gate. It is not the deploy mechanism.
+#
+# Also NOT here: `validate:value-shapes`. It queries production D1 directly
+# (`wrangler d1 execute --remote`) and needs the same production credentials this workflow
+# deliberately does not hold. It stays a pre-deploy, operator-run check (docs/DEPLOYING.md).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Typecheck, tests, and boundary validators
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (reproducible, from package-lock)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit and integration tests
+        run: npx vitest run --no-file-parallelism
+
+      # The governance boundary scans are part of the gate, not optional extras: they are what
+      # keep authority, the AI boundary, cross-repo isolation, brand, design tokens, CSS
+      # coverage, and SQL-against-schema honest. Each has its own self-test — a validator that
+      # cannot demonstrate it still catches what it exists to catch does not run here.
+      - name: Authority boundary
+        run: npm run validate:authority
+
+      - name: AI boundary
+        run: npm run validate:ai-boundary
+
+      - name: Network boundary
+        run: npm run validate:network-boundary
+
+      - name: Brand system
+        run: npm run validate:brand
+
+      - name: Design tokens
+        run: npm run validate:design-tokens
+
+      - name: CSS class coverage
+        run: npm run validate:css-classes
+
+      - name: SQL against schema
+        run: npm run validate:sql
+
+      - name: Build client
+        run: npm run build
+
+  e2e:
+    name: Playwright journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (reproducible, from package-lock)
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # `npm run e2e` resets the local D1 and starts its own `wrangler dev --local` — offline,
+      # no credentials, safe to re-run back to back (AGENTS.md).
+      - name: Playwright journeys
+        run: npm run e2e

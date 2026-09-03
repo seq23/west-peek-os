@@ -152,7 +152,17 @@ if (unbalanced) {
   process.exit(1);
 }
 
-const problems = scan(readFileSync(CSS, "utf8"), walk(ROOT));
+const tsxFiles = walk(ROOT);
+// A scan that finds no .tsx files to check is not a pass. Reproduced 2026-09: pointing ROOT at an
+// empty directory still printed "CSS CLASS SCAN PASSED" having examined zero files.
+if (tsxFiles.length === 0) {
+  console.error(`CSS CLASS SCAN FAILED — examined 0 .tsx files under ${ROOT}.`);
+  console.error("A scan that checks nothing is not a passing scan. Confirm ROOT resolves to the real");
+  console.error("client tree before trusting this result.");
+  process.exit(1);
+}
+
+const problems = scan(readFileSync(CSS, "utf8"), tsxFiles);
 if (problems.length > 0) {
   console.error("CSS CLASS SCAN FAILED — these are applied to elements and style nothing:\n");
   for (const p of problems) console.error(`  ${p}`);

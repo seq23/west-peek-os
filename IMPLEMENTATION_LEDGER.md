@@ -5335,3 +5335,90 @@ One claim was trimmed rather than fixed, because it was larger than the truth: t
 hours "hold everything back". Nothing is removed from the notification centre by holding, and no push
 service, VAPID key or subscription exists in this environment — so the only channel that could
 actually interrupt her is UNAVAILABLE at every hour. The copy now says what it does.
+
+---
+
+## 3 Sep 2026 — CI had been deleted, not just quiet, and four validators passed on zero items
+
+### Why CI stopped running
+
+`.github/workflows/deploy.yml` was added 12 Aug 2026 (push-to-main → validate → `wrangler deploy
+--env production`, run by GitHub Actions). It was deleted 14 Aug 2026 in the same large
+"Sync deployed production artifact" commit that brought three days of Rooms/community/intelligence
+work into git history — a side effect of that sync, not a decision anyone made about CI. Every
+commit after 14 Aug ran no CI at all, including 18+ commits and the 27 Aug "Silent Failures" merge;
+`gh workflow list` on this repo returned nothing.
+
+The old workflow is not simply restored. It deployed with bare `wrangler deploy --env production`
+on every push — no migration step, no long-lived Cloudflare credential boundary considered. BACKLOG.md
+already records the deliberate decision that supersedes it: Cloudflare Workers Builds (the
+equivalent auto-deploy-on-push) was connected 14 Aug and switched off 18 Aug on purpose, because
+teaching CI to run the safe `npm run deploy:production` sequence needs a Cloudflare API token with
+D1 write access sitting in the build environment — real blast radius, for a firm that deploys from
+one laptop. "GitHub is source history and backup. It is not the deploy mechanism."
+
+`.github/workflows/ci.yml` replaces it: typecheck, the full vitest suite, all eight static
+validators (including `validate:sql`, `validate:design-tokens`, `validate:css-classes`, none of
+which need credentials), the client build, and the Playwright suite in a second job — on every push
+and PR to `main`, plus `workflow_dispatch`. No deploy step. No production credential in the
+environment. Deploying stays exactly what BACKLOG.md says it is: `npm run deploy:production`, run by
+a human, from one laptop.
+
+### Four validators passed having examined nothing
+
+Reproduced by pointing each scan's directory constant at an empty directory and re-running the real
+(non-self-test) path:
+
+| Validator | Before | After |
+|---|---|---|
+| `validate:ai-boundary` (`no-direct-provider-calls.mjs`) | `AI BOUNDARY SCAN PASSED` on 0 files | hard `FAILED — examined 0 source files` |
+| `validate:network-boundary` (`no-cross-repo-coupling.mjs`) | `NETWORK BOUNDARY SCAN PASSED` on 0 files | hard `FAILED — examined 0 source files` |
+| `validate:css-classes` | `CSS CLASS SCAN PASSED` on 0 `.tsx` files | hard `FAILED — examined 0 .tsx files` |
+| `validate:sql` | `Checking 0 statements… PASSED` | hard `FAILED — examined 0 statements` |
+
+`validate:value-shapes` was added to the same guard for the same reason one layer up: it queries
+production D1 directly, and a bad DB name, a dropped credential, or a connectivity failure that
+returns no rows would otherwise print `VALUE SHAPE SCAN PASSED` against zero tables — a false green
+against PRODUCTION rather than against a local fixture. `validate:authority`
+(`no-unauthorized-effects.mjs`) already failed correctly on the same empty-directory probe, because
+it separately asserts specific files exist; it got the same explicit zero-count guard anyway, for a
+consistent failure message rather than relying on that as the only line of defence.
+
+Every fixed validator was re-run against the real tree afterward with an unchanged pass and an
+unchanged item count (1110 SQL statements, 229 tables, the same file counts as before), and the
+empty-directory probe was re-run against the fixed source to confirm the new failure fires. Nothing
+was weakened to reach green.
+
+### Two stale claims in the docs
+
+`docs/DEPLOYING.md` still said `validate:sql` "needs network: parses every statement against the
+live schema" — true before 22 Aug 2026, false since: the script was rewritten to build the schema
+from `migrations/` in an in-memory `node:sqlite` database, specifically so it would need no
+credentials and actually get run. `REPO_VALIDATION_MATRIX.md`, the document AGENTS.md names as
+authoritative for what each check proves, listed four of the repo's eight validators
+(`validate:sql`, `validate:value-shapes`, `validate:design-tokens`, `validate:css-classes` were
+absent). Both fixed.
+
+### What was actually deployed vs `main`
+
+Production's last deploy was `2026-08-24T02:30:25Z` (`wrangler deployments list --env production`).
+Exactly one commit landed on `main` after that: `4e6fa79` (27 Aug, PR #17, "The Silent Failures") —
+the commit that fixes the Network OS connection and makes the deck and community journeys work on
+real data. Production was three days behind its own fix. Confirmed live in the browser before
+redeploying: Home showed `Degraded — 2 scheduled job(s) recently failed or were refused: Loading the
+community from Network OS`, and Community showed 4,712 people pulled but "the firm has formed a view
+on 0 of them" — the pre-fix state. Migrations were already fully synced (`No migrations to apply!`
+against `--env production --remote`), so the only gap was the Worker/client bundle. Shipped via the
+one documented path, `npm run deploy:production` (never bare `wrangler deploy`), and re-verified
+live afterward.
+
+### The full suite, run clean
+
+The first full `vitest run` was contaminated by a concurrent `npm run e2e` this session started
+against the documented warning not to run anything else heavy alongside it — 80 tests failed with
+`fetch failed` / `ECONNRESET` from miniflare's proxy bridge, exactly the resource-contention
+signature `docs/ENVIRONMENTS.md` describes. Re-run alone: **112/112 files, 1719/1719 tests.** e2e
+itself first failed 111/129 with `Executable doesn't exist at …chrome-headless-shell-mac-arm64` —
+this machine's Playwright browser cache was missing, so a manual `npm run e2e` here would have
+silently produced 111 believable-looking product failures until someone thought to check for that
+line. `npx playwright install chromium`, then **129/129 clean.**

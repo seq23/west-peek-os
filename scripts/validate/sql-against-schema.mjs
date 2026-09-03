@@ -193,6 +193,17 @@ async function main() {
   const entries = [...statements.entries()];
   process.stdout.write(`Checking ${entries.length} statements against ${tables.n} tables built from the migrations…\n`);
 
+  // A scan that finds no statements to check is not a pass. Reproduced 2026-09: pointing
+  // WORKER_DIR at an empty directory still printed "SQL SCHEMA SCAN PASSED" having checked zero
+  // statements.
+  if (entries.length === 0) {
+    process.stdout.write(`SQL SCHEMA SCAN FAILED — examined 0 statements under ${WORKER_DIR}.\n`);
+    process.stdout.write("A scan that checks nothing is not a passing scan. Confirm WORKER_DIR resolves to the\n");
+    process.stdout.write("real worker tree before trusting this result.\n");
+    process.exitCode = 1;
+    return;
+  }
+
   const failures = [];
   for (const [sql, where] of entries) {
     const reason = checkOne(db, sql);
