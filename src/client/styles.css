@@ -3133,8 +3133,12 @@ details h3 {
 
 .job-card { display: flex; flex-direction: column; gap: var(--space-xs); }
 
-/* A running job carries the accent on its edge, so on/off reads before any text does. */
-.job-card.is-on { border-left: 3px solid var(--wp-accent); }
+/* A running job carries the accent on its edge, so on/off reads before any text does.
+   `--wp-accent` was never defined. Three rules referenced it and every one of those declarations
+   was dropped in silence, so this edge never drew and the two avatar circles below rendered with
+   no background at all. An unresolved custom property does not error and does not warn.
+   The token this meant is `--wp-orange`, named at the top of this file as "the one accent". */
+.job-card.is-on { border-left: 3px solid var(--wp-orange); }
 
 .job-card-head { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; }
 .job-card-title { margin: var(--space-3xs) 0 0; }
@@ -3155,7 +3159,7 @@ details h3 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--wp-accent);
+  background: var(--wp-orange);
   color: var(--wp-paper);
   font-weight: 700;
   font-size: var(--text-xs);
@@ -3421,7 +3425,7 @@ details h3 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--wp-accent);
+  background: var(--wp-orange);
   color: var(--wp-paper);
   font-weight: 700;
   font-size: var(--text-2xl);
