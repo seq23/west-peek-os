@@ -75,6 +75,9 @@ jobs:
       - name: CSS class coverage
         run: npm run validate:css-classes
 
+      - name: Every var(--token) resolves
+        run: npm run validate:css-variables
+
       - name: SQL against schema
         run: npm run validate:sql
 
