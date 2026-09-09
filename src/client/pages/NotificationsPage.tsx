@@ -200,9 +200,14 @@ function quietWindowHours(start: number, end: number): number {
 }
 
 export function NotificationsPage({ me }: { me: MeResponse }) {
-  const notifications = useApi<{ notifications: Notification[]; unread_count: number; critical_unread: number; note: string }>(
-    "/api/notifications",
-  );
+  const notifications = useApi<{
+    notifications: Notification[];
+    unread_count: number;
+    critical_unread: number;
+    /** The list is capped at 200; the counts are not. Said out loud rather than left to be noticed. */
+    truncated?: boolean;
+    note: string;
+  }>("/api/notifications");
   const prefs = useApi<{ preference: { quiet_hours_json: string; push_enabled: number } | null; kinds: string[]; rules: Record<string, string> }>(
     "/api/notifications/preferences",
   );
@@ -244,12 +249,17 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
 
   const all = notifications.data?.notifications ?? [];
 
-  const { needsYou, worthKnowing, handled } = useMemo(() => {
+  const { needsYou, worthKnowing, handled, acknowledged } = useMemo(() => {
     const unread = all.filter((n) => n.read_at === null);
+    const done = all.filter((n) => n.read_at !== null);
     return {
       needsYou: unread.filter((n) => n.severity === "CRITICAL" || n.severity === "WARNING"),
       worthKnowing: unread.filter((n) => n.severity !== "CRITICAL" && n.severity !== "WARNING"),
-      handled: all.filter((n) => n.read_at !== null),
+      handled: done,
+      // Dismissed and acknowledged are different acts and only one of them puts her name on the
+      // audit spine. The summary line below names both rather than letting the larger number
+      // stand for the smaller one.
+      acknowledged: done.filter((n) => n.acked_at !== null).length,
     };
   }, [all]);
 
@@ -265,13 +275,20 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
     notifications.reload();
   }
 
-  const clear = needsYou.length === 0 && worthKnowing.length === 0;
+  /*
+   * "CAUGHT UP" NOW MEANS THE FIRM, NOT THE PAGE. `unread_count` is counted over every row the
+   * reader may see; the list itself is capped at 200. Deciding the empty state from the visible
+   * buckets alone would let a busy inbox print "You are caught up" the moment unread rows fell off
+   * the end of the page — the same false quiet the health board exists to prevent.
+   */
+  const unreadTotal = notifications.data?.unread_count ?? needsYou.length + worthKnowing.length;
+  const clear = unreadTotal === 0;
 
   return (
     <section data-testid="notifications-page">
       <div className="home-section-head">
         <h3>
-          {clear ? "You are caught up" : `${needsYou.length + worthKnowing.length} waiting`}
+          {clear ? "You are caught up" : `${unreadTotal} waiting`}
         </h3>
         {!clear && (
           <button type="button" className="link-button" disabled={busy} data-testid="notifications-read-all" onClick={() => void readAll()}>
@@ -281,6 +298,15 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
       </div>
 
       {message && <p className="notice" data-testid="notifications-message">{message}</p>}
+
+      {/* A list shorter than the count above it, said out loud. Two numbers disagreeing silently on
+          one screen is how a partner learns to trust neither. */}
+      {notifications.data?.truncated && (
+        <p className="muted small" data-testid="notifications-truncated">
+          Showing the 200 most serious and most recent. The counts on this page are over everything,
+          not just what is listed.
+        </p>
+      )}
 
       {clear && (
         <p className="state-empty" data-testid="notifications-clear">
@@ -337,7 +363,20 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
           onToggle={(e) => setShowHandled((e.currentTarget as HTMLDetailsElement).open)}
           data-testid="notifications-handled"
         >
-          <summary>{handled.length} already dealt with</summary>
+          {/*
+            SAYS WHICH OF THE TWO ACTS EACH ONE GOT, because the old summary did not and was read
+            as the stronger of them. Operator, 9 Sep 2026: "there are 61 items that i took
+            responsibility for". Production had exactly 61 notifications with `read_at` set — but
+            only 35 with `acked_at`. "Already dealt with" was counting DISMISSED, while the button
+            an inch above it is labelled "Take responsibility", so the number she read as her
+            audit-trail total was in fact her dismissed pile with the acknowledged ones inside it.
+            The page taught her to over-count her own liability by 26. Both numbers, named as the
+            acts that produced them.
+          */}
+          <summary>
+            {handled.length} already dealt with
+            {acknowledged > 0 && ` · ${acknowledged} you took responsibility for`}
+          </summary>
           <ul className="card-list">
             {handled.slice(0, 50).map((n) => (
               <NotificationRow key={n.id} n={n} onChanged={notifications.reload} onMessage={setMessage} />

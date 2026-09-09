@@ -34,7 +34,17 @@
  * The version is bumped rather than edited in place because "which prompt wrote this" is the first
  * question asked when report quality changes, and it is unanswerable after the fact.
  */
-export const PROMPT_VERSION = "daily-intelligence-v3";
+/**
+ * v4 adds ONE BLOCK PER SECTION KEY to the output-format instructions.
+ *
+ * Not a quality change — a correctness one. v3 asks for `top_headlines` as "five, in this shape and
+ * no other" and then gives a per-headline template, and a model reading that carefully returns five
+ * separate `===SECTION top_headlines` blocks. `intelligence_report_section` is UNIQUE on
+ * (report_id, section_key), so the second insert threw and the entire finished brief was discarded.
+ * Bumped rather than edited in place, per the paragraph above: a report stored under v3 was written
+ * by a prompt that did not say this, and that is worth being able to tell.
+ */
+export const PROMPT_VERSION = "daily-intelligence-v4";
 
 /** The sections a report can contain, in reading order. */
 export const REPORT_SECTIONS = [
@@ -184,6 +194,12 @@ export function buildSynthesisPrompt(packet: EvidencePacket): string {
     "rests on, comma-separated, and may be empty. Everything between the ===EVENTS line and ===END",
     "is the body, copied verbatim — write normal prose and markdown there.",
     "",
+    "ONE BLOCK PER SECTION KEY, and this one is not cosmetic. A section that contains several items —",
+    "top_headlines is five headlines, classification is one line per category — is still ONE block:",
+    "put all five headlines inside a single ===SECTION top_headlines ... ===END, separated by their",
+    "own bold numbered subheadings. Do not open a new ===SECTION for each item and do not repeat a",
+    "key you have already used.",
+    "",
     "COPY EVENT IDS WHOLE. They are long UUIDs and the temptation is to shorten them; a shortened",
     "id cannot be linked back to its source. Paste the entire id exactly as given, and do not put",
     "ids in the body — the ===EVENTS line is where they belong.",
@@ -286,8 +302,51 @@ export interface ParsedSection {
  */
 export function parseReport(raw: string): ParsedSection[] | null {
   const delimited = parseDelimited(raw);
-  if (delimited) return delimited;
-  return parseJsonReport(raw);
+  if (delimited) return mergeByKey(delimited);
+  const jsonForm = parseJsonReport(raw);
+  return jsonForm ? mergeByKey(jsonForm) : null;
+}
+
+/**
+ * One section per key, keeping everything the model wrote.
+ *
+ * THE BUG THIS FIXES, AND IT COST FOUR BRIEFS. `intelligence_report_section` is UNIQUE on
+ * (report_id, section_key), and the writer in dailyIntelligence.ts inserts one row per parsed
+ * section. A model that emits the same key twice therefore made the SECOND insert throw
+ * `UNIQUE constraint failed`, which unwound the whole of `generateForPartner` — so a report that
+ * had already been gathered, ranked, written and verified was thrown away at the last statement.
+ *
+ * It was not a rare model tantrum either. The prompt above asks for `top_headlines` as "five, in
+ * this shape and no other" and then gives a per-headline template, so a model reading it carefully
+ * emits FIVE `===SECTION top_headlines` blocks, one per headline. CONFIRMED against production:
+ * both of Sequoia's 2026-09-09 runs (air_dd5d3c0e…, air_65634b97…) returned 14 blocks with
+ * `top_headlines` five times, and every `system.swallowed_failure` event in the database — nine of
+ * them, back to 24 Aug 2026 — is this same constraint.
+ *
+ * MERGED RATHER THAN REFUSED, and that is the whole decision. Dropping the repeats would have
+ * silently discarded four of the five headlines in the section the reader is actually paying for,
+ * and a brief that quietly loses 80% of "What matters most" is worse than one that visibly fails.
+ * Joining them back together in the order the model wrote them reconstructs exactly the section the
+ * prompt asked for.
+ *
+ * Fixed HERE and not in the writer, because the writer is not the only reader of this function and
+ * because a parser that can return a shape the schema cannot store is the actual defect. The prompt
+ * is also clearer now, but a prompt is a request and this is a guarantee.
+ */
+function mergeByKey(sections: readonly ParsedSection[]): ParsedSection[] {
+  const byKey = new Map<string, ParsedSection>();
+  for (const s of sections) {
+    const existing = byKey.get(s.key);
+    if (!existing) {
+      byKey.set(s.key, { key: s.key, body_md: s.body_md, event_ids: [...s.event_ids] });
+      continue;
+    }
+    // A blank line between blocks: these are markdown bodies, and two paragraphs run together
+    // render as one.
+    existing.body_md = `${existing.body_md}\n\n${s.body_md}`;
+    for (const id of s.event_ids) if (!existing.event_ids.includes(id)) existing.event_ids.push(id);
+  }
+  return [...byKey.values()];
 }
 
 /**

@@ -276,11 +276,35 @@ export async function handleListNotifications(ctx: RouteContext): Promise<Respon
     .all<Record<string, unknown>>();
   const notifications = rows.results ?? [];
 
-  const unread = notifications.filter((n) => n.read_at === null);
+  /*
+   * COUNTED OVER EVERYTHING, NOT OVER THE PAGE — which is a correctness fix, not a tidy-up.
+   *
+   * The counts were derived from `notifications`, and that array is capped at 200 by the LIMIT
+   * above. The ORDER BY is severity first, so once the firm passes two hundred rows the page fills
+   * with CRITICAL and WARNING — read or unread, the ordering does not care — and unread INFO falls
+   * off the end. `unread_count` would then have reported a number that was true of the page and
+   * false of the firm, and the inbox would have said "You are caught up" with unread notifications
+   * sitting in the database. A monitor that under-reports as it gets busier is the worst possible
+   * failure mode for one.
+   *
+   * Not yet fired: production holds 87 notifications today, growing at roughly that a month. This
+   * is the fix landing before the bug does, which is the only time it is cheap.
+   */
+  const totals = await ctx.env.WP_OS_DB.prepare(
+    `SELECT COUNT(*) AS unread, SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END) AS critical
+       FROM notification
+      WHERE ${visibility} AND (firm_user_id IS NULL OR firm_user_id = ?1) AND read_at IS NULL`,
+  )
+    .bind(ctx.identity!.id)
+    .first<{ unread: number; critical: number | null }>();
+
   return json({
     notifications,
-    unread_count: unread.length,
-    critical_unread: unread.filter((n) => n.severity === "CRITICAL").length,
+    unread_count: totals?.unread ?? 0,
+    critical_unread: totals?.critical ?? 0,
+    // Said plainly, because a list that is quietly shorter than the count above it is the kind of
+    // disagreement between two numbers on one screen that makes a partner distrust both.
+    truncated: notifications.length >= 200,
     note: "Quiet hours and preferences hold DELIVERY, never the record: held notifications still appear here, marked with why.",
   });
 }

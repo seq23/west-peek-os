@@ -494,3 +494,68 @@ describe("an answered approval stops asking", () => {
     expect(kept.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * THE COUNT IS OVER EVERYTHING; THE LIST IS A PAGE OF IT.
+ *
+ * `handleListNotifications` reads at most 200 rows, ordered by SEVERITY first and only then by
+ * recency. `unread_count` and `critical_unread` were derived from that array, so both were true of
+ * the page and false of the firm the moment a 201st row existed: the page fills with CRITICAL and
+ * WARNING — read or unread, the ordering does not care — and unread INFO falls off the end
+ * uncounted. The inbox would then have printed "You are caught up" over unread notifications
+ * sitting in the database.
+ *
+ * That is the same false quiet the health board exists to catch, committed by the surface that
+ * reports it. Production held 87 rows on 9 Sep 2026, growing at roughly that a month, so this is
+ * the fix landing before the bug — which is the only time it costs nothing.
+ */
+describe("the unread count is counted over everything, not over the visible page", () => {
+  const READER = "fu_scooter_taylor";
+
+  it("still counts unread rows the 200-row page cannot show", async () => {
+    // Clear the decks so this test owns the arithmetic rather than inheriting it.
+    await call("/api/notifications/read-all", MP, "POST", {});
+    const start = await call<{ unread_count: number }>("/api/notifications", MP);
+    expect(start.body.unread_count, "the reader should start caught up").toBe(0);
+
+    /*
+     * 205 WARNINGs and then one INFO. Severity ordering puts every WARNING ahead of the INFO, so
+     * the INFO is row 206 and cannot appear in a 200-row page — while remaining unread, and while
+     * being exactly the sort of thing ("a brief is ready") a partner still wants counted.
+     */
+    const OVER_THE_CAP = 205;
+    for (let n = 0; n < OVER_THE_CAP; n += 1) {
+      await notify(env, {
+        kind: "APPROVAL", severity: "WARNING", title: `cap filler ${n}`,
+        firmUserId: READER, dedupeKey: `cap-filler-${n}-${crypto.randomUUID()}`,
+      });
+    }
+    const buriedKey = `cap-buried-${crypto.randomUUID()}`;
+    await notify(env, {
+      kind: "INTELLIGENCE_BRIEF", severity: "INFO", title: "the buried one",
+      firmUserId: READER, dedupeKey: buriedKey,
+    });
+
+    const res = await call<{
+      notifications: Array<{ title: string }>; unread_count: number; truncated: boolean;
+    }>("/api/notifications", MP);
+
+    // The premise, asserted rather than assumed: the page really is truncated and really does not
+    // contain the buried row. Without this the test could pass for the wrong reason.
+    expect(res.body.notifications.length, "the page should be at its cap").toBe(200);
+    expect(res.body.truncated, "and should say so").toBe(true);
+    expect(
+      res.body.notifications.some((n) => n.title === "the buried one"),
+      "the buried notification must genuinely be off the page for this test to mean anything",
+    ).toBe(false);
+
+    // The fix: the count knows about it anyway.
+    expect(res.body.unread_count).toBe(OVER_THE_CAP + 1);
+  });
+
+  it("says caught up only when the firm is caught up, not when the page looks empty", async () => {
+    await call("/api/notifications/read-all", MP, "POST", {});
+    const res = await call<{ unread_count: number; truncated: boolean }>("/api/notifications", MP);
+    expect(res.body.unread_count).toBe(0);
+  });
+});

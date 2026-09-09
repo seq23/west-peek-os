@@ -177,7 +177,7 @@ describe("the v3 report asks for depth", () => {
   });
 
   it("carries a version that says which prompt wrote it", () => {
-    expect(PROMPT_VERSION).toBe("daily-intelligence-v3");
+    expect(PROMPT_VERSION).toBe("daily-intelligence-v4");
   });
 });
 
@@ -231,6 +231,96 @@ describe("reading the delimited format", () => {
   it("still reads the JSON form, so stored reports and stubborn models both survive", () => {
     const out = parseReport('{"sections":[{"key":"watch","body_md":"Still works.","event_ids":[]}]}');
     expect(out![0]!.body_md).toBe("Still works.");
+  });
+});
+
+/**
+ * ONE SECTION PER KEY, WHICH IS WHAT THE DATABASE CAN STORE.
+ *
+ * The bug these pin cost Sequoia four morning briefs and produced every single
+ * `system.swallowed_failure` event in production — nine of them, from 24 Aug to 9 Sep 2026, all
+ * reading `UNIQUE constraint failed: intelligence_report_section.report_id,
+ * intelligence_report_section.section_key`.
+ *
+ * The prompt asks for `top_headlines` as "five, in this shape and no other" and then gives a
+ * per-headline template, so a careful model emits FIVE `===SECTION top_headlines` blocks. Both of
+ * Sequoia's 2026-09-09 runs did exactly that: 14 blocks, `top_headlines` five times. The writer
+ * inserts one row per parsed section, the second insert threw, and a report that had already been
+ * gathered, ranked, written and verified was discarded at the last statement — silently, because
+ * the throw was caught and recorded rather than surfaced.
+ *
+ * MERGED, NOT DROPPED. Keeping only the first block would have thrown away four of the five
+ * headlines in the section the reader actually reads, and a brief that quietly loses 80% of "What
+ * matters most" is worse than one that visibly fails.
+ */
+describe("a repeated section key", () => {
+  /** The production shape, reduced: five headline blocks under one key, in order. */
+  const fiveHeadlines = [
+    "===SECTION executive_summary", "===EVENTS iitem_a", "Five things.", "===END",
+    "===SECTION top_headlines", "===EVENTS iitem_a", "**1. Rates moved.**", "===END",
+    "===SECTION top_headlines", "===EVENTS iitem_b", "**2. A fund closed.**", "===END",
+    "===SECTION top_headlines", "===EVENTS iitem_a, iitem_c", "**3. A chip shipped.**", "===END",
+    "===SECTION top_headlines", "===EVENTS", "**4. A bank blinked.**", "===END",
+    "===SECTION top_headlines", "===EVENTS iitem_d", "**5. A law passed.**", "===END",
+    "===SECTION watch", "===EVENTS", "The curve.", "===END",
+  ].join("\n");
+
+  it("collapses to one section per key, so every row can be stored", () => {
+    const out = parseReport(fiveHeadlines)!;
+    const keys = out.map((s) => s.key);
+    expect(keys).toEqual(["executive_summary", "top_headlines", "watch"]);
+    // The constraint this exists to satisfy, asserted as the constraint rather than as a count.
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("keeps ALL five headlines, in the order the model wrote them", () => {
+    const merged = parseReport(fiveHeadlines)!.find((s) => s.key === "top_headlines")!;
+    for (const n of ["**1. Rates moved.**", "**2. A fund closed.**", "**3. A chip shipped.**",
+                     "**4. A bank blinked.**", "**5. A law passed."]) {
+      expect(merged.body_md).toContain(n);
+    }
+    expect(merged.body_md.indexOf("**1.")).toBeLessThan(merged.body_md.indexOf("**5."));
+    // Separated by a blank line: two markdown paragraphs run together render as one.
+    expect(merged.body_md).toContain("**1. Rates moved.**\n\n**2. A fund closed.**");
+  });
+
+  it("unions the cited events without repeating one", () => {
+    const merged = parseReport(fiveHeadlines)!.find((s) => s.key === "top_headlines")!;
+    expect(merged.event_ids).toEqual(["iitem_a", "iitem_b", "iitem_c", "iitem_d"]);
+  });
+
+  it("does the same for the JSON form, which can repeat a key just as easily", () => {
+    const out = parseReport(JSON.stringify({
+      sections: [
+        { key: "top_headlines", body_md: "First.", event_ids: ["e1"] },
+        { key: "top_headlines", body_md: "Second.", event_ids: ["e1", "e2"] },
+      ],
+    }))!;
+    expect(out).toHaveLength(1);
+    expect(out[0]!.body_md).toBe("First.\n\nSecond.");
+    expect(out[0]!.event_ids).toEqual(["e1", "e2"]);
+  });
+
+  it("leaves a report that never repeats a key completely alone", () => {
+    // The merge must be invisible in the ordinary case, or it is a second behaviour rather than a
+    // guarantee.
+    const out = parseReport(
+      [
+        "===SECTION executive_summary", "===EVENTS iitem_a", "Summary.", "===END",
+        "===SECTION classification", "===EVENTS", "Equities: RED — selloff", "===END",
+      ].join("\n"),
+    )!;
+    expect(out.map((s) => s.key)).toEqual(["executive_summary", "classification"]);
+    expect(out[0]!.body_md).toBe("Summary.");
+    expect(out[0]!.event_ids).toEqual(["iitem_a"]);
+  });
+
+  it("tells the model to write one block per key, so the parser is the belt and not the braces", () => {
+    // A prompt is a request and the merge is the guarantee, but a prompt that invites the crash is
+    // still a defect. Asserted against the instruction's meaning, not its exact wording.
+    const prompt = buildSynthesisPrompt(packet());
+    expect(prompt).toContain("ONE BLOCK PER SECTION KEY");
+    expect(prompt).toMatch(/do not repeat a\s*\n?\s*key you have already used/i);
   });
 });
 
