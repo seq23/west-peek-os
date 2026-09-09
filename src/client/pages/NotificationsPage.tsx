@@ -206,6 +206,8 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
     critical_unread: number;
     /** The list is capped at 200; the counts are not. Said out loud rather than left to be noticed. */
     truncated?: boolean;
+    /** What stopped waiting on you because the condition ended — never because anybody decided. */
+    cleared?: { resolved: number; superseded: number; note: string };
     note: string;
   }>("/api/notifications");
   const prefs = useApi<{ preference: { quiet_hours_json: string; push_enabled: number } | null; kinds: string[]; rules: Record<string, string> }>(
@@ -305,6 +307,33 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
         <p className="muted small" data-testid="notifications-truncated">
           Showing the 200 most serious and most recent. The counts on this page are over everything,
           not just what is listed.
+        </p>
+      )}
+
+      {/*
+        WHAT STOPPED WAITING, AND WHY IT WAS NOT HIM. Operator, 9 Sep 2026, about a partner who has
+        never signed in: "clear his responsibilities and dismiss everything". Twenty-six notices had
+        accumulated at him; thirteen warned about faults that are now closed and twelve were
+        superseded briefings. Marking them read would have put twenty-six decisions on the audit
+        spine that he never made, so nothing was written to them at all — they simply stopped being
+        true. This line is how that stays visible instead of the number quietly moving.
+      */}
+      {notifications.data?.cleared && (notifications.data.cleared.resolved + notifications.data.cleared.superseded) > 0 && (
+        <p className="muted small" data-testid="notifications-cleared">
+          {notifications.data.cleared.resolved > 0 && (
+            <>
+              <strong>{notifications.data.cleared.resolved}</strong> no longer waiting because the problem
+              they reported is fixed
+            </>
+          )}
+          {notifications.data.cleared.resolved > 0 && notifications.data.cleared.superseded > 0 && " · "}
+          {notifications.data.cleared.superseded > 0 && (
+            <>
+              <strong>{notifications.data.cleared.superseded}</strong> briefing
+              {notifications.data.cleared.superseded === 1 ? "" : "s"} replaced by a newer one
+            </>
+          )}
+          . Nothing was marked read or dismissed on anyone's behalf, and all of it is still below.
         </p>
       )}
 

@@ -675,3 +675,143 @@ describe("the badge and the page agree, whatever she just did", () => {
     expect(hers.body.unread_count, "the other partner's badge counted a notification that is not hers").toBe(0);
   });
 });
+
+/**
+ * NOTHING IS EVER RECORDED AS DECIDED BY SOMEONE WHO HAS NEVER SIGNED IN.
+ *
+ * Operator, 9 Sep 2026: "scooter doesnt check his OS much so fix everything and clear his
+ * responsibilities and dismiss everything." `fu_scooter_taylor` had 26 unread notifications and has
+ * NEVER AUTHENTICATED — zero events on the spine, zero notifications read, zero approvals decided.
+ *
+ * The easy way to clear them would have been to stamp `read_by` and `acked_by` with his name, and
+ * it would have been a falsification: twenty-six decisions on the audit spine that a man who has
+ * never opened the product did not make, and every later question of who knew what answered wrongly
+ * and confidently. Of the 26, thirteen warned about faults that are now closed and twelve were
+ * superseded briefings — none of them obligations he incurred.
+ *
+ * So they are cleared by DERIVATION and nothing is written. These assert that, and assert the other
+ * half: a notice whose condition is still true is never cleared, because a clean screen over a live
+ * fault costs the operator the signal AND keeps the fault.
+ */
+describe("clearing a notice never records a decision nobody made", () => {
+  const NEVER_SIGNED_IN = "fu_scooter_taylor";
+
+  /*
+   * Its own database. An earlier block in this file deliberately writes 206 notifications to prove
+   * the 200-row page cap, and these rows are backdated so they would fall off that page — which
+   * would make every assertion below vacuous for the wrong reason.
+   */
+  let own: TestDb;
+  let ownEnv: Env;
+
+  beforeAll(async () => {
+    own = await createTestDb();
+    ownEnv = makeTestEnv(own.db);
+  });
+  afterAll(async () => {
+    await disposeTestDb(own);
+  });
+
+  async function get<T>(path: string): Promise<T> {
+    const res = await handleRequest(req(path, MP), ownEnv);
+    expect(res.status).toBe(200);
+    return (await res.json()) as T;
+  }
+
+  /** Plant a fault and the warning that would have been written about it. */
+  async function faultAndWarning(key: string, resolved: boolean): Promise<string> {
+    const seen = "2026-09-01T00:00:00.000Z";
+    await ownEnv.WP_OS_DB.prepare(
+      `INSERT INTO health_fault (id, check_key, label, first_seen_at, escalated_at, resolved_at, firm_scope)
+       VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'west-peek')`,
+    )
+      .bind(`hf_${key}`, key, `The ${key} check`, seen, resolved ? "2026-09-05T00:00:00.000Z" : null)
+      .run();
+
+    const res = await notify(ownEnv, {
+      kind: "PROVIDER_FAILURE", severity: "WARNING", title: `${key} is down`,
+      objectType: "health_fault", objectId: key,
+      firmUserId: NEVER_SIGNED_IN, dedupeKey: `hf-warn-${key}`,
+    });
+    expect(res.created, "the warning was not written, so there is nothing to clear").toBe(true);
+    // Written as if it had been sent while the fault was open.
+    await ownEnv.WP_OS_DB.prepare("UPDATE notification SET created_at = ?2 WHERE id = ?1")
+      .bind(res.id, "2026-09-02T00:00:00.000Z")
+      .run();
+    return res.id!;
+  }
+
+  it("stops counting a warning whose fault is closed, and keeps one whose fault is open", async () => {
+    const closedId = await faultAndWarning("clear_closed", true);
+    const openId = await faultAndWarning("clear_open", false);
+
+    const body = await get<{
+      unread_count: number;
+      cleared: { resolved: number; superseded: number };
+      notifications: Array<{ id: string; stale_reason: string | null }>;
+    }>("/api/notifications");
+
+    // Hard-fails on nothing examined.
+    expect(body.notifications.length, "no notifications came back at all").toBeGreaterThan(0);
+
+    const closedRow = body.notifications.find((n) => n.id === closedId);
+    const openRow = body.notifications.find((n) => n.id === openId);
+    expect(closedRow, "the cleared notice vanished entirely instead of being marked").toBeTruthy();
+    expect(closedRow!.stale_reason, "a warning about a fixed fault is still counted as waiting").toBe("RESOLVED");
+    expect(openRow!.stale_reason, "a warning about a STILL-OPEN fault was cleared").toBeNull();
+
+    expect(body.cleared.resolved, "the clearing was silent rather than accounted for").toBeGreaterThan(0);
+
+    // The badge counts what is outstanding: the open one, never the closed one.
+    const badge = await get<{ unread_count: number; notifications: Array<{ id: string }> }>(
+      "/api/notifications?unread=1",
+    );
+    expect(badge.notifications.some((n) => n.id === openId), "the live fault fell off the badge").toBe(true);
+    expect(badge.notifications.some((n) => n.id === closedId), "a fixed fault is still on the badge").toBe(false);
+  });
+
+  it("writes NOTHING to a cleared notice — no read_by, no acked_by, no timestamps", async () => {
+    /*
+     * THE ASSERTION THIS BLOCK EXISTS FOR. `read_by` and `acked_by` name a person. Stamping them for
+     * a partner who has never authenticated would put decisions on the spine that he did not make,
+     * and the record would then answer "did Scooter see the outage" with a confident yes.
+     */
+    const rows = (
+      await ownEnv.WP_OS_DB.prepare(
+        `SELECT n.id, n.read_at, n.read_by, n.acked_at, n.acked_by
+           FROM notification n WHERE n.object_type = 'health_fault' AND n.firm_user_id = ?1`,
+      ).bind(NEVER_SIGNED_IN).all<{ id: string; read_at: string | null; read_by: string | null; acked_at: string | null; acked_by: string | null }>()
+    ).results ?? [];
+
+    expect(rows.length, "no fault notices to check").toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(r.read_by, `${r.id} was recorded as read by somebody`).toBeNull();
+      expect(r.acked_by, `${r.id} was recorded as acknowledged by somebody`).toBeNull();
+      expect(r.read_at, `${r.id} was recorded as read`).toBeNull();
+      expect(r.acked_at, `${r.id} was recorded as acknowledged`).toBeNull();
+    }
+  });
+
+  it("never stamps a decision for a user who has never authenticated", async () => {
+    /*
+     * The invariant stated over the WHOLE table rather than over the rows this test made: nobody
+     * who has produced no events on the spine may appear as having read, acknowledged or decided
+     * anything. Authentication is what produces events, so an actor with none has never been here.
+     */
+    const users = (
+      await ownEnv.WP_OS_DB.prepare(
+        `SELECT u.id, u.full_name,
+                (SELECT COUNT(*) FROM event_record e WHERE e.actor_type = 'firm_user' AND e.actor_id = u.id) AS acted,
+                (SELECT COUNT(*) FROM notification n WHERE n.read_by = u.id OR n.acked_by = u.id) AS stamped
+           FROM firm_user u WHERE u.status = 'ACTIVE'`,
+      ).all<{ id: string; full_name: string; acted: number; stamped: number }>()
+    ).results ?? [];
+
+    expect(users.length, "no firm users to examine").toBeGreaterThan(0);
+    const neverActed = users.filter((u) => u.acted === 0);
+    expect(neverActed.length, "every user has acted, so this invariant examined nothing").toBeGreaterThan(0);
+    for (const u of neverActed) {
+      expect(u.stamped, `${u.full_name} has never acted but is recorded as having handled ${u.stamped} notification(s)`).toBe(0);
+    }
+  });
+});

@@ -4,6 +4,7 @@ import {
   buildDiscrepancyRegister, buildPrepPacket, prepWindow, runWednesdayPrep,
 } from "../src/worker/services/meetingPrep";
 import { chiefOfStaffFor } from "../src/shared/work/chiefOfStaff";
+import { usd } from "../src/shared/fund/sleeveMath";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 
@@ -248,8 +249,16 @@ describe("the fund-deck discrepancy register", () => {
 
     // Derived and recorded stay apart, and the arithmetic actually ran.
     expect(reg.derived.length, "no arithmetic check produced anything").toBeGreaterThan(0);
-    // 70% of $24M is $16.8M, stated as $17.0M.
-    expect(reg.derived.some((d) => d.what.includes("$16.8M") && d.what.includes("$17.0M"))).toBe(true);
+    /*
+     * 70% of $24M is $16.8M against a stored $17M. Figures print through the one formatter in
+     * `sleeveMath.usd`, which strips trailing zeros — so this is "$17M", not "$17.0M". Asserted on
+     * the formatter's output rather than on a hand-written string, because two ways of writing the
+     * same number on one screen is the smaller cousin of the bug this whole file is about.
+     */
+    expect(
+      reg.derived.some((d) => d.what.includes(usd(16_800_000)) && d.what.includes(usd(17_000_000))),
+      `no sleeve mismatch was reported; derived items were: ${reg.derived.map((d) => d.where).join(", ")}`,
+    ).toBe(true);
     // 20 positions at $500-750K needs $10.0M-$15.0M; the sleeve leaves $10.2M after 40% reserves.
     expect(reg.derived.some((d) => d.what.includes("positions"))).toBe(true);
 

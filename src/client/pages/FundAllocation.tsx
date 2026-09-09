@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useApi } from "../lib/api";
+import { reserveUsd, sleeveTargetUsd, type ReserveDoc, type SleeveDoc } from "@shared/fund/sleeveMath";
 
 /**
  * Where the fund actually goes — the whole $30M, as parts of one thing.
@@ -160,11 +161,16 @@ export function FundAllocation({ fundId }: { fundId: string | null }) {
     };
     // `current`, not `[0]`: the ring drew the first mandate ever written, not the one in force.
     const m = read<{ target_size_usd?: number }>(mandate.data?.current?.mandate_json);
-    const s = read<{ estimated_fees_usd?: number; estimated_expenses_usd?: number; sleeves?: Array<{ key: string; target_usd?: number }> }>(
-      sleeve.data?.current?.sleeve_json,
-    );
-    const r = read<{ reserve_usd?: number }>(reserve.data?.current?.reserve_json);
-    return { fundSize: m.target_size_usd ?? 0, sleeveDoc: s, reserveUsd: r.reserve_usd ?? 0 };
+    const s = read<SleeveDoc>(sleeve.data?.current?.sleeve_json);
+    const r = read<ReserveDoc>(reserve.data?.current?.reserve_json);
+    /*
+     * DERIVED, NOT READ. These used to take `target_usd` and `reserve_usd` straight off the policy
+     * document — the same independently-stored figures that disagreed with their own percentages by
+     * $200K and $280K. The percentage is the policy; the dollars are a computation over an
+     * investable base that moves. Reading the stored figure here would have drawn a ring of numbers
+     * the register was simultaneously reporting as wrong.
+     */
+    return { fundSize: m.target_size_usd ?? 0, sleeveDoc: s, reserveDoc: r };
   }, [mandate.data, sleeve.data, reserve.data]);
 
   if (!fundId) return null;
@@ -180,8 +186,9 @@ export function FundAllocation({ fundId }: { fundId: string | null }) {
   }
 
   const fees = (parsed.sleeveDoc.estimated_fees_usd ?? 0) + (parsed.sleeveDoc.estimated_expenses_usd ?? 0);
-  const secondaries = parsed.sleeveDoc.sleeves?.find((x) => x.key === "SECONDARY_PURCHASE")?.target_usd ?? 0;
-  const reserves = parsed.reserveUsd;
+  const secondarySleeve = parsed.sleeveDoc.sleeves?.find((x) => x.key === "SECONDARY_PURCHASE");
+  const secondaries = secondarySleeve ? sleeveTargetUsd(parsed.sleeveDoc, secondarySleeve) : 0;
+  const reserves = reserveUsd(parsed.sleeveDoc, parsed.reserveDoc);
   // Whatever is left is the money that buys initial positions — derived rather than stated, so the
   // four slices always sum to the fund exactly.
   const initial = Math.max(0, parsed.fundSize - fees - secondaries - reserves);

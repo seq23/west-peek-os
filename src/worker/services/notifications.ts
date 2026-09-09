@@ -261,16 +261,70 @@ async function parseJsonBody(request: Request): Promise<unknown | null> {
   }
 }
 
+/**
+ * Why a notification has stopped being outstanding WITHOUT anybody deciding anything about it.
+ *
+ * THE PROBLEM THIS SOLVES, in the operator's words on 9 Sep 2026: "scooter doesnt check his OS much
+ * so fix everything and clear his responsibilities and dismiss everything". `fu_scooter_taylor` had
+ * 26 unread notifications and has NEVER SIGNED IN — zero events on the spine, zero notifications
+ * read, zero approvals decided. Of those 26, thirteen were fault warnings whose faults are now
+ * resolved and twelve were superseded morning-briefing notices. They are not obligations he
+ * incurred; they accumulated at him.
+ *
+ * MARKING THEM READ OR DISMISSED WOULD HAVE BEEN THE EASY FIX AND A FALSIFICATION. `read_by` and
+ * `acked_by` name a person, and stamping them would put twenty-six decisions on the audit spine
+ * that a man who has never opened the product did not make. Any later question of who knew what,
+ * and when, would be answered wrongly and confidently — which is worse than a cluttered screen.
+ *
+ * DERIVED, THEREFORE SELF-MAINTAINING. Nothing is written. A warning stops being outstanding
+ * because the fault it describes is closed; a briefing notice stops because a newer briefing
+ * exists. That is true of both partners, applies to notices that do not exist yet, and cannot drift
+ * — where a one-off bulk clear would fix twenty-six rows today and let the twenty-seventh pile up
+ * tomorrow.
+ *
+ * A STILL-TRUE CONDITION IS NEVER CLEARED. `silent_failures` was open at the time of writing, so
+ * its warning stays outstanding on both partners' lists. Clearing a warning whose subject is still
+ * broken is the one outcome worse than leaving it: the operator loses the signal AND keeps the
+ * fault.
+ *
+ * `first_seen_at <= n.created_at` is what ties a notice to the OCCURRENCE it was written about
+ * rather than to the check key. `runHealthEscalation` opens a NEW `health_fault` row each time a
+ * check goes down again, so without that bound a fault recurring next month would silently
+ * resurrect August's warning — while the recurrence writes its own notice anyway.
+ */
+const STALE_REASON_SQL = `CASE
+  WHEN n.object_type = 'health_fault' AND NOT EXISTS (
+         SELECT 1 FROM health_fault hf
+          WHERE hf.check_key = n.object_id
+            AND hf.resolved_at IS NULL
+            AND hf.first_seen_at <= n.created_at)
+    THEN 'RESOLVED'
+  WHEN n.kind = 'INTELLIGENCE_BRIEF' AND n.created_at < (
+         SELECT MAX(n2.created_at) FROM notification n2
+          WHERE n2.kind = 'INTELLIGENCE_BRIEF'
+            AND n2.firm_user_id IS n.firm_user_id
+            AND n2.firm_scope = n.firm_scope)
+    THEN 'SUPERSEDED'
+  ELSE NULL
+END`;
+
 export async function handleListNotifications(ctx: RouteContext): Promise<Response> {
   const url = new URL(ctx.request.url);
   const unreadOnly = url.searchParams.get("unread") === "1";
   const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
   const clauses = [visibility, "(firm_user_id IS NULL OR firm_user_id = ?1)"];
-  if (unreadOnly) clauses.push("read_at IS NULL");
+  /*
+   * `?unread=1` MEANS OUTSTANDING, which is what the status bar has always been trying to ask.
+   * Unread AND still true: a warning about a fault that has since been fixed is not something
+   * waiting on anybody, and a badge that keeps counting it teaches its reader the number is
+   * decorative.
+   */
+  if (unreadOnly) clauses.push(`read_at IS NULL AND (${STALE_REASON_SQL}) IS NULL`);
 
   const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT * FROM notification WHERE ${clauses.join(" AND ")} ORDER BY
-       CASE severity WHEN 'CRITICAL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END, created_at DESC LIMIT 200`,
+    `SELECT n.*, ${STALE_REASON_SQL} AS stale_reason FROM notification n
+      WHERE ${clauses.join(" AND ")} ORDER BY
+       CASE n.severity WHEN 'CRITICAL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END, n.created_at DESC LIMIT 200`,
   )
     .bind(ctx.identity!.id)
     .all<Record<string, unknown>>();
@@ -291,17 +345,37 @@ export async function handleListNotifications(ctx: RouteContext): Promise<Respon
    * is the fix landing before the bug does, which is the only time it is cheap.
    */
   const totals = await ctx.env.WP_OS_DB.prepare(
-    `SELECT COUNT(*) AS unread, SUM(CASE WHEN severity = 'CRITICAL' THEN 1 ELSE 0 END) AS critical
-       FROM notification
-      WHERE ${visibility} AND (firm_user_id IS NULL OR firm_user_id = ?1) AND read_at IS NULL`,
+    `SELECT COUNT(*) AS unread,
+            SUM(CASE WHEN n.severity = 'CRITICAL' THEN 1 ELSE 0 END) AS critical,
+            SUM(CASE WHEN (${STALE_REASON_SQL}) = 'RESOLVED' THEN 1 ELSE 0 END) AS resolved,
+            SUM(CASE WHEN (${STALE_REASON_SQL}) = 'SUPERSEDED' THEN 1 ELSE 0 END) AS superseded
+       FROM notification n
+      WHERE ${visibility} AND (n.firm_user_id IS NULL OR n.firm_user_id = ?1) AND n.read_at IS NULL`,
   )
     .bind(ctx.identity!.id)
-    .first<{ unread: number; critical: number | null }>();
+    .first<{ unread: number; critical: number | null; resolved: number | null; superseded: number | null }>();
+
+  const stale = (totals?.resolved ?? 0) + (totals?.superseded ?? 0);
 
   return json({
     notifications,
-    unread_count: totals?.unread ?? 0,
+    // OUTSTANDING, not merely unread. See STALE_REASON_SQL: a warning about a fault that has since
+    // been fixed is not waiting on anybody.
+    unread_count: Math.max(0, (totals?.unread ?? 0) - stale),
     critical_unread: totals?.critical ?? 0,
+    /*
+     * SAID OUT LOUD RATHER THAN SILENTLY SUBTRACTED. "You had 26 and now you have 4" needs to be
+     * accountable, or it is just a number that moved. These two say exactly what stopped being
+     * outstanding and why — and nothing was written to any of those rows to make it so.
+     */
+    cleared: {
+      resolved: totals?.resolved ?? 0,
+      superseded: totals?.superseded ?? 0,
+      note:
+        "Cleared because the condition ended, not because anybody decided anything. A warning whose " +
+        "fault is closed and a briefing a newer one replaced stop waiting on you; nothing is marked " +
+        "read or dismissed on your behalf, and everything is still here.",
+    },
     // Said plainly, because a list that is quietly shorter than the count above it is the kind of
     // disagreement between two numbers on one screen that makes a partner distrust both.
     truncated: notifications.length >= 200,
