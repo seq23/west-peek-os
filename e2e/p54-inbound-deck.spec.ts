@@ -78,9 +78,21 @@ test("a deck emailed about a company we already have is stored, queued, and read
   expect(created.status(), await created.text()).toBe(201);
   const companyId = ((await created.json()) as { id: string }).id;
 
-  // Nothing is waiting before the mail arrives — so "1 could not be read" below cannot be somebody
-  // else's deck.
-  expect(await runDeckReading(request)).toBe("no decks waiting");
+  /*
+   * Nothing is waiting before the mail arrives — so "1 could not be read" below cannot be somebody
+   * else's deck.
+   *
+   * THE SUMMARY ALSO SAYS HOW LONG THE LANE HAS BEEN QUIET, and this asserts both halves rather
+   * than the bare words it used to. In production `deck_reading` reported the flat string "no decks
+   * waiting" 310 times in seven days over a lane that had had no arrival in sixteen days — two
+   * green facts ("I read everything" and "nothing has come in for a fortnight") wearing one
+   * sentence, which is how a partner ended up discovering it by asking an employee to start. On a
+   * fresh database nothing has ever arrived, and the summary now says so.
+   */
+  const beforeAnyMail = await runDeckReading(request);
+  expect(beforeAnyMail).toContain("no decks waiting");
+  expect(beforeAnyMail, "the run log does not say how long the lane has been quiet")
+    .toContain("none has ever arrived");
 
   await deliverMail(request, {
     from: FOUNDER,

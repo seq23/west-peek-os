@@ -293,6 +293,29 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   if (job.job_key === "deck_reading") {
     const { runDeckReading } = await import("./deckQueue");
     const out = await runDeckReading(env);
+    /*
+     * AN EMPTY LANE IS SAID OUT LOUD, WITH ITS AGE.
+     *
+     * This reported the bare words "no decks waiting" 310 times in the seven days to 9 Sep 2026,
+     * over a queue that has had no arrival since 23 August. Two green facts — "I read everything"
+     * and "nothing has come in for a fortnight" — wearing one sentence. The operator discovered it
+     * by asking Wyatt to start, which is the only way an inert lane CAN be discovered when its
+     * status line looks like health.
+     *
+     * The health board carries the judgement (`deck_intake`); this makes the run log stop lying by
+     * omission, because a run log that reads identically on day one and day sixteen is a log nobody
+     * can learn anything from.
+     */
+    const quiet = await env.WP_OS_DB.prepare(
+      "SELECT MAX(created_at) AS last FROM pending_deck",
+    ).first<{ last: string | null }>().catch(() => null);
+    const daysQuiet = quiet?.last
+      ? Math.floor((now.getTime() - new Date(quiet.last).getTime()) / 86_400_000)
+      : null;
+    const emptyDetail =
+      daysQuiet === null
+        ? "no decks waiting — and none has ever arrived"
+        : `no decks waiting — nothing has arrived for ${daysQuiet} day${daysQuiet === 1 ? "" : "s"}`;
     return {
       status: "SUCCEEDED",
       // A deck that could not be read is reported, never swallowed: "the deck said nothing about
@@ -301,7 +324,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
         out.skipped === -1
           ? "no document store is configured, so no deck can be read"
           : out.read === 0 && out.failed === 0 && out.skipped === 0
-            ? "no decks waiting"
+            ? emptyDetail
             // A deck waiting on a company nobody has opened yet is SAID. Reporting "no decks
             // waiting" while decks wait is a status line that is true of the query and false about
             // the firm.

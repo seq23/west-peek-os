@@ -334,6 +334,61 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
     page: "record",
   });
 
+  /*
+   * ── THE DECK LANE, AND WHETHER ANYTHING IS COMING DOWN IT ──
+   *
+   * Operator, 9 Sep 2026: "i noticed i had to tell Wyatt to 'start' inputting the decks that came in
+   * — this should be automatic not something he asks me if he can do."
+   *
+   * WHAT WAS ACTUALLY WRONG, which is not what it looked like. Wyatt does not ask. `deck_reading` is
+   * ACTIVE, fires every fifteen minutes, needs no approval and has no gate — and in the seven days
+   * to 9 Sep it succeeded 310 times, every single run reporting "no decks waiting". Two decks have
+   * ever been enqueued and both were read on 23 August. The lane has had NO ARRIVALS IN SIXTEEN
+   * DAYS and 310 green ticks said so in a way nobody could hear.
+   *
+   * That is Rule 0 exactly: a stage exiting 0 having done nothing, with no named stop. And it is why
+   * a human became the trigger — not because the employee waits for permission, but because an
+   * empty lane and a working lane were indistinguishable, so the only way to discover it was for a
+   * partner to go and ask.
+   *
+   * SO THE QUIET IS REPORTED. An empty queue right after a read is health; an empty queue that has
+   * been empty for a fortnight is a lane to look at. DEGRADED rather than DOWN: nothing is broken,
+   * decks may genuinely not have been sent, and a red light for a quiet inbox would train two
+   * partners to ignore red lights. It carries the real reading so the judgement stays with them.
+   */
+  const decks = await one<{ waiting: number; last_arrival: string | null; ever: number }>(
+    "pending_deck",
+    `SELECT SUM(state = 'PENDING') AS waiting, MAX(created_at) AS last_arrival, COUNT(*) AS ever
+       FROM pending_deck`,
+  );
+  const QUIET_AFTER_DAYS = 7;
+  const waiting = decks?.waiting ?? 0;
+  const daysQuiet = decks?.last_arrival
+    ? Math.floor((Date.now() - new Date(decks.last_arrival).getTime()) / 86_400_000)
+    : null;
+  checks.push({
+    key: "deck_intake",
+    label: "Decks arriving",
+    state:
+      waiting > 0 ? "OK"
+      : daysQuiet === null ? "DEGRADED"
+      : daysQuiet >= QUIET_AFTER_DAYS ? "DEGRADED"
+      : "OK",
+    reading:
+      waiting > 0
+        ? `${waiting} waiting to be read · one is read every tick`
+        : daysQuiet === null
+          ? "no deck has ever arrived"
+          : `nothing has arrived for ${daysQuiet} day${daysQuiet === 1 ? "" : "s"} · last on ${decks!.last_arrival!.slice(0, 10)}`,
+    remedy:
+      waiting > 0 || (daysQuiet !== null && daysQuiet < QUIET_AFTER_DAYS)
+        ? undefined
+        : "Wyatt reads a deck every fifteen minutes and needs no permission to; there has been nothing to read. " +
+          "Decks reach this queue as attachments on mail to the firm, so a long silence is either a quiet fortnight " +
+          "or nothing reaching the inbox. Anything you have by hand can be put in from Capture.",
+    page: "capture",
+  });
+
   // ── Outbound email and image generation: configured or not, stated plainly ──
   checks.push({
     key: "email",

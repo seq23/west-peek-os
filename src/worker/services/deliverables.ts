@@ -197,6 +197,40 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
   const mineOnly = url.searchParams.get("mine") === "1";
   const mineClause = mineOnly ? "prepared_for = ?mine" : "1=1";
 
+  /*
+   * A MORNING BRIEF IS SUPERSEDED BY THE NEXT MORNING'S, AND ONLY THE LATEST IS STILL A DELIVERY.
+   *
+   * Operator, 9 Sep 2026, about Scooter's Home page: "make sure his home page is cleared of things
+   * to be put away and old briefings just surface the latest 1".
+   *
+   * She is describing a real backlog. `fu_scooter_taylor` has never signed in — zero events on the
+   * spine, zero notifications read, zero approvals decided, zero deliverables acknowledged or
+   * dismissed — and 20 deliverables have accumulated against his name, 13 of them daily briefs
+   * going back to 20 August. His first sight of this product would have been a stack of superseded
+   * morning briefs he had no part in creating, each offering him a Dismiss button for a decision he
+   * never made.
+   *
+   * DERIVED, NOT WRITTEN, and that is the whole point. Marking them dismissed would record that he
+   * decided something about documents he has never seen — the same state-confusion as an unread
+   * badge that cannot tell "handled" from "acknowledged". Nothing is written here at all: an older
+   * brief simply stops being CURRENT, because the next one replaced it. It stays in the database,
+   * stays on `?superseded=1`, and stays in `intelligence_report` in full.
+   *
+   * ONLY `daily_brief`. A weekly review, a research packet and a discrepancy register are referred
+   * back to; a brief is read on the morning it is about and replaced by breakfast the next day —
+   * which is the same reasoning that already stops briefs being filed into Documents at all
+   * (`kindDef('daily_brief').file === false`).
+   *
+   * PER RECIPIENT, so her latest never supersedes his.
+   */
+  const superseded = url.searchParams.get("superseded") === "1";
+  const currentClause = superseded
+    ? "1=1"
+    : `(d.kind <> 'daily_brief' OR d.created_at = (
+         SELECT MAX(d2.created_at) FROM deliverable d2
+          WHERE d2.kind = 'daily_brief' AND d2.prepared_for = d.prepared_for
+            AND d2.firm_scope = d.firm_scope))`;
+
   // BOTH PARTNERS SEE EACH OTHER'S. Research is INTERNAL by default, and the operator's question was
   // explicitly "if scooter requests research i can find it". Anything labelled more sensitive is
   // filtered by the visibility clause, which is where that decision belongs.
@@ -207,13 +241,15 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
   const me = ctx.identity!.id;
   const rows = kind
     ? await ctx.env.WP_OS_DB.prepare(
-        `${select} WHERE kind = ?1 AND ${dismissClause} AND ${mineClause.replace("?mine", "?3")} AND ${visibility}
+        `${select} WHERE kind = ?1 AND ${dismissClause} AND ${currentClause}
+            AND ${mineClause.replace("?mine", "?3")} AND ${visibility}
           ORDER BY created_at DESC LIMIT ?2`,
       )
         .bind(...(mineOnly ? [kind, limit, me] : [kind, limit]))
         .all<DeliverableRow>()
     : await ctx.env.WP_OS_DB.prepare(
-        `${select} WHERE ${dismissClause} AND ${mineClause.replace("?mine", "?2")} AND ${visibility}
+        `${select} WHERE ${dismissClause} AND ${currentClause}
+            AND ${mineClause.replace("?mine", "?2")} AND ${visibility}
           ORDER BY created_at DESC LIMIT ?1`,
       )
         .bind(...(mineOnly ? [limit, me] : [limit]))

@@ -104,6 +104,38 @@ jobs:
       - name: Install (reproducible, from package-lock)
         run: npm ci
 
+      # `--with-deps` runs `apt-get update`, which on a GitHub runner consults Google's own Chrome
+      # apt repository — a third-party source this job does not need and does not use. On 9 Sep 2026
+      # that repository served a corrupt index and `apt` failed the whole step twice in a row with
+      # "Hash Sum mismatch ... dl.google.com/linux/chrome-stable", before a single journey ran.
+      #
+      # Playwright ships its OWN Chromium build; `--with-deps` only wants shared libraries, and
+      # those come from Ubuntu's repositories. So the fix is to stop apt consulting a source that
+      # has nothing to do with this build, rather than to tolerate the failure.
+      #
+      # THIS IS NOT A WEAKENED GATE, and the distinction matters. There is no `continue-on-error`
+      # here, no `if: always()`, and nothing skipped: if the browser install genuinely fails, this
+      # step still fails and the job still fails. What changes is that an unrelated vendor's package
+      # index can no longer decide whether West Peek's journeys are allowed to run.
+      # Matched on CONTENT, not on a filename. The first attempt removed
+      # `google-chrome.list` by name and apt kept failing on the same URL, because the runner image
+      # declares the source somewhere else — a deb822 `.sources` file, or a differently named list.
+      # Grepping for the host finds it whatever it is called, and the step PRINTS what it removed so
+      # a silent no-op cannot masquerade as a fix.
+      - name: Remove the third-party apt source this job does not use
+        run: |
+          set -euo pipefail
+          found=$(sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null || true)
+          if [ -n "$found" ]; then
+            echo "Removing apt sources that point at dl.google.com:"
+            echo "$found"
+            echo "$found" | xargs -r sudo rm -f
+          else
+            echo "No apt source referencing dl.google.com is present; nothing to remove."
+          fi
+          # Ubuntu's own repositories are untouched and still have to work.
+          sudo apt-get update
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
