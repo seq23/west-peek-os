@@ -8,6 +8,7 @@ import { trySendAsPartner } from "../services/googleConnect";
 import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
 import { aiOutboundSwitches, mayAiEmail } from "../../shared/policy/aiOutbound";
 import { MANAGING_PARTNERS } from "../../shared/registry/managingPartners";
+import { employeeSenderAddress } from "../../shared/registry/employeeMail";
 import type { EmailSendResult } from "./emailTransport";
 import {
   cloudflareEmailBlockedReason,
@@ -43,6 +44,8 @@ export interface ExternalEffectRequestRow {
   approval_card_id: string | null;
   created_at: string;
   executed_at: string | null;
+  /** The address the message went out AS, written at execution. Null on rows written before 0156. */
+  sender_address?: string | null;
 }
 
 export class EffectError extends Error {
@@ -65,6 +68,15 @@ export interface SimulatedDelivery {
   delivered_at: string;
   /** Provider message id when a real send happened. Null for a simulation. */
   provider_message_id?: string | null;
+  /**
+   * The address the message actually went out AS.
+   *
+   * ON THE RECORD RATHER THAN IN THE PROSE. The From has always been in the summary string — "as
+   * preston@… via Resend" — which is unqueryable, so "did any employee ever send from the wrong
+   * domain" needed a human to read every receipt. It took an operator noticing a signature to catch
+   * it, which is not a control. It is the address USED, not the one that should have been.
+   */
+  sender_address?: string | null;
 }
 
 /**
@@ -127,7 +139,32 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
     // request, stays as the firm. Resolved from the person who REQUESTED the effect rather than
     // whoever executed it — the request is the authorship, and the approval is a separate act.
     const requestedBy = request.requested_by_type === "HUMAN" ? request.requested_by_id : null;
-    const from = (await fromAddressFor(env, requestedBy)) ?? undefined;
+    /*
+     * AN EMPLOYEE SIGNS THEIR OWN NAME, ON WEST PEEK'S OWN DOMAIN.
+     *
+     * Operator, 9 Sep 2026: "why dont any of the ai employees from os.joinwestpeek.com have emails
+     * from @joinwestpeek.com". They did not because they had no sender identity at all — every
+     * employee's mail went out as the firm's `WP_OS_EMAIL_FROM` — and when one was wired to a
+     * notifier by hand it borrowed Boss OS's, so a West Peek employee signed three emails from
+     * `preston@sequoiataylor.com`, the domain of a DIFFERENT BUSINESS.
+     *
+     * REFUSES RATHER THAN FALLING BACK. `employeeSenderAddress` throws for a name that is not on
+     * the roster, and that throw is allowed to fail the effect: the mail is not sent, the receipt
+     * is not consumed, and the request records FAILED. Quietly sending as the firm instead is what
+     * kept the original defect invisible — the message went out, it looked fine, and nobody learned
+     * that the sender had never been resolved. See `shared/registry/employeeMail.ts` for why
+     * `westpeek.ventures` is refused to an employee: it is the LP-facing identity, and mail from
+     * `preston@westpeek.ventures` reads to an outsider as a person at the fund.
+     */
+    let from: string | undefined;
+    if (request.requested_by_type === "AI") {
+      const employee = await env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1 OR name = ?1")
+        .bind(request.requested_by_id)
+        .first<{ name: string }>();
+      from = employeeSenderAddress(employee?.name ?? request.requested_by_id);
+    } else {
+      from = (await fromAddressFor(env, requestedBy)) ?? undefined;
+    }
 
     const message = {
       to: request.destination,
@@ -170,6 +207,7 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
       summary: result.detail,
       delivered_at: new Date().toISOString(),
       provider_message_id: result.provider_message_id,
+      sender_address: from ?? env.WP_OS_EMAIL_FROM ?? null,
     };
   }
 
@@ -283,10 +321,11 @@ export async function executeExternalEffect(
   const executedAt = new Date().toISOString();
   await env.WP_OS_DB.prepare(
     `UPDATE external_effect_request
-        SET state = 'EXECUTED', authorization_receipt_id = ?2, approval_card_id = ?2, executed_at = ?3
+        SET state = 'EXECUTED', authorization_receipt_id = ?2, approval_card_id = ?2, executed_at = ?3,
+            sender_address = ?4
       WHERE id = ?1`,
   )
-    .bind(request.id, receiptId!, executedAt)
+    .bind(request.id, receiptId!, executedAt, delivery.sender_address ?? null)
     .run();
 
   // Consume the receipt: approved → executed. Replay is then impossible.

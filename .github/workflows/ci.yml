@@ -86,6 +86,11 @@ jobs:
       - name: A deck becomes current only by human decision
         run: npm run validate:deck-decision
 
+      # A West Peek employee signs from joinwestpeek.com — never from westpeek.ventures, which is
+      # the LP-facing partner identity, and never from sequoiataylor.com, which is Boss OS.
+      - name: Employees send from West Peek's own domain
+        run: npm run validate:employee-sender
+
       - name: Build client
         run: npm run build
 

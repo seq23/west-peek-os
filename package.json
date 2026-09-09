@@ -2,7 +2,7 @@
   "name": "west-peek-os",
   "private": true,
   "version": "0.25.0",
-  "description": "West Peek OS \u2014 governed institutional operating system (P0-P12 substrate, P13-P25 operating product).",
+  "description": "West Peek OS — governed institutional operating system (P0-P12 substrate, P13-P25 operating product).",
   "type": "module",
   "scripts": {
     "backup:local": "node scripts/backup/backup.mjs",
@@ -22,6 +22,7 @@
     "validate:css-variables": "node scripts/validate/css-variables.mjs",
     "validate:deck-decision": "node scripts/validate/deck-current-requires-a-decision.mjs && node scripts/validate/deck-current-requires-a-decision.mjs --self-test",
     "validate:design-tokens": "node scripts/validate/design-tokens.mjs && node scripts/validate/design-tokens.mjs --self-test",
+    "validate:employee-sender": "node scripts/validate/employee-sender-domain.mjs && node scripts/validate/employee-sender-domain.mjs --self-test",
     "validate:network-boundary": "node scripts/validate/no-cross-repo-coupling.mjs && node scripts/validate/no-cross-repo-coupling.mjs --self-test",
     "validate:sql": "node scripts/validate/sql-against-schema.mjs && node scripts/validate/sql-against-schema.mjs --self-test",
     "validate:value-shapes": "node scripts/validate/value-shapes.mjs && node scripts/validate/value-shapes.mjs --self-test",
