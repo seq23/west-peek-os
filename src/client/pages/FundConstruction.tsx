@@ -199,6 +199,25 @@ export function FundConstruction({ fundId }: { fundId: string | null }): JSX.Ele
     reserve.reload();
   }
 
+  /*
+   * SAME SHAPE-NOT-TRUTHINESS RULE AS THE DECK PANEL. `/api/funds/:id/policies/:kind` answers a
+   * governed refusal with a body, so `mandate.data` can be truthy and carry no `current` at all.
+   * Rendering the editor anyway would show a form full of invented defaults to somebody who cannot
+   * save it — and pressing Save would then be a silent 403. A closed door says so.
+   */
+  const refused = [mandate.status, sleeve.status, reserve.status].some((s) => s === 403);
+  if (refused) {
+    return (
+      <section className="card" data-testid="fund-construction">
+        <h3>How the fund is built</h3>
+        <p className="state-empty" data-testid="construction-refused">
+          Fund construction is set by the Managing Partners. You can see where the fund goes above;
+          changing it is theirs.
+        </p>
+      </section>
+    );
+  }
+
   if (!fundId) return null;
 
   return (

@@ -116,18 +116,38 @@ export function DeckPanel(): JSX.Element {
 
   if (deck.loading) return <section className="card"><p className="muted small">Loading the deck…</p></section>;
 
+  /*
+   * A REFUSAL AND A 404 ARRIVE AS A BODY, NOT AS NULL.
+   *
+   * `useApi` hands back whatever the server returned, so a 404 `{error:"no_fund"}` or a 403 is a
+   * TRUTHY object with no `versions` array — and `data.versions.filter(...)` threw, taking the whole
+   * Fund strategy page down to nothing. Both design journeys caught it: "Fund strategy (0 chars)"
+   * and the no-Managing-Partner sweep. A blank page is the worst possible rendering of a governed
+   * refusal, because it looks like a firm with nothing in it rather than a door that is closed.
+   *
+   * So the shape is checked, and the two cases are told apart: a refusal says it was refused, and
+   * an absent fund says there is nothing to hold a deck yet.
+   */
   const data = deck.data;
-  if (!data) {
+  const versions = Array.isArray(data?.versions) ? data!.versions : null;
+  if (!data || versions === null) {
+    const refused = deck.status === 403;
     return (
       <section className="card" data-testid="deck-panel">
         <h3>The deck</h3>
-        <p className="state-empty">Could not read the deck. Nothing has been changed.</p>
+        <p className="state-empty" data-testid="deck-unavailable">
+          {refused
+            ? "The deck is visible to Managing Partners. Ask Sequoia or Scooter if you need it."
+            : deck.status === 404
+              ? "No fund has been set up yet, so there is nothing for a deck to be about. Create the fund first and the deck history starts here."
+              : "Could not read the deck just now. Nothing has been changed — try again in a moment."}
+        </p>
       </section>
     );
   }
 
-  const proposed = data.versions.filter((v) => v.state === "PROPOSED");
-  const history = data.versions.filter((v) => v.state !== "PROPOSED");
+  const proposed = versions.filter((v) => v.state === "PROPOSED");
+  const history = versions.filter((v) => v.state !== "PROPOSED");
   const drift = data.staleness?.changed_since ?? [];
 
   return (
