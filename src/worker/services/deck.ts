@@ -23,6 +23,23 @@ import {
  * derived from which because NO VERSION EVER RECORDED ITS OWN INPUTS. `records_snapshot_json` is the
  * whole point of this file; the viewer and the version list are what make it visible.
  *
+ * THE DECK IS NEVER EMAILED, AND THE RULE GENERALISES — put here because this is where the next
+ * person will look for it.
+ *
+ *   A DOCUMENT WITH A CURRENT VERSION LIVES IN THE OS AND IS LINKED.
+ *   A SUMMARY THAT IS TRUE AT THE MOMENT IT IS WRITTEN CAN BE EMAILED.
+ *
+ * Operator, 9 Sep 2026: "i dont need the deck in an email at all just inside the OS". That is not a
+ * preference about inboxes. An emailed PDF is a SECOND COPY THAT CAN DRIFT — somebody forwards the
+ * attachment, the OS later renders v3, and two versions of an LP document exist with no way to tell
+ * which is current. The entire value of this table is that there is one current deck and the system
+ * knows which one; an email undoes it. So a new version raises a NOTICE that links here, and the
+ * bytes never leave.
+ *
+ * The distinction, not a ban on email: a weekly relationship note or a monthly list is true when it
+ * is written and has no later version to disagree with, so pushing it is right. A deck, a policy, a
+ * report that gets superseded — those are linked, never attached.
+ *
  * PROVENANCE IS A FIRST-CLASS FIELD. `UPLOADED` is a partner exporting from Canva; `BUILT` is an
  * employee rendering from records. They are different kinds of document and a reader should never
  * have to guess: only a BUILT version can promise its figures match the OS.
