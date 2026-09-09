@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { readableDate, shortDate } from "./lib/dates";
 import { api, getDevUser, mutationError, onNotificationsChanged, signOut, useApi, type MeResponse } from "./lib/api";
 import { RecordInvestment } from "./pages/RecordInvestment";
+import { DeckPanel } from "./pages/DeckPanel";
+import { FundConstruction } from "./pages/FundConstruction";
 import { LpPage } from "./pages/LpPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { PageHostCard } from "./pages/PageHostCard";
@@ -3311,8 +3313,21 @@ const STRATEGY_STEPS: readonly { q: string; where: string }[] = [
 ];
 
 function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
+  /*
+   * The deck and the construction editor sit at the TOP of this page, above the analysis, because
+   * they are the two things the operator asked for by name — "we should have our deck displayed
+   * prominently in the OS" and "we need to be able to adjust this ourselves in the OS UI". A
+   * document that lives only in Canva and a construction that needs a migration to change are the
+   * two gaps that produced every discrepancy found on 9 Sep 2026.
+   */
+  const funds = useApi<{ funds: Array<{ id: string }> }>("/api/funds");
+  const fundId = funds.data?.funds?.[0]?.id ?? null;
+
   return (
     <section data-testid="fund-strategy-page">
+      <DeckPanel />
+      <FundConstruction fundId={fundId} />
+
       {/* The sequence, stated once at the top. It teaches the order rather than assuming it. */}
       <details className="card" data-testid="strategy-how">
         <summary className="muted small">How this decision runs</summary>

@@ -177,6 +177,7 @@ import {
   handleListDeliverables,
 } from "./services/deliverables";
 import { handleRunMeetingPrep } from "./services/meetingPrep";
+import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/deck";
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
 import { handleIngestTranscript } from "./services/captureAdapter";
@@ -998,6 +999,10 @@ const router = new Router()
   // The per-partner Wednesday packets and the deck discrepancy register. Runs on `wednesday_prep`
   // every morning; this is the same path, by hand, for a partner who wants it now.
   .post("/api/meeting-prep/run", handleRunMeetingPrep)
+  // The LP deck, its history, and whether the records have moved under it since it was built.
+  .get("/api/deck", handleGetDeck)
+  .post("/api/deck/versions", handleUploadDeck)
+  .post("/api/deck/versions/:id/decide", handleDecideDeck)
   // The capture box: put something on the agenda that no record knows about.
   .post("/api/weekly-review/notes", handleReviewNotes)
   .post("/api/weekly-review/items", handleAddReviewItem)
