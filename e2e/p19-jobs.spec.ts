@@ -49,9 +49,23 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
   await expect(job).toContainText("Switched off");
   await expect(job).toContainText("operator must switch recurring work on");
 
-  // Running a paused job records a refusal rather than doing the work.
+  /*
+   * A PAUSE STOPS THE TIMER, NOT A PARTNER.
+   *
+   * This used to assert REFUSED, and the refusal was a defect. Every pause_reason in this repo
+   * tells the reader to run the job by hand — deck_rebuild's says "Run it from Work, or POST
+   * /api/jobs/deck_rebuild/run" — and following that sentence returned "REFUSED: job is PAUSED",
+   * confirmed against production on 9 Sep 2026. A message that instructs an operator to do
+   * something the system then refuses costs a person their time proving the software wrong.
+   *
+   * The run SAYS it happened while paused, which is the part worth asserting: the operator must
+   * never be left wondering why a switched-off job produced work. The clock is still refused —
+   * that half is held in tests/jobs.test.ts, where a SCHEDULED trigger can be driven directly.
+   */
   await page.getByTestId("job-run-daily_intelligence").click();
-  await expect(page.getByTestId("jobs-message")).toContainText("REFUSED");
+  await expect(page.getByTestId("jobs-message")).toContainText("while the job is PAUSED");
+  // Still switched off. Running it by hand is not switching it on.
+  await expect(page.getByTestId("job-daily_intelligence")).toContainText("Switched off");
 
   // Switch it on deliberately, then run it.
   await page.getByTestId("job-reason").fill("operator switching the daily brief on");
