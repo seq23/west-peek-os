@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { readableDate, shortDate } from "./lib/dates";
-import { api, getDevUser, mutationError, signOut, useApi, type MeResponse } from "./lib/api";
+import { api, getDevUser, mutationError, onNotificationsChanged, signOut, useApi, type MeResponse } from "./lib/api";
 import { RecordInvestment } from "./pages/RecordInvestment";
 import { LpPage } from "./pages/LpPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
@@ -3196,6 +3196,24 @@ function StatusBar({ onNavigate, refreshNonce }: { onNavigate: (key: string) => 
   const [online, setOnline] = useState(isOnline());
   const [queued, setQueued] = useState(queuedCaptures().length);
   const [message, setMessage] = useState<string | null>(null);
+
+  /*
+   * THE BADGE FOLLOWS HER ACTIONS. Operator, 9 Sep 2026: "the west peek os home screen still says
+   * 12 unread even tho i read it all and dismissed or took responsibility."
+   *
+   * This component held its own copy of the count, refreshed only when App's `refreshNonce`
+   * changed — and that nonce is handed to `CapturePage` and `WorkSurface` and to nothing else. The
+   * Notifications page calls its own `useApi().reload()`, which cannot reach this one. So she could
+   * clear the entire inbox, watch the page say "You are caught up", and see this number sit
+   * unchanged until she reloaded the tab. A counter that does not answer to what she just did
+   * teaches her the counter is decorative — and the day it means something looks exactly like the
+   * forty days it did not.
+   *
+   * `onNotificationsChanged` fires from `api()` whenever a notification write is ACCEPTED, whatever
+   * surface made it, so no page has to remember to tell the badge.
+   */
+  const reloadCount = notifications.reload;
+  useEffect(() => onNotificationsChanged(reloadCount), [reloadCount]);
 
   useEffect(() => {
     const update = () => {

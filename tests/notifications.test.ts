@@ -559,3 +559,119 @@ describe("the unread count is counted over everything, not over the visible page
     expect(res.body.unread_count).toBe(0);
   });
 });
+
+/**
+ * WHAT THE BADGE COUNTS AND WHAT THE PAGE SHOWS ARE THE SAME NUMBER, FOR EVERY STATE.
+ *
+ * Operator, 9 Sep 2026: "the west peek os home screen still says 12 unread even tho i read it all
+ * and dismissed or took responsibility." The client half of that — a status bar holding its own
+ * frozen copy of the count — is pinned in `tests/notificationBadge.test.ts`. This is the server
+ * half: the badge reads `/api/notifications?unread=1` and the page reads `/api/notifications`, two
+ * different requests, and nothing but this test makes them agree about what "waiting" means.
+ *
+ * THREE ACTIONS, AND THEY ARE NOT THE SAME ACT. Dismiss records that she has seen it. Take
+ * responsibility puts her name and the time on the audit spine AND implies she saw it, so it sets
+ * `read_at` too. Both therefore clear the badge, which is correct for a badge labelled UNREAD: the
+ * number answers "is there anything I have not looked at", and by then she has. What acknowledging
+ * additionally does is recorded, permanent, and visible on the row — it is not what this number is
+ * for.
+ */
+describe("the badge and the page agree, whatever she just did", () => {
+  const READER = "fu_scooter_taylor";
+
+  /**
+   * Both surfaces, read the way the two components read them.
+   *
+   * `waitingOnPage` is only comparable when the page is NOT truncated. The full list is capped at
+   * 200 rows and ordered by severity, so on a busy inbox an unread row can legitimately be off the
+   * page while still being counted — which is the whole reason `truncated` exists. The invariant
+   * that always holds is that both surfaces report the SAME NUMBER; the rendered-row comparison is
+   * the stronger form, asserted where it applies.
+   */
+  async function bothViews() {
+    const badge = await call<{ unread_count: number; notifications: Array<{ id: string }> }>(
+      "/api/notifications?unread=1", MP,
+    );
+    const page = await call<{ unread_count: number; truncated: boolean; notifications: Array<{ id: string; read_at: string | null }> }>(
+      "/api/notifications", MP,
+    );
+    return {
+      badgeCount: badge.body.unread_count,
+      badgeRows: badge.body.notifications.length,
+      pageCount: page.body.unread_count,
+      truncated: page.body.truncated,
+      waitingOnPage: page.body.notifications.filter((n) => n.read_at === null).length,
+    };
+  }
+
+  /** The two surfaces must never disagree about the number, whatever the page could fit. */
+  function agree(v: Awaited<ReturnType<typeof bothViews>>, expected: number, when: string): void {
+    expect(v.badgeCount, `the badge is wrong ${when}`).toBe(expected);
+    expect(v.pageCount, `the page and the badge disagree ${when}`).toBe(v.badgeCount);
+    // The unread-only view is never truncated at these volumes, so its rows ARE the count.
+    expect(v.badgeRows, `the unread list and its own count disagree ${when}`).toBe(v.badgeCount);
+    if (!v.truncated) {
+      expect(v.waitingOnPage, `the page renders a different number of waiting items ${when}`).toBe(v.badgeCount);
+    }
+  }
+
+  it("agrees before anything is acted on, after a dismiss, and after taking responsibility", async () => {
+    await call("/api/notifications/read-all", MP, "POST", {});
+
+    const ids: string[] = [];
+    for (const severity of ["CRITICAL", "WARNING", "INFO"] as const) {
+      const res = await notify(env, {
+        kind: "EMPLOYEE_EXCEPTION", severity, title: `agree ${severity}`,
+        firmUserId: READER, dedupeKey: `agree-${severity}-${crypto.randomUUID()}`,
+      });
+      expect(res.created).toBe(true);
+      ids.push(res.id!);
+    }
+
+    // Hard-fails on nothing to examine: every assertion below is vacuously true over an empty set.
+    const start = await bothViews();
+    expect(start.badgeCount, "nothing was outstanding, so this proves nothing").toBe(3);
+    agree(start, 3, "before she acts");
+
+    // 1 · Dismiss one.
+    expect((await call(`/api/notifications/${ids[0]}/read`, MP, "POST", {})).status).toBe(200);
+    agree(await bothViews(), 2, "after she dismissed one");
+
+    // 2 · Take responsibility for another. Acknowledging implies reading, so it clears too.
+    expect((await call(`/api/notifications/${ids[1]}/acknowledge`, MP, "POST", {})).status).toBe(200);
+    agree(await bothViews(), 1, "after she took responsibility for one");
+
+    // And the stronger act is still recorded on the row rather than merely clearing a number.
+    const acked = await env.WP_OS_DB.prepare(
+      "SELECT acked_at, acked_by, read_at FROM notification WHERE id = ?1",
+    ).bind(ids[1]).first<{ acked_at: string | null; acked_by: string | null; read_at: string | null }>();
+    expect(acked!.acked_at, "acknowledgement did not persist").toBeTruthy();
+    expect(acked!.acked_by).toBe(READER);
+    expect(acked!.read_at, "acknowledging must imply reading, or the badge and the row disagree").toBeTruthy();
+
+    // 3 · Clear the rest in bulk.
+    await call("/api/notifications/read-all", MP, "POST", {});
+    agree(await bothViews(), 0, "after she dismissed everything");
+  });
+
+  it("never counts a notification addressed to the other partner", async () => {
+    /*
+     * The production shape on 9 Sep 2026: all twenty-six unread rows were addressed to Scooter and
+     * NONE to Sequoia, so her true count was zero while her badge showed a stale twelve. If the
+     * count ever stopped filtering by recipient, one partner's inbox would inflate the other's.
+     */
+    await call("/api/notifications/read-all", MP, "POST", {});
+    await call("/api/notifications/read-all", SEQUOIA, "POST", {});
+
+    const res = await notify(env, {
+      kind: "EMPLOYEE_EXCEPTION", severity: "WARNING", title: "for scooter only",
+      firmUserId: "fu_scooter_taylor", dedupeKey: `scooter-only-${crypto.randomUUID()}`,
+    });
+    expect(res.created).toBe(true);
+
+    const his = await call<{ unread_count: number }>("/api/notifications?unread=1", MP);
+    const hers = await call<{ unread_count: number }>("/api/notifications?unread=1", SEQUOIA);
+    expect(his.body.unread_count, "the addressee did not see their own notification").toBe(1);
+    expect(hers.body.unread_count, "the other partner's badge counted a notification that is not hers").toBe(0);
+  });
+});
