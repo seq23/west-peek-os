@@ -4529,3 +4529,19 @@ body {
   width: 1%;
   white-space: nowrap;
 }
+
+/* ── The fund-construction editor on a narrow screen ──────────────────────────────────────────
+   The inputs sit inside sentences ("A 30M fund, charging 2% a year over 10 years"), which reads
+   far better than a column of labelled boxes and overflows a phone if the numbers are allowed
+   their default width. `journey 10 — mobile` caught this at 281px of sideways scroll: the page
+   body must never scroll horizontally, and wide content scrolls inside its own container instead.
+   So the number fields are sized to their content and the sentence wraps between them. */
+.construction-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35em; }
+.construction-inputs input[type="number"] {
+  width: 5.5ch;
+  min-width: 0;
+  padding: 0.15em 0.35em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.construction-why { width: 100%; max-width: 100%; box-sizing: border-box; }

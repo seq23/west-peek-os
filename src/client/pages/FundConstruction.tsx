@@ -239,8 +239,8 @@ export function FundConstruction({ fundId }: { fundId: string | null }): JSX.Ele
       </p>
 
       <h4>What you decide</h4>
-      <div className="quiet-hours" data-testid="construction-inputs">
-        <p className="quiet-hours-line">
+      <div className="quiet-hours construction-inputs" data-testid="construction-inputs">
+        <p className="quiet-hours-line construction-line">
           A{" "}
           <input type="number" min={1} step={1} value={fundSizeM} data-testid="input-fund-size"
             aria-label="Fund size in millions" onChange={(e) => setFundSizeM(Number(e.target.value))} />
@@ -255,7 +255,7 @@ export function FundConstruction({ fundId }: { fundId: string | null }): JSX.Ele
             aria-label="Estimated expenses in millions" onChange={(e) => setExpensesM(Number(e.target.value))} />
           M of expenses.
         </p>
-        <p className="quiet-hours-line">
+        <p className="quiet-hours-line construction-line">
           Split the investable capital{" "}
           <input type="number" min={0} max={100} step={1} value={earlyPct} data-testid="input-early-pct"
             aria-label="Early stage percentage" onChange={(e) => setEarlyPct(Math.max(0, Math.min(100, Number(e.target.value))))} />
@@ -264,7 +264,7 @@ export function FundConstruction({ fundId }: { fundId: string | null }): JSX.Ele
             aria-label="Reserve percentage of the early stage sleeve" onChange={(e) => setReservePct(Math.max(0, Math.min(100, Number(e.target.value))))} />
           % of the early-stage sleeve in reserve.
         </p>
-        <p className="quiet-hours-line">
+        <p className="quiet-hours-line construction-line">
           Aiming for{" "}
           <input type="number" min={1} step={1} value={positions} data-testid="input-positions"
             aria-label="Target number of positions" onChange={(e) => setPositions(Number(e.target.value))} />
@@ -348,9 +348,10 @@ export function FundConstruction({ fundId }: { fundId: string | null }): JSX.Ele
         Kept on the new version. The sector question was lost in August because a later version dropped
         it without saying why — one sentence here is what stops that happening again.
       </p>
-      <input type="text" value={why} data-testid="construction-why" aria-label="Why you changed it"
+      <input type="text" className="construction-why" value={why} data-testid="construction-why"
+        aria-label="Why you changed it"
         placeholder="e.g. moved to 70/30 of investable capital so the table accounts for fees"
-        onChange={(e) => setWhy(e.target.value)} style={{ width: "100%" }} />
+        onChange={(e) => setWhy(e.target.value)} />
 
       <div className="quiet-hours-actions">
         <button type="button" className="btn-strong" disabled={!canSave} data-testid="construction-save"
