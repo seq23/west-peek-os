@@ -80,6 +80,40 @@ export function DeckPanel(): JSX.Element {
     deck.reload();
   }
 
+  /*
+   * THE UPLOAD CONTROL, WITHOUT WHICH THE ENDPOINT IS DEAD CODE. `POST /api/deck/versions` existed
+   * with nothing in the interface able to reach it — this repo's "exists but nothing invokes it"
+   * defect, committed while building the surface that exists to prevent that class. A partner
+   * exporting from Canva is how a version arrives today, so it is the control that matters most.
+   */
+  async function upload(file: File): Promise<void> {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      // Chunked so a multi-megabyte deck does not blow the argument limit on String.fromCharCode.
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 8192) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      }
+      const res = await api<{ error?: string; detail?: string }>("/api/deck/versions", {
+        method: "POST",
+        body: { title: file.name.replace(/\.pdf$/i, ""), content_base64: btoa(binary) },
+      });
+      setMessage(
+        res.status === 201
+          ? "Recorded, with a snapshot of every fund figure it was built from. It is now the current deck and the previous one is still on the record."
+          : `That did not save${res.data?.detail ? `: ${res.data.detail}` : ""}. Nothing was changed.`,
+      );
+      deck.reload();
+    } catch {
+      setMessage("Could not read that file. Nothing was changed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (deck.loading) return <section className="card"><p className="muted small">Loading the deck…</p></section>;
 
   const data = deck.data;
@@ -191,6 +225,25 @@ export function DeckPanel(): JSX.Element {
           </ul>
         </>
       )}
+
+      <p className="muted small">
+        <label htmlFor="deck-upload">
+          <strong>Add the current deck</strong> — export it to PDF and put it here. Every version is
+          kept with the fund figures it was built from, so nothing you upload replaces what came before.
+        </label>
+      </p>
+      <input
+        id="deck-upload"
+        type="file"
+        accept="application/pdf"
+        disabled={busy}
+        data-testid="deck-upload"
+        onChange={(e) => {
+          const file = e.currentTarget.files?.[0];
+          if (file) void upload(file);
+          e.currentTarget.value = "";
+        }}
+      />
 
       {history.length > 0 && (
         <details className="card" data-testid="deck-history">
