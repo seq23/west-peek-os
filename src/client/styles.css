@@ -2308,7 +2308,22 @@ details h3 {
 .notification-row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-lg); }
 .notification-body { min-width: 0; }
 .notification-head { display: flex; align-items: baseline; gap: var(--space-sm); flex-wrap: wrap; }
-.notification-actions { display: flex; gap: var(--space-sm); flex-shrink: 0; }
+/*
+ * A ROW OF BUTTONS WRAPS RATHER THAN PUSHING THE PAGE SIDEWAYS.
+ *
+ * Found on 9 Sep 2026 while chasing an unrelated failure: Fund strategy at a 390px phone width had
+ * a document 671px wide — 281px of horizontal scroll — because the eight sector chips share this
+ * class and a flex row with no `flex-wrap` never breaks. The journey that catches this
+ * (p25 "journey 10 — mobile") passes in CI and fails locally, because the number of chips depends
+ * on the seeded sector list: the defect was always there and the assertion only met a database wide
+ * enough to show it.
+ *
+ * `flex-wrap` rather than a fix on the sector picker alone, because every other user of this class
+ * is an Approve/Try-again pair that should also stack on a phone instead of dragging the whole
+ * document off-screen — the exact thing this journey exists to prevent. `flex-shrink: 0` stays: it
+ * governs this container inside a parent row and has nothing to do with its own children.
+ */
+.notification-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); flex-shrink: 0; }
 
 /* ══════════════════════════════════════════════════════════════════════════
    HOME — deliveries lead, and each one has a face on it

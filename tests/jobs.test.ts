@@ -151,11 +151,40 @@ describe("recurring work never starts itself", () => {
     expect(ghost.status).toBe(404);
   });
 
-  it("a PAUSED job that is run anyway records a REFUSED run rather than doing the work", async () => {
-    const res = await call<{ run: { status: string; outcome_summary: string } }>("/api/jobs/daily_intelligence/run", MP, "POST");
-    expect(res.status).toBe(201);
-    expect(res.body.run.status).toBe("REFUSED");
-    expect(res.body.run.outcome_summary).toContain("job is PAUSED");
+  /*
+   * A PAUSE STOPS THE TIMER, NOT A PARTNER.
+   *
+   * This test used to assert the opposite, and the opposite was a defect. Every pause_reason this
+   * repo seeds tells the reader to run the job by hand — `deck_rebuild`'s says "Rebuilt when the
+   * records move or when a partner asks, not on a timer. Run it from Work, or POST
+   * /api/jobs/deck_rebuild/run" — and following that sentence returned `REFUSED: job is PAUSED`,
+   * confirmed by hitting it in production on 9 Sep 2026. A refusal that instructs an operator to do
+   * something the system then refuses costs a person their time proving the software wrong.
+   *
+   * The two halves are asserted together on purpose. Relaxing the pause check for a partner is only
+   * safe if the SCHEDULED path is still refused; a test that proved the first without the second
+   * would be describing a job that is not paused at all.
+   */
+  it("lets a partner run a PAUSED job by hand, and still refuses the timer", async () => {
+    const byHand = await call<{ run: { status: string; outcome_summary: string } }>(
+      "/api/jobs/daily_intelligence/run", MP, "POST",
+    );
+    expect(byHand.status).toBe(201);
+    expect(byHand.body.run.status, "a partner asking by hand was refused").not.toBe("REFUSED");
+    expect(
+      byHand.body.run.outcome_summary,
+      "the run log does not say it happened while the job was paused",
+    ).toContain("PAUSED");
+
+    // The clock still gets nothing. This is what the pause means.
+    const scheduled = await runJob(
+      env,
+      { type: "HUMAN", firmUserId: "fu_sequoia_taylor", firmScopes: ["west-peek"], roles: ["MANAGING_PARTNER"] },
+      "daily_intelligence",
+      { trigger: "SCHEDULED" },
+    );
+    expect((scheduled.run as { status: string }).status, "a paused job ran on its schedule").toBe("REFUSED");
+    expect((scheduled.run as { outcome_summary: string }).outcome_summary).toContain("job is PAUSED");
   });
 });
 

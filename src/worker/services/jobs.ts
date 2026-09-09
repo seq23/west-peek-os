@@ -144,8 +144,31 @@ async function resolveEmployee(
  * Governance preconditions, checked before any work and before any spend. A refusal here is a
  * recorded outcome, never an exception: the operator needs to see WHY a scheduled job did nothing.
  */
-async function checkPreconditions(env: Env, job: ScheduledJobRow): Promise<string | null> {
-  if (job.status === "PAUSED") return `job is PAUSED: ${job.pause_reason ?? "no reason recorded"}`;
+async function checkPreconditions(
+  env: Env,
+  job: ScheduledJobRow,
+  /**
+   * WHY THE TRIGGER AND THE ACTOR ARE ARGUMENTS NOW.
+   *
+   * PAUSED MEANS "NOT ON A TIMER", NOT "NOBODY MAY ASK". Every pause_reason this repo seeds says so
+   * in as many words — `deck_rebuild`'s reads "Rebuilt when the records move or when a partner asks,
+   * not on a timer. Run it from Work, or POST /api/jobs/deck_rebuild/run." Following that sentence
+   * returned `REFUSED: job is PAUSED`, confirmed by hitting it directly on 9 Sep 2026. A refusal
+   * message that instructs an operator to do something the system then refuses is worse than a bare
+   * refusal: it costs a person their time proving the software wrong.
+   *
+   * So a MANUAL run asked for by a HUMAN passes the pause check, and nothing else does. A scheduled
+   * tick is still refused — which is the entire meaning of the pause — and so is an employee or any
+   * other non-human actor, because switching a paused duty back on is not a thing an AI employee may
+   * arrange for itself. Every other precondition below still applies to the manual path unchanged:
+   * an INACTIVE employee, a paused machine and a missing target all still refuse.
+   */
+  opts: { trigger: "SCHEDULED" | "MANUAL"; actorType: Actor["type"] },
+): Promise<string | null> {
+  const askedByHand = opts.trigger === "MANUAL" && opts.actorType === "HUMAN";
+  if (job.status === "PAUSED" && !askedByHand) {
+    return `job is PAUSED: ${job.pause_reason ?? "no reason recorded"}`;
+  }
 
   if (job.target_kind === "EMPLOYEE") {
     const employee = await resolveEmployee(env, job.target_id!);
@@ -559,7 +582,10 @@ export async function runJob(
     return { run: existing, replayed: true };
   }
 
-  const refusal = await checkPreconditions(env, job);
+  const refusal = await checkPreconditions(env, job, { trigger: opts.trigger, actorType: actor.type });
+  // A paused duty run by hand is a normal, allowed thing — and it is recorded as such, so the run
+  // log never leaves a reader wondering why a paused job produced work.
+  const ranWhilePaused = job.status === "PAUSED" && refusal === null;
   const runId = `jrun_${crypto.randomUUID()}`;
   /*
    * TWO DIFFERENT QUESTIONS WERE BEING ANSWERED BY ONE NUMBER.
@@ -661,6 +687,13 @@ export async function runJob(
       summary: "job body threw",
       error: err instanceof Error ? err.message : String(err),
       artifacts: [],
+    };
+  }
+
+  if (ranWhilePaused) {
+    outcome = {
+      ...outcome,
+      summary: `Asked for by hand while the job is PAUSED (a pause stops the timer, not a partner). ${outcome.summary}`,
     };
   }
 

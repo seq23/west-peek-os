@@ -20,6 +20,7 @@
     "validate:brand": "node scripts/validate/west-peek-brand-system.mjs && node scripts/validate/west-peek-brand-system.mjs --self-test",
     "validate:css-classes": "node scripts/validate/css-classes.mjs",
     "validate:css-variables": "node scripts/validate/css-variables.mjs",
+    "validate:deck-decision": "node scripts/validate/deck-current-requires-a-decision.mjs && node scripts/validate/deck-current-requires-a-decision.mjs --self-test",
     "validate:design-tokens": "node scripts/validate/design-tokens.mjs && node scripts/validate/design-tokens.mjs --self-test",
     "validate:network-boundary": "node scripts/validate/no-cross-repo-coupling.mjs && node scripts/validate/no-cross-repo-coupling.mjs --self-test",
     "validate:sql": "node scripts/validate/sql-against-schema.mjs && node scripts/validate/sql-against-schema.mjs --self-test",

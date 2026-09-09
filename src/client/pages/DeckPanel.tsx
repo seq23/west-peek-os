@@ -64,7 +64,7 @@ export function DeckPanel(): JSX.Element {
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function decide(id: string, decision: "APPROVE" | "REJECT"): Promise<void> {
+  async function decide(id: string, decision: "APPROVE" | "REJECT", reinstate = false): Promise<void> {
     setBusy(true);
     const reason = decision === "REJECT" ? window.prompt("What is wrong with it? Preston gets this back.") : undefined;
     if (decision === "REJECT" && !reason) { setBusy(false); return; }
@@ -72,9 +72,11 @@ export function DeckPanel(): JSX.Element {
     setBusy(false);
     setMessage(
       res.status === 200
-        ? decision === "APPROVE"
-          ? "Approved. That is now the current deck."
-          : "Sent back to Preston with your reason."
+        ? decision === "REJECT"
+          ? "Sent back to Preston with your reason."
+          : reinstate
+            ? "That is the current deck again. Nothing about it changed — only which one the firm sends."
+            : "Approved. That is now the current deck."
         : "That did not go through. Nothing changed.",
     );
     deck.reload();
@@ -103,7 +105,7 @@ export function DeckPanel(): JSX.Element {
       });
       setMessage(
         res.status === 201
-          ? "Recorded, with a snapshot of every fund figure it was built from. It is now the current deck and the previous one is still on the record."
+          ? "Recorded, with a snapshot of every fund figure it was built from. It is NOT the deck yet — it is waiting on you below. The deck the firm sends has not changed."
           : `That did not save${res.data?.detail ? `: ${res.data.detail}` : ""}. Nothing was changed.`,
       );
       deck.reload();
@@ -217,9 +219,17 @@ export function DeckPanel(): JSX.Element {
         </>
       )}
 
+      {/*
+        WAITING ON YOU IS NOW THE ONLY DOOR. Until 9 Sep 2026 an upload published itself: it inserted
+        as CURRENT and superseded whatever the firm was sending. Recording a PDF and deciding it is
+        the document that goes to limited partners are different acts, and both now arrive here.
+      */}
       {proposed.length > 0 && (
         <>
           <h4>Waiting on you</h4>
+          <p className="muted small">
+            Nothing here is the deck yet. The current deck does not change until you approve one.
+          </p>
           <ul className="card-list" data-testid="deck-proposed">
             {proposed.map((v) => (
               <li key={v.id} className="card">
@@ -227,7 +237,7 @@ export function DeckPanel(): JSX.Element {
                   v{v.version_no} — {v.title}
                 </strong>
                 <p className="muted small">
-                  Built by {v.created_by} · {when(v.created_at)}
+                  {v.origin === "UPLOADED" ? "Uploaded by" : "Built by"} {v.created_by} · {when(v.created_at)}
                 </p>
                 {v.change_summary && <p className="small">{v.change_summary}</p>}
                 <div className="notification-actions">
@@ -248,8 +258,9 @@ export function DeckPanel(): JSX.Element {
 
       <p className="muted small">
         <label htmlFor="deck-upload">
-          <strong>Add the current deck</strong> — export it to PDF and put it here. Every version is
-          kept with the fund figures it was built from, so nothing you upload replaces what came before.
+          <strong>Add a version of the deck</strong> — export it to PDF and put it here. It goes on
+          the record with the fund figures it was built from and then waits on your approval above:
+          uploading a file never changes which deck the firm sends.
         </label>
       </p>
       <input
@@ -282,7 +293,25 @@ export function DeckPanel(): JSX.Element {
                       {changed.map((c) => `${c.field}: ${c.was} → ${c.now}`).join(" · ")}
                     </div>
                   )}
-                  {v.rejected_reason && <div className="muted">Sent back: {v.rejected_reason}</div>}
+                  {/*
+                    NOT "sent back". A REJECTED row is any version that is not the document, and the
+                    two reasons read nothing alike: a build Preston must redo, or — migration 0155 —
+                    a row recorded in error that nobody ever chose. The reason says which.
+                  */}
+                  {v.rejected_reason && <div className="muted">Why this is not the deck: {v.rejected_reason}</div>}
+                  {/*
+                    REINSTATE. A superseded version can be made current again without anything about
+                    it changing, which is what was missing when a stray upload displaced the Canva
+                    deck and putting it back needed a migration.
+                  */}
+                  {v.state === "SUPERSEDED" && (
+                    <div className="notification-actions">
+                      <button type="button" disabled={busy} data-testid={`deck-reinstate-${v.id}`}
+                        onClick={() => void decide(v.id, "APPROVE", true)}>
+                        Make this the current deck again
+                      </button>
+                    </div>
+                  )}
                 </li>
               );
             })}

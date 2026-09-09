@@ -81,6 +81,11 @@ jobs:
       - name: SQL against schema
         run: npm run validate:sql
 
+      # The LP deck cannot become current without a human deciding. On 9 Sep 2026 an upload
+      # published itself and displaced the deck the firm sends; migration 0155 is the cleanup.
+      - name: A deck becomes current only by human decision
+        run: npm run validate:deck-decision
+
       - name: Build client
         run: npm run build
 
