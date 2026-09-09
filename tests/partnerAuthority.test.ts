@@ -22,7 +22,73 @@ import {
  * holds, which is the only interesting property here.
  */
 
-const PASS = `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=pass`;
+/**
+ * THE REAL HEADER, COPIED OUT OF A REAL MESSAGE.
+ *
+ * Taken verbatim from an email Scooter actually sent to os@joinwestpeek.com on 23 Aug 2026, pulled
+ * back out of R2 where the oversize path stored the raw `.eml`. It is the fixture that matters,
+ * because the first version of this check was written from what an Authentication-Results header
+ * OUGHT to look like and would have refused both partners for ever. Three things only a real message
+ * shows:
+ *
+ *   · `dmarc=none` — westpeek.ventures publishes no DMARC record, so there is no `dmarc=pass` to
+ *     require. That is a statement about enforcement, not about whether the message authenticated.
+ *   · `header.d=westpeek-ventures.20251104.gappssmtp.com` — the domain has no DKIM key of its own,
+ *     so Google Workspace signs with its per-tenant default, which strict alignment rejects.
+ *   · TWO `spf=` results — a `none` for the HELO identity BEFORE the `pass` for the envelope sender.
+ *     Reading the first one returns "none" for a message that plainly passed.
+ *
+ * Every one of those was a refusal of the genuine article, and every one was invisible to a test
+ * written against an idealised header.
+ */
+const REAL_SCOOTER = `${TRUSTED_AUTHSERV_ID}; dkim=pass header.d=westpeek-ventures.20251104.gappssmtp.com header.s=20251104 header.b=y29FGFQj; dmarc=none header.from=westpeek.ventures policy.dmarc=none; spf=none (mx.cloudflare.net: no SPF records found for postmaster@mail-qv1-xf2e.google.com) smtp.helo=mail-qv1-xf2e.google.com; spf=pass (mx.cloudflare.net: domain of scooter@westpeek.ventures designates 2607:f8b0:4864:20::f2e as permitted sender) smtp.mailfrom=scooter@westpeek.ventures; arc=none smtp.remote-ip="2607:f8b0:4864:20::f2e"`;
+
+const PASS = `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=sequoia@westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=pass`;
+
+describe("the guard admits the actual partner, not an idealised one", () => {
+  it("ACCEPTS the real header from a message Scooter genuinely sent", () => {
+    const out = mailAuthority({ fromHeader: '"Scooter Taylor" <scooter@westpeek.ventures>', authenticationResults: REAL_SCOOTER });
+    expect(out.isAssignment, `the genuine article was refused: ${out.reason}`).toBe(true);
+    expect(out.chiefOfStaff).toBe("Walker");
+    // Reported honestly: SPF and DKIM both aligned passes, DMARC simply not published.
+    expect(out.verdict.spf, "the helo spf=none masked the mailfrom spf=pass").toBe("pass");
+    expect(out.verdict.dkim).toBe("pass");
+    expect(out.verdict.dmarc, "no DMARC record is published for westpeek.ventures").toBe("none");
+  });
+
+  /*
+   * THE WORKSPACE ALLOWANCE IS FOR THIS DOMAIN, NOT FOR gappssmtp.com. Any Workspace tenant signs
+   * with a `*.gappssmtp.com` key; the label is the verified domain with dots as dashes, and getting
+   * `westpeek-ventures.*` requires adding westpeek.ventures to a Workspace account and proving
+   * ownership in DNS. A wildcard on the parent would have let every Google customer in.
+   */
+  it("REFUSES another tenant's Workspace key, which a wildcard on gappssmtp.com would have allowed", () => {
+    const otherTenant = mailAuthority({
+      fromHeader: "sequoia@westpeek.ventures",
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; dkim=pass header.d=attacker-co.20251104.gappssmtp.com; dmarc=none; spf=pass smtp.mailfrom=sequoia@westpeek.ventures`,
+    });
+    expect(otherTenant.isAssignment, "any Google Workspace customer could assign work").toBe(false);
+    expect(otherTenant.reason).toMatch(/not the sender's domain/i);
+  });
+
+  it("REFUSES an SPF pass for somebody else's envelope, which is what a spoof actually produces", () => {
+    const wrongEnvelope = mailAuthority({
+      fromHeader: "sequoia@westpeek.ventures",
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; dkim=pass header.d=westpeek.ventures; dmarc=none; spf=pass smtp.mailfrom=bounce@attacker.example`,
+    });
+    expect(wrongEnvelope.isAssignment).toBe(false);
+    expect(wrongEnvelope.reason).toMatch(/SPF passed for an identity that is not westpeek\.ventures/i);
+  });
+
+  it("REFUSES an explicit DMARC fail even when the domain publishes no policy elsewhere", () => {
+    const out = mailAuthority({
+      fromHeader: "sequoia@westpeek.ventures",
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; dkim=pass header.d=westpeek.ventures; dmarc=fail; spf=pass smtp.mailfrom=sequoia@westpeek.ventures`,
+    });
+    expect(out.isAssignment).toBe(false);
+    expect(out.reason).toMatch(/DMARC fail/i);
+  });
+});
 
 describe("only an authenticated partner can assign work by email", () => {
   it("accepts a genuine message from each of the two partners, and routes it to their OWN chief of staff", () => {
@@ -36,7 +102,7 @@ describe("only an authenticated partner can assign work by email", () => {
 
     const scooter = mailAuthority({
       fromHeader: "scooter@westpeek.ventures",
-      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass; dkim=pass header.d=westpeek.ventures; dmarc=pass`,
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=scooter@westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=pass`,
     });
     expect(scooter.isAssignment, scooter.reason).toBe(true);
     expect(scooter.chiefOfStaff, "Scooter's request went to the wrong desk").toBe("Walker");
@@ -89,7 +155,7 @@ describe("only an authenticated partner can assign work by email", () => {
     // Cloudflare's real verdict first (a failure), the attacker's forged one appended below it.
     const injected = mailAuthority({
       fromHeader: "sequoia@westpeek.ventures",
-      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=fail; dkim=fail; dmarc=fail, ${TRUSTED_AUTHSERV_ID}; spf=pass; dkim=pass header.d=westpeek.ventures; dmarc=pass`,
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=fail; dkim=fail; dmarc=fail, ${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=sequoia@westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=pass`,
     });
     expect(injected.isAssignment, "an injected Authentication-Results was believed").toBe(false);
     expect(injected.reason).toMatch(/more than one Authentication-Results/i);
@@ -97,7 +163,7 @@ describe("only an authenticated partner can assign work by email", () => {
     // And the reverse order — the forged one first — is refused for the same reason.
     const injectedFirst = mailAuthority({
       fromHeader: "sequoia@westpeek.ventures",
-      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass; dkim=pass header.d=westpeek.ventures; dmarc=pass, ${TRUSTED_AUTHSERV_ID}; spf=fail; dkim=fail; dmarc=fail`,
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=sequoia@westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=pass, ${TRUSTED_AUTHSERV_ID}; spf=fail; dkim=fail; dmarc=fail`,
     });
     expect(injectedFirst.isAssignment).toBe(false);
   });
@@ -110,7 +176,7 @@ describe("only an authenticated partner can assign work by email", () => {
   it("REFUSES a valid signature from a domain that is not the sender's", () => {
     const misaligned = mailAuthority({
       fromHeader: "sequoia@westpeek.ventures",
-      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass; dkim=pass header.d=attacker.example; dmarc=pass`,
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=sequoia@westpeek.ventures; dkim=pass header.d=attacker.example; dmarc=pass`,
     });
     expect(misaligned.isAssignment, "a signature from another domain was accepted as alignment").toBe(false);
     expect(misaligned.reason).toMatch(/not the sender's domain/i);
@@ -119,7 +185,7 @@ describe("only an authenticated partner can assign work by email", () => {
   it("REFUSES an authenticated stranger — passing the check is not the same as being a partner", () => {
     const stranger = mailAuthority({
       fromHeader: "founder@somestartup.com",
-      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass; dkim=pass header.d=somestartup.com; dmarc=pass`,
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=founder@somestartup.com; dkim=pass header.d=somestartup.com; dmarc=pass`,
     });
     expect(stranger.isAssignment).toBe(false);
     expect(stranger.verdict.passed, "the message genuinely did authenticate").toBe(true);
@@ -129,7 +195,7 @@ describe("only an authenticated partner can assign work by email", () => {
   it("REFUSES an authenticated employee address, so no employee can assign itself work by email", () => {
     const employee = mailAuthority({
       fromHeader: "wren@joinwestpeek.com",
-      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass; dkim=pass header.d=joinwestpeek.com; dmarc=pass`,
+      authenticationResults: `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=wren@joinwestpeek.com; dkim=pass header.d=joinwestpeek.com; dmarc=pass`,
     });
     expect(employee.isAssignment, "an employee address was allowed to assign work").toBe(false);
   });
@@ -177,7 +243,7 @@ describe("only an authenticated partner can assign work by email", () => {
   it("records every verdict field, so a refusal is queryable rather than merely absent", () => {
     const v = authenticationVerdict(PASS, "sequoia@westpeek.ventures");
     expect(v).toMatchObject({ spf: "pass", dkim: "pass", dmarc: "pass", signing_domain: "westpeek.ventures", passed: true });
-    const bad = authenticationVerdict(`${TRUSTED_AUTHSERV_ID}; spf=softfail; dkim=none; dmarc=fail`, "sequoia@westpeek.ventures");
+    const bad = authenticationVerdict(`${TRUSTED_AUTHSERV_ID}; spf=softfail smtp.mailfrom=sequoia@westpeek.ventures; dkim=none; dmarc=fail`, "sequoia@westpeek.ventures");
     expect(bad.passed).toBe(false);
     expect(bad.spf).toBe("softfail");
     expect(bad.dkim).toBe("none");

@@ -105,25 +105,52 @@ export function checkSources(sources) {
       }
     }
 
-    // 4 · All three methods, plus alignment.
+    /*
+     * 4 · An ALIGNED pass on both methods, and no DMARC failure.
+     *
+     * NOT `dmarc === "pass"`, and the first version of this scan got that wrong. westpeek.ventures
+     * publishes no DMARC record, so a genuine email from Scooter reports `dmarc=none` — requiring a
+     * pass would have refused both partners for ever while every test went green. What DMARC would
+     * evaluate is ALIGNMENT, and that is available directly, so it is required directly: an SPF pass
+     * whose identity belongs to the sender's domain AND a DKIM pass whose signature does. Both,
+     * which is stricter than DMARC's either-or. An explicit `dmarc=fail` is still refused.
+     */
     const verdict = bodyOf(code, "authenticationVerdict");
     if (!verdict) {
       violations.push(`${AUTHORITY_FILE}: authenticationVerdict is gone.`);
     } else {
-      for (const method of ["spf", "dkim", "dmarc"]) {
-        if (!new RegExp(`${method}\\s*!==\\s*["']pass["']`).test(verdict)) {
+      for (const [name, needle] of [["SPF", "spfPass"], ["DKIM", "dkimPass"]]) {
+        if (!new RegExp(`!${needle}\\b`).test(verdict)) {
           violations.push(
-            `${AUTHORITY_FILE}: authenticationVerdict no longer requires ${method.toUpperCase()} to pass. ` +
-              `All three are required — dropping one is dropping the boundary.`,
+            `${AUTHORITY_FILE}: authenticationVerdict no longer requires an aligned ${name} pass. Both are ` +
+              `required — dropping one is dropping half the boundary.`,
+          );
+        }
+        if (!new RegExp(`${needle}\\s*=[^=]`).test(verdict) || !/isAligned\s*\(/.test(verdict)) {
+          violations.push(
+            `${AUTHORITY_FILE}: the ${name} pass is no longer checked for ALIGNMENT. A pass for somebody ` +
+              `else's identity proves they sent something, not that this From wrote it.`,
           );
         }
       }
-      if (!/signingDomain\s*!==\s*fromDomain/.test(verdict)) {
+      if (!/dmarc\s*===\s*["']fail["']/.test(verdict)) {
         violations.push(
-          `${AUTHORITY_FILE}: DKIM alignment is no longer checked. A signature from another domain proves ` +
-            `that domain sent something, not that this From wrote it — which is the shape of a spoof.`,
+          `${AUTHORITY_FILE}: an explicit DMARC failure is no longer refused. dmarc=none means no policy ` +
+            `is published; dmarc=fail is the sender's own domain saying this is not from them.`,
         );
       }
+    }
+
+    // The alignment rule itself must stay narrow. A wildcard on gappssmtp.com would admit every
+    // Google Workspace customer on earth; the label must be tied to the sender's own domain.
+    const aligned = bodyOf(code, "isAligned");
+    if (!aligned) {
+      violations.push(`${AUTHORITY_FILE}: isAligned is gone, so nothing checks that a pass belongs to the sender.`);
+    } else if (/gappssmtp/.test(aligned) && !/fromDomain\.replace/.test(aligned)) {
+      violations.push(
+        `${AUTHORITY_FILE}: the Google Workspace allowance is no longer tied to the sender's own domain. ` +
+          `A wildcard on gappssmtp.com admits every Workspace tenant, not this one.`,
+      );
     }
 
     // 5 · The trusted resolver is a constant, never configuration.
@@ -175,11 +202,16 @@ function selfTest() {
   const cleanAuthority = [
     'export const ASSIGNING_PARTNERS = ["sequoia@westpeek.ventures", "scooter@westpeek.ventures"];',
     'export const TRUSTED_AUTHSERV_ID = "mx.cloudflare.net";',
+    "export function isAligned(identity, fromDomain) {",
+    "  if (domain === fromDomain) return true;",
+    "  return domain.startsWith(`${fromDomain.replace(/\\./g, '-')}.`) && domain.endsWith('.gappssmtp.com');",
+    "}",
     "export function authenticationVerdict(header, from) {",
-    '  if (spf !== "pass") failed.push("spf");',
-    '  if (dkim !== "pass") failed.push("dkim");',
-    '  if (dmarc !== "pass") failed.push("dmarc");',
-    "  if (signingDomain !== fromDomain) failed.push('misaligned');",
+    "  const spfPass = spfResults.find((r) => r.result === 'pass' && isAligned(r.identity, fromDomain));",
+    "  const dkimPass = dkimResults.find((r) => r.result === 'pass' && isAligned(r.identity, fromDomain));",
+    "  if (!spfPass) failed.push('spf');",
+    "  if (!dkimPass) failed.push('dkim');",
+    '  if (dmarc === "fail") failed.push("dmarc fail");',
     "  return { passed: failed.length === 0 };",
     "}",
     "export function mailAuthority(input) {",
@@ -225,13 +257,24 @@ function selfTest() {
         '"scooter@westpeek.ventures", "assistant@westpeek.ventures"]',
       ),
     },
-    "DMARC no longer required": {
+    "an explicit DMARC failure no longer refused": {
       ...clean,
-      [AUTHORITY_FILE]: cleanAuthority.replace('  if (dmarc !== "pass") failed.push("dmarc");', ""),
+      [AUTHORITY_FILE]: cleanAuthority.replace('  if (dmarc === "fail") failed.push("dmarc fail");', ""),
     },
-    "DKIM alignment dropped": {
+    "the aligned DKIM pass no longer required": {
       ...clean,
-      [AUTHORITY_FILE]: cleanAuthority.replace("  if (signingDomain !== fromDomain) failed.push('misaligned');", ""),
+      [AUTHORITY_FILE]: cleanAuthority.replace("  if (!dkimPass) failed.push('dkim');", ""),
+    },
+    "the aligned SPF pass no longer required": {
+      ...clean,
+      [AUTHORITY_FILE]: cleanAuthority.replace("  if (!spfPass) failed.push('spf');", ""),
+    },
+    "alignment widened to every Google Workspace tenant": {
+      ...clean,
+      [AUTHORITY_FILE]: cleanAuthority.replace(
+        "  return domain.startsWith(`${fromDomain.replace(/\\./g, '-')}.`) && domain.endsWith('.gappssmtp.com');",
+        "  return domain.endsWith('.gappssmtp.com');",
+      ),
     },
     "who to trust moved into the environment": {
       ...clean,
@@ -274,7 +317,7 @@ if (process.argv.includes("--self-test")) {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log("SELF-TEST PASSED: clean fixture passes; all 8 bypasses are caught, including an assignment opened straight off a From header.");
+  console.log("SELF-TEST PASSED: clean fixture passes; all 9 bypasses are caught, including an assignment opened straight off a From header.");
   process.exit(0);
 }
 
@@ -306,7 +349,7 @@ if (violations.length > 0) {
 
 console.log(
   `MAIL AUTHORITY SCAN PASSED: the allow-list is exactly ${EXPECTED_PARTNERS.join(" and ")}; ` +
-    `mailAuthority refuses a failed verdict before it grants; SPF, DKIM, DMARC and alignment are all ` +
-    `required; the trusted resolver is a constant; ${assignmentSites} assignment site(s) across ` +
+    `mailAuthority refuses a failed verdict before it grants; an ALIGNED SPF pass and an ALIGNED DKIM ` +
+    `pass are both required and an explicit DMARC failure is refused; the trusted resolver is a constant; ${assignmentSites} assignment site(s) across ` +
     `${Object.keys(sources).length} sources, each gated on isAssignment.`,
 );

@@ -34,7 +34,21 @@ function deliver(headers: Record<string, string>, body: string): Promise<void> {
   );
 }
 
-const GENUINE = `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=pass`;
+/**
+ * THE REAL HEADER SHAPE, taken from a message Scooter actually sent to os@joinwestpeek.com and
+ * recovered from R2. `dmarc=none` because westpeek.ventures publishes no policy, the DKIM signed by
+ * Google Workspace's per-tenant key rather than the domain itself, and TWO spf results with the
+ * helo `none` before the mailfrom `pass`. Every one of those refused the genuine article in the
+ * first version of this check, and none of them was visible in a header written from memory.
+ */
+const genuineFrom = (address: string): string =>
+  `${TRUSTED_AUTHSERV_ID}; dkim=pass header.d=westpeek-ventures.20251104.gappssmtp.com header.s=20251104; ` +
+  `dmarc=none header.from=westpeek.ventures policy.dmarc=none; ` +
+  `spf=none (${TRUSTED_AUTHSERV_ID}: no SPF records found for postmaster@mail-qv1-xf2e.google.com) smtp.helo=mail-qv1-xf2e.google.com; ` +
+  `spf=pass (${TRUSTED_AUTHSERV_ID}: domain of ${address} designates 2607:f8b0:4864:20::f2e as permitted sender) smtp.mailfrom=${address}; ` +
+  `arc=none`;
+
+const GENUINE = genuineFrom("sequoia@westpeek.ventures");
 const FORGED = `${TRUSTED_AUTHSERV_ID}; spf=fail; dkim=fail; dmarc=fail`;
 
 async function cardsOwnedBy(owner: string): Promise<Array<{ id: string; title: string; description: string }>> {
@@ -112,7 +126,7 @@ describe("an authenticated partner's email is an assignment; anything else is a 
 
   it("sends Scooter's request to Walker, from the roster rather than from a second list", async () => {
     await deliver(
-      { from: "scooter@westpeek.ventures", subject: "Look at the Northwind terms", "authentication-results": `${TRUSTED_AUTHSERV_ID}; spf=pass; dkim=pass header.d=westpeek.ventures; dmarc=pass` },
+      { from: "scooter@westpeek.ventures", subject: "Look at the Northwind terms", "authentication-results": genuineFrom("scooter@westpeek.ventures") },
       "Can someone read the Northwind term sheet before Thursday.",
     );
     const walker = await cardsOwnedBy("aie_walker");
@@ -142,7 +156,7 @@ describe("an authenticated partner's email is an assignment; anything else is a 
   it("does not assign for an authenticated stranger, however well their mail authenticates", async () => {
     const before = (await cardsOwnedBy("aie_wren")).length + (await cardsOwnedBy("aie_walker")).length;
     await deliver(
-      { from: "founder@somestartup.com", subject: "quick question", "authentication-results": `${TRUSTED_AUTHSERV_ID}; spf=pass; dkim=pass header.d=somestartup.com; dmarc=pass` },
+      { from: "founder@somestartup.com", subject: "quick question", "authentication-results": `${TRUSTED_AUTHSERV_ID}; spf=pass smtp.mailfrom=founder@somestartup.com; dkim=pass header.d=somestartup.com; dmarc=pass` },
       "Do you invest at pre-seed?",
     );
     expect(
