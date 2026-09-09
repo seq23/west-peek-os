@@ -6,6 +6,10 @@ import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { deliver } from "./deliverables";
 import { notify } from "./notifications";
 import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
+import {
+  initialCapitalUsd, investableBase, reserveMismatch, sleeveMismatches, sleeveTargetUsd, usd,
+  type ReserveDoc, type SleeveDoc,
+} from "../../shared/fund/sleeveMath";
 
 /**
  * The Wednesday prep packet, one per partner, and the fund-deck discrepancy register.
@@ -389,7 +393,7 @@ export interface Discrepancy {
  */
 export async function buildDiscrepancyRegister(
   env: Env,
-): Promise<{ fundId: string; fundName: string; recorded: Discrepancy[]; derived: Discrepancy[]; body: string }> {
+): Promise<{ fundId: string; fundName: string; recorded: Discrepancy[]; derived: Discrepancy[]; closed: Discrepancy[]; body: string }> {
   const fund = await env.WP_OS_DB.prepare("SELECT id, name, target_size_minor, vintage_year FROM fund LIMIT 1")
     .first<{ id: string; name: string; target_size_minor: number | null; vintage_year: number | null }>();
   if (!fund) throw new Error("no fund exists: there is nothing to compare a deck against");
@@ -410,15 +414,61 @@ export async function buildDiscrepancyRegister(
     ).bind(fund.id).all<{ version_no: number; reserve_json: string }>()
   ).results ?? [];
 
-  // The empty-loop guard. No policies means this examined nothing, and that is a failure, not a
-  // clean bill of health.
-  if (mandates.length === 0 && sleeves.length === 0) {
-    throw new Error("the fund carries no mandate or sleeve policy: this register examined nothing");
+  /*
+   * A VERSION THAT CANNOT BE READ IS A FINDING, NOT A CRASH.
+   *
+   * These documents are immutable by trigger — UPDATE and DELETE are both rejected — so a version
+   * written with malformed JSON stays in the table for ever and the only correction available is a
+   * later version. A bare `JSON.parse` here would therefore let one bad row take the whole register
+   * down permanently, which is precisely the "one bad table blanks the board" failure the health
+   * checks are built to avoid. It is reported as a discrepancy instead, which is what it is.
+   *
+   * Written from experience rather than caution: this agent wrote exactly such a row into production
+   * on 9 Sep 2026 by double-escaping the JSON, and could not delete it.
+   */
+  const unreadable: Array<{ table: string; version: number }> = [];
+  const parse = <T>(raw: string): T => {
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return {} as T;
+    }
+  };
+  const readable = <T extends { version_no: number }>(rows: T[], table: string, column: keyof T): T[] =>
+    rows.filter((r) => {
+      try {
+        JSON.parse(String(r[column]));
+        return true;
+      } catch {
+        unreadable.push({ table, version: r.version_no });
+        return false;
+      }
+    });
+  const mandatesOk = readable(mandates, "investment_mandate_version", "mandate_json");
+  const sleevesOk = readable(sleeves, "sleeve_policy_version", "sleeve_json");
+  const reservesOk = readable(reserves, "reserve_policy_version", "reserve_json");
+
+  /*
+   * The empty-loop guard. No READABLE policy means this examined nothing, and that is a failure
+   * rather than a clean bill of health — counted after the parse filter, so a fund whose only
+   * versions are unreadable cannot report a tidy register.
+   */
+  if (mandatesOk.length === 0 && sleevesOk.length === 0) {
+    throw new Error("the fund carries no readable mandate or sleeve policy: this register examined nothing");
   }
 
-  const parse = <T>(raw: string): T => JSON.parse(raw) as T;
   const recorded: Discrepancy[] = [];
   const derived: Discrepancy[] = [];
+
+  for (const bad of unreadable) {
+    derived.push({
+      where: `${bad.table} v${bad.version}`,
+      what: "This policy version's stored document is not readable JSON, so nothing can be derived from it.",
+      shouldBe: "Every policy version parses. These tables are immutable, so the correction is a later version.",
+      actedOn: "Superseded by a later version rather than edited — UPDATE and DELETE are rejected by trigger.",
+      origin: "DERIVED",
+    });
+  }
 
   /*
    * THE OPEN QUESTION THAT WAS DELETED RATHER THAN ANSWERED.
@@ -429,8 +479,8 @@ export async function buildDiscrepancyRegister(
    * change is visible, and the change here was the disappearance of the only record that a question
    * was open. That is worth reporting louder than the question itself.
    */
-  const withQuestion = mandates.filter((m) => typeof parse<{ open_question?: string }>(m.mandate_json).open_question === "string");
-  const latestMandate = mandates.length > 0 ? parse<Record<string, unknown>>(mandates[mandates.length - 1]!.mandate_json) : {};
+  const withQuestion = mandatesOk.filter((m) => typeof parse<{ open_question?: string }>(m.mandate_json).open_question === "string");
+  const latestMandate = mandatesOk.length > 0 ? parse<Record<string, unknown>>(mandatesOk[mandatesOk.length - 1]!.mandate_json) : {};
   for (const m of withQuestion) {
     const q = parse<{ open_question: string }>(m.mandate_json).open_question;
     const stillCarried = typeof latestMandate.open_question === "string";
@@ -439,13 +489,13 @@ export async function buildDiscrepancyRegister(
       what: q,
       shouldBe: "One sector list, the same on the deck, on the Terms page, and in the mandate.",
       actedOn: stillCarried
-        ? `Still open — carried forward into v${mandates[mandates.length - 1]!.version_no}.`
-        : `NOT resolved, DROPPED. v${mandates[mandates.length - 1]!.version_no} no longer carries the question and records no answer, so the only trace that it was ever open is v${m.version_no}.`,
+        ? `Still open — carried forward into v${mandatesOk[mandatesOk.length - 1]!.version_no}.`
+        : `NOT resolved, DROPPED. v${mandatesOk[mandatesOk.length - 1]!.version_no} no longer carries the question and records no answer, so the only trace that it was ever open is v${m.version_no}.`,
       origin: "RECORDED",
     });
   }
 
-  for (const s of sleeves) {
+  for (const s of sleevesOk) {
     const note = parse<{ note?: string }>(s.sleeve_json).note;
     if (!note) continue;
     recorded.push({
@@ -476,75 +526,117 @@ export async function buildDiscrepancyRegister(
     });
   }
 
-  for (const s of sleeves) {
-    const sleeve = parse<{
-      estimated_investable_usd?: number;
-      sleeves?: Array<{ key: string; target_pct: number; target_usd: number }>;
-    }>(s.sleeve_json);
-    const base = sleeve.estimated_investable_usd ?? 0;
-    for (const sl of sleeve.sleeves ?? []) {
-      const impliedUsd = Math.round((sl.target_pct / 100) * base);
-      if (base > 0 && Math.abs(impliedUsd - sl.target_usd) >= 1) {
-        derived.push({
-          where: `sleeve_policy_version v${s.version_no} · ${sl.key}`,
-          what:
-            `${sl.target_pct}% of the $${(base / 1e6).toFixed(1)}M investable base is ` +
-            `$${(impliedUsd / 1e6).toFixed(1)}M, but the sleeve is stated as $${(sl.target_usd / 1e6).toFixed(1)}M — ` +
-            `a $${(Math.abs(impliedUsd - sl.target_usd) / 1000).toFixed(0)}K disagreement between the percentage and the dollars.`,
-          shouldBe: "The percentage and the dollar figure describe the same number.",
-          actedOn:
-            "No. This is the same class of error the deck was flagged for in August, committed by " +
-            "the policy written to replace it.",
-          origin: "DERIVED",
-        });
-      }
+  /*
+   * THE PERCENTAGE IS THE POLICY; THE DOLLARS ARE A COMPUTATION.
+   *
+   * Sleeve v1 stored both and they disagreed — 70% of $24.0M is $16.8M against a stored $17.0M, and
+   * 30% is $7.2M against a stored $7.0M. Both readings summed to $24.0M, so the totals agreed either
+   * way and this was a DECISION rather than an arithmetic slip: 70/30, or 70.83/29.17.
+   *
+   * The operator decided it on 9 Sep 2026 — "70/30 is the intent, use the percentages" — and the
+   * later policy version stores the percentage alone. So a version that still carries both is
+   * reported as a discrepancy, and a version that has stopped carrying both CLOSES it. A register
+   * that cannot close its own items is the stale-state defect it was written to find.
+   */
+  const closed: Discrepancy[] = [];
+  const latestSleeveDoc = sleevesOk.length > 0 ? parse<SleeveDoc>(sleevesOk[sleevesOk.length - 1]!.sleeve_json) : {};
+  const latestReserveDoc = reservesOk.length > 0 ? parse<ReserveDoc>(reservesOk[reservesOk.length - 1]!.reserve_json) : {};
+  const latestSleeveVersion = sleevesOk.length > 0 ? sleevesOk[sleevesOk.length - 1]!.version_no : 0;
+
+  for (const s of sleevesOk) {
+    const doc = parse<SleeveDoc>(s.sleeve_json);
+    const isLatest = s.version_no === latestSleeveVersion;
+    for (const m of sleeveMismatches(doc)) {
+      const item: Discrepancy = {
+        where: `sleeve_policy_version v${s.version_no} · ${m.key}`,
+        what:
+          `${(doc.sleeves ?? []).find((x) => x.key === m.key)?.target_pct}% of the ` +
+          `${usd(investableBase(doc))} investable base is ${usd(m.derivedUsd)}, but the sleeve also stores ` +
+          `${usd(m.storedUsd)} — a ${usd(m.differenceUsd)} disagreement between the percentage and the dollars.`,
+        shouldBe: "The percentage is stored and the dollars are derived from it, so the two cannot diverge.",
+        actedOn: isLatest
+          ? "No. This is the same class of error the deck was flagged for in August, committed by the policy written to replace it."
+          : `RESOLVED in v${latestSleeveVersion}. The operator settled the split on 9 Sep 2026 — "70/30 is the intent, use the percentages" — and v${latestSleeveVersion} stores the percentage alone, so the dollars are computed from the live investable base and cannot drift from it again.`,
+        origin: "DERIVED",
+      };
+      (isLatest ? derived : closed).push(item);
     }
+  }
+
+  /*
+   * THE RESERVE CARRIES THE IDENTICAL DEFECT and was not in the original report — found only
+   * because the same question was asked of the neighbouring row. 40% of the sleeve's derived
+   * $16.8M is $6.72M against a stored $7.0M: a $280K gap, larger than either sleeve's.
+   */
+  for (const r of reservesOk) {
+    const reserveDoc = parse<ReserveDoc>(r.reserve_json);
+    const againstDoc = r.version_no === latestSleeveVersion ? latestSleeveDoc : latestSleeveDoc;
+    const m = reserveMismatch(againstDoc, reserveDoc);
+    if (!m) continue;
+    const isLatest = r.version_no === (reservesOk[reservesOk.length - 1]!.version_no);
+    const item: Discrepancy = {
+      where: `reserve_policy_version v${r.version_no}`,
+      what:
+        `${reserveDoc.reserve_pct}% of the early-stage sleeve is ${usd(m.derivedUsd)}, but the policy also ` +
+        `stores ${usd(m.storedUsd)} — a ${usd(m.differenceUsd)} disagreement, and the largest of the three.`,
+      shouldBe: "The percentage is stored and the dollars are derived from the sleeve it is a percentage of.",
+      actedOn: isLatest
+        ? "No — the reserve still stores both a percentage and a dollar figure."
+        : "RESOLVED. The later version stores the percentage alone.",
+      origin: "DERIVED",
+    };
+    (isLatest ? derived : closed).push(item);
   }
 
   /*
    * CAN THE MANDATE AFFORD ITS OWN PORTFOLIO? The mandate names a target position count and a check
    * range; the sleeve and reserve policies decide how much initial capital actually exists. Nobody
    * had multiplied the two together.
+   *
+   * THE FIGURE MOVED WHEN THE SPLIT WAS SETTLED, and this reads the derivation rather than a stored
+   * number so it says the current one. At $17.0M the sleeve left $10.2M for initials; at the
+   * decided 70% it leaves $10.08M, so the target portfolio clears the bottom of its own range by
+   * $80K instead of $200K. A register still quoting the number it just changed would be the stale
+   * state it exists to catch.
    */
   const mandate = latestMandate as {
     target_positions?: number;
     check_size_usd?: { min?: number; max?: number };
   };
-  const early = (sleeves.length > 0
-    ? parse<{ sleeves?: Array<{ key: string; target_usd: number }> }>(sleeves[sleeves.length - 1]!.sleeve_json).sleeves
-    : []
-  )?.find((sl) => sl.key === "EARLY_STAGE_PRIMARY");
-  const reserve = reserves.length > 0
-    ? parse<{ reserve_pct?: number; basis?: string }>(reserves[reserves.length - 1]!.reserve_json)
-    : {};
-  if (early && mandate.target_positions && mandate.check_size_usd?.min && mandate.check_size_usd.max && reserve.reserve_pct) {
-    const forInitials = early.target_usd * (1 - reserve.reserve_pct / 100);
+  const early = (latestSleeveDoc.sleeves ?? []).find((sl) => sl.key === "EARLY_STAGE_PRIMARY");
+  if (early && mandate.target_positions && mandate.check_size_usd?.min && mandate.check_size_usd.max && latestReserveDoc.reserve_pct) {
+    const forInitials = initialCapitalUsd(latestSleeveDoc, latestReserveDoc);
     const atMin = mandate.target_positions * mandate.check_size_usd.min;
     const atMax = mandate.target_positions * mandate.check_size_usd.max;
     if (atMax > forInitials) {
+      const headroom = forInitials - atMin;
       derived.push({
         where: "investment_mandate_version × sleeve_policy_version × reserve_policy_version",
         what:
-          `${mandate.target_positions} positions at the stated $${(mandate.check_size_usd.min / 1000).toFixed(0)}–` +
-          `${(mandate.check_size_usd.max / 1000).toFixed(0)}K check needs $${(atMin / 1e6).toFixed(1)}M–` +
-          `$${(atMax / 1e6).toFixed(1)}M of initial capital. The early-stage sleeve is ` +
-          `$${(early.target_usd / 1e6).toFixed(1)}M with ${reserve.reserve_pct}% reserved, leaving ` +
-          `$${(forInitials / 1e6).toFixed(1)}M for initials. The target portfolio is only affordable if ` +
-          `every cheque is written at ${atMin <= forInitials ? "the bottom of the range" : "below the stated minimum"}.`,
+          `${mandate.target_positions} positions at the stated ${usd(mandate.check_size_usd.min)}–` +
+          `${usd(mandate.check_size_usd.max)} cheque needs ${usd(atMin)}–${usd(atMax)} of initial capital. ` +
+          `The early-stage sleeve is ${usd(sleeveTargetUsd(latestSleeveDoc, early))} with ` +
+          `${latestReserveDoc.reserve_pct}% reserved, leaving ${usd(forInitials)} for initials — ` +
+          (headroom >= 0
+            ? `${usd(headroom)} of headroom, so the target portfolio is affordable only with every cheque at the bottom of the range.`
+            : `${usd(-headroom)} SHORT even with every cheque at the stated minimum.`),
         shouldBe:
-          "Either fewer positions, a smaller check, a larger early-stage sleeve, or a stated " +
+          "Either fewer positions, a smaller cheque, a larger early-stage sleeve, or a stated " +
           "expectation that the range's midpoint is not the plan.",
-        actedOn: "No — this arithmetic does not appear anywhere in the firm's records.",
+        actedOn:
+          `No. Settling the split at 70/30 on 9 Sep 2026 tightened this rather than easing it: the sleeve ` +
+          `moved from $17.0M to ${usd(sleeveTargetUsd(latestSleeveDoc, early))}, so initials moved from $10.2M to ` +
+          `${usd(forInitials)}. She was told that before deciding.`,
         origin: "DERIVED",
       });
     }
   }
 
-  const body = renderRegister(fund.name, recorded, derived);
-  return { fundId: fund.id, fundName: fund.name, recorded, derived, body };
+  const body = renderRegister(fund.name, recorded, derived, closed);
+  return { fundId: fund.id, fundName: fund.name, recorded, derived, closed, body };
 }
 
-function renderRegister(fundName: string, recorded: Discrepancy[], derived: Discrepancy[]): string {
+function renderRegister(fundName: string, recorded: Discrepancy[], derived: Discrepancy[], closed: Discrepancy[]): string {
   const lines: string[] = [];
   lines.push(`# ${fundName} — where our own records and the deck disagree`);
   lines.push("");
@@ -578,6 +670,14 @@ function renderRegister(fundName: string, recorded: Discrepancy[], derived: Disc
     "Nothing was recorded. No policy version on this fund carries a note or an open question.");
   section("Newly noticed by this run", derived,
     "Nothing new. Every arithmetic check this run performed came back consistent.");
+
+  /*
+   * A REGISTER THAT CANNOT CLOSE ITS OWN ITEMS IS THE STALE STATE IT EXISTS TO FIND. These were
+   * raised by an earlier run and are no longer true, and saying so is what makes the list shrink
+   * visibly rather than silently.
+   */
+  section("Settled since the last run", closed,
+    "Nothing has been closed since the last run.");
 
   lines.push("---");
   lines.push("");

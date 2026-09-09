@@ -3236,7 +3236,15 @@ function StatusBar({ onNavigate, refreshNonce }: { onNavigate: (key: string) => 
   return (
     <p className="status-bar" data-testid="status-bar">
       <button type="button" className="link-button" data-testid="status-notifications" onClick={() => onNavigate("notifications")}>
-        {unread} unread{critical > 0 ? ` (${critical} critical)` : ""}
+        {/*
+          "WAITING ON YOU", NOT "UNREAD", because that is now what the number counts and the two
+          had stopped being the same thing. `?unread=1` returns what is unread AND still true: a
+          warning about a fault that has since been fixed is not waiting on anybody. Calling that
+          "unread" would be accurate about a column and wrong about the firm — and it is the second
+          vocabulary on this subject, since the Notifications page has always said "N waiting".
+          One definition, one word.
+        */}
+        {unread} waiting on you{critical > 0 ? ` (${critical} critical)` : ""}
       </button>
       <span className={online ? "badge badge-ok" : "badge badge-bad"} data-testid="status-connection">
         {online ? "online" : "offline"}
