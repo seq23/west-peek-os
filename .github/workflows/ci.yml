@@ -91,6 +91,12 @@ jobs:
       - name: Employees send from West Peek's own domain
         run: npm run validate:employee-sender
 
+      # os@joinwestpeek.com is publicly addressable, and an authenticated partner's mail can now
+      # assign work. A From header is a string the sender chooses, so this proves no path turns a
+      # message into an assignment without SPF, DKIM, DMARC and the two-address allow-list.
+      - name: An emailed assignment needs an authenticated partner
+        run: npm run validate:mail-authority
+
       - name: Build client
         run: npm run build
 

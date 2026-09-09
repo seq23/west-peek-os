@@ -1,7 +1,9 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { proposePerson } from "./networkOsClient";
-import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openRoutingCard } from "../services/dealIntake";
+import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openAssignmentCard, openRoutingCard } from "../services/dealIntake";
+import { notifyQuietly } from "../services/notifications";
+import { ASSIGNING_PARTNERS, EMAILED_TASK_LIMITS, addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
 import { pdfAttachments } from "./mimeAttachments";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
@@ -384,6 +386,80 @@ export async function handleInboundEmail(
   const wantsDeal = summary.triggers.includes("#wpdealflow") || summary.triggers.includes("#wpdeck");
 
   /*
+   * ── AN AUTHENTICATED PARTNER'S EMAIL IS AN ASSIGNMENT ─────────────────────────────────────────
+   *
+   * Operator, 9 Sep 2026: "porter receives and hands to wren or walker and we just email
+   * os@joinwestpeek.com", and on who may: "only scooter@ and sequoia@ can email them".
+   *
+   * THE OUTER `From:`, NOT `trueSender`, AND THIS DISTINCTION IS THE WHOLE SECURITY BOUNDARY.
+   * `trueSender` is the FORWARDED origin — deliberately, because a partner forwarding a founder's
+   * deck should file that founder, not herself. Authority is the opposite question: the only sender
+   * the receiving resolver authenticated is the one on the envelope it actually accepted. Reading
+   * authority off the forwarded origin would mean anyone whose email a partner forwards inherits her
+   * ability to direct the firm's employees.
+   *
+   * ONLY THE UNTAGGED PATH. A `#wpdealflow` message from a partner is still deal flow: the tags are
+   * a routing vocabulary that works and this is not a reason to change it. What changes is the case
+   * `NO_TRIGGER_ROUTE` describes — mail nothing could route, which used to wait for a person to
+   * triage. When Porter can PROVE it came from a partner, waiting for triage is the wrong answer:
+   * she was asking for something.
+   *
+   * FAILING THE CHECK COSTS NOTHING AND DROPS NOTHING. `mailAuthority` returns a reason and the code
+   * falls through to the capture card that has always handled untrusted mail — which is why the bar
+   * can be this high. A forged message claiming to be a partner becomes an ordinary routing card
+   * with the failure written on it, exactly like any other unroutable email.
+   */
+  let assignmentCardId: string | null = null;
+  const authority = mailAuthority({
+    fromHeader: message.headers.get("from"),
+    authenticationResults: message.headers.get("authentication-results"),
+  });
+
+  if (summary.unrouted && authority.isAssignment) {
+    assignmentCardId = await openAssignmentCard(env, {
+      subject: summary.subject,
+      partnerAddress: authority.partnerAddress!,
+      chiefOfStaff: authority.chiefOfStaff!,
+      raw,
+      limits: EMAILED_TASK_LIMITS,
+    });
+
+    /*
+     * RECEIPT CONFIRMED IN THE OS, NOT BY EMAIL — a decision, not an omission.
+     *
+     * The brief asked for a reply saying where to watch it. An automatic reply would be an
+     * `email.send` external effect, and that path requires an approval receipt a human decided
+     * (`executeExternalEffect`). Building an auto-reply means building a bypass around the one gate
+     * that stands between this system and anything reaching a person, on the very path that has just
+     * started accepting instructions from outside. That trade is not worth a confirmation message.
+     *
+     * A NOTICE ANSWERS THE SAME QUESTION BETTER. It is addressed to the partner who actually sent
+     * it, links the card, respects their quiet hours, and cannot be forwarded into a second copy of
+     * something the OS is authoritative about — the rule already written at the top of `deck.ts`. So
+     * "we got it, here is where to watch it" arrives where the work itself lives.
+     */
+    const partnerUser = await env.WP_OS_DB.prepare("SELECT id FROM firm_user WHERE lower(email) = ?1")
+      .bind(authority.partnerAddress!)
+      .first<{ id: string }>();
+    if (partnerUser) {
+      await notifyQuietly(env, {
+        kind: "MEETING",
+        severity: "INFO",
+        title: `${ROUTING_EMPLOYEE} took your email and gave it to ${authority.chiefOfStaff}`,
+        body:
+          `"${summary.subject || "(no subject)"}" arrived at ${INTAKE_MAILBOX}, authenticated as you, and is now a work card ` +
+          `on ${authority.chiefOfStaff}'s desk. Open it on Work to see who it goes to and what happens. ` +
+          `It cannot approve anything or send anything outside the firm — those still come back to you.`,
+        objectType: "work_card",
+        objectId: assignmentCardId,
+        firmUserId: partnerUser.id,
+        dedupeKey: `mail_assignment:${assignmentCardId}`,
+        firmScope,
+      });
+    }
+  }
+
+  /*
    * A COMPANY WE ALREADY OWN GOES TO WINTER, and it goes as a job rather than as a figure.
    *
    * Handled before the deal ladder because it is a different question. The three older triggers all
@@ -479,13 +555,30 @@ export async function handleInboundEmail(
       // handler, Porter's method and the page a partner reads all say the same word.
       dealResult = { outcome: "AMBIGUOUS", detail: `No company name could be read, so ${ROUTING_EMPLOYEE} has it.` };
     }
-  } else if (summary.unrouted) {
+  } else if (summary.unrouted && !assignmentCardId) {
+    /*
+     * THE UNCHANGED PATH, plus the one sentence that makes a refused assignment diagnosable.
+     *
+     * A message claiming to be a partner that did NOT authenticate lands here, exactly like any
+     * other unroutable mail, and the card says why it was not treated as an instruction. That
+     * sentence is what stops the only two failure modes that would matter: a partner whose mail
+     * silently stops assigning work and nobody can say why, and a spoof attempt that leaves no
+     * trace. Both now read the same way — the message is on the record with the verdict beside it.
+     *
+     * `claimsToBePartner` is the FROM HEADER, which is exactly the untrusted string this whole check
+     * exists not to believe. It is used here only to decide whether to explain, never to grant
+     * anything.
+     */
+    const claimsToBePartner = ASSIGNING_PARTNERS.includes(addressIn(message.headers.get("from")) ?? "");
     routingCardId = await openRoutingCard(env, {
       subject: summary.subject,
       from: summary.from,
       raw,
       triggers: [],
-      why: "No recognised tag, so nothing could route it automatically.",
+      why: claimsToBePartner
+        ? `No recognised tag. It says it is from a Managing Partner, and it was NOT treated as an assignment because ${authority.reason}. ` +
+          `A From line is not proof of anything, so this is a message to read rather than an instruction to follow.`
+        : "No recognised tag, so nothing could route it automatically.",
     });
   }
 
@@ -561,6 +654,25 @@ export async function handleInboundEmail(
       mailbox: INTAKE_MAILBOX,
       known_triggers: EMAIL_TRIGGERS.map((t) => t.tag),
       ...(routingCardId ? { routing_card_id: routingCardId } : {}),
+      /*
+       * THE VERDICT IS ON THE SPINE FOR EVERY MESSAGE, not only the ones that passed.
+       *
+       * Rule 0 applied to a security check: a scan that records nothing when it refuses is
+       * indistinguishable from one that never ran. "Has anyone tried to assign work by forging a
+       * partner's address" is a query over these fields, and it is only answerable because a
+       * FAILED check writes as much as a passing one.
+       */
+      mail_authority: {
+        assigned: Boolean(assignmentCardId),
+        spf: authority.verdict.spf,
+        dkim: authority.verdict.dkim,
+        dmarc: authority.verdict.dmarc,
+        signing_domain: authority.verdict.signing_domain,
+        partner: authority.partnerAddress,
+        chief_of_staff: authority.chiefOfStaff,
+        refused_because: authority.reason || undefined,
+      },
+      ...(assignmentCardId ? { assignment_card_id: assignmentCardId } : {}),
       ...(updateCardId ? { portfolio_update_card_id: updateCardId } : {}),
       ...(dealResult ? { dealflow: dealResult.outcome, dealflow_detail: dealResult.detail } : {}),
       ...(relayed ? { network_os_relay: relayed.ok ? "PROPOSED" : `REFUSED: ${relayed.detail}` } : {}),
