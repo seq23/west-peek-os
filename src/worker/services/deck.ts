@@ -1,0 +1,493 @@
+import { z } from "zod";
+import type { Env } from "../env";
+import type { RouteContext } from "../router";
+import { json } from "../router";
+import { appendEvent } from "../events";
+import { actorFromIdentity, authorize, type Actor } from "./authorize";
+import { uploadDocument } from "./documents";
+import {
+  initialCapitalUsd, investableBase, reserveUsd, sleeveTargetUsd, usd,
+  type ReserveDoc, type SleeveDoc,
+} from "../../shared/fund/sleeveMath";
+
+/**
+ * The LP deck, inside the OS, with every version carrying the numbers it was built from.
+ *
+ * Operator, 9 Sep 2026: "we should have our deck displayed prominently in the OS and when we want to
+ * make updates to it we can assign the same employee to do so and changes are tracked and the latest
+ * edits and date and timestamps in the OS".
+ *
+ * WHAT WAS ACTUALLY MISSING. The deck existed in Canva and in a Downloads folder; the fund records
+ * existed in D1; nothing joined them. That gap produced every discrepancy found on 9 Sep — the deck
+ * says early stage is $21M, the OS held $17.0M against a $24.0M base, and nobody could say which was
+ * derived from which because NO VERSION EVER RECORDED ITS OWN INPUTS. `records_snapshot_json` is the
+ * whole point of this file; the viewer and the version list are what make it visible.
+ *
+ * THE DECK IS NEVER EMAILED, AND THE RULE GENERALISES — put here because this is where the next
+ * person will look for it.
+ *
+ *   A DOCUMENT WITH A CURRENT VERSION LIVES IN THE OS AND IS LINKED.
+ *   A SUMMARY THAT IS TRUE AT THE MOMENT IT IS WRITTEN CAN BE EMAILED.
+ *
+ * Operator, 9 Sep 2026: "i dont need the deck in an email at all just inside the OS". That is not a
+ * preference about inboxes. An emailed PDF is a SECOND COPY THAT CAN DRIFT — somebody forwards the
+ * attachment, the OS later renders v3, and two versions of an LP document exist with no way to tell
+ * which is current. The entire value of this table is that there is one current deck and the system
+ * knows which one; an email undoes it. So a new version raises a NOTICE that links here, and the
+ * bytes never leave.
+ *
+ * The distinction, not a ban on email: a weekly relationship note or a monthly list is true when it
+ * is written and has no later version to disagree with, so pushing it is right. A deck, a policy, a
+ * report that gets superseded — those are linked, never attached.
+ *
+ * PROVENANCE IS A FIRST-CLASS FIELD. `UPLOADED` is a partner exporting from Canva; `BUILT` is an
+ * employee rendering from records. They are different kinds of document and a reader should never
+ * have to guess: only a BUILT version can promise its figures match the OS.
+ */
+
+export class DeckError extends Error {
+  constructor(public status: number, public code: string, detail?: string) {
+    super(detail ?? code);
+  }
+}
+
+/**
+ * Every fund figure a deck depends on, frozen.
+ *
+ * DERIVED FIGURES ARE STORED ALONGSIDE THE INPUTS, and that is not a contradiction of the rule that
+ * one figure is stored and the other computed. That rule governs POLICY, which must never hold two
+ * numbers that can drift. This is a SNAPSHOT — a photograph of what the arithmetic produced at a
+ * moment — and its whole value is that it does not change when the policy does. Recomputing it later
+ * would answer a different question from the one it exists to answer.
+ */
+export interface RecordsSnapshot {
+  taken_at: string;
+  fund_size_usd: number | null;
+  estimated_fees_usd: number;
+  estimated_expenses_usd: number;
+  investable_base_usd: number;
+  sleeves: Array<{ key: string; target_pct: number | null; derived_usd: number }>;
+  reserve_pct: number | null;
+  reserve_usd: number;
+  initial_capital_usd: number;
+  sectors: string[];
+  target_positions: number | null;
+  check_size_usd: { min: number | null; max: number | null };
+  /** Which policy rows this was read from, so a snapshot can be traced to its sources. */
+  policy_versions: { mandate: number | null; sleeve: number | null; reserve: number | null };
+}
+
+interface PolicyRow { version_no: number; doc: string }
+
+async function latestPolicy(env: Env, table: string, column: string, fundId: string): Promise<PolicyRow | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT version_no, ${column} AS doc FROM ${table} WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1`,
+  )
+    .bind(fundId)
+    .first<PolicyRow>();
+  return row ?? null;
+}
+
+/** Parse, or treat the version as absent. An unreadable policy must not be read as an empty one. */
+function readDoc<T>(row: PolicyRow | null): { doc: T; version: number | null } {
+  if (!row) return { doc: {} as T, version: null };
+  try {
+    return { doc: JSON.parse(row.doc) as T, version: row.version_no };
+  } catch {
+    return { doc: {} as T, version: null };
+  }
+}
+
+/**
+ * Read the fund records as they stand right now.
+ *
+ * THROWS WHEN THERE IS NOTHING TO PHOTOGRAPH. A snapshot of a fund with no mandate and no sleeve
+ * policy is an empty object wearing a timestamp, and storing one would let a deck version claim
+ * provenance it does not have. The `NOT NULL` column and this throw are the same guard from two
+ * directions.
+ */
+export async function takeRecordsSnapshot(env: Env, fundId: string): Promise<RecordsSnapshot> {
+  const mandateRow = await latestPolicy(env, "investment_mandate_version", "mandate_json", fundId);
+  const sleeveRow = await latestPolicy(env, "sleeve_policy_version", "sleeve_json", fundId);
+  const reserveRow = await latestPolicy(env, "reserve_policy_version", "reserve_json", fundId);
+
+  const mandate = readDoc<{
+    target_size_usd?: number;
+    sectors?: string[];
+    target_positions?: number;
+    check_size_usd?: { min?: number; max?: number };
+  }>(mandateRow);
+  const sleeve = readDoc<SleeveDoc>(sleeveRow);
+  const reserve = readDoc<ReserveDoc>(reserveRow);
+
+  if (mandate.version === null && sleeve.version === null) {
+    throw new DeckError(
+      409,
+      "no_records",
+      "this fund carries no readable mandate or sleeve policy, so a deck built from it would have nothing behind its figures",
+    );
+  }
+
+  const base = investableBase(sleeve.doc);
+  return {
+    taken_at: new Date().toISOString(),
+    fund_size_usd: mandate.doc.target_size_usd ?? null,
+    estimated_fees_usd: sleeve.doc.estimated_fees_usd ?? 0,
+    estimated_expenses_usd: sleeve.doc.estimated_expenses_usd ?? 0,
+    investable_base_usd: base,
+    sleeves: (sleeve.doc.sleeves ?? []).map((s) => ({
+      key: s.key,
+      target_pct: s.target_pct ?? null,
+      derived_usd: sleeveTargetUsd(sleeve.doc, s),
+    })),
+    reserve_pct: reserve.doc.reserve_pct ?? null,
+    reserve_usd: reserveUsd(sleeve.doc, reserve.doc),
+    initial_capital_usd: initialCapitalUsd(sleeve.doc, reserve.doc),
+    sectors: mandate.doc.sectors ?? [],
+    target_positions: mandate.doc.target_positions ?? null,
+    check_size_usd: { min: mandate.doc.check_size_usd?.min ?? null, max: mandate.doc.check_size_usd?.max ?? null },
+    policy_versions: { mandate: mandate.version, sleeve: sleeve.version, reserve: reserve.version },
+  };
+}
+
+export interface FigureDrift {
+  field: string;
+  was: string;
+  now: string;
+}
+
+/**
+ * What has moved in the records since a deck was built.
+ *
+ * THE LINE THE OPERATOR ASKED FOR — "this deck is N days old and M fund figures have changed since"
+ * — is this function. It is cheap only because versions store their inputs; without the snapshot the
+ * same question needs an archaeologist, which is precisely what 9 Sep required.
+ *
+ * Compares the FIGURES a reader would see on a slide, not the whole document, so a reworded note on
+ * a policy does not report as a changed number.
+ */
+export function driftSince(snapshot: RecordsSnapshot, now: RecordsSnapshot): FigureDrift[] {
+  const drift: FigureDrift[] = [];
+  const money = (field: string, was: number | null, next: number | null) => {
+    if (was === next) return;
+    if (was === null || next === null) {
+      drift.push({ field, was: was === null ? "not set" : usd(was), now: next === null ? "not set" : usd(next) });
+      return;
+    }
+    if (Math.abs(was - next) >= 1) drift.push({ field, was: usd(was), now: usd(next) });
+  };
+
+  money("Fund size", snapshot.fund_size_usd, now.fund_size_usd);
+  money("Investable base", snapshot.investable_base_usd, now.investable_base_usd);
+  money("Reserves", snapshot.reserve_usd, now.reserve_usd);
+  money("Capital for initial cheques", snapshot.initial_capital_usd, now.initial_capital_usd);
+
+  const byKey = new Map(now.sleeves.map((s) => [s.key, s]));
+  for (const was of snapshot.sleeves) {
+    const next = byKey.get(was.key);
+    if (!next) {
+      drift.push({ field: `Sleeve ${was.key}`, was: usd(was.derived_usd), now: "removed" });
+      continue;
+    }
+    money(`Sleeve ${was.key}`, was.derived_usd, next.derived_usd);
+    if (was.target_pct !== next.target_pct) {
+      drift.push({ field: `Sleeve ${was.key} share`, was: `${was.target_pct}%`, now: `${next.target_pct}%` });
+    }
+  }
+  for (const next of now.sleeves) {
+    if (!snapshot.sleeves.some((s) => s.key === next.key)) {
+      drift.push({ field: `Sleeve ${next.key}`, was: "absent", now: usd(next.derived_usd) });
+    }
+  }
+
+  if (snapshot.sectors.join("|") !== now.sectors.join("|")) {
+    drift.push({ field: "Sector focus", was: snapshot.sectors.join(", ") || "none", now: now.sectors.join(", ") || "none" });
+  }
+  if (snapshot.target_positions !== now.target_positions) {
+    drift.push({
+      field: "Target positions",
+      was: String(snapshot.target_positions ?? "not set"),
+      now: String(now.target_positions ?? "not set"),
+    });
+  }
+  const range = (c: RecordsSnapshot["check_size_usd"]) =>
+    c.min === null && c.max === null ? "not set" : `${c.min === null ? "?" : usd(c.min)}–${c.max === null ? "?" : usd(c.max)}`;
+  if (range(snapshot.check_size_usd) !== range(now.check_size_usd)) {
+    drift.push({ field: "Cheque range", was: range(snapshot.check_size_usd), now: range(now.check_size_usd) });
+  }
+  if (snapshot.reserve_pct !== now.reserve_pct) {
+    drift.push({ field: "Reserve share", was: `${snapshot.reserve_pct}%`, now: `${now.reserve_pct}%` });
+  }
+  return drift;
+}
+
+export interface DeckVersionRow {
+  id: string;
+  fund_id: string;
+  version_no: number;
+  title: string;
+  origin: string;
+  created_by: string;
+  created_by_type: string;
+  document_id: string | null;
+  page_count: number | null;
+  records_snapshot_json: string;
+  change_summary: string | null;
+  changed_fields_json: string;
+  state: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  rejected_reason: string | null;
+  created_at: string;
+}
+
+export interface RecordDeckInput {
+  fundId: string;
+  title: string;
+  origin: "BUILT" | "UPLOADED";
+  createdBy: string;
+  createdByType: "HUMAN" | "AI";
+  pageCount?: number | null;
+  /** The PDF. Optional only so a definition can be versioned before it renders. */
+  pdfBase64?: string | null;
+  changeSummary?: string | null;
+}
+
+/**
+ * Record a new deck version. Never replaces one.
+ *
+ * The snapshot is taken HERE rather than accepted from the caller, so a version cannot be written
+ * claiming inputs it did not have. The diff against the previous version is computed from the two
+ * snapshots, which is the only way it can be trustworthy: prose about what changed is an assertion,
+ * two snapshots subtracted is a measurement.
+ */
+export async function recordDeckVersion(env: Env, actor: Actor, input: RecordDeckInput): Promise<DeckVersionRow> {
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const snapshot = await takeRecordsSnapshot(env, input.fundId);
+
+  const previous = await env.WP_OS_DB.prepare(
+    "SELECT * FROM deck_version WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1",
+  )
+    .bind(input.fundId)
+    .first<DeckVersionRow>();
+
+  let changed: FigureDrift[] = [];
+  if (previous) {
+    try {
+      changed = driftSince(JSON.parse(previous.records_snapshot_json) as RecordsSnapshot, snapshot);
+    } catch {
+      changed = [];
+    }
+  }
+
+  let documentId: string | null = null;
+  let pageCount = input.pageCount ?? null;
+  if (input.pdfBase64) {
+    const { document } = await uploadDocument(env, actor, {
+      title: input.title,
+      doc_type: "DECK",
+      privacy_label: "INTERNAL",
+      content_type: "application/pdf",
+      content_base64: input.pdfBase64,
+    });
+    documentId = document.id;
+  }
+
+  const versionNo = (previous?.version_no ?? 0) + 1;
+  const id = `dck_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.prepare(
+    `INSERT INTO deck_version
+       (id, fund_id, version_no, title, origin, created_by, created_by_type, document_id, page_count,
+        records_snapshot_json, change_summary, changed_fields_json, state, firm_scope)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)`,
+  )
+    .bind(
+      id, input.fundId, versionNo, input.title, input.origin, input.createdBy, input.createdByType,
+      documentId, pageCount, JSON.stringify(snapshot),
+      input.changeSummary ?? (previous ? summariseDrift(changed) : null),
+      JSON.stringify(changed),
+      // An UPLOADED version is what the firm actually sent, so it is current on arrival. A BUILT one
+      // is a proposal until a human says otherwise: an LP document publishes nothing by itself.
+      input.origin === "UPLOADED" ? "CURRENT" : "PROPOSED",
+      firmScope,
+    )
+    .run();
+
+  if (input.origin === "UPLOADED" && previous) {
+    await env.WP_OS_DB.prepare(
+      "UPDATE deck_version SET state = 'SUPERSEDED' WHERE fund_id = ?1 AND id <> ?2 AND state = 'CURRENT'",
+    )
+      .bind(input.fundId, id)
+      .run();
+  }
+
+  await appendEvent(env, {
+    eventType: "deck_version.recorded",
+    actorType: input.createdByType === "HUMAN" ? "firm_user" : "system",
+    actorId: actor.firmUserId ?? input.createdBy,
+    objectType: "deck_version",
+    objectId: id,
+    firmScope,
+    payload: { version_no: versionNo, origin: input.origin, changed_fields: changed.length, page_count: pageCount },
+  });
+
+  return (await env.WP_OS_DB.prepare("SELECT * FROM deck_version WHERE id = ?1").bind(id).first<DeckVersionRow>())!;
+}
+
+/** Words for a list of moved figures, so a version list reads without opening anything. */
+export function summariseDrift(drift: FigureDrift[]): string {
+  if (drift.length === 0) return "No fund figure changed since the previous version.";
+  const named = drift.slice(0, 3).map((d) => `${d.field} ${d.was} → ${d.now}`);
+  const rest = drift.length - named.length;
+  return `${drift.length} figure${drift.length === 1 ? "" : "s"} changed: ${named.join("; ")}${rest > 0 ? `; and ${rest} more` : ""}.`;
+}
+
+// ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
+
+async function theFund(env: Env): Promise<{ id: string; name: string }> {
+  const fund = await env.WP_OS_DB.prepare("SELECT id, name FROM fund LIMIT 1").first<{ id: string; name: string }>();
+  if (!fund) throw new DeckError(404, "no_fund", "there is no fund to hold a deck");
+  return fund;
+}
+
+/**
+ * GET /api/deck — the current deck, its history, and whether the records have moved under it.
+ *
+ * The drift line is computed against the records AS THEY ARE NOW, on every read, so the page cannot
+ * show a stale "up to date" badge. That is the whole lesson of the unread badge: a status derived
+ * once at write time is wrong by the time somebody reads it.
+ */
+export async function handleGetDeck(ctx: RouteContext): Promise<Response> {
+  try {
+    const fund = await theFund(ctx.env);
+    const rows = (
+      await ctx.env.WP_OS_DB.prepare(
+        "SELECT * FROM deck_version WHERE fund_id = ?1 ORDER BY version_no DESC",
+      ).bind(fund.id).all<DeckVersionRow>()
+    ).results ?? [];
+
+    const current = rows.find((r) => r.state === "CURRENT") ?? null;
+    let drift: FigureDrift[] = [];
+    let ageDays: number | null = null;
+    if (current) {
+      const nowSnapshot = await takeRecordsSnapshot(ctx.env, fund.id);
+      try {
+        drift = driftSince(JSON.parse(current.records_snapshot_json) as RecordsSnapshot, nowSnapshot);
+      } catch {
+        drift = [];
+      }
+      ageDays = Math.floor((Date.now() - new Date(current.created_at).getTime()) / 86_400_000);
+    }
+
+    return json({
+      fund: { id: fund.id, name: fund.name },
+      current,
+      versions: rows,
+      /** "This deck is 11 days old and 3 fund figures have changed since." */
+      staleness: current
+        ? {
+            age_days: ageDays,
+            changed_since: drift,
+            headline:
+              drift.length === 0
+                ? `The current deck is ${ageDays} day${ageDays === 1 ? "" : "s"} old and every figure in it still matches the records.`
+                : `The current deck is ${ageDays} day${ageDays === 1 ? "" : "s"} old and ${drift.length} fund figure${drift.length === 1 ? " has" : "s have"} changed since it was built.`,
+          }
+        : null,
+      note: current
+        ? undefined
+        : "No deck version has been recorded yet. Upload the current PDF to start the history — v1 is what LPs actually received, discrepancies and all.",
+    });
+  } catch (err) {
+    if (err instanceof DeckError) return json({ error: err.code, detail: err.message }, { status: err.status });
+    throw err;
+  }
+}
+
+const uploadSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  content_base64: z.string().min(1),
+  page_count: z.number().int().positive().optional(),
+  change_summary: z.string().trim().max(2000).optional(),
+});
+
+/** POST /api/deck/versions — record what the firm is actually sending today. */
+export async function handleUploadDeck(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "document.upload", { objectType: "deck_version", objectId: "new" });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const parsed = uploadSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  try {
+    const fund = await theFund(ctx.env);
+    const row = await recordDeckVersion(ctx.env, actor, {
+      fundId: fund.id,
+      title: parsed.data.title,
+      origin: "UPLOADED",
+      createdBy: ctx.identity!.fullName,
+      createdByType: "HUMAN",
+      pageCount: parsed.data.page_count ?? null,
+      pdfBase64: parsed.data.content_base64,
+      changeSummary: parsed.data.change_summary ?? null,
+    });
+    return json({ version: row }, { status: 201 });
+  } catch (err) {
+    if (err instanceof DeckError) return json({ error: err.code, detail: err.message }, { status: err.status });
+    throw err;
+  }
+}
+
+const decisionSchema = z.object({
+  decision: z.enum(["APPROVE", "REJECT"]),
+  reason: z.string().trim().max(2000).optional(),
+});
+
+/**
+ * POST /api/deck/versions/:id/decide — Approve, or Try Again.
+ *
+ * A HUMAN ACT, and refused to anything else. This is the document the firm shows limited partners;
+ * an employee may write one and may not decide it is the one that goes out.
+ */
+export async function handleDecideDeck(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") {
+    return json({ error: "forbidden", detail: "approving what goes to an LP is a human act" }, { status: 403 });
+  }
+  const parsed = decisionSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+
+  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM deck_version WHERE id = ?1")
+    .bind(ctx.params.id!)
+    .first<DeckVersionRow>();
+  if (!row) return json({ error: "not_found" }, { status: 404 });
+  if (row.state !== "PROPOSED") {
+    return json({ error: "conflict", detail: `this version is ${row.state}, not awaiting a decision` }, { status: 409 });
+  }
+
+  const now = new Date().toISOString();
+  if (parsed.data.decision === "APPROVE") {
+    await ctx.env.WP_OS_DB.prepare(
+      "UPDATE deck_version SET state = 'SUPERSEDED' WHERE fund_id = ?1 AND state = 'CURRENT'",
+    ).bind(row.fund_id).run();
+    await ctx.env.WP_OS_DB.prepare(
+      "UPDATE deck_version SET state = 'CURRENT', approved_by = ?2, approved_at = ?3 WHERE id = ?1",
+    ).bind(row.id, ctx.identity!.id, now).run();
+  } else {
+    await ctx.env.WP_OS_DB.prepare(
+      "UPDATE deck_version SET state = 'REJECTED', rejected_reason = ?2, approved_by = ?3, approved_at = ?4 WHERE id = ?1",
+    ).bind(row.id, parsed.data.reason ?? "No reason given.", ctx.identity!.id, now).run();
+  }
+
+  await appendEvent(ctx.env, {
+    eventType: parsed.data.decision === "APPROVE" ? "deck_version.approved" : "deck_version.rejected",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "deck_version",
+    objectId: row.id,
+    payload: { version_no: row.version_no, reason: parsed.data.reason ?? null },
+  });
+
+  return json(await ctx.env.WP_OS_DB.prepare("SELECT * FROM deck_version WHERE id = ?1").bind(row.id).first());
+}

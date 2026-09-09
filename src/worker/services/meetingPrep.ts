@@ -608,25 +608,36 @@ export async function buildDiscrepancyRegister(
     const forInitials = initialCapitalUsd(latestSleeveDoc, latestReserveDoc);
     const atMin = mandate.target_positions * mandate.check_size_usd.min;
     const atMax = mandate.target_positions * mandate.check_size_usd.max;
-    if (atMax > forInitials) {
+    /*
+     * FLAGGED ONLY WHEN THE PORTFOLIO CANNOT BE BUILT AT ALL, which is a correction to this check.
+     *
+     * It used to fire whenever the TOP of the cheque range exceeded the available capital — and that
+     * is true of very nearly every fund ever raised, because nobody writes their maximum cheque into
+     * every company. A check that fires on the normal case is noise, and noise is how a register
+     * stops being read.
+     *
+     * The real failure is when the MINIMUM cheque across the target count already exceeds what
+     * exists: then the stated portfolio is arithmetically impossible rather than merely ambitious.
+     * Reported against the corrected figures the operator confirmed on 9 Sep — 25 companies at
+     * $250K–$750K, not the 20 at $500K–$750K this was first computed from.
+     */
+    if (atMin > forInitials) {
       const headroom = forInitials - atMin;
       derived.push({
         where: "investment_mandate_version × sleeve_policy_version × reserve_policy_version",
         what:
           `${mandate.target_positions} positions at the stated ${usd(mandate.check_size_usd.min)}–` +
-          `${usd(mandate.check_size_usd.max)} cheque needs ${usd(atMin)}–${usd(atMax)} of initial capital. ` +
+          `${usd(mandate.check_size_usd.max)} cheque needs at least ${usd(atMin)} of initial capital. ` +
           `The early-stage sleeve is ${usd(sleeveTargetUsd(latestSleeveDoc, early))} with ` +
-          `${latestReserveDoc.reserve_pct}% reserved, leaving ${usd(forInitials)} for initials — ` +
-          (headroom >= 0
-            ? `${usd(headroom)} of headroom, so the target portfolio is affordable only with every cheque at the bottom of the range.`
-            : `${usd(-headroom)} SHORT even with every cheque at the stated minimum.`),
+          `${latestReserveDoc.reserve_pct}% reserved, leaving only ${usd(forInitials)} — ` +
+          `${usd(-headroom)} SHORT even with every cheque at the stated minimum, so this portfolio ` +
+          `cannot be built as described.`,
         shouldBe:
           "Either fewer positions, a smaller cheque, a larger early-stage sleeve, or a stated " +
           "expectation that the range's midpoint is not the plan.",
         actedOn:
-          `No. Settling the split at 70/30 on 9 Sep 2026 tightened this rather than easing it: the sleeve ` +
-          `moved from $17.0M to ${usd(sleeveTargetUsd(latestSleeveDoc, early))}, so initials moved from $10.2M to ` +
-          `${usd(forInitials)}. She was told that before deciding.`,
+          "No — this arithmetic does not appear anywhere in the firm's records, and it is a genuine " +
+          "impossibility rather than a tight fit.",
         origin: "DERIVED",
       });
     }
