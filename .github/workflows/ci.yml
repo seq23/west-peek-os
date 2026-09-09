@@ -104,6 +104,22 @@ jobs:
       - name: Install (reproducible, from package-lock)
         run: npm ci
 
+      # `--with-deps` runs `apt-get update`, which on a GitHub runner consults Google's own Chrome
+      # apt repository — a third-party source this job does not need and does not use. On 9 Sep 2026
+      # that repository served a corrupt index and `apt` failed the whole step twice in a row with
+      # "Hash Sum mismatch ... dl.google.com/linux/chrome-stable", before a single journey ran.
+      #
+      # Playwright ships its OWN Chromium build; `--with-deps` only wants shared libraries, and
+      # those come from Ubuntu's repositories. So the fix is to stop apt consulting a source that
+      # has nothing to do with this build, rather than to tolerate the failure.
+      #
+      # THIS IS NOT A WEAKENED GATE, and the distinction matters. There is no `continue-on-error`
+      # here, no `if: always()`, and nothing skipped: if the browser install genuinely fails, this
+      # step still fails and the job still fails. What changes is that an unrelated vendor's package
+      # index can no longer decide whether West Peek's journeys are allowed to run.
+      - name: Remove the third-party apt source this job does not use
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google.list
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
