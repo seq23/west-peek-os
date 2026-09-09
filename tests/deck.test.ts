@@ -259,3 +259,59 @@ describe("what was sent to an LP is not editable", () => {
     expect(after!.state).toBe("CURRENT");
   });
 });
+
+/**
+ * PRESTON'S DUTY, so the deck is something she can ASSIGN rather than a command she runs.
+ *
+ * Operator, 9 Sep 2026: "when we want to make updates to it we can assign the same employee to do
+ * so". `scripts/deck/build.mjs` renders the PDF from the records, which was the hard part — but a
+ * command a partner has to type is a chore with a nicer name, not a duty.
+ */
+describe("the deck can be assigned to Preston", () => {
+  it("records a PROPOSED version signed by Preston, never CURRENT", async () => {
+    const { runDeckRebuild, DECK_OWNER } = await import("../src/worker/services/deck");
+    expect(DECK_OWNER, "the deck owner is not the seat that owns fund construction").toBe("Preston");
+
+    const before = (
+      await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deck_version WHERE fund_id = ?1").bind(FUND).first<{ n: number }>()
+    )!.n;
+
+    const out = await runDeckRebuild(env, ACTOR, { title: "rebuild under test" });
+
+    expect(out.version.created_by).toBe("Preston");
+    expect(out.version.created_by_type).toBe("AI");
+    expect(out.version.origin).toBe("BUILT");
+    /*
+     * A RENDER IS A PROPOSAL. This is the document the firm shows limited partners; an employee may
+     * write one and may not decide it is the one that goes out.
+     */
+    expect(out.version.state, "an employee published an LP document by itself").toBe("PROPOSED");
+
+    const after = (
+      await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deck_version WHERE fund_id = ?1").bind(FUND).first<{ n: number }>()
+    )!.n;
+    expect(after, "the rebuild replaced a version instead of adding one").toBe(before + 1);
+
+    // It carries its inputs like every other version, which is the whole point of the table.
+    const snap = JSON.parse(out.version.records_snapshot_json) as { fund_size_usd: number | null };
+    expect(snap.fund_size_usd, "the rebuilt version carries no snapshot").not.toBeUndefined();
+  });
+
+  it("tells BOTH partners, each addressed, and never firm-wide", async () => {
+    /*
+     * The deck is the firm's document and Scooter's name is on it. A firm-wide notice would skip
+     * the preference block in `notify()` entirely — the defect found in all twelve all-clears this
+     * system had ever sent.
+     */
+    const rows = (
+      await env.WP_OS_DB.prepare(
+        "SELECT firm_user_id, title FROM notification WHERE dedupe_key LIKE 'deck_rebuilt:%'",
+      ).all<{ firm_user_id: string | null; title: string }>()
+    ).results ?? [];
+
+    expect(rows.length, "nothing announced the rebuild").toBeGreaterThan(0);
+    expect(rows.every((r) => Boolean(r.firm_user_id)), "a rebuild notice was addressed to nobody").toBe(true);
+    expect(new Set(rows.map((r) => r.firm_user_id)).size, "one notice each, never two to one person").toBe(rows.length);
+    expect(rows[0]!.title).toContain("Preston");
+  });
+});

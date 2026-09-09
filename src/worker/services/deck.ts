@@ -4,6 +4,7 @@ import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
+import { notifyPartners } from "./notifications";
 import { uploadDocument } from "./documents";
 import {
   initialCapitalUsd, investableBase, reserveUsd, sleeveTargetUsd, usd,
@@ -44,6 +45,9 @@ import {
  * employee rendering from records. They are different kinds of document and a reader should never
  * have to guess: only a BUILT version can promise its figures match the OS.
  */
+
+/** Preston owns fund construction on the roster, so the deck's numbers are his. No new seat. */
+export const DECK_OWNER = "Preston";
 
 export class DeckError extends Error {
   constructor(public status: number, public code: string, detail?: string) {
@@ -340,6 +344,80 @@ export function summariseDrift(drift: FigureDrift[]): string {
   const named = drift.slice(0, 3).map((d) => `${d.field} ${d.was} → ${d.now}`);
   const rest = drift.length - named.length;
   return `${drift.length} figure${drift.length === 1 ? "" : "s"} changed: ${named.join("; ")}${rest > 0 ? `; and ${rest} more` : ""}.`;
+}
+
+/**
+ * Preston's duty: rebuild the deck from the records and hand it to the partners.
+ *
+ * THIS IS WHAT MAKES IT ASSIGNABLE. Operator, 9 Sep 2026: "when we want to make updates to it we can
+ * assign the same employee to do so". A command she has to run herself is not a duty, it is a
+ * chore with a nicer name — and the whole point of the employee model is that she asks for the
+ * outcome, not the steps.
+ *
+ * PRESTON, AND NOT A NEW SEAT. He owns `fund_construction_allocation` on the roster and he wrote the
+ * discrepancy register that found the deck's construction table summing to $27M of a $30M fund.
+ * Producing the deck is the obvious extension of auditing it, not a stretch of his charter.
+ *
+ * WHAT IT DOES NOT DO IS DECIDE. The render arrives PROPOSED and a human moves it to CURRENT: this
+ * is the document the firm shows limited partners, and an employee may write one without being
+ * allowed to choose that it goes out.
+ *
+ * THE PDF IS RENDERED ON HER MAC, not here. `scripts/deck/build.mjs` drives the Playwright Chromium
+ * the e2e suite already installs, which costs nothing and works offline; the Browser Rendering
+ * binding would bill a session for a document a human asked for once. So this duty records the
+ * version and raises the notices, and the bytes are attached by the build script or by the upload
+ * control on the Fund strategy page. A version with no PDF still carries its snapshot, which is the
+ * part that makes the history worth having.
+ */
+export async function runDeckRebuild(
+  env: Env,
+  actor: Actor,
+  input: { title?: string; pdfBase64?: string | null } = {},
+): Promise<{ version: DeckVersionRow; changed: number }> {
+  const fund = await theFund(env);
+  const version = await recordDeckVersion(env, actor, {
+    fundId: fund.id,
+    title: input.title ?? `${fund.name} — rebuilt from the records`,
+    origin: "BUILT",
+    createdBy: DECK_OWNER,
+    createdByType: "AI",
+    pdfBase64: input.pdfBase64 ?? null,
+  });
+
+  let changed: FigureDrift[] = [];
+  try {
+    changed = JSON.parse(version.changed_fields_json) as FigureDrift[];
+  } catch {
+    changed = [];
+  }
+
+  /*
+   * EVERY EMPLOYEE REPORTS COMPLETION, and to BOTH partners — the deck is the firm's document and
+   * Scooter's name is on it. `notifyPartners` addresses one notice per person from the role join, so
+   * each gets their own row and quiet hours apply to both; a firm-wide notice would skip the
+   * preference block entirely, which is the defect found in every all-clear this system had sent.
+   *
+   * INSIDE THE OS, NEVER EMAILED. See the rule at the top of this file: a document with a current
+   * version is linked, not attached, or a forwarded copy drifts from the version the OS calls
+   * current.
+   */
+  await notifyPartners(env, {
+    kind: "MEETING",
+    severity: "INFO",
+    title: `${DECK_OWNER} has rebuilt the deck — v${version.version_no} is waiting on a decision`,
+    body:
+      changed.length === 0
+        ? "No fund figure changed since the last version. Open it on Fund strategy to approve or send it back."
+        : `${changed.length} figure${changed.length === 1 ? "" : "s"} changed: ` +
+          `${changed.slice(0, 4).map((c) => `${c.field} ${c.was} → ${c.now}`).join("; ")}. ` +
+          "Open it on Fund strategy to approve or send it back.",
+    objectType: "deck_version",
+    objectId: version.id,
+    dedupeKey: `deck_rebuilt:${version.id}`,
+    firmScope: actor.firmScopes[0] ?? "west-peek",
+  });
+
+  return { version, changed: changed.length };
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
