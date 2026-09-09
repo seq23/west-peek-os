@@ -176,6 +176,7 @@ import {
   handleListDeliverableFeedback,
   handleListDeliverables,
 } from "./services/deliverables";
+import { handleRunMeetingPrep } from "./services/meetingPrep";
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
 import { handleIngestTranscript } from "./services/captureAdapter";
@@ -994,6 +995,9 @@ const router = new Router()
   .post("/api/approvals/:id/comments", handleAddApprovalComment)
   .get("/api/weekly-review", handleGetWeeklyReview)
   .post("/api/weekly-review/generate", handleGenerateWeeklyReview)
+  // The per-partner Wednesday packets and the deck discrepancy register. Runs on `wednesday_prep`
+  // every morning; this is the same path, by hand, for a partner who wants it now.
+  .post("/api/meeting-prep/run", handleRunMeetingPrep)
   // The capture box: put something on the agenda that no record knows about.
   .post("/api/weekly-review/notes", handleReviewNotes)
   .post("/api/weekly-review/items", handleAddReviewItem)

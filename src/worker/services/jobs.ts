@@ -196,6 +196,39 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   /*
+   * The Wednesday prep packets and the deck discrepancy register.
+   *
+   * ON THE SAME DAILY SHAPE AS `weekly_mp_review` and deliberately EARLIER in the day than the
+   * meeting: a packet that lands at 11:05 is a minute of the meeting rather than preparation for
+   * it. The job is idempotent — `deliver()` keys on (source_type, source_id) and the source is the
+   * meeting date plus the partner — so firing more than once a day updates the same packet.
+   *
+   * A FAILURE HERE IS A FAILED RUN. `runWednesdayPrep` collects per-packet failures rather than
+   * throwing on the first, because one partner's packet failing should not cost the other theirs;
+   * the run then reports FAILED so the health board sees it. A job that returns SUCCEEDED having
+   * written nothing is the exact stage Rule 0 forbids.
+   */
+  if (job.job_key === "wednesday_prep") {
+    const { runWednesdayPrep } = await import("./meetingPrep");
+    const out = await runWednesdayPrep(env, actor, now);
+    for (const p of out.packets) {
+      artifacts.push({ kind: "MEETING_PREP", ref_type: "firm_user", ref_id: p.firmUserId });
+    }
+    const empties = out.packets.filter((p) => p.empty).length;
+    return {
+      status: out.failures.length > 0 ? "FAILED" : "SUCCEEDED",
+      // An empty packet is named as empty in the summary too, so the run log carries the same
+      // distinction the packet does.
+      summary:
+        `${out.packets.length} prep packet(s) for ${out.meetingDate}` +
+        `${empties > 0 ? ` (${empties} with nothing completed, delivered and marked as such)` : ""}` +
+        `${out.register ? `; discrepancy register: ${out.register.recorded} recorded, ${out.register.derived} newly noticed` : "; NO discrepancy register"}` +
+        `${out.failures.length > 0 ? `. FAILED: ${out.failures.map((f) => `${f.what} — ${f.detail}`).join("; ")}` : ""}`,
+      artifacts,
+    };
+  }
+
+  /*
    * Diagnostics, on the clock. Item 22.
    *
    * INTERVAL DECIDED: every tick, fifteen minutes. The checks are a handful of COUNT queries and

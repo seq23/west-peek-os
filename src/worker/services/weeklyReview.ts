@@ -4,6 +4,7 @@ import { appendEvent } from "../events";
 import { recordSwallowed } from "./swallowed";
 import { deliver } from "./deliverables";
 import { jointByline } from "../../shared/work/chiefOfStaff";
+import { MANAGING_PARTNERS } from "../../shared/registry/managingPartners";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
@@ -340,31 +341,75 @@ export async function generateReview(
      * INTERNAL and the list is deliberately shared. Copies-per-reader was never what "prepared
      * jointly" meant.
      */
+    /*
+     * "THE SENIOR PARTNER ON THE ROSTER" — SAID BY THE COMMENT, NOT DONE BY THE QUERY.
+     *
+     * This was `ORDER BY u.id LIMIT 1`, which is alphabetical order over primary keys.
+     * `fu_scooter_taylor` sorts before `fu_sequoia_taylor`, so it happened to pick the partner who
+     * does hold final authority — by luck, from a string comparison that knows nothing about
+     * seniority. Rename an id, add a partner called Aaron, and the firm's weekly agenda quietly
+     * changes hands with nothing to notice.
+     *
+     * Seniority is recorded, in `MANAGING_PARTNERS`: ownership percentages and an explicit
+     * `finalAuthority` flag. Ordering by the thing that means seniority makes the code say what the
+     * comment claims, and the result is unchanged today — which is the point of fixing it now
+     * rather than after it diverges.
+     */
+    const senior = [...MANAGING_PARTNERS].sort(
+      (a, b) => Number(b.finalAuthority) - Number(a.finalAuthority) || b.ownershipPct - a.ownershipPct,
+    );
     const partners = ((await env.WP_OS_DB.prepare(
-      `SELECT u.id FROM firm_user u
+      `SELECT u.id, u.full_name FROM firm_user u
          JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
-        WHERE u.status = 'ACTIVE'
-        ORDER BY u.id
-        LIMIT 1`,
-    ).all<{ id: string }>()).results ?? []);
+        WHERE u.status = 'ACTIVE'`,
+    ).all<{ id: string; full_name: string }>()).results ?? [])
+      .sort((a, b) => {
+        const rank = (name: string) => {
+          const i = senior.findIndex((m) => m.fullName === name);
+          return i === -1 ? senior.length : i;
+        };
+        return rank(a.full_name) - rank(b.full_name) || a.id.localeCompare(b.id);
+      })
+      .slice(0, 1);
 
     const items = ((await env.WP_OS_DB.prepare(
       "SELECT heading, body, exit_type, source_type FROM weekly_review_item WHERE review_id = ?1 ORDER BY heading",
     ).bind(reviewId).all<{ heading: string; body: string; exit_type: string; source_type: string | null }>()).results ?? []);
 
-    if (items.length > 0) {
-      for (const partner of partners) {
-        await deliver(env, actor, {
-          kind: "weekly_review",
-          title: `Weekly operating review — week of ${week}`,
-          body: renderAgenda(items),
-          preparedBy: jointByline(),
-          preparedFor: partner.id,
-          // One row per review, so re-generating updates it rather than stacking another copy.
-          sourceType: "weekly_review",
-          sourceId: reviewId,
-        });
-      }
+    /*
+     * A QUIET WEEK IS DELIVERED, AND SAYS SO.
+     *
+     * This was guarded by `if (items.length > 0)`, so a week that derived no agenda items produced
+     * NO deliverable at all — and on a Home page an absent agenda and a failed generation are the
+     * same thing: nothing. The operator settled this on 9 Sep 2026: "saying nothing was done is
+     * okay too." A truthful empty agenda is a legitimate output; a silently missing one never is.
+     *
+     * The empty body states the window it examined, so an empty week can be believed rather than
+     * merely accepted.
+     */
+    const body = items.length > 0
+      ? renderAgenda(items)
+      : [
+          `# Weekly operating review — week of ${week}`,
+          "",
+          "**Nothing was raised for this week.** That is the reading, not a missing agenda.",
+          "",
+          "Every agenda item here is derived from a record that already exists — a pending approval, " +
+          "an open commitment, a portfolio alert, a failing job. None of those produced anything " +
+          "this week that needed the two of you in a room.",
+        ].join("\n");
+
+    for (const partner of partners) {
+      await deliver(env, actor, {
+        kind: "weekly_review",
+        title: `Weekly operating review — week of ${week}`,
+        body,
+        preparedBy: jointByline(),
+        preparedFor: partner.id,
+        // One row per review, so re-generating updates it rather than stacking another copy.
+        sourceType: "weekly_review",
+        sourceId: reviewId,
+      });
     }
   } catch (err) {
     // The agenda stands. It simply has not been filed — and the ledger says why, which is the
