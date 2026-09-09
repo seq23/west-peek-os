@@ -64,9 +64,15 @@ export function prepWindow(now: Date): PrepWindow {
   while (from.getUTCDay() !== 3 || from.getTime() >= to.getTime()) {
     from.setUTCDate(from.getUTCDate() - 1);
   }
-  // The meeting being prepared for is the NEXT Wednesday at or after now.
-  const meeting = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
-  while (meeting.getUTCDay() !== 3) meeting.setUTCDate(meeting.getUTCDate() + 1);
+  /*
+   * THE MEETING BEING PREPARED FOR IS ALWAYS THE ONE AFTER `from`, which is one week later by
+   * definition. Deriving it from `now` instead — "the next Wednesday at or on today" — gets a
+   * Wednesday AFTERNOON wrong: at 16:00Z the sync has already happened, and a packet titled with
+   * today's date, covering the hour since it ended, is prep for a meeting nobody is going to have.
+   * Anchoring on `from` makes the window and the meeting one week apart, always, and there is no
+   * hour of the week where the two disagree.
+   */
+  const meeting = new Date(from.getTime() + 7 * 86_400_000);
   return { from: from.toISOString(), to: to.toISOString(), meetingDate: meeting.toISOString().slice(0, 10) };
 }
 

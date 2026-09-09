@@ -70,6 +70,18 @@ describe("the window between two syncs", () => {
     expect(w.from).toBe("2026-09-09T15:00:00.000Z");
     expect(w.meetingDate).toBe("2026-09-16");
   });
+
+  it("on a Wednesday AFTERNOON prepares for next week, not for the sync that just ended", () => {
+    /*
+     * The hour that gets this wrong. Deriving the meeting from `now` — "the next Wednesday at or
+     * on today" — returns TODAY at 16:00Z, so the packet would be titled with the date of a
+     * meeting that finished an hour ago and would cover that hour. The window and the meeting are
+     * one week apart by definition, and this is the only assertion that holds them there.
+     */
+    const w = prepWindow(new Date("2026-09-09T16:00:00.000Z"));
+    expect(w.from).toBe("2026-09-09T15:00:00.000Z");
+    expect(w.meetingDate).toBe("2026-09-16");
+  });
 });
 
 describe("each partner's packet is signed by their own Chief of Staff", () => {
