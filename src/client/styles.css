@@ -4536,11 +4536,11 @@ body {
    their default width. `journey 10 — mobile` caught this at 281px of sideways scroll: the page
    body must never scroll horizontally, and wide content scrolls inside its own container instead.
    So the number fields are sized to their content and the sentence wraps between them. */
-.construction-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35em; }
+.construction-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2xs); }
 .construction-inputs input[type="number"] {
   width: 5.5ch;
   min-width: 0;
-  padding: 0.15em 0.35em;
+  padding: var(--space-3xs) var(--space-2xs);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
