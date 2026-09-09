@@ -254,12 +254,27 @@ export async function buildMap(
   const panels = bySegment(merged);
   const note = `${coverageNote({ companies: merged, sourcesUsed: used })}${failed.length ? ` Unavailable this run: ${failed.join("; ")}.` : ""}`;
 
+  /*
+   * COUNTED FROM THE ROWS, NOT FROM THE INTENTION.
+   *
+   * This stored `merged.length` — how many companies the run MEANT to write. The insert above is
+   * `INSERT OR IGNORE` against `UNIQUE (map_id, name)`, so any two companies the merge left sharing
+   * a name are silently reduced to one and the stored number keeps counting both. The map then
+   * reports "24 companies" over a list of 23, for ever, and nothing reconciles them: the count is
+   * written once and never looked at again.
+   *
+   * `INSERT OR IGNORE` is kept — a name collision inside one map is a merge that could have been
+   * tighter, not a reason to fail a whole market map — but the number now describes what is
+   * actually there. One extra COUNT on a path that already made one query per company.
+   */
+  const landed = { n: await landedCompanyCount(env, id) };
+
   await env.WP_OS_DB.prepare(
     `UPDATE mkt_map SET status = 'READY', segments_json = ?2, company_count = ?3,
             coverage_note = ?4, sources_used = ?5, ai_run_id = ?6,
             completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
   )
-    .bind(id, JSON.stringify(panels.map((p) => p.segment)), merged.length, note, JSON.stringify(used), runId)
+    .bind(id, JSON.stringify(panels.map((p) => p.segment)), landed?.n ?? 0, note, JSON.stringify(used), runId)
     .run();
 
   await appendEvent(env, {
@@ -270,6 +285,19 @@ export async function buildMap(
   });
 
   return { map_id: id, companies: merged.length, segments: panels.length, sources_used: used, sources_failed: failed };
+}
+
+/**
+ * How many companies are ACTUALLY on this map.
+ *
+ * Exported so the invariant can be asserted directly rather than inferred from a build that needs a
+ * model and a web search to run. The number `mkt_map.company_count` stores must always be this.
+ */
+export async function landedCompanyCount(env: Env, mapId: string): Promise<number> {
+  const row = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM mkt_map_company WHERE map_id = ?1")
+    .bind(mapId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
