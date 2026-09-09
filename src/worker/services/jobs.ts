@@ -229,6 +229,31 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   /*
+   * Preston rebuilding the deck. Assignable rather than a command she has to run.
+   *
+   * MANUAL BY DEFAULT, and deliberately: a deck is rebuilt when the records move or when a partner
+   * asks, not every fifteen minutes. The row is seeded PAUSED so the schedule exists to be switched
+   * on if she ever wants it periodic, and `POST /api/jobs/deck_rebuild/run` is the path an
+   * assignment takes today.
+   *
+   * A RENDER IS A PROPOSAL. The version arrives PROPOSED and both partners are told; only a human
+   * moves it to CURRENT, because this is the document the firm shows limited partners.
+   */
+  if (job.job_key === "deck_rebuild") {
+    const { runDeckRebuild } = await import("./deck");
+    const out = await runDeckRebuild(env, actor);
+    artifacts.push({ kind: "DECK_VERSION", ref_type: "deck_version", ref_id: out.version.id });
+    return {
+      status: "SUCCEEDED",
+      summary:
+        `Deck v${out.version.version_no} recorded as PROPOSED and both partners told` +
+        `${out.changed > 0 ? `; ${out.changed} fund figure(s) changed since the last version` : "; no fund figure changed since the last version"}` +
+        `${out.version.document_id ? "" : ". No PDF attached — run scripts/deck/build.mjs or upload it on Fund strategy"}.`,
+      artifacts,
+    };
+  }
+
+  /*
    * Diagnostics, on the clock. Item 22.
    *
    * INTERVAL DECIDED: every tick, fifteen minutes. The checks are a handful of COUNT queries and
