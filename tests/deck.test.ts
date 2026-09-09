@@ -118,8 +118,14 @@ describe("every version carries the records it was built from", () => {
     expect(snap.fund_size_usd, "the snapshot is present but empty, which is worse than absent").toBe(30_000_000);
     expect(snap.sleeves.length).toBeGreaterThan(0);
 
-    // v1 is the historical record of what LPs received, so it is current on arrival.
-    expect(v1.state).toBe("CURRENT");
+    /*
+     * EVEN v1 WAITS FOR A DECISION. This used to read CURRENT, on the reasoning that an upload is
+     * "what the firm actually sent" — which made recording a file the same act as choosing it and
+     * cost the firm its LP deck on 9 Sep 2026 (migration 0155). Storing the August PDF is a claim
+     * about history; saying it is what we send today is a claim about the present, and a partner
+     * makes the second one.
+     */
+    expect(v1.state, "an upload published itself as the firm's LP document").toBe("PROPOSED");
     expect(v1.origin).toBe("UPLOADED");
     expect(v1.change_summary, "a diff against nothing would be prose pretending to be a measurement").toBeNull();
     expect(JSON.parse(v1.changed_fields_json)).toEqual([]);
@@ -257,6 +263,70 @@ describe("what was sent to an LP is not editable", () => {
     const after = await env.WP_OS_DB.prepare("SELECT state FROM deck_version WHERE id = ?1")
       .bind(proposed!.id).first<{ state: string }>();
     expect(after!.state).toBe("CURRENT");
+  });
+
+  /*
+   * MIGRATION 0155 CLOSED THE LAST UNGUARDED COLUMN. The trigger froze the bytes, the snapshot, the
+   * number, the author and the provenance — but not the row's account of ITSELF. A history whose
+   * prose can be rewritten while the table advertises append-only is not append-only, and 0155 was
+   * the last write that hole legitimately permitted.
+   */
+  it("refuses to rewrite a version's own account of itself", async () => {
+    const row = await env.WP_OS_DB.prepare(
+      "SELECT id FROM deck_version WHERE fund_id = ?1 ORDER BY version_no LIMIT 1",
+    ).bind(FUND).first<{ id: string }>();
+    expect(row, "no deck version to test the summary guard against").toBeTruthy();
+
+    await expect(
+      env.WP_OS_DB.prepare("UPDATE deck_version SET change_summary = 'nothing to see' WHERE id = ?1").bind(row!.id).run(),
+    ).rejects.toThrow(/immutable/i);
+    await expect(
+      env.WP_OS_DB.prepare("UPDATE deck_version SET title = 'renamed' WHERE id = ?1").bind(row!.id).run(),
+    ).rejects.toThrow(/immutable/i);
+  });
+});
+
+/**
+ * RECORDING A VERSION AND DECIDING IT GOES OUT ARE DIFFERENT ACTS.
+ *
+ * The 9 Sep 2026 defect, in one line: `recordDeckVersion` inserted an UPLOADED version as CURRENT
+ * and superseded whatever the firm was sending. Preston's rebuild cannot attach its own PDF, so the
+ * render was uploaded to supply the file — and that upload displaced the operator's Canva deck as
+ * the firm's LP document. A second upload meant to undo it made a third copy. Two junk rows and a
+ * wrong current deck, from a caller trying to attach a file. Migration 0155 is the cleanup.
+ */
+describe("an upload cannot make itself the deck", () => {
+  it("records an UPLOADED version as PROPOSED and leaves the current deck alone", async () => {
+    const current = await env.WP_OS_DB.prepare(
+      "SELECT id, version_no FROM deck_version WHERE fund_id = ?1 AND state = 'CURRENT' LIMIT 1",
+    ).bind(FUND).first<{ id: string; version_no: number }>();
+    expect(current, "no current deck to try to displace — this test would prove nothing").toBeTruthy();
+
+    const { recordDeckVersion } = await import("../src/worker/services/deck");
+    const uploaded = await recordDeckVersion(env, ACTOR, {
+      fundId: FUND,
+      title: "a partner's Canva export",
+      origin: "UPLOADED",
+      createdBy: "Sequoia Taylor",
+      createdByType: "HUMAN",
+    });
+
+    expect(uploaded.origin).toBe("UPLOADED");
+    expect(uploaded.state, "an upload published itself as the firm's LP document").toBe("PROPOSED");
+
+    const stillCurrent = await env.WP_OS_DB.prepare(
+      "SELECT id FROM deck_version WHERE fund_id = ?1 AND state = 'CURRENT'",
+    ).bind(FUND).all<{ id: string }>();
+    expect(stillCurrent.results!.map((r) => r.id), "an upload changed which deck the firm sends").toEqual([current!.id]);
+  });
+
+  it("keeps exactly one CURRENT version, so 'which deck do we send' always has one answer", async () => {
+    const n = (
+      await env.WP_OS_DB.prepare(
+        "SELECT COUNT(*) AS n FROM deck_version WHERE fund_id = ?1 AND state = 'CURRENT'",
+      ).bind(FUND).first<{ n: number }>()
+    )!.n;
+    expect(n, "the fund has more than one current deck, or none at all").toBe(1);
   });
 });
 

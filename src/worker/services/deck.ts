@@ -310,20 +310,30 @@ export async function recordDeckVersion(env: Env, actor: Actor, input: RecordDec
       documentId, pageCount, JSON.stringify(snapshot),
       input.changeSummary ?? (previous ? summariseDrift(changed) : null),
       JSON.stringify(changed),
-      // An UPLOADED version is what the firm actually sent, so it is current on arrival. A BUILT one
-      // is a proposal until a human says otherwise: an LP document publishes nothing by itself.
-      input.origin === "UPLOADED" ? "CURRENT" : "PROPOSED",
+      /*
+       * RECORDING A VERSION AND DECIDING IT IS THE ONE THAT GOES OUT ARE DIFFERENT ACTS, and every
+       * version arrives PROPOSED whatever its provenance.
+       *
+       * THE DEFECT THIS REPLACES, 9 Sep 2026. An UPLOADED version used to insert as CURRENT and
+       * supersede whatever was current before it, on the reasoning that an upload is "what the firm
+       * actually sent". That reasoning is wrong in the one direction that matters: it makes the act
+       * of RECORDING a file indistinguishable from the act of CHOOSING it, on the table holding the
+       * document this firm shows limited partners.
+       *
+       * It cost exactly what you would expect. Preston's rebuild records a version and cannot attach
+       * the PDF — the build script renders on the operator's Mac, not here — so the render was
+       * uploaded to supply the file, and that upload silently displaced the operator's Canva deck as
+       * the document the firm sends. A second upload, meant to push it back, made a third copy of a
+       * PDF already on the record. Two junk rows and a wrong current deck, from a caller who was
+       * only trying to attach a file. See migration 0155.
+       *
+       * The system already knew this for a BUILT version: Preston may write one and may not decide
+       * it goes out. Uploads skipped the gate; now nothing skips it. A stray upload is a stray row.
+       */
+      "PROPOSED",
       firmScope,
     )
     .run();
-
-  if (input.origin === "UPLOADED" && previous) {
-    await env.WP_OS_DB.prepare(
-      "UPDATE deck_version SET state = 'SUPERSEDED' WHERE fund_id = ?1 AND id <> ?2 AND state = 'CURRENT'",
-    )
-      .bind(input.fundId, id)
-      .run();
-  }
 
   await appendEvent(env, {
     eventType: "deck_version.recorded",
@@ -474,7 +484,7 @@ export async function handleGetDeck(ctx: RouteContext): Promise<Response> {
         : null,
       note: current
         ? undefined
-        : "No deck version has been recorded yet. Upload the current PDF to start the history — v1 is what LPs actually received, discrepancies and all.",
+        : "No deck version has been recorded yet. Upload the current PDF to start the history — v1 is what LPs actually received, discrepancies and all — then approve it to make it the deck the firm sends.",
     });
   } catch (err) {
     if (err instanceof DeckError) return json({ error: err.code, detail: err.message }, { status: err.status });
@@ -489,7 +499,12 @@ const uploadSchema = z.object({
   change_summary: z.string().trim().max(2000).optional(),
 });
 
-/** POST /api/deck/versions — record what the firm is actually sending today. */
+/**
+ * POST /api/deck/versions — put a PDF on the record. It does NOT become the deck.
+ *
+ * The version lands PROPOSED and waits for a human on Fund strategy, the same gate a render from
+ * Preston passes through. Uploading used to publish, and migration 0155 is what that cost.
+ */
 export async function handleUploadDeck(ctx: RouteContext): Promise<Response> {
   const actor = actorFromIdentity(ctx.identity!);
   const authz = await authorize(ctx.env, actor, "document.upload", { objectType: "deck_version", objectId: "new" });
@@ -525,8 +540,22 @@ const decisionSchema = z.object({
 /**
  * POST /api/deck/versions/:id/decide — Approve, or Try Again.
  *
- * A HUMAN ACT, and refused to anything else. This is the document the firm shows limited partners;
- * an employee may write one and may not decide it is the one that goes out.
+ * A HUMAN ACT, AND THE ONLY WAY A VERSION BECOMES CURRENT. This is the document the firm shows
+ * limited partners; an employee may write one and may not decide it is the one that goes out, and
+ * since 9 Sep 2026 neither may an upload. Every other path records a PROPOSED row and stops.
+ *
+ * APPROVE ALSO REINSTATES. A SUPERSEDED version can be made current again, and that is a narrow
+ * mechanism built for a real hole rather than a convenience: before this, a version that was
+ * superseded WRONGLY could not be restored by any code path at all — `handleDecideDeck` answered 409
+ * to anything not PROPOSED, and the immutability trigger correctly refused everything else. On
+ * 9 Sep the operator's own Canva deck was superseded by a stray upload and putting it back took a
+ * migration. A firm should not need a schema change to say "that one, the one we already had".
+ *
+ * WHAT REINSTATEMENT IS NOT. It is not an edit — nothing about the version changes but the approval
+ * decision, which is the one thing the trigger has always permitted to move. It is not available to
+ * an employee: the human check above governs it identically. And it is refused for a REJECTED
+ * version, because a row struck off as wrong is not quietly promoted back into the firm's history;
+ * if a rejection was itself a mistake, record the document again and decide on that.
  */
 export async function handleDecideDeck(ctx: RouteContext): Promise<Response> {
   const actor = actorFromIdentity(ctx.identity!);
@@ -540,15 +569,29 @@ export async function handleDecideDeck(ctx: RouteContext): Promise<Response> {
     .bind(ctx.params.id!)
     .first<DeckVersionRow>();
   if (!row) return json({ error: "not_found" }, { status: 404 });
-  if (row.state !== "PROPOSED") {
-    return json({ error: "conflict", detail: `this version is ${row.state}, not awaiting a decision` }, { status: 409 });
+
+  const reinstating = parsed.data.decision === "APPROVE" && row.state === "SUPERSEDED";
+  const allowed = row.state === "PROPOSED" || reinstating;
+  if (!allowed) {
+    return json(
+      {
+        error: "conflict",
+        detail:
+          row.state === "CURRENT"
+            ? "this version is already the current deck"
+            : row.state === "REJECTED"
+              ? "this version was struck off as wrong and is not promoted back; record the document again and decide on that"
+              : `this version is ${row.state}, not awaiting a decision`,
+      },
+      { status: 409 },
+    );
   }
 
   const now = new Date().toISOString();
   if (parsed.data.decision === "APPROVE") {
     await ctx.env.WP_OS_DB.prepare(
-      "UPDATE deck_version SET state = 'SUPERSEDED' WHERE fund_id = ?1 AND state = 'CURRENT'",
-    ).bind(row.fund_id).run();
+      "UPDATE deck_version SET state = 'SUPERSEDED' WHERE fund_id = ?1 AND id <> ?2 AND state = 'CURRENT'",
+    ).bind(row.fund_id, row.id).run();
     await ctx.env.WP_OS_DB.prepare(
       "UPDATE deck_version SET state = 'CURRENT', approved_by = ?2, approved_at = ?3 WHERE id = ?1",
     ).bind(row.id, ctx.identity!.id, now).run();
@@ -559,12 +602,17 @@ export async function handleDecideDeck(ctx: RouteContext): Promise<Response> {
   }
 
   await appendEvent(ctx.env, {
-    eventType: parsed.data.decision === "APPROVE" ? "deck_version.approved" : "deck_version.rejected",
+    eventType:
+      parsed.data.decision === "REJECT"
+        ? "deck_version.rejected"
+        : reinstating
+          ? "deck_version.reinstated"
+          : "deck_version.approved",
     actorType: "firm_user",
     actorId: ctx.identity!.id,
     objectType: "deck_version",
     objectId: row.id,
-    payload: { version_no: row.version_no, reason: parsed.data.reason ?? null },
+    payload: { version_no: row.version_no, reason: parsed.data.reason ?? null, from_state: row.state },
   });
 
   return json(await ctx.env.WP_OS_DB.prepare("SELECT * FROM deck_version WHERE id = ?1").bind(row.id).first());
