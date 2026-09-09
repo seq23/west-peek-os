@@ -127,6 +127,22 @@ export const NO_TRIGGER_ROUTE = {
   owner: "WEST_PEEK_OS" as TriggerOwner,
   does: "Goes to Porter, who reads it and decides where it belongs.",
   lands: "Needs your attention, so it is never silently held.",
+  /*
+   * THE ONE CASE PORTER DOES NOT HAND TO A PERSON, added 9 Sep 2026.
+   *
+   * Operator: "porter receives and hands to wren or walker and we just email os@joinwestpeek.com".
+   * When Porter can PROVE the message came from a Managing Partner — SPF, DKIM and DMARC all
+   * passing with an aligned signature, and the sender on a two-address allow-list — waiting for a
+   * human to triage it is the wrong answer, because she was asking for something.
+   *
+   * SAID HERE BECAUSE THIS IS WHERE THE ROUTES ARE PUBLISHED. A page that lists what happens to
+   * untagged mail would otherwise still promise it merely waits for a person, which stopped being
+   * the whole truth. See `partnerAuthority.ts` for why a From header proves nothing, and why there
+   * is deliberately NO hashtag for this: a public word may route, but must never authorise.
+   */
+  fromAPartner:
+    "If it authenticates as Sequoia or Scooter, Porter hands it straight to their own chief of staff " +
+    "as an assignment. Anything that fails that check is read as mail, never as an instruction.",
 };
 
 /**
