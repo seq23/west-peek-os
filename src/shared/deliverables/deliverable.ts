@@ -16,7 +16,9 @@
  * output of work somebody did for you, which is why it has an author and an audience.
  */
 
-export const DELIVERABLE_KINDS = ["daily_brief", "weekly_review", "research_packet", "ask_brief"] as const;
+export const DELIVERABLE_KINDS = [
+  "daily_brief", "weekly_review", "research_packet", "ask_brief", "meeting_prep", "discrepancy_list",
+] as const;
 
 export type DeliverableKind = (typeof DELIVERABLE_KINDS)[number];
 
@@ -79,6 +81,36 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     page: "intent",
     docType: "BRIEF",
     // Something a partner asked for and will want to find again.
+    file: true,
+  },
+  /*
+   * YOUR packet, not the firm's agenda — and the difference is the whole point.
+   *
+   * The weekly operating review above is ONE document two partners work through together, signed
+   * jointly. This is per-person: what you finished since the last sync, and what is waiting on you
+   * for the next one. Two partners cannot prepare for a meeting from one shared list of the firm's
+   * open items, which is what they had.
+   */
+  meeting_prep: {
+    key: "meeting_prep",
+    label: "Meeting prep packet",
+    blurb: "What you completed since the last sync, and what is waiting on you.",
+    page: "weekly-review",
+    docType: "REVIEW",
+    // Kept: "what did we say we'd done on the 9th" is a question that gets asked in November.
+    file: true,
+  },
+  /*
+   * A STANDING REGISTER, NOT AN ANSWER. Deliberately its own kind rather than an `ask_brief`: this
+   * is regenerated, expected to shrink, and worth finding again next month. An answer to a question
+   * asked once would be a brief.
+   */
+  discrepancy_list: {
+    key: "discrepancy_list",
+    label: "Discrepancy register",
+    blurb: "Where the firm's own records and its fund deck disagree, and whether anyone acted.",
+    page: "fund",
+    docType: "REVIEW",
     file: true,
   },
 };

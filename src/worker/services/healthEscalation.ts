@@ -1,8 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { runHealthChecks } from "./health";
-import { notifyQuietly } from "./notifications";
-import { MANAGING_PARTNERS } from "../../shared/registry/managingPartners";
+import { notifyPartners } from "./notifications";
 
 /**
  * Diagnostics that runs when nobody is watching, and tells somebody when it finds something.
@@ -88,36 +87,31 @@ export async function runHealthEscalation(
      * the noise rather than reaching two people. The dedupe key differed only by first name, which is
      * why nothing caught it.
      *
-     * Resolved by name against `firm_user`, which is the only place the id lives. A partner who is
-     * not on the roster is skipped rather than silently becoming a firm-wide broadcast — and if none
-     * resolve, one firm-wide notice is sent, because a fault nobody hears about is worse than a
-     * fault everybody hears about.
+     * NOW RESOLVED BY ROLE, not by name. This file used to run its own `full_name IN (…)` lookup
+     * against the registry while `notifyPartners` — written for exactly this job — resolved the same
+     * audience from `firm_user_role`. Two components each keeping their own list of who the partners
+     * are, with nothing linking them: rename a partner in the database and the registry lookup finds
+     * nobody and quietly broadcasts firm-wide, while every other partner notice in the system still
+     * arrives correctly. One resolver, keyed on the role somebody actually holds.
+     *
+     * The key `notifyPartners` writes is `health_fault:<check>:<first_seen>:<firm_user_id>` — byte
+     * for byte what this loop produced before, so a fault open across the change is not re-sent.
      */
-    const recipients = await env.WP_OS_DB.prepare(
-      `SELECT id, full_name FROM firm_user WHERE full_name IN (${MANAGING_PARTNERS.map(() => "?").join(", ")})`,
-    )
-      .bind(...MANAGING_PARTNERS.map((mp) => mp.fullName))
-      .all<{ id: string; full_name: string }>();
-    const addressed = recipients.results ?? [];
-
-    for (const mp of addressed.length > 0 ? addressed : [{ id: "", full_name: "the firm" }]) {
-      await notifyQuietly(env, {
-        // PROVIDER_FAILURE rather than a new kind: the notification kinds are a CHECK constraint
-        // in the database, and widening it for one caller would be a migration to say a thing the
-        // nearest existing kind already says.
-        kind: "PROVIDER_FAILURE",
-        severity: "WARNING",
-        title: `${check.label} is down`,
-        body: `${check.reading}${check.remedy ? ` — ${check.remedy}` : ""}`,
-        objectType: "health_fault",
-        objectId: check.key,
-        // One per fault per partner, so a fault that lasts a week does not send 672 notifications.
-        // Keyed by the RECIPIENT, so each partner gets one and neither gets two.
-        dedupeKey: `health_fault:${check.key}:${existing.first_seen_at}:${mp.id || "firm"}`,
-        ...(mp.id ? { firmUserId: mp.id } : {}),
-        firmScope: "west-peek",
-      });
-    }
+    await notifyPartners(env, {
+      // PROVIDER_FAILURE rather than a new kind: the notification kinds are a CHECK constraint
+      // in the database, and widening it for one caller would be a migration to say a thing the
+      // nearest existing kind already says.
+      kind: "PROVIDER_FAILURE",
+      severity: "WARNING",
+      title: `${check.label} is down`,
+      body: `${check.reading}${check.remedy ? ` — ${check.remedy}` : ""}`,
+      objectType: "health_fault",
+      objectId: check.key,
+      // One per fault per partner, so a fault that lasts a week does not send 672 notifications.
+      // Keyed by the RECIPIENT, so each partner gets one and neither gets two.
+      dedupeKey: `health_fault:${check.key}:${existing.first_seen_at}`,
+      firmScope: "west-peek",
+    });
     escalated.push(check.key);
   }
 
@@ -130,7 +124,23 @@ export async function runHealthEscalation(
       .run();
     recovered.push(fault.check_key);
     if (fault.escalated_at) {
-      await notifyQuietly(env, {
+      /*
+       * ADDRESSED, LIKE THE ALERT IT CLOSES — and until now it was not.
+       *
+       * The fault path above was fixed to write one notice per named partner. The all-clear was
+       * left calling `notifyQuietly` with no `firmUserId`, which is a FIRM-WIDE row, and a
+       * firm-wide row skips the preference block in `notify()` ENTIRELY: per-kind switches,
+       * minimum severity and quiet hours are all dead for it. CONFIRMED in production — all
+       * twelve `health_recovered:%` notifications carry `firm_user_id = NULL`, so every all-clear
+       * this system has ever sent ignored quiet hours. Exactly the defect the escalation branch
+       * documents at length, still live in its sibling four lines away.
+       *
+       * `notifyPartners` is the existing answer and resolves the audience from the ROLE JOIN
+       * rather than a hardcoded name list, so it also survives a partner being added or renamed.
+       * It appends `:<firm_user_id>` to the dedupe key, which is the same shape the fault path
+       * already uses.
+       */
+      await notifyPartners(env, {
         kind: "PROVIDER_FAILURE",
         severity: "INFO",
         title: `${fault.label || fault.check_key} is working again`,

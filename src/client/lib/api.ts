@@ -57,6 +57,58 @@ export function signOut(): string | null {
   return "/cdn-cgi/access/logout";
 }
 
+/**
+ * Anything that changes a notification tells everything that counts notifications.
+ *
+ * THE BUG THIS EXISTS FOR. Operator, 9 Sep 2026: "the west peek os home screen still says 12 unread
+ * even tho i read it all and dismissed or took responsibility."
+ *
+ * She was right and the number was frozen. `StatusBar` fetched `/api/notifications?unread=1` into
+ * its OWN `useApi` instance, refreshed only when App's `refreshNonce` changed — and `refreshNonce`
+ * was passed to exactly two components, `CapturePage` and `WorkSurface`. The Notifications page was
+ * not one of them: dismissing called `notifications.reload()`, which bumps that page's local nonce
+ * and cannot reach the status bar's. So the page correctly said "You are caught up" while the badge
+ * above it kept displaying the number it had fetched when the tab was opened. On 9 Sep her true
+ * unread count was ZERO — all twenty-six unread rows in production are addressed to Scooter — and
+ * the badge was still showing a count from earlier in the session. Two components, each keeping its
+ * own copy of the same number, with nothing linking them.
+ *
+ * WHY A CHANNEL RATHER THAN ONE MORE PROP. Wiring `refreshNonce` into the Notifications page would
+ * fix today's symptom and leave the trap: the next surface that marks something read has to
+ * remember to call a prop it was never given, and forgetting is silent. Publishing from `api()`
+ * itself means the invalidation happens because the WRITE happened, so no caller can forget it.
+ *
+ * Deliberately narrow: only a mutating request under `/api/notifications`, and only one that the
+ * server accepted. A failed dismiss must not clear a badge that is still correct.
+ */
+const notificationListeners = new Set<() => void>();
+
+/** Subscribe to "a notification changed". Returns the unsubscribe. */
+export function onNotificationsChanged(listener: () => void): () => void {
+  notificationListeners.add(listener);
+  return () => notificationListeners.delete(listener);
+}
+
+/** Announce it. Exported for tests and for any caller that mutates outside `api()`. */
+export function notificationsChanged(): void {
+  for (const listener of [...notificationListeners]) {
+    try {
+      listener();
+    } catch {
+      // One bad subscriber must not stop the others being told.
+    }
+  }
+}
+
+/** Did this call change a notification, and did the server accept it? */
+function mutatedNotifications(path: string, method: string, status: number): boolean {
+  if (method === "GET") return false;
+  if (!path.startsWith("/api/notifications")) return false;
+  // A preference save changes when she is interrupted, never what is outstanding.
+  if (path.startsWith("/api/notifications/preferences")) return false;
+  return status >= 200 && status < 300;
+}
+
 export async function api<T = unknown>(
   path: string,
   options: { method?: string; body?: unknown } = {},
@@ -88,6 +140,7 @@ export async function api<T = unknown>(
     return { status: 0, data: null };
   }
   const data = (await res.json().catch(() => null)) as T | null;
+  if (mutatedNotifications(path, options.method ?? "GET", res.status)) notificationsChanged();
   return { status: res.status, data };
 }
 

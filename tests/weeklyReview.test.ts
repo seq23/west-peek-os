@@ -232,3 +232,76 @@ describe("meeting notes become proposals, not minutes", () => {
     expect(p).toMatch(/untrusted/i);
   });
 });
+
+/**
+ * A QUIET WEEK IS STILL DELIVERED, AND SAYS SO.
+ *
+ * The handover was guarded by `if (items.length > 0)`, so a week that derived no agenda items
+ * produced NO deliverable at all. On a Home page that is indistinguishable from a generation that
+ * crashed — and only one of those means the firm had a quiet week.
+ *
+ * Operator, 9 Sep 2026, settling it: "saying nothing was done is okay too." An empty agenda is a
+ * legitimate output; a silently absent one never is.
+ *
+ * Its own database, deliberately: the suite above seeds an approval, three opportunities and a
+ * contradiction precisely so the derivation has something to find, which is the opposite of what
+ * this needs.
+ */
+describe("a week with nothing in it", () => {
+  let quiet: TestDb;
+  let quietEnv: Env;
+
+  beforeAll(async () => {
+    quiet = await createTestDb();
+    quietEnv = makeTestEnv(quiet.db);
+  });
+
+  afterAll(async () => {
+    await disposeTestDb(quiet);
+  });
+
+  it("hands over an agenda that states it is empty, rather than handing over nothing", async () => {
+    const { generateReview } = await import("../src/worker/services/weeklyReview");
+    const out = await generateReview(
+      quietEnv,
+      { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] },
+      new Date("2026-09-09T12:00:00.000Z"),
+    );
+
+    // The premise, asserted rather than assumed: this really is a week with nothing derivable, so
+    // the test cannot pass for the wrong reason.
+    expect(out.items.length, "the fixture produced agenda items, so this proves nothing").toBe(0);
+
+    const delivered = (
+      await quietEnv.WP_OS_DB.prepare(
+        "SELECT title, body, prepared_for FROM deliverable WHERE kind = 'weekly_review'",
+      ).all<{ title: string; body: string; prepared_for: string }>()
+    ).results ?? [];
+
+    expect(delivered.length, "an empty week produced no deliverable at all").toBeGreaterThan(0);
+    expect(delivered[0]!.body).toContain("Nothing was raised for this week");
+    // And it says what it looked at, so "nothing" can be believed rather than merely accepted.
+    expect(delivered[0]!.body).toContain("derived from a record that already exists");
+  });
+
+  it("addresses the one joint copy by recorded seniority, not by alphabetical id", async () => {
+    /*
+     * The recipient was chosen with `ORDER BY u.id LIMIT 1` under a comment reading "the senior
+     * partner on the roster". That is a string comparison over primary keys which happens to agree
+     * with seniority today and would stop agreeing the moment an id changed. Seniority is recorded
+     * in MANAGING_PARTNERS — ownership percentages and an explicit finalAuthority flag.
+     */
+    const { MANAGING_PARTNERS } = await import("../src/shared/registry/managingPartners");
+    const expected = [...MANAGING_PARTNERS].sort(
+      (a, b) => Number(b.finalAuthority) - Number(a.finalAuthority) || b.ownershipPct - a.ownershipPct,
+    )[0]!;
+
+    const row = await quietEnv.WP_OS_DB.prepare(
+      `SELECT u.full_name FROM deliverable d JOIN firm_user u ON u.id = d.prepared_for
+        WHERE d.kind = 'weekly_review' LIMIT 1`,
+    ).first<{ full_name: string }>();
+
+    expect(row, "no weekly review was delivered, so nothing was checked").toBeTruthy();
+    expect(row!.full_name).toBe(expected.fullName);
+  });
+});
