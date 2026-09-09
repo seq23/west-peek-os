@@ -89,10 +89,18 @@ CREATE INDEX IF NOT EXISTS idx_deliverable_open ON deliverable (firm_scope, dism
 -- This one was asked for by name, for a meeting series that already exists on the calendar, and a
 -- prep packet that has to be switched on before the first Wednesday is a prep packet that misses
 -- the first Wednesday.
-INSERT OR IGNORE INTO scheduled_job
+-- SEEDED THE LOUD WAY, and `tests/seededJobs.test.ts` caught the first draft of this file using the
+-- other one. `INSERT OR IGNORE` swallows a constraint failure, so migration 0046 registered
+-- `monthly_room_proposal` while omitting a NOT NULL column: the violation was ignored, the migration
+-- reported success, `schema_version` advanced, and the job existed in NO database at all — found
+-- only by querying production by hand. `WHERE NOT EXISTS` is idempotent for the same reason without
+-- being deaf to anything else, so a bad column here aborts the migration instead of quietly
+-- producing a job that never runs.
+INSERT INTO scheduled_job
   (id, job_key, name, kind, schedule_kind, daily_at_utc, target_kind, task_class, budget_usd,
    data_class, status, created_by, firm_scope)
-VALUES
-  ('sjb_wednesday_prep', 'wednesday_prep', 'Wednesday sync prep packets',
-   'INTELLIGENCE', 'DAILY_AT', '09:00', 'SYSTEM', 'DERIVATION', 0,
-   'INTERNAL', 'ACTIVE', 'system', 'west-peek');
+SELECT
+  'sjb_wednesday_prep', 'wednesday_prep', 'Wednesday sync prep packets',
+  'INTELLIGENCE', 'DAILY_AT', '09:00', 'SYSTEM', 'DERIVATION', 0,
+  'INTERNAL', 'ACTIVE', 'system', 'west-peek'
+WHERE NOT EXISTS (SELECT 1 FROM scheduled_job WHERE job_key = 'wednesday_prep');
