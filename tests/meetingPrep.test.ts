@@ -259,12 +259,43 @@ describe("the fund-deck discrepancy register", () => {
       reg.derived.some((d) => d.what.includes(usd(16_800_000)) && d.what.includes(usd(17_000_000))),
       `no sleeve mismatch was reported; derived items were: ${reg.derived.map((d) => d.where).join(", ")}`,
     ).toBe(true);
-    // 20 positions at $500-750K needs $10.0M-$15.0M; the sleeve leaves $10.2M after 40% reserves.
-    expect(reg.derived.some((d) => d.what.includes("positions"))).toBe(true);
+    /*
+     * AFFORDABILITY IS NOT FLAGGED WHEN THE PORTFOLIO IS MERELY TIGHT.
+     *
+     * 20 positions at the fixture's $500K minimum needs $10.0M, and the sleeve leaves $10.08M after
+     * 40% reserves — buildable, with $80K to spare. The check used to fire whenever the TOP of the
+     * cheque range exceeded the capital, which is true of very nearly every fund ever raised and is
+     * therefore noise. It now fires only when the portfolio cannot be built at all.
+     */
+    expect(
+      reg.derived.some((d) => d.what.includes("cannot be built as described")),
+      "a buildable portfolio was reported as a discrepancy",
+    ).toBe(false);
 
     expect(reg.body).toContain("Already found, and recorded at the time");
     expect(reg.body).toContain("Newly noticed by this run");
     for (const d of [...reg.recorded, ...reg.derived]) expect(reg.body).toContain(d.where);
+  });
+
+  it("DOES flag a portfolio that cannot be built even at the minimum cheque", async () => {
+    /*
+     * The other half, so the relaxed threshold cannot become a check that never fires. 40 positions
+     * at a $500K minimum needs $20M against the same $10.08M — genuinely impossible rather than
+     * ambitious, and that is the case worth a partner's attention.
+     */
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO investment_mandate_version (id, fund_id, version_no, effective_from, mandate_json, created_by)
+       VALUES ('imv_unaffordable', 'fund_test', 3, '2026-09-09', ?1, 'system')`,
+    ).bind(JSON.stringify({
+      target_positions: 40,
+      check_size_usd: { min: 500_000, max: 750_000 },
+    })).run();
+
+    const reg = await buildDiscrepancyRegister(env);
+    const finding = reg.derived.find((d) => d.what.includes("cannot be built as described"));
+    expect(finding, "an impossible portfolio was not reported").toBeTruthy();
+    expect(finding!.what).toContain("40 positions");
+    expect(finding!.what).toContain("SHORT");
   });
 });
 
