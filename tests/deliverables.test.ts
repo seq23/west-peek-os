@@ -387,3 +387,129 @@ describe("commissioning a brief passes the authorization choke point", () => {
     expect(body.detail).toContain("Managing Partner");
   });
 });
+
+/**
+ * A PARTNER WHO HAS NEVER SIGNED IN MUST NOT OPEN ON THREE WEEKS OF SUPERSEDED BRIEFS.
+ *
+ * Operator, 9 Sep 2026, about Scooter: "make sure his home page is cleared of things to be put away
+ * and old briefings just surface the latest 1".
+ *
+ * She is describing something the data confirms exactly. `fu_scooter_taylor` has ZERO events on the
+ * spine, zero notifications read, zero approvals decided and zero deliverables acknowledged or
+ * dismissed — he has never used the product — while 20 deliverables accumulated against his name,
+ * 13 of them daily briefs going back to 20 August. His first sight of West Peek OS would have been
+ * a stack of superseded morning briefs, each offering a Dismiss button for a decision he never made.
+ *
+ * DERIVED, NEVER WRITTEN. Marking them dismissed would record that he decided something about
+ * documents he has not seen — the same confusion between "handled", "seen" and "gone" that made the
+ * unread badge untrustworthy. Nothing is written: an older brief simply stops being CURRENT because
+ * the next one replaced it, and `?superseded=1` still returns every one.
+ */
+describe("only the latest morning brief is still a delivery", () => {
+  const HERS = "fu_sequoia_taylor";
+  const HIS = "fu_scooter_taylor";
+
+  /*
+   * Its own database. The suite above already delivers briefs for both partners as fixtures, and
+   * "the latest" is only a meaningful assertion over a set this block controls entirely.
+   */
+  let sup: TestDb;
+  let supEnv: Env;
+
+  beforeAll(async () => {
+    sup = await createTestDb();
+    supEnv = makeTestEnv(sup.db);
+  });
+  afterAll(async () => {
+    await disposeTestDb(sup);
+  });
+
+  async function list(query = ""): Promise<Array<Record<string, unknown>>> {
+    const res = await handleRequest(apiReq(`/api/deliverables?limit=50${query}`), supEnv);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { deliverables: Array<Record<string, unknown>> }).deliverables;
+  }
+
+  async function brief(forWhom: string, day: string): Promise<string> {
+    const row = await deliver(supEnv, ACTOR, {
+      kind: "daily_brief",
+      title: `Morning brief ${day} for ${forWhom}`,
+      body: "what moved overnight",
+      preparedBy: forWhom === HIS ? "Walker" : "Wren",
+      preparedFor: forWhom,
+      // Keyed like the real pipeline, so each day is its own row rather than an upsert.
+      sourceType: "intelligence_report",
+      sourceId: `${day}:${forWhom}`,
+    });
+    // The rule keys on created_at, and three inserts inside one millisecond would make "latest"
+    // ambiguous. Stamped explicitly so the ordering under test is the one being asserted.
+    await supEnv.WP_OS_DB.prepare("UPDATE deliverable SET created_at = ?2 WHERE id = ?1")
+      .bind(row.id, `${day}T11:00:00.000Z`)
+      .run();
+    return row.id;
+  }
+
+  it("hides the superseded ones and keeps exactly the newest", async () => {
+    await brief(HIS, "2026-08-20");
+    await brief(HIS, "2026-08-21");
+    const newest = await brief(HIS, "2026-09-09");
+
+    const all = await list("&superseded=1");
+    const hisAll = all.filter((d) => d.prepared_for === HIS && d.kind === "daily_brief");
+    // The premise, asserted: three really are stored, so the filtering below means something.
+    expect(hisAll.length, "the briefs were not stored, so there is nothing to supersede").toBe(3);
+
+    const current = await list();
+    const hisCurrent = current.filter((d) => d.prepared_for === HIS && d.kind === "daily_brief");
+    expect(hisCurrent.length, "his page still carries superseded briefs").toBe(1);
+    expect(hisCurrent[0]!.id).toBe(newest);
+  });
+
+  it("supersedes per person, so her latest never hides his", async () => {
+    await brief(HERS, "2026-09-09");
+    const current = await list();
+    const byWhom = current.filter((d) => d.kind === "daily_brief");
+    expect(byWhom.length, "one brief each, and only one each").toBe(2);
+    expect(new Set(byWhom.map((d) => d.prepared_for))).toEqual(new Set([HIS, HERS]));
+  });
+
+  it("writes NOTHING to the rows it hides — they are not dismissed on his behalf", async () => {
+    /*
+     * The half that matters most. Hiding by marking them dismissed would put a decision he never
+     * made onto rows he has never seen, and `dismissed_by` would name him.
+     */
+    const rows = (
+      await supEnv.WP_OS_DB.prepare(
+        "SELECT dismissed_at, dismissed_by, acknowledged_at FROM deliverable WHERE kind = 'daily_brief' AND prepared_for = ?1",
+      ).bind(HIS).all<{ dismissed_at: string | null; dismissed_by: string | null; acknowledged_at: string | null }>()
+    ).results ?? [];
+    expect(rows.length, "no briefs to check").toBe(3);
+    for (const r of rows) {
+      expect(r.dismissed_at, "a superseded brief was recorded as dismissed").toBeNull();
+      expect(r.dismissed_by).toBeNull();
+      expect(r.acknowledged_at, "a superseded brief was recorded as read").toBeNull();
+    }
+  });
+
+  it("keeps every superseded brief reachable, because history is not deleted", async () => {
+    const all = await list("&superseded=1");
+    expect(all.filter((d) => d.prepared_for === HIS && d.kind === "daily_brief").length).toBe(3);
+  });
+
+  it("never supersedes anything that is referred back to", async () => {
+    // A weekly review, a research packet and a discrepancy register are looked up again; a brief is
+    // read on the morning it is about. Only the brief is superseded, and this is what pins that.
+    await deliver(supEnv, ACTOR, {
+      kind: "weekly_review", title: "Week of 2026-09-02", body: "agenda",
+      preparedBy: "Walker and Wren", preparedFor: HIS,
+      sourceType: "weekly_review", sourceId: "wr_super_1",
+    });
+    await deliver(supEnv, ACTOR, {
+      kind: "weekly_review", title: "Week of 2026-09-09", body: "agenda",
+      preparedBy: "Walker and Wren", preparedFor: HIS,
+      sourceType: "weekly_review", sourceId: "wr_super_2",
+    });
+    const current = await list();
+    expect(current.filter((d) => d.kind === "weekly_review" && d.prepared_for === HIS).length).toBe(2);
+  });
+});
