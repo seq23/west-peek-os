@@ -133,6 +133,9 @@ export function checkWorkerSources(sources) {
       // Reads are not decisions: comparing a row's state, or filtering a list, writes nothing.
       const writes = /state\s*=\s*['"]CURRENT['"]/.test(line) || /,\s*["']CURRENT["']/.test(line) || /["']CURRENT["']\s*,/.test(line);
       if (!writes) return;
+      // A SELECT that filters on state = 'CURRENT' is a read, whatever else the line looks like.
+      // Only a line that SETs the column, or passes the literal as a bound value, can write it.
+      if (/\bSELECT\b/.test(line) && !/\bSET\b/.test(line)) return;
       currentWriteSites += 1;
       const fn = functionAtLine(lines, i);
       if (!fn || !HUMAN_DECISION_FUNCTIONS.has(fn)) {
@@ -204,6 +207,9 @@ function selfTest() {
     '  if (actor.type !== "HUMAN") return json({ error: "forbidden" }, { status: 403 });',
     "  await db.prepare(\"UPDATE deck_version SET state = 'SUPERSEDED' WHERE state = 'CURRENT'\").run();",
     "  await db.prepare(\"UPDATE deck_version SET state = 'CURRENT', approved_by = ?2 WHERE id = ?1\").run();",
+    "}",
+    "async function currentDeckPdf(env, fundId) {",
+    "  return db.prepare(\"SELECT document_id FROM deck_version WHERE fund_id = ?1 AND state = 'CURRENT' LIMIT 1\").bind(fundId).first();",
     "}",
   ].join("\n");
   const clean = { "src/worker/services/deck.ts": cleanDeck };
