@@ -247,14 +247,17 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
   checks.push({
     key: "scheduled_work",
     label: "Scheduled work",
+    // DOWN MEANS DOWN. "Scheduled work is down — 8 of 9 running · 1 failing" went to both partners
+    // on 14 Sep because one job's upstream (Network OS) answered 503. Eight jobs were running.
+    // A red light for one failing job is the red light that gets ignored when everything stops;
+    // one failing job is DEGRADED and named, and DOWN is kept for nothing running or everything
+    // failing.
     state:
-      failing.length > 0
+      active.length === 0 || (failing.length > 0 && failing.length >= active.length)
         ? "DOWN"
-        : stalled.length > 0 || refused.length > 0
+        : failing.length > 0 || stalled.length > 0 || refused.length > 0
           ? "DEGRADED"
-          : active.length > 0
-            ? "OK"
-            : "DEGRADED",
+          : "OK",
     reading: `${active.length} of ${jobs.length} running${failing.length ? ` · ${failing.length} failing` : ""}${stalled.length ? ` · ${stalled.length} cannot run` : ""}${refused.length ? ` · ${refused.length} refused` : ""}`,
     remedy: refused.length && !stalled.length && !failing.length
       ? `${refused.map((j) => j.job_key).join(", ")} ${refused.length === 1 ? "was" : "were"} refused on the last attempt — usually a spend ceiling or an employee who is switched off. Not broken, but not happening either.`

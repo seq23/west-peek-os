@@ -293,13 +293,19 @@ describe("real subsystems emit notifications", () => {
     // wildcards, and D1 refused the pattern outright ("LIKE or GLOB pattern too complex").
     const rows = await t.db
       .prepare("SELECT * FROM notification WHERE kind = 'PROVIDER_FAILURE'")
-      .all<{ severity: string; kind: string; firm_user_id: string | null; dedupe_key: string }>();
-    const addressed = (rows.results ?? []).filter((r) => r.dedupe_key.startsWith(`job_dead_letter:${run.body.run.id}`));
+      .all<{ severity: string; kind: string; firm_user_id: string | null; dedupe_key: string; title: string; body: string }>();
+    // Keyed on the JOB and the hour, not the run: a job that keeps failing rings once an hour, and
+    // the notice says "keeps failing", never "stopped" — the job is still scheduled.
+    const jobId = (await t.db.prepare("SELECT id FROM scheduled_job WHERE job_key = 'notify_dead_letter'").first<{ id: string }>())!.id;
+    const addressed = (rows.results ?? []).filter((r) => r.dedupe_key.startsWith(`job_dead_letter:${jobId}:`));
     expect(addressed.length).toBeGreaterThan(0);
     for (const row of addressed) {
       expect(row.severity).toBe("CRITICAL");
       expect(row.kind).toBe("PROVIDER_FAILURE");
       expect(row.firm_user_id).toBeTruthy();
+      expect(row.title).toMatch(/keeps failing/);
+      expect(row.title).not.toMatch(/stopped/);
+      expect(row.body).toMatch(/still scheduled and will try again/);
     }
   });
 

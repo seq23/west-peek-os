@@ -723,14 +723,18 @@ export async function runJob(
   // every time a job completed normally.
 
   if (finalStatus === "DEAD_LETTER") {
+    // NOT "STOPPED". The job is still ACTIVE and its next occurrence still runs — a dead-lettered
+    // run is one occurrence given up on, not the job switched off. "Scheduled job stopped:
+    // Loading the community" reached both partners on 14 Sep for a job that ran again sixteen
+    // minutes later. Say what is true, say the reason, and say it once an hour, not once a run.
     await notifyPartners(env, {
       kind: "PROVIDER_FAILURE",
       severity: "CRITICAL",
-      title: `Scheduled job stopped: ${job.name}`,
-      body: `${job.job_key} failed ${attempt} time(s) and is now in DEAD_LETTER: ${outcome.error ?? outcome.summary}`,
-      objectType: "job_run",
-      objectId: runId,
-      dedupeKey: `job_dead_letter:${runId}`,
+      title: `Scheduled job keeps failing: ${job.name}`,
+      body: `${job.job_key} has failed ${attempt} time(s) in a row. Last: ${outcome.error ?? outcome.summary} It is still scheduled and will try again; this notice repeats hourly while it keeps failing.`,
+      objectType: "scheduled_job",
+      objectId: job.id,
+      dedupeKey: `job_dead_letter:${job.id}:${new Date().toISOString().slice(0, 13)}`,
       firmScope: job.firm_scope,
     });
   }

@@ -199,7 +199,17 @@ export async function pullSnapshot(env: Env, fetchImpl: typeof fetch = fetch): P
       };
     }
     if (!res.ok) {
-      return { ok: false, snapshot: null, source: null, detail: `Network OS returned HTTP ${res.status}.` };
+      // NETWORK OS SAYS WHY IN ITS BODY — "Google Sheets …", a quota, a token — and dropping it
+      // left the Jobs page reading "HTTP 503" three times on 14 Sep while the actual reason was one
+      // parse away. Carried through, bounded, never the whole body (it can be large).
+      let why = "";
+      try {
+        const err = (await res.json()) as { error?: string };
+        if (typeof err.error === "string") why = err.error.slice(0, 300);
+      } catch {
+        /* not JSON; the status is all there is */
+      }
+      return { ok: false, snapshot: null, source: null, detail: `Network OS returned HTTP ${res.status}${why ? `: ${why}` : "."}` };
     }
 
     const body = (await res.json()) as { ok?: boolean; error?: string; source?: string; data?: Record<string, unknown[]> };
