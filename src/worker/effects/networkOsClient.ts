@@ -203,11 +203,16 @@ export async function pullSnapshot(env: Env, fetchImpl: typeof fetch = fetch): P
       // left the Jobs page reading "HTTP 503" three times on 14 Sep while the actual reason was one
       // parse away. Carried through, bounded, never the whole body (it can be large).
       let why = "";
+      const text = await res.text().catch(() => "");
       try {
-        const err = (await res.json()) as { error?: string };
+        const err = JSON.parse(text) as { error?: string };
         if (typeof err.error === "string") why = err.error.slice(0, 300);
       } catch {
-        /* not JSON; the status is all there is */
+        // Not Network OS's JSON — then it is the platform's page (a Worker over its resource
+        // limit answers 503 with HTML). The first words of it are the reason.
+        why = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+        const code = res.headers.get("cf-error-code") ?? res.headers.get("cf-ray");
+        if (code) why = `${why} [cf ${code}]`.trim();
       }
       return { ok: false, snapshot: null, source: null, detail: `Network OS returned HTTP ${res.status}${why ? `: ${why}` : "."}` };
     }
