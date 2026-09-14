@@ -174,7 +174,11 @@ binding = "BROWSER"
 # Deployment settings rather than buttons on a page, on purpose: flipping one should leave a diff, a
 # review and a timestamp, not be a click any session with an MP cookie can make. Anything other than
 # exactly "enabled" is off, so a typo fails safe.
-WP_OS_AI_EMAIL_PARTNERS = "off"
+# TO PARTNERS: ON, 14 Sep 2026, by the operator's instruction — "make sure … sequoia@ and scooter@
+# can email os@joinwestpeek.com for requests … and we will be notified when its done." The only
+# thing this switch lets out is a reply to one of the two partner addresses, and the only sender of
+# such a reply is services/requestReply.ts, which refuses any other destination.
+WP_OS_AI_EMAIL_PARTNERS = "enabled"
 WP_OS_AI_EMAIL_EXTERNAL = "off"
 # Not "local": the dev identity header `x-wpos-dev-user` is refused outside local,
 # and identity comes from `Cf-Access-Authenticated-User-Email` (src/worker/auth.ts).

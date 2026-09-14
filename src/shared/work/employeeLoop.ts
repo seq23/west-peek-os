@@ -38,7 +38,7 @@ import { personaPrompt } from "../registry/aiEmployeePersonas";
  * design. Text and pixels are different evidence, and collapsing them would let an employee review
  * a layout it never saw.
  */
-export const EMPLOYEE_ACTIONS = ["search", "visit", "look_at", "note", "blocked", "done"] as const;
+export const EMPLOYEE_ACTIONS = ["search", "visit", "look_at", "note", "assign", "blocked", "done"] as const;
 export type EmployeeAction = (typeof EMPLOYEE_ACTIONS)[number];
 
 export interface EmployeeDecision {
@@ -51,6 +51,10 @@ export interface EmployeeDecision {
   finding?: string;
   /** For `blocked`: what they need from a person, phrased as a question somebody can answer. */
   needs?: string;
+  /** For `assign`: the first name of the employee whose job this is. */
+  to?: string;
+  /** For `assign`: the brief, in the assigner's own words — what to do and what "done" looks like. */
+  brief?: string;
 }
 
 /** How many steps one run may take before it stops and reports. */
@@ -100,6 +104,11 @@ export interface LoopContext {
    * for the life of the card.
    */
   steering?: Array<{ id: string; body: string }>;
+  /**
+   * Who else works here — name and role — so a card can be handed to the seat whose job it is.
+   * Empty when the caller does not allow hand-offs; the `assign` action is then not offered.
+   */
+  colleagues?: Array<{ name: string; role: string }>;
 }
 
 export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
@@ -177,6 +186,18 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     '  note   — write down something you have established. Use this when you have learned',
     "           something worth keeping but the work is not finished.",
     "",
+    ...(ctx.colleagues && ctx.colleagues.length > 0
+      ? [
+          '  assign — hand this to the colleague whose job it is. Give their first name and a brief in',
+          "           your own words: what to do and what finished looks like. They work it; whoever",
+          "           asked is told when it is done. Use this when the work belongs to another seat —",
+          "           a request about the deck goes to Finance, a company to the Analyst, an LP to LP",
+          "           Relations. Do not assign work that is yours, and never assign to yourself.",
+          "           WHO ELSE WORKS HERE:",
+          ...ctx.colleagues.map((c) => `             ${c.name} — ${c.role}`),
+          "",
+        ]
+      : []),
     '  blocked — you cannot go further without a person. Say exactly what you need, phrased as a',
     "           question somebody can answer. Use this for a judgement that is not yours to make,",
     "           a credential you do not have, or a fact only the partners know.",
@@ -197,6 +218,7 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     '  {"action":"visit","start_url":"https://…","objective":"what to look for on it"}',
     '  {"action":"look_at","start_url":"https://…","objective":"what to judge about how it looks"}',
     '  {"action":"note","finding":"…"}',
+    ...(ctx.colleagues && ctx.colleagues.length > 0 ? ['  {"action":"assign","to":"Wyatt","brief":"what to do and what finished looks like"}'] : []),
     '  {"action":"blocked","needs":"…"}',
     '  {"action":"done","finding":"…"}',
   ]
@@ -239,7 +261,11 @@ export function parseDecision(raw: string): EmployeeDecision | null {
   const startUrl = str(parsed.start_url, 2000);
   const finding = str(parsed.finding, 2000);
   const needs = str(parsed.needs, 800);
+  const to = str(parsed.to, 40);
+  const brief = str(parsed.brief, 2000);
   if (objective) d.objective = objective;
+  if (to) d.to = to;
+  if (brief) d.brief = brief;
   // Only https, and only when it is really a URL. A model writing "search google" into this field
   // would otherwise become a start page.
   if (startUrl && /^https:\/\/\S+$/i.test(startUrl)) d.start_url = startUrl;
@@ -257,5 +283,7 @@ export function parseDecision(raw: string): EmployeeDecision | null {
   if (d.action === "done" && !d.finding) return null;
   if (d.action === "note" && !d.finding) return null;
   if (d.action === "blocked" && !d.needs) return null;
+  // A hand-off with no name goes nowhere; one with no brief hands over a title and nothing else.
+  if (d.action === "assign" && (!d.to || !d.brief)) return null;
   return d;
 }
