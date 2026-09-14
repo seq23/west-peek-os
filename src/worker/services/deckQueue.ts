@@ -2,11 +2,11 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { readDeck } from "./deckReader";
 import { deckLinks, messageText, pdfAttachments, unreadableDeckAttachments } from "../effects/mimeAttachments";
-import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany } from "./dealIntake";
+import { dealFromMessage, intakeDealFromEmail } from "./dealIntake";
 import { decodeMimeHeader } from "../effects/inboundEmail";
 import { createWorkCardInternal } from "./workCards";
 import { triggersIn } from "../../shared/intake/emailTriggers";
-import { DEAL_INTAKE_EMPLOYEE, seatId } from "../../shared/intake/emailTriggers";
+import { DEAL_INTAKE_EMPLOYEE, ROUTING_EMPLOYEE, seatId } from "../../shared/intake/emailTriggers";
 
 /** Derived through the one helper, so this file cannot invent a second convention. */
 const DEAL_INTAKE_EMPLOYEE_ID = seatId(DEAL_INTAKE_EMPLOYEE);
@@ -117,6 +117,38 @@ async function openRenameProposal(
     },
   );
 }
+
+/**
+ * A deck that was read reaches the analyst's card, whichever door it came through.
+ *
+ * A message over the size cap whose subject did not name the company opened a card for the ROUTING
+ * seat ("Deck arriving"), because nobody yet knew whose deck it was. Now it has been read and the
+ * analyst has a card of their own (`analystCardId`): the routing card is closed with a line saying
+ * where the work went, and the deck is re-pointed at the analyst's card so `companyKnowledge` and
+ * the sweep's wait-for-the-reading rule both find it there.
+ */
+async function handOffToAnalyst(env: Env, deck: { id: string; work_card_id: string | null }, analystCardId: string | null): Promise<void> {
+  if (!analystCardId) return;
+  if (deck.work_card_id && deck.work_card_id !== analystCardId) {
+    const previous = await env.WP_OS_DB.prepare("SELECT owner_id, state FROM work_card WHERE id = ?1")
+      .bind(deck.work_card_id)
+      .first<{ owner_id: string | null; state: string }>();
+    if (previous?.owner_id === seatId(ROUTING_EMPLOYEE) && ["OPEN", "IN_PROGRESS", "BLOCKED"].includes(previous.state)) {
+      await env.WP_OS_DB.prepare(
+        `UPDATE work_card
+            SET state = 'DONE', next_action = NULL, lease_until = NULL,
+                description = description || ?2
+          WHERE id = ?1`,
+      )
+        .bind(deck.work_card_id, `\n\nThe message was read and the deck went to the analyst as work card ${analystCardId}. Nothing to route.`)
+        .run();
+    }
+  }
+  await env.WP_OS_DB.prepare("UPDATE pending_deck SET work_card_id = ?2 WHERE id = ?1").bind(deck.id, analystCardId).run();
+}
+
+/** The hand-off, reachable for a test that has no model to read a deck with. */
+export const __handOffToAnalystForTests = handOffToAnalyst;
 
 export async function runDeckReading(env: Env): Promise<{ read: number; failed: number; skipped: number }> {
   // No bucket means nothing can be read, and saying "no decks waiting" would be a lie about a
@@ -336,24 +368,23 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
         continue;
       }
 
-      const existing = await matchFunnelCompany(env, named);
-      if (existing) {
-        companyId = existing.id;
-      } else {
-        const opened = await intakeDealFromEmail(env, {
-          company: named,
-          sector: reading.reading.sector ?? fromMessage?.sector ?? null,
-          one_liner: reading.reading.one_liner ?? fromMessage?.one_liner ?? null,
-          website: reading.reading.website ?? fromMessage?.website ?? null,
-          from: fromMessage?.from ?? "",
-          isDeck: true,
-          raw: emlBody.slice(0, 4000),
-        });
-        companyId = opened.company_id;
-      }
+      // THE ANALYST GETS A CARD EITHER WAY. `openIntoFunnel` matches before it writes, so an
+      // existing company is not registered twice — but it is still handed to the analyst, because a
+      // deck that arrived for a known company is work whether or not the record existed.
+      const opened = await intakeDealFromEmail(env, {
+        company: named,
+        sector: reading.reading.sector ?? fromMessage?.sector ?? null,
+        one_liner: reading.reading.one_liner ?? fromMessage?.one_liner ?? null,
+        website: reading.reading.website ?? fromMessage?.website ?? null,
+        from: fromMessage?.from ?? "",
+        isDeck: true,
+        raw: emlBody.slice(0, 4000),
+      });
+      companyId = opened.company_id;
       await env.WP_OS_DB.prepare("UPDATE pending_deck SET company_id = ?2 WHERE id = ?1")
         .bind(deck.id, companyId)
         .run();
+      await handOffToAnalyst(env, deck, opened.work_card_id);
     }
 
     // Belt and braces, and a narrowing the compiler needs: every path above either set an id or

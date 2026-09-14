@@ -218,7 +218,7 @@ export async function handleInboundEmail(
      * it is the weakest evidence the system takes, and a wrong new company is worse than none.
      */
     const oversizeMatch = await companyFromSubject(env, subject);
-    const oversizeCompanyId = oversizeMatch?.id ?? null;
+    let oversizeCompanyId = oversizeMatch?.id ?? null;
     await appendEvent(env, {
       eventType: "inbound_email.too_large_to_read",
       actorType: "system",
@@ -287,25 +287,43 @@ export async function handleInboundEmail(
      * Only when a company was matched from the headers: a deck for a company nobody can name has
      * nothing to fill in, and the routing card below is the right home for that.
      */
-    const oversizeCard = await openRoutingCard(env, {
-      headline: "Too big to read",
-      subject,
-      from: sender,
-      raw: "",
-      triggers: oversizeSummary.triggers,
-      why: [
-        `It is ${(message.rawSize / 1024 / 1024).toFixed(1)}MB — too large to open inside one request, so the body and attachments were not read.`,
-        oversizeSummary.triggers.length > 0
-          ? `It carries ${oversizeSummary.triggers.join(", ")}, so it was meant for the funnel.`
-          : "It carries no trigger tag.",
-        storedKey
-          ? `The whole message is kept here and can be opened without going anywhere else: ${storedKey}`
-          // NOT "it is still in the inbox". `os@joinwestpeek.com` routes to this Worker, and whether
-          // a mailbox copy also exists depends on a routing rule this code cannot see. Telling a
-          // partner her deck is somewhere it may not be is worse than telling her it is gone.
-          : "It could NOT be stored here. Ask the sender to send it again once this is fixed, or get it from their sent mail — this system did not keep a copy.",
-      ].join(" "),
-    });
+    /*
+     * THE SAME DOOR AS A SMALL DECK. Operator, 14 Sep 2026: "i want to not have a problem with
+     * oversized decks at all... all sizes should go thru". Until now a message over the cap opened a
+     * card headed "Too big to read" for the routing seat — a human-shaped card about a machine
+     * limit — while a small deck opened the analyst's "Deck: <Company>" card. Sensori and Vynlo sat
+     * BLOCKED on that difference for three weeks. Now: when the subject names the company (it is
+     * "#wpdealflow Sensori", so it usually does), the analyst's card is opened here exactly as the
+     * small path opens it, the stored message is queued against that card, and the reader fills
+     * the card in from its own CPU budget before the sweep lets the analyst start. Size is not a
+     * fact the analyst is ever told about.
+     */
+    const oversizeName = oversizeMatch?.canonical_name ?? dealFromMessage(subject, "", sender, true)?.company ?? null;
+    let oversizeCard: string;
+    if (oversizeName) {
+      const entry = await intakeDealFromEmail(env, {
+        company: oversizeName,
+        from: sender,
+        isDeck: true,
+        raw: `The message is ${(message.rawSize / 1024 / 1024).toFixed(1)}MB, so its body and attachments were not opened here — they are being read from the stored copy and the deck's reading is added to this card before you start.`,
+        notes: storedKey ? [`Stored message: ${storedKey}`] : ["The message could NOT be stored — ask the sender to send it again."],
+      });
+      oversizeCard = entry.work_card_id ?? "";
+      oversizeCompanyId = entry.company_id ?? oversizeCompanyId;
+    } else {
+      oversizeCard = await openRoutingCard(env, {
+        headline: "Deck arriving",
+        subject,
+        from: sender,
+        raw: "",
+        triggers: oversizeSummary.triggers,
+        why: [
+          `It is ${(message.rawSize / 1024 / 1024).toFixed(1)}MB and its subject does not name the company, so it is being read from the stored copy to find out whose it is.`,
+          "When it has been read this card is closed and the analyst's own card is opened. If it cannot be read, the reason is written here.",
+          storedKey ? `Stored message: ${storedKey}` : "It could NOT be stored here. Ask the sender to send it again once this is fixed, or get it from their sent mail — this system did not keep a copy.",
+        ].join(" "),
+      });
+    }
 
     /*
      * QUEUED WHETHER OR NOT A COMPANY WAS MATCHED — and requiring one was throwing decks away.
@@ -331,7 +349,7 @@ export async function handleInboundEmail(
         .bind(
           `pdk_${crypto.randomUUID()}`,
           oversizeCompanyId,
-          oversizeCard,
+          oversizeCard || null,
           `${subject || "message"}.eml`.slice(0, 200),
           storedKey,
           message.rawSize,

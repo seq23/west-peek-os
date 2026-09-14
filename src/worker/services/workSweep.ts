@@ -4,6 +4,7 @@ import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
 import { notifyPartners } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
+import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 
 /**
  * The sweep that works the cards employees own (14 Sep 2026).
@@ -104,7 +105,10 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
   const lease = new Date(now.getTime() + LEASE_MINUTES * 60_000).toISOString();
   const claimed = await env.WP_OS_DB.prepare(
     `UPDATE work_card
-        SET lease_until = ?2, work_attempts = COALESCE(work_attempts, 0) + 1, state = 'IN_PROGRESS'
+        SET lease_until = ?2, work_attempts = COALESCE(work_attempts, 0) + 1,
+            -- An OPEN card is fresh or reopened by a person: its step allowance starts again.
+            work_steps = CASE WHEN state = 'OPEN' THEN 0 ELSE COALESCE(work_steps, 0) END,
+            state = 'IN_PROGRESS'
       WHERE id = ?1 AND (lease_until IS NULL OR lease_until < ?3)`,
   )
     .bind(candidate.id, lease, nowIso)
@@ -195,7 +199,7 @@ export async function sweepOnce(
   env: Env,
   now: Date,
   runners: {
-    general?: (env: Env, ctx: RouteContext, cardId: string) => Promise<{ finished: boolean; blocked: boolean; detail: string; steps: Array<{ action: string; detail: string }> }>;
+    general?: (env: Env, ctx: RouteContext, cardId: string, options: { maxSteps: number }) => Promise<{ finished: boolean; blocked: boolean; detail: string; steps: Array<{ action: string; detail: string }> }>;
     deckRework?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
@@ -226,6 +230,10 @@ export async function sweepOnce(
   let finished = false;
   let blocked = false;
   let detail = "";
+  // Did the run END WELL — every step it took was a real move (search, visit, note) and it simply
+  // ran out of steps for this tick? Then the card is progressed, not failed, and the next tick
+  // continues it. Only a run that died, or an employee that chose nothing usable, costs an attempt.
+  let progressed = false;
   try {
     if (card.kind === "DECK_REWORK") {
       const run = runners.deckRework ?? (await import("./deck")).runDeckRework;
@@ -235,11 +243,12 @@ export async function sweepOnce(
       detail = out.detail;
     } else {
       const run = runners.general ?? workCard;
-      const out = await run(env, sweepContext(env, card.firm_scope), card.id);
+      const out = await run(env, sweepContext(env, card.firm_scope), card.id, { maxSteps: STEPS_PER_TICK });
       finished = out.finished;
       blocked = out.blocked;
       const last = out.steps[out.steps.length - 1];
       detail = last ? last.detail : out.detail;
+      progressed = out.steps.length > 0 && out.steps.every((s) => !["failed", "unclear"].includes(s.action));
     }
   } catch (err) {
     detail = err instanceof Error ? err.message : String(err);
@@ -269,6 +278,18 @@ export async function sweepOnce(
     const question = fresh?.next_action ?? detail;
     await announceOutcome(env, card, "BLOCKED", question);
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" is blocked: ${question.slice(0, 160)}`, card, outcome: "BLOCKED" };
+  }
+
+  if (progressed) {
+    // THIS TICK'S WORK IS DONE AND THE CARD IS NOT. Hand it back for the next tick: the claim's
+    // attempt is given back, because an invocation that did what it was asked is not a failure.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
+    return {
+      status: "SUCCEEDED",
+      summary: `"${card.title.slice(0, 60)}" progressed (${STEPS_PER_TICK} step(s) this tick): ${detail.slice(0, 160)}. The next tick continues it.`,
+      card: { ...card, work_attempts: Math.max(card.work_attempts - 1, 0) },
+      outcome: "PROGRESSED",
+    };
   }
 
   // Neither done nor blocked: the run died or the employee chose nothing usable.

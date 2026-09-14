@@ -17,6 +17,7 @@ import { ASK_PROMPT_VERSION, buildDraftPrompt, parseAnswer } from "../../shared/
 import { PAGE_PURPOSES } from "../../shared/help/pagePurpose";
 import {
   MAX_STEPS,
+  MAX_STEPS_PER_CARD,
   buildStepPrompt,
   parseDecision,
   type EmployeeDecision,
@@ -231,7 +232,7 @@ async function appendFinding(env: Env, card: CardRow, text: string): Promise<voi
  * Never throws at the caller: a card that could not be worked is a card in a state somebody can
  * see, not an exception that loses the run.
  */
-export async function workCard(env: Env, ctx: RouteContext, cardId: string): Promise<{
+export async function workCard(env: Env, ctx: RouteContext, cardId: string, options: { maxSteps?: number } = {}): Promise<{
   card: CardRow | null;
   steps: StepOutcome[];
   finished: boolean;
@@ -271,7 +272,16 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
   const machineId = await machineForEmployee(env, employee.name);
   const rosterEntry = AI_EMPLOYEE_ROSTER.find((e) => e.name === employee.name);
 
-  for (let step = 1; step <= MAX_STEPS; step++) {
+  // THE BUDGET IS THE CARD'S, NOT THE RUN'S. `work_steps` counts every step ever taken on this card,
+  // so a run that hands the card back unfinished is continued, not restarted, and the employee is
+  // made to conclude when the card's allowance is spent — never "five more searches".
+  const runSteps = Math.max(1, options.maxSteps ?? MAX_STEPS);
+  for (let step = 1; step <= runSteps; step++) {
+    const taken = (await env.WP_OS_DB.prepare("SELECT COALESCE(work_steps, 0) AS n FROM work_card WHERE id = ?1").bind(card.id).first<{ n: number }>())?.n ?? 0;
+    const leftOnCard = Math.max(1, MAX_STEPS_PER_CARD - taken);
+    const leftInRun = runSteps - step + 1;
+    const stepsLeft = Math.min(leftOnCard, leftInRun);
+    const mustConclude = leftOnCard <= 1;
     const loopCtx: LoopContext = {
       title: card.title,
       next_action: card.next_action,
@@ -300,7 +310,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
     const { run } = await runAi(env, {
       purpose: `${employee.name} working "${card.title.slice(0, 60)}" (step ${step})`,
       actor,
-      inputs: [buildStepPrompt(loopCtx, MAX_STEPS - step + 1)],
+      inputs: [buildStepPrompt(loopCtx, mustConclude ? 1 : stepsLeft)],
       // The card and its findings are firm-internal. Never raised: a higher label would let this
       // loop carry confidential material to a provider without anybody deciding that.
       sensitivity: "INTERNAL" as never,
@@ -335,6 +345,14 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       break;
     }
 
+    await env.WP_OS_DB.prepare("UPDATE work_card SET work_steps = COALESCE(work_steps, 0) + 1 WHERE id = ?1").bind(card.id).run();
+    if (mustConclude && decision.action !== "done" && decision.action !== "blocked") {
+      // THE LAST STEP IS A CONCLUSION OR NOTHING. An employee told it has one step left and asking
+      // for a sixteenth search has not chosen an action the card can take; the sweep hands the
+      // card to a person rather than granting the search.
+      steps.push({ step, action: "unclear", detail: `the card's ${MAX_STEPS_PER_CARD}-step allowance is spent and the employee asked to ${decision.action} instead of concluding` });
+      break;
+    }
     const outcome = await applyDecision(env, ctx, card, decision, step, employee.name, employee.id, machineId);
     steps.push(outcome);
     if (outcome.action === "done" || outcome.action === "blocked" || outcome.action === "waiting") break;

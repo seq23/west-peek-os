@@ -134,4 +134,14 @@ describe("what a note is, and is not", () => {
     expect(res.body.notes[0]!.body).toMatch(/pre-revenue/);
     expect(res.body.notes[0]!.acknowledged_at).toBeNull();
   });
+
+  it("the last step says so and allows only a conclusion; any other step says how many are left on the card", () => {
+    const last = buildStepPrompt(BASE_CTX, 1);
+    expect(last).toMatch(/THIS IS YOUR LAST STEP/);
+    expect(last).toMatch(/"Not found after looking" is a finding; say it as done/);
+    expect(last).not.toMatch(/steps? left on this card/);
+    const mid = buildStepPrompt(BASE_CTX, 3);
+    expect(mid).toMatch(/You have 3 steps left on this card/);
+    expect(mid).not.toMatch(/LAST STEP/);
+  });
 });

@@ -55,6 +55,18 @@ export interface EmployeeDecision {
 
 /** How many steps one run may take before it stops and reports. */
 export const MAX_STEPS = 5;
+/**
+ * How many steps ONE INVOCATION of the sweep takes before handing the card back still in progress.
+ * A cron invocation on the Free plan has a CPU budget; five steps of model calls in one invocation
+ * is what got "Deal flow: Helios Grid" killed part-way on 14 Sep 2026. Two steps fit; the next tick
+ * carries on from the card's own record.
+ */
+export const STEPS_PER_TICK = 2;
+/**
+ * How many steps a card gets in total before the employee MUST conclude. Fifteen searches on Helios
+ * Grid all said "nothing live can be found" and not one of them was followed by a conclusion.
+ */
+export const MAX_STEPS_PER_CARD = 8;
 
 export interface LoopContext {
   title: string;
@@ -132,7 +144,14 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
       ? `WHAT HAS HAPPENED SO FAR (oldest first):\n${ctx.history.map((h, i) => `  ${i + 1}. ${h}`).join("\n")}`
       : "NOTHING HAS HAPPENED YET. This is your first step.",
     "",
-    `You have ${stepsLeft} step${stepsLeft === 1 ? "" : "s"} left in this run.`,
+    stepsLeft === 1
+      ? [
+          "THIS IS YOUR LAST STEP. Searching, visiting and looking are no longer available: what you",
+          "have established is what you have. Choose done — saying what the answer is, or that the",
+          "evidence is not there and what you recommend because of that — or blocked, with the one",
+          "question a person must answer. \"Not found after looking\" is a finding; say it as done.",
+        ].join("\n")
+      : `You have ${stepsLeft} step${stepsLeft === 1 ? "" : "s"} left on this card.`,
     "",
     "CHOOSE EXACTLY ONE ACTION:",
     "",
