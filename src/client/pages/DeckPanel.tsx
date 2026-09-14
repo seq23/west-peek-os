@@ -59,7 +59,24 @@ function when(iso: string): string {
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-export function DeckPanel(): JSX.Element {
+/**
+ * THE LINK GOES TO THE DOCUMENT, ON THE DOCUMENTS PAGE. Operator, 14 Sep 2026: the "view the deck"
+ * link "needs to go to the actual documents page to view the latest deck". The Documents page owns
+ * viewing; this panel names which document to open there and hands over. The proposed versions
+ * get the same link — until now a version could be approved or sent back without a way to look at
+ * it first, which is deciding on a document unread.
+ */
+export function viewOnDocuments(onNavigate: ((key: string) => void) | undefined, documentId: string): void {
+  try {
+    window.sessionStorage.setItem("wpos.documents.focus", documentId);
+  } catch {
+    /* a private window; the page still opens, just not scrolled to it */
+  }
+  if (onNavigate) onNavigate("documents");
+  else window.location.hash = "#/documents";
+}
+
+export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void } = {}): JSX.Element {
   const deck = useApi<DeckResponse>("/api/deck");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -207,13 +224,14 @@ export function DeckPanel(): JSX.Element {
 
           {data.current.document_id && (
             <p>
-              <a
+              <button
+                type="button"
                 className="link-button"
                 data-testid="deck-open"
-                href={`/api/documents/${data.current.document_id}/download`}
+                onClick={() => viewOnDocuments(onNavigate, data.current!.document_id!)}
               >
-                Open the current deck
-              </a>
+                View the current deck on Documents
+              </button>
             </p>
           )}
         </>
@@ -240,6 +258,16 @@ export function DeckPanel(): JSX.Element {
                   {v.origin === "UPLOADED" ? "Uploaded by" : "Built by"} {v.created_by} · {when(v.created_at)}
                 </p>
                 {v.change_summary && <p className="small">{v.change_summary}</p>}
+                {v.document_id ? (
+                  <p>
+                    <button type="button" className="link-button" data-testid={`deck-view-${v.id}`}
+                      onClick={() => viewOnDocuments(onNavigate, v.document_id!)}>
+                      View v{v.version_no} on Documents
+                    </button>
+                  </p>
+                ) : (
+                  <p className="muted small">No PDF is attached to this version, so there is nothing to look at before deciding.</p>
+                )}
                 <div className="notification-actions">
                   <button type="button" className="btn-strong" disabled={busy} data-testid={`deck-approve-${v.id}`}
                     onClick={() => void decide(v.id, "APPROVE")}>

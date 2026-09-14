@@ -87,7 +87,7 @@ WP_OS_ENV = "local"
 # Objects are deliberately not used. A trigger cannot fire in local `wrangler dev`, so the same
 # code path is exercised locally through POST /api/jobs/tick and directly in tests.
 [triggers]
-crons = ["*/15 * * * *"]
+crons = ["* * * * *"]
 
 # ---------------------------------------------------------------------------
 # production — the deployed profile (`wrangler deploy --env production`).

@@ -6,6 +6,9 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { notifyPartners } from "./notifications";
 import { uploadDocument } from "./documents";
+import { renderDeckHtml, type DeckFigures } from "../../shared/deck/render";
+import { createWorkCardInternal } from "./workCards";
+import type { FirmUserIdentity } from "../auth";
 import {
   initialCapitalUsd, investableBase, reserveUsd, sleeveTargetUsd, usd,
   type ReserveDoc, type SleeveDoc,
@@ -379,20 +382,143 @@ export function summariseDrift(drift: FigureDrift[]): string {
  * control on the Fund strategy page. A version with no PDF still carries its snapshot, which is the
  * part that makes the history worth having.
  */
+/**
+ * THE FIGURES A SLIDE PRINTS, from the records — the same derivation scripts/deck/build.mjs does
+ * on the Mac, so a deck built here and one built there cannot disagree.
+ */
+export async function figuresFromRecords(env: Env, fundId: string): Promise<DeckFigures> {
+  const snap = await takeRecordsSnapshot(env, fundId);
+  const mandate = readDoc<{ management_fee_pct?: number; carried_interest_pct?: number }>(
+    await latestPolicy(env, "investment_mandate_version", "mandate_json", fundId),
+  );
+  const early = snap.sleeves.find((x) => x.key === "EARLY_STAGE_PRIMARY") ?? null;
+  const secondary = snap.sleeves.find((x) => x.key === "SECONDARY_PURCHASE") ?? null;
+  const origins = (
+    await env.WP_OS_DB.prepare(
+      "SELECT relationship_origin AS o, COUNT(*) AS n FROM investment_opportunity GROUP BY relationship_origin",
+    ).all<{ o: string | null; n: number }>()
+  ).results ?? [];
+  const totalOpps = origins.reduce((sum, r) => sum + Number(r.n), 0);
+  const community = origins.filter((r) => r.o === "COMMUNITY_INTRO").reduce((sum, r) => sum + Number(r.n), 0);
+  const positions = Number(
+    (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM position").first<{ n: number }>())?.n ?? 0,
+  );
+  return {
+    fund_size: snap.fund_size_usd,
+    fees: snap.estimated_fees_usd || null,
+    expenses: snap.estimated_expenses_usd || null,
+    investable_base: snap.investable_base_usd || null,
+    early_sleeve_usd: early?.derived_usd ?? null,
+    early_sleeve_pct: early?.target_pct ?? null,
+    secondary_sleeve_usd: secondary?.derived_usd ?? null,
+    secondary_sleeve_pct: secondary?.target_pct ?? null,
+    reserve_pct: snap.reserve_pct,
+    mgmt_fee_pct: mandate.doc.management_fee_pct ?? null,
+    carry_pct: mandate.doc.carried_interest_pct ?? null,
+    reserve_usd: snap.reserve_usd || null,
+    initial_capital_usd: snap.initial_capital_usd || null,
+    target_positions: snap.target_positions,
+    check_min: snap.check_size_usd.min,
+    check_max: snap.check_size_usd.max,
+    sectors: snap.sectors,
+    community_sourced: totalOpps > 0 ? { through_community: community, total: totalOpps } : null,
+    positions_held: positions,
+    as_of_date: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+  };
+}
+
+/**
+ * RENDER THE PDF HERE, IN THE WORKER. scripts/deck/build.mjs's own header says the Worker has a
+ * Browser Rendering binding and could do this; it chose the Mac because a human was pressing the
+ * button. Once the rebuild is Preston's card rather than a chore on her laptop, the render has to
+ * happen where Preston works. Same HTML, same page size, same "fonts ready" wait as the script.
+ *
+ * Returns null, with the reason, where no browser is available (local dev, a test) — the version
+ * is then recorded without a document and the summary says so in words, which is what the daily
+ * job had been doing silently for five days.
+ */
+export async function buildDeckPdf(
+  env: Env,
+  fundId: string,
+  launch?: (binding: unknown) => Promise<{ newPage(): Promise<any>; close(): Promise<void> }>,
+): Promise<{ pdfBase64: string; pageCount: number } | { pdfBase64: null; reason: string }> {
+  const binding = (env as unknown as { BROWSER?: unknown }).BROWSER;
+  if (!launch && !binding) {
+    return { pdfBase64: null, reason: "no browser is available here — the BROWSER binding is not configured" };
+  }
+  const figures = await figuresFromRecords(env, fundId);
+  const html = renderDeckHtml(figures);
+  let browser: { newPage(): Promise<any>; close(): Promise<void> } | null = null;
+  try {
+    const doLaunch =
+      launch ??
+      (async (b: unknown) => {
+        const puppeteer = await import("@cloudflare/puppeteer");
+        return (await puppeteer.launch(b as never)) as unknown as { newPage(): Promise<any>; close(): Promise<void> };
+      });
+    browser = await doLaunch(binding);
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready);
+    const bytes: Uint8Array = new Uint8Array(
+      await page.pdf({
+        width: "13.333in",
+        height: "7.5in",
+        printBackground: true,
+        margin: { top: "0", right: "0", bottom: "0", left: "0" },
+      }),
+    );
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    const pageCount = (new TextDecoder("latin1").decode(bytes).match(/\/Type\s*\/Page[^s]/g) ?? []).length;
+    return { pdfBase64: btoa(binary), pageCount };
+  } catch (err) {
+    return { pdfBase64: null, reason: `the browser could not render the deck: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    if (browser) await browser.close().catch(() => undefined);
+  }
+}
+
 export async function runDeckRebuild(
   env: Env,
   actor: Actor,
-  input: { title?: string; pdfBase64?: string | null } = {},
-): Promise<{ version: DeckVersionRow; changed: number }> {
+  input: { title?: string; pdfBase64?: string | null; brief?: string | null; launch?: Parameters<typeof buildDeckPdf>[2] } = {},
+): Promise<{ version: DeckVersionRow; changed: number; rendered: boolean; renderNote: string | null }> {
   const fund = await theFund(env);
+  // The PDF is built HERE unless the caller brought one (the Mac script does). A rebuild that
+  // records a version with nothing behind it is the empty daily this replaces.
+  let pdfBase64 = input.pdfBase64 ?? null;
+  let pageCount: number | null = null;
+  let renderNote: string | null = null;
+  if (!pdfBase64) {
+    const built = await buildDeckPdf(env, fund.id, input.launch);
+    if (built.pdfBase64) {
+      pdfBase64 = built.pdfBase64;
+      pageCount = built.pageCount;
+    } else {
+      renderNote = "reason" in built ? built.reason : null;
+    }
+  }
   const version = await recordDeckVersion(env, actor, {
     fundId: fund.id,
     title: input.title ?? `${fund.name} — rebuilt from the records`,
     origin: "BUILT",
     createdBy: DECK_OWNER,
     createdByType: "AI",
-    pdfBase64: input.pdfBase64 ?? null,
+    pdfBase64,
+    pageCount,
+    changeSummary: input.brief ? `Rebuilt on request: ${input.brief.slice(0, 400)}` : null,
   });
+  // ONE PROPOSAL AT A TIME. Every older version still waiting on a decision is superseded by this
+  // one, the way the operator did by hand for v6–v9 on 14 Sep — five identical proposals waiting
+  // on five decisions about nothing is what a queue looks like when nobody closes it.
+  await env.WP_OS_DB.prepare(
+    "UPDATE deck_version SET state = 'REJECTED', rejected_reason = 'SUPERSEDED', approved_at = ?3 WHERE fund_id = ?1 AND id <> ?2 AND state = 'PROPOSED'",
+  )
+    .bind(fund.id, version.id, new Date().toISOString())
+    .run();
 
   let changed: FigureDrift[] = [];
   try {
@@ -427,7 +553,120 @@ export async function runDeckRebuild(
     firmScope: actor.firmScopes[0] ?? "west-peek",
   });
 
-  return { version, changed: changed.length };
+  return { version, changed: changed.length, rendered: pdfBase64 !== null, renderNote };
+}
+
+// ── A rejection becomes Preston's card, and the card becomes the next version ────────────────
+
+const DECK_OWNER_ID = "aie_preston";
+
+function deckSystemIdentity(firmScope: string): FirmUserIdentity {
+  return {
+    id: "system:deck_review",
+    email: "deck-review@joinwestpeek.com",
+    fullName: "Deck review",
+    status: "ACTIVE",
+    roles: ["MANAGING_PARTNER"],
+    authorityScopes: [{ scopeKey: "firm_scope", scopeValue: firmScope }],
+  };
+}
+
+/**
+ * SENDING A DECK BACK OPENS THE REWORK. Until 14 Sep 2026 a rejection wrote a row and an event and
+ * stopped — "i rejected it but i need to know where to go to see he is working on it again", and
+ * there was nowhere, because he was not. Now the reason she typed becomes the brief on a card
+ * owned by Preston, kind DECK_REWORK, which the work sweep picks up within minutes and works by
+ * building the next version. She sees it on Work (the card, then its completion note) and on Fund
+ * strategy (the new version waiting on her decision). Sending THAT back opens another.
+ *
+ * Only a BUILT version opens a card: rejecting a version she uploaded herself is a correction of
+ * her own record, not an instruction to Preston.
+ */
+export async function requestDeckRework(
+  env: Env,
+  rejected: DeckVersionRow,
+  reason: string,
+  rejectedBy: string,
+): Promise<{ id: string } | null> {
+  if (rejected.origin !== "BUILT") return null;
+  const firmScope = (rejected as unknown as { firm_scope?: string }).firm_scope ?? "west-peek";
+  const nextNo = rejected.version_no + 1;
+  const card = await createWorkCardInternal(env, deckSystemIdentity(firmScope), {
+    title: `Rebuild the LP deck as v${nextNo}`,
+    description: [
+      `v${rejected.version_no} was sent back by ${rejectedBy} with this reason:`,
+      "",
+      reason,
+      "",
+      "Pull from the current deck and the fund records, fix every discrepancy between them, and make it",
+      "full and ready for limited partners. Every figure comes from the records; where the current deck",
+      "disagrees with the records, the records win and the change is listed.",
+    ].join("\n"),
+    next_action: `Build v${nextNo} from the records and propose it on Fund strategy.`,
+    owner_type: "AI",
+    owner_id: DECK_OWNER_ID,
+    priority: "HIGH",
+    firm_scope: firmScope,
+    prompt: reason,
+  });
+  await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'DECK_REWORK' WHERE id = ?1").bind(card.id).run();
+  await appendEvent(env, {
+    eventType: "deck_version.rework_requested",
+    actorType: "system",
+    actorId: "deck_review",
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope,
+    payload: { rejected_version_id: rejected.id, version_no: rejected.version_no, next_version_no: nextNo },
+  });
+  return { id: card.id };
+}
+
+/**
+ * The sweep's runner for a DECK_REWORK card: build the next version from the records, with the
+ * card's brief as the change summary, close the card with a note that says where to look. If the
+ * browser cannot render, the version is still recorded and the card says so — a partner then knows
+ * exactly what is missing rather than finding an empty proposal.
+ */
+export async function runDeckRework(
+  env: Env,
+  card: { id: string; title: string; firm_scope: string },
+  launch?: Parameters<typeof buildDeckPdf>[2],
+): Promise<{ finished: boolean; blocked: boolean; detail: string }> {
+  const row = await env.WP_OS_DB.prepare("SELECT description, prompt FROM work_card WHERE id = ?1")
+    .bind(card.id)
+    .first<{ description: string | null; prompt: string | null }>();
+  const brief = row?.prompt ?? row?.description ?? null;
+  const actor: Actor = { type: "SYSTEM", roles: [], firmScopes: [card.firm_scope] };
+  const out = await runDeckRebuild(env, actor, { brief, launch });
+  const drift = (() => {
+    try {
+      return JSON.parse(out.version.changed_fields_json) as FigureDrift[];
+    } catch {
+      return [] as FigureDrift[];
+    }
+  })();
+  const detail = out.rendered
+    ? `v${out.version.version_no} is proposed on Fund strategy, ${out.version.page_count ?? "?"} pages, built from the records. ` +
+      (drift.length > 0
+        ? `${drift.length} figure(s) differ from the last version: ${drift.slice(0, 5).map((d) => `${d.field} ${d.was} → ${d.now}`).join("; ")}.`
+        : "No fund figure moved since the last version; the discrepancies were in the slides, not the records.") +
+      " Approve it there, or send it back with what is still wrong and this card reopens as the next version."
+    : `v${out.version.version_no} was recorded but NO PDF could be rendered: ${out.renderNote}. The version is on Fund strategy without a document.`;
+  // Written onto the card the way every employee finding is (employeeWork.appendFinding): a note
+  // row is a partner's steer and its author must be a firm user, which Preston is not.
+  const existing = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(card.id).first<{ description: string | null }>();
+  await env.WP_OS_DB.prepare("UPDATE work_card SET description = ?2 WHERE id = ?1")
+    .bind(card.id, `${existing?.description ? `${existing.description}\n` : ""}• ${DECK_OWNER}: ${detail}`.slice(0, 8000))
+    .run();
+  if (out.rendered) {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1").bind(card.id).run();
+    return { finished: true, blocked: false, detail };
+  }
+  await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
+    .bind(card.id, `The deck could not be rendered: ${out.renderNote}`)
+    .run();
+  return { finished: false, blocked: true, detail };
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
@@ -599,6 +838,8 @@ export async function handleDecideDeck(ctx: RouteContext): Promise<Response> {
     await ctx.env.WP_OS_DB.prepare(
       "UPDATE deck_version SET state = 'REJECTED', rejected_reason = ?2, approved_by = ?3, approved_at = ?4 WHERE id = ?1",
     ).bind(row.id, parsed.data.reason ?? "No reason given.", ctx.identity!.id, now).run();
+    // The rejection is an assignment. See requestDeckRework.
+    await requestDeckRework(ctx.env, row, parsed.data.reason ?? "No reason given.", ctx.identity!.fullName);
   }
 
   await appendEvent(ctx.env, {

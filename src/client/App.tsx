@@ -1718,6 +1718,26 @@ function CompaniesPage({ me }: { me: MeResponse }) {
 
 function DocumentsPage() {
   const documents = useApi<{ documents: DocumentRow[] }>("/api/documents");
+  /*
+   * ARRIVING FROM "VIEW THE DECK". Fund strategy names a document and hands over; this page opens
+   * it in a viewer at the top and scrolls the list to it. The handoff is a session key rather than
+   * a URL parameter so a bookmarked #/documents stays a plain list. Cleared once read, so a later
+   * visit to Documents is not still pinned to last week's deck.
+   */
+  const [focus, setFocus] = useState<string | null>(() => {
+    try {
+      const id = window.sessionStorage.getItem("wpos.documents.focus");
+      window.sessionStorage.removeItem("wpos.documents.focus");
+      return id;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (!focus || !documents.data) return;
+    document.querySelector(`[data-testid="document-${focus}"]`)?.scrollIntoView({ block: "center" });
+  }, [focus, documents.data]);
+  const focused = focus ? (documents.data?.documents ?? []).find((d) => d.id === focus) ?? null : null;
   const [title, setTitle] = useState("");
   const [docType, setDocType] = useState("diligence_note");
   const [file, setFile] = useState<File | null>(null);
@@ -1784,9 +1804,22 @@ function DocumentsPage() {
         </button>
         {message && <p className="notice" data-testid="doc-message">{message}</p>}
       </form>
+      {focused && (
+        <div className="card" data-testid="document-viewer">
+          <div className="home-section-head">
+            <h3>{focused.title}</h3>
+            <button type="button" className="link-button" onClick={() => setFocus(null)}>close</button>
+          </div>
+          <iframe
+            title={focused.title}
+            src={`/api/documents/${focused.id}/download`}
+            style={{ width: "100%", height: "70vh", border: "1px solid var(--line, #ddd)", background: "#fff" }}
+          />
+        </div>
+      )}
       <ul data-testid="document-list" className="card-list">
         {(documents.data?.documents ?? []).map((d) => (
-          <li key={d.id} className="card" data-testid={`document-${d.id}`}>
+          <li key={d.id} className={d.id === focus ? "card card-focus" : "card"} data-testid={`document-${d.id}`}>
             <strong>{d.title}</strong> — {d.doc_type} · {d.privacy_label}{" "}
             <button type="button" data-testid={`download-${d.id}`} onClick={() => download(d.id, d.title)}>
               Download
@@ -3312,7 +3345,7 @@ const STRATEGY_STEPS: readonly { q: string; where: string }[] = [
   { q: "And the companies we already own?", where: "Follow-on: which of them earns the next cheque." },
 ];
 
-function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
+function FundStrategyPage({ me, onNavigate }: { me: MeResponse; onNavigate?: (key: string) => void }): JSX.Element {
   /*
    * The deck and the construction editor sit at the TOP of this page, above the analysis, because
    * they are the two things the operator asked for by name — "we should have our deck displayed
@@ -3325,7 +3358,7 @@ function FundStrategyPage({ me }: { me: MeResponse }): JSX.Element {
 
   return (
     <section data-testid="fund-strategy-page">
-      <DeckPanel />
+      <DeckPanel onNavigate={onNavigate} />
       <FundConstruction fundId={fundId} />
 
       {/* The sequence, stated once at the top. It teaches the order rather than assuming it. */}
@@ -3698,7 +3731,7 @@ export function App() {
           {authed && active === "community" && <CommunityPage />}
           {authed && active === "record" && <LedgersPage />}
           {/* Follow-on merged into Fund strategy. The route stays live. */}
-          {authed && active === "follow-on" && <FundStrategyPage me={me.data!} />}
+          {authed && active === "follow-on" && <FundStrategyPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "weekly-review" && <WeeklyReviewPage onNavigate={navigate} />}
           {authed && active === "cross-office" && <CrossOfficePage />}
           {authed && active === "secondaries" && <SecondariesPage onNavigate={navigate} />}
@@ -3748,7 +3781,7 @@ export function App() {
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
           {/* The old Deal Math address, kept working. `MERGED_ROUTES` normally resolves it to
               fund-strategy before it gets here; this stays so a direct jump cannot land nowhere. */}
-          {authed && active === "deal-math" && <FundStrategyPage me={me.data!} />}
+          {authed && active === "deal-math" && <FundStrategyPage me={me.data!} onNavigate={navigate} />}
           {/*
             THE PIPELINE AND THE DEAL RECORD ARE ONE PAGE AND ONE COMPONENT.
 
@@ -3774,12 +3807,12 @@ export function App() {
               composition also counts closed opportunities while the holdings list counts booked
               positions, so the two could print different portfolios on one screen. */}
           {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
-          {authed && active === "fund-strategy" && <FundStrategyPage me={me.data!} />}
+          {authed && active === "fund-strategy" && <FundStrategyPage me={me.data!} onNavigate={navigate} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}
           {authed && active === "integrations" && <IntegrationsPage me={me.data!} />}
           {authed && active === "lp" && <LpPage me={me.data!} />}
           {/* The old address still works and lands in the same place. */}
-          {authed && active === "allocation" && <FundStrategyPage me={me.data!} />}
+          {authed && active === "allocation" && <FundStrategyPage me={me.data!} onNavigate={navigate} />}
           {/* Reporting folded into LP (item 16): an LP is somebody who gave the fund money and
               whom the fund owes an account of it, and two tabs for one relationship meant
               answering "what has Cedar been told?" required knowing packets lived elsewhere.

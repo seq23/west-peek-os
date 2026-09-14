@@ -1,0 +1,170 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import type { Env } from "../src/worker/env";
+import { createWorkCardInternal } from "../src/worker/services/workCards";
+import { MAX_WORK_ATTEMPTS, claimNextCard, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
+import { runDueJobs } from "../src/worker/services/jobs";
+
+/**
+ * The sweep that works the cards employees own — proven without a model.
+ *
+ * WHAT THE OPERATOR SAW, 14 Sep 2026: four cards owned by Wyatt "in progress" since 9 Sep with
+ * nothing behind them; a rejected deck that told Preston nothing; a cron tick killed at 10 ms of
+ * CPU four jobs deep. Each assertion below is one of those, made impossible.
+ */
+
+let t: TestDb;
+let env: Env;
+const NOW = new Date("2026-09-14T12:00:00.000Z");
+
+async function card(title: string, owner = "aie_wyatt"): Promise<string> {
+  const c = await createWorkCardInternal(env, sweepIdentity(), {
+    title,
+    description: "test",
+    owner_type: "AI",
+    owner_id: owner,
+    firm_scope: "west-peek",
+  });
+  return c.id;
+}
+
+async function state(id: string): Promise<{ state: string; next_action: string | null; work_attempts: number; lease_until: string | null }> {
+  return (await env.WP_OS_DB.prepare("SELECT state, next_action, work_attempts, lease_until FROM work_card WHERE id = ?1").bind(id).first())!;
+}
+
+async function notices(cardId: string): Promise<Array<{ title: string; severity: string }>> {
+  return (
+    await env.WP_OS_DB.prepare("SELECT title, severity FROM notification WHERE object_type = 'work_card' AND object_id = ?1 ORDER BY created_at")
+      .bind(cardId)
+      .all<{ title: string; severity: string }>()
+  ).results ?? [];
+}
+
+beforeAll(async () => {
+  t = await createTestDb();
+  env = makeTestEnv(t.db);
+});
+
+afterAll(async () => {
+  await disposeTestDb(t);
+});
+
+describe("assignment causes work", () => {
+  it("claims the OLDEST waiting AI-owned card, marks it in progress, and counts the attempt", async () => {
+    const first = await card("First card");
+    const second = await card("Second card");
+    const claimed = await claimNextCard(env, NOW);
+    expect(claimed?.id).toBe(first);
+    expect(claimed?.work_attempts).toBe(1);
+    const s = await state(first);
+    expect(s.state).toBe("IN_PROGRESS");
+    expect(s.lease_until).not.toBeNull();
+    // The lease is the lock: the same card is not handed out twice while it is held.
+    const again = await claimNextCard(env, NOW);
+    expect(again?.id).toBe(second);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id IN (?1, ?2)").bind(first, second).run();
+  });
+
+  it("a card the employee finishes goes DONE and both partners are told where to look", async () => {
+    const id = await card("Deck: Sensori");
+    const out = await sweepOnce(env, NOW, {
+      general: async (e, _ctx, cardId) => {
+        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1").bind(cardId).run();
+        return { finished: true, blocked: false, detail: "Real company, fits the thesis; opened at the top of the funnel.", steps: [{ action: "done", detail: "Real company, fits the thesis; opened at the top of the funnel." }] };
+      },
+    });
+    expect(out.outcome).toBe("DONE");
+    expect((await state(id)).state).toBe("DONE");
+    expect((await state(id)).lease_until).toBeNull();
+    const n = await notices(id);
+    expect(n.length).toBeGreaterThanOrEqual(1);
+    expect(n[0]!.title).toMatch(/Wyatt finished "Deck: Sensori"/);
+    expect(n[0]!.title).toMatch(/check it on Work/);
+  });
+
+  it("a card the employee cannot finish goes BLOCKED with the question, and the partners are told", async () => {
+    const id = await card("Deal flow: Helios Grid");
+    const out = await sweepOnce(env, NOW, {
+      general: async (e, _ctx, cardId) => {
+        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
+          .bind(cardId, "Is a $2M pre-seed inside the mandate?")
+          .run();
+        return { finished: false, blocked: true, detail: "Is a $2M pre-seed inside the mandate?", steps: [{ action: "blocked", detail: "Is a $2M pre-seed inside the mandate?" }] };
+      },
+    });
+    expect(out.outcome).toBe("BLOCKED");
+    const n = await notices(id);
+    expect(n[0]!.title).toMatch(/Wyatt is blocked on/);
+    expect(n[0]!.severity).toBe("WARNING");
+  });
+
+  it("three failed attempts end in BLOCKED with the failure on the card, never a fourth retry", async () => {
+    const id = await card("Find accelerators in Texas");
+    const failing = async () => ({ finished: false, blocked: false, detail: "provider returned 429", steps: [{ action: "failed", detail: "provider returned 429" }] });
+    for (let i = 1; i < MAX_WORK_ATTEMPTS; i++) {
+      const out = await sweepOnce(env, new Date(NOW.getTime() + i * 60_000), { general: failing });
+      expect(out.outcome).toBe("FAILED");
+      expect(out.summary).toMatch(/will be tried again/);
+      expect((await state(id)).state).toBe("IN_PROGRESS");
+    }
+    const last = await sweepOnce(env, new Date(NOW.getTime() + MAX_WORK_ATTEMPTS * 60_000), { general: failing });
+    expect(last.outcome).toBe("BLOCKED");
+    const s = await state(id);
+    expect(s.state).toBe("BLOCKED");
+    expect(s.next_action).toMatch(/Could not finish after 3 attempts/);
+    expect(s.next_action).toMatch(/provider returned 429/);
+    // And it is not picked up again.
+    const next = await sweepOnce(env, new Date(NOW.getTime() + 10 * 60_000), { general: failing });
+    expect(next.card?.id).not.toBe(id);
+  });
+
+  it("a DECK_REWORK card is worked by the deck runner, not the four-move loop", async () => {
+    const id = await card("Rebuild the LP deck as v12", "aie_preston");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'DECK_REWORK' WHERE id = ?1").bind(id).run();
+    let generalCalled = false;
+    let deckCalled = false;
+    const out = await sweepOnce(env, new Date(NOW.getTime() + 20 * 60_000), {
+      general: async () => { generalCalled = true; return { finished: true, blocked: false, detail: "", steps: [] }; },
+      deckRework: async (e, c) => {
+        deckCalled = true;
+        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(c.id).run();
+        return { finished: true, blocked: false, detail: "v12 is proposed on Fund strategy" };
+      },
+    });
+    expect(deckCalled).toBe(true);
+    expect(generalCalled).toBe(false);
+    expect(out.outcome).toBe("DONE");
+  });
+
+  it("with nothing waiting the sweep says so and touches nothing", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const out = await sweepOnce(env, NOW);
+    expect(out.outcome).toBe("NOTHING_WAITING");
+    expect(out.card).toBeNull();
+  });
+});
+
+describe("one job per tick", () => {
+  it("seeds the sweep ACTIVE every five minutes and puts the deck rebuild back to on-request", async () => {
+    const sweep = await env.WP_OS_DB.prepare("SELECT status, schedule_kind, interval_minutes FROM scheduled_job WHERE job_key = 'employee_work_sweep'").first<{ status: string; schedule_kind: string; interval_minutes: number }>();
+    expect(sweep).toMatchObject({ status: "ACTIVE", schedule_kind: "INTERVAL", interval_minutes: 5 });
+    const deck = await env.WP_OS_DB.prepare("SELECT status FROM scheduled_job WHERE job_key = 'deck_rebuild'").first<{ status: string }>();
+    expect(deck?.status).toBe("PAUSED");
+  });
+
+  it("runs only the single most overdue job on a scheduled tick, leaving the rest for the next tick", async () => {
+    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED'").run();
+    const at = (min: number) => new Date(NOW.getTime() - min * 60_000).toISOString();
+    for (const [id, key, due] of [["sj_t_a", "t_a", at(30)], ["sj_t_b", "t_b", at(10)], ["sj_t_c", "t_c", at(20)]] as const) {
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO scheduled_job (id, job_key, name, kind, schedule_kind, interval_minutes, target_kind, task_class, budget_usd, data_class, status, created_by, firm_scope, next_run_at)
+         VALUES (?1, ?2, ?2, 'INTELLIGENCE', 'INTERVAL', 60, 'SYSTEM', 'OPERATIONS', 0, 'INTERNAL', 'ACTIVE', 'test', 'west-peek', ?3)`,
+      ).bind(id, key, due).run();
+    }
+    const results = await runDueJobs(env, NOW);
+    expect(results.map((r) => r.job_key)).toEqual(["t_a"]);
+    const still = (await env.WP_OS_DB.prepare("SELECT job_key FROM scheduled_job WHERE status = 'ACTIVE' AND next_run_at <= ?1 ORDER BY next_run_at").bind(NOW.toISOString()).all<{ job_key: string }>()).results ?? [];
+    expect(still.map((r) => r.job_key)).toEqual(["t_c", "t_b"]);
+  });
+
+});
