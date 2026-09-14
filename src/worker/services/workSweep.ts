@@ -3,7 +3,7 @@ import type { RouteContext } from "../router";
 import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
 import { notifyPartners } from "./notifications";
-import { workCard } from "./employeeWork";
+import { deckStillBeingRead, workCard } from "./employeeWork";
 
 /**
  * The sweep that works the cards employees own (14 Sep 2026).
@@ -153,8 +153,11 @@ export interface SweepResult {
   status: "SUCCEEDED" | "FAILED";
   summary: string;
   card: SweepCard | null;
-  outcome: "DONE" | "BLOCKED" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING";
+  outcome: "DONE" | "BLOCKED" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK";
 }
+
+/** How long a card waits for its deck to be read before the sweep looks at it again. */
+export const DECK_WAIT_MINUTES = 15;
 
 /**
  * Work one card. `runners` is injectable so tests can prove the sweep's own logic — claim, attempt
@@ -171,6 +174,24 @@ export async function sweepOnce(
   const card = await claimNextCard(env, now);
   if (!card) {
     return { status: "SUCCEEDED", summary: "nothing waiting: every card an employee owns is done, blocked, or being worked", card: null, outcome: "NOTHING_WAITING" };
+  }
+
+  // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
+  // count and the card is parked until the reader has had a turn; another card gets this tick.
+  const unread = card.kind === "DECK_REWORK" ? null : await deckStillBeingRead(env, card.title, card.id);
+  if (unread) {
+    const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
+    await env.WP_OS_DB.prepare(
+      "UPDATE work_card SET lease_until = ?2, work_attempts = COALESCE(work_attempts, 1) - 1, state = 'OPEN' WHERE id = ?1",
+    )
+      .bind(card.id, until)
+      .run();
+    return {
+      status: "SUCCEEDED",
+      summary: `"${card.title.slice(0, 60)}" is waiting for its deck (${unread.filename}) to be read; the reader runs every 15 minutes.`,
+      card: { ...card, work_attempts: card.work_attempts - 1, state: "OPEN" },
+      outcome: "WAITING_ON_DECK",
+    };
   }
 
   let finished = false;

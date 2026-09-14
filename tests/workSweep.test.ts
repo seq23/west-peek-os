@@ -185,4 +185,57 @@ describe("the employee sees what the firm already holds", () => {
     expect(lines[2]).toMatch(/does not say: Team bios/);
     expect(await companyKnowledge(env, "Find accelerators in Texas")).toEqual([]);
   });
+
+  it("a deck queued against the card itself is found even when no company was matched from the subject", async () => {
+    const { companyKnowledge } = await import("../src/worker/services/employeeWork");
+    const id = await card("Deck: Nobody Knows This One");
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO pending_deck (id, company_id, work_card_id, filename, object_key, bytes, state, applied_json, firm_scope, read_at) VALUES ('pdk_t_card', NULL, ?1, 'Fwd deck.eml', 'k2', 1, 'READ', ?2, 'west-peek', '2026-09-14T02:01:20.265Z')",
+    ).bind(id, JSON.stringify({ claims: ["Raising $1.5M pre-seed"], missing: [] })).run();
+    const lines = await companyKnowledge(env, "Deck: Nobody Knows This One", id);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/Their deck \(Fwd deck\.eml, read 2026-09-14\) claims: Raising \$1\.5M/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+
+  it("a deck that could NOT be read is told to the employee as that fact, not as silence", async () => {
+    const { companyKnowledge } = await import("../src/worker/services/employeeWork");
+    const id = await card("Deck: Unreadable Co");
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO pending_deck (id, company_id, work_card_id, filename, object_key, bytes, state, detail, firm_scope, read_at) VALUES ('pdk_t_failed', NULL, ?1, 'deck.eml', 'k3', 1, 'FAILED', 'the attachment is a .pptx, not a PDF', 'west-peek', '2026-09-14T02:01:20.265Z')",
+    ).bind(id).run();
+    const lines = await companyKnowledge(env, "Deck: Unreadable Co", id);
+    expect(lines[0]).toMatch(/could NOT be read: the attachment is a \.pptx/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+
+  it("the sweep WAITS for a queued deck instead of working the card from an empty body, and the wait costs no attempt", async () => {
+    const id = await card("Deck: Still Arriving");
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO pending_deck (id, company_id, work_card_id, filename, object_key, bytes, state, firm_scope) VALUES ('pdk_t_pending', NULL, ?1, 'Still Arriving.eml', 'k4', 7000000, 'PENDING', 'west-peek')",
+    ).bind(id).run();
+    let worked = false;
+    const out = await sweepOnce(env, new Date(NOW.getTime() + 30 * 60_000), {
+      general: async () => { worked = true; return { finished: true, blocked: false, detail: "", steps: [] }; },
+    });
+    expect(out.outcome).toBe("WAITING_ON_DECK");
+    expect(out.summary).toMatch(/waiting for its deck \(Still Arriving\.eml\) to be read/);
+    expect(worked, "the employee must not be handed a deck card before the deck is read").toBe(false);
+    const s = await state(id);
+    expect(s.state).toBe("OPEN");
+    expect(s.work_attempts).toBe(0);
+    expect(s.lease_until, "parked until the reader has had a turn").not.toBeNull();
+    // Once the reader is done the card is worked as normal on the next free tick.
+    await env.WP_OS_DB.prepare("UPDATE pending_deck SET state = 'READ', applied_json = '{\"claims\":[\"x\"]}' WHERE id = 'pdk_t_pending'").run();
+    const later = await sweepOnce(env, new Date(NOW.getTime() + 50 * 60_000), {
+      general: async (e, _ctx, cardId) => {
+        worked = true;
+        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(cardId).run();
+        return { finished: true, blocked: false, detail: "read it", steps: [] };
+      },
+    });
+    expect(later.card?.id).toBe(id);
+    expect(worked).toBe(true);
+    expect((await state(id)).work_attempts).toBe(1);
+  });
 });

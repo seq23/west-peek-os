@@ -126,28 +126,30 @@ async function recordAcknowledgement(
  * ("Deck: X", "Deal flow: X", "Scouted: X") gets what the OS knows about X — the record, and the
  * reading of the deck it sent — as the first lines of its history.
  */
-export async function companyKnowledge(env: Env, title: string): Promise<string[]> {
-  const m = /^(?:Deck|Deal flow|Scouted):\s*(.+?)(?:\s+Deck)?$/i.exec(title.trim());
-  if (!m) return [];
-  const name = m[1]!.trim();
-  const company = await env.WP_OS_DB.prepare(
-    "SELECT id, canonical_name, website, sector, one_liner, description FROM canonical_company WHERE lower(canonical_name) = lower(?1) OR lower(canonical_name) LIKE lower(?2) LIMIT 1",
-  )
-    .bind(name, `${name}%`)
-    .first<{ id: string; canonical_name: string; website: string | null; sector: string | null; one_liner: string | null; description: string | null }>();
-  if (!company) return [];
-  const out = [
-    `The firm's record for ${company.canonical_name}: ` +
-      [company.sector ? `sector ${company.sector}` : null, company.one_liner, company.website ? `website ${company.website}` : null, company.description]
-        .filter(Boolean)
-        .join(" · "),
-  ];
+export async function companyKnowledge(env: Env, title: string, cardId?: string): Promise<string[]> {
+  const company = await companyForTitle(env, title);
+  const out: string[] = [];
+  if (company) {
+    out.push(
+      `The firm's record for ${company.canonical_name}: ` +
+        [company.sector ? `sector ${company.sector}` : null, company.one_liner, company.website ? `website ${company.website}` : null, company.description]
+          .filter(Boolean)
+          .join(" · "),
+    );
+  }
+  // THE DECK IS FOUND BY THE COMPANY OR BY THE CARD. An oversize email queues its deck against the
+  // routing card it opened and against whatever company the subject named; either link is enough.
   const reading = await env.WP_OS_DB.prepare(
-    "SELECT filename, applied_json, read_at FROM pending_deck WHERE company_id = ?1 AND state = 'READ' ORDER BY read_at DESC LIMIT 1",
+    `SELECT filename, state, applied_json, detail, read_at FROM pending_deck
+      WHERE state IN ('READ', 'FAILED') AND (company_id = ?1 OR work_card_id = ?2)
+      ORDER BY read_at DESC LIMIT 1`,
   )
-    .bind(company.id)
-    .first<{ filename: string; applied_json: string | null; read_at: string | null }>();
-  if (reading?.applied_json) {
+    .bind(company?.id ?? "", cardId ?? "")
+    .first<{ filename: string; state: string; applied_json: string | null; detail: string | null; read_at: string | null }>();
+  if (reading?.state === "FAILED") {
+    // "nobody read the deck" is a different fact from "the deck said nothing" — say which.
+    out.push(`Their deck (${reading.filename}) arrived but could NOT be read: ${reading.detail ?? "no reason recorded"}. Work from what else you can find and say the deck is unread.`);
+  } else if (reading?.applied_json) {
     try {
       const applied = JSON.parse(reading.applied_json) as { claims?: string[]; missing?: string[] };
       if (applied.claims?.length) out.push(`Their deck (${reading.filename}, read ${String(reading.read_at).slice(0, 10)}) claims: ${applied.claims.slice(0, 12).join(" | ")}`);
@@ -157,6 +159,34 @@ export async function companyKnowledge(env: Env, title: string): Promise<string[
     }
   }
   return out;
+}
+
+interface CompanyForTitle { id: string; canonical_name: string; website: string | null; sector: string | null; one_liner: string | null; description: string | null }
+
+async function companyForTitle(env: Env, title: string): Promise<CompanyForTitle | null> {
+  const m = /^(?:Deck|Deal flow|Scouted):\s*(.+?)(?:\s+Deck)?$/i.exec(title.trim());
+  if (!m) return null;
+  const name = m[1]!.trim();
+  return env.WP_OS_DB.prepare(
+    "SELECT id, canonical_name, website, sector, one_liner, description FROM canonical_company WHERE lower(canonical_name) = lower(?1) OR lower(canonical_name) LIKE lower(?2) LIMIT 1",
+  )
+    .bind(name, `${name}%`)
+    .first<CompanyForTitle>();
+}
+
+/**
+ * A deck that is queued but not yet read is a reason to WAIT, not to work. The sweep runs every
+ * five minutes and the reader every fifteen; without this, the employee's first attempt at a deck
+ * card lands before the deck has been opened, works from an empty body, and blocks on "the deck
+ * PDF never reached me" — which is exactly how Sensori and Vynlo sat BLOCKED for three weeks.
+ */
+export async function deckStillBeingRead(env: Env, title: string, cardId: string): Promise<{ filename: string } | null> {
+  const company = await companyForTitle(env, title);
+  return env.WP_OS_DB.prepare(
+    "SELECT filename FROM pending_deck WHERE state = 'PENDING' AND (company_id = ?1 OR work_card_id = ?2) LIMIT 1",
+  )
+    .bind(company?.id ?? "", cardId)
+    .first<{ filename: string }>();
 }
 
 async function historyFor(env: Env, cardId: string): Promise<string[]> {
@@ -262,7 +292,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       ]
         .filter((block) => block.length > 0)
         .join("\n"),
-      history: [...(await companyKnowledge(env, card.title)), ...(await historyFor(env, card.id))],
+      history: [...(await companyKnowledge(env, card.title, card.id)), ...(await historyFor(env, card.id))],
       // Re-read each step: a partner may leave a note while this is already running.
       steering: await unansweredNotes(env, card.id),
     };
