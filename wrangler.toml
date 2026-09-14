@@ -27,6 +27,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "./dist/client"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
 
 # D1 — relational operational truth. database_id below is a placeholder:
 # local `wrangler dev` / migrations work without a real id; remote use requires
@@ -110,6 +111,14 @@ name = "west-peek-os"
 directory = "./dist/client"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# THE API IS THE WORKER'S, EVEN FOR A NAVIGATION. Found 14 Sep 2026 by opening
+# /api/documents/<id>/download in a tab: the static-asset layer answers navigation requests
+# before the Worker runs and, in single-page-application mode, returns index.html for any path
+# that is not a file - so the deck download opened as the Documents page, and the "Open the
+# current deck" link had never worked. Script fetches were unaffected, which is why every test
+# passed. With /api/* routed to the Worker first, a navigation, an iframe and a fetch all get
+# the same bytes.
+run_worker_first = ["/api/*"]
 
 [[env.production.d1_databases]]
 binding = "WP_OS_DB"
