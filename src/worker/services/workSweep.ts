@@ -228,10 +228,15 @@ export async function sweepOnce(
       .bind(card.id, why)
       .run();
     await announceOutcome(env, card, "BLOCKED", why);
-    return { status: "FAILED", summary: `"${card.title.slice(0, 60)}" blocked after ${MAX_WORK_ATTEMPTS} failed attempts: ${detail.slice(0, 140)}`, card, outcome: "BLOCKED" };
+    return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" blocked after ${MAX_WORK_ATTEMPTS} failed attempts and handed to you: ${detail.slice(0, 140)}`, card, outcome: "BLOCKED" };
   }
+  // THE SWEEP RAN; THE CARD IS NOT DONE YET. Reporting this as a failed RUN painted "FAILED" on the
+  // Work page for a card that was simply on its first attempt of three (Vantage Robotics, 14 Sep,
+  // 13:32). The run succeeded at its job — it worked the card — and the card's own state says the
+  // rest. A run fails when the sweep itself could not do its work, not when an employee needs
+  // another go.
   return {
-    status: "FAILED",
+    status: "SUCCEEDED",
     summary: `"${card.title.slice(0, 60)}" attempt ${card.work_attempts} of ${MAX_WORK_ATTEMPTS} did not finish: ${detail.slice(0, 160)}. It will be tried again.`,
     card,
     outcome: "FAILED",

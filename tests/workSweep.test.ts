@@ -104,6 +104,7 @@ describe("assignment causes work", () => {
     for (let i = 1; i < MAX_WORK_ATTEMPTS; i++) {
       const out = await sweepOnce(env, new Date(NOW.getTime() + i * 60_000), { general: failing });
       expect(out.outcome).toBe("FAILED");
+      expect(out.status, "an attempt that needs another go is not a failed run").toBe("SUCCEEDED");
       expect(out.summary).toMatch(/will be tried again/);
       expect((await state(id)).state).toBe("IN_PROGRESS");
     }
@@ -167,4 +168,21 @@ describe("one job per tick", () => {
     expect(still.map((r) => r.job_key)).toEqual(["t_c", "t_b"]);
   });
 
+});
+
+describe("the employee sees what the firm already holds", () => {
+  it("a card titled for a company carries the company record and its deck reading into the history", async () => {
+    const { companyKnowledge } = await import("../src/worker/services/employeeWork");
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO canonical_company (id, canonical_name, status, privacy_label, created_by, firm_scope, sector, one_liner) VALUES ('cc_sensori_t', 'Sensori', 'ACTIVE', 'INTERNAL', 'test', 'west-peek', 'Functional beverage / CPG', 'A 12oz functional non-alcoholic sparkling beverage.')",
+    ).run();
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO pending_deck (id, company_id, filename, object_key, bytes, state, applied_json, firm_scope, read_at) VALUES ('pdk_t', 'cc_sensori_t', 'Sensori Deck.eml', 'k', 1, 'READ', ?1, 'west-peek', '2026-08-24T02:01:20.265Z')",
+    ).bind(JSON.stringify({ claims: ["61% of U.S. adults plan to drink less", "$4.2M ARR run-rate"], missing: ["Team bios"] })).run();
+    const lines = await companyKnowledge(env, "Deck: Sensori Deck");
+    expect(lines[0]).toMatch(/record for Sensori: sector Functional beverage/);
+    expect(lines[1]).toMatch(/Their deck \(Sensori Deck\.eml, read 2026-08-24\) claims: 61% of U\.S\. adults/);
+    expect(lines[2]).toMatch(/does not say: Team bios/);
+    expect(await companyKnowledge(env, "Find accelerators in Texas")).toEqual([]);
+  });
 });

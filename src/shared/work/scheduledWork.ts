@@ -58,6 +58,39 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     why: "So the event exists as a proposal to react to rather than a thing somebody has to start from nothing.",
     deliveredBy: ["Parker"],
   },
+  // EVERY JOB SAYS WHAT IT IS. Until 14 Sep 2026 five of these read "No description has been
+  // written for this job" and "Nobody is named as delivering this" on the Work page — machinery
+  // the operator was asked to switch on or off without being told what it did.
+  employee_work_sweep: {
+    what: "Works the cards your employees own. Every five minutes it picks up the oldest card waiting on an employee and runs it — the same thing as pressing the button on the card. A card ends Done with its findings, or Blocked with the question it needs you to answer.",
+    why: "So assigning work to an employee means it gets done, and \"in progress\" means somebody is actually on it.",
+    deliveredBy: ["the firm"],
+  },
+  deck_rebuild: {
+    what: "Rebuilds the LP deck: reads the current deck page by page, carries everything over, corrects every figure to the fund records, and proposes the new version on Fund strategy.",
+    why: "Runs when you send a version back — that opens a card for Preston — or when you press Run it now. Not on a timer: a deck is rebuilt when somebody asks, not every morning.",
+    deliveredBy: ["Preston"],
+  },
+  deck_reading: {
+    what: "Reads decks that arrived by email — sector, one-liner, claims and what the deck leaves out — and writes them onto the company's record.",
+    why: "So the employee who checks a company already has what its deck says, and nobody re-reads a deck by hand.",
+    deliveredBy: ["Wells"],
+  },
+  network_sync: {
+    what: "Loads the community from Network OS — new people, changed details, introductions — into this system's records.",
+    why: "So the community you see here is the community, not a copy that drifted last month.",
+    deliveredBy: ["the firm"],
+  },
+  diagnostics_sweep: {
+    what: "Checks the machinery: every integration, credential and lane the firm depends on, and raises a notice when one goes down or comes back.",
+    why: "So a broken connection is reported by the system, not discovered by a partner mid-task.",
+    deliveredBy: ["the firm"],
+  },
+  wednesday_prep: {
+    what: "Prepares each partner's packet for the Wednesday sync — what completed, what is waiting, and where the records and the deck disagree.",
+    why: "So the sync starts from a page, not from memory.",
+    deliveredBy: JOINT_CHIEFS,
+  },
 };
 
 /**
