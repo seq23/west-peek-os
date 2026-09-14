@@ -4,6 +4,7 @@ import type { Env } from "../src/worker/env";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
 import { MAX_WORK_ATTEMPTS, claimNextCard, settleAbandonedCards, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { runDueJobs } from "../src/worker/services/jobs";
+import { STEPS_PER_TICK } from "../src/shared/work/employeeLoop";
 
 /**
  * The sweep that works the cards employees own — proven without a model.
@@ -96,6 +97,40 @@ describe("assignment causes work", () => {
     const n = await notices(id);
     expect(n[0]!.title).toMatch(/Wyatt is blocked on/);
     expect(n[0]!.severity).toBe("WARNING");
+  });
+
+  it("a run that took its steps and ran out is PROGRESSED, costs no attempt, and the next tick continues the same card", async () => {
+    const id = await card("Deal flow: Helios Grid");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', work_steps = 5 WHERE id = ?1").bind(id).run();
+    let askedFor: number | null = null;
+    const out = await sweepOnce(env, NOW, {
+      general: async (_e, _ctx, _cardId, options) => {
+        askedFor = options.maxSteps;
+        return { finished: false, blocked: false, detail: "Searched …", steps: [{ action: "search", detail: "Searched …" }, { action: "note", detail: "nothing live" }] };
+      },
+    });
+    expect(askedFor, "the sweep asks for a few steps per tick, not the whole run").toBe(STEPS_PER_TICK);
+    expect(out.outcome).toBe("PROGRESSED");
+    expect(out.summary).toMatch(/The next tick continues it/);
+    const s = await state(id);
+    expect(s.state).toBe("IN_PROGRESS");
+    expect(s.work_attempts, "an invocation that did its work is not an attempt lost").toBe(0);
+    expect(s.lease_until).toBeNull();
+    const steps = (await env.WP_OS_DB.prepare("SELECT work_steps FROM work_card WHERE id = ?1").bind(id).first<{ work_steps: number }>())!.work_steps;
+    expect(steps, "a continued card keeps its step count; only a reopened (OPEN) card starts again").toBe(5);
+    const again = await claimNextCard(env, new Date(NOW.getTime() + 60_000));
+    expect(again?.id).toBe(id);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED', lease_until = NULL WHERE id = ?1").bind(id).run();
+  });
+
+  it("a card a person reopens starts its step allowance again", async () => {
+    const id = await card("Reopened");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', work_steps = 8 WHERE id = ?1").bind(id).run();
+    const claimed = await claimNextCard(env, NOW);
+    expect(claimed?.id).toBe(id);
+    const steps = (await env.WP_OS_DB.prepare("SELECT work_steps FROM work_card WHERE id = ?1").bind(id).first<{ work_steps: number }>())!.work_steps;
+    expect(steps).toBe(0);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED', lease_until = NULL WHERE id = ?1").bind(id).run();
   });
 
   it("three failed attempts end in BLOCKED with the failure on the card, never a fourth retry", async () => {

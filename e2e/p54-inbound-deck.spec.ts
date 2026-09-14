@@ -226,15 +226,7 @@ test("a deck for a company we have never heard of is still KEPT, not thrown away
   expect(Number(queued[0]!.n), "the attachment must survive even when the company does not exist yet").toBeGreaterThan(0);
 });
 
-test("a message too large to parse is stored, routed from its headers, and opens a card", async ({ page, request }) => {
-  /*
-   * THE FAILURE THIS EXISTS FOR HAPPENED IN PRODUCTION. Operator, 22 Aug 2026: "we got an updated
-   * deck for sensori overnight to os@joinwestpeek.com." It had arrived at 03:29, been logged
-   * `too_large` at 7,093,115 bytes, and been discarded — silently. She found out by asking.
-   *
-   * 400KB: comfortably over the handler's own 256KB parse cap, which is the boundary under test,
-   * and under miniflare's 1MiB local delivery limit. Production allows 25MiB.
-   */
+test("a message too large to parse is stored, and opens the analyst's own card — the same card a small deck opens", async ({ page, request }) => {
   const company = `Sensori ${Date.now()}`;
   await deliverMail(request, {
     from: `Founder <founder@sensori.example>`,
@@ -253,66 +245,39 @@ test("a message too large to parse is stored, routed from its headers, and opens
   expect(tooLarge, "an oversized message must be recorded, never silently discarded").toBeTruthy();
   const payload = JSON.stringify(tooLarge!.payload ?? tooLarge!.payload_json ?? "");
   expect(payload, "the size is on the record").toContain("bytes");
-  // Routed from the SUBJECT alone — headers are already parsed and cost nothing, which is the whole
-  // reason an unreadable body does not have to mean an unroutable message.
   expect(payload).toContain("#wpdealflow");
 
   /*
-   * A person can see it, and the card says where the message itself is.
-   *
-   * The whole message is streamed to the document store on arrival — "storing bytes to R2 is I/O,
-   * not CPU… while PARSING the same bytes would exhaust the 10ms budget" — and the card names the
-   * key, which is what makes the arrival RECOVERABLE rather than merely reported. That key on the
-   * card is the assertion: an R2 object nothing points at is the same as no object.
+   * THE SAME DOOR AS A SMALL DECK. Operator, 14 Sep 2026: "all sizes should go thru". This used to
+   * open a card headed "Too big to read" for the routing seat — a human-shaped card about a machine
+   * limit — and Sensori and Vynlo sat BLOCKED on that difference for three weeks. Now the analyst's
+   * "Deck: <Company>" card opens here exactly as for a small deck; the stored message is queued
+   * against it; the reader fills it in before the sweep lets the analyst start.
    */
   await signIn(page);
   await gotoSurface(page, "Work");
-  const card = page.locator('li[data-testid^="work-card-"]').filter({ hasText: "Too big to read" }).first();
+  const nothingHumanShaped = page.locator('li[data-testid^="work-card-"]').filter({ hasText: "Too big to read" });
+  await expect(nothingHumanShaped).toHaveCount(0);
+  const card = page.locator('li[data-testid^="work-card-"]').filter({ hasText: `Deck: ${company}` }).first();
   await expect(card).toBeVisible();
   await card.getByTestId(/^work-card-toggle-/).click();
   const body = card.locator('[data-testid^="work-card-findings-"]');
-  await expect(body).toContainText("too large to open inside one request");
-  await expect(body).toContainText("#wpdealflow");
+  await expect(body).toContainText("being read from the stored copy");
   // Where the message itself is kept, said explicitly — the operator must not have to go and hunt.
   await expect(body).toContainText("inbound-email/");
 
-  /*
-   * AND IT IS QUEUED FOR READING, which this test never checked and which production was not doing.
-   *
-   * Scooter sent two real decks on 23 Aug. Both reached R2, both opened a card — and neither reached
-   * `pending_deck`, so the card told Porter to go and read something nothing pointed at. The handler
-   * queued only when a company had already been matched from the subject, while migration `0135` had
-   * made `company_id` nullable specifically to stop that: "requiring a company here meant the bytes
-   * were discarded for exactly the case the operator described". The migration's comment was
-   * stricter than the code that shipped with it.
-   *
-   * Everything above this line passed throughout. An R2 object nothing points at is the same as no
-   * object, and this suite proved the pointer existed on the CARD without ever checking the QUEUE.
-   */
   const queued = queryLocalD1<{ n: number; company_id: string | null; work_card_id: string | null }>(
-    `SELECT COUNT(*) AS n, company_id, work_card_id FROM pending_deck WHERE object_key LIKE 'inbound-email/%'`,
+    `SELECT COUNT(*) AS n, company_id, work_card_id FROM pending_deck WHERE object_key LIKE 'inbound-email/%' ORDER BY created_at DESC`,
   );
   expect(Number(queued[0]!.n), "an oversized deck must be queued for reading, not only stored").toBeGreaterThan(0);
-  // Attached to the card, so an analyst opening the company later finds the deck already on the
-  // thing they are working rather than having to go looking for it.
-  expect(queued[0]!.work_card_id, "the queued deck names the card it arrived with").toBeTruthy();
+  expect(queued[0]!.work_card_id, "the queued deck names the analyst's card").toBeTruthy();
+  expect(queued[0]!.company_id, "the company is registered at the door, not left for the reader").toBeTruthy();
+  const owner = queryLocalD1<{ owner_id: string; title: string }>(`SELECT owner_id, title FROM work_card WHERE id = '${queued[0]!.work_card_id}'`);
+  expect(owner[0]!.title).toBe(`Deck: ${company}`);
+  expect(owner[0]!.owner_id).toBe("aie_wyatt");
 });
 
-test("an oversized deck is kept and routed even when the tag is in the body and the subject is encoded", async ({ request }) => {
-  /*
-   * SCOOTER'S ACTUAL MESSAGE, 23 Aug 2026, and every assumption in the path was wrong for it.
-   *
-   * Operator: "the subjects will all be different its the #hashtag trigger that matters", and "the
-   * hashtag can be in the subject or the body". The oversize path routes from HEADERS ALONE, because
-   * walking a multi-megabyte MIME tree does not fit in a Worker's 10ms of CPU — so a tag written in
-   * the body could not be seen, and both real cards read "It carries no trigger tag."
-   *
-   * Worse, the raw header was never MIME-decoded on this path. A forward carrying an em dash arrives
-   * as `=?utf-8?Q?Fwd:_Vynlo_=E2=80=94_pre-seed?=`, which is what the card title actually said — and
-   * the company match, the trigger scan and the prefix strip all ran against that encoded string.
-   *
-   * The scan now happens in the scheduled reader, which has its own budget and the whole message.
-   */
+test("an oversized deck is kept and handed to the analyst even when the tag is in the body and the subject is encoded", async ({ request }) => {
   const marker = `Vynlo ${Date.now()}`;
   await deliverMail(request, {
     from: `Scooter Taylor <scooter@westpeek.ventures>`,
@@ -330,13 +295,16 @@ test("an oversized deck is kept and routed even when the tag is in the body and 
   );
   expect(Number(queued[0]!.n), "a deck must be kept even when nothing in the headers named a company").toBeGreaterThan(0);
 
-  // And the title a partner reads is words, not an encoding. The card used to carry the raw
-  // `=?utf-8?Q?...?=` string, which is unreadable and made every downstream match run on gibberish.
-  const cards = queryLocalD1<{ title: string }>(
-    `SELECT title FROM work_card WHERE title LIKE 'Too big to read:%' ORDER BY created_at DESC LIMIT 1`,
+  // The name is read out of the decoded subject with its forwarding prefixes stripped, and the
+  // analyst's card carries words, not an encoding. It used to carry the raw `=?utf-8?Q?...?=`.
+  const cards = queryLocalD1<{ title: string; owner_id: string }>(
+    `SELECT title, owner_id FROM work_card WHERE title LIKE 'Deck: %' ORDER BY created_at DESC LIMIT 1`,
   );
   expect(cards[0]!.title).not.toContain("=?utf-8?");
   expect(cards[0]!.title).toContain(marker.split(" ")[0]);
+  expect(cards[0]!.owner_id).toBe("aie_wyatt");
+  const none = queryLocalD1<{ n: number }>(`SELECT COUNT(*) AS n FROM work_card WHERE title LIKE 'Too big to read:%'`);
+  expect(Number(none[0]!.n)).toBe(0);
 });
 
 test("a #wpnetwork message whose person cannot be read opens a card instead of failing quietly", async ({ page, request }) => {
