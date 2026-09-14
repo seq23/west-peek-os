@@ -133,3 +133,25 @@ describe("the card becomes the next version, with a PDF", () => {
     expect(out.version.document_id).not.toBeNull();
   });
 });
+
+describe("the rebuild pulls from the current deck", () => {
+  it("carries every transcribed page and binds each record-held figure to the record, listing what it corrected", async () => {
+    const { slidesFromTranscript, figuresFromRecords } = await import("../src/worker/services/deck");
+    const figures = await figuresFromRecords(env, FUND);
+    const pages = [
+      { page: 1, headline: "COMMUNITY IS THE NEW MOAT", standfirst: "Fund I — early stage", lines: [{ text: "August 2026 · For Accredited Investors Only" }] },
+      { page: 2, headline: "Agenda", lines: [{ text: "Thesis" }, { text: "Team" }, { text: "Fund construction" }, { text: "Image: a photo of the partners" }] },
+      { page: 7, headline: "Fund construction", lines: [{ label: "Target fund size", bind: "fund_size", was: "$25M" }, { label: "Reserve", bind: "reserve_pct", was: "40%" }, { text: "25 positions over three years" }] },
+    ];
+    const out = slidesFromTranscript(pages, figures);
+    expect(out.slides.map((s) => s.headline)).toEqual(["COMMUNITY IS THE NEW MOAT", "Agenda", "Fund construction"]);
+    // Nothing dropped: prose lines carry verbatim.
+    expect(out.slides[1]!.slots).toHaveLength(4);
+    expect(out.slides[1]!.slots[3]).toEqual({ kind: "text", text: "Image: a photo of the partners" });
+    // The records win: the fund-size line is bound to the record, and the substitution is listed.
+    expect(out.slides[2]!.slots[0]).toEqual({ kind: "figure", label: "Target fund size", bind: "fund_size" });
+    expect(out.corrections).toEqual([{ page: 7, field: "fund_size", was: "$25M", now: "$30M" }]);
+    // A figure that already matched is bound but not a correction.
+    expect(out.corrections.some((c) => c.field === "reserve_pct")).toBe(false);
+  });
+});

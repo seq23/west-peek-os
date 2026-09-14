@@ -115,6 +115,50 @@ async function recordAcknowledgement(
   }
 }
 
+/**
+ * WHAT THE FIRM ALREADY HOLDS ON THE COMPANY THE CARD IS ABOUT.
+ *
+ * 14 Sep 2026: Wyatt's "Deck: Sensori" card was blocked with "the actual deck attachment content
+ * was not included in what I received". It had been — the deck was read on 24 August, its sector,
+ * one-liner and twenty claims applied to the company record — but the card carried only the email
+ * body, and nothing put the company record in front of the employee working the card. Two
+ * components each keeping their own list, no link. This is the link: a card titled for a company
+ * ("Deck: X", "Deal flow: X", "Scouted: X") gets what the OS knows about X — the record, and the
+ * reading of the deck it sent — as the first lines of its history.
+ */
+export async function companyKnowledge(env: Env, title: string): Promise<string[]> {
+  const m = /^(?:Deck|Deal flow|Scouted):\s*(.+?)(?:\s+Deck)?$/i.exec(title.trim());
+  if (!m) return [];
+  const name = m[1]!.trim();
+  const company = await env.WP_OS_DB.prepare(
+    "SELECT id, canonical_name, website, sector, one_liner, description FROM canonical_company WHERE lower(canonical_name) = lower(?1) OR lower(canonical_name) LIKE lower(?2) LIMIT 1",
+  )
+    .bind(name, `${name}%`)
+    .first<{ id: string; canonical_name: string; website: string | null; sector: string | null; one_liner: string | null; description: string | null }>();
+  if (!company) return [];
+  const out = [
+    `The firm's record for ${company.canonical_name}: ` +
+      [company.sector ? `sector ${company.sector}` : null, company.one_liner, company.website ? `website ${company.website}` : null, company.description]
+        .filter(Boolean)
+        .join(" · "),
+  ];
+  const reading = await env.WP_OS_DB.prepare(
+    "SELECT filename, applied_json, read_at FROM pending_deck WHERE company_id = ?1 AND state = 'READ' ORDER BY read_at DESC LIMIT 1",
+  )
+    .bind(company.id)
+    .first<{ filename: string; applied_json: string | null; read_at: string | null }>();
+  if (reading?.applied_json) {
+    try {
+      const applied = JSON.parse(reading.applied_json) as { claims?: string[]; missing?: string[] };
+      if (applied.claims?.length) out.push(`Their deck (${reading.filename}, read ${String(reading.read_at).slice(0, 10)}) claims: ${applied.claims.slice(0, 12).join(" | ")}`);
+      if (applied.missing?.length) out.push(`The deck does not say: ${applied.missing.slice(0, 8).join(" | ")}`);
+    } catch {
+      /* an unreadable reading is simply not history */
+    }
+  }
+  return out;
+}
+
 async function historyFor(env: Env, cardId: string): Promise<string[]> {
   // FAILURES CAUSED BY A DEFECT THAT NO LONGER EXISTS ARE NOT HISTORY, THEY ARE NOISE. Early runs
   // drove the browser at DuckDuckGo, which returns a bot challenge; those attempts are still on the
@@ -218,7 +262,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string): Pro
       ]
         .filter((block) => block.length > 0)
         .join("\n"),
-      history: await historyFor(env, card.id),
+      history: [...(await companyKnowledge(env, card.title)), ...(await historyFor(env, card.id))],
       // Re-read each step: a partner may leave a note while this is already running.
       steering: await unansweredNotes(env, card.id),
     };
