@@ -11,6 +11,8 @@ import { deliver } from "./deliverables";
 import { guidanceBlock } from "../../shared/skills/library";
 import { writtenGuidance } from "./firmSkills";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
+import { createWorkCardInternal } from "./workCards";
+import { seatId } from "../../shared/intake/emailTriggers";
 import { buildDesignReviewPrompt } from "../../shared/design/reviewRubric";
 import { z } from "zod";
 import { ASK_PROMPT_VERSION, buildDraftPrompt, parseAnswer } from "../../shared/work/askToCard";
@@ -62,6 +64,7 @@ interface CardRow {
   allows_browser: number;
   prompt: string | null;
   firm_scope: string;
+  requested_by_email?: string | null;
 }
 
 export interface StepOutcome {
@@ -190,6 +193,86 @@ export async function deckStillBeingRead(env: Env, title: string, cardId: string
     .first<{ filename: string }>();
 }
 
+/** Every other ACTIVE employee, name and role, for the hand-off menu. */
+async function colleaguesOf(env: Env, employeeId: string): Promise<Array<{ name: string; role: string }>> {
+  const rows = (
+    await env.WP_OS_DB.prepare("SELECT name, role FROM ai_employee WHERE status = 'ACTIVE' AND id != ?1 ORDER BY name")
+      .bind(employeeId)
+      .all<{ name: string; role: string }>()
+  ).results ?? [];
+  return rows;
+}
+
+/**
+ * Hand a card to the colleague whose job it is.
+ *
+ * WHY THIS EXISTS. A partner's emailed request lands on their chief of staff's desk with the
+ * instruction "work out who should do this and assign them" — and the employee loop had no way to
+ * assign anything. The chief could search, visit, note, block or claim it done; the one thing the
+ * brief asked for was the one move not on the menu. So every emailed request was either worked by
+ * the wrong seat or blocked back to the partner who sent it.
+ *
+ * The new card carries the brief in the assigner's words, the original request underneath, who
+ * asked (`requested_by_email`, so the answer goes back to them), and where it came from. The
+ * assigner's card closes as handed on — its outcome is the hand-off, not the work.
+ */
+export async function assignCard(
+  env: Env,
+  card: CardRow,
+  by: { id: string; name: string },
+  to: string,
+  brief: string,
+): Promise<{ ok: true; cardId: string; toName: string } | { ok: false; reason: string }> {
+  const target = await env.WP_OS_DB.prepare("SELECT id, name, role, status FROM ai_employee WHERE lower(name) = lower(?1) OR id = ?2")
+    .bind(to.trim(), seatId(to.trim()))
+    .first<{ id: string; name: string; role: string; status: string }>();
+  if (!target) return { ok: false, reason: `nobody called "${to}" works here` };
+  if (target.id === by.id) return { ok: false, reason: "a card cannot be assigned to the employee who already holds it" };
+  if (target.status !== "ACTIVE") return { ok: false, reason: `${target.name} is not employed right now` };
+  const created = await createWorkCardInternal(
+    env,
+    {
+      id: `system:assign:${by.id}`,
+      email: "work-sweep@joinwestpeek.com",
+      fullName: by.name,
+      status: "ACTIVE",
+      roles: ["MANAGING_PARTNER"],
+      authorityScopes: [{ scopeKey: "firm_scope", scopeValue: card.firm_scope }],
+    },
+    {
+      title: brief.split(/\r?\n/)[0]!.slice(0, 90),
+      description: [
+        `${by.name} handed this to you${card.requested_by_email ? `; it was asked for by ${card.requested_by_email} by email` : ""}.`,
+        "",
+        "THE BRIEF, in their words:",
+        brief,
+        "",
+        "--- the original request ---",
+        (card.description ?? "").slice(0, 4000),
+      ].join("\n"),
+      owner_type: "AI",
+      owner_id: target.id,
+      priority: "NORMAL",
+      firm_scope: card.firm_scope,
+      next_action: brief.slice(0, 300),
+      prompt: card.prompt ?? undefined,
+    },
+  );
+  await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2, assigned_from_card_id = ?3 WHERE id = ?1")
+    .bind(created.id, card.requested_by_email ?? null, card.id)
+    .run();
+  await appendEvent(env, {
+    eventType: "work_card.assigned",
+    actorType: "ai_employee",
+    actorId: by.id,
+    objectType: "work_card",
+    objectId: created.id,
+    firmScope: card.firm_scope,
+    payload: { from_card: card.id, to: target.id, requested_by_email: card.requested_by_email ?? null },
+  });
+  return { ok: true, cardId: created.id, toName: target.name };
+}
+
 async function historyFor(env: Env, cardId: string): Promise<string[]> {
   // FAILURES CAUSED BY A DEFECT THAT NO LONGER EXISTS ARE NOT HISTORY, THEY ARE NOISE. Early runs
   // drove the browser at DuckDuckGo, which returns a bot challenge; those attempts are still on the
@@ -305,6 +388,8 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
       history: [...(await companyKnowledge(env, card.title, card.id)), ...(await historyFor(env, card.id))],
       // Re-read each step: a partner may leave a note while this is already running.
       steering: await unansweredNotes(env, card.id),
+      // Everyone else who is employed, so the card can be handed to the seat whose job it is.
+      colleagues: await colleaguesOf(env, employee.id),
     };
 
     const { run } = await runAi(env, {
@@ -355,10 +440,10 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
     }
     const outcome = await applyDecision(env, ctx, card, decision, step, employee.name, employee.id, machineId);
     steps.push(outcome);
-    if (outcome.action === "done" || outcome.action === "blocked" || outcome.action === "waiting") break;
+    if (outcome.action === "done" || outcome.action === "assigned" || outcome.action === "blocked" || outcome.action === "waiting") break;
   }
 
-  const finished = steps.some((s) => s.action === "done");
+  const finished = steps.some((s) => s.action === "done" || s.action === "assigned");
   const blocked = steps.some((s) => s.action === "blocked" || s.action === "waiting");
 
   await appendEvent(env, {
@@ -525,6 +610,18 @@ async function applyDecision(
   if (d.action === "note") {
     await appendFinding(env, card, d.finding!);
     return { step, action: "noted", detail: d.finding! };
+  }
+
+  if (d.action === "assign") {
+    const handed = await assignCard(env, card, { id: employeeId, name: employeeName }, d.to!, d.brief!);
+    if (!handed.ok) {
+      await appendFinding(env, card, `Tried to hand this on: ${handed.reason}.`);
+      return { step, action: "noted", detail: `could not hand this on: ${handed.reason}` };
+    }
+    const line = `Handed to ${handed.toName} as work card ${handed.cardId}: ${d.brief!.slice(0, 300)}`;
+    await appendFinding(env, card, line);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1").bind(card.id).run();
+    return { step, action: "assigned", detail: line };
   }
 
   if (d.action === "blocked") {

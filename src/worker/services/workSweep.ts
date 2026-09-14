@@ -5,6 +5,7 @@ import { appendEvent } from "../events";
 import { notifyPartners } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
+import { replyToRequester } from "./requestReply";
 
 /**
  * The sweep that works the cards employees own (14 Sep 2026).
@@ -60,6 +61,7 @@ export interface SweepCard {
   state: string;
   work_attempts: number;
   firm_scope: string;
+  requested_by_email?: string | null;
 }
 
 /** Who the sweep is when it works a card: the firm, acting on its own assignment. */
@@ -90,7 +92,7 @@ function sweepContext(env: Env, firmScope: string): RouteContext {
 export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | null> {
   const nowIso = now.toISOString();
   const candidate = await env.WP_OS_DB.prepare(
-    `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope
+    `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email
        FROM work_card
       WHERE owner_type = 'AI' AND owner_id IS NOT NULL
         AND state IN ('OPEN', 'IN_PROGRESS')
@@ -134,30 +136,37 @@ async function employeeName(env: Env, id: string | null): Promise<string> {
 export async function announceOutcome(
   env: Env,
   card: SweepCard,
-  outcome: "DONE" | "BLOCKED",
+  outcome: "DONE" | "BLOCKED" | "HANDED_ON",
   detail: string,
-): Promise<void> {
+): Promise<{ emailed: string | null }> {
   const who = await employeeName(env, card.owner_id);
   await notifyPartners(env, {
     kind: "MEETING",
-    severity: outcome === "DONE" ? "INFO" : "WARNING",
+    severity: outcome === "BLOCKED" ? "WARNING" : "INFO",
     title:
       outcome === "DONE"
         ? `${who} finished "${card.title.slice(0, 70)}" — check it on Work`
-        : `${who} is blocked on "${card.title.slice(0, 70)}"`,
+        : outcome === "HANDED_ON"
+          ? `${who} handed "${card.title.slice(0, 70)}" to a colleague`
+          : `${who} is blocked on "${card.title.slice(0, 70)}"`,
     body: detail.slice(0, 600),
     objectType: "work_card",
     objectId: card.id,
     dedupeKey: `work_card:${card.id}:${outcome}:${card.work_attempts}`,
     firmScope: card.firm_scope,
   });
+  // A REQUEST THAT CAME BY EMAIL IS ANSWERED BY EMAIL — at the end, not at the hand-off. The
+  // partner asked for a thing, not for a tour of who holds the card.
+  if (outcome === "HANDED_ON") return { emailed: null };
+  const reply = await replyToRequester(env, card, outcome, who, detail);
+  return { emailed: reply.sent ? reply.to : null };
 }
 
 export interface SweepResult {
   status: "SUCCEEDED" | "FAILED";
   summary: string;
   card: SweepCard | null;
-  outcome: "DONE" | "BLOCKED" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK";
+  outcome: "DONE" | "BLOCKED" | "HANDED_ON" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK";
 }
 
 /** How long a card waits for its deck to be read before the sweep looks at it again. */
@@ -176,7 +185,7 @@ export const DECK_WAIT_MINUTES = 15;
 export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCard[]> {
   const rows = (
     await env.WP_OS_DB.prepare(
-      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope
+      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email
          FROM work_card
         WHERE owner_type = 'AI' AND state = 'IN_PROGRESS'
           AND COALESCE(work_attempts, 0) >= ?1
@@ -234,6 +243,7 @@ export async function sweepOnce(
   // ran out of steps for this tick? Then the card is progressed, not failed, and the next tick
   // continues it. Only a run that died, or an employee that chose nothing usable, costs an attempt.
   let progressed = false;
+  let handedOn = false;
   try {
     if (card.kind === "DECK_REWORK") {
       const run = runners.deckRework ?? (await import("./deck")).runDeckRework;
@@ -248,6 +258,7 @@ export async function sweepOnce(
       blocked = out.blocked;
       const last = out.steps[out.steps.length - 1];
       detail = last ? last.detail : out.detail;
+      handedOn = last?.action === "assigned";
       progressed = out.steps.length > 0 && out.steps.every((s) => !["failed", "unclear"].includes(s.action));
     }
   } catch (err) {
@@ -261,8 +272,21 @@ export async function sweepOnce(
     .first<{ state: string; next_action: string | null }>();
   const state = fresh?.state ?? card.state;
 
+  if (handedOn) {
+    await announceOutcome(env, card, "HANDED_ON", detail);
+    await appendEvent(env, {
+      eventType: "work_card.swept",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { outcome: "HANDED_ON", attempt: card.work_attempts },
+    });
+    return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" ${detail.slice(0, 160)}`, card, outcome: "HANDED_ON" };
+  }
   if (state === "DONE" || finished) {
-    await announceOutcome(env, card, "DONE", detail || "Finished. The findings are on the card.");
+    const { emailed } = await announceOutcome(env, card, "DONE", detail || "Finished. The findings are on the card.");
     await appendEvent(env, {
       eventType: "work_card.swept",
       actorType: "system",
@@ -272,7 +296,7 @@ export async function sweepOnce(
       firmScope: card.firm_scope,
       payload: { outcome: "DONE", attempt: card.work_attempts },
     });
-    return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" finished (attempt ${card.work_attempts}): ${detail.slice(0, 160)}`, card, outcome: "DONE" };
+    return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" finished (attempt ${card.work_attempts})${emailed ? `, ${emailed} emailed` : ""}: ${detail.slice(0, 160)}`, card, outcome: "DONE" };
   }
   if (state === "BLOCKED" || blocked) {
     const question = fresh?.next_action ?? detail;

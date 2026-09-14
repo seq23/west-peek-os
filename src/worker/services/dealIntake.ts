@@ -835,6 +835,11 @@ export async function openAssignmentCard(
       "wants to approve something does it where approvals happen. If what is asked needs an approval " +
       "or would reach someone outside the firm, raise it for their decision rather than performing it.",
   });
+  // WHO ASKED, so the answer goes back to their inbox when the work is done — and only ever to the
+  // authenticated address, never one read out of the message. See services/requestReply.ts.
+  await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2 WHERE id = ?1")
+    .bind(card.id, input.partnerAddress.toLowerCase())
+    .run();
   return card.id;
 }
 
