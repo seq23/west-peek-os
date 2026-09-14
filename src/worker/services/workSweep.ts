@@ -163,6 +163,34 @@ export const DECK_WAIT_MINUTES = 15;
  * Work one card. `runners` is injectable so tests can prove the sweep's own logic — claim, attempt
  * count, notices, the three-strikes rule — without a model or a browser.
  */
+/**
+ * A THIRD ATTEMPT THAT DIED MID-RUN LEFT THE CARD NOWHERE. Helios Grid, 14 Sep 14:09: the run was
+ * killed hard (no `finally` ran), so the lease expired with `work_attempts = 3` and the card still
+ * IN_PROGRESS — unclaimable (at the cap) and never finalised (the cap check lives in the run that
+ * died). Every sweep now settles such cards first: BLOCKED, the failure named, the partners told.
+ */
+export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCard[]> {
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope
+         FROM work_card
+        WHERE owner_type = 'AI' AND state = 'IN_PROGRESS'
+          AND COALESCE(work_attempts, 0) >= ?1
+          AND lease_until IS NOT NULL AND lease_until < ?2`,
+    )
+      .bind(MAX_WORK_ATTEMPTS, now.toISOString())
+      .all<SweepCard>()
+  ).results ?? [];
+  for (const card of rows) {
+    const why = `Could not finish after ${MAX_WORK_ATTEMPTS} attempts. The last attempt was cut off before it could report (the run was killed mid-step). Decide what to do with it: reassign, rewrite the brief, or cancel.`;
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2, lease_until = NULL WHERE id = ?1 AND state = 'IN_PROGRESS'")
+      .bind(card.id, why)
+      .run();
+    await announceOutcome(env, card, "BLOCKED", why);
+  }
+  return rows;
+}
+
 export async function sweepOnce(
   env: Env,
   now: Date,
@@ -171,6 +199,7 @@ export async function sweepOnce(
     deckRework?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
+  await settleAbandonedCards(env, now);
   const card = await claimNextCard(env, now);
   if (!card) {
     return { status: "SUCCEEDED", summary: "nothing waiting: every card an employee owns is done, blocked, or being worked", card: null, outcome: "NOTHING_WAITING" };
