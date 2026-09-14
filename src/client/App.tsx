@@ -1813,7 +1813,7 @@ function DocumentsPage() {
           <iframe
             title={focused.title}
             src={`/api/documents/${focused.id}/download`}
-            style={{ width: "100%", height: "70vh", border: "1px solid var(--line, #ddd)", background: "#fff" }}
+            style={{ width: "100%", height: "70vh", border: "1px solid var(--wp-line)", background: "var(--wp-surface)" }}
           />
         </div>
       )}

@@ -176,7 +176,7 @@ export function JobsPage({ me }: { me: MeResponse }) {
           return (
           <li key={j.id} className={on ? "card job-card is-on" : "card job-card"} data-testid={`job-${j.job_key}`}>
             <div className="job-card-head">
-              <span className={on ? "badge badge-ok" : "badge badge-gate"}>{on ? "On" : j.job_key === "deck_rebuild" ? "On request" : "Off"}</span>
+              <span className={on ? "badge badge-ok" : "badge badge-gate"}>{on ? "Running" : j.job_key === "deck_rebuild" ? "On request" : "Switched off"}</span>
               <h3 className="job-card-title" style={{ display: "inline", marginLeft: 8 }}>{j.name}</h3>
               {j.dead_letters > 0 && <span className="badge badge-bad">{j.dead_letters} stuck</span>}
             </div>
