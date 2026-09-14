@@ -186,7 +186,10 @@ export async function pullSnapshot(env: Env, fetchImpl: typeof fetch = fetch): P
   try {
     // fresh=1 so a sync reads current state rather than Network OS's 45-second snapshot cache;
     // a sync receipt recording stale rows would be worse than a slower call.
-    const res = await fetchImpl(`${base}${SNAPSHOT_PATH}?fresh=1`, {
+    // ONLY THE TWO TABS THIS READS. The snapshot used to be asked for whole — eight tabs, every
+    // row parsed and re-keyed in one Network OS invocation — and on 14 Sep 2026 that crossed the
+    // Free plan's CPU limit: every pull for two hours answered 503 / Cloudflare error 1102.
+    const res = await fetchImpl(`${base}${SNAPSHOT_PATH}?fresh=1&tabs=contacts,relationship_touches`, {
       method: "GET",
       headers: { cookie: `wpn_session=${session}`, accept: "application/json" },
       signal: controller.signal,

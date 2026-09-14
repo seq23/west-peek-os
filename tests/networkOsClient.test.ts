@@ -119,6 +119,8 @@ describe("pulling a snapshot", () => {
     }) as unknown as typeof fetch;
     await pullSnapshot(CONFIGURED, spy);
     expect(seenUrl).toContain("/api/sheets/snapshot");
+    // Only what the pull reads — the whole snapshot crossed Network OS's CPU limit on 14 Sep 2026.
+    expect(seenUrl).toContain("tabs=contacts,relationship_touches");
     // fresh=1 bypasses Network OS's 45s cache: a sync receipt recording stale rows is worse than
     // a slower call.
     expect(seenUrl).toContain("fresh=1");
