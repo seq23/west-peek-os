@@ -104,6 +104,7 @@ describe("assignment causes work", () => {
     for (let i = 1; i < MAX_WORK_ATTEMPTS; i++) {
       const out = await sweepOnce(env, new Date(NOW.getTime() + i * 60_000), { general: failing });
       expect(out.outcome).toBe("FAILED");
+      expect(out.status, "an attempt that needs another go is not a failed run").toBe("SUCCEEDED");
       expect(out.summary).toMatch(/will be tried again/);
       expect((await state(id)).state).toBe("IN_PROGRESS");
     }

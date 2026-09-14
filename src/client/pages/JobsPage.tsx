@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
-import { JOB_FACTS, JOB_KINDS, cadenceInWords, delivererLine, delivererNames } from "@shared/work/scheduledWork";
+import { JOB_FACTS, cadenceInWords, delivererLine, delivererNames } from "@shared/work/scheduledWork";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
 /**
@@ -148,6 +148,13 @@ export function JobsPage({ me }: { me: MeResponse }) {
         jobs quietly working. A page where the healthy and the broken are interleaved by job_key
         makes you read all of it to find the one that matters.
       */}
+      {/*
+        ONE ROW PER JOB. Eight tall cards, each with its own buttons and a folded run trail, read as
+        eight separate things to worry about; the operator's verdict (14 Sep 2026) was that the page
+        did not make sense. A job is one line: is it on, what it does, who does it, how often, and
+        how its last run went — with the reason inline when it failed, because a red word with no
+        sentence beside it is a question, not information. Actions stay on the row.
+      */}
       <ul className="job-grid" data-testid="job-list">
         {[...(jobs.data?.jobs ?? [])]
           .sort((a, b) => {
@@ -155,60 +162,51 @@ export function JobsPage({ me }: { me: MeResponse }) {
               j.dead_letters > 0 || (j.status === "ACTIVE" && j.target_employee_status && j.target_employee_status !== "ACTIVE")
                 ? 0
                 : j.status === "ACTIVE"
-                  ? 2
-                  : 1;
+                  ? 1
+                  : 2;
             return trouble(a) - trouble(b) || a.name.localeCompare(b.name);
           })
           .map((j) => {
           const facts = JOB_FACTS[j.job_key];
-          const kind = JOB_KINDS[j.kind];
           const names = delivererNames(j);
           const on = j.status === "ACTIVE";
-          // The silent failure this page existed without: switched on, and its employee is not.
           const stalled = on && j.target_employee_status !== null && j.target_employee_status !== "ACTIVE";
+          const last = j.recent_runs[0] ?? null;
+          const lastFailed = last ? last.status !== "SUCCEEDED" : false;
           return (
           <li key={j.id} className={on ? "card job-card is-on" : "card job-card"} data-testid={`job-${j.job_key}`}>
             <div className="job-card-head">
-              <span className={on ? "badge badge-ok" : "badge badge-gate"}>{on ? "Running" : "Switched off"}</span>
-              <span className="badge" title={kind?.means}>{kind?.label ?? j.kind}</span>
+              <span className={on ? "badge badge-ok" : "badge badge-gate"}>{on ? "On" : j.job_key === "deck_rebuild" ? "On request" : "Off"}</span>
+              <h3 className="job-card-title" style={{ display: "inline", marginLeft: 8 }}>{j.name}</h3>
               {j.dead_letters > 0 && <span className="badge badge-bad">{j.dead_letters} stuck</span>}
             </div>
-
-            <h3 className="job-card-title">{j.name}</h3>
             <p className="small">{facts?.what ?? "No description has been written for this job."}</p>
-            {facts && <p className="muted small">{facts.why}</p>}
-
-            <p className="job-byline small">
-              {names.length === 0 ? (
-                <span className="muted">{delivererLine(names)}</span>
-              ) : (
-                <>
-                  <span className="muted">Delivered by</span> {names.map((n) => <Deliverer key={n} name={n} />)}
-                </>
-              )}
-            </p>
-
             <p className="muted small">
-              {cadenceInWords(j)}
-              {on
-                ? j.next_run_at
-                  ? ` · next ${new Date(j.next_run_at).toLocaleString()}`
-                  : " · not scheduled yet"
-                : " · not running"}
+              {names.length === 0 ? delivererLine(names) : <>By {names.map((n) => <Deliverer key={n} name={n} />)}</>}
+              {" · "}{cadenceInWords(j)}
+              {on ? (j.next_run_at ? ` · next ${new Date(j.next_run_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : " · not scheduled yet") : ""}
             </p>
-
+            {last ? (
+              <p className={lastFailed ? "notice small" : "muted small"} data-testid={`job-runs-${j.job_key}`}>
+                <span className={runBadge(last.status)}>{last.status}</span>{" "}
+                {new Date(last.started_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                {last.outcome_summary ? ` — ${last.outcome_summary.slice(0, 220)}` : ""}
+                {lastFailed && last.error ? ` — ${last.error.slice(0, 220)}` : ""}
+              </p>
+            ) : (
+              <p className="muted small" data-testid={`job-runs-${j.job_key}`}>Never run.</p>
+            )}
             {stalled && (
               <p className="notice small" data-testid={`job-stalled-${j.job_key}`}>
                 This is switched on, but {j.target_id} is {String(j.target_employee_status).toLowerCase()} — so it
                 cannot actually run. Activate them on Team → Employees.
               </p>
             )}
-            {j.pause_reason && <p className="muted small">Switched off because: {j.pause_reason}</p>}
-
+            {!on && j.pause_reason && <p className="muted small">{j.pause_reason}</p>}
             <div className="form-row job-card-actions">
               <button
                 type="button"
-                className={on ? undefined : "btn-strong"}
+                className="link-button"
                 data-testid={`job-toggle-${j.job_key}`}
                 onClick={async () => {
                   const res = await api<{ error?: string }>(`/api/jobs/${j.job_key}/status`, {
@@ -223,9 +221,10 @@ export function JobsPage({ me }: { me: MeResponse }) {
               </button>
               <button
                 type="button"
+                className="link-button"
                 data-testid={`job-run-${j.job_key}`}
                 onClick={async () => {
-                  const res = await api<{ run?: { status: string; outcome_summary: string } }>(`/api/jobs/${j.job_key}/run`, { method: "POST" });
+                  const res = await api<{ run?: { status: string; outcome_summary: string }; error?: string }>(`/api/jobs/${j.job_key}/run`, { method: "POST" });
                   setMessage(
                     res.data?.run ? `${j.name}: ${res.data.run.status} — ${res.data.run.outcome_summary}` : `Run failed (HTTP ${res.status}).`,
                   );
@@ -234,32 +233,20 @@ export function JobsPage({ me }: { me: MeResponse }) {
               >
                 Run it now
               </button>
+              {j.recent_runs.length > 1 && (
+                <details className="job-runs" style={{ display: "inline-block" }}>
+                  <summary className="muted small">{j.recent_runs.length} recent runs</summary>
+                  <ul className="card-list small">
+                    {j.recent_runs.map((r) => (
+                      <li key={r.id}>
+                        <span className={runBadge(r.status)}>{r.status}</span> {new Date(r.started_at).toLocaleString()}
+                        {r.outcome_summary ? ` — ${r.outcome_summary}` : ""}{r.error ? ` — ${r.error}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
-
-            {/* The run trail is folded away. It is the right thing to KEEP — a job that says it
-                succeeded while keeping zero items is only visible in its history — and the wrong
-                thing to lead with: four identical SUCCEEDED lines per job pushed the next job off
-                the screen, so the page read as a log rather than as a list of what runs. */}
-            {j.recent_runs.length === 0 ? (
-              <p className="muted small" data-testid={`job-runs-${j.job_key}`}>Never run.</p>
-            ) : (
-              <details className="job-runs" data-testid={`job-runs-${j.job_key}`}>
-                <summary>
-                  <span className={runBadge(j.recent_runs[0]!.status)}>{j.recent_runs[0]!.status}</span>{" "}
-                  last run {new Date(j.recent_runs[0]!.started_at).toLocaleString()}
-                  {j.recent_runs.length > 1 ? ` · ${j.recent_runs.length} runs recorded` : ""}
-                </summary>
-                <ul className="card-list small">
-                  {j.recent_runs.map((r) => (
-                    <li key={r.id}>
-                      <span className={runBadge(r.status)}>{r.status}</span> attempt {r.attempt} · {r.trigger_kind} ·{" "}
-                      {new Date(r.started_at).toLocaleString()}
-                      {r.outcome_summary ? ` — ${r.outcome_summary}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
           </li>
           );
         })}

@@ -3758,9 +3758,9 @@ export function App() {
                   is the scheduled half of this page. */}
               <div className="home-section-head work-scheduled-head">
                 <h3>
-                  <span className="chev" aria-hidden="true" /> Scheduled work
+                  <span className="chev" aria-hidden="true" /> Runs on a clock
                 </h3>
-                <span className="muted small">machinery, not anything somebody carries</span>
+                <span className="muted small">the machinery — what it does, who does it, and how its last run went</span>
               </div>
               <JobsPage me={me.data!} />
             </>

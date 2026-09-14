@@ -48,6 +48,8 @@ interface WorkCardRow {
   owner_name?: string | null;
   owner_role?: string | null;
   allows_browser?: number;
+  kind?: string | null;
+  work_attempts?: number;
   looks?: Array<{
     id: string; objective: string; start_url: string; status: string;
     result_text: string | null; refusal_reason: string | null;
@@ -159,27 +161,36 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
    * grouping that buries it is hiding the thing worth seeing. Yours comes next: it is the only band
    * you can act on without talking to anybody.
    */
+  /*
+   * SECTIONS BY WHAT THEY MEAN TO YOU, NOT BY WHO HOLDS THE CARD. Operator, 14 Sep 2026: "the entire
+   * WORK page needs to be reworked... it needs to make sense and be self explanatory." The old bands
+   * (nobody / yours / your partner / your employees) answered "who has it", which is not the
+   * question you open this page with. The question is: what needs ME, what is being handled, and
+   * what got done. Three bands, in that order.
+   */
   const bands = useMemo(() => {
-    const nobody: WorkCardRow[] = [];
-    const mine: WorkCardRow[] = [];
+    const waiting: WorkCardRow[] = [];
+    const working: WorkCardRow[] = [];
     const partner: WorkCardRow[] = [];
-    const employees: WorkCardRow[] = [];
-
     for (const c of live) {
-      if (c.owner_type === "UNASSIGNED" || !c.owner_id) nobody.push(c);
-      else if (c.owner_type === "AI") employees.push(c);
-      else if (c.owner_id === me.id) mine.push(c);
+      const mine = c.owner_type === "HUMAN" && c.owner_id === me.id;
+      const nobody = c.owner_type === "UNASSIGNED" || !c.owner_id;
+      if (c.state === "BLOCKED" || nobody || mine) waiting.push(c);
+      else if (c.owner_type === "AI") working.push(c);
       else partner.push(c);
     }
-
     const partnerName = partner[0]?.owner_name ?? "Your partner";
     return [
-      { key: "nobody", name: "Nobody has picked these up", note: "the ones most likely to be dropped", cards: nobody },
-      { key: "mine", name: "Yours", note: me.fullName, cards: mine },
-      { key: "partner", name: partnerName, note: "your partner", cards: partner },
-      { key: "employees", name: "Your employees", note: `${new Set(employees.map((c) => c.owner_id)).size} carrying work`, cards: employees },
+      { key: "waiting", name: "Waiting on you", note: "blocked, unowned, or yours — nothing moves until you act", cards: waiting },
+      { key: "working", name: "Being worked by your employees", note: "the sweep picks each one up within five minutes and it ends Done or Blocked", cards: working },
+      { key: "partner", name: `${partnerName} is carrying`, note: "your partner's", cards: partner },
     ].filter((b) => b.cards.length > 0);
-  }, [live, me.id, me.fullName]);
+  }, [live, me.id]);
+
+  // DECKS WAITING ON A DECISION ARE WORK WAITING ON YOU. "i dont see any indication of v12 deck
+  // anywhere" — it was on Fund strategy, under the proposals, and nowhere on the page called Work.
+  const deck = useApi<{ versions?: Array<{ id: string; version_no: number; title: string; state: string; created_by: string; created_at: string; document_id: string | null; change_summary: string | null }> }>("/api/deck");
+  const decksWaiting = (deck.data?.versions ?? []).filter((v) => v.state === "PROPOSED");
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -305,7 +316,13 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   return (
     <section data-testid="work-cards-page">
       <div className="home-section-head">
-        <h3>{live.length === 0 ? "Nothing open" : `${live.length} open`}</h3>
+        <h3>
+          {bands[0]?.key === "waiting" || decksWaiting.length > 0
+            ? `${(bands.find((b) => b.key === "waiting")?.cards.length ?? 0) + decksWaiting.length} waiting on you`
+            : live.length === 0
+              ? "Nothing open"
+              : `${live.length} open, none waiting on you`}
+        </h3>
         <button type="button" className="btn-strong" data-testid="work-card-add-toggle" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a card"}
         </button>
@@ -414,6 +431,38 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </div>
       )}
 
+      {decksWaiting.length > 0 && (
+        <section data-testid="work-decks-waiting">
+          <div className="home-section-head">
+            <h4>
+              A deck is waiting on your decision <span className="count-pill">{decksWaiting.length}</span>
+            </h4>
+            <span className="muted small">look at it, then approve it or send it back — sending it back opens the next card for Preston</span>
+          </div>
+          <ul className="card-list">
+            {decksWaiting.map((v) => (
+              <li key={v.id} className="card" data-testid={`work-deck-${v.id}`}>
+                <strong>v{v.version_no} — {v.title}</strong>{" "}
+                <span className="muted small">by {v.created_by}, {new Date(v.created_at).toLocaleString()}</span>
+                {v.change_summary && <p className="small">{v.change_summary}</p>}
+                <div className="notification-actions">
+                  {v.document_id && (
+                    <button type="button" className="link-button" onClick={() => {
+                      try { window.sessionStorage.setItem("wpos.documents.focus", v.document_id!); } catch { /* fine */ }
+                      onNavigate("documents");
+                    }}>
+                      View v{v.version_no}
+                    </button>
+                  )}
+                  <button type="button" className="btn-strong" onClick={() => onNavigate("follow-on")}>
+                    Decide on Fund strategy
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {bands.map((group) => (
         <section key={group.key} data-testid={`work-owner-${group.key}`}>
           <div className="home-section-head">
@@ -452,6 +501,14 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                       <span className={c.state === "BLOCKED" ? "badge badge-bad" : "badge"}>
                         {meaning?.label ?? c.state}
                       </span>
+                      {/* HOW FAR ALONG. An employee gets three attempts; the count is what tells you
+                          "in progress" is a run that happened rather than a label that stuck. */}
+                      {c.owner_type === "AI" && c.state === "IN_PROGRESS" && (
+                        <span className="muted small">attempt {Math.max(1, c.work_attempts ?? 1)} of 3</span>
+                      )}
+                      {c.owner_type === "AI" && c.state === "OPEN" && (
+                        <span className="muted small">queued — picked up within 5 min</span>
+                      )}
                       {c.priority !== "NORMAL" && <span className="badge badge-gate">{c.priority.toLowerCase()}</span>}
                       {/* Two facts survive the collapse because they change what you do next. */}
                       {/* "12 looks" meant nothing to anybody — the operator's question was
@@ -743,16 +800,26 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
       )}
 
       {finished.length > 0 && (
-        <details className="card" data-testid="work-cards-finished">
-          <summary>{finished.length} finished or dropped</summary>
-          <p className="muted small">
-            Kept rather than deleted — what got done is the record, and a decision not to act is
-            still a decision.
-          </p>
+        <details className="card" data-testid="work-cards-finished" open>
+          <summary>
+            <strong>Finished</strong> <span className="count-pill">{finished.filter((c) => c.state === "DONE").length}</span>
+            <span className="muted small"> · what each one produced, so you can check it</span>
+          </summary>
           <ul className="card-list small">
-            {finished.slice(0, 50).map((c) => (
+            {finished.slice(0, 50).map((c) => {
+              // THE LAST FINDING IS THE RESULT. An employee writes what it found onto the card as
+              // "• ..." lines; the last one is the verdict, and a finished card that does not show
+              // it is a card you have to open to learn anything from.
+              const lines = (c.description ?? "").split("\n").filter((l) => l.startsWith("• "));
+              const result = lines.length > 0 ? lines[lines.length - 1]!.slice(2) : null;
+              return (
               <li key={c.id}>
-                <span className="badge">{stateMeaning(c.state)?.label ?? c.state}</span> {c.title}
+                <span className="badge">{stateMeaning(c.state)?.label ?? c.state}</span> <strong>{c.title}</strong>
+                {c.owner_name ? <span className="muted small"> · {c.owner_name}</span> : null}
+                {result && <p className="small" style={{ margin: "4px 0 0" }}>{result.slice(0, 400)}</p>}
+                {c.kind === "DECK_REWORK" && c.state === "DONE" && (
+                  <button type="button" className="link-button" onClick={() => onNavigate("follow-on")}>Decide on Fund strategy</button>
+                )}
                 {/* CHANGING YOUR MIND HAS TO BE POSSIBLE. A dropped or finished card is kept
                     rather than deleted precisely because the decision might be revisited. Reopens
                     as OPEN, not to whatever it was before: what it was is history, what it is now
@@ -771,7 +838,8 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                   {c.state === "CANCELLED" ? "Put it back" : "Reopen"}
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </details>
       )}
