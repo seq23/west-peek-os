@@ -28,7 +28,9 @@ try {
   const applied = [...out.matchAll(/│ (\d{4}_[a-z_]+\.sql)\s+│ ✅/g)].map((m) => m[1]);
   say(applied.length ? `     applied: ${applied.join(", ")}` : "     nothing to apply");
 } catch (err) {
-  die(`migration apply failed:\n${err.stdout ?? err.message}`);
+  // BOTH STREAMS. wrangler writes its refusal to stderr; printing stdout alone produced
+  // "migration apply failed:" followed by nothing (14 Sep 2026), which is a stop with no reason.
+  die(`migration apply failed:\n${[err.stdout, err.stderr, err.message].filter((s) => s && String(s).trim()).join("\n")}`);
 }
 
 say("2/4  verifying no migrations are pending…");
