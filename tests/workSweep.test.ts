@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
-import { MAX_WORK_ATTEMPTS, claimNextCard, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
+import { MAX_WORK_ATTEMPTS, claimNextCard, settleAbandonedCards, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { runDueJobs } from "../src/worker/services/jobs";
 
 /**
@@ -117,6 +117,27 @@ describe("assignment causes work", () => {
     // And it is not picked up again.
     const next = await sweepOnce(env, new Date(NOW.getTime() + 10 * 60_000), { general: failing });
     expect(next.card?.id).not.toBe(id);
+  });
+
+  it("a third attempt killed mid-run (lease expired, cap reached, still IN_PROGRESS) is settled BLOCKED on the next sweep, and the partners told", async () => {
+    const id = await card("Deal flow: Helios Grid (killed)");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', work_attempts = ?2, lease_until = ?3 WHERE id = ?1")
+      .bind(id, MAX_WORK_ATTEMPTS, new Date(NOW.getTime() - 60_000).toISOString())
+      .run();
+    const settled = await settleAbandonedCards(env, NOW);
+    expect(settled.map((c) => c.id)).toContain(id);
+    const s = await state(id);
+    expect(s.state).toBe("BLOCKED");
+    expect(s.lease_until).toBeNull();
+    expect(s.next_action).toMatch(/cut off before it could report/);
+    expect((await notices(id))[0]!.title).toMatch(/is blocked on/);
+    // A card whose lease is still held is a run in flight, not abandoned.
+    const live = await card("Still running");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', work_attempts = ?2, lease_until = ?3 WHERE id = ?1")
+      .bind(live, MAX_WORK_ATTEMPTS, new Date(NOW.getTime() + 60_000).toISOString())
+      .run();
+    expect((await settleAbandonedCards(env, NOW)).map((c) => c.id)).not.toContain(live);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(live).run();
   });
 
   it("a DECK_REWORK card is worked by the deck runner, not the four-move loop", async () => {
