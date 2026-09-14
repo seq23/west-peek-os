@@ -328,6 +328,42 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </button>
       </div>
 
+      {/* THE THING WAITING ON YOU COMES FIRST. The header said "1 waiting on you" and the deck it
+          meant sat under the legend, the add form and the empty-state explainer — "i have 1 waiting
+          for me item ... and i have no idea what the item is" (14 Sep). What the count counts is
+          the next thing on the page. */}
+      {decksWaiting.length > 0 && (
+        <section data-testid="work-decks-waiting">
+          <div className="home-section-head">
+            <h4>
+              A deck is waiting on your decision <span className="count-pill">{decksWaiting.length}</span>
+            </h4>
+            <span className="muted small">look at it, then approve it or send it back — sending it back opens the next card for Preston</span>
+          </div>
+          <ul className="card-list">
+            {decksWaiting.map((v) => (
+              <li key={v.id} className="card" data-testid={`work-deck-${v.id}`}>
+                <strong>v{v.version_no} — {v.title}</strong>{" "}
+                <span className="muted small">by {v.created_by}, {new Date(v.created_at).toLocaleString()}</span>
+                {v.change_summary && <p className="small">{v.change_summary}</p>}
+                <div className="notification-actions">
+                  {v.document_id && (
+                    <button type="button" className="link-button" onClick={() => {
+                      try { window.sessionStorage.setItem("wpos.documents.focus", v.document_id!); } catch { /* fine */ }
+                      onNavigate("documents");
+                    }}>
+                      View v{v.version_no}
+                    </button>
+                  )}
+                  <button type="button" className="btn-strong" onClick={() => onNavigate("follow-on")}>
+                    Decide on Fund strategy
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {/* THE LEGEND BELONGS BEFORE THE THING IT EXPLAINS — it used to sit at the very bottom, under
           every card, so the words telling you what "Blocked" means were below the blocked card you
           were reading. But five rows of definitions expanded at the top pushed the cards themselves
@@ -400,7 +436,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </form>
       )}
 
-      {live.length === 0 && !adding && (
+      {live.length === 0 && decksWaiting.length === 0 && !adding && (
         <div className="card" data-testid="work-cards-empty">
           <h4>Nothing is open</h4>
           <p className="small">
@@ -431,38 +467,6 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </div>
       )}
 
-      {decksWaiting.length > 0 && (
-        <section data-testid="work-decks-waiting">
-          <div className="home-section-head">
-            <h4>
-              A deck is waiting on your decision <span className="count-pill">{decksWaiting.length}</span>
-            </h4>
-            <span className="muted small">look at it, then approve it or send it back — sending it back opens the next card for Preston</span>
-          </div>
-          <ul className="card-list">
-            {decksWaiting.map((v) => (
-              <li key={v.id} className="card" data-testid={`work-deck-${v.id}`}>
-                <strong>v{v.version_no} — {v.title}</strong>{" "}
-                <span className="muted small">by {v.created_by}, {new Date(v.created_at).toLocaleString()}</span>
-                {v.change_summary && <p className="small">{v.change_summary}</p>}
-                <div className="notification-actions">
-                  {v.document_id && (
-                    <button type="button" className="link-button" onClick={() => {
-                      try { window.sessionStorage.setItem("wpos.documents.focus", v.document_id!); } catch { /* fine */ }
-                      onNavigate("documents");
-                    }}>
-                      View v{v.version_no}
-                    </button>
-                  )}
-                  <button type="button" className="btn-strong" onClick={() => onNavigate("follow-on")}>
-                    Decide on Fund strategy
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
       {bands.map((group) => (
         <section key={group.key} data-testid={`work-owner-${group.key}`}>
           <div className="home-section-head">
