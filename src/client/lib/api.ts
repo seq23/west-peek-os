@@ -162,13 +162,26 @@ export function useApi<T>(
     }
     let cancelled = false;
     setState((s) => ({ ...s, loading: true }));
-    api<T>(path)
-      .then(({ status, data }) => {
-        if (!cancelled) setState({ data, status, loading: false });
-      })
-      .catch(() => {
-        if (!cancelled) setState({ data: null, status: 0, loading: false });
-      });
+    // A DROPPED CONNECTION IS RETRIED BEFORE IT IS REPORTED. Status 0 is "the request never got an
+    // answer" — a blip, a proxy that dropped the socket (wrangler dev does this under load; the
+    // CI sweep read six lists as blank on 14 Sep for exactly that), a laptop waking up. One or two
+    // quick retries turn most of those into the page the reader was going to see anyway; only a
+    // connection that stays down is shown as one.
+    const attempt = (n: number): void => {
+      api<T>(path)
+        .then(({ status, data }) => {
+          if (cancelled) return;
+          if (status === 0 && n < 2) {
+            setTimeout(() => attempt(n + 1), 300 * (n + 1));
+            return;
+          }
+          setState({ data, status, loading: false });
+        })
+        .catch(() => {
+          if (!cancelled) setState({ data: null, status: 0, loading: false });
+        });
+    };
+    attempt(0);
     return () => {
       cancelled = true;
     };
