@@ -313,6 +313,14 @@ describe("3. adapter failure degrades to read-only and stays visible", () => {
     expect(me.status).toBe(200);
   });
 
+  it("the scheduled sync reports a failed pull as the reason it failed, never as '0 applied'", async () => {
+    const { runNetworkSync } = await import("../src/worker/services/networkAdapter");
+    const out = await runNetworkSync(env, fixtureClient({}, { failPull: "contact" }));
+    expect(out.ok).toBe(false);
+    expect(out.detail).toMatch(/could not load the community: .*ECONNREFUSED/);
+    expect(out.detail).not.toMatch(/^0 applied/);
+  });
+
   it("with no configured client the HTTP route fails closed as UNPROVEN and records the refusal", async () => {
     const res = await call<{ error: string; detail: string }>("/api/network/pull/contact", MP, "POST", {});
     expect(res.status).toBe(503);

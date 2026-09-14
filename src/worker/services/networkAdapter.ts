@@ -1039,8 +1039,8 @@ export async function handleNetworkCompanyPush(ctx: RouteContext): Promise<Respo
  * Network OS is a fact the operator needs on the page, not an exception that kills the tick and
  * takes the other jobs with it.
  */
-export async function runNetworkSync(env: Env): Promise<{ resource: string; applied: number; detail: string; ok: boolean }> {
-  const client = configuredClient(env);
+export async function runNetworkSync(env: Env, clientOverride?: NetworkOsClient | null): Promise<{ resource: string; applied: number; detail: string; ok: boolean }> {
+  const client = clientOverride ?? configuredClient(env);
   if (!client) {
     return { resource: "contact", applied: 0, ok: false, detail: networkOsBlockedReason(env) ?? "Network OS is not configured." };
   }
@@ -1062,11 +1062,18 @@ export async function runNetworkSync(env: Env): Promise<{ resource: string; appl
     const more = summary.progress && !summary.progress.complete
       ? ` — ${summary.progress.done} of ${summary.progress.total}, the rest on later ticks`
       : "";
+    const ok = summary.status === "OK" || summary.status === "IN_PROGRESS";
     return {
       resource: "contact",
       applied: summary.applied ?? 0,
-      ok: summary.status === "OK" || summary.status === "IN_PROGRESS",
-      detail: `${summary.applied ?? 0} applied${summary.conflicts ? `, ${summary.conflicts} disagreement(s) raised` : ""}${more}`,
+      ok,
+      // A FAILED PULL SAYS WHY. The Jobs page showed "FAILED — contact: 0 applied" twice on 14 Sep
+      // while the cursor row held "Network OS returned HTTP 503": the run was scored FAILED from
+      // `status` and described from `applied`, so the reader saw a failure with a count for a reason
+      // and asked whether "0 applied" meant done. It did not; nothing was reached.
+      detail: ok
+        ? `${summary.applied ?? 0} applied${summary.conflicts ? `, ${summary.conflicts} disagreement(s) raised` : ""}${more}`
+        : `could not load the community: ${summary.failure_reason ?? summary.status}. Nothing was applied; what was already loaded stays readable.`,
     };
   } catch (err) {
     return {
