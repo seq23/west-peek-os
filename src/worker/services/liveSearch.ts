@@ -151,6 +151,17 @@ export async function searchQuestion(
     if (run.status !== "COMPLETED" || !run.output_text) {
       return { ok: false, text: "", citations: [], aiRunId: run.id, detail: run.failure_reason ?? `run ${run.status}` };
     }
+    // A SEARCH ANSWERED BY A MODEL THAT CANNOT SEARCH IS A TOOL FAILURE, NOT A RESULT. On 14 Sep
+    // 2026 every search was routed to a general model (the search model had no price row) and its
+    // "I have no web access" was handed to the employee as a finding, who then reported companies
+    // as not existing. The run records which model answered; anything but the search model is
+    // refused here so the employee sees the tool fail rather than a confident nothing.
+    if (run.model !== SEARCH_MODEL) {
+      return {
+        ok: false, text: "", citations: [], aiRunId: run.id,
+        detail: `search was routed to ${run.model ?? "an unknown model"}, which cannot search the web; ${SEARCH_MODEL} was unavailable to routing. The result is not a finding about the question.`,
+      };
+    }
     return { ok: true, text: run.output_text, citations: extractUrls(run.output_text), aiRunId: run.id, detail: "ok" };
   } catch (err) {
     return { ok: false, text: "", citations: [], aiRunId: null, detail: err instanceof Error ? err.message : String(err) };

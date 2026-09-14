@@ -284,6 +284,14 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
    * provider with no credential — is exactly the class that sits unnoticed for days. There is no
    * argument for checking less often than the cheapest thing on the schedule.
    */
+  if (job.job_key === "employee_work_sweep") {
+    // One waiting card, worked through the same path the button runs. See workSweep.ts for the
+    // review that put this here: assignment did not cause work, and "in progress" meant nothing.
+    const { sweepOnce } = await import("./workSweep");
+    const out = await sweepOnce(env, now);
+    if (out.card) artifacts.push({ kind: "WORK_CARD", ref_type: "work_card", ref_id: out.card.id });
+    return { status: out.status, summary: out.summary, artifacts };
+  }
   if (job.job_key === "diagnostics_sweep") {
     const { runHealthEscalation } = await import("./healthEscalation");
     const out = await runHealthEscalation(env, now);
@@ -879,7 +887,48 @@ export async function closeAbandonedRuns(
   return { jobRuns: jobs.meta?.changes ?? 0, aiRuns: ai.meta?.changes ?? 0, rescheduled, unrepairable };
 }
 
-export async function runDueJobs(env: Env, now: Date): Promise<Array<{ job_key: string; status: string; summary: string }>> {
+/**
+ * ONE JOB PER TICK. Until 14 Sep 2026 a tick ran every due job in sequence inside one cron
+ * invocation, and the invocation has a CPU budget: `wrangler tail` showed the tick ending
+ * `exceededCpu` at 10 ms with a 7-second wall clock, four jobs deep. The jobs it never reached were
+ * closed as "abandoned: the run stopped part-way through and never finished" — thirty-four of them
+ * in three days — and a job that was killed mid-run looked, in the queue, exactly like one that
+ * had crashed. Nothing was wrong with any job.
+ *
+ * So the cron fires every minute and each tick runs the ONE most overdue job in its own
+ * invocation, with its own budget. The sweeps run on a tick that has nothing due. A job that is
+ * itself over the budget still dies, but alone, and its own run says so.
+ */
+export async function runDueJobs(
+  env: Env,
+  now: Date,
+  opts: { limit?: number } = {},
+): Promise<Array<{ job_key: string; status: string; summary: string }>> {
+  const limit = opts.limit ?? 1;
+  if (limit === 0) return runDueJobsAll(env, now);
+  const dueFirst = (
+    await env.WP_OS_DB.prepare(
+      "SELECT * FROM scheduled_job WHERE status = 'ACTIVE' AND (next_run_at IS NULL OR next_run_at <= ?1) ORDER BY next_run_at ASC LIMIT ?2",
+    )
+      .bind(now.toISOString(), limit)
+      .all<ScheduledJobRow>()
+  ).results ?? [];
+  if (dueFirst.length === 0) return runDueJobsAll(env, now);
+  const systemActor: Actor = { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] };
+  const results: Array<{ job_key: string; status: string; summary: string }> = [];
+  for (const job of dueFirst) {
+    try {
+      const { run } = await runJob(env, systemActor, job.id, { trigger: "SCHEDULED", now });
+      results.push({ job_key: job.job_key, status: String(run.status), summary: String(run.outcome_summary ?? "") });
+    } catch (err) {
+      results.push({ job_key: job.job_key, status: "ERROR", summary: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return results;
+}
+
+/** The whole-tick behaviour this replaced: sweeps, then every due job. The manual route keeps it. */
+export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_key: string; status: string; summary: string }>> {
   /*
    * SWEEP BEFORE RUNNING, every tick. `closeAbandonedReports` was already written and correct, but
    * its only caller was the top of the once-daily brief — so a brief that died at 06:00 stayed
@@ -1123,7 +1172,7 @@ export async function handleCancelJobRun(ctx: RouteContext): Promise<Response> {
 export async function handleRunDueJobs(ctx: RouteContext): Promise<Response> {
   const actor = actorFromIdentity(ctx.identity!);
   if (actor.type !== "HUMAN") return json({ error: "forbidden" }, { status: 403 });
-  const results = await runDueJobs(ctx.env, new Date());
+  const results = await runDueJobsAll(ctx.env, new Date());
   return json({
     ran: results,
     note: "This is the same code path the Cron Trigger calls. Running it here proves the path locally; it does not prove that Cloudflare fired it.",

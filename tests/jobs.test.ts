@@ -281,11 +281,21 @@ describe("the scheduled tick is idempotent and produces artifacts", () => {
     expect(next.replayed).toBe(false);
   });
 
-  it("runDueJobs is the same path the cron trigger calls", async () => {
-    const results = await runDueJobs(env, new Date("2026-08-14T08:00:00.000Z"));
-    expect(Array.isArray(results)).toBe(true);
-    // The daily intelligence job is due again on a later day and runs.
-    expect(results.some((r) => r.job_key === "daily_intelligence")).toBe(true);
+  it("runDueJobs is the same path the cron trigger calls — one job per tick, until nothing is due", async () => {
+    // ONE PER TICK (14 Sep 2026): the cron invocation was being killed at its CPU budget four jobs
+    // deep, so each tick now runs the single most overdue job. Ticking until quiet still reaches
+    // every due job, daily intelligence included.
+    const at = new Date("2026-08-14T08:00:00.000Z");
+    const seen: string[] = [];
+    for (let tick = 0; tick < 12; tick++) {
+      const results = await runDueJobs(env, at);
+      expect(Array.isArray(results)).toBe(true);
+      const ran = results.filter((r) => !r.job_key.startsWith("_"));
+      expect(ran.length, "a tick ran more than one job").toBeLessThanOrEqual(1);
+      if (ran.length === 0) break;
+      seen.push(ran[0]!.job_key);
+    }
+    expect(seen).toContain("daily_intelligence");
   });
 
   it("the operator tick route says plainly what it does and does not prove", async () => {
