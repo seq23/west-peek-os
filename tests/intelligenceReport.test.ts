@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { FIRM_INTERESTS, effectiveInterests, isFirmInterest } from "../src/shared/intelligence/interests";
 import {
-  PROMPT_VERSION, REPORT_SECTIONS, buildSynthesisPrompt, parseReport, resolveEventIds, verifyReport,
+  PROMPT_VERSION, REPORT_SECTIONS, REQUIRED_SECTIONS, buildSources, buildSynthesisPrompt, citedEventIds, parseReport,
+  renderCitations, resolveEventIds, verifyBrief, verifyReport,
   type EvidencePacket, type ParsedSection,
 } from "../src/shared/intelligence/reportSchema";
 
@@ -131,7 +132,7 @@ describe("verification", () => {
  * reference brief runs three hundred words. These tests pin the things that made it thin, because
  * a prompt is the easiest artefact in the system to quietly weaken later.
  */
-describe("the v3 report asks for depth", () => {
+describe("the report asks for depth (v3), and v5 keeps it", () => {
   const packet: EvidencePacket = {
     report_date: "2026-08-18",
     partner_name: "Sequoia Taylor",
@@ -144,8 +145,8 @@ describe("the v3 report asks for depth", () => {
     const p = buildSynthesisPrompt(packet);
     // The specific numbers matter less than that a floor is stated at all: "two or three
     // sentences" is what produced the thin report.
-    expect(p).toMatch(/150 TO 300 WORDS/);
-    expect(p).toMatch(/50 TO 90 WORDS/);
+    expect(p).toMatch(/150–300 words/);
+    expect(p).toMatch(/40–80 words/);
   });
 
   it("teaches the two moves the reference brief actually makes", () => {
@@ -154,8 +155,10 @@ describe("the v3 report asks for depth", () => {
     expect(p).toContain("THE DISTINCTION");
   });
 
-  it("names the difference between omitting a section and writing a thin one", () => {
-    expect(buildSynthesisPrompt(packet)).toMatch(/OMITTING[\s\S]{0,80}BEING THIN/);
+  it("says a thin section is rejected, not merely discouraged (v5)", () => {
+    const p = buildSynthesisPrompt(packet);
+    expect(p).toMatch(/A paragraph with no \[n\] will be rejected/);
+    expect(p).toMatch(/every required section present/);
   });
 
   it("accepts the two sections v3 adds", () => {
@@ -177,7 +180,7 @@ describe("the v3 report asks for depth", () => {
   });
 
   it("carries a version that says which prompt wrote it", () => {
-    expect(PROMPT_VERSION).toBe("daily-intelligence-v4");
+    expect(PROMPT_VERSION).toBe("daily-intelligence-v5");
   });
 });
 
@@ -319,8 +322,8 @@ describe("a repeated section key", () => {
     // A prompt is a request and the merge is the guarantee, but a prompt that invites the crash is
     // still a defect. Asserted against the instruction's meaning, not its exact wording.
     const prompt = buildSynthesisPrompt(packet());
-    expect(prompt).toContain("ONE BLOCK PER SECTION KEY");
-    expect(prompt).toMatch(/do not repeat a\s*\n?\s*key you have already used/i);
+    expect(prompt).toContain("One block per section key");
+    expect(prompt).toMatch(/Do not repeat a key/i);
   });
 });
 
@@ -418,5 +421,94 @@ describe("what a brief covers", () => {
     const scooter = effectiveInterests({ sectors: [], themes: ["brand strategy"], companies: [] });
     const sequoia = effectiveInterests({ sectors: [], themes: ["down rounds and structure"], companies: [] });
     expect(scooter.themes).not.toEqual(sequoia.themes);
+  });
+});
+
+/**
+ * v5 — the operator's example, section for section, with numbered citations (15 Sep 2026).
+ */
+describe("v5: the example brief's shape, and citations that resolve", () => {
+  const packet = (): EvidencePacket => ({
+    report_date: "2026-09-15",
+    partner_name: "Sequoia Taylor",
+    firm_context: { sectors: [], portfolio: [], watchlist: [], themes: [] },
+    open_narratives: [],
+    events: [
+      { event_id: "iitem_a", title: "Fed cuts", summary: "…", publisher: "Reuters", published_at: null, categories: [], source_urls: ["https://reuters.test/fed"], importance: 5, why_ranked: [] },
+      { event_id: "iitem_b", title: "Acme raises", summary: "…", publisher: "TechCrunch", published_at: null, categories: [], source_urls: ["https://tc.test/acme", "https://other.test/acme"], importance: 4, why_ranked: [] },
+    ],
+    macro_readings: [{ label: "10-year Treasury yield", value: "4.96%", asOf: "2026-09-11", sourceUrl: "https://fred.stlouisfed.org/series/DGS10", sourceName: "FRED DGS10" }],
+    macro_failures: [{ label: "Brent crude", detail: "HTTP 503" }],
+    market_citations: ["https://cnbc.test/premarket"],
+    watchlist_entries: [],
+  });
+
+  it("numbers the sources the system supplied, events first, then fetched figures, then the market read", () => {
+    const sources = buildSources(packet());
+    expect(sources.map((s) => s.url)).toEqual([
+      "https://reuters.test/fed", "https://tc.test/acme", "https://fred.stlouisfed.org/series/DGS10", "https://cnbc.test/premarket",
+    ]);
+    expect(sources[0]!.eventId).toBe("iitem_a");
+    expect(sources[2]!.eventId).toBeNull();
+    expect(sources[2]!.title).toContain("as of 2026-09-11");
+  });
+
+  it("orders the sections as the example does, and asks for the dashboard, the regime strip and the most important number", () => {
+    const keys = REPORT_SECTIONS.map((s) => s.key);
+    expect(keys.slice(0, 12)).toEqual([
+      "executive_summary", "top_headlines", "markets_macro", "capital_markets", "venture_private",
+      "government_legal", "ai_technology", "watchlist", "investor_insight", "key_events", "watch", "citations",
+    ]);
+    const p = buildSynthesisPrompt(packet());
+    for (const row of ["10-year Treasury", "Brent", "WTI", "Fed cut/hike probability", "S&P 500", "Nasdaq", "US dollar", "Bitcoin"]) expect(p).toContain(row);
+    expect(p).toContain("Current regime");
+    expect(p).toContain("The most important number on the board");
+    expect(p).toContain("West Peek read-through");
+    expect(p).toContain("Investor Importance: N/10");
+  });
+
+  it("puts the fetched figure in front of the model with its as-of date and source number, and names what could not be fetched", () => {
+    const p = buildSynthesisPrompt(packet());
+    expect(p).toContain("10-year Treasury yield: 4.96% (as of 2026-09-11) — cite [3]");
+    expect(p).toContain("COULD NOT BE FETCHED (say so by name, do not estimate): Brent crude (HTTP 503)");
+    expect(p).toMatch(/I do not have a reliable print/);
+  });
+
+  const full = (over: Partial<Record<string, string>> = {}) =>
+    REQUIRED_SECTIONS.map((k) => `===SECTION ${k}\n${over[k] ?? `A substantial paragraph about ${k} that carries a claim worth reading [1].`}\n===END`).join("\n");
+
+  it("passes a brief with every section present and every section cited", () => {
+    const sections = parseReport(full())!;
+    expect(verifyBrief(sections, buildSources(packet()), { watchlistEmpty: true })).toEqual([]);
+  });
+
+  it("fails a brief missing a section, naming it", () => {
+    const raw = full().replace(/===SECTION watch\n[\s\S]*?===END/, "");
+    const problems = verifyBrief(parseReport(raw)!, buildSources(packet()), { watchlistEmpty: true });
+    expect(problems.map((p) => p.problem)).toEqual(["missing_section"]);
+    expect(problems[0]!.detail).toContain("watch");
+  });
+
+  it("fails a section with no citation, and one citing a source that was never supplied", () => {
+    const sources = buildSources(packet());
+    const noCite = verifyBrief(parseReport(full({ ai_technology: "A long enough paragraph about AI with no citation anywhere in it at all." }))!, sources, { watchlistEmpty: true });
+    expect(noCite.map((p) => `${p.section}:${p.problem}`)).toEqual(["ai_technology:no_citation"]);
+    const badN = verifyBrief(parseReport(full({ watch: "One thing to watch, said at length, citing something invented [9]." }))!, sources, { watchlistEmpty: true });
+    expect(badN.map((p) => `${p.section}:${p.problem}`)).toEqual(["watch:unknown_citation"]);
+  });
+
+  it("excuses the watchlist from citing only when the firm has no watchlist entries", () => {
+    const sources = buildSources(packet());
+    const raw = full({ watchlist: "The firm has no watchlist entries recorded; adding companies to the watchlist puts them here." });
+    expect(verifyBrief(parseReport(raw)!, sources, { watchlistEmpty: true })).toEqual([]);
+    expect(verifyBrief(parseReport(raw)!, sources, { watchlistEmpty: false }).map((p) => p.problem)).toEqual(["no_citation"]);
+  });
+
+  it("maps [n] back to the swept event so the interface can still link it, and renders the footer", () => {
+    const sources = buildSources(packet());
+    expect(citedEventIds("Fed cut [1] and Acme [2] and the ten-year [3]", sources)).toEqual(["iitem_a", "iitem_b"]);
+    const footer = renderCitations(sources);
+    expect(footer).toContain("- [1] https://reuters.test/fed — Reuters: Fed cuts");
+    expect(footer).toContain("- [3] https://fred.stlouisfed.org/series/DGS10 — FRED DGS10");
   });
 });

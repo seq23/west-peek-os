@@ -55,8 +55,10 @@ describe("the prompt refuses to invent figures", () => {
 
   it("tells the model to say so when there are none", () => {
     const prompt = buildSynthesisPrompt(basePacket());
-    expect(prompt).toContain("Do not state any market figure");
-    expect(prompt).toContain("Omit the key_events section");
+    // v5: a missing figure is SAID, by name; key_events is still written, honestly, rather than omitted.
+    expect(prompt).toContain("Do not state a futures level or Fed probability");
+    expect(prompt).toContain("I do not have a reliable print");
+    expect(prompt).toContain("key_events must still be written");
   });
 
   it("asks for the shape the operator wanted", () => {
@@ -66,8 +68,8 @@ describe("the prompt refuses to invent figures", () => {
     // its own block, which is what gives that block room to be an argument rather than a clause.
     expect(prompt).toContain("**Why it matters**");
     expect(prompt).toContain("Investor Importance: N/10");
-    // …and warns against the failure mode of a scored list.
-    expect(prompt).toContain("a page of nines is noise");
+    // …and says what a ten means, so the score is comparable across a page.
+    expect(prompt).toContain("10 changes a decision this firm is about to make");
   });
 });
 

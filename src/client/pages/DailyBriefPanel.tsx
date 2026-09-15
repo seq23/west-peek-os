@@ -88,6 +88,25 @@ function renderBody(md: string): JSX.Element {
           );
         }
 
+        // The footer: `- [n] url — title`, each line anchored so a [n] above can jump to it.
+        const sourced = lines.length > 0 && lines.every((l) => /^-\s+\[\d{1,3}\]\s+https?:\/\//.test(l));
+        if (sourced) {
+          return (
+            <ol key={i} className="brief-sources-list">
+              {lines.map((l, n) => {
+                const m = l.match(/^-\s+\[(\d{1,3})\]\s+(\S+)\s*(?:—\s*(.*))?$/);
+                if (!m) return <li key={n}>{l}</li>;
+                return (
+                  <li key={n} id={`brief-source-${m[1]}`} value={Number(m[1])}>
+                    <a href={m[2]} target="_blank" rel="noreferrer noopener">{m[3] || m[2]}</a>
+                    <span className="muted small"> {m[2]}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          );
+        }
+
         const bulleted = lines.length > 0 && lines.every((l) => /^[-*·]\s+/.test(l));
         if (bulleted) {
           return (
@@ -152,8 +171,25 @@ function bold(text: string): JSX.Element {
   return (
     <>
       {parts.map((p, i) =>
-        p.startsWith("**") && p.endsWith("**") ? <strong key={i}>{p.slice(2, -2)}</strong> : <span key={i}>{p}</span>,
+        p.startsWith("**") && p.endsWith("**") ? <strong key={i}>{cite(p.slice(2, -2))}</strong> : <span key={i}>{cite(p)}</span>,
       )}
+    </>
+  );
+}
+
+/**
+ * [n] citations become links to the numbered source in the footer (v5). The number is kept
+ * visible: it is how the reader checks a claim, and the footer is where the URL lives.
+ */
+function cite(text: string): JSX.Element {
+  const parts = text.split(/(\[\d{1,3}\])/g);
+  if (parts.length === 1) return <>{text}</>;
+  return (
+    <>
+      {parts.map((p, i) => {
+        const m = p.match(/^\[(\d{1,3})\]$/);
+        return m ? <a key={i} className="brief-cite" href={`#brief-source-${m[1]}`}>{p}</a> : <span key={i}>{p}</span>;
+      })}
     </>
   );
 }
@@ -346,21 +382,44 @@ export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {})
   const sections = state.data?.sections ?? [];
   const citations = new Map((state.data?.citations ?? []).map((c) => [c.id, c]));
 
+  /*
+   * THE BUTTON WALKS THE STAGES. Each request advances the brief one stage — gathered, numbers
+   * read, written — because a request has the same CPU budget as a cron tick and the one-shot
+   * build is what died in production on 15 Sep 2026. The page keeps calling until it is done.
+   */
   async function generate() {
     setBusy(true);
     setMessage(null);
-    const res = await api<{ status?: string; candidates?: number; detail?: string; error?: string }>(
-      "/api/daily-intelligence/generate", { method: "POST", body: {} },
-    );
-    if (res.status !== 201) setMessage(res.data?.detail ?? res.data?.error ?? `Could not build the brief (HTTP ${res.status}).`);
-    else if (res.data?.status !== "READY") setMessage(`Brief did not complete: ${res.data?.status}.`);
+    const STAGE_WORDS: Record<string, string> = {
+      gathered: "Gathered and ranked the last 48 hours…",
+      market_read: "Fetched the numbers and read the market…",
+      written: "Written and verified.",
+      failed: "Failed.",
+      busy: "Another run holds it…",
+    };
+    for (let i = 0; i < 6; i++) {
+      const res = await api<{ status?: string; stage?: string; done?: boolean; detail?: string | null; error?: string }>(
+        "/api/daily-intelligence/generate", { method: "POST", body: {} },
+      );
+      if (res.status !== 201) {
+        setMessage(res.data?.detail ?? res.data?.error ?? `Could not build the brief (HTTP ${res.status}).`);
+        break;
+      }
+      setMessage(STAGE_WORDS[res.data?.stage ?? ""] ?? `Stage: ${res.data?.stage ?? "?"}`);
+      if (res.data?.done) {
+        if (res.data.status !== "READY") setMessage(`Brief FAILED: ${res.data.detail ?? res.data.status}. It was not delivered thin.`);
+        else setMessage(null);
+        break;
+      }
+      if (res.data?.stage === "busy" || res.data?.stage === "none") break;
+    }
     setBusy(false);
     state.reload();
   }
 
   // What survives the fold on Home: the one-minute version, and the ten-second version under it.
   // Everything else is the long read.
-  const ABOVE_FOLD = ["executive_summary", "classification"];
+  const ABOVE_FOLD = ["executive_summary", "classification", "markets_macro"];
   const folded = compact && !expanded;
   const shown = folded ? sections.filter((s) => ABOVE_FOLD.includes(s.section_key)) : sections;
   const hiddenCount = sections.length - shown.length;
