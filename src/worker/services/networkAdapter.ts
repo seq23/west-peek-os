@@ -50,7 +50,11 @@ export const NETWORK_RESOURCES = ["contact", "relationship", "touch", "gmail_thr
  * costs a duplicate-check query, an upsert and a receipt, and it is better to take twenty ticks and
  * finish than to take one and be killed halfway with no record of where.
  */
-export const RECORDS_PER_PULL = 250;
+// THE WHOLE SNAPSHOT IS ONE WINDOW WHEN NOTHING IS NEW. 250 meant nineteen ticks — five hours — to
+// walk 4,712 already-applied contacts before a pass could complete and the next pull could ask
+// only for what changed since. The duplicate check is one batched round-trip whatever the size;
+// what is bounded per tick is the NEW records applied (FRESH_RECORDS_PER_TICK), not the scan.
+export const RECORDS_PER_PULL = 10_000;
 /** New (never-seen) records applied in one scheduled tick; each one is several D1 statements. */
 export const FRESH_RECORDS_PER_TICK = 8;
 
@@ -399,14 +403,20 @@ export async function pullResource(
    */
   const keys = window.map((record) => `pull:${resource}:${record.delivery_id ?? record.external_id}`);
   const already = new Set<string>();
+  const lookups = [];
   for (let i = 0; i < keys.length; i += 90) {
     const chunk = keys.slice(i, i + 90);
-    const rows = await env.WP_OS_DB.prepare(
-      `SELECT idempotency_key FROM network_sync_receipt WHERE firm_scope = ?1 AND idempotency_key IN (${chunk.map((_, j) => `?${j + 2}`).join(",")})`,
-    )
-      .bind(firmScope, ...chunk)
-      .all<{ idempotency_key: string }>();
-    for (const r of rows.results ?? []) already.add(r.idempotency_key);
+    lookups.push(
+      env.WP_OS_DB.prepare(
+        `SELECT idempotency_key FROM network_sync_receipt WHERE firm_scope = ?1 AND idempotency_key IN (${chunk.map((_, j) => `?${j + 2}`).join(",")})`,
+      ).bind(firmScope, ...chunk),
+    );
+  }
+  // One round-trip for every chunk: statements inside a batch cost the Worker almost nothing,
+  // where the same statements awaited one by one each cost CPU (measured on Boss OS, 14 Sep).
+  for (let i = 0; i < lookups.length; i += 50) {
+    const results = await env.WP_OS_DB.batch<{ idempotency_key: string }>(lookups.slice(i, i + 50));
+    for (const res of results) for (const r of res.results ?? []) already.add(r.idempotency_key);
   }
   let freshHandled = 0;
   let deferred = false;
