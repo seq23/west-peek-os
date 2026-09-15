@@ -25,7 +25,66 @@ import { AI_EMPLOYEE_ROSTER } from "../registry/aiEmployees";
  * Pure and I/O-free, so all of it is testable without a network or a model.
  */
 
-export const PACKET_PROMPT_VERSION = "room-packet/1";
+export const PACKET_PROMPT_VERSION = "room-packet/2";
+
+/**
+ * What the partner typed when she asked for a Room herself (15 Sep 2026).
+ *
+ * Operator: "basically the 'ask parker for a room' flow needs to change where i can input what im
+ * thinking and he use my initial suggestions… i like that he can think of a room on demand but i
+ * need to be able to do that OR ask for a specific type of room." Two doors, one packet queue: a
+ * packet records which door it came through (`origin`) and carries this brief so the page can show
+ * what was asked for next to what Parker made of it.
+ */
+export interface RoomBrief {
+  /** Audience or theme, free text. "top Black lawyers on the rise". */
+  audience: string;
+  /** YYYY-MM. */
+  month: string;
+  city: string | null;
+  /** Sponsor prospects she named. Used FIRST; each becomes an evt_sponsor_prospect row. */
+  sponsorProspects: string[];
+  notes: string | null;
+}
+
+export type PacketOrigin = "PARKER" | "PARTNER_BRIEF";
+
+/**
+ * A sponsor prospect as Parker proposes it. `sourceUrl` is kept only if the live search actually
+ * returned it — the same rule as venues, applied to the money.
+ */
+export interface SponsorProspectIdea {
+  orgName: string;
+  /** Must be one of evt_sponsor_prospect.category's CHECK values; anything else becomes OTHER. */
+  category: SponsorCategory;
+  askUsd: number;
+  /** Why this organisation fits THIS room. */
+  whyFit: string | null;
+  /** The one-line pitch angle to open with. */
+  pitch: string | null;
+  sourceUrl: string | null;
+  /** True when the partner named them in her brief rather than Parker finding them. */
+  fromBrief: boolean;
+}
+
+/** Must stay in step with the `category` CHECK in migration 0044. */
+export const SPONSOR_CATEGORIES = [
+  "CLOUD", "FINTECH_SPEND", "EQUITY_CAPTABLE", "LEGAL", "PAYROLL_HR", "BANKING", "HOSPITALITY", "RECRUITING", "OTHER",
+] as const;
+export type SponsorCategory = (typeof SPONSOR_CATEGORIES)[number];
+
+/**
+ * THE SPONSORSHIP RULE, in the operator's words (15 Sep 2026): "$10,000 to us per sponsor; aim for
+ * up to $40K in sponsorships per room — ideally 4 sponsors or whichever number makes sense based
+ * on the logistics." Parker states how many sponsors the format honestly carries; the money is
+ * that count times the per-sponsor figure, never a tier table.
+ */
+export const SPONSORSHIP_RULE = {
+  perSponsorUsd: 10_000,
+  idealSponsors: 4,
+  maxSponsors: 4,
+  roomTargetUsd: 40_000,
+} as const;
 
 /** Must stay in step with the `format` CHECK in migration 0044. */
 export const ROOM_FORMATS = [
@@ -62,7 +121,8 @@ export interface RoomEconomics {
   venueHighUsd: number;
   foodPerHeadUsd: number;
   targetAttendees: number;
-  /** What the tiers below are expected to bring in. */
+  /** How many sponsors the packet asks for, and what they bring at SPONSORSHIP_RULE.perSponsorUsd. */
+  sponsorCount: number;
   sponsorTargetLowUsd: number;
   sponsorTargetHighUsd: number;
   estimatedCostLowUsd: number;
@@ -86,6 +146,13 @@ export interface RoomPacket {
   venues: PacketVenue[];
   sponsorThesis: string | null;
   economics: RoomEconomics | null;
+  /** How many sponsors Parker says this format honestly supports (1..maxSponsors). */
+  sponsorCount: number;
+  sponsorProspects: SponsorProspectIdea[];
+  /** What could go wrong, as Parker sees it. */
+  risks: string[];
+  /** What saying "keep" commits the firm to — spend, people, approaches made in its name. */
+  commitmentMd: string | null;
 }
 
 export interface PacketFlag {
@@ -96,11 +163,16 @@ export interface PacketFlag {
     | "no_seed_questions"
     | "no_sponsor_thesis"
     | "target_out_of_range"
-    | "contact_without_source";
+    | "contact_without_source"
+    | "no_sponsor_prospects";
   detail: string;
 }
 
-/** The sponsor structure from the pilot: one presenting, one supporting, one in-kind. */
+/**
+ * The sponsor structure from the pilot: one presenting, one supporting, one in-kind. Kept for the
+ * tier labels on the pipeline; the MONEY is SPONSORSHIP_RULE now — a flat per-sponsor figure the
+ * operator set on 15 Sep 2026 — so nothing computes from these ranges any more.
+ */
 export const SPONSOR_TIER_TARGETS = {
   PRESENTING: { low: 20_000, high: 25_000 },
   SUPPORTING: { low: 7_500, high: 12_500 },
@@ -130,12 +202,28 @@ export function buildPacketPrompt(input: {
    * half lives in the database and only the worker can read it. The caller composes both.
    */
   guidance?: string;
+  /** The partner's own brief, when the Room was asked for rather than thought of. */
+  brief?: RoomBrief | null;
 }): string {
   // THE FIRM'S METHODS COME FIRST, because they say what a good proposal IS. Everything below is
   // how to format one. Parker was proposing events without ever being told docs/COMMUNITY.md
   // existed, which is how a generator came to implement one row of a four-row rhythm and report
   // the same sponsor target on every packet it ever produced.
   const methods = input.guidance && input.guidance.trim().length > 0 ? `\n${input.guidance}\n` : "";
+
+  // HER BRIEF COMES BEFORE EVERYTHING ELSE about the Room, because it IS the Room. Parker's own
+  // idea is the fallback for a month nobody asked about, not a competitor to what she asked for.
+  const brief = input.brief
+    ? [
+        "THE PARTNER ASKED FOR THIS ROOM. Build exactly what she asked for; do not substitute your own theme.",
+        `- Audience / theme, in her words: ${input.brief.audience}`,
+        input.brief.city ? `- City: ${input.brief.city}` : null,
+        input.brief.sponsorProspects.length
+          ? `- Sponsor prospects she named — use these FIRST, each as its own prospect, before adding any of your own: ${input.brief.sponsorProspects.join("; ")}`
+          : "- She named no sponsor prospects; propose them yourself.",
+        input.brief.notes ? `- Her notes: ${input.brief.notes}` : null,
+      ].filter(Boolean).join("\n")
+    : "Nobody asked for a particular Room this month — propose the one you think the community needs now.";
 
   const avoid = input.recentThemes.length
     ? `\nRECENT THEMES — propose something different:\n${input.recentThemes.map((t) => `- ${t}`).join("\n")}`
@@ -155,6 +243,8 @@ export function buildPacketPrompt(input: {
     `Propose ONE Room for ${input.month} in ${input.city}.`,
     methods,
     "",
+    brief,
+    "",
     "A Room is a curated experience — a dinner, salon, workshop or roundtable — built around a",
     "single important question. 25–35 people: strong operators, first-time founders, startup",
     "lawyers, finance leaders, technical builders. Conversation is the product, not presentations.",
@@ -172,8 +262,26 @@ export function buildPacketPrompt(input: {
     "  correct answer; a plausible wrong number is not.",
     "- Pricing as a range with a note on what the range covers. Null if the source does not say.",
     "- 4–8 seed questions, phrased the way an operator would actually ask them.",
-    "- Guest ideas describe KINDS of people. Leave person_id null — you cannot know our records.",
+    "- Guest ideas describe KINDS of people — invitee archetypes — each with an example PROFILE",
+    "  (\"a sixth-year litigation associate at an AmLaw 50 firm who just made partner\"), never a",
+    "  named individual. Leave person_id null — you cannot know our records.",
     "- A sponsor thesis says what a sponsor is underwriting. Never access to members.",
+    "",
+    "SPONSORSHIP — the firm's rule, stated by a Managing Partner:",
+    `- Each sponsor pays $${SPONSORSHIP_RULE.perSponsorUsd.toLocaleString("en-US")} to West Peek. Aim for up to`,
+    `  $${SPONSORSHIP_RULE.roomTargetUsd.toLocaleString("en-US")} per Room — ideally ${SPONSORSHIP_RULE.idealSponsors} sponsors, or whichever number the`,
+    "  logistics of THIS format honestly support. State that number as sponsor_count and say why in",
+    "  sponsor_thesis. A seated dinner for 25 cannot carry four logos gracefully; say so if so.",
+    "- Name each sponsor prospect: the organisation, its category, why it fits THIS room, the ask",
+    `  ($${SPONSORSHIP_RULE.perSponsorUsd.toLocaleString("en-US")} unless you argue otherwise), and the one-line pitch angle to open with.`,
+    "- Prospects the partner named come first and are never dropped. One category, one sponsor.",
+    "- A prospect's source_url is kept only if it appears in the candidate list or your search;",
+    "  otherwise leave it null. Never invent a contact name or email — those are found by a person.",
+    "",
+    "RISKS AND THE COMMITMENT:",
+    "- risks: 3–5 things that could go wrong with this particular Room, each one line.",
+    "- commitment_md: what saying \"keep\" commits the firm to — the spend, whose time, which",
+    "  organisations get approached in West Peek's name, and by when. Plain, short, honest.",
     "",
     'Return ONLY JSON:',
     JSON.stringify(
@@ -187,7 +295,7 @@ export function buildPacketPrompt(input: {
         audience: "who should be in the room",
         agenda_md: "markdown run of the evening",
         seed_questions: ["…"],
-        guest_ideas: [{ description: "…", why: "…" }],
+        guest_ideas: [{ description: "archetype — example profile", why: "…" }],
         venues: [
           {
             name: "…", city: "…", address: "…", capacity: 40,
@@ -197,6 +305,15 @@ export function buildPacketPrompt(input: {
           },
         ],
         sponsor_thesis: "…",
+        sponsor_count: 4,
+        sponsor_prospects: [
+          {
+            org_name: "…", category: "LEGAL", ask_usd: 10000,
+            why_fit: "…", pitch: "…", source_url: null,
+          },
+        ],
+        risks: ["…"],
+        commitment_md: "…",
       },
       null,
       1,
@@ -278,6 +395,34 @@ export function parsePacket(raw: string): RoomPacket | null {
   const targetMin = num(p.target_min) ?? 25;
   const targetMax = num(p.target_max) ?? 35;
 
+  const sponsorProspects: SponsorProspectIdea[] = [];
+  for (const sp of Array.isArray(p.sponsor_prospects) ? (p.sponsor_prospects as Record<string, unknown>[]) : []) {
+    const orgName = str(sp.org_name);
+    if (!orgName) continue;
+    const rawCat = str(sp.category)?.toUpperCase() ?? "OTHER";
+    const category = (SPONSOR_CATEGORIES as readonly string[]).includes(rawCat) ? (rawCat as SponsorCategory) : "OTHER";
+    const sourceUrl = str(sp.source_url);
+    sponsorProspects.push({
+      orgName,
+      category,
+      askUsd: num(sp.ask_usd) ?? SPONSORSHIP_RULE.perSponsorUsd,
+      whyFit: str(sp.why_fit),
+      pitch: str(sp.pitch),
+      sourceUrl: sourceUrl && /^https?:\/\//i.test(sourceUrl) ? sourceUrl : null,
+      fromBrief: false,
+    });
+  }
+
+  const risks = (Array.isArray(p.risks) ? p.risks : [])
+    .map((r) => str(r))
+    .filter((r): r is string => r !== null);
+
+  // Clamped to the rule: a model that says "six sponsors" has not read the room.
+  const rawCount = num(p.sponsor_count);
+  const sponsorCount = rawCount === null
+    ? Math.min(Math.max(sponsorProspects.length, 1), SPONSORSHIP_RULE.maxSponsors)
+    : Math.min(Math.max(Math.round(rawCount), 1), SPONSORSHIP_RULE.maxSponsors);
+
   return {
     title,
     theme,
@@ -292,7 +437,49 @@ export function parsePacket(raw: string): RoomPacket | null {
     venues,
     sponsorThesis: str(p.sponsor_thesis),
     economics: null,
+    sponsorCount,
+    sponsorProspects,
+    risks,
+    commitmentMd: str(p.commitment_md),
   };
+}
+
+/**
+ * The partner's named prospects are used FIRST and never lost.
+ *
+ * The prompt says so; this makes it so. A prospect she typed that the model left out is added with
+ * the standard ask and no pitch — the page then shows "Parker did not say why" beside it rather
+ * than silently forgetting the one name she cared about. Matching is case-insensitive on the
+ * organisation name, with a domain ("harvey.ai") matched against a name containing its stem.
+ */
+export function mergeBriefSponsors(packet: RoomPacket, brief: RoomBrief | null | undefined): RoomPacket {
+  if (!brief || brief.sponsorProspects.length === 0) return packet;
+  const norm = (v: string) => v.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[^a-z0-9]/g, "");
+  const stemOf = (v: string) => norm(v).replace(/(com|ai|io|co|org|net)$/, "");
+  const merged = packet.sponsorProspects.map((s) => ({ ...s }));
+  for (const named of brief.sponsorProspects) {
+    const key = stemOf(named);
+    const hit = merged.find((s) => {
+      const k = stemOf(s.orgName);
+      return k === key || (key.length >= 4 && (k.includes(key) || key.includes(k)));
+    });
+    if (hit) {
+      hit.fromBrief = true;
+      continue;
+    }
+    merged.push({
+      orgName: named,
+      category: "OTHER",
+      askUsd: SPONSORSHIP_RULE.perSponsorUsd,
+      whyFit: null,
+      pitch: null,
+      sourceUrl: null,
+      fromBrief: true,
+    });
+  }
+  // Hers first, in the order she typed them.
+  merged.sort((a, b) => Number(b.fromBrief) - Number(a.fromBrief));
+  return { ...packet, sponsorProspects: merged, sponsorCount: Math.max(packet.sponsorCount, Math.min(merged.filter((m) => m.fromBrief).length, SPONSORSHIP_RULE.maxSponsors)) };
 }
 
 // ── Verification ─────────────────────────────────────────────────────────────
@@ -346,6 +533,20 @@ export function verifyPacket(
     }
   }
 
+  // A sponsor's citation is held to the venue standard, but the prospect survives: a name is a
+  // lead a person can check, a URL the search never returned is an invention and goes.
+  const sponsorProspects = packet.sponsorProspects.map((sp) => {
+    if (!sp.sourceUrl) return sp;
+    const source = normaliseUrl(sp.sourceUrl);
+    const known = allowed.size === 0 || allowed.has(source) || [...allowed].some((a) => source.startsWith(a) || a.startsWith(source));
+    if (known) return sp;
+    flags.push({ code: "invented_url", detail: `${sp.orgName}: source ${sp.sourceUrl} was not among the search results — citation removed, prospect kept` });
+    return { ...sp, sourceUrl: null };
+  });
+  if (sponsorProspects.length === 0) {
+    flags.push({ code: "no_sponsor_prospects", detail: "No sponsor prospect was named, so nobody can be approached for the money." });
+  }
+
   if (packet.seedQuestions.length < 3) {
     flags.push({ code: "no_seed_questions", detail: "Fewer than three seed questions — the room will not start itself." });
   }
@@ -359,7 +560,7 @@ export function verifyPacket(
     });
   }
 
-  return { packet: { ...packet, venues: kept }, flags };
+  return { packet: { ...packet, venues: kept, sponsorProspects }, flags };
 }
 
 // ── Economics ────────────────────────────────────────────────────────────────
@@ -374,7 +575,12 @@ export function computeEconomics(input: {
   venues: readonly PacketVenue[];
   targetAttendees: number;
   foodPerHeadUsd?: number;
-  tiers?: readonly (keyof typeof SPONSOR_TIER_TARGETS)[];
+  /**
+   * How many sponsors the packet asks for. The low case is one sponsor landing, the high case is
+   * all of them at SPONSORSHIP_RULE.perSponsorUsd — the operator's rule, replacing the tier table
+   * from the pilot (one presenting at $20–25k, one supporting at $7.5–12.5k) on 15 Sep 2026.
+   */
+  sponsorCount?: number;
 }): RoomEconomics {
   const priced = input.venues.filter((v) => v.priceLowUsd !== null || v.priceHighUsd !== null);
 
@@ -389,13 +595,9 @@ export function computeEconomics(input: {
   const targetAttendees = input.targetAttendees;
   const food = foodPerHeadUsd * targetAttendees;
 
-  const tiers = input.tiers ?? (["PRESENTING", "SUPPORTING"] as const);
-  let sponsorTargetLowUsd = 0;
-  let sponsorTargetHighUsd = 0;
-  for (const tier of tiers) {
-    sponsorTargetLowUsd += SPONSOR_TIER_TARGETS[tier].low;
-    sponsorTargetHighUsd += SPONSOR_TIER_TARGETS[tier].high;
-  }
+  const sponsorCount = Math.min(Math.max(input.sponsorCount ?? SPONSORSHIP_RULE.idealSponsors, 1), SPONSORSHIP_RULE.maxSponsors);
+  const sponsorTargetLowUsd = SPONSORSHIP_RULE.perSponsorUsd;
+  const sponsorTargetHighUsd = SPONSORSHIP_RULE.perSponsorUsd * sponsorCount;
 
   const estimatedCostLowUsd = venueLowUsd + food;
   const estimatedCostHighUsd = venueHighUsd + food;
@@ -405,6 +607,7 @@ export function computeEconomics(input: {
     venueHighUsd,
     foodPerHeadUsd,
     targetAttendees,
+    sponsorCount,
     sponsorTargetLowUsd,
     sponsorTargetHighUsd,
     estimatedCostLowUsd,
@@ -418,4 +621,16 @@ export function computeEconomics(input: {
 /** YYYY-MM for a date, so the monthly job can ask "did this month already get a proposal". */
 export function monthKey(iso: string): string {
   return iso.slice(0, 7);
+}
+
+/**
+ * The month AFTER the one a date falls in. The monthly job proposes for this, not for the month it
+ * runs in: a Room proposed on the 1st for the same month leaves no time to sell a sponsor, and both
+ * packets proposed that way (2026-08, 2026-09) were declined.
+ */
+export function followingMonth(iso: string): string {
+  const y = Number(iso.slice(0, 4));
+  const m = Number(iso.slice(5, 7));
+  const next = m === 12 ? { y: y + 1, m: 1 } : { y, m: m + 1 };
+  return `${next.y}-${String(next.m).padStart(2, "0")}`;
 }

@@ -38,6 +38,50 @@ test("Events & Rooms explains itself and offers a proposal", async ({ page }) =>
   await expect(page.getByTestId("declined-proposals")).toBeVisible();
 });
 
+/**
+ * The request door (15 Sep 2026).
+ *
+ * Operator: "i need to be able to do that OR ask for a specific type of room." No model runs in
+ * this suite, so the build cannot finish — which is exactly the state worth proving: her brief is on
+ * the record the moment she asks, the failure is named on the card rather than lost in a 502, and
+ * dismissing it puts the substance (who was to be invited, why we said no) on the shelf.
+ */
+test("asking Parker for a Room records the brief before anything else, and the shelf keeps the substance", async ({ page }) => {
+  await signIn(page);
+  await gotoSurface(page, "Events & Rooms");
+  await page.getByTestId("room-audience").fill("top Black lawyers on the rise");
+  await page.getByTestId("room-month").fill("2026-10");
+  await page.getByTestId("room-sponsors").fill("Harvey AI (harvey.ai)");
+  await page.getByTestId("room-notes").fill("one legal sponsor at most");
+  await page.getByTestId("request-room-submit").click();
+
+  // The build cannot complete offline; the request is kept, with the reason, not dropped.
+  await expect(page.getByTestId("rooms-message")).toContainText(/could not build|Proposed/, { timeout: 30_000 });
+  const card = page.locator('[data-testid^="packet-rpk_"]').first();
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("Room requested: top Black lawyers on the rise");
+  await expect(card.getByTestId("packet-brief")).toContainText("Harvey AI (harvey.ai)");
+  await expect(card.getByTestId("packet-brief")).toContainText("one legal sponsor at most");
+  await expect(card.locator('[data-testid^="build-error-"]')).toContainText("Parker could not build it");
+
+  // Dismiss it with a reason; the shelf shows who was to be invited and why we said no.
+  page.once("dialog", (d) => d.accept("wrong month for this crowd"));
+  await card.locator('[data-testid^="decline-"]').click();
+  const shelf = page.getByTestId("declined-proposals");
+  await expect(shelf).toContainText("Room requested: top Black lawyers on the rise");
+  await expect(shelf).toContainText("asked for by a partner");
+  await expect(shelf).toContainText("Who was to be invited");
+  await expect(shelf).toContainText("top Black lawyers on the rise");
+  await expect(shelf).toContainText("wrong month for this crowd");
+  await expect(shelf.locator('[data-testid^="again-"]').first()).toBeVisible();
+
+  // "Propose again with changes" prefills the form from the declined Room.
+  await shelf.locator('[data-testid^="again-"]').first().click();
+  await expect(page.getByTestId("room-audience")).toHaveValue("top Black lawyers on the rise");
+  await expect(page.getByTestId("room-notes")).toHaveValue(/Reworking/);
+  await expect(page.getByTestId("request-room")).toContainText("again, with changes");
+});
+
 /*
  * Introductions is no longer its own destination.
  *
