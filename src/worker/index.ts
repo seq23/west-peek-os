@@ -230,6 +230,8 @@ import {
   handleListDocuments,
   handleUploadDocument,
   handleArchiveDocument,
+  handleRestoreDocument,
+  handleArchiveAllDocuments,
 } from "./services/documents";
 import {
   handleAcceptClaim,
@@ -780,6 +782,8 @@ const router = new Router()
   .get("/api/document-links", handleListLinkedDocuments)
   .get("/api/documents/:id/download", handleDownloadDocument)
   .post("/api/documents/:id/archive", handleArchiveDocument)
+  .post("/api/documents/:id/restore", handleRestoreDocument)
+  .post("/api/documents/archive-all", handleArchiveAllDocuments)
   // P5 — diligence claims (ADR-004 enum; self-promotion ban enforced in the service).
   .post("/api/claims", handleCreateClaim)
   .get("/api/claims", handleListClaims)

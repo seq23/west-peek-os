@@ -415,6 +415,7 @@ function Monitoring({ me }: { me: MeResponse }) {
         )}
 
         <ul className="card-list small" data-testid="holdings-list">
+          {selected.loading && <li className="state-message" data-testid="holdings-list-loading">Loading…</li>}
           {(p?.holdings ?? []).map((h) => (
             <li key={h.position_id} data-testid={`holding-${h.position_id}`}>
               <strong>{h.company}</strong> — paid {money(h.cost, currency)}, held at {money(h.value, currency)}

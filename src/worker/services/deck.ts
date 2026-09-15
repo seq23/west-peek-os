@@ -815,7 +815,7 @@ export async function runDeckRework(
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
 
-async function theFund(env: Env): Promise<{ id: string; name: string }> {
+export async function theFund(env: Env): Promise<{ id: string; name: string }> {
   const fund = await env.WP_OS_DB.prepare("SELECT id, name FROM fund LIMIT 1").first<{ id: string; name: string }>();
   if (!fund) throw new DeckError(404, "no_fund", "there is no fund to hold a deck");
   return fund;

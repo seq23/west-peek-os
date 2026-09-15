@@ -26,6 +26,9 @@ test("P5 evidence journey: document upload → conflicting claims → contradict
   // Upload a small document (R2 round-trip; SHA-256 recorded).
   await page.getByRole("button", { name: "Documents", exact: true }).click();
   await page.getByTestId("doc-title").fill(`${marker} note`);
+  // WHAT IT IS, chosen from a list — the free-text box defaulting to `diligence_note` is gone.
+  await page.getByTestId("doc-type").selectOption("DILIGENCE_NOTE");
+  await expect(page.getByTestId("doc-type-means")).toContainText("Something you learned about a company");
   await page.getByTestId("doc-file").setInputFiles({ name: "note.txt", mimeType: "text/plain", buffer: Buffer.from(`ARR: $4.2M (2025)\nBurn: $180k/mo (2025)`) });
   await page.getByTestId("doc-submit").click();
   await expect(page.getByTestId("doc-message")).toContainText("Uploaded doc_");

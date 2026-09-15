@@ -189,6 +189,7 @@ export function IntegrationsPage({ me }: { me: MeResponse }) {
         {connectors.data?.rules.credentials} {connectors.data?.rules.checks}
       </p>
       <ul className="card-list" data-testid="connector-list">
+        {connectors.loading && <li className="state-message" data-testid="connector-list-loading">Loading…</li>}
         {(connectors.data?.connectors ?? []).map((c) => (
           <li key={c.id} className="card" data-testid={`connector-${c.connector_key}`}>
             <p>
@@ -255,6 +256,7 @@ export function IntegrationsPage({ me }: { me: MeResponse }) {
         {prep.data?.note}
       </p>
       <ul className="card-list small" data-testid="prep-queue">
+        {prep.loading && <li className="state-message" data-testid="prep-queue-loading">Loading…</li>}
         {(prep.data?.queue ?? []).map((m) => (
           <li key={m.id}>
             <strong>{m.title}</strong> — {label(MEETING_KIND, m.meeting_type)}, {readableDate(m.scheduled_at)}, {m.participants}{" "}

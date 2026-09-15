@@ -355,7 +355,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                       View v{v.version_no}
                     </button>
                   )}
-                  <button type="button" className="btn-strong" onClick={() => onNavigate("follow-on")}>
+                  <button type="button" className="btn-strong" onClick={() => onNavigate("fund-strategy")}>
                     Decide on Fund strategy
                   </button>
                 </div>
@@ -822,7 +822,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                 {c.owner_name ? <span className="muted small"> · {c.owner_name}</span> : null}
                 {result && <p className="small" style={{ margin: "4px 0 0" }}>{result.slice(0, 400)}</p>}
                 {c.kind === "DECK_REWORK" && c.state === "DONE" && (
-                  <button type="button" className="link-button" onClick={() => onNavigate("follow-on")}>Decide on Fund strategy</button>
+                  <button type="button" className="link-button" onClick={() => onNavigate("fund-strategy")}>Decide on Fund strategy</button>
                 )}
                 {/* CHANGING YOUR MIND HAS TO BE POSSIBLE. A dropped or finished card is kept
                     rather than deleted precisely because the decision might be revisited. Reopens

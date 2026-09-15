@@ -573,6 +573,7 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       */}
       <h3>What we are looking into</h3>
       <ul className="card-list small" data-testid="research-projects">
+        {projects.loading && <li className="state-message" data-testid="research-projects-loading">Loading…</li>}
         {(projects.data?.projects ?? []).map((p) => (
           <li key={p.id}>
             {/* Was the raw column value — ACTIVE, DRAFT. */}
