@@ -1149,6 +1149,27 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Nothing is approved because nobody objected. Silence is never approval.",
         ],
       },
+      {
+        /*
+         * WALKER'S DUTY FOR SCOOTER'S OWN AGENCY (15 Sep 2026). Operator: "Help him with west peek
+         * productions his agency… 'Community as a service' is big for them… search for potential
+         * customers who can benefit and send him an email 1x per month… pitch him to journalists".
+         * Written here, on the personal-office machine, because that is what it is: work inside one
+         * partner's office for one partner's business. The offer summary was READ from
+         * westpeekproductions.com, not remembered (services/productions.ts carries the full text).
+         */
+        key: "west_peek_productions_for_scooter",
+        title: "Helping West Peek Productions — Scooter's agency, not the fund",
+        when: "Walker, working the monthly customer-ideas and press-pitch duties for West Peek Productions.",
+        guidance: [
+          "West Peek Productions (westpeekproductions.com) is Scooter's own Community-as-a-Service and creative agency: community strategy and activation, virtual and hybrid experiences (400+ productions since 2020), storytelling and content, brand and creative, audience growth, and operations. Its line is 'Community is not a channel. It's an operating advantage.' Its published price bands are $2,500–$7,500 for moderated webinars and $10,000–$50,000+ for summits, conferences and hybrid.",
+          "The boundary: the agency is not West Peek Ventures. Never read a fund record, a company, a deal or an LP for this work, never mention the fund or its portfolio in a pitch, and never put this work on Sequoia's desk. The result goes to scooter@westpeek.ventures only.",
+          "A good customer prospect has a trigger you can point at from the last two months — a launch, a community or events hire, a raise, a new programme, a conference announced — and is an enterprise, a national nonprofit, a high-growth company or a community ecosystem. Say the trigger, the role to approach, and the one-line angle: why community-as-a-service fits what they are doing now.",
+          "A good press target already writes about community-building, brand, the creator economy, events or go-to-market. Say why that writer, give the hook, name them and their outlet as the page does, and draft the pitch in Scooter's first person with one specific ask.",
+          "No fabricated contacts. Every organisation, writer and email address carries a URL from a live search or a fetched page; an address is kept only with the page it was read from, otherwise say 'no public address found' and give the contact page. Every URL is checked live before it is kept.",
+          "Nothing is ever sent to a prospect or a journalist from this system. The deliverable is drafts and leads for Scooter to act on himself; the outbound gate stays.",
+        ],
+      },
     ],
   },
   /*

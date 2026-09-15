@@ -90,6 +90,29 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     why: "So a broken connection is reported by the system, not discovered by a partner mid-task.",
     deliveredBy: ["the firm"],
   },
+  // WALKER'S DUTIES FOR SCOOTER'S OWN AGENCY. West Peek Productions is not part of the fund; these
+  // two are personal-office work for Scooter and the result reaches him alone, by email. The
+  // facts say so, because a partner reading this page must be able to tell fund work from a
+  // colleague's private business at a glance.
+  productions_customer_ideas: {
+    what:
+      "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker searches " +
+      "for 10 organisations that plausibly need Community-as-a-Service right now (a launch, a hire, a " +
+      "raise, a programme), the role to approach, a one-line angle and the page it came from; every " +
+      "page is checked live before it is kept. Emailed to scooter@westpeek.ventures only. Nobody is contacted.",
+    why: "So Scooter opens the month with ten qualified leads and a reason for each, instead of a blank page.",
+    deliveredBy: ["Walker"],
+  },
+  productions_press_pitches: {
+    what:
+      "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker drafts " +
+      "pitches to 5 journalists or newsletter writers on community, brand, the creator economy or " +
+      "go-to-market: why that writer, the hook, their name and outlet, a public email address only " +
+      "when a live page shows one, and a piece proving the beat. Drafts, emailed to Scooter to send " +
+      "himself; nothing goes to a journalist from here.",
+    why: "So the agency is pitched to the press every month without Scooter starting from a blank page or the OS sending anything outside the firm.",
+    deliveredBy: ["Walker"],
+  },
   wednesday_prep: {
     what: "Prepares each partner's packet for the Wednesday sync — what completed, what is waiting, and where the records and the deck disagree.",
     why: "So the sync starts from a page, not from memory.",

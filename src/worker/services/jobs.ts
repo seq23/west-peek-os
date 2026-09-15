@@ -411,6 +411,25 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     };
   }
 
+  /*
+   * Walker's two monthly duties for West Peek Productions — Scooter's own agency, not the fund.
+   * The job opens the month's card; the employee sweep does the work (search, verify, email
+   * Scooter) so this tick does one cheap thing. Opening a card that is already open is a success:
+   * the duty is monthly and the job fires daily.
+   */
+  if (job.job_key === "productions_customer_ideas" || job.job_key === "productions_press_pitches") {
+    const { openProductionsCard } = await import("./productions");
+    const out = await openProductionsCard(env, job.job_key, now, job.firm_scope);
+    artifacts.push({ kind: "WORK_CARD", ref_type: "work_card", ref_id: out.cardId });
+    return {
+      status: "SUCCEEDED",
+      summary: out.opened
+        ? `Opened "${out.title}" on Walker's desk; the employee sweep works it within minutes and emails Scooter.`
+        : `This month's card is already open or done: "${out.title}".`,
+      artifacts,
+    };
+  }
+
   if (job.kind === "INTELLIGENCE") {
     // A BRIEF OWED TODAY IS THE WHOLE TICK. Building it reads what earlier ticks gathered; it does
     // not also gather. When no brief is owed, the tick reads one source.

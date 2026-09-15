@@ -44,6 +44,7 @@ const EGRESS_ALLOWED = new Map([
   ["src/worker/effects/secEdgarClient.ts", "SEC EDGAR full-text search; public, read-only, https-only, one request per market map, sends the User-Agent the SEC's fair-access policy requires"],
   ["src/worker/effects/networkOsClient.ts", "Network OS snapshot pull (§12A); READ-ONLY by construction — no POST in the file — and inert unless base URL, session secret and approved email are all set"],
   ["src/worker/effects/runwareClient.ts", "Runware image generation; the PROMPT is the only thing that leaves — no firm records travel with it — https-only to one host, inert unless RUNWARE_API_KEY is set, one image per call, size and time capped"],
+  ["src/worker/effects/urlLiveness.ts", "Liveness check on a page a search-grounded model cited (Walker's West Peek Productions research); GET with the body discarded, https-only, same host guard as feed acquisition, short timeout, carries nothing out"],
   ["src/worker/effects/googleClient.ts", "Google OAuth + Calendar (P51); READ-ONLY scopes so nothing here can alter a calendar, inert unless GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are both set, and reachable only for a partner who granted consent themselves"],
 ]);
 
