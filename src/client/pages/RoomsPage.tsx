@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, getDevUser, useApi } from "../lib/api";
 import { EventsPage } from "./EventsPage";
 import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
+import { sameOrg } from "@shared/events/roomPacket";
 import { HowThisWorks } from "./HowThisWorks";
 
 /**
@@ -785,7 +786,7 @@ function RoomProposal(props: {
                   <li key={sp.id}>
                     <strong>{sp.rank ? `${sp.rank}. ` : ""}{sp.org_name}</strong>
                     <span className="muted"> · {categoryLabel(sp.category)} · {tierLabel(sp.tier)} · ask {usd(sp.ask_low_usd)}</span>
-                    {sp.note?.includes("partner") && <span className="help-tag help-tag-muted"> named by you</span>}
+                    {(brief?.sponsorProspects ?? []).some((n) => sameOrg(n, sp.org_name)) && <span className="help-tag help-tag-muted"> named by you</span>}
                     <div>
                       <strong>Evidence they sponsor:</strong>{" "}
                       {sp.evidence_url ?? sp.source_url

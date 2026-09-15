@@ -277,8 +277,13 @@ export function renderPacketHtml(v: PacketView): string {
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;background:var(--paper);color:var(--ink)}
   body{font-family:"Public Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;font-size:11.5px;line-height:1.5}
-  .page{width:8.5in;min-height:11in;padding:0.6in 0.7in 0.55in;background:var(--paper);page-break-after:always;break-after:page;position:relative;display:flex;flex-direction:column}
+  /* A SECTION FLOWS ONTO THE NEXT SHEET; only the cover is a full sheet. The first render fixed
+     every section at 11in and broke after it, so a section that ran long left a sheet that was
+     nine-tenths blank (found by reading the rendered PDF, not the HTML). */
+  .page{width:8.5in;padding:0.6in 0.7in 0.55in;background:var(--paper);page-break-after:always;break-after:page;position:relative;display:flex;flex-direction:column}
+  .page.cover{min-height:11in}
   .page:last-child{page-break-after:auto;break-after:auto}
+  tr,.venue,.fit,.concept,.callout,.email{break-inside:avoid;page-break-inside:avoid}
   header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--rule);padding-bottom:6px;margin-bottom:18px}
   .wordmark{font-family:"Oswald","Public Sans",sans-serif;font-weight:600;letter-spacing:.18em;font-size:11px}
   .folio{font-size:9.5px;color:var(--muted);letter-spacing:.04em}
