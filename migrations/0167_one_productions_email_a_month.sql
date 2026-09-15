@@ -1,4 +1,4 @@
--- 0166 · one Productions email a month (15 Sep 2026)
+-- 0167 · one Productions email a month (15 Sep 2026)
 --
 -- "why is scooter getting 2 emails?" — the customer list and the press drafts were two jobs and two
 -- emails. One job now opens one card that does both and sends one note. The two earlier jobs are
@@ -20,3 +20,5 @@ UPDATE scheduled_job
  WHERE job_key IN ('productions_customer_ideas', 'productions_press_pitches') AND status = 'ACTIVE';
 
 INSERT OR IGNORE INTO schema_version (migration) VALUES ('0166_one_productions_email_a_month');
+
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0167_one_productions_email_a_month');
