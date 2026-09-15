@@ -196,7 +196,11 @@ async function checkPreconditions(
  * conservative is that a brief lands twenty minutes later, and the cost of being too ambitious is
  * that it never lands at all — which is the state this is fixing.
  */
-const SOURCES_PER_TICK = 2;
+// ONE THING PER TICK (15 Sep 2026). Two feeds parsed plus a partner's brief in one invocation
+// measured 37 ms of CPU (wrangler tail: `exceededCpu`) against the Free plan's 10 ms, and the
+// platform killed it every run for seventeen hours — no brief, no intelligence. A tick now either
+// builds ONE partner's brief (when one is still owed today) or reads ONE source.
+const SOURCES_PER_TICK = 1;
 const PARTNERS_PER_TICK = 1;
 
 async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runId: string, now: Date): Promise<RunOutcome> {
@@ -408,6 +412,18 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   if (job.kind === "INTELLIGENCE") {
+    // A BRIEF OWED TODAY IS THE WHOLE TICK. Building it reads what earlier ticks gathered; it does
+    // not also gather. When no brief is owed, the tick reads one source.
+    const { runDailyForAll, briefsOwedToday } = await import("./dailyIntelligence");
+    if (await briefsOwedToday(env, now)) {
+      const brief = await runDailyForAll(env, actor, now, undefined, PARTNERS_PER_TICK);
+      artifacts.push({ kind: "DAILY_BRIEFING", note: `${brief.generated} partner briefing(s)` });
+      return {
+        status: brief.failed > 0 && brief.generated === 0 ? "FAILED" : "SUCCEEDED",
+        summary: `Briefing tick: ${brief.generated} generated${brief.failed ? `, ${brief.failed} failed` : ""}${brief.remaining > 0 ? `, ${brief.remaining} still to build` : ""}. Sources are read on the next tick.`,
+        artifacts,
+      };
+    }
     /*
      * A BOUNDED SWEEP, because this tick has ten milliseconds of CPU.
      *
@@ -438,29 +454,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     for (const item of result.items.slice(0, 20)) {
       artifacts.push({ kind: "INTELLIGENCE_ITEM", ref_type: "intelligence_item", ref_id: item.id, note: item.title });
     }
-    // The briefing is chained here rather than given its own job, because it READS what the sweep
-    // just gathered. Two independent jobs could fire in either order, and a brief that ran first
-    // would brief on yesterday's items while reporting today's date.
-    //
-    // A failed brief does NOT fail the sweep. The sweep genuinely succeeded and its items are
-    // stored; marking the whole run failed would hide that and invite someone to re-run the
-    // gathering unnecessarily.
-    let briefingNote = "";
-    if (result.run.status !== "FAILED") {
-      try {
-        const { runDailyForAll } = await import("./dailyIntelligence");
-        // ONE PARTNER PER TICK, same reason. Two partners on a fifteen-minute cron means both
-        // briefs are built within half an hour, and neither tick does enough to be killed.
-        const brief = await runDailyForAll(env, actor, now, undefined, PARTNERS_PER_TICK);
-        briefingNote =
-          ` Briefings: ${brief.generated} generated${brief.failed ? `, ${brief.failed} failed` : ""}` +
-          `${brief.remaining > 0 ? `, ${brief.remaining} still to build` : ""}.`;
-        artifacts.push({ kind: "DAILY_BRIEFING", note: `${brief.generated} partner briefing(s)` });
-      } catch (err) {
-        briefingNote = ` Briefing step failed: ${err instanceof Error ? err.message : String(err)}`;
-      }
-    }
-
+    const briefingNote = "";
     return {
       status: result.run.status === "FAILED" ? "FAILED" : "SUCCEEDED",
       summary: `${result.run.status}: ${result.run.items_kept} item(s) kept, ${result.run.items_duplicate} duplicate, ${result.run.sources_failed} source failure(s).${briefingNote}`,

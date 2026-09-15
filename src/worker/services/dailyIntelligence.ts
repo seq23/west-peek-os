@@ -625,6 +625,42 @@ export const MAX_BRIEF_ATTEMPTS = 3;
  * `limit` exists so the manual path can still do everyone in one go: a human pressing the button is
  * not on the cron's CPU budget, and making them press it once per partner would be absurd.
  */
+/**
+ * Is any partner's brief still owed today? The scheduled tick asks this first: a tick that owes a
+ * brief builds only the brief; otherwise it reads one source. (A dry-run of `runDailyForAll`'s own
+ * "due" filter, with none of the work.)
+ */
+export async function briefsOwedToday(env: Env, now: Date, firmScope = "west-peek"): Promise<boolean> {
+  const partners = await env.WP_OS_DB.prepare(
+    `SELECT u.id, COALESCE(p.enabled, 1) AS enabled, COALESCE(p.timezone,'America/Chicago') AS timezone,
+            COALESCE(p.weekends, 0) AS weekends, COALESCE(p.earliest_start_local,'06:15') AS earliest_start_local
+       FROM firm_user u
+       LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
+       JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
+      WHERE u.status = 'ACTIVE'`,
+  ).all<{ id: string; enabled: number; timezone: string; weekends: number; earliest_start_local: string }>();
+  const done = new Set(
+    (
+      (
+        await env.WP_OS_DB.prepare(
+          `SELECT firm_user_id, report_date FROM intelligence_report
+            WHERE firm_scope = ?1 AND report_date >= ?2
+              AND (status = 'READY' OR status = 'GENERATING' OR (status = 'FAILED' AND attempts >= ${MAX_BRIEF_ATTEMPTS}))`,
+        )
+          .bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10))
+          .all<{ firm_user_id: string; report_date: string }>()
+      ).results ?? []
+    ).map((r) => `${r.firm_user_id}:${r.report_date}`),
+  );
+  return (partners.results ?? []).some(
+    (p) =>
+      p.enabled === 1 &&
+      (p.weekends === 1 || !isWeekend(now, p.timezone)) &&
+      isAfterLocalTime(now, p.timezone, p.earliest_start_local) &&
+      !done.has(`${p.id}:${localReportDate(now, p.timezone)}`),
+  );
+}
+
 export async function runDailyForAll(
   env: Env,
   actor: Actor,
