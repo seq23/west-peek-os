@@ -318,8 +318,9 @@ describe("real subsystems emit notifications", () => {
      * kind the operator sees most.
      */
     const saved = await call("/api/notifications/preferences", MP, "POST", {
-      // A window covering the whole clock, so this does not depend on when the suite runs.
-      quiet_hours: { start: 0, end: 23, timezone: "UTC" },
+      // A window built around NOW, so this does not depend on when the suite runs. (It used to be
+      // 0–23, which is "every hour but 23:00" — the suite went red at 23:xx UTC on 15 Sep 2026.)
+      quiet_hours: { start: new Date().getUTCHours(), end: (new Date().getUTCHours() + 2) % 24, timezone: "UTC" },
       push_enabled: false,
     });
     expect(saved.status).toBe(201);

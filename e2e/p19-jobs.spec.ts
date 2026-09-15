@@ -83,21 +83,26 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
  * business they serve. A job whose card said "no description" was the failure the facts exist to
  * stop; a job for a partner's private agency that read like fund work would be the same failure.
  */
-test("Walker's West Peek Productions duties are on the clock and labelled as Scooter's agency work", async ({ page }) => {
+test("Walker's West Peek Productions duty is on the clock, one note a month, labelled as Scooter's agency work", async ({ page }) => {
   await signIn(page);
   await gotoSurface(page, "Work");
+  // ONE job now (15 Sep 2026: "why is scooter getting 2 emails?"); the two it replaced are paused
+  // with the reason and still read on the page.
+  const job = page.getByTestId("job-productions_monthly");
+  await expect(job).toBeVisible();
+  await expect(job).toContainText("Scooter's own agency, not the fund");
+  await expect(job).toContainText("Walker");
+  await expect(job).toContainText("Running");
   for (const key of ["productions_customer_ideas", "productions_press_pitches"]) {
-    const job = page.getByTestId(`job-${key}`);
-    await expect(job).toBeVisible();
-    await expect(job).toContainText("Scooter's own agency, not the fund");
-    await expect(job).toContainText("Walker");
-    await expect(job).toContainText("Running");
+    const old = page.getByTestId(`job-${key}`);
+    await expect(old).toContainText("Switched off");
+    await expect(old).toContainText("Folded into productions_monthly");
   }
-  // Run one by hand: it opens the month's card on Walker's desk and says so. Walker is put on duty
+  // Run it by hand: it opens the month's card on Walker's desk and says so. Walker is put on duty
   // first — an earlier journey in the suite may have paused him, and a scheduled job may never
   // activate an employee itself (D10), so a paused Walker is a correct REFUSED, not this test.
   provisionLocalD1("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_walker';");
-  await page.getByTestId("job-run-productions_customer_ideas").click();
+  await page.getByTestId("job-run-productions_monthly").click();
   await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
-  await expect(page.getByTestId("job-runs-productions_customer_ideas")).toContainText("Walker's desk");
+  await expect(page.getByTestId("job-runs-productions_monthly")).toContainText("Walker's desk");
 });

@@ -423,7 +423,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
    * Scooter) so this tick does one cheap thing. Opening a card that is already open is a success:
    * the duty is monthly and the job fires daily.
    */
-  if (job.job_key === "productions_customer_ideas" || job.job_key === "productions_press_pitches") {
+  if (job.job_key === "productions_monthly" || job.job_key === "productions_customer_ideas" || job.job_key === "productions_press_pitches") {
     const { openProductionsCard } = await import("./productions");
     const out = await openProductionsCard(env, job.job_key, now, job.firm_scope);
     artifacts.push({ kind: "WORK_CARD", ref_type: "work_card", ref_id: out.cardId });

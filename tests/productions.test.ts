@@ -246,4 +246,32 @@ describe("the monthly card on Walker's desk", () => {
     const sent = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND payload_json LIKE '%Walker, your chief of staff%'").first<{ n: number }>())!.n;
     expect(sent).toBe(1);
   });
+
+  it("ONE email a month: the monthly card does both searches, hunts the addresses, and sends Scooter a single note", async () => {
+    const { openProductionsCard, renderMonthlyEmail } = await import("../src/worker/services/productions");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2026-11-01T14:00:00.000Z"));
+    expect(opened.title).toBe("Walker: West Peek Productions this month (2026-11)");
+    let searches = 0;
+    const out = await sweepOnce(env, new Date("2026-11-01T14:05:00.000Z"), {
+      productions: (e, card) => runProductionsCard(e, card, {
+        search: async (_e, _a, prompt) => { searches += 1; return { ok: true, text: /journalists/.test(prompt) ? pressJson : customerJson, detail: "ok" }; },
+        urlCheck,
+        pageText: async () => "Contact: a.writer@communityweekly.example",
+        now: new Date("2026-11-01T14:05:00.000Z"),
+      }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome).toBe("DONE");
+    const mails = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all<{ payload_json: string }>()).results ?? [];
+    const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
+    expect(delivered).toMatch(/Walker: West Peek Productions this month — \d+ customer lead\(s\) and \d+ press pitch\(es\)/);
+    expect(delivered).toMatch(/═══ 1 · WHO COULD BUY THIS MONTH/);
+    expect(delivered).toMatch(/═══ 2 · PRESS PITCHES — YOURS TO SEND/);
+    expect(delivered).toMatch(/Walker, your chief of staff/);
+    expect(delivered).toMatch(/os@joinwestpeek\.com/);
+    expect(mails.length, "at most one email for the month").toBeLessThanOrEqual(1);
+    expect(searches).toBeGreaterThanOrEqual(2);
+    expect(renderMonthlyEmail("2026-11", [], [], [])).toMatch(/Nothing with a live citation this month/);
+  });
 });
