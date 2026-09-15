@@ -98,7 +98,7 @@ export interface NetworkRecord {
  * accidentally talk to a live system.
  */
 export interface NetworkOsClient {
-  pull(resource: NetworkResource, cursor: string | null): Promise<{ records: NetworkRecord[]; next_cursor: string | null; provider_version?: string }>;
+  pull(resource: NetworkResource, cursor: string | null, opts?: { since?: string | null }): Promise<{ records: NetworkRecord[]; next_cursor: string | null; provider_version?: string }>;
   push(resource: NetworkResource, record: { external_id: string; fields: Record<string, unknown> }, idempotencyKey: string): Promise<{ ok: boolean; response: unknown }>;
 }
 
@@ -314,13 +314,21 @@ export async function pullResource(
     throw new NetworkAdapterError(503, "adapter_unconfigured", "no Network OS client is configured (UNPROVEN — INTEGRATION/CREDENTIAL GATE)");
   }
 
-  const cursorRow = await env.WP_OS_DB.prepare("SELECT cursor_value FROM network_sync_cursor WHERE resource = ?1 AND firm_scope = ?2")
+  const cursorRow = await env.WP_OS_DB.prepare("SELECT cursor_value, last_sync_at FROM network_sync_cursor WHERE resource = ?1 AND firm_scope = ?2")
     .bind(resource, firmScope)
-    .first<{ cursor_value: string | null }>();
+    .first<{ cursor_value: string | null; last_sync_at: string | null }>();
 
   let page: { records: NetworkRecord[]; next_cursor: string | null; provider_version?: string };
   try {
-    page = await client.pull(resource, cursorRow?.cursor_value ?? null);
+    // A pass still in progress re-reads the whole community (its window positions mean nothing
+    // against a filtered set); a completed pass asks only for what changed since it completed.
+    const inProgress = readProgress(cursorRow?.cursor_value ?? null) > 0;
+    // Five minutes of overlap: a row updated while the last pass was being read is asked for
+    // again rather than missed, and an already-applied row costs nothing.
+    const since = !inProgress && cursorRow?.last_sync_at ? new Date(Date.parse(cursorRow.last_sync_at) - 5 * 60_000).toISOString() : null;
+    const t0 = Date.now();
+    page = await client.pull(resource, cursorRow?.cursor_value ?? null, { since });
+    console.log("network pull", JSON.stringify({ resource, since, records: page.records.length, ms: Date.now() - t0 }));
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     // Bounded, visible failure: previously synced mappings stay readable.
@@ -768,8 +776,8 @@ function errorResponse(err: unknown): Response {
 export function configuredClient(env: Env): NetworkOsClient | null {
   if (!networkOsConfigured(env)) return null;
   return {
-    async pull(resource: NetworkResource) {
-      const result = await pullSnapshot(env);
+    async pull(resource: NetworkResource, _cursor: string | null, opts: { since?: string | null } = {}) {
+      const result = await pullSnapshot(env, undefined, { since: opts.since ?? null });
       if (!result.ok || !result.snapshot) throw new Error(result.detail);
       const rows = resourceRows(result.snapshot, resource);
       return {
