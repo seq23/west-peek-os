@@ -392,16 +392,17 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     };
   }
 
-  // Parker's monthly Room proposal. Same job_key-before-kind reasoning as above, and the same
-  // shape as weekly_mp_review: it fires daily and generates only when the current month has no
-  // proposal yet. schedule_kind has no MONTHLY value and adding one would mean rebuilding
-  // scheduled_job's CHECK; a month check in SQL costs one query and no migration risk.
   if (job.job_key === "productions_intro_note") {
     const { runIntroNote } = await import("./productions");
     const out = await runIntroNote(env);
     return { status: out.status, summary: out.summary, artifacts };
   }
 
+  // Parker's Rooms. The job does ONE CHEAP THING per run — opens Parker's card for a Room a
+  // partner asked for, or queues his own Room for the following month — and the employee sweep
+  // runs the chain (sponsor discovery and research, three concepts, venues, the packet, the PDF)
+  // a stage per tick. No model runs in this tick. schedule_kind has no MONTHLY value and adding
+  // one would mean rebuilding scheduled_job's CHECK; a month check in SQL costs one query.
   if (job.job_key === "monthly_room_proposal") {
     const { runMonthlyRoomProposal } = await import("./roomPacket");
     const out = await runMonthlyRoomProposal(env, actor, now.toISOString());
@@ -411,7 +412,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     return {
       status: "SUCCEEDED",
       // A skipped month is a success, not a no-op worth alerting on — the shelf is already stocked.
-      summary: out.generated ? `Room proposed: ${out.detail}` : out.detail,
+      summary: out.generated ? `Rooms: ${out.detail}` : out.detail,
       artifacts,
     };
   }

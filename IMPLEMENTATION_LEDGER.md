@@ -5454,3 +5454,41 @@ from Network OS" scheduled job flipped from `Degraded` to `SUCCEEDED` (4,712 con
 synced, vs. the pre-fix 250-contact cap), and an open work card ("Deck: Vynlo") showed Wyatt's
 actual extracted findings from a real inbound deck — sector, product description, and company
 status — confirming both journeys the operator asked about are live and working on real data.
+
+## Parker runs the whole chain — the Room packet as research, judgement and a PDF (15 Sep 2026)
+
+**The verdict.** The first October packet under 0161/0164 ("The Rise of the Black Lawyer Room")
+was "sub par": Harvey AI at $10K with no evidence it sponsors anything, two more legal vendors from
+memory, five steakhouses, agenda lines. The operator showed the standard she meant (a Gemini
+transcript): the named sponsor's actual programme (US Open, three NBA/WNBA teams, PSG, Lavender
+Law), the people who run its partnerships by name and title, the fit argued in the sponsor's own
+strategic language, three concepts compared and one chosen, a culturally intentional venue, a run of
+show to the minute, a line budget with its basis, and the cold email to the named contact.
+
+**What shipped (migration 0166, PR "Parker runs the whole chain").**
+
+- **A chain, not a prompt.** `services/roomPacket.ts` runs six stages — DISCOVER (invite-list
+  reality check from the firm's own records + "who pays to be in front of these people", every
+  evidence URL liveness-checked), RESEARCH (each sponsor's programme, the partnerships contact read
+  off a fetched page that must carry the name, their strategic language; two per tick, up to six),
+  CONCEPTS (three, compared on tone / value to the sponsor / who it fits / cost band; one chosen,
+  pushback on the brief), VENUES (searched for the chosen concept's direction), PACKET (run of show
+  with named roles and the sponsor's minutes, budget lines with basis, a sponsorship structure priced
+  so all slots = cost + the firm's keep, ranked sponsors, the pitch email in Sequoia's voice), PDF
+  (Browser Rendering, `doc_type ROOM_PACKET`, linked on the packet, emailed to both partners with
+  Parker's two-line introduction). State lives on the row (`build_stage`, `build_state_json`); a
+  dead tick loses one stage.
+- **Inside the sweep.** The request door and the Rooms job only queue a draft and open a
+  `ROOM_PACKET` card on Parker's desk; `workSweep` runs one stage per tick and charges no attempt for
+  a stage that completed (`progressed`). Nothing per tick is more than one or two model calls and a
+  handful of fetches.
+- **The money is a target with reasons.** `SPONSORSHIP_RULE` ($10K × up to 4) is gone from the
+  prompt, the skill library and `computeEconomics`; `SPONSORSHIP_TARGET.keepUsd` is the fixed point,
+  the structure (title / supporting / an exclusive option) is Parker's judgement, and the packet says
+  plainly when the structure falls short of the keep.
+- **Evidence or nothing.** A sponsor's evidence URL survives only if research verified it; a contact
+  only if the page carried the name; an unevidenced prospect ranks last and is flagged; a partner-named
+  sponsor with no history is said to have none.
+- **Proof.** `tests/roomPacket.test.ts` (45), `tests/roomRequest.test.ts` (9, the chain through
+  `sweepOnce` with every dependency injected, the PDF in R2, the two emails), the e2e request journey
+  updated for the queued chain. Full suite 1,941 green; every validator in CI green.

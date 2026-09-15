@@ -55,11 +55,13 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
   },
   monthly_room_proposal: {
     what:
-      "Rooms. Every half hour it does one thing: builds a Room a partner asked for on Events & Rooms " +
-      "whose build did not finish, or — when the FOLLOWING month has no packet yet — proposes Parker's " +
-      "own Room for it: theme, who is in the room, run of show, venues, sponsor prospects at $10,000 " +
-      "each, risks, and what keeping it commits the firm to. The packet is emailed to both partners.",
-    why: "So a Room is proposed with time to sell its sponsors, and a Room you asked for is built even if the button's build failed.",
+      "Rooms. Every quarter hour it does one cheap thing: opens Parker's card for a Room a partner asked " +
+      "for on Events & Rooms, or — when the FOLLOWING month has no packet yet — queues Parker's own Room " +
+      "for it. The employee sweep then runs the chain a stage at a time: who pays to be in front of this " +
+      "audience (with evidence and the named person who runs partnerships), three concepts compared and one " +
+      "chosen, venues with a reason, the run of show to the minute, the budget with its basis, a sponsorship " +
+      "structure priced to cost plus the firm's keep, the pitch email, and a PDF emailed to both partners.",
+    why: "So a Room is proposed with time to sell its sponsors, and a Room you asked for is built without a second prompt from you.",
     deliveredBy: ["Parker"],
   },
   // EVERY JOB SAYS WHAT IT IS. Until 14 Sep 2026 five of these read "No description has been

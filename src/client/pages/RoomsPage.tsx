@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, useApi } from "../lib/api";
+import { api, getDevUser, useApi } from "../lib/api";
 import { EventsPage } from "./EventsPage";
 import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
 import { HowThisWorks } from "./HowThisWorks";
@@ -76,7 +76,31 @@ interface PacketRow {
   build_attempts: number;
   parent_packet_id: string | null;
   emailed_at: string | null;
+  /** Where Parker is in the chain while it is a DRAFT (QUEUED … DONE). */
+  build_stage?: string;
+  work_card_id?: string | null;
+  /** The downloadable PDF, once rendered. */
+  document_id?: string | null;
+  pushback_md?: string | null;
 }
+
+/** What the page says while Parker is on each stage; mirrors BUILD_STAGE_LABELS on the worker. */
+const BUILD_STAGES = ["DISCOVER", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "PDF"] as const;
+const STAGE_LABELS: Record<string, string> = {
+  QUEUED: "waiting for Parker to pick it up",
+  DISCOVER: "reading the firm's list and finding who pays to be in front of this audience",
+  RESEARCH: "researching each sponsor — their programme, the people who run it, their own words",
+  CONCEPTS: "ideating three concepts and choosing one",
+  VENUES: "searching venues for the chosen concept",
+  PACKET: "writing the packet — run of show, budget, structure, the pitch",
+  PDF: "rendering the PDF and emailing both partners",
+  DONE: "done",
+};
+
+interface Concept { title: string; format: string; premise: string; tone: string; valueToSponsor: string; whoItFits: string; costBand: string; signatureMoment: string; venueDirection: string; chosen: boolean }
+interface RunOfShowLine { time: string; minutes: number; what: string; who: string }
+interface InviteCheck { totalContacts: number; matchingCount: number; matchedOn: string[]; archetypes: string[]; namedFromRecords: string[]; verdict: string; note: string }
+interface PitchEmail { to: string; subject: string; body: string }
 
 interface Brief {
   audience: string;
@@ -131,6 +155,9 @@ interface VenueRow {
   estimate_low_usd?: number | null;
   estimate_high_usd?: number | null;
   estimate_basis?: string | null;
+  why_here?: string | null;
+  room_minimum_usd?: number | null;
+  is_fallback?: number | null;
 }
 
 interface SponsorRow {
@@ -147,10 +174,20 @@ interface SponsorRow {
   source_url?: string | null;
   note?: string | null;
   decline_reason: string | null;
+  /** The chain's research (packets built from 15 Sep 2026): evidence, the named contact, the ranking. */
+  evidence_url?: string | null;
+  evidence_note?: string | null;
+  contact_name?: string | null;
+  contact_title?: string | null;
+  contact_source_url?: string | null;
+  fit_argument?: string | null;
+  rank?: number | null;
 }
 
 interface BudgetLine { key: string; label: string; lowUsd: number; highUsd: number; basis: string }
-interface Scenario { sponsors: number; sponsorshipUsd: number; netLowUsd: number; netHighUsd: number }
+interface Scenario { sponsors: number; sponsorshipUsd: number; netLowUsd: number; netHighUsd: number; description?: string }
+interface SponsorSlot { tier: string; count: number; askUsd: number; gets: string }
+interface Structure { slots: SponsorSlot[]; exclusiveUsd: number | null; exclusiveGets: string | null; rationale: string }
 
 interface Economics {
   venueLowUsd: number;
@@ -166,10 +203,43 @@ interface Economics {
   estimatedCostHighUsd: number;
   netLowUsd: number;
   netHighUsd: number;
+  /** The structure priced to cost + the firm's keep (packets built from 15 Sep 2026). */
+  structure?: Structure;
+  keepTargetUsd?: number;
+  requiredUsd?: number;
+  reachesKeep?: boolean;
+  exclusiveScenario?: Scenario | null;
 }
 
 const usd = (n: number | null | undefined): string =>
-  n === null || n === undefined ? "—" : `$${Math.round(n).toLocaleString("en-US")}`;
+  n === null || n === undefined ? "—" : `${n < 0 ? "−" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
+
+/**
+ * THE PDF, FETCHED WITH THE SAME IDENTITY EVERY OTHER CALL USES, then handed to the browser to save.
+ * A plain link to the download route works behind Cloudflare Access (cookies) and nowhere the
+ * identity is a header — the same finding as DocumentPreview. One way of getting a file, both places.
+ */
+async function downloadDocument(documentId: string, filename: string): Promise<string | null> {
+  const headers: Record<string, string> = {};
+  const devUser = getDevUser();
+  if (devUser) headers["x-wpos-dev-user"] = devUser;
+  try {
+    const res = await fetch(`/api/documents/${documentId}/download`, { headers });
+    if (!res.ok) return `Could not fetch the packet (HTTP ${res.status}).`;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: "application/pdf" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    return null;
+  } catch (err) {
+    return `Could not fetch the packet (${err instanceof Error ? err.message : String(err)}).`;
+  }
+}
 
 const range = (low: number | null, high: number | null): string => {
   if (low === null && high === null) return "not published";
@@ -256,22 +326,20 @@ export function RoomsPage(): JSX.Element {
   async function propose(body: Record<string, unknown>): Promise<boolean> {
     setBusy(true);
     setMessage(null);
-    const res = await api<{ flags: { detail: string }[]; venuesKept: number; searchDetail: string; error?: string; detail?: string }>(
+    const res = await api<{ packet: PacketRow; queued: boolean; error?: string; detail?: string }>(
       "/api/rooms/packets", { method: "POST", body },
     );
     setBusy(false);
     packets.reload();
     if (res.status === 201 && res.data) {
-      const flags = res.data.flags ?? [];
       setMessage(
-        `Proposed and emailed to both partners. ${res.data.venuesKept} venue(s) found — ${res.data.searchDetail}.` +
-        (flags.length ? ` ${flags.length} thing(s) to know: ${flags.map((f) => f.detail).join(" · ")}` : ""),
+        res.data.queued
+          ? "On Parker's desk. He runs the chain a stage every few minutes — sponsors with evidence, three concepts, venues, the packet, the PDF — and emails both partners when it lands, usually within the hour. The card below says which stage he is on."
+          : `That Room is already ${(PACKET_STATE[res.data.packet.status]?.label ?? res.data.packet.status).toLowerCase()}: ${res.data.packet.title}.`,
       );
       return true;
     }
-    setMessage(
-      `Parker could not build that Room (${res.data?.detail ?? res.status}). The request is kept below as a draft and he tries again on the half hour.`,
-    );
+    setMessage(`Parker could not take that request (${res.data?.detail ?? res.status}).`);
     return false;
   }
 
@@ -439,7 +507,8 @@ export function RoomsPage(): JSX.Element {
           "Move a sponsor along, and record what they committed",
         ]}
         aiDoes={[
-          "Parker builds the Room you asked for, or proposes one for next month: theme, who is in the room, run of show, venues, sponsors at $10,000 each, risks, and what keeping it commits you to — and emails both partners the packet",
+          "Parker builds the Room you asked for, or proposes one for next month, as a chain: who pays to be in front of this audience (with evidence and the named person who runs their partnerships), three concepts compared and one chosen, venues with a reason, the run of show to the minute, the budget with its basis, a sponsorship structure priced to cost plus the firm's keep, the pitch email — and a PDF emailed to both partners",
+          "Parker reads the firm's own list and says whether it can fill the room before you commit",
           "Parker finds candidate venues by live search and reads prices off the page it cites",
           "Parker reads close-out notes and turns what West Peek committed to into assigned work",
           // Parker, not Wynn: that seat was retired in the cull and `brand_sponsorship_revenue` sits
@@ -484,8 +553,9 @@ function RoomProposal(props: {
   onChanged: () => void;
 }): JSX.Element {
   const p = props.packet;
+  const [pdfProblem, setPdfProblem] = useState<string | null>(null);
   const detail = useApi<{
-    packet: PacketRow & { agenda_md: string | null; seed_questions_json: string; guest_ideas_json: string; audience: string | null; risks_json: string; commitment_md: string | null };
+    packet: PacketRow & { agenda_md: string | null; seed_questions_json: string; guest_ideas_json: string; audience: string | null; risks_json: string; commitment_md: string | null; concepts_json?: string; concept_choice_md?: string | null; run_of_show_json?: string; pitch_email_json?: string | null; invite_check_json?: string | null };
     brief: Brief | null;
     venues: VenueRow[];
     sponsors: SponsorRow[];
@@ -504,6 +574,13 @@ function RoomProposal(props: {
   const seedQuestions: string[] = d ? safeList<string>(d.packet.seed_questions_json) : [];
   const guestIdeas = d ? safeList<{ description: string; why: string | null }>(d.packet.guest_ideas_json) : [];
   const risks: string[] = d ? safeList<string>(d.packet.risks_json ?? "[]") : [];
+  const concepts: Concept[] = d ? safeList<Concept>(d.packet.concepts_json ?? "[]") : [];
+  const runOfShow: RunOfShowLine[] = d ? safeList<RunOfShowLine>(d.packet.run_of_show_json ?? "[]") : [];
+  const chosenConcept = concepts.find((c) => c.chosen) ?? null;
+  let inviteCheck: InviteCheck | null = null;
+  try { inviteCheck = d?.packet.invite_check_json ? (JSON.parse(d.packet.invite_check_json) as InviteCheck) : null; } catch { inviteCheck = null; }
+  let pitchEmail: PitchEmail | null = null;
+  try { pitchEmail = d?.packet.pitch_email_json ? (JSON.parse(d.packet.pitch_email_json) as PitchEmail) : null; } catch { pitchEmail = null; }
 
   // A DRAFT is a request Parker has not finished. It shows what was asked and where the build is,
   // and nothing else — there is no packet to read yet.
@@ -516,13 +593,18 @@ function RoomProposal(props: {
         </div>
         <p className="muted small">For {monthWord(p.proposed_for_month)}{brief?.city ? ` · ${brief.city}` : ""}</p>
         {brief && <BriefBlock brief={brief} />}
+        <p className="small" data-testid={`build-stage-${p.id}`}>
+          <strong>Stage {Math.max(1, BUILD_STAGES.indexOf((p.build_stage === "QUEUED" ? "DISCOVER" : p.build_stage ?? "DISCOVER") as (typeof BUILD_STAGES)[number]) + 1)} of {BUILD_STAGES.length}:</strong>{" "}
+          {STAGE_LABELS[p.build_stage ?? "QUEUED"] ?? p.build_stage}.
+          {p.work_card_id ? " The card is on Parker's desk on Work; the sweep advances it every few minutes." : " Parker's card opens on the next tick of the Rooms job."}
+        </p>
         {p.build_error ? (
           <p className="notice notice-gate small" data-testid={`build-error-${p.id}`}>
-            Parker could not build it (attempt {p.build_attempts}): {p.build_error}. He tries again on the
-            half hour, up to three times; after that it waits here for you to ask again or dismiss it.
+            Parker could not finish that stage (attempt {p.build_attempts}): {p.build_error}. The sweep retries the
+            same stage, up to three times; after that the card is blocked and waits for you to ask again or dismiss it.
           </p>
         ) : (
-          <p className="state-empty">Parker is building this Room — searching venues and writing the packet. It lands here within the hour.</p>
+          <p className="state-empty">Parker is building this Room. Every stage he finishes is kept, so a retried tick picks up where he left off. It lands here, and in both partners' inboxes with the PDF, when the chain is done.</p>
         )}
         <div className="form-row">
           <button type="button" onClick={() => props.onDecide(p.id, "DECLINED")} data-testid={`decline-${p.id}`}>
@@ -552,6 +634,33 @@ function RoomProposal(props: {
       </p>
       {brief && <BriefBlock brief={brief} />}
 
+      <p className="form-row" data-testid={`packet-pdf-${p.id}`}>
+        {p.document_id ? (
+          <>
+            <button
+              type="button"
+              className="btn-strong"
+              data-testid={`download-packet-${p.id}`}
+              onClick={async () => {
+                const problem = await downloadDocument(p.document_id!, `west-peek-room-${p.proposed_for_month}-${p.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60)}.pdf`);
+                setPdfProblem(problem);
+              }}
+            >
+              Download the packet (PDF)
+            </button>
+            {pdfProblem && <span className="muted small">{pdfProblem}</span>}
+          </>
+        ) : (
+          <span className="muted small">No PDF for this one — it was built before packets were rendered, or the browser was not available. The whole packet is below and in the email.</span>
+        )}
+      </p>
+
+      {p.pushback_md && (
+        <div className="notice notice-gate small" data-testid={`pushback-${p.id}`}>
+          <strong>Where Parker pushes back:</strong> {p.pushback_md}
+        </div>
+      )}
+
       {detail.loading && <p className="state-empty">Reading the packet…</p>}
 
       {!detail.loading && !d && (
@@ -573,6 +682,39 @@ function RoomProposal(props: {
               collapsable with an arrow… it takes up too much space when things aren't collapsable
               and becomes too busy." Each summary line carries the one number that matters, so a
               closed packet still reads as a packet and not as a list of doors. */}
+          <Fold title="The concept, and the two it beat" fact={concepts.length === 0 ? "built before Parker compared concepts" : `${chosenConcept?.title ?? "chosen"} over ${concepts.length - 1} other${concepts.length === 2 ? "" : "s"}`} testId={`fold-concepts-${p.id}`}>
+            {concepts.length === 0 ? (
+              <p className="state-empty">This packet was built in one pass, before Parker ideated three concepts and chose. Ask again to get the comparison.</p>
+            ) : (
+              <>
+                <table data-testid={`packet-concepts-${p.id}`}>
+                  <thead><tr><th>Concept</th><th>Tone</th><th>Value to the sponsor</th><th>Who it fits</th><th>Cost band</th></tr></thead>
+                  <tbody>
+                    {concepts.map((c) => (
+                      <tr key={c.title}>
+                        <th scope="row">{c.title}{c.chosen && <span className="help-tag help-tag-good"> chosen</span>}<div className="muted small">{formatLabel(c.format)} · {c.signatureMoment}</div></th>
+                        <td className="small">{c.tone}</td><td className="small">{c.valueToSponsor}</td><td className="small">{c.whoItFits}</td><td className="small">{c.costBand}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {d.packet.concept_choice_md && <p className="small"><strong>Why this one:</strong> {d.packet.concept_choice_md}</p>}
+              </>
+            )}
+          </Fold>
+
+          <Fold title="Can our own list fill it?" fact={inviteCheck ? `${inviteCheck.verdict.replace(/_/g, " ").toLowerCase()} — ${inviteCheck.matchingCount} of ${inviteCheck.totalContacts} contacts match` : "not checked"} testId={`fold-invite-${p.id}`}>
+            {!inviteCheck ? (
+              <p className="state-empty">Parker did not read the firm's list for this one. Assume the guest list is a build project.</p>
+            ) : (
+              <>
+                <p className="small">{inviteCheck.matchingCount} of {inviteCheck.totalContacts} contacts in the firm's records read as {inviteCheck.matchedOn.join(" / ")}. {inviteCheck.note}</p>
+                {inviteCheck.archetypes.length > 0 && <p className="small"><strong>Already on the list:</strong> {inviteCheck.archetypes.join("; ")}</p>}
+                {inviteCheck.namedFromRecords.length > 0 && <p className="muted small">A starting list, from our own records: {inviteCheck.namedFromRecords.join(", ")}</p>}
+              </>
+            )}
+          </Fold>
+
           <Fold title="Questions to seed it with" fact={seedQuestions.length === 0 ? "none suggested" : `${seedQuestions.length} question${seedQuestions.length === 1 ? "" : "s"}`} testId={`fold-questions-${p.id}`}>
             {seedQuestions.length === 0 ? (
               <p className="state-empty">None suggested. A Room with no opening question becomes a networking event.</p>
@@ -593,8 +735,17 @@ function RoomProposal(props: {
             )}
           </Fold>
 
-          <Fold title="How it runs" fact={d.packet.agenda_md ? `${formatLabel(p.format)}, ${p.target_min}–${p.target_max} people` : "no run of show written"} testId={`fold-agenda-${p.id}`}>
-            {d.packet.agenda_md ? (
+          <Fold title="Run of show" fact={runOfShow.length > 0 ? `${runOfShow.length} lines, ${runOfShow[0]!.time} to ${runOfShow[runOfShow.length - 1]!.time}` : d.packet.agenda_md ? `${formatLabel(p.format)}, ${p.target_min}–${p.target_max} people` : "no run of show written"} testId={`fold-agenda-${p.id}`}>
+            {runOfShow.length > 0 ? (
+              <table data-testid={`packet-ros-${p.id}`}>
+                <thead><tr><th>Time</th><th>Min</th><th>What happens</th><th>Who</th></tr></thead>
+                <tbody>
+                  {runOfShow.map((l, i) => (
+                    <tr key={`${l.time}-${i}`}><th scope="row">{l.time}</th><td>{l.minutes || ""}</td><td className="small">{l.what}</td><td className="muted small">{l.who}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : d.packet.agenda_md ? (
               <p className="small" style={{ whiteSpace: "pre-wrap" }}>{d.packet.agenda_md}</p>
             ) : (
               <p className="state-empty">Parker wrote no run of show. The evening has no shape yet.</p>
@@ -625,19 +776,31 @@ function RoomProposal(props: {
             fact={`${p.sponsor_count} sponsor${p.sponsor_count === 1 ? "" : "s"}, ${usd(p.sponsor_total_usd)} asked`}
             testId={`fold-sponsors-${p.id}`}
           >
-            <p className="muted small">{p.sponsor_count} sponsor{p.sponsor_count === 1 ? "" : "s"} at $10,000 each, {usd(p.sponsor_total_usd)} if all land.</p>
+            <p className="muted small">{p.sponsor_count} slot{p.sponsor_count === 1 ? "" : "s"}, {usd(p.sponsor_total_usd)} if all land — the structure is under “What it costs”. Ranked: approach the first one first.</p>
             {d.sponsors.length === 0 ? (
               <p className="state-empty">Parker named nobody to approach. A Room with no prospect is spend the fund carries alone.</p>
             ) : (
               <ul className="card-list small" data-testid={`packet-sponsors-${p.id}`}>
                 {d.sponsors.map((sp) => (
                   <li key={sp.id}>
-                    <strong>{sp.org_name}</strong>
-                    <span className="muted"> · {categoryLabel(sp.category)} · ask {usd(sp.ask_low_usd)}</span>
+                    <strong>{sp.rank ? `${sp.rank}. ` : ""}{sp.org_name}</strong>
+                    <span className="muted"> · {categoryLabel(sp.category)} · {tierLabel(sp.tier)} · ask {usd(sp.ask_low_usd)}</span>
                     {sp.note?.includes("partner") && <span className="help-tag help-tag-muted"> named by you</span>}
-                    <div>{sp.ask_detail ?? <span className="muted">Parker did not say why they fit.</span>}</div>
+                    <div>
+                      <strong>Evidence they sponsor:</strong>{" "}
+                      {sp.evidence_url ?? sp.source_url
+                        ? <>{sp.evidence_note ? `${sp.evidence_note} — ` : ""}<a href={sp.evidence_url ?? sp.source_url ?? undefined} target="_blank" rel="noreferrer noopener">{(sp.evidence_url ?? sp.source_url ?? "").replace(/^https?:\/\//, "").slice(0, 70)}</a></>
+                        : <span className="help-tag help-tag-warn">none found on a public page — not a qualified prospect yet</span>}
+                    </div>
+                    <div>
+                      <strong>Who runs partnerships:</strong>{" "}
+                      {sp.contact_name
+                        ? <>{sp.contact_name}{sp.contact_title ? `, ${sp.contact_title}` : ""}{sp.contact_source_url && <> — <a href={sp.contact_source_url} target="_blank" rel="noreferrer noopener">read from this page</a></>}</>
+                        : <span className="muted">no named contact on a public page — a person finds one</span>}
+                    </div>
+                    <div>{sp.fit_argument ?? sp.ask_detail ?? <span className="muted">Parker did not say why they fit.</span>}</div>
                     {sp.pitch && <div className="muted">Open with: {sp.pitch}</div>}
-                    {sp.source_url && <a href={sp.source_url} target="_blank" rel="noreferrer noopener">where this came from</a>}
+                    {sp.note && !sp.note.startsWith("Found by Parker") && !sp.note.startsWith("Named by the partner in her brief.") && <div className="muted">{sp.note}</div>}
                   </li>
                 ))}
               </ul>
@@ -653,6 +816,19 @@ function RoomProposal(props: {
             testId={`fold-budget-${p.id}`}
           >
             <Budget economics={economics} />
+          </Fold>
+
+          <Fold title="The pitch — a draft for Sequoia to send" fact={pitchEmail ? `to ${pitchEmail.to.slice(0, 60)}` : "not drafted"} testId={`fold-pitch-${p.id}`}>
+            {pitchEmail ? (
+              <div className="card small" data-testid={`packet-pitch-${p.id}`}>
+                <p className="muted">To: {pitchEmail.to}</p>
+                <p><strong>{pitchEmail.subject}</strong></p>
+                <p style={{ whiteSpace: "pre-wrap" }}>{pitchEmail.body}</p>
+                <p className="muted">Nothing has been sent. Copy it, edit it, send it from your own account.</p>
+              </div>
+            ) : (
+              <p className="state-empty">Parker did not draft the approach. The first sponsor conversation starts from a blank page.</p>
+            )}
           </Fold>
 
           <Fold title="What could go wrong" fact={risks.length === 0 ? "no risks named" : `${risks.length} risk${risks.length === 1 ? "" : "s"}`} testId={`fold-risks-${p.id}`}>
@@ -768,9 +944,11 @@ function RequestRoom(props: {
       <h4>{props.again ? `Propose "${props.again.title}" again, with changes` : "Ask Parker for a Room"}</h4>
       <p className="muted small">
         Say what you are thinking and he builds it from your suggestions: who should be in the room,
-        the month, the city, and any sponsor you already have in mind. He finds venues by live
-        search, names the sponsors to approach at $10,000 each, and emails the packet to both partners.
-        Nothing is booked and nobody outside the firm is contacted.
+        the month, the city, and any sponsor you already have in mind. A sponsor you name is a seed —
+        he researches it, finds others, and ranks them all with evidence and a named contact. He
+        compares three concepts, picks one, prices the sponsorship to cover the cost plus the firm's
+        keep, and emails both partners the packet as a PDF. Nothing is booked and nobody outside the
+        firm is contacted.
       </p>
       <div className="form-row">
         <label>
@@ -827,7 +1005,7 @@ function RequestRoom(props: {
             Or let Parker think of one
           </button>
         )}
-        <span className="muted small">Takes about half a minute. If the build fails, the request stays on the list and he retries.</span>
+        <span className="muted small">Lands within the hour: the chain runs a stage every few minutes on Parker's desk, and the card below says where he is.</span>
       </div>
     </div>
   );
@@ -897,22 +1075,47 @@ function Budget({ economics }: { economics: Economics | null }): JSX.Element {
           </tbody>
         </table>
       )}
+      {economics.structure && economics.structure.slots.length > 0 && (
+        <div data-testid="packet-structure">
+          <p className="small"><strong>How the sponsorship is structured:</strong> {economics.structure.rationale}</p>
+          <table>
+            <thead><tr><th>Slot</th><th>How many</th><th>Ask</th><th>What they get</th></tr></thead>
+            <tbody>
+              {economics.structure.slots.map((sl) => (
+                <tr key={`${sl.tier}-${sl.askUsd}`}><th scope="row">{tierLabel(sl.tier)}</th><td>{sl.count}</td><td>{usd(sl.askUsd)}</td><td className="muted small">{sl.gets}</td></tr>
+              ))}
+              {economics.structure.exclusiveUsd && (
+                <tr><th scope="row">Exclusive — one sponsor, the whole room</th><td>1</td><td>{usd(economics.structure.exclusiveUsd)}</td><td className="muted small">{economics.structure.exclusiveGets}</td></tr>
+              )}
+            </tbody>
+          </table>
+          {typeof economics.requiredUsd === "number" && (
+            <p className="small">
+              Priced against the high-case cost {usd(economics.estimatedCostHighUsd)} plus the firm's target keep {usd(economics.keepTargetUsd)} = {usd(economics.requiredUsd)}.
+              All slots sold bring {usd(economics.sponsorTargetHighUsd)} — {economics.reachesKeep ? "the target is reached." : <span className="muted">short by {usd(economics.requiredUsd - economics.sponsorTargetHighUsd)}; Parker says so rather than rounding.</span>}
+            </p>
+          )}
+        </div>
+      )}
       <p className="small">
-        <strong>Sponsorship:</strong> {usd(economics.sponsorTargetLowUsd)}–{usd(economics.sponsorTargetHighUsd)} · <strong>Left over:</strong>{" "}
+        <strong>Sponsorship:</strong> {usd(economics.sponsorTargetLowUsd)}–{usd(economics.sponsorTargetHighUsd)} · <strong>Left for the firm:</strong>{" "}
         {usd(economics.netLowUsd)} to {usd(economics.netHighUsd)}
-        {economics.netLowUsd < 0 && <span className="muted"> — the low case does not cover itself</span>}
+        {economics.netLowUsd < 0 && <span className="muted"> — the first slot alone does not cover the high case</span>}
       </p>
       {economics.scenarios && economics.scenarios.length > 0 ? (
         <ul className="card-list small" data-testid="packet-scenarios">
           {economics.scenarios.map((sc) => (
             <li key={sc.sponsors}>
-              At <strong>{sc.sponsors} sponsor{sc.sponsors === 1 ? "" : "s"}</strong> ({usd(sc.sponsorshipUsd)}): {usd(sc.netLowUsd)} to {usd(sc.netHighUsd)} left over
+              At <strong>{sc.sponsors} sponsor{sc.sponsors === 1 ? "" : "s"}</strong>{sc.description ? ` (${sc.description})` : ""} — {usd(sc.sponsorshipUsd)}: {usd(sc.netLowUsd)} to {usd(sc.netHighUsd)} left for the firm
               {sc.netHighUsd < 0 ? <span className="muted"> — does not pay for itself</span> : sc.netLowUsd < 0 ? <span className="muted"> — pays only at the cheap end</span> : null}
             </li>
           ))}
+          {economics.exclusiveScenario && (
+            <li>With <strong>one exclusive sponsor</strong> — {usd(economics.exclusiveScenario.sponsorshipUsd)}: {usd(economics.exclusiveScenario.netLowUsd)} to {usd(economics.exclusiveScenario.netHighUsd)} left for the firm</li>
+          )}
         </ul>
       ) : (
-        <p className="muted small">Built before the sponsor scenarios existed; ask Parker again to see two versus four sponsors.</p>
+        <p className="muted small">Built before the sponsor scenarios existed; ask Parker again to see what is left as each sponsor lands.</p>
       )}
     </>
   );
@@ -951,15 +1154,18 @@ function Venue(props: { venue: VenueRow; onChanged: () => void }): JSX.Element {
       <div className="card-head-static">
         <span>
           <strong>{v.name}</strong>
+          {v.is_fallback ? <span className="help-tag help-tag-muted"> fallback</span> : null}
           {v.city && <span className="muted"> · {v.city}</span>}
           {v.capacity && <span className="muted"> · holds {v.capacity}</span>}
         </span>
         <span className={state.tone} data-testid={`venue-state-${v.id}`}>{state.label}</span>
       </div>
+      {v.why_here && <p className="small">{v.why_here}</p>}
       {/* THE ESTIMATE FIRST. Operator: "no venue is truly $0 and best guesses using comps should be
           used." The published price, where the page states one, follows it. */}
       <p className="small">
         <strong>Est. {range(v.estimate_low_usd ?? v.price_low_usd, v.estimate_high_usd ?? v.price_high_usd)}</strong>
+        {v.room_minimum_usd ? <span> · room minimum {usd(v.room_minimum_usd)}</span> : null}
         {v.estimate_basis ? <span className="muted"> — {v.estimate_basis}</span> : <span className="muted"> — estimate not recorded on this older packet</span>}
       </p>
       <p className="small">
