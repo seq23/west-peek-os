@@ -5,6 +5,11 @@ import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
+
+/** A Productions card, by kind — kept here (not imported) so the sweep and productions.ts do not import each other. */
+function isProductionsKind(kind: string | null | undefined): boolean {
+  return kind === "PRODUCTIONS_CUSTOMERS" || kind === "PRODUCTIONS_PRESS" || kind === "PRODUCTIONS_MONTHLY";
+}
 import { replyToRequester } from "./requestReply";
 
 /**
@@ -143,7 +148,7 @@ export async function announceOutcome(
   // SCOOTER'S PERSONAL-AGENCY WORK IS TOLD TO SCOOTER. A West Peek Productions card is a duty
   // inside his office (productions.ts); a notice about it on Sequoia's desk would be the wrong
   // desk. The email went from the runner itself, to him only.
-  if (card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS") {
+  if (isProductionsKind(card.kind)) {
     await notifyQuietly(env, {
       firmUserId: "fu_scooter_taylor",
       kind: "MEETING",
@@ -238,7 +243,7 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = card.kind === "DECK_REWORK" || card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS" ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -269,7 +274,7 @@ export async function sweepOnce(
       finished = out.finished;
       blocked = out.blocked;
       detail = out.detail;
-    } else if (card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS") {
+    } else if (isProductionsKind(card.kind)) {
       // Walker's West Peek Productions duty: one search, every URL checked, one email to Scooter.
       const run = runners.productions ?? (await import("./productions")).runProductionsCard;
       const out = await run(env, card);

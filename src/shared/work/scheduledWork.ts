@@ -94,6 +94,16 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
   // two are personal-office work for Scooter and the result reaches him alone, by email. The
   // facts say so, because a partner reading this page must be able to tell fund work from a
   // colleague's private business at a glance.
+  productions_monthly: {
+    what:
+      "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker sends " +
+      "Scooter ONE note: ten organisations that could buy Community-as-a-Service (trigger, who to " +
+      "approach, the page it came from) and five press pitches chosen with intent, each with the " +
+      "writer's address read off a live page and a draft to send. Nothing goes to a prospect or a " +
+      "journalist from here.",
+    why: "So the agency gets its leads and its press in one note from his chief of staff, not two emails from a machine (folded 15 Sep 2026).",
+    deliveredBy: ["Walker"],
+  },
   productions_customer_ideas: {
     what:
       "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker searches " +

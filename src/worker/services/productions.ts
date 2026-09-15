@@ -60,9 +60,17 @@ export const PRODUCTIONS_OFFER = [
   "Backed by the broader West Peek community of 5,000+ founders, operators, investors, creatives and builders.",
 ].join("\n");
 
-export type ProductionsKind = "PRODUCTIONS_CUSTOMERS" | "PRODUCTIONS_PRESS";
+export type ProductionsKind = "PRODUCTIONS_CUSTOMERS" | "PRODUCTIONS_PRESS" | "PRODUCTIONS_MONTHLY";
 
 export const PRODUCTIONS_JOBS: Readonly<Record<string, { kind: ProductionsKind; title: (month: string) => string }>> = {
+  // ONE EMAIL A MONTH. Operator, 15 Sep 2026: "why is scooter getting 2 emails?" — the customer
+  // list and the press drafts were two jobs, two cards, two emails; a seam in the machinery
+  // showing in his inbox. One card now does both and sends one note from his chief of staff.
+  productions_monthly: {
+    kind: "PRODUCTIONS_MONTHLY",
+    title: (month) => `Walker: West Peek Productions this month (${month})`,
+  },
+  // The two earlier duties, kept so their past cards still read; their jobs are PAUSED (0166).
   productions_customer_ideas: {
     kind: "PRODUCTIONS_CUSTOMERS",
     title: (month) => `Walker: 10 who could buy Community-as-a-Service this month (${month})`,
@@ -105,7 +113,9 @@ export async function openProductionsCard(
       "SCOOTER'S PERSONAL-AGENCY DUTY — West Peek Productions is Scooter's own business, not part of West Peek Ventures.",
       "This card touches no fund record and its result goes to scooter@westpeek.ventures only. Nothing is sent to anyone outside the firm.",
       "",
-      job.kind === "PRODUCTIONS_CUSTOMERS"
+      job.kind === "PRODUCTIONS_MONTHLY"
+        ? "This month's note to Scooter, in one email: (1) 10 organisations that plausibly need Community-as-a-Service right now — each with the trigger, the person or role to approach, a one-line angle, and the URL that shows the trigger; (2) pitches to 5 journalists or newsletter writers chosen with intent — why that writer, the hook, the address read off a live page and which page, a URL proving the beat — drafts for Scooter to send himself."
+        : job.kind === "PRODUCTIONS_CUSTOMERS"
         ? "Find 10 organisations that plausibly need Community-as-a-Service right now — each with the trigger (a launch, a hire, a raise, a programme), the person or role to approach, a one-line angle, and the URL that shows the trigger."
         : "Draft pitches to 5 journalists or newsletter writers covering community, brand, the creator economy or go-to-market — each with why that writer, the hook, the writer's name and outlet, a public email address if a live page shows one (otherwise the contact page), and a URL proving the beat. Drafts for Scooter to send himself.",
     ].join("\n"),
@@ -113,7 +123,7 @@ export async function openProductionsCard(
     owner_id: "aie_walker",
     priority: "NORMAL",
     firm_scope: firmScope,
-    next_action: job.kind === "PRODUCTIONS_CUSTOMERS" ? "Search, verify every URL, email Scooter the ten." : "Search, verify every URL, email Scooter the five drafts.",
+    next_action: job.kind === "PRODUCTIONS_MONTHLY" ? "Search both, verify every URL, hunt the addresses, email Scooter once." : job.kind === "PRODUCTIONS_CUSTOMERS" ? "Search, verify every URL, email Scooter the ten." : "Search, verify every URL, email Scooter the five drafts.",
   });
   await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2 WHERE id = ?1").bind(card.id, job.kind).run();
   await appendEvent(env, {
@@ -440,6 +450,48 @@ export async function findWriterAddress(
   return { ...pitch, email: null, emailKind: null, contactUrl: pitch.contactUrl ?? candidates.find((u) => u !== pitch.proofUrl) ?? null };
 }
 
+/** The one monthly note: who Walker is, the leads, the pitches. */
+export function renderMonthlyEmail(month: string, ideas: readonly CustomerIdea[], pitches: readonly PressPitch[], dropped: readonly string[]): string {
+  const lines = [
+    `Scooter — Walker, your chief of staff. This is West Peek Productions' month in one note: ${ideas.length} organisation(s) that could buy Community-as-a-Service, and ${pitches.length} press pitch draft(s) for you to send. Nobody has been contacted from here; that stays yours.`,
+    "",
+    `═══ 1 · WHO COULD BUY THIS MONTH (${month}) ═══`,
+    "Each one has a trigger you can point at, a role to approach, and the page it came from.",
+    "",
+    ...ideas.flatMap((i, n) => [
+      `${n + 1}. ${i.organisation}`,
+      `   Trigger: ${i.trigger}`,
+      `   Approach: ${i.approach}`,
+      ...(i.angle ? [`   Angle: ${i.angle}`] : []),
+      `   Source: ${i.url}`,
+      "",
+    ]),
+    ideas.length === 0 ? "Nothing with a live citation this month — say where to look and I will." : "",
+    "",
+    `═══ 2 · PRESS PITCHES — YOURS TO SEND ═══`,
+    "Copy, paste, send. Each address was read off the page named under it.",
+    "",
+    ...pitches.flatMap((p, n) => [
+      `${n + 1}. ${p.writer} — ${p.outlet}`,
+      `   To: ${p.email ?? `no public address on any page checked — write via ${p.contactUrl ?? "the outlet's contact page"}`}`,
+      ...(p.email && p.contactUrl ? [`   (${p.emailKind === "outlet" ? "the outlet's public inbox, not the writer's own" : "the writer's own address"} — read from ${p.contactUrl})`] : []),
+      `   Why this writer: ${p.whyThisWriter}`,
+      `   Proof of beat: ${p.proofUrl}`,
+      `   Subject: ${p.hook}`,
+      "",
+      "   ---",
+      ...p.draft.split("\n").map((l) => `   ${l}`),
+      "   ---",
+      "",
+    ]),
+    pitches.length === 0 ? "No writer with a live citation this month — say where to look and I will." : "",
+    dropped.length ? `Left out because the cited page did not answer when checked: ${dropped.join(", ")}` : "",
+    "",
+    "— Walker. Anything you want from me or the team: email os@joinwestpeek.com from this address and Porter routes it. This is Productions work, on your desk only; nothing here touches the fund.",
+  ];
+  return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+}
+
 export function renderPressEmail(month: string, pitches: readonly PressPitch[], dropped: readonly string[]): string {
   const lines = [
     `Scooter — ${pitches.length} press pitch draft(s) for West Peek Productions (${month}). Copy, paste, send — nothing has been sent from here.`,
@@ -501,15 +553,30 @@ export async function runProductionsCard(
   const check = deps.urlCheck ?? defaultUrlCheck;
   const kind = card.kind as ProductionsKind;
 
-  const found = await search(env, actor, kind === "PRODUCTIONS_CUSTOMERS" ? buildCustomerPrompt(month) : buildPressPrompt(month));
-  if (!found.ok) {
-    return { finished: false, blocked: false, detail: `the live search failed: ${found.detail}` };
-  }
-
   let subject: string;
   let text: string;
   let count: number;
   let dropped: string[];
+  if (kind === "PRODUCTIONS_MONTHLY") {
+    const pageText = deps.pageText ?? defaultPageText;
+    const customers = await search(env, actor, buildCustomerPrompt(month));
+    const press = await search(env, actor, buildPressPrompt(month));
+    if (!customers.ok && !press.ok) {
+      return { finished: false, blocked: false, detail: `the live search failed: ${customers.detail}` };
+    }
+    const ideas = customers.ok ? await keepLive(parseCustomerIdeas(customers.text), (i) => i.url, check) : { kept: [] as CustomerIdea[], dropped: [] as string[] };
+    const pitchesLive = press.ok ? await keepLive(parsePressPitches(press.text), (p) => p.proofUrl, check) : { kept: [] as PressPitch[], dropped: [] as string[] };
+    const hunted: PressPitch[] = [];
+    for (const p of pitchesLive.kept) hunted.push(await findWriterAddress(env, actor, { ...p, email: null }, { search, pageText }));
+    count = ideas.kept.length + hunted.length;
+    dropped = [...ideas.dropped, ...pitchesLive.dropped];
+    subject = `Walker: West Peek Productions this month — ${ideas.kept.length} customer lead(s) and ${hunted.length} press pitch(es)`;
+    text = renderMonthlyEmail(month, ideas.kept, hunted, dropped);
+  } else {
+  const found = await search(env, actor, kind === "PRODUCTIONS_CUSTOMERS" ? buildCustomerPrompt(month) : buildPressPrompt(month));
+  if (!found.ok) {
+    return { finished: false, blocked: false, detail: `the live search failed: ${found.detail}` };
+  }
   if (kind === "PRODUCTIONS_CUSTOMERS") {
     const parsed = parseCustomerIdeas(found.text);
     const live = await keepLive(parsed, (i) => i.url, check);
@@ -529,6 +596,7 @@ export async function runProductionsCard(
     dropped = live.dropped;
     subject = `Walker: ${count} press pitch drafts for West Peek Productions — yours to send`;
     text = renderPressEmail(month, live.kept, live.dropped);
+  }
   }
 
   if (count === 0) {
