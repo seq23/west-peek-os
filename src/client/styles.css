@@ -4570,10 +4570,13 @@ body {
   background: var(--wp-surface);
 }
 .deck-home > .home-section-head h3 {
-  font-size: 1.35rem;
+  font-size: var(--text-xl);
 }
 .deck-home .deck-current-title {
-  font-size: 1.15rem;
+  font-size: var(--text-md);
   display: block;
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--space-2xs);
+}
+.deck-home .deck-waiting-head {
+  margin-top: var(--space-lg);
 }

@@ -256,7 +256,7 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
       */}
       {proposed.length > 0 && (
         <>
-          <h4 style={{ marginTop: "1.25rem" }}>Waiting on your decision</h4>
+          <h4 className="deck-waiting-head">Waiting on your decision</h4>
           <p className="muted small">
             Nothing here is the deck yet. The current deck above does not change until you approve one;
             "Send back" asks for what is wrong and opens Preston's next card.
