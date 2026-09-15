@@ -73,8 +73,10 @@ edited is not an audit trail. Correct a mistake by writing a compensating row.
 `scripts/validate/no-unauthorized-effects.mjs` fails the build if a worker file calls `fetch()`
 without being named in `EGRESS_ALLOWED`, with a reason. Today: the RSS feed client, the Resend
 transport, the Network OS client, the SEC EDGAR client, the Google client — OAuth and calendar,
-read-only scopes, reachable only for a partner who granted consent to their own account — and the
-Runware client, which turns a prompt into an image and sends nothing but that prompt. External
+read-only scopes, reachable only for a partner who granted consent to their own account — the
+Runware client, which turns a prompt into an image and sends nothing but that prompt, and the URL
+liveness check (a GET with the body discarded, so a page a search-grounded model cited is confirmed
+to answer before a lead is kept). External
 *effects* (anything leaving the firm) execute only in `src/worker/effects/executor.ts`, only against
 an approved receipt.
 
