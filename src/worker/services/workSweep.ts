@@ -143,6 +143,10 @@ export async function announceOutcome(
   // SCOOTER'S PERSONAL-AGENCY WORK IS TOLD TO SCOOTER. A West Peek Productions card is a duty
   // inside his office (productions.ts); a notice about it on Sequoia's desk would be the wrong
   // desk. The email went from the runner itself, to him only.
+  // PARKER'S PACKET ANNOUNCES ITSELF: the finished packet is emailed to both partners and posted
+  // as its own notice (services/roomPacket.ts emailPacket), so a second "finished the card" notice
+  // would ring twice for one thing. A BLOCKED packet card still tells both partners below.
+  if (card.kind === "ROOM_PACKET" && outcome === "DONE") return { emailed: null };
   if (card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS") {
     await notifyQuietly(env, {
       firmUserId: "fu_scooter_taylor",
@@ -228,6 +232,7 @@ export async function sweepOnce(
     general?: (env: Env, ctx: RouteContext, cardId: string, options: { maxSteps: number }) => Promise<{ finished: boolean; blocked: boolean; detail: string; steps: Array<{ action: string; detail: string }> }>;
     deckRework?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     productions?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+    roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -238,7 +243,7 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = card.kind === "DECK_REWORK" || card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS" ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = card.kind === "DECK_REWORK" || card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS" || card.kind === "ROOM_PACKET" ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -268,6 +273,15 @@ export async function sweepOnce(
       const out = await run(env, card);
       finished = out.finished;
       blocked = out.blocked;
+      detail = out.detail;
+    } else if (card.kind === "ROOM_PACKET") {
+      // Parker's Room packet: a CHAIN of research and judgement, one stage per tick. A stage that
+      // completed is progress, not a finish — the card is handed back and the next tick continues.
+      const run = runners.roomPacket ?? (await import("./roomPacket")).runRoomPacketCard;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
+      progressed = out.progressed;
       detail = out.detail;
     } else if (card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS") {
       // Walker's West Peek Productions duty: one search, every URL checked, one email to Scooter.
@@ -335,7 +349,7 @@ export async function sweepOnce(
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
     return {
       status: "SUCCEEDED",
-      summary: `"${card.title.slice(0, 60)}" progressed (${STEPS_PER_TICK} step(s) this tick): ${detail.slice(0, 160)}. The next tick continues it.`,
+      summary: `"${card.title.slice(0, 60)}" progressed${card.kind === "ROOM_PACKET" ? "" : ` (${STEPS_PER_TICK} step(s) this tick)`}: ${detail.slice(0, 160)}. The next tick continues it.`,
       card: { ...card, work_attempts: Math.max(card.work_attempts - 1, 0) },
       outcome: "PROGRESSED",
     };
