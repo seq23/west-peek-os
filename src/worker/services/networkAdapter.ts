@@ -526,7 +526,11 @@ export async function pullResource(
     await upsertCursor(env, firmScope, resource, {
       // Deferred fresh records keep the window where it is: the next tick rescans it, the
       // already-applied rows drop out in one query, and the deferred ones are applied.
-      cursor_value: reachedEnd ? page.next_cursor : writeProgress(deferred ? from : from + window.length, total),
+      // A COMPLETED PASS CLEARS ITS OFFSET. `upsertCursor` COALESCEs a null into the old value, so
+      // writing `page.next_cursor` (always null from a snapshot) left the previous pass's offset in
+      // place for ever — every later pull read "in progress", never sent `since`, and re-parsed
+      // all 4,712 contacts (15 Sep 2026: since:null, 87 ms, after the pass had completed).
+      cursor_value: reachedEnd ? (page.next_cursor ?? writeProgress(0, total)) : writeProgress(deferred ? from : from + window.length, total),
       ...(reachedEnd ? { last_sync_at: new Date().toISOString() } : {}),
       last_status: reachedEnd ? "OK" : "IN_PROGRESS",
       failure_reason: null,
