@@ -3,8 +3,7 @@ import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { SEARCH_MODEL } from "./liveSearch";
-import { LIVENESS_TIMEOUT_MS, urlIsLive } from "../effects/urlLiveness";
-import { guardFeedUrl } from "../effects/feedClient";
+import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
 import { emailPartnerDeliverable } from "./requestReply";
@@ -369,37 +368,8 @@ export function renderCustomerEmail(month: string, ideas: readonly CustomerIdea[
 export type PageText = (url: string) => Promise<string | null>;
 
 const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-const PAGE_BYTES = 150_000;
 
-export const defaultPageText: PageText = async (url) => {
-  const guard = guardFeedUrl(url);
-  if (!guard.ok) return null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LIVENESS_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { redirect: "follow", signal: controller.signal, headers: { "user-agent": "WestPeekOS/1.0 (+https://os.joinwestpeek.com)", accept: "text/html,text/plain" } });
-    if (!res.ok) return null;
-    const reader = res.body?.getReader();
-    if (!reader) return null;
-    const chunks: Uint8Array[] = [];
-    let got = 0;
-    while (got < PAGE_BYTES) {
-      const { done, value } = await reader.read();
-      if (done || !value) break;
-      chunks.push(value);
-      got += value.length;
-    }
-    try { await reader.cancel(); } catch { /* enough was read */ }
-    const merged = new Uint8Array(got);
-    let at = 0;
-    for (const c of chunks) { merged.set(c.subarray(0, Math.min(c.length, merged.length - at)), at); at += c.length; if (at >= merged.length) break; }
-    return new TextDecoder("utf-8", { fatal: false }).decode(merged);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-};
+export const defaultPageText: PageText = (url) => pageTextOf(url);
 
 function outletDomainOf(url: string | null): string | null {
   try { return url ? new URL(url).hostname.replace(/^www\./, "") : null; } catch { return null; }
