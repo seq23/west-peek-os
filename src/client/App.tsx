@@ -3,6 +3,7 @@ import { readableDate, shortDate } from "./lib/dates";
 import { api, getDevUser, mutationError, onNotificationsChanged, signOut, useApi, type MeResponse } from "./lib/api";
 import { RecordInvestment } from "./pages/RecordInvestment";
 import { DeckPanel } from "./pages/DeckPanel";
+import { DocumentPreview } from "./components/DocumentPreview";
 import { FundConstruction } from "./pages/FundConstruction";
 import { LpPage } from "./pages/LpPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
@@ -1432,9 +1433,14 @@ interface DocumentRow {
   id: string;
   title: string;
   doc_type: string;
+  type_label?: string;
   privacy_label: string;
   created_at: string;
+  archived_at?: string | null;
+  archive_reason?: string | null;
+  deck?: { version_no: number; state: string; id: string } | null;
 }
+type DocumentTypeChoice = { key: string; label: string; means: string };
 
 function ResolveContradictionForm({ contradiction, onDone }: { contradiction: ContradictionRow; onDone: () => void }) {
   const [disposition, setDisposition] = useState("RESOLVED");
@@ -1716,8 +1722,9 @@ function CompaniesPage({ me }: { me: MeResponse }) {
   );
 }
 
-function DocumentsPage() {
-  const documents = useApi<{ documents: DocumentRow[] }>("/api/documents");
+function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
+  const documents = useApi<{ documents: DocumentRow[]; types: DocumentTypeChoice[] }>("/api/documents");
+  const archived = useApi<{ documents: DocumentRow[] }>("/api/documents?archived=1");
   /*
    * ARRIVING FROM "VIEW THE DECK". Fund strategy names a document and hands over; this page opens
    * it in a viewer at the top and scrolls the list to it. The handoff is a session key rather than
@@ -1735,13 +1742,43 @@ function DocumentsPage() {
   });
   useEffect(() => {
     if (!focus || !documents.data) return;
-    document.querySelector(`[data-testid="document-${focus}"]`)?.scrollIntoView({ block: "center" });
+    // The viewer, not the row: what she asked to see is the document, and it opens at the top.
+    document.querySelector('[data-testid="document-viewer"]')?.scrollIntoView({ block: "start" });
   }, [focus, documents.data]);
-  const focused = focus ? (documents.data?.documents ?? []).find((d) => d.id === focus) ?? null : null;
+  const all = documents.data?.documents ?? [];
+  const focused = focus ? all.find((d) => d.id === focus) ?? (archived.data?.documents ?? []).find((d) => d.id === focus) ?? null : null;
   const [title, setTitle] = useState("");
-  const [docType, setDocType] = useState("diligence_note");
+  const [docType, setDocType] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const types = documents.data?.types ?? [];
+  const chosenType = types.find((t) => t.key === docType) ?? null;
+
+  /*
+   * THE DECK HAS ITS OWN SHELF. Operator, 15 Sep 2026: "where the fuck is the section for the
+   * current deck to stay?!" Eight deck PDFs sat in one flat list under one identical title, with no
+   * version number on any of them; she archived v14 by accident and could not find the current one
+   * at all. Every deck row now says which version it is and what state it is in, the current one
+   * leads, the one waiting on her is second, and the rest are history under a lid.
+   */
+  const decks = all.filter((d) => d.deck).sort((a, b) => (b.deck!.version_no - a.deck!.version_no));
+  const currentDeck = decks.find((d) => d.deck!.state === "CURRENT") ?? null;
+  const proposedDecks = decks.filter((d) => d.deck!.state === "PROPOSED");
+  const pastDecks = decks.filter((d) => d.deck!.state !== "CURRENT" && d.deck!.state !== "PROPOSED");
+  const others = all.filter((d) => !d.deck);
+  const byType = new Map<string, DocumentRow[]>();
+  for (const d of others) {
+    const k = d.type_label ?? d.doc_type;
+    byType.set(k, [...(byType.get(k) ?? []), d]);
+  }
+
+  // THE TITLE IS THE FILE'S NAME UNTIL SHE SAYS OTHERWISE. "why the title of the document doesnt
+  // auto match the title of the file i upload?" — it did on submit, invisibly; now it fills the box
+  // the moment a file is chosen, and she can change it before uploading.
+  const chooseFile = (chosen: File | null) => {
+    setFile(chosen);
+    if (chosen && !title.trim()) setTitle(chosen.name.replace(/\.[a-z0-9]{2,5}$/i, ""));
+  };
 
   const download = async (id: string, docTitle: string) => {
     const headers: Record<string, string> = {};
@@ -1761,8 +1798,118 @@ function DocumentsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const deckState = (d: DocumentRow): string =>
+    d.deck!.state === "CURRENT"
+      ? "the deck the firm sends"
+      : d.deck!.state === "PROPOSED"
+        ? "waiting on your decision"
+        : d.deck!.state === "REJECTED"
+          ? "sent back"
+          : "superseded";
+
+  const row = (d: DocumentRow, opts: { archived?: boolean } = {}) => (
+    <li key={d.id} className={d.id === focus ? "card card-focus" : "card"} data-testid={`document-${d.id}`}>
+      <div>
+        {d.deck && (
+          <span className={d.deck.state === "CURRENT" ? "badge badge-ok" : d.deck.state === "PROPOSED" ? "badge badge-gate" : "badge"} data-testid={`document-deck-${d.id}`}>
+            v{d.deck.version_no}
+          </span>
+        )}{" "}
+        <strong>{d.title}</strong>
+        <span className="muted small">
+          {" "}· {d.type_label ?? d.doc_type}
+          {d.deck ? ` · ${deckState(d)}` : ""} · {new Date(d.created_at).toLocaleDateString()}
+          {opts.archived && d.archive_reason ? ` · archived: ${d.archive_reason}` : ""}
+        </span>
+      </div>
+      <div className="notification-actions">
+        <button type="button" className="link-button" data-testid={`view-${d.id}`} onClick={() => setFocus(d.id)}>
+          View here
+        </button>
+        <button type="button" className="link-button" data-testid={`download-${d.id}`} onClick={() => download(d.id, d.title)}>
+          Download
+        </button>
+        {d.deck && d.deck.state === "PROPOSED" && (
+          <button type="button" className="btn-strong" onClick={() => onNavigate("fund-strategy")}>
+            Decide on Fund strategy
+          </button>
+        )}
+        {opts.archived ? (
+          <button
+            type="button"
+            className="link-button"
+            data-testid={`doc-restore-${d.id}`}
+            onClick={async () => {
+              const failed = mutationError(await api(`/api/documents/${d.id}/restore`, { method: "POST" }), 200);
+              setMessage(failed ?? "Back on the shelf.");
+              documents.reload();
+              archived.reload();
+            }}
+          >
+            Restore
+          </button>
+        ) : d.deck && (d.deck.state === "CURRENT" || d.deck.state === "PROPOSED") ? null : (
+          /* OFF THE SHELF, NOT DESTROYED. A reason is required because six months from now the
+             reason is the only part that still helps. The current deck and a version waiting on a
+             decision offer no Archive at all — they are retired on Fund strategy, not here. */
+          <button
+            type="button"
+            className="link-button"
+            data-testid={`doc-archive-${d.id}`}
+            onClick={async () => {
+              const reason = window.prompt(`Why are you taking "${d.title}" off the shelf?`);
+              if (!reason || reason.trim().length < 3) return;
+              const failed = mutationError(
+                await api(`/api/documents/${d.id}/archive`, { method: "POST", body: { reason: reason.trim() } }),
+                200,
+              );
+              setMessage(failed ?? `Archived. It is kept, with your reason attached — find it under "Archived" below.`);
+              documents.reload();
+              archived.reload();
+            }}
+          >
+            Archive
+          </button>
+        )}
+      </div>
+    </li>
+  );
+
   return (
     <section data-testid="documents-page">
+      {message && <p className="notice" data-testid="doc-message">{message}</p>}
+      {focused && (
+        <div className="card" data-testid="document-viewer">
+          <div className="home-section-head">
+            <h3>
+              {focused.deck ? `v${focused.deck.version_no} — ` : ""}
+              {focused.title}
+            </h3>
+            <button type="button" className="link-button" onClick={() => setFocus(null)}>close</button>
+          </div>
+          <DocumentPreview documentId={focused.id} title={focused.title} height="70vh" />
+        </div>
+      )}
+
+      <section data-testid="documents-deck">
+        <div className="home-section-head">
+          <h3>The LP deck</h3>
+          <span className="muted small">one current version at a time; new ones wait on your approval on Fund strategy</span>
+        </div>
+        <ul className="card-list" data-testid="documents-deck-list">
+          {currentDeck ? row(currentDeck) : (
+            <li className="state-empty">No version of the deck is current. Upload one below as "The LP deck", then approve it on Fund strategy.</li>
+          )}
+          {proposedDecks.map((d) => row(d))}
+        </ul>
+        {pastDecks.length > 0 && (
+          <details data-testid="documents-deck-history">
+            <summary className="muted small">{pastDecks.length} earlier version{pastDecks.length === 1 ? "" : "s"} — superseded or sent back</summary>
+            <ul className="card-list">{pastDecks.map((d) => row(d))}</ul>
+          </details>
+        )}
+      </section>
+
       <form
         className="card"
         data-testid="document-upload-form"
@@ -1773,15 +1920,23 @@ function DocumentsPage() {
             setMessage("Choose a file first.");
             return;
           }
+          if (!docType) {
+            setMessage("Say what kind of document this is.");
+            return;
+          }
           const buffer = await file.arrayBuffer();
           let binary = "";
           new Uint8Array(buffer).forEach((b) => (binary += String.fromCharCode(b)));
-          const { status, data } = await api<{ id: string; version?: { sha256: string }; error?: string; detail?: string }>("/api/documents", {
+          const { status, data } = await api<{ id: string; version?: { sha256: string }; deck_version?: { version_no: number }; note?: string; error?: string; detail?: string }>("/api/documents", {
             method: "POST",
             body: { title: title || file.name, doc_type: docType, content_base64: window.btoa(binary), content_type: file.type || "application/octet-stream" },
           });
           setMessage(
-            status === 201 ? `Uploaded ${data!.id} (sha256 ${data!.version?.sha256.slice(0, 12)}…).` : `Upload failed: ${data?.detail ?? data?.error ?? status}`,
+            status === 201
+              ? data?.deck_version
+                ? `Recorded as v${data.deck_version.version_no} of the deck. It is not the deck the firm sends until you approve it on Fund strategy.`
+                : `Uploaded ${data!.id}${data!.version ? ` (sha256 ${data!.version.sha256.slice(0, 12)}…)` : ""}.`
+              : `Upload failed: ${data?.detail ?? data?.error ?? status}`,
           );
           if (status === 201) {
             setTitle("");
@@ -1790,65 +1945,64 @@ function DocumentsPage() {
           }
         }}
       >
+        <h4>Put a document on the shelf</h4>
         <div className="form-row">
           <label>
-            Title <input data-testid="doc-title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            Title <input data-testid="doc-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="what a partner would call it" />
           </label>
           <label>
-            Type <input data-testid="doc-type" value={docType} onChange={(e) => setDocType(e.target.value)} />
+            What is it?{" "}
+            <select data-testid="doc-type" value={docType} onChange={(e) => setDocType(e.target.value)}>
+              <option value="">— pick one —</option>
+              {types.map((t) => (
+                <option key={t.key} value={t.key}>{t.label}</option>
+              ))}
+            </select>
           </label>
-          <input data-testid="doc-file" aria-label="Choose a file to upload" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input data-testid="doc-file" aria-label="Choose a file to upload" type="file" onChange={(e) => chooseFile(e.target.files?.[0] ?? null)} />
         </div>
+        {chosenType && <p className="muted small" data-testid="doc-type-means">{chosenType.means}</p>}
         <button type="submit" className="btn-strong" data-testid="doc-submit">
           Upload
         </button>
-        {message && <p className="notice" data-testid="doc-message">{message}</p>}
       </form>
-      {focused && (
-        <div className="card" data-testid="document-viewer">
-          <div className="home-section-head">
-            <h3>{focused.title}</h3>
-            <button type="button" className="link-button" onClick={() => setFocus(null)}>close</button>
-          </div>
-          <iframe
-            title={focused.title}
-            src={`/api/documents/${focused.id}/download`}
-            style={{ width: "100%", height: "70vh", border: "1px solid var(--wp-line)", background: "var(--wp-surface)" }}
-          />
-        </div>
-      )}
+
+      <div className="home-section-head">
+        <h3>Everything else on the shelf</h3>
+        {others.length > 0 && (
+          <button
+            type="button"
+            className="link-button"
+            data-testid="doc-archive-all"
+            onClick={async () => {
+              const reason = window.prompt(`Take all ${others.length} of these off the shelf? The current deck and any version waiting on your decision stay. Say why:`);
+              if (!reason || reason.trim().length < 3) return;
+              const res = await api<{ note?: string }>("/api/documents/archive-all", { method: "POST", body: { reason: reason.trim() } });
+              setMessage(mutationError(res, 200) ?? res.data?.note ?? "Archived.");
+              documents.reload();
+              archived.reload();
+            }}
+          >
+            Archive everything here
+          </button>
+        )}
+      </div>
       <ul data-testid="document-list" className="card-list">
-        {(documents.data?.documents ?? []).map((d) => (
-          <li key={d.id} className={d.id === focus ? "card card-focus" : "card"} data-testid={`document-${d.id}`}>
-            <strong>{d.title}</strong> — {d.doc_type} · {d.privacy_label}{" "}
-            <button type="button" data-testid={`download-${d.id}`} onClick={() => download(d.id, d.title)}>
-              Download
-            </button>{" "}
-            {/* OFF THE SHELF, NOT DESTROYED. There was no removal of any kind before this — five
-                document routes and none of them removed anything — so six of the eight documents
-                here were machine noise nobody could clear. A reason is required because six months
-                from now the reason is the only part that still helps. */}
-            <button
-              type="button"
-              className="link-button"
-              data-testid={`doc-archive-${d.id}`}
-              onClick={async () => {
-                const reason = window.prompt(`Why are you taking "${d.title}" off the shelf?`);
-                if (!reason || reason.trim().length < 3) return;
-                const failed = mutationError(
-                  await api(`/api/documents/${d.id}/archive`, { method: "POST", body: { reason: reason.trim() } }),
-                  200,
-                );
-                setMessage(failed ?? `Archived. It is kept, with your reason attached.`);
-                documents.reload();
-              }}
-            >
-              Archive
-            </button>
+        {[...byType.entries()].map(([label, docs]) => (
+          <li key={label} className="card">
+            <h4>{label} <span className="count-pill">{docs.length}</span></h4>
+            <ul className="card-list">{docs.map((d) => row(d))}</ul>
           </li>
         ))}
-        {(documents.data?.documents ?? []).length === 0 && <li className="state-empty">Nothing on the shelf. Morning briefs are not filed here on purpose — they live on Home and are superseded each day.</li>}
+        {others.length === 0 && <li className="state-empty">Nothing else on the shelf. Morning briefs are not filed here on purpose — they live on Home and are superseded each day.</li>}
       </ul>
+
+      {(archived.data?.documents ?? []).length > 0 && (
+        <details data-testid="documents-archived">
+          <summary className="muted small">Archived — {(archived.data?.documents ?? []).length} taken off the shelf, none destroyed</summary>
+          <ul className="card-list">{(archived.data?.documents ?? []).map((d) => row(d, { archived: true }))}</ul>
+        </details>
+      )}
     </section>
   );
 }
@@ -3441,6 +3595,8 @@ const MERGED_ROUTES: Readonly<Record<string, string>> = {
   "deal-math": "fund-strategy",
   today: "home",
   allocation: "fund-strategy",
+  // "Decide on Fund strategy" buttons navigated here and the page rendered under the header "Home".
+  "follow-on": "fund-strategy",
 };
 
 function keyFromHash(known: (key: string) => boolean): string {
@@ -3523,7 +3679,9 @@ export function App() {
   const authed = me.status === 200 && me.data;
 
   // On the phone sheet, choosing a destination is the whole interaction — close behind it.
-  const navigate = useCallback((key: string) => {
+  const navigate = useCallback((rawKey: string) => {
+    // A merged or legacy key resolves here too, not only when typed into the URL.
+    const key = MERGED_ROUTES[rawKey] ?? rawKey;
     setActive(key);
     setNavOpen(false);
     // The URL follows the page, so it can be bookmarked, sent to your partner, and survive a
@@ -3818,7 +3976,7 @@ export function App() {
               answering "what has Cedar been told?" required knowing packets lived elsewhere.
               The route still resolves so an old link lands on the page that now holds it. */}
           {authed && active === "reporting" && <LpPage me={me.data!} />}
-          {authed && active === "documents" && <DocumentsPage />}
+          {authed && active === "documents" && <DocumentsPage onNavigate={navigate} />}
           {authed && active === "contradictions" && <ContradictionsPage />}
           {authed && active === "activity" && <ActivityPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "governance" && <GovernancePage me={me.data!} />}

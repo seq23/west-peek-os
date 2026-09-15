@@ -5,6 +5,7 @@ import { json } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { privacyLabelSchema } from "../../shared/privacy";
+import { DOCUMENT_TYPES, documentTypeLabel, normaliseDocumentType } from "../../shared/documents/types";
 
 /**
  * Documents (P5, D16): governed binary storage. Binary content lives ONLY in the
@@ -202,6 +203,89 @@ async function parseJsonBody(request: Request): Promise<unknown | null> {
   }
 }
 
+/**
+ * POST /api/documents/archive-all — everything on the shelf, off it, in one act. Operator, 15 Sep
+ * 2026: "i should be able to archive ALL documents as 1 function". The current deck and a version
+ * waiting on a decision stay: they are retired on Fund strategy, not here. One reason, every row,
+ * every row on the spine.
+ */
+export async function handleArchiveAllDocuments(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "document.archive", { objectType: "document", objectId: "all" });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+  const body = (await ctx.request.json().catch(() => null)) as { reason?: unknown } | null;
+  const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+  if (reason.length < 3) {
+    return json({ error: "reason_required", detail: "Say why in a few words. It goes on every document you take off the shelf." }, { status: 400 });
+  }
+  const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
+  const rows = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT d.id, d.title, dv.version_no, dv.state
+         FROM document d LEFT JOIN deck_version dv ON dv.document_id = d.id AND dv.state IN ('CURRENT','PROPOSED')
+        WHERE ${visibility} AND d.archived_at IS NULL`,
+    ).all<{ id: string; title: string; version_no: number | null; state: string | null }>()
+  ).results ?? [];
+  const kept = rows.filter((r) => r.version_no !== null);
+  const going = rows.filter((r) => r.version_no === null);
+  for (const doc of going) {
+    await ctx.env.WP_OS_DB.prepare(
+      `UPDATE document SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), archived_by = ?2, archive_reason = ?3 WHERE id = ?1 AND archived_at IS NULL`,
+    )
+      .bind(doc.id, actor.firmUserId ?? "system", reason.slice(0, 400))
+      .run();
+    await appendEvent(ctx.env, {
+      eventType: "document.archived",
+      actorType: "firm_user",
+      actorId: actor.firmUserId ?? "system",
+      objectType: "document",
+      objectId: doc.id,
+      firmScope: actor.firmScopes[0] ?? "west-peek",
+      payload: { title: doc.title, reason: reason.slice(0, 400), via: "archive_all" },
+    });
+  }
+  return json({
+    archived: going.length,
+    kept: kept.map((k) => ({ id: k.id, title: k.title, version_no: k.version_no, state: k.state })),
+    note:
+      `${going.length} taken off the shelf.` +
+      (kept.length ? ` Kept: ${kept.map((k) => `v${k.version_no} (${k.state === "CURRENT" ? "the deck the firm sends" : "waiting on your decision"})`).join(", ")}.` : ""),
+  });
+}
+
+/** POST /api/documents/:id/restore — back on the shelf, with the trail kept on the spine. */
+export async function handleRestoreDocument(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const authz = await authorize(ctx.env, actor, "document.archive", { objectType: "document", objectId: ctx.params.id! });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+  const doc = await ctx.env.WP_OS_DB.prepare("SELECT * FROM document WHERE id = ?1").bind(ctx.params.id!).first<DocumentRow & { archived_at: string | null; archive_reason: string | null }>();
+  if (!doc) return json({ error: "not_found" }, { status: 404 });
+  if (!doc.archived_at) return json({ error: "not_archived", detail: "This is already on the shelf." }, { status: 409 });
+  await ctx.env.WP_OS_DB.prepare("UPDATE document SET archived_at = NULL, archived_by = NULL, archive_reason = NULL WHERE id = ?1").bind(doc.id).run();
+  await appendEvent(ctx.env, {
+    eventType: "document.restored",
+    actorType: "firm_user",
+    actorId: actor.firmUserId ?? "system",
+    objectType: "document",
+    objectId: doc.id,
+    firmScope: actor.firmScopes[0] ?? "west-peek",
+    payload: { title: doc.title, had_been_archived_for: doc.archive_reason },
+  });
+  return json({ id: doc.id, archived: false, note: "Back on the shelf." });
+}
+
+/** Pages in a PDF, counted from its object table; null when the bytes are not a PDF. */
+export function countPdfPages(base64: string): number | null {
+  try {
+    const bytes = atob(base64);
+    if (!bytes.startsWith("%PDF")) return null;
+    const n = (bytes.match(/\/Type\s*\/Page[^s]/g) ?? []).length;
+    return n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 function errorResponse(err: unknown): Response {
   if (err instanceof DocumentError) return json({ error: err.code, detail: err.message }, { status: err.status });
   throw err;
@@ -242,7 +326,37 @@ export async function handleUploadDocument(ctx: RouteContext): Promise<Response>
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   try {
     const actor = actorFromIdentity(ctx.identity!);
-    const { document, version } = await uploadDocument(ctx.env, actor, parsed.data);
+    const docType = normaliseDocumentType(parsed.data.doc_type);
+    /*
+     * A DECK UPLOADED HERE IS A DECK VERSION, NOT A LOOSE FILE. Operator, 15 Sep 2026: she uploaded
+     * the current Canva deck on Documents, it was filed as a `diligence_note` with the title she
+     * typed, and Fund strategy went on pointing at a version from a week earlier — "where is the
+     * section for the current deck to stay?!". One door: whichever page a deck comes in through,
+     * it lands on the record as vN and waits on her decision on Fund strategy.
+     */
+    if (docType === "DECK") {
+      const { recordDeckVersion, theFund } = await import("./deck");
+      const fund = await theFund(ctx.env);
+      const row = await recordDeckVersion(ctx.env, actor, {
+        fundId: fund.id,
+        title: parsed.data.title,
+        origin: "UPLOADED",
+        createdBy: ctx.identity!.fullName,
+        createdByType: "HUMAN",
+        pdfBase64: parsed.data.content_base64,
+        pageCount: countPdfPages(parsed.data.content_base64),
+      });
+      const document = await getDocument(ctx.env, row.document_id!);
+      return json(
+        {
+          ...document,
+          deck_version: { id: row.id, version_no: row.version_no, state: row.state },
+          note: `Recorded as v${row.version_no} of the deck. It is not the deck the firm sends until you approve it on Fund strategy.`,
+        },
+        { status: 201 },
+      );
+    }
+    const { document, version } = await uploadDocument(ctx.env, actor, { ...parsed.data, doc_type: docType });
     let link: string | null = null;
     if (parsed.data.about) {
       link = await linkDocument(ctx.env, actor, document.id, parsed.data.about);
@@ -273,10 +387,24 @@ export async function handleListDocuments(ctx: RouteContext): Promise<Response> 
   const wantArchived = new URL(ctx.request.url).searchParams.get("archived") === "1";
   const shelf = wantArchived ? "archived_at IS NOT NULL" : "archived_at IS NULL";
   const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT * FROM document WHERE ${visibility} AND ${shelf} ORDER BY created_at DESC, id LIMIT 200`,
-  ).all<DocumentRow>();
+    `SELECT d.*, dv.version_no AS deck_version_no, dv.state AS deck_state, dv.id AS deck_version_id
+       FROM document d
+       LEFT JOIN deck_version dv ON dv.document_id = d.id
+      WHERE ${visibility} AND ${shelf}
+      ORDER BY d.created_at DESC, d.id LIMIT 200`,
+  ).all<DocumentRow & { deck_version_no: number | null; deck_state: string | null; deck_version_id: string | null }>();
+  // SAID IN WORDS, AND SAID WHICH VERSION. "i should know which one is v14 in documents" — every
+  // deck row carries its version number and state; every row carries its type as a label.
+  const documents = (rows.results ?? []).map((d) => ({
+    ...d,
+    type_label: documentTypeLabel(d.doc_type),
+    deck: d.deck_version_no
+      ? { version_no: d.deck_version_no, state: d.deck_state, id: d.deck_version_id }
+      : null,
+  }));
   return json({
-    documents: rows.results ?? [],
+    documents,
+    types: DOCUMENT_TYPES,
     archived: wantArchived,
     note: wantArchived
       ? "Archived documents. Nothing was destroyed — each one records who took it off the shelf and why."
@@ -313,6 +441,24 @@ export async function handleArchiveDocument(ctx: RouteContext): Promise<Response
   if (!doc) return json({ error: "not_found" }, { status: 404 });
   if ((doc as unknown as { archived_at: string | null }).archived_at) {
     return json({ error: "already_archived", detail: "This is already off the shelf." }, { status: 409 });
+  }
+  // THE DECK THE FIRM SENDS, AND ONE WAITING ON A DECISION, CANNOT BE ARCHIVED FROM HERE. She
+  // archived v14 "accidentally b/c nothing in documents had the title name v14"; a version is
+  // retired by being superseded or sent back on Fund strategy, never by vanishing off the shelf.
+  const live = await ctx.env.WP_OS_DB.prepare("SELECT version_no, state FROM deck_version WHERE document_id = ?1 AND state IN ('CURRENT','PROPOSED')")
+    .bind(doc.id)
+    .first<{ version_no: number; state: string }>();
+  if (live) {
+    return json(
+      {
+        error: "deck_version_live",
+        detail:
+          live.state === "CURRENT"
+            ? `This is v${live.version_no}, the deck the firm sends. It leaves the shelf only when another version replaces it on Fund strategy.`
+            : `This is v${live.version_no}, waiting on your decision on Fund strategy. Approve it or send it back there; it is not archived from here.`,
+      },
+      { status: 409 },
+    );
   }
 
   await ctx.env.WP_OS_DB.prepare(

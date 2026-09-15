@@ -4560,3 +4560,20 @@ body {
   text-align: right;
 }
 .construction-why { width: 100%; max-width: 100%; box-sizing: border-box; }
+
+/* ── The current deck's home ──
+   Operator, 15 Sep 2026: "the parking spot for the current deck should be more prominent". One
+   accent rule down the side, a larger title, the version badge on the head — the first thing on
+   Fund strategy and unmistakably the thing the firm sends. */
+.deck-home {
+  border-left: 4px solid var(--wp-orange);
+  background: var(--wp-surface);
+}
+.deck-home > .home-section-head h3 {
+  font-size: 1.35rem;
+}
+.deck-home .deck-current-title {
+  font-size: 1.15rem;
+  display: block;
+  margin-bottom: 0.25rem;
+}

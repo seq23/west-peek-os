@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
+import { DocumentPreview } from "../components/DocumentPreview";
 import { usd } from "@shared/fund/sleeveMath";
 
 /**
@@ -79,6 +80,7 @@ export function viewOnDocuments(onNavigate: ((key: string) => void) | undefined,
 export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void } = {}): JSX.Element {
   const deck = useApi<DeckResponse>("/api/deck");
   const [message, setMessage] = useState<string | null>(null);
+  const [openPreview, setOpenPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function decide(id: string, decision: "APPROVE" | "REJECT", reinstate = false): Promise<void> {
@@ -168,13 +170,35 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
   const proposed = versions.filter((v) => v.state === "PROPOSED");
   const history = versions.filter((v) => v.state !== "PROPOSED");
   const drift = data.staleness?.changed_since ?? [];
+  /*
+   * A PREVIEW WHERE THE DECISION IS. Operator, 15 Sep 2026: "v14 in fund strategy for me to
+   * approve should have a nice preview so i can choose to view it on that page OR in documents".
+   * Approving a document she has to leave the page to look at is a decision made blind; the PDF
+   * opens here, under the version it belongs to, and Documents remains one click away.
+   */
+  const preview = (documentId: string, label: string, testId: string) =>
+    documentId && (
+      <div>
+        <div className="notification-actions">
+          <button type="button" className="link-button" data-testid={`${testId}-preview`}
+            onClick={() => setOpenPreview((cur) => (cur === documentId ? null : documentId))}>
+            {openPreview === documentId ? "Hide the preview" : `Preview ${label} here`}
+          </button>
+          <button type="button" className="link-button" data-testid={testId}
+            onClick={() => viewOnDocuments(onNavigate, documentId)}>
+            Open {label} on Documents
+          </button>
+        </div>
+        {openPreview === documentId && <DocumentPreview documentId={documentId} title={label} />}
+      </div>
+    );
 
   return (
-    <section className="card" data-testid="deck-panel">
+    <section className="card deck-home" data-testid="deck-panel">
       <div className="home-section-head">
-        <h3>The deck</h3>
+        <h3>The current deck — what the firm sends</h3>
         {data.current && (
-          <span className="muted small">
+          <span className="badge badge-ok" data-testid="deck-current-badge">
             v{data.current.version_no} · {data.current.page_count ?? "?"} pages
           </span>
         )}
@@ -191,8 +215,7 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
       {data.current && (
         <>
           <p data-testid="deck-current">
-            <strong>{data.current.title}</strong>
-            <br />
+            <strong className="deck-current-title">{data.current.title}</strong>
             <span className="muted small">
               {data.current.origin === "UPLOADED" ? "Uploaded by" : "Built by"} {data.current.created_by} ·{" "}
               {when(data.current.created_at)}
@@ -222,18 +245,7 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
             )}
           </div>
 
-          {data.current.document_id && (
-            <p>
-              <button
-                type="button"
-                className="link-button"
-                data-testid="deck-open"
-                onClick={() => viewOnDocuments(onNavigate, data.current!.document_id!)}
-              >
-                View the current deck on Documents
-              </button>
-            </p>
-          )}
+          {data.current.document_id && preview(data.current.document_id, `v${data.current.version_no}`, "deck-open")}
         </>
       )}
 
@@ -244,27 +256,23 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
       */}
       {proposed.length > 0 && (
         <>
-          <h4>Waiting on you</h4>
+          <h4 style={{ marginTop: "1.25rem" }}>Waiting on your decision</h4>
           <p className="muted small">
-            Nothing here is the deck yet. The current deck does not change until you approve one.
+            Nothing here is the deck yet. The current deck above does not change until you approve one;
+            "Send back" asks for what is wrong and opens Preston's next card.
           </p>
           <ul className="card-list" data-testid="deck-proposed">
             {proposed.map((v) => (
               <li key={v.id} className="card">
                 <strong>
-                  v{v.version_no} — {v.title}
+                  <span className="badge badge-gate">v{v.version_no}</span> {v.title}
                 </strong>
                 <p className="muted small">
                   {v.origin === "UPLOADED" ? "Uploaded by" : "Built by"} {v.created_by} · {when(v.created_at)}
                 </p>
                 {v.change_summary && <p className="small">{v.change_summary}</p>}
                 {v.document_id ? (
-                  <p>
-                    <button type="button" className="link-button" data-testid={`deck-view-${v.id}`}
-                      onClick={() => viewOnDocuments(onNavigate, v.document_id!)}>
-                      View v{v.version_no} on Documents
-                    </button>
-                  </p>
+                  preview(v.document_id, `v${v.version_no}`, `deck-view-${v.id}`)
                 ) : (
                   <p className="muted small">No PDF is attached to this version, so there is nothing to look at before deciding.</p>
                 )}
@@ -275,7 +283,7 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
                   </button>
                   <button type="button" disabled={busy} data-testid={`deck-reject-${v.id}`}
                     onClick={() => void decide(v.id, "REJECT")}>
-                    Try again
+                    Send back to Preston
                   </button>
                 </div>
               </li>
@@ -286,8 +294,9 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
 
       <p className="muted small">
         <label htmlFor="deck-upload">
-          <strong>Add a version of the deck</strong> — export it to PDF and put it here. It goes on
-          the record with the fund figures it was built from and then waits on your approval above:
+          <strong>Add a version of the deck</strong> — export it to PDF and put it here (or upload it
+          on Documents as "The LP deck"; both land in the same place). It goes on the record as the
+          next version, with the fund figures it was built from, and waits on your approval above:
           uploading a file never changes which deck the firm sends.
         </label>
       </p>
@@ -306,7 +315,7 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
 
       {history.length > 0 && (
         <details className="card" data-testid="deck-history">
-          <summary>{history.length} version{history.length === 1 ? "" : "s"} on the record</summary>
+          <summary>History — {history.length} version{history.length === 1 ? "" : "s"} on the record, including the current one</summary>
           <ul className="card-list small">
             {history.map((v) => {
               let changed: Drift[] = [];
