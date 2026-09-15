@@ -221,8 +221,7 @@ export async function handleArchiveAllDocuments(ctx: RouteContext): Promise<Resp
   const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
   const rows = (
     await ctx.env.WP_OS_DB.prepare(
-      `SELECT d.id, d.title, dv.version_no, dv.state
-         FROM document d LEFT JOIN deck_version dv ON dv.document_id = d.id AND dv.state IN ('CURRENT','PROPOSED')
+      `SELECT d.id, d.title, dv.version_no, dv.state FROM document d LEFT JOIN deck_version dv ON dv.document_id = d.id AND dv.state IN ('CURRENT','PROPOSED')
         WHERE ${visibility} AND d.archived_at IS NULL`,
     ).all<{ id: string; title: string; version_no: number | null; state: string | null }>()
   ).results ?? [];
