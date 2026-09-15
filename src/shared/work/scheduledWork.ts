@@ -113,6 +113,14 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     why: "So the agency is pitched to the press every month without Scooter starting from a blank page or the OS sending anything outside the firm.",
     deliveredBy: ["Walker"],
   },
+  productions_intro_note: {
+    what:
+      "One note, once: Walker introduces himself to Scooter as his chief of staff, owns the weak " +
+      "first Productions run, says what changed, and reminds him that requests go to " +
+      "os@joinwestpeek.com. Sent on its first run, then the job pauses itself and stays as the record.",
+    why: "So the first two emails Scooter received from a name he had not been introduced to are explained, and he knows how to reach the team.",
+    deliveredBy: ["Walker"],
+  },
   wednesday_prep: {
     what: "Prepares each partner's packet for the Wednesday sync — what completed, what is waiting, and where the records and the deck disagree.",
     why: "So the sync starts from a page, not from memory.",

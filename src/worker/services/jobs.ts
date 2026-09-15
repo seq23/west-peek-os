@@ -396,6 +396,12 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   // shape as weekly_mp_review: it fires daily and generates only when the current month has no
   // proposal yet. schedule_kind has no MONTHLY value and adding one would mean rebuilding
   // scheduled_job's CHECK; a month check in SQL costs one query and no migration risk.
+  if (job.job_key === "productions_intro_note") {
+    const { runIntroNote } = await import("./productions");
+    const out = await runIntroNote(env);
+    return { status: out.status, summary: out.summary, artifacts };
+  }
+
   if (job.job_key === "monthly_room_proposal") {
     const { runMonthlyRoomProposal } = await import("./roomPacket");
     const out = await runMonthlyRoomProposal(env, actor, now.toISOString());

@@ -3,7 +3,8 @@ import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { SEARCH_MODEL } from "./liveSearch";
-import { urlIsLive } from "../effects/urlLiveness";
+import { LIVENESS_TIMEOUT_MS, urlIsLive } from "../effects/urlLiveness";
+import { guardFeedUrl } from "../effects/feedClient";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
 import { emailPartnerDeliverable } from "./requestReply";
@@ -144,6 +145,11 @@ export interface PressPitch {
   /** Only when a live page showed it; otherwise null and `contactUrl` says where to look. */
   email: string | null;
   contactUrl: string | null;
+  /**
+   * How the address was established: `personal` (the writer's own, read off a page), `outlet`
+   * (a public inbox for the outlet — tips@, editors@ — read off a page), or null when none.
+   */
+  emailKind?: "personal" | "outlet" | null;
   whyThisWriter: string;
   hook: string;
   /** The URL proving the beat — a recent piece by this writer on this subject. */
@@ -283,19 +289,40 @@ export function buildPressPrompt(month: string): string {
     "",
     guidanceBlock(["mp_personal_office"]),
     "",
-    `TASK — ${month}: find 5 journalists or newsletter writers who cover community-building, brand,`,
-    "the creator economy, events, or go-to-market, and draft a pitch to each that Scooter can send",
-    "himself. The story he can offer: what 'Community-as-a-Service' is, why community is an operating",
-    "advantage rather than a channel, what 400+ virtual and hybrid productions taught about what makes",
-    "people gather and stay, and published price bands in an industry that hides them.",
+    `TASK — ${month}: choose 5 journalists or newsletter writers with INTENT, and draft a pitch to`,
+    "each that Scooter can send himself. The story he can offer: what 'Community-as-a-Service' is, why",
+    "community is an operating advantage rather than a channel, what 400+ virtual and hybrid productions",
+    "taught about what makes people gather and stay, and published price bands in an industry that hides them.",
+    "",
+    "WHO TO CHOOSE — and why. The point of press is to be read by the people who BUY community work:",
+    "heads of community, CMOs and brand leads, founders building a member base, event and experience",
+    "leads. Pick the five as a deliberate mix, one from each:",
+    "  1. TRADE PRESS those buyers read daily — marketing/brand trades (Digiday, Adweek, Marketing Brew,",
+    "     Ad Age, Modern Retail, Fast Company's brand desk).",
+    "  2. A CREATOR-ECONOMY or COMMUNITY NEWSLETTER with an operator audience (ICYMI, Lenny's, The",
+    "     Publish Press, CreatorEconomy.so, Community Club / CMX writers).",
+    "  3. A BUSINESS TITLE whose contributor or staff writer covers community, membership or the creator",
+    "     economy (Forbes, Inc., Entrepreneur, Business Insider, Fortune).",
+    "  4. AN EVENTS-INDUSTRY OUTLET (BizBash, Event Marketer, Skift Meetings, Eventbrite/Cvent blogs with",
+    "     bylined reporting) — the people who book productions.",
+    "  5. A WILDCARD earned by a specific recent piece: someone who just wrote about a company doing",
+    "     community well, or about agencies/vendors in this space — the writer most likely to want a",
+    "     follow-up now.",
+    "Prefer writers whose recent piece QUOTES an operator, agency or community lead (they take vendor",
+    "sources); avoid writers who only cover public companies or funding rounds. Each choice must name",
+    "the recent piece it is earned by and the angle that piece makes natural — 'you wrote X; here is",
+    "the number/operator view you did not have'. A writer chosen because their beat vaguely matches",
+    "is not a choice.",
     "",
     "RULES:",
     "- Only writers you can cite a live, recent piece for on this beat (proof_url). No URL, no entry.",
     "- The writer's name and outlet as they appear on that page.",
     "- An email address ONLY if a live page shows it (a masthead, bio or contact page) — give that page",
     "  as contact_url. If no public address is shown, leave email null and give the outlet's contact or",
-    "  tips page as contact_url. Never guess an address pattern.",
-    "- why_this_writer: two lines on what they cover and why this fits. hook: the one-line subject.",
+    "  tips page as contact_url. Never guess an address pattern. (The address is checked again afterwards",
+    "  by reading the pages — see findWriterAddress — so cite where it is, not what it is.)",
+    "- why_this_writer: which slot (1–5) they fill, the piece they are earned by, and the angle that",
+    "  piece makes natural. hook: the one-line subject.",
     "- draft: 90–140 words, first person as Scooter, no flattery, one specific ask (a 20-minute",
     "  conversation), no attachments promised.",
     "",
@@ -325,14 +352,132 @@ export function renderCustomerEmail(month: string, ideas: readonly CustomerIdea[
   return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
 }
 
+// ── Finding the address ──────────────────────────────────────────────────────
+
+/**
+ * THE ADDRESS HUNT. Operator, 15 Sep 2026, on the first press run: "why couldn't u find these
+ * journalists' emails — this seems weak and like it should have been achievable." It was: the
+ * first run kept an address only if the one page the search cited happened to show it. A
+ * journalist's address is usually one hop away — the author page, the newsletter's about/contact
+ * page, a personal site, the masthead, or the outlet's public tips inbox. So for every pitch
+ * without an address: ask the search engine specifically for pages that show it, fetch up to
+ * five candidate pages, read the addresses off them, and prefer the one that carries the writer's
+ * name; failing that, an outlet inbox read off an outlet page, labelled as such. An address is
+ * never derived from a pattern and never taken from the model's memory — every one names the page
+ * it was read from.
+ */
+export type PageText = (url: string) => Promise<string | null>;
+
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const PAGE_BYTES = 150_000;
+
+export const defaultPageText: PageText = async (url) => {
+  const guard = guardFeedUrl(url);
+  if (!guard.ok) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LIVENESS_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { redirect: "follow", signal: controller.signal, headers: { "user-agent": "WestPeekOS/1.0 (+https://os.joinwestpeek.com)", accept: "text/html,text/plain" } });
+    if (!res.ok) return null;
+    const reader = res.body?.getReader();
+    if (!reader) return null;
+    const chunks: Uint8Array[] = [];
+    let got = 0;
+    while (got < PAGE_BYTES) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      got += value.length;
+    }
+    try { await reader.cancel(); } catch { /* enough was read */ }
+    const merged = new Uint8Array(got);
+    let at = 0;
+    for (const c of chunks) { merged.set(c.subarray(0, Math.min(c.length, merged.length - at)), at); at += c.length; if (at >= merged.length) break; }
+    return new TextDecoder("utf-8", { fatal: false }).decode(merged);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+function outletDomainOf(url: string | null): string | null {
+  try { return url ? new URL(url).hostname.replace(/^www\./, "") : null; } catch { return null; }
+}
+
+function urlsIn(text: string): string[] {
+  return Array.from(new Set((text.match(/https?:\/\/[^\s)"'<>\]]+/g) ?? []).map((u) => u.replace(/[.,;:]+$/, ""))));
+}
+
+/** Addresses on a page, decoded from mailto: and plain text, junk (images, example.com) removed. */
+export function addressesIn(pageText: string): string[] {
+  const text = pageText.replace(/&#64;|&commat;/g, "@").replace(/\s?\[at\]\s?|\s\(at\)\s/gi, "@").replace(/\s?\[dot\]\s?/gi, ".");
+  const found = new Set<string>();
+  for (const m of text.match(EMAIL_RE) ?? []) {
+    const a = m.toLowerCase();
+    if (/\.(png|jpg|jpeg|gif|svg|webp|css|js)$/.test(a)) continue;
+    if (/example\.|sentry|wixpress|@2x|no-?reply|donotreply|privacy@|legal@|abuse@|support@|unsubscribe/i.test(a)) continue;
+    found.add(a);
+  }
+  return [...found];
+}
+
+/** Pick the writer's own address from a page's addresses, else an outlet inbox, else nothing. */
+export function chooseAddress(addresses: readonly string[], writer: string, outletDomain: string | null): { email: string; kind: "personal" | "outlet" } | null {
+  const parts = writer.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  const last = parts[parts.length - 1] ?? "";
+  const first = parts[0] ?? "";
+  const local = (a: string) => a.split("@")[0]!.replace(/[._-]/g, "");
+  // The writer's own address carries their surname, or their first name with their initial, or
+  // is simply their first name (newsletter writers: lia@…). Checked in that order.
+  const personal =
+    addresses.find((a) => last.length > 2 && local(a).includes(last)) ??
+    addresses.find((a) => first.length > 2 && last && local(a).startsWith(first[0]! + last)) ??
+    addresses.find((a) => first.length > 2 && (local(a) === first || local(a).startsWith(first) && local(a).length <= first.length + 2));
+  if (personal) return { email: personal, kind: "personal" };
+  const outlet = addresses.find((a) => outletDomain && a.endsWith("@" + outletDomain) && /^(tips|editors?|editorial|newsdesk|news|press|pitches|hello|contact|info|submissions)@/.test(a));
+  if (outlet) return { email: outlet, kind: "outlet" };
+  return null;
+}
+
+export async function findWriterAddress(
+  env: Env,
+  actor: Actor,
+  pitch: PressPitch,
+  deps: { search: ProductionsSearch; pageText: PageText },
+): Promise<PressPitch> {
+  const outletDomain = outletDomainOf(pitch.proofUrl);
+  const candidates: string[] = [];
+  const push = (u: string | null) => { if (u && !candidates.includes(u)) candidates.push(u); };
+  push(pitch.contactUrl);
+  push(pitch.proofUrl);
+  const ask = await deps.search(
+    env,
+    actor,
+    [
+      `Find the public email address of ${pitch.writer}, who writes for ${pitch.outlet}. Look for: their author/bio page on ${outletDomain ?? "the outlet"},`,
+      "the outlet's masthead or contact page, the writer's newsletter about/contact page (Substack, beehiiv), the writer's personal site, a Muck Rack or press-list profile that shows the address, and the outlet's public tips/pitches inbox.",
+      "Return ONLY the URLs of pages that actually display an email address, one per line, most specific first. No addresses from memory.",
+    ].join(" "),
+  );
+  if (ask.ok) for (const u of urlsIn(ask.text).slice(0, 6)) push(u);
+  for (const url of candidates.slice(0, 6)) {
+    const text = await deps.pageText(url);
+    if (!text) continue;
+    const pick = chooseAddress(addressesIn(text), pitch.writer, outletDomain);
+    if (pick) return { ...pitch, email: pick.email, emailKind: pick.kind, contactUrl: url };
+  }
+  return { ...pitch, email: null, emailKind: null, contactUrl: pitch.contactUrl ?? candidates.find((u) => u !== pitch.proofUrl) ?? null };
+}
+
 export function renderPressEmail(month: string, pitches: readonly PressPitch[], dropped: readonly string[]): string {
   const lines = [
     `Scooter — ${pitches.length} press pitch draft(s) for West Peek Productions (${month}). Copy, paste, send — nothing has been sent from here.`,
     "",
     ...pitches.flatMap((p, n) => [
       `${n + 1}. ${p.writer} — ${p.outlet}`,
-      `   To: ${p.email ?? `no public address found — contact page: ${p.contactUrl ?? "not found"}`}`,
-      ...(p.email && p.contactUrl ? [`   (address read from ${p.contactUrl})`] : []),
+      `   To: ${p.email ?? `no public address on any page checked — write via ${p.contactUrl ?? "the outlet's contact page"}`}`,
+      ...(p.email && p.contactUrl ? [`   (${p.emailKind === "outlet" ? "the outlet's public inbox, not the writer's own" : "the writer's own address"} — read from ${p.contactUrl})`] : []),
       `   Why this writer: ${p.whyThisWriter}`,
       `   Proof of beat: ${p.proofUrl}`,
       `   Subject: ${p.hook}`,
@@ -377,7 +522,7 @@ const defaultSearch: ProductionsSearch = async (env, actor, prompt) => {
 export async function runProductionsCard(
   env: Env,
   card: SweepCard,
-  deps: { search?: ProductionsSearch; urlCheck?: UrlCheck; now?: Date } = {},
+  deps: { search?: ProductionsSearch; urlCheck?: UrlCheck; pageText?: PageText; now?: Date } = {},
 ): Promise<{ finished: boolean; blocked: boolean; detail: string }> {
   const now = deps.now ?? new Date();
   const month = monthOf(now);
@@ -405,6 +550,11 @@ export async function runProductionsCard(
   } else {
     const parsed = parsePressPitches(found.text);
     const live = await keepLive(parsed, (p) => p.proofUrl, check);
+    // EVERY ADDRESS IS READ OFF A PAGE, including one the model offered: the hunt re-reads it.
+    const pageText = deps.pageText ?? defaultPageText;
+    const hunted: PressPitch[] = [];
+    for (const p of live.kept) hunted.push(await findWriterAddress(env, actor, { ...p, email: null }, { search, pageText }));
+    live.kept = hunted;
     count = live.kept.length;
     dropped = live.dropped;
     subject = `Walker: ${count} press pitch drafts for West Peek Productions — yours to send`;
@@ -450,4 +600,48 @@ export async function runProductionsCard(
     blocked: false,
     detail: mail.sent ? `${subject} — emailed to ${SCOOTER_EMAIL}` : `${subject} — on the card; email not sent (${mail.reason})`,
   };
+}
+
+// ── One note, once ───────────────────────────────────────────────────────────
+
+/**
+ * WALKER INTRODUCES HIMSELF AND OWNS THE FIRST RUN. Operator, 15 Sep 2026: "send scooter another
+ * email acknowledging the first one was bad and maybe walker should introduce himself in that
+ * email too … and a reminder that any emails scooter wants to send should be to
+ * os@joinwestpeek.com and those get routed via Porter." Sent through the partner-email path so it
+ * is on the record like everything else an employee sends; the job pauses itself after one send.
+ */
+export function renderIntroNote(): { subject: string; text: string } {
+  return {
+    subject: "Walker, your chief of staff — about that first Productions email, and how to reach me",
+    text: [
+      "Scooter —",
+      "",
+      "I'm Walker, your chief of staff in West Peek OS. I should have introduced myself before the first two emails landed in your inbox, so: that is who was writing.",
+      "",
+      "The first customer list was below the standard you should expect from me. The search wandered — a couple of the ten were not US-market companies, one appeared twice — and the press drafts came with almost no addresses because I only kept an address if the single page I cited happened to show one. Both are fixed: the customer search is now restricted to the US market with one entry per organisation, and for every writer I now go and find the page that shows their address (author page, masthead, newsletter contact page, personal site, or the outlet's tips inbox) and tell you which page it came from. The five writers are chosen with intent — a mix of the trade press your buyers read, a creator/community newsletter, a business title, an events-industry outlet, and one earned by a specific recent piece — not by beat alone.",
+      "",
+      "You will get two emails from me on the first of each month: ten organisations that could buy Community-as-a-Service, and five press pitches drafted for you to send. Nothing goes to a prospect or a journalist from here; that stays yours.",
+      "",
+      "If you want anything from me or the team, email os@joinwestpeek.com from this address. Porter routes it to whoever's job it is — usually me — and the finished work comes back to your inbox.",
+      "",
+      "— Walker",
+    ].join("\n"),
+  };
+}
+
+/** The scheduled branch: send once, record it, pause the job. Rule 0: a second run says why it did nothing. */
+export async function runIntroNote(env: Env): Promise<{ status: "SUCCEEDED" | "FAILED"; summary: string }> {
+  const already = await env.WP_OS_DB.prepare(
+    "SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND payload_json LIKE '%Walker, your chief of staff%'",
+  ).first<{ n: number }>();
+  if ((already?.n ?? 0) > 0) {
+    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED', pause_reason = 'Sent once on its first run; a second introduction would be noise.' WHERE job_key = 'productions_intro_note'").run();
+    return { status: "SUCCEEDED", summary: "already sent; the job paused itself" };
+  }
+  const note = renderIntroNote();
+  const mail = await emailPartnerDeliverable(env, { to: SCOOTER_EMAIL, subject: note.subject, text: note.text, objectType: "scheduled_job", objectId: "sjb_productions_intro_note", firmScope: "west-peek", actorId: "aie_walker" });
+  if (!mail.sent) return { status: "FAILED", summary: `not sent: ${mail.reason}` };
+  await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED', pause_reason = 'Sent once (Walker introduced himself). Kept as the record of it.' WHERE job_key = 'productions_intro_note'").run();
+  return { status: "SUCCEEDED", summary: `sent to ${SCOOTER_EMAIL}: "${note.subject}"; the job paused itself` };
 }
