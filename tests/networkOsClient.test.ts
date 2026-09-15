@@ -121,6 +121,10 @@ describe("pulling a snapshot", () => {
     expect(seenUrl).toContain("/api/sheets/snapshot");
     // Only what the pull reads — the whole snapshot crossed Network OS's CPU limit on 14 Sep 2026.
     expect(seenUrl).toContain("tabs=contacts,relationship_touches");
+    // fresh=1 bypasses Network OS's 45s cache: a sync receipt recording stale rows is worse than
+    // a slower call.
+    expect(seenUrl).toContain("fresh=1");
+    expect(seenCookie).toMatch(/^wpn_session=/);
   });
 
   it("asks Network OS only for what changed since a moment it names", async () => {
@@ -131,10 +135,6 @@ describe("pulling a snapshot", () => {
     }) as unknown as typeof fetch;
     await pullSnapshot(CONFIGURED, fetchImpl, { since: "2026-09-15T16:00:00.000Z" });
     expect(seenUrl).toContain("since=2026-09-15T16%3A00%3A00.000Z");
-    // fresh=1 bypasses Network OS's 45s cache: a sync receipt recording stale rows is worse than
-    // a slower call.
-    expect(seenUrl).toContain("fresh=1");
-    expect(seenCookie).toMatch(/^wpn_session=/);
   });
 
   it("turns an unreachable host into a stated reason, not a throw", async () => {
