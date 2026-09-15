@@ -123,7 +123,7 @@ function deps(over: Partial<ChainDeps> = {}): ChainDeps {
       const org = /Research (.+?) as a sponsor/.exec(prompt)?.[1] ?? "?";
       return { ok: true, text: researchJson(org), citations: [], detail: "ok" };
     },
-    urlCheck: async (url) => url !== DEAD_URL,
+    urlCheck: async (url) => (url === DEAD_URL ? 404 : url.includes("jpmorgan") ? 403 : 200),
     pageText: async (url) => (url === HARVEY_TEAM ? "<h3>Mali <b>Robertson</b></h3> Director of Brand Partnerships" : url === "https://www.harvey.ai/nobody" ? "<p>Team page</p>" : null),
     synthesise: async (prompt) => ({ text: prompt.includes("THREE distinct concepts") ? conceptsJson : packetJson(), aiRunId: null }),
     render: async () => ({ pdfBase64: TINY_PDF, pageCount: 1 }),
@@ -211,7 +211,10 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     expect(sponsors[0]).toMatchObject({ rank: 1, tier: "PRESENTING", evidence_url: HARVEY_EVIDENCE, contact_name: "Mali Robertson", contact_title: "Director of Brand Partnerships", contact_source_url: HARVEY_TEAM });
     expect(sponsors[0]!.fit_argument).toContain("elite law firms");
     // The bank's made-up evidence was swapped for the research's verified page; its invented contact went.
+    // The bank's site answered 403 — a guarded page is kept and marked for a person to verify.
     expect(sponsors[1]!.evidence_url).toBe("https://www.jpmorgan.com/private-bank/events");
+    expect(parseState(p.build_state_json).candidates.find((c) => c.orgName.startsWith("J.P."))!.evidenceNote).toMatch(/refused an automated read/);
+    expect(parseState(p.build_state_json).dropped).toEqual([{ orgName: "Ghost Co", url: DEAD_URL, status: 404 }]);
     expect(sponsors[1]!.contact_name).toBeNull();
     // Her second seed had no sponsorship history: kept, last, and said so.
     expect(sponsors[2]!.note).toMatch(/No sponsorship history was found/);

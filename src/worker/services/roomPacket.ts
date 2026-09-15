@@ -6,7 +6,7 @@ import type { RouteContext } from "../router";
 import { runAi } from "../ai/runAi";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { findVenues, SEARCH_MODEL } from "./liveSearch";
-import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
+import { pageTextOf, urlStatus } from "../effects/urlLiveness";
 import {
   SPONSORSHIP_TARGET,
   audienceTerms,
@@ -189,10 +189,12 @@ export interface BuildState {
   flags: PacketFlag[];
   pdfError: string | null;
   discoveryDetail: string | null;
+  /** Candidates discovery dropped, with the status their page answered — so the packet can say who was looked at. */
+  dropped: Array<{ orgName: string; url: string; status: number | null }>;
 }
 
 export function emptyState(): BuildState {
-  return { candidates: [], research: [], researched: [], inviteCheck: null, concepts: [], choiceRationale: null, pushback: null, venueHits: [], venueCitations: [], venueDetail: null, flags: [], pdfError: null, discoveryDetail: null };
+  return { candidates: [], research: [], researched: [], inviteCheck: null, concepts: [], choiceRationale: null, pushback: null, venueHits: [], venueCitations: [], venueDetail: null, flags: [], pdfError: null, discoveryDetail: null, dropped: [] };
 }
 
 export function parseState(raw: string | null): BuildState {
@@ -215,7 +217,21 @@ async function saveStage(env: Env, id: string, stage: BuildStage, state: BuildSt
 export type VenueSearch = typeof findVenues;
 export type Synthesise = (prompt: string) => Promise<{ text: string; aiRunId: string | null }>;
 export type ResearchSearch = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; citations: string[]; detail: string }>;
-export type UrlCheck = (url: string) => Promise<boolean>;
+/** The status a URL answers with; null when nothing answered. */
+export type UrlCheck = (url: string) => Promise<number | null>;
+
+/**
+ * What a status means for a cited page. Under 400 it answered; 401/403/405/429 it exists and
+ * refused an automated read (a corporate site behind bot protection) — kept, and a person checks
+ * it; anything else (404, 410, 5xx, nothing) is a page that is not there.
+ */
+export function evidenceVerdict(status: number | null): "live" | "guarded" | "dead" {
+  if (status === null) return "dead";
+  if (status < 400) return "live";
+  if ([401, 403, 405, 429].includes(status)) return "guarded";
+  return "dead";
+}
+const GUARDED_NOTE = " [page exists but refused an automated read — verify by hand]";
 export type PageText = (url: string) => Promise<string | null>;
 export type RenderPdf = (html: string) => Promise<{ pdfBase64: string; pageCount: number } | { pdfBase64: null; reason: string }>;
 
@@ -429,7 +445,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
   const city = brief?.city ?? "New York";
   const state = parseState(draft.build_state_json);
   const research = deps.research ?? defaultResearch;
-  const check = deps.urlCheck ?? ((u: string) => urlIsLive(u));
+  const check = deps.urlCheck ?? ((u: string) => urlStatus(u));
   const pageText = deps.pageText ?? ((u: string) => pageTextOf(u));
   const synth = (purpose: string, prompt: string, tokens: number) => (deps.synthesise ? deps.synthesise(prompt) : defaultSynthesise(env, actor, purpose, prompt, tokens));
   const stage: BuildStage = draft.build_stage === "QUEUED" ? "DISCOVER" : draft.build_stage;
@@ -447,8 +463,9 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       const parsed = parseSponsorCandidates(found.text, brief);
       // Every evidence URL is asked for its status before the candidate is kept. A citation the
       // search transcribed wrongly would otherwise reach the packet as proof.
-      const checked = await Promise.all(parsed.map(async (c) => ({ c, ok: await check(c.evidenceUrl) })));
-      state.candidates = checked.filter((x) => x.ok).map((x) => x.c);
+      const checked = await Promise.all(parsed.map(async (c) => { const status = await check(c.evidenceUrl); return { c, status, verdict: evidenceVerdict(status) }; }));
+      state.candidates = checked.filter((x) => x.verdict !== "dead").map((x) => (x.verdict === "guarded" ? { ...x.c, evidenceNote: `${x.c.evidenceNote}${GUARDED_NOTE}` } : x.c));
+      state.dropped = checked.filter((x) => x.verdict === "dead").map((x) => ({ orgName: x.c.orgName, url: x.c.evidenceUrl, status: x.status }));
       // A seed she named that discovery did not return is still researched: its evidence comes
       // from its own research stage, or the packet says it has none.
       for (const named of brief?.sponsorProspects ?? []) {
@@ -456,7 +473,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
           state.candidates.unshift({ orgName: named, category: "OTHER", evidenceUrl: "", evidenceNote: "", whyThisAudience: "named by the partner", fromBrief: true });
         }
       }
-      state.discoveryDetail = `${parsed.length} candidate(s) found, ${checked.filter((x) => !x.ok).length} dropped because the cited page did not answer`;
+      state.discoveryDetail = `${parsed.length} candidate(s) found, ${state.dropped.length} dropped because the cited page did not answer${state.dropped.length ? ` (${state.dropped.map((d) => `${d.orgName}: ${d.status ?? "no answer"}`).join(", ")})` : ""}`;
       await saveStage(env, draft.id, "RESEARCH", state);
       return { stage, next: "RESEARCH", note: `${state.candidates.length} sponsor candidate(s) with live evidence; ${state.inviteCheck.matchingCount} of ${state.inviteCheck.totalContacts} contacts match the audience (${state.inviteCheck.verdict})` };
     }
@@ -471,8 +488,8 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
         // Evidence: discovery's URL (already live) plus up to three of the research's, each checked.
         const evidence: SponsorResearch["evidence"] = c.evidenceUrl ? [{ url: c.evidenceUrl, note: c.evidenceNote }] : [];
         const extra = raw.history.filter((h) => !evidence.some((e) => e.url === h.url)).slice(0, PAGES_PER_SPONSOR);
-        const live = await Promise.all(extra.map(async (h) => ({ h, ok: await check(h.url) })));
-        for (const x of live) if (x.ok) evidence.push(x.h);
+        const live = await Promise.all(extra.map(async (h) => { const status = await check(h.url); return { h, verdict: evidenceVerdict(status) }; }));
+        for (const x of live) if (x.verdict === "live") evidence.push(x.h); else if (x.verdict === "guarded") evidence.push({ ...x.h, note: `${x.h.note}${GUARDED_NOTE}` });
         // Contact: the first named person whose page, fetched, actually carries the name.
         let contact: SponsorResearch["contact"] = null;
         for (const cand of raw.contacts.slice(0, PAGES_PER_SPONSOR)) {
@@ -846,6 +863,7 @@ export function viewFromRows(packet: PacketRow, venues: VenueLine[], sponsors: S
     commitmentMd: packet.commitment_md,
     pitchEmail: obj<{ to: string; subject: string; body: string }>(packet.pitch_email_json),
     inviteCheck: obj<InviteCheck>(packet.invite_check_json),
+    alsoLookedAt: parseState(packet.build_state_json).dropped.map((d) => d.orgName),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -917,6 +935,8 @@ export function renderPacketText(packet: PacketRow, venues: VenueLine[], sponsor
           sp.note ? `   [${sp.note}]` : "",
         ])
       : ["- none named"]),
+    "",
+    v.alsoLookedAt.length ? `Also looked at, left out because the cited page did not answer when checked: ${v.alsoLookedAt.join(", ")}.` : "",
     "",
     v.pitchEmail ? `THE PITCH — a draft for Sequoia to send to ${v.pitchEmail.to || "the rank-1 sponsor"}\nSubject: ${v.pitchEmail.subject}\n\n${v.pitchEmail.body}\n` : "",
     "RISKS",

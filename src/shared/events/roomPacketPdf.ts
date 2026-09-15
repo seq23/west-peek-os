@@ -81,6 +81,8 @@ export interface PacketView {
   commitmentMd: string | null;
   pitchEmail: { to: string; subject: string; body: string } | null;
   inviteCheck: InviteCheck | null;
+  /** Organisations discovery looked at whose cited page did not answer — said, so the list reads as searched, not short. */
+  alsoLookedAt: string[];
   /** ISO timestamp of the build. */
   generatedAt: string;
 }
@@ -219,6 +221,7 @@ export function renderPacketHtml(v: PacketView): string {
     ? `<table class="sponsors"><thead><tr><th>#</th><th>Organisation</th><th>Evidence they sponsor</th><th>Who runs partnerships</th></tr></thead><tbody>${v.sponsors.map(sponsorRow).join("")}</tbody></table>
   ${v.sponsors.map((s) => (s.fitArgument || s.pitch || s.note) ? `<div class="fit"><h3>${s.rank ?? ""}. ${esc(s.orgName)}</h3>${s.fitArgument ? `<p>${esc(s.fitArgument)}</p>` : ""}${s.pitch ? `<p class="muted"><strong>Open with:</strong> ${esc(s.pitch)}</p>` : ""}${s.note ? `<p class="muted">${esc(s.note)}</p>` : ""}</div>` : "").join("")}`
     : "<p>Nobody to approach was named. A Room with no prospect is spend the fund carries alone.</p>"}
+  ${v.alsoLookedAt.length ? `<p class="muted">Also looked at, left out because the cited page did not answer when checked: ${esc(v.alsoLookedAt.join(", "))}.</p>` : ""}
 </section>`;
 
   const money = eco
