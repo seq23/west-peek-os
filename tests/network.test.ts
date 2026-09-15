@@ -544,6 +544,12 @@ describe("a community with more new people than one tick may apply", () => {
     expect(applied).toBe(records.length);
     expect(last.status).toBe("OK");
     expect(last.progress?.complete).toBe(true);
+    // The completed pass leaves no offset behind: the next pull must read "not in progress" and
+    // ask Network OS only for what changed since — a stale offset kept every pull whole (15 Sep).
+    const done = await t.db
+      .prepare("SELECT cursor_value FROM network_sync_cursor WHERE resource = 'contact'")
+      .first<{ cursor_value: string | null }>();
+    expect(JSON.parse(done!.cursor_value ?? "{}").offset ?? 0).toBe(0);
     // Duplicates on a re-read are ONE receipt per pull, not one per person.
     const before = (await t.db.prepare("SELECT COUNT(*) AS n FROM network_sync_receipt WHERE status = 'DUPLICATE_IGNORED'").first<{ n: number }>())!.n;
     const again = await pullResource(env, MP_IDENTITY, "contact", client);
