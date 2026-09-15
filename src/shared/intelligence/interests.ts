@@ -90,3 +90,60 @@ export function effectiveInterests(partner: PartnerInterests): { sectors: string
     themes: merge(FIRM_INTERESTS.themes, partner.themes),
   };
 }
+
+/**
+ * THE LENS: which way a partner reads the same brief.
+ *
+ * Audit, 15 Sep 2026. Both partners are written by ONE template, ONE required-section list and ONE
+ * verifier — the code has never had a partner-specific branch. What differed on the page that day
+ * was the prompt version (Scooter's was built by the old pipeline hours before the staged one
+ * shipped), not the standard. The only intended difference between the two briefs is emphasis:
+ * Scooter reads marketing, growth, brand, the creator economy, community, events and go-to-market;
+ * Sequoia reads markets, venture and private markets, secondaries, legal and AI. Both get the macro
+ * dashboard, the Top 5 and the West Peek read-throughs, in the same sections, in the same order.
+ *
+ * A lens is a NAMED PRESET, stored on the profile (`partner_intelligence_profile.lens`) so it is
+ * data a partner can change rather than a name hard-coded against a person. It decides which
+ * stories lead and which angle "why it matters" takes — never what is true and never which
+ * sections exist. The partner's own sectors and themes sit on top of it as before.
+ */
+export type LensKey = "investing" | "growth";
+
+export interface Lens {
+  key: LensKey;
+  /** Reads on the report header: "Edition: Scooter — marketing & growth lens". */
+  label: string;
+  /** What leads under this lens, in the order it is said to the model. */
+  categories: readonly string[];
+}
+
+export const LENSES: Readonly<Record<LensKey, Lens>> = {
+  investing: {
+    key: "investing",
+    label: "markets & private-markets lens",
+    categories: ["markets", "VC and private markets", "secondaries", "legal and the courts", "AI"],
+  },
+  growth: {
+    key: "growth",
+    label: "marketing & growth lens",
+    categories: ["marketing", "growth", "brand", "creator economy", "community", "events", "go-to-market"],
+  },
+} as const;
+
+/** The default when a profile says nothing: the fund's own lens. */
+export const DEFAULT_LENS: LensKey = "investing";
+
+export function isLensKey(value: unknown): value is LensKey {
+  return value === "investing" || value === "growth";
+}
+
+/** The lens a stored value names; an unknown or missing value is the default, never a throw. */
+export function lensFor(key: string | null | undefined): Lens {
+  return LENSES[isLensKey(key) ? key : DEFAULT_LENS];
+}
+
+/** The header line every report carries, written by the system rather than the model. */
+export function editionLine(partnerName: string, lens: Lens): string {
+  const first = partnerName.trim().split(/\s+/)[0] || "Partner";
+  return `Edition: ${first} — ${lens.label}`;
+}
