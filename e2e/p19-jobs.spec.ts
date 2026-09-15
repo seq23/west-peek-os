@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { provisionLocalD1 } from "./support/provision";
 
 /**
  * P19 browser journey — governed orchestration (GAP-21, GAP-22).
@@ -92,7 +93,10 @@ test("Walker's West Peek Productions duties are on the clock and labelled as Sco
     await expect(job).toContainText("Walker");
     await expect(job).toContainText("Running");
   }
-  // Run one by hand: it opens the month's card on Walker's desk and says so.
+  // Run one by hand: it opens the month's card on Walker's desk and says so. Walker is put on duty
+  // first — an earlier journey in the suite may have paused him, and a scheduled job may never
+  // activate an employee itself (D10), so a paused Walker is a correct REFUSED, not this test.
+  provisionLocalD1("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_walker';");
   await page.getByTestId("job-run-productions_customer_ideas").click();
   await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
   await expect(page.getByTestId("job-runs-productions_customer_ideas")).toContainText("Walker's desk");
