@@ -11,7 +11,6 @@ import {
   writeBack,
   REQUIRED_CONTRACT_CLAUSES,
   FRESH_RECORDS_PER_TICK,
-  RECORDS_PER_PULL,
   type NetworkOsClient,
   type NetworkRecord,
 } from "../src/worker/services/networkAdapter";
@@ -505,9 +504,9 @@ describe("5. there is no direct cross-repo storage coupling", () => {
  *
  * This is the test that would have caught it: a community larger than one page.
  */
-describe("a community that does not fit in one pull", () => {
-  it("advances the cursor, reports IN_PROGRESS, and resumes where it stopped", async () => {
-    const records: NetworkRecord[] = Array.from({ length: RECORDS_PER_PULL + 40 }, (_, i) => ({
+describe("a community with more new people than one tick may apply", () => {
+  it("reports IN_PROGRESS, holds the window, and finishes over the following ticks", async () => {
+    const records: NetworkRecord[] = Array.from({ length: FRESH_RECORDS_PER_TICK * 3 + 2 }, (_, i) => ({
       external_id: `bigsync_${i}`,
       identity_key: `p${i}@example.test`,
       delivery_id: `bigsync_delivery_${i}`,
@@ -537,7 +536,7 @@ describe("a community that does not fit in one pull", () => {
     // more than the cap, and the already-applied people cost one query, not one each.
     let applied = first.applied;
     let last = first;
-    for (let tick = 0; tick < 60 && !last.progress?.complete; tick++) {
+    for (let tick = 0; tick < 12 && !last.progress?.complete; tick++) {
       last = await pullResource(env, MP_IDENTITY, "contact", client);
       expect(last.applied).toBeLessThanOrEqual(FRESH_RECORDS_PER_TICK);
       applied += last.applied;
@@ -549,7 +548,7 @@ describe("a community that does not fit in one pull", () => {
     const before = (await t.db.prepare("SELECT COUNT(*) AS n FROM network_sync_receipt WHERE status = 'DUPLICATE_IGNORED'").first<{ n: number }>())!.n;
     const again = await pullResource(env, MP_IDENTITY, "contact", client);
     expect(again.applied).toBe(0);
-    expect(again.duplicates).toBeGreaterThan(0);
+    expect(again.duplicates).toBe(records.length);
     const after = (await t.db.prepare("SELECT COUNT(*) AS n FROM network_sync_receipt WHERE status = 'DUPLICATE_IGNORED'").first<{ n: number }>())!.n;
     expect(after - before).toBe(1);
 
