@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
+import { tweakDeckInBrowser, type DeckTweak } from "./deckTweak";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { notifyPartners } from "./notifications";
@@ -449,7 +450,7 @@ const BINDINGS: readonly Binding[] = [
 
 export interface CarriedDeck {
   slides: Slide[];
-  corrections: Array<{ page: number; field: string; was: string; now: string }>;
+  corrections: Array<{ page: number; field: string; was: string; now: string; context?: string }>;
   sourceVersionNo: number;
   sourcePages: number;
 }
@@ -495,7 +496,7 @@ export async function carryCurrentDeck(env: Env, actor: Actor, fundId: string, f
     "You are transcribing the firm's CURRENT limited-partner deck so it can be re-rendered in full with corrected figures.",
     "Go page by page, in order. For EVERY page output one object: {\"page\": n, \"headline\": \"...\", \"standfirst\": \"...\" or null, \"lines\": [...]}.",
     "Each line is either {\"text\": \"the sentence or bullet, verbatim\"} or, when the line states a figure the records hold,",
-    `{\"label\": \"what the line calls it\", \"bind\": one of ${JSON.stringify(BINDINGS)}, \"was\": \"the figure as printed\"}.`,
+    `{\"label\": \"what the line calls it\", \"bind\": one of ${JSON.stringify(BINDINGS)}, \"was\": \"the figure as printed, exactly — '$3M', '30%', '$30 Million'\", \"line\": \"the whole printed line the figure sits in, exactly\"}.`,
     "Carry every sentence, bullet, name, and claim on the page; do not summarise, merge pages, or drop anything. Keep the deck's voice.",
     "Charts and images: describe them in one text line beginning 'Chart:' or 'Image:'.",
     "The records currently hold these figures (the bind keys): " + JSON.stringify(figures) + ".",
@@ -513,7 +514,7 @@ export async function carryCurrentDeck(env: Env, actor: Actor, fundId: string, f
   if (run.status !== "COMPLETED" || !run.output_text) return null;
   const match = /\{[\s\S]*\}/.exec(run.output_text);
   if (!match) return null;
-  let pages: Array<{ page?: number; headline?: string; standfirst?: string | null; lines?: Array<{ text?: string; label?: string; bind?: string; was?: string }> }>;
+  let pages: TranscribedPage[];
   try {
     pages = (JSON.parse(match[0]) as { pages?: typeof pages }).pages ?? [];
   } catch {
@@ -523,7 +524,7 @@ export async function carryCurrentDeck(env: Env, actor: Actor, fundId: string, f
   return { ...slidesFromTranscript(pages, figures), sourceVersionNo: pdf.versionNo, sourcePages: pages.length };
 }
 
-export type TranscribedPage = { page?: number; headline?: string; standfirst?: string | null; lines?: Array<{ text?: string; label?: string; bind?: string; was?: string }> };
+export type TranscribedPage = { page?: number; headline?: string; standfirst?: string | null; lines?: Array<{ text?: string; label?: string; bind?: string; was?: string; line?: string }> };
 
 /** Pure: the model's transcription becomes slides, with every record-held figure bound to the record. */
 export function slidesFromTranscript(pages: TranscribedPage[], figures: DeckFigures): { slides: Slide[]; corrections: CarriedDeck["corrections"] } {
@@ -536,7 +537,7 @@ export function slidesFromTranscript(pages: TranscribedPage[], figures: DeckFigu
         slots.push({ kind: "figure", label: (line.label ?? bind).slice(0, 120), bind });
         const now = renderBindingText(bind, figures);
         if (line.was && now && line.was.trim() !== now.trim()) {
-          corrections.push({ page: p.page ?? i + 1, field: bind, was: line.was, now });
+          corrections.push({ page: p.page ?? i + 1, field: bind, was: line.was, now, ...(line.line ? { context: line.line } : {}) });
         }
       } else if (line.text) {
         slots.push({ kind: "text", text: line.text.slice(0, 400) });
@@ -604,6 +605,46 @@ export async function buildDeckPdf(
   }
 }
 
+/**
+ * THE NEW VERSION IS THE CURRENT DECK, COPIED, WITH ITS FIGURES CHANGED IN PLACE.
+ *
+ * Operator, 15 Sep 2026: "every deck should copy the original deck and make tweaks." v12–v14 were
+ * transcribed and re-typeset — the design became bullet points — and all three were sent back.
+ * Every page is copied byte-for-byte in the browser; only the figures that disagree with the
+ * records are painted over, at their own size and place. A figure that cannot be found is left as
+ * printed and named. If the copy cannot be made, the rebuild fails visibly — it never falls back
+ * to re-typesetting.
+ */
+export async function copyDeckWithTweaks(
+  env: Env,
+  fundId: string,
+  launch: Parameters<typeof buildDeckPdf>[2] | undefined,
+  carried: CarriedDeck,
+): Promise<{ pdfBase64: string; pageCount: number; placed: DeckTweak[]; missing: DeckTweak[] } | { pdfBase64: null; reason: string }> {
+  const binding = (env as unknown as { BROWSER?: unknown }).BROWSER;
+  if (!launch && !binding) return { pdfBase64: null, reason: "no browser is available here — the BROWSER binding is not configured" };
+  const source = await currentDeckPdf(env, fundId);
+  if (!source) return { pdfBase64: null, reason: "there is no current deck with a PDF to copy" };
+  const tweaks: DeckTweak[] = carried.corrections.map((c) => ({ page: c.page, was: c.was, now: c.now, field: c.field, ...(c.context ? { context: c.context } : {}) }));
+  let browser: { newPage(): Promise<any>; close(): Promise<void> } | null = null;
+  try {
+    const doLaunch =
+      launch ??
+      (async (b: unknown) => {
+        const puppeteer = await import("@cloudflare/puppeteer");
+        return (await puppeteer.launch(b as never)) as unknown as { newPage(): Promise<any>; close(): Promise<void> };
+      });
+    browser = await doLaunch(binding);
+    const page = await browser.newPage();
+    const out = await tweakDeckInBrowser(page, source.base64, tweaks);
+    return out;
+  } catch (err) {
+    return { pdfBase64: null, reason: `the browser could not copy the deck: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    if (browser) await browser.close().catch(() => undefined);
+  }
+}
+
 export async function runDeckRebuild(
   env: Env,
   actor: Actor,
@@ -616,18 +657,38 @@ export async function runDeckRebuild(
   let pageCount: number | null = null;
   let renderNote: string | null = null;
   let carried: CarriedDeck | null = null;
+  let placed: DeckTweak[] = [];
+  let missing: DeckTweak[] = [];
   if (!pdfBase64) {
     // Pull from the current deck first; fall back to the template only when there is none.
     if (input.carry !== false) {
       const figures = await figuresFromRecords(env, fund.id);
       carried = await carryCurrentDeck(env, actor, fund.id, figures).catch(() => null);
     }
-    const built = await buildDeckPdf(env, fund.id, input.launch, carried);
-    if (built.pdfBase64) {
-      pdfBase64 = built.pdfBase64;
-      pageCount = built.pageCount;
+    if (carried) {
+      // COPY, NEVER RE-TYPESET. The transcript is used only to know which figures to change and
+      // what they say now; the pages themselves come from the current PDF.
+      const copied = await copyDeckWithTweaks(env, fund.id, input.launch, carried);
+      if (copied.pdfBase64) {
+        pdfBase64 = copied.pdfBase64;
+        pageCount = copied.pageCount;
+        placed = copied.placed;
+        missing = copied.missing;
+      } else {
+        renderNote = "reason" in copied ? copied.reason : null;
+      }
+    } else if (await currentDeckPdf(env, fund.id)) {
+      // THERE IS A DECK AND IT COULD NOT BE READ. Building the template instead would be the
+      // re-typeset the operator rejected three times; nothing is built and the reason is said.
+      renderNote = "the current deck could not be read to find its figures, so nothing was built — the template is never used while a current deck exists";
     } else {
-      renderNote = "reason" in built ? built.reason : null;
+      const built = await buildDeckPdf(env, fund.id, input.launch, null);
+      if (built.pdfBase64) {
+        pdfBase64 = built.pdfBase64;
+        pageCount = built.pageCount;
+      } else {
+        renderNote = "reason" in built ? built.reason : null;
+      }
     }
   }
   const version = await recordDeckVersion(env, actor, {
@@ -640,11 +701,15 @@ export async function runDeckRebuild(
     pageCount,
     changeSummary: [
       carried
-        ? `Carried all ${carried.sourcePages} pages of v${carried.sourceVersionNo}; ` +
-          (carried.corrections.length > 0
-            ? `${carried.corrections.length} figure(s) corrected to the records: ` +
-              carried.corrections.slice(0, 6).map((c) => `p${c.page} ${c.field} ${c.was} → ${c.now}`).join("; ")
-            : "every figure already matched the records")
+        ? `Copied every page of v${carried.sourceVersionNo} as designed; ` +
+          (placed.length > 0
+            ? `${placed.length} figure(s) changed in place: ` + placed.slice(0, 8).map((c) => `p${c.page} ${c.field} ${c.was} → ${c.now}`).join("; ")
+            : carried.corrections.length === 0
+              ? "every figure already matched the records, so nothing was changed"
+              : "no figure could be changed in place") +
+          (missing.length > 0
+            ? `. Left as printed (could not be found on the page): ${missing.slice(0, 6).map((c) => `p${c.page} ${c.field} ${c.was}`).join("; ")}`
+            : "")
         : "Built from the template: there was no current deck to pull from",
       input.brief ? `On request: ${input.brief.slice(0, 300)}` : null,
     ].filter(Boolean).join(". "),
@@ -728,7 +793,12 @@ export async function requestDeckRework(
 ): Promise<{ id: string } | null> {
   if (rejected.origin !== "BUILT") return null;
   const firmScope = (rejected as unknown as { firm_scope?: string }).firm_scope ?? "west-peek";
-  const nextNo = rejected.version_no + 1;
+  // THE NEXT NUMBER IS THE NEXT NUMBER, not the rejected one plus one. v14 was sent back after v15
+  // existed and the card read "Rebuild the LP deck as v15" for a build that would be v16.
+  const top = await env.WP_OS_DB.prepare("SELECT COALESCE(MAX(version_no), 0) AS n FROM deck_version WHERE fund_id = ?1")
+    .bind(rejected.fund_id)
+    .first<{ n: number }>();
+  const nextNo = (top?.n ?? rejected.version_no) + 1;
   const card = await createWorkCardInternal(env, deckSystemIdentity(firmScope), {
     title: `Rebuild the LP deck as v${nextNo}`,
     description: [

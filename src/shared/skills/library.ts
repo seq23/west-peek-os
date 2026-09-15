@@ -696,6 +696,17 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
         ],
       },
       {
+        key: "the_deck_is_copied_never_retyped",
+        title: "A new version of the LP deck",
+        when: "Rebuilding, correcting or proposing any version of the fund's deck.",
+        guidance: [
+          "COPY THE CURRENT DECK AND CHANGE ONLY WHAT IS WRONG. Every page, every image, every layout stays exactly as the designer left it; the only edits are the figures that disagree with the records, changed in place on the slide they appear on.",
+          "Never re-typeset the deck. A deck rebuilt from a transcript — bullets where the design was — is not a version of the deck, it is a different document, and the partner rejected v12, v13 and v14 for exactly that.",
+          "If a figure cannot be changed in place, leave it as printed and say so in the version's summary. A page left as it was is better than a page redrawn.",
+          "Say what changed, page by page: 'p8 reserve 30% → 40%'. A version whose summary cannot name its edits has no reason to exist.",
+        ],
+      },
+      {
         key: "what_a_room_costs",
         title: "The money around the community",
         when: "Booking, forecasting or reporting sponsorship revenue and event cost.",
