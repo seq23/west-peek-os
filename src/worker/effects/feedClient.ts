@@ -39,8 +39,10 @@ const FETCH_TIMEOUT_MS = 8_000;
  * comfortably contains far more than twenty-five entries of any real feed, so in practice this
  * drops material that was being parsed and then thrown away.
  */
-const MAX_BYTES = 256 * 1024;
-const MAX_ITEMS_PER_SOURCE = 25;
+// HALVED 15 Sep 2026: one source parsed in a scheduled tick measured 32 ms of CPU against a 10 ms
+// budget. A feed's newest items are its first bytes; 128 KB holds twenty of them with room.
+const MAX_BYTES = 128 * 1024;
+const MAX_ITEMS_PER_SOURCE = 20;
 
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
 

@@ -174,7 +174,7 @@ export async function probeNetworkOs(env: Env, fetchImpl: typeof fetch = fetch):
  * unconfigured and unreachable are both normal states the adapter records as a receipt, not
  * exceptions to bubble up.
  */
-export async function pullSnapshot(env: Env, fetchImpl: typeof fetch = fetch): Promise<NetworkPullResult> {
+export async function pullSnapshot(env: Env, fetchImpl: typeof fetch = fetch, opts: { since?: string | null } = {}): Promise<NetworkPullResult> {
   const blocked = networkOsBlockedReason(env);
   if (blocked) return { ok: false, snapshot: null, detail: blocked, source: null };
 
@@ -189,7 +189,11 @@ export async function pullSnapshot(env: Env, fetchImpl: typeof fetch = fetch): P
     // ONLY THE TWO TABS THIS READS. The snapshot used to be asked for whole — eight tabs, every
     // row parsed and re-keyed in one Network OS invocation — and on 14 Sep 2026 that crossed the
     // Free plan's CPU limit: every pull for two hours answered 503 / Cloudflare error 1102.
-    const res = await fetchImpl(`${base}${SNAPSHOT_PATH}?fresh=1&tabs=contacts,relationship_touches`, {
+    // ONLY WHAT CHANGED SINCE THE LAST COMPLETE PASS. 4,712 contacts is megabytes of JSON parsed
+    // every fifteen minutes to learn nothing is new — 107 ms of CPU (15 Sep 2026). With `since`,
+    // Network OS keeps the rows updated at or after it; a quiet quarter-hour is a few bytes.
+    const since = opts.since ? `&since=${encodeURIComponent(opts.since)}` : "";
+    const res = await fetchImpl(`${base}${SNAPSHOT_PATH}?fresh=1&tabs=contacts,relationship_touches${since}`, {
       method: "GET",
       headers: { cookie: `wpn_session=${session}`, accept: "application/json" },
       signal: controller.signal,

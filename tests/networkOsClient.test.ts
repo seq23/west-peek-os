@@ -127,6 +127,16 @@ describe("pulling a snapshot", () => {
     expect(seenCookie).toMatch(/^wpn_session=/);
   });
 
+  it("asks Network OS only for what changed since a moment it names", async () => {
+    let seenUrl = "";
+    const fetchImpl = (async (url: string | URL | Request) => {
+      seenUrl = String(url);
+      return new Response(JSON.stringify({ ok: true, data: { contacts: [], relationship_touches: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    await pullSnapshot(CONFIGURED, fetchImpl, { since: "2026-09-15T16:00:00.000Z" });
+    expect(seenUrl).toContain("since=2026-09-15T16%3A00%3A00.000Z");
+  });
+
   it("turns an unreachable host into a stated reason, not a throw", async () => {
     const boom = (async () => { throw new Error("connection refused"); }) as unknown as typeof fetch;
     const r = await pullSnapshot(CONFIGURED, boom);
