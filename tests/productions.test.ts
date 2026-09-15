@@ -34,6 +34,7 @@ const customerJson = JSON.stringify({
     { organisation: "Example Nonprofit", trigger: "announced a national summit for March", approach: "Head of Community", angle: "the summit needs a community that outlives it", url: "https://example.org/summit" },
     { organisation: "Dead Link Co", trigger: "raised a Series B", approach: "VP Marketing", angle: "new audience", url: "https://dead.example/press" },
     { organisation: "No URL Inc", trigger: "hired a community lead", approach: "that lead" },
+    { organisation: "example nonprofit", trigger: "a second trigger at the same place", approach: "CMO", url: "https://example.org/other" },
   ],
 });
 
@@ -87,9 +88,10 @@ describe("what Walker is told", () => {
 });
 
 describe("what survives the search", () => {
-  it("drops an idea with no URL, and one whose page is dead", async () => {
+  it("drops an idea with no URL, a repeated organisation, and one whose page is dead", async () => {
     const parsed = parseCustomerIdeas(customerJson);
     expect(parsed.map((i) => i.organisation)).toEqual(["Example Nonprofit", "Dead Link Co"]);
+    expect(buildCustomerPrompt("2026-10")).toMatch(/United States/);
     const live = await keepLive(parsed, (i) => i.url, urlCheck);
     expect(live.kept.map((i) => i.organisation)).toEqual(["Example Nonprofit"]);
     expect(live.dropped).toEqual(["https://dead.example/press"]);

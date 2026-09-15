@@ -181,6 +181,8 @@ export function parseCustomerIdeas(raw: string): CustomerIdea[] {
     const url = httpUrl(r.url);
     // No URL, no idea. The value of a search-grounded answer over a remembered one is the citation.
     if (!organisation || !url) continue;
+    // One entry per organisation, whatever the model did: the first run listed VK twice.
+    if (out.some((o) => o.organisation.toLowerCase() === organisation.toLowerCase())) continue;
     out.push({
       organisation,
       trigger: str(r.trigger) ?? "trigger not stated",
@@ -257,6 +259,9 @@ export function buildCustomerPrompt(month: string): string {
     "high-growth company, or community ecosystem. Vary the sectors.",
     "",
     "RULES:",
+    "- Organisations in the United States, or serving a US audience, from English-language sources.",
+    "  The first run of this duty (15 Sep 2026) returned Russian and French press pages; those are",
+    "  not buyers of a New York agency. Each organisation ONCE — two triggers at one company is one entry.",
     "- Only organisations you can cite a live page for that SHOWS the trigger. No URL, no entry.",
     "- The person or ROLE to approach (a title is fine — 'Head of Community', 'VP Marketing'). Do NOT",
     "  invent a person's name or email; if you name a person it must appear on the cited page.",
