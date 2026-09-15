@@ -203,7 +203,7 @@ async function checkPreconditions(
 const SOURCES_PER_TICK = 1;
 const PARTNERS_PER_TICK = 1;
 
-async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runId: string, now: Date): Promise<RunOutcome> {
+async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runId: string, now: Date, trigger: "MANUAL" | "SCHEDULED" = "SCHEDULED"): Promise<RunOutcome> {
   const artifacts: RunOutcome["artifacts"] = [];
 
   // job_key is checked BEFORE kind. `kind` is a CHECK constraint that cannot be widened in D1:
@@ -414,13 +414,17 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   if (job.kind === "INTELLIGENCE") {
     // A BRIEF OWED TODAY IS THE WHOLE TICK. Building it reads what earlier ticks gathered; it does
     // not also gather. When no brief is owed, the tick reads one source.
+    // SCHEDULED ticks only: a person pressing "Run it now" expects the sweep, and gets it below.
     const { runDailyForAll, briefsOwedToday } = await import("./dailyIntelligence");
-    if (await briefsOwedToday(env, now)) {
+    if (trigger === "SCHEDULED" && (await briefsOwedToday(env, now))) {
       const brief = await runDailyForAll(env, actor, now, undefined, PARTNERS_PER_TICK);
       artifacts.push({ kind: "DAILY_BRIEFING", note: `${brief.generated} partner briefing(s)` });
+      // A failed brief does not fail the tick: the brief keeps its own attempts and its own notice
+      // ("Sequoia's brief is down" says why), and a job dead-lettered for a model outage would stop
+      // reading sources too. The summary says what happened.
       return {
-        status: brief.failed > 0 && brief.generated === 0 ? "FAILED" : "SUCCEEDED",
-        summary: `Briefing tick: ${brief.generated} generated${brief.failed ? `, ${brief.failed} failed` : ""}${brief.remaining > 0 ? `, ${brief.remaining} still to build` : ""}. Sources are read on the next tick.`,
+        status: "SUCCEEDED",
+        summary: `Briefing tick: ${brief.generated} generated${brief.failed ? `, ${brief.failed} failed (the brief's own notice says why)` : ""}${brief.remaining > 0 ? `, ${brief.remaining} still to build` : ""}. Sources are read on the next tick.`,
         artifacts,
       };
     }
@@ -682,7 +686,7 @@ export async function runJob(
 
   let outcome: RunOutcome;
   try {
-    outcome = await executeJobBody(env, job, actor, runId, now);
+    outcome = await executeJobBody(env, job, actor, runId, now, opts.trigger);
   } catch (err) {
     outcome = {
       status: "FAILED",

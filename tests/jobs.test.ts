@@ -278,8 +278,12 @@ describe("the scheduled tick is idempotent and produces artifacts", () => {
     expect(await briefsOwedToday(env, later)).toBe(true);
     const brief = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "SCHEDULED", now: later });
     expect(brief.run.outcome_summary).toMatch(/^Briefing tick:/);
+    expect(brief.run.status, "a brief that cannot be built (no model here) does not fail the tick; the brief's own notice says why").toBe("SUCCEEDED");
     const detail = await call<{ artifacts: Array<{ kind: string }> }>(`/api/jobs/runs/${brief.run.id}`, MP);
     expect(detail.body.artifacts.some((a) => a.kind === "INTELLIGENCE_RUN"), "a briefing tick gathers nothing").toBe(false);
+    // A person pressing "Run it now" at the same hour gets the sweep they asked for.
+    const byHand = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "MANUAL", now: later });
+    expect(byHand.run.outcome_summary).not.toMatch(/^Briefing tick:/);
   });
 
   it("a second tick inside the same window replays instead of running twice", async () => {
