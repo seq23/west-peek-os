@@ -103,11 +103,60 @@ describe("what survives the search", () => {
     expect(pitches[0]!.email).toBe("a.writer@communityweekly.example");
     // An address with no page behind it is a guess, and a guess is not sent to anybody.
     expect(pitches[1]!.email).toBeNull();
-    const text = renderPressEmail("2026-10", pitches.slice(0, 2), []);
+    const text = renderPressEmail("2026-10", [{ ...pitches[0]!, emailKind: "personal" }, pitches[1]!], []);
     expect(text).toContain("To: a.writer@communityweekly.example");
-    expect(text).toContain("(address read from https://communityweekly.example/about)");
-    expect(text).toContain("To: no public address found — contact page: not found");
+    expect(text).toContain("(the writer's own address — read from https://communityweekly.example/about)");
+    expect(text).toContain("To: no public address on any page checked — write via the outlet's contact page");
     expect(text).toMatch(/nothing leaves this system for a journalist/);
+  });
+
+  /*
+   * THE ADDRESS HUNT. Operator, 15 Sep 2026: "why couldn't u find these journalists' emails — this
+   * seems weak and like it should have been achievable." The first run kept an address only if the
+   * one page the search cited showed it. Now the pages that show addresses are asked for, fetched
+   * and read, the writer's own address wins, an outlet inbox is the labelled fallback, and a
+   * pattern or a remembered address is never used.
+   */
+  it("reads addresses off a page and prefers the writer's own over the outlet's inbox", async () => {
+    const { addressesIn, chooseAddress } = await import("../src/worker/services/productions");
+    const page = `<a href="mailto:lia&#64;icymi.example">email</a> tips@icymi.example logo@2x.png noreply@icymi.example editors@icymi.example`;
+    const found = addressesIn(page);
+    expect(found).toEqual(expect.arrayContaining(["lia@icymi.example", "tips@icymi.example", "editors@icymi.example"]));
+    expect(found).not.toContain("noreply@icymi.example");
+    expect(chooseAddress(found, "Lia Haberman", "icymi.example")).toEqual({ email: "lia@icymi.example", kind: "personal" });
+    expect(chooseAddress(["tips@icymi.example"], "Lia Haberman", "icymi.example")).toEqual({ email: "tips@icymi.example", kind: "outlet" });
+    expect(chooseAddress(["someone@elsewhere.example"], "Lia Haberman", "icymi.example")).toBeNull();
+  });
+
+  it("hunts: asks for the pages that show an address, reads them, and records where the address came from", async () => {
+    const { findWriterAddress } = await import("../src/worker/services/productions");
+    const pitch = { writer: "Conor Murray", outlet: "Forbes", email: null, contactUrl: null, whyThisWriter: "", hook: "", proofUrl: "https://forbes.example/sites/conormurray/piece", draft: "" };
+    const asked: string[] = [];
+    const out = await findWriterAddress(env, { type: "AI", aiEmployeeId: "aie_walker", roles: [], firmScopes: ["west-peek"] }, pitch, {
+      search: async (_e, _a, prompt) => { asked.push(prompt); return { ok: true, text: "https://forbes.example/sites/conormurray/\nhttps://muckrack.example/conor-murray", detail: "ok" }; },
+      pageText: async (url) => (url === "https://muckrack.example/conor-murray" ? "Conor Murray, Forbes. Contact: cmurray@forbes.example" : "no addresses here"),
+    });
+    expect(asked[0]).toMatch(/public email address of Conor Murray/);
+    expect(out.email).toBe("cmurray@forbes.example");
+    expect(out.emailKind).toBe("personal");
+    expect(out.contactUrl).toBe("https://muckrack.example/conor-murray");
+    // Nothing found anywhere: no address, and the contact page to write via is named.
+    const none = await findWriterAddress(env, { type: "AI", aiEmployeeId: "aie_walker", roles: [], firmScopes: ["west-peek"] }, pitch, {
+      search: async () => ({ ok: true, text: "https://forbes.example/contact", detail: "ok" }),
+      pageText: async () => "a page with no address",
+    });
+    expect(none.email).toBeNull();
+    expect(none.contactUrl).toBe("https://forbes.example/contact");
+  });
+
+  it("chooses the five with intent: the prompt demands a mix of outlets and a piece each choice is earned by", async () => {
+    const { buildPressPrompt } = await import("../src/worker/services/productions");
+    const prompt = buildPressPrompt("2026-10");
+    expect(prompt).toMatch(/TRADE PRESS those buyers read daily/);
+    expect(prompt).toMatch(/CREATOR-ECONOMY or COMMUNITY NEWSLETTER/);
+    expect(prompt).toMatch(/EVENTS-INDUSTRY OUTLET/);
+    expect(prompt).toMatch(/WILDCARD earned by a specific recent piece/);
+    expect(prompt).toMatch(/A writer chosen because their beat vaguely matches\s+is not a choice/);
   });
 });
 
@@ -150,7 +199,7 @@ describe("the monthly card on Walker's desk", () => {
   it("blocks, with the reason, when nothing has a live citation — and emails nothing", async () => {
     const opened = await openProductionsCard(env, "productions_press_pitches", NOW);
     const out = await sweepOnce(env, NOW, {
-      productions: (e, card) => runProductionsCard(e, card, { search: async () => ({ ok: true, text: pressJson, detail: "ok" }), urlCheck: async () => false, now: NOW }),
+      productions: (e, card) => runProductionsCard(e, card, { search: async () => ({ ok: true, text: pressJson, detail: "ok" }), urlCheck: async () => false, pageText: async () => null, now: NOW }),
     });
     expect(out.card?.id).toBe(opened.cardId);
     expect(out.outcome).toBe("BLOCKED");
@@ -168,5 +217,33 @@ describe("the monthly card on Walker's desk", () => {
     expect(run?.summary).toMatch(/Opened "Walker: 5 press pitches for West Peek Productions \(2026-10\)"/);
     const cards = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card WHERE kind = 'PRODUCTIONS_PRESS' AND state != 'CANCELLED'").first<{ n: number }>();
     expect(cards!.n).toBe(1);
+  });
+
+  it("Walker introduces himself once: the note goes to Scooter, names os@joinwestpeek.com, and the job pauses itself", async () => {
+    const { runIntroNote, renderIntroNote } = await import("../src/worker/services/productions");
+    const note = renderIntroNote();
+    expect(note.text).toMatch(/I'm Walker, your chief of staff/);
+    expect(note.text).toMatch(/below the standard/);
+    expect(note.text).toMatch(/os@joinwestpeek\.com/);
+    expect(note.text).toMatch(/Porter routes it/);
+    // A transport, so the send is real up to the provider's door.
+    const { vi } = await import("vitest");
+    const sends: string[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("api.resend.com")) { sends.push(String(init?.body)); return new Response(JSON.stringify({ id: "re_intro" }), { status: 200 }); }
+      throw new Error(`unexpected fetch ${String(url)}`);
+    });
+    const withMail = { ...env, RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
+    const first = await runIntroNote(withMail);
+    vi.unstubAllGlobals();
+    expect(first.status, first.summary).toBe("SUCCEEDED");
+    expect(sends[0]).toContain("scooter@westpeek.ventures");
+    expect(first.summary).toMatch(/sent to scooter@westpeek\.ventures/);
+    const job = await env.WP_OS_DB.prepare("SELECT status FROM scheduled_job WHERE job_key = 'productions_intro_note'").first<{ status: string }>();
+    expect(job?.status).toBe("PAUSED");
+    const again = await runIntroNote(withMail);
+    expect(again.summary).toMatch(/already sent/);
+    const sent = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND payload_json LIKE '%Walker, your chief of staff%'").first<{ n: number }>())!.n;
+    expect(sent).toBe(1);
   });
 });
