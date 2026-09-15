@@ -56,6 +56,12 @@ describe("quiet-hours arithmetic", () => {
     expect(inQuietHours({ start: 21, end: 7 }, new Date("2026-08-12T12:00:00.000Z"))).toBe(false);
     expect(inQuietHours({ start: 9, end: 17 }, new Date("2026-08-12T12:00:00.000Z"))).toBe(true);
     expect(inQuietHours({}, new Date())).toBe(false);
+    // `end` is exclusive: 0–23 is NOT the whole clock, and 23:xx falls outside it. This is the
+    // exact hole the integration fixture below fell through — keep it stated here so nobody
+    // "fixes" it back.
+    expect(inQuietHours({ start: 0, end: 23 }, new Date("2026-09-15T23:15:00.000Z"))).toBe(false);
+    expect(inQuietHours({ start: 22, end: 1 }, new Date("2026-09-15T23:15:00.000Z"))).toBe(true);
+    expect(inQuietHours({ start: 23, end: 2 }, new Date("2026-09-15T00:15:00.000Z"))).toBe(true);
   });
 });
 
@@ -317,9 +323,17 @@ describe("real subsystems emit notifications", () => {
      * firm-wide row has nobody whose preferences could be read. This proves the loop closes for the
      * kind the operator sees most.
      */
+    /*
+     * A WINDOW CENTRED ON NOW, so this does not depend on when the suite runs. The previous fixture
+     * was `{ start: 0, end: 23 }`, described as "the whole clock" — but `end` is exclusive, so it
+     * excluded 23:00–23:59 UTC and the suite failed on main every night in that hour (15 Sep 2026,
+     * run 35034066666). A full-clock window cannot be expressed at all: `start === end` means "off".
+     * Three hours around the current hour wraps midnight correctly and survives the clock ticking
+     * over between this line and the service reading it.
+     */
+    const hourNow = new Date().getUTCHours();
     const saved = await call("/api/notifications/preferences", MP, "POST", {
-      // A window covering the whole clock, so this does not depend on when the suite runs.
-      quiet_hours: { start: 0, end: 23, timezone: "UTC" },
+      quiet_hours: { start: (hourNow + 23) % 24, end: (hourNow + 2) % 24, timezone: "UTC" },
       push_enabled: false,
     });
     expect(saved.status).toBe(201);
