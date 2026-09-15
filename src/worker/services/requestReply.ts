@@ -73,3 +73,52 @@ export async function replyToRequester(
   });
   return { sent: result.sent, to, reason: result.detail };
 }
+
+/**
+ * An employee emails a partner a finished deliverable (15 Sep 2026).
+ *
+ * Operator, on Rooms: "when i request a room they should email me and scooter with the deliverable
+ * as well. b/c we requested the room we should get an email with the finished deliverable." And on
+ * Walker's monthly work for Scooter's agency: "send him an email 1x per month of potential customer
+ * ideas". Same bounds as the reply above, lifted out so every deliverable that leaves by email takes
+ * the one door: the destination is checked against the two partner addresses, the switch is the
+ * deployment's, the transport defuses triggers, and the send is recorded as an event either way.
+ * Nothing here can reach anyone outside the firm.
+ */
+export async function emailPartnerDeliverable(
+  env: Env,
+  input: {
+    to: string;
+    subject: string;
+    text: string;
+    /** What the email is about, for the event spine. */
+    objectType: string;
+    objectId: string;
+    firmScope: string;
+    actorId?: string;
+  },
+): Promise<{ sent: boolean; to: string; reason: string }> {
+  const to = input.to.trim().toLowerCase();
+  if (!ASSIGNING_PARTNERS.includes(to)) {
+    return { sent: false, to, reason: `${to} is not one of the two partner addresses; a deliverable goes nowhere else` };
+  }
+  if (!aiOutboundSwitches(env).toPartners) {
+    return { sent: false, to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off" };
+  }
+  let result: { sent: boolean; detail: string; provider_message_id: string | null };
+  try {
+    result = await sendViaResend(env, { to, subject: input.subject.slice(0, 200), text: input.text.slice(0, 60_000) });
+  } catch (err) {
+    result = { sent: false, detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
+  }
+  await appendEvent(env, {
+    eventType: result.sent ? "deliverable.emailed_to_partner" : "deliverable.email_not_sent",
+    actorType: "system",
+    actorId: input.actorId ?? "work_sweep",
+    objectType: input.objectType,
+    objectId: input.objectId,
+    firmScope: input.firmScope,
+    payload: { to, subject: input.subject, detail: result.detail, provider_message_id: result.provider_message_id },
+  });
+  return { sent: result.sent, to, reason: result.detail };
+}

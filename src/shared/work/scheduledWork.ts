@@ -54,8 +54,12 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     deliveredBy: JOINT_CHIEFS,
   },
   monthly_room_proposal: {
-    what: "Next month's Room — a proposed date, theme, guests and what it would cost.",
-    why: "So the event exists as a proposal to react to rather than a thing somebody has to start from nothing.",
+    what:
+      "Rooms. Every half hour it does one thing: builds a Room a partner asked for on Events & Rooms " +
+      "whose build did not finish, or — when the FOLLOWING month has no packet yet — proposes Parker's " +
+      "own Room for it: theme, who is in the room, run of show, venues, sponsor prospects at $10,000 " +
+      "each, risks, and what keeping it commits the firm to. The packet is emailed to both partners.",
+    why: "So a Room is proposed with time to sell its sponsors, and a Room you asked for is built even if the button's build failed.",
     deliveredBy: ["Parker"],
   },
   // EVERY JOB SAYS WHAT IT IS. Until 14 Sep 2026 five of these read "No description has been

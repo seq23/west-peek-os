@@ -482,7 +482,8 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Rooms are the primary monetisation layer. A proposal with no funding story and no explanation is unfinished, not neutral.",
           "Name the sponsor category the theme actually fits and the ask you would make, with reasoning. Do not restate a standard target as though it were a judgement about this event.",
           "Do not start with six logos. One presenting partner, one supporting partner, one in-kind partner is the shape that works.",
-          "Aim for roughly $10,000 an event and take $7,500 when that is what the room will carry. Use your judgement on the number rather than repeating a target.",
+          "The money, as the Managing Partner set it on 15 Sep 2026: $10,000 to West Peek per sponsor; aim for up to $40,000 in sponsorship per Room — ideally four sponsors, or whichever number the logistics of this format honestly support. State that number and say why; a seated dinner for twenty-five does not carry four logos gracefully, and saying so is the judgement.",
+          "Name every sponsor prospect: the organisation, why it fits this room, the ask, and the one-line pitch angle to open with. A prospect the partner named in her brief comes first and is never dropped. Never invent a contact name or email — a person finds those.",
           "A genuinely good Room with no money in it is still worth proposing. Surface it, say plainly that it does not pay for itself, and say what it buys instead — community, brand, a relationship, a debt repaid.",
           "Some things in the rhythm are free by design and should never be made to earn: The Office every week, and the Community Mastermind every month. Do not attach a sponsor to them to make the numbers work.",
           "Sponsors underwrite the experience. They never purchase access to members, and a proposal that implies otherwise is wrong however much money it raises.",
@@ -862,7 +863,7 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Start from what the Room needs to exist, then find the category that naturally belongs there. A sponsor who does not fit the theme is noticed by everyone in the room.",
           "One category, one sponsor. Competing brands in the same Room make both uncomfortable and neither renews.",
           "Say concretely what the sponsor gets — their person in the room, the underwriting credit, the clinic afterwards — and say what they do not get.",
-          "Ask for a number and justify it. A range with no reasoning reads as an opening bid.",
+          "Ask for a number and justify it. A range with no reasoning reads as an opening bid. The firm's rule is $10,000 a sponsor and up to four sponsors ($40,000) a Room; argue for fewer when the format cannot carry them.",
         ],
       },
       {
