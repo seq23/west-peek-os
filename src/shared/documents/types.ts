@@ -16,6 +16,7 @@ export interface DocumentType {
 
 export const DOCUMENT_TYPES: readonly DocumentType[] = [
   { key: "DECK", label: "The LP deck", means: "A version of the fund's deck. It goes on the record as a numbered version and waits on your approval on Fund strategy before it becomes the deck the firm sends." },
+  { key: "ROOM_PACKET", label: "Room packet", means: "Parker's packet for a proposed Room, as a PDF: the concept and the two it beat, the sponsors with evidence and named contacts, the venue, the run of show, the budget, the sponsorship structure, and the pitch email. Downloadable from Events & Rooms." },
   { key: "DILIGENCE_NOTE", label: "Diligence note", means: "Something you learned about a company — a memo, a call note, a data-room extract. Claims can be read out of it on the company's evidence page." },
   { key: "REVIEW", label: "Review", means: "A written review the firm produced: the weekly operating review, a deck-versus-records check, meeting prep." },
   { key: "BRIEF", label: "Brief", means: "A briefing written for a partner — the morning brief, a pre-read." },

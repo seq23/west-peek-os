@@ -39,14 +39,15 @@ test("Events & Rooms explains itself and offers a proposal", async ({ page }) =>
 });
 
 /**
- * The request door (15 Sep 2026).
+ * The request door (15 Sep 2026), and the chain behind it.
  *
  * Operator: "i need to be able to do that OR ask for a specific type of room." No model runs in
  * this suite, so the build cannot finish — which is exactly the state worth proving: her brief is on
- * the record the moment she asks, the failure is named on the card rather than lost in a 502, and
- * dismissing it puts the substance (who was to be invited, why we said no) on the shelf.
+ * the record the moment she asks, Parker's card is open and the card says which stage he is on
+ * rather than a 502, and dismissing it puts the substance (who was to be invited, why we said no)
+ * on the shelf and takes the card off his desk.
  */
-test("asking Parker for a Room records the brief before anything else, and the shelf keeps the substance", async ({ page }) => {
+test("asking Parker for a Room records the brief and opens his card before anything else, and the shelf keeps the substance", async ({ page }) => {
   await signIn(page);
   await gotoSurface(page, "Events & Rooms");
   await page.getByTestId("room-audience").fill("top Black lawyers on the rise");
@@ -55,14 +56,25 @@ test("asking Parker for a Room records the brief before anything else, and the s
   await page.getByTestId("room-notes").fill("one legal sponsor at most");
   await page.getByTestId("request-room-submit").click();
 
-  // The build cannot complete offline; the request is kept, with the reason, not dropped.
-  await expect(page.getByTestId("rooms-message")).toContainText(/could not build|Proposed/, { timeout: 30_000 });
+  // The route queues and returns; the chain runs in the sweep. The page says so, and says the stage.
+  await expect(page.getByTestId("rooms-message")).toContainText(/On Parker's desk/, { timeout: 30_000 });
   const card = page.locator('[data-testid^="packet-rpk_"]').first();
   await expect(card).toBeVisible();
   await expect(card).toContainText("Room requested: top Black lawyers on the rise");
   await expect(card.getByTestId("packet-brief")).toContainText("Harvey AI (harvey.ai)");
   await expect(card.getByTestId("packet-brief")).toContainText("one legal sponsor at most");
-  await expect(card.locator('[data-testid^="build-error-"]')).toContainText("Parker could not build it");
+  await expect(card.locator('[data-testid^="build-stage-"]')).toContainText(/Stage 1 of 6/);
+  await expect(card.locator('[data-testid^="build-stage-"]')).toContainText("on Parker's desk");
+
+  // The card is on Parker's desk, of the kind the sweep knows how to run.
+  const cardRow = await page.evaluate(async () => {
+    const res = await fetch("/api/rooms/packets", { headers: { accept: "application/json", "x-wpos-dev-user": localStorage.getItem("wpos.devUser") ?? "" } });
+    const body = (await res.json()) as { packets: Array<{ work_card_id: string | null; build_stage: string; status: string }> };
+    return body.packets[0]!;
+  });
+  expect(cardRow.status).toBe("DRAFT");
+  expect(cardRow.build_stage).toBe("QUEUED");
+  expect(cardRow.work_card_id).toBeTruthy();
 
   // Dismiss it with a reason; the shelf shows who was to be invited and why we said no.
   page.once("dialog", (d) => d.accept("wrong month for this crowd"));

@@ -5454,3 +5454,73 @@ from Network OS" scheduled job flipped from `Degraded` to `SUCCEEDED` (4,712 con
 synced, vs. the pre-fix 250-contact cap), and an open work card ("Deck: Vynlo") showed Wyatt's
 actual extracted findings from a real inbound deck — sector, product description, and company
 status — confirming both journeys the operator asked about are live and working on real data.
+
+## Parker runs the whole chain — the Room packet as research, judgement and a PDF (15 Sep 2026)
+
+**The verdict.** The first October packet under 0161/0164 ("The Rise of the Black Lawyer Room")
+was "sub par": Harvey AI at $10K with no evidence it sponsors anything, two more legal vendors from
+memory, five steakhouses, agenda lines. The operator showed the standard she meant (a Gemini
+transcript): the named sponsor's actual programme (US Open, three NBA/WNBA teams, PSG, Lavender
+Law), the people who run its partnerships by name and title, the fit argued in the sponsor's own
+strategic language, three concepts compared and one chosen, a culturally intentional venue, a run of
+show to the minute, a line budget with its basis, and the cold email to the named contact.
+
+**What shipped (migration 0166, PR "Parker runs the whole chain").**
+
+- **A chain, not a prompt.** `services/roomPacket.ts` runs six stages — DISCOVER (invite-list
+  reality check from the firm's own records + "who pays to be in front of these people", every
+  evidence URL liveness-checked), RESEARCH (each sponsor's programme, the partnerships contact read
+  off a fetched page that must carry the name, their strategic language; two per tick, up to six),
+  CONCEPTS (three, compared on tone / value to the sponsor / who it fits / cost band; one chosen,
+  pushback on the brief), VENUES (searched for the chosen concept's direction), PACKET (run of show
+  with named roles and the sponsor's minutes, budget lines with basis, a sponsorship structure priced
+  so all slots = cost + the firm's keep, ranked sponsors, the pitch email in Sequoia's voice), PDF
+  (Browser Rendering, `doc_type ROOM_PACKET`, linked on the packet, emailed to both partners with
+  Parker's two-line introduction). State lives on the row (`build_stage`, `build_state_json`); a
+  dead tick loses one stage.
+- **Inside the sweep.** The request door and the Rooms job only queue a draft and open a
+  `ROOM_PACKET` card on Parker's desk; `workSweep` runs one stage per tick and charges no attempt for
+  a stage that completed (`progressed`). Nothing per tick is more than one or two model calls and a
+  handful of fetches.
+- **The money is a target with reasons.** `SPONSORSHIP_RULE` ($10K × up to 4) is gone from the
+  prompt, the skill library and `computeEconomics`; `SPONSORSHIP_TARGET.keepUsd` is the fixed point,
+  the structure (title / supporting / an exclusive option) is Parker's judgement, and the packet says
+  plainly when the structure falls short of the keep.
+- **Evidence or nothing.** A sponsor's evidence URL survives only if research verified it; a contact
+  only if the page carried the name; an unevidenced prospect ranks last and is flagged; a partner-named
+  sponsor with no history is said to have none.
+- **Proof.** `tests/roomPacket.test.ts` (45), `tests/roomRequest.test.ts` (9, the chain through
+  `sweepOnce` with every dependency injected, the PDF in R2, the two emails), the e2e request journey
+  updated for the queued chain. Full suite 1,941 green; every validator in CI green.
+
+### The production passes, and what each one taught (15 Sep 2026, PRs #64, #66, #67, and the fourth pass)
+
+The October request was re-run through the chain three times in production, each packet read in
+full (rows, the PDF pulled from R2, the two emails) and the next pass built from what it got wrong:
+
+- **Pass 1 (`rpk_7f5edb14`, "First Counsel, First Look Room")** — concept, pushback grounded in the
+  firm's records (6 of 4,712 contacts read as lawyers → widen to the founders who need them), an
+  11-line run of show with the sponsor capped at six minutes, a line budget, a real structure. Wrong:
+  the sponsors were the audience's own institutions (NAMWOLF, LCLD, a bar foundation) asked for
+  $12K each; Harvey's "contact" was the role *Partner Program Lead*; the exclusive option was priced
+  below the sum of the cash slots; a $4K in-kind slot counted toward the keep; Cooley was tagged
+  "named by you" because its note contained the word *partner*; sections fixed at 11in left sheets
+  nine-tenths blank. **#66** guards every one of those.
+- **Pass 2 (`rpk_7d961d77`, "Before It's Public: the Deal-Readiness Salon")** — at the standard: the
+  Schomburg Center with its published corporate rate and the reason it was chosen, the Apollo as
+  fallback, ten lines to the minute under Chatham House rule, Harvey's evidence its own US Open
+  announcement, the pitch addressed to "the partnerships team at Harvey" with the honest note that a
+  person must be found first, a structure that says plainly it falls $23K short of cost + keep at
+  the high case. Wrong: seven sponsor names from one NAMWOLF page; five candidates dropped as
+  "dead" without saying who. **#67**: a 401/403/429 page is kept and marked *verify by hand*; the
+  dropped are named in the packet; discovery must read several lists.
+- **Pass 3 (`rpk_8bab6be3`)** — discovery now spans BANKING / RECRUITING / vendors / employers, but
+  all thirteen from NAPABA's 2026 sponsor page, and two candidates carried a URL beside a note
+  saying no evidence was found. **Fourth pass**: a second discovery search that is told what it has
+  and which hosts not to cite again, a cap of four candidates per page, a "not evidenced" note
+  strips its URL, and the six researched are picked round-robin by category, hers first.
+
+Each pass also proved the plumbing end to end: one stage per sweep tick with no attempt charged
+for progress (~40 minutes queue-to-inbox), the PDF in R2 as a `ROOM_PACKET` document linked on
+the packet, both partners emailed with Parker's introduction and the download link, the Rooms page
+showing the stage while it built and the download button when done.
