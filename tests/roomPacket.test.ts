@@ -605,3 +605,13 @@ describe("discovery, after the third production run", () => {
     expect(prompt).toMatch(/BANKING, RECRUITING/);
   });
 });
+
+describe("venue intent, after the third production run", () => {
+  it("makes the first-choice venue carry the audience's identity, in both prompts", () => {
+    const concepts = buildConceptsPrompt({ month: "2026-10", city: "New York", brief: null, recentThemes: [], inviteCheck: null, sponsors: [] });
+    expect(concepts).toMatch(/AUDIENCE IS DEFINED BY WHO THEY ARE/);
+    expect(concepts).toMatch(/Schomburg Center/);
+    const packet = buildPacketPrompt({ month: "2026-10", recentThemes: [], venueCandidates: [], city: "New York" });
+    expect(packet).toMatch(/FIRST-CHOICE venue carries that identity/);
+  });
+});
