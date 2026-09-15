@@ -610,6 +610,24 @@ export async function runJob(
     .bind(key)
     .first<Record<string, unknown>>();
   if (existing && (existing.status === "SUCCEEDED" || existing.status === "REFUSED")) {
+    /*
+     * A REPLAY STILL MOVES THE CLOCK. Production, 15 Sep 2026, 20:17–20:29 UTC: two DAILY_AT jobs
+     * that had already SUCCEEDED that day had their `next_run_at` put back to "now". Every tick
+     * took the most overdue job — one of those two — found the finished occurrence, answered
+     * "already ran", and returned without touching `next_run_at`. So the same job was the most
+     * overdue job on the next tick too, and with one job per tick nothing else in the firm ran:
+     * no employee sweep, no brief, no sources, for as long as it would have stayed that way.
+     *
+     * A finished occurrence that is still marked due is a schedule that is wrong, and the job that
+     * knows it is wrong is the one to put it right: advance to the next occurrence, exactly as a
+     * claimed run does. Only when the job is actually due — a manual replay of a future job must
+     * not push its schedule out.
+     */
+    if (opts.trigger === "SCHEDULED" && (job.next_run_at === null || job.next_run_at <= now.toISOString())) {
+      await env.WP_OS_DB.prepare("UPDATE scheduled_job SET next_run_at = ?2 WHERE id = ?1 AND (next_run_at IS NULL OR next_run_at <= ?3)")
+        .bind(job.id, computeNextRun(job, now), now.toISOString())
+        .run();
+    }
     return { run: existing, replayed: true };
   }
   if (existing && (existing.status === "RUNNING" || existing.status === "QUEUED")) {

@@ -614,6 +614,37 @@ describe("a failed occurrence can be tried again, and a dead one does not wedge 
     expect(second.replayed).toBe(true);
   });
 
+  it("moves a finished occurrence that is somehow still due to its next time, so one job cannot wedge the tick", async () => {
+    /*
+     * Production, 15 Sep 2026: two DAILY_AT jobs that had SUCCEEDED that day were put back to
+     * "due now". Each tick took the most overdue job, found the finished occurrence, said
+     * "already ran" and left next_run_at alone — so the same job was the most overdue job on every
+     * tick after, and nothing else in the firm ran for twelve minutes until a person noticed.
+     */
+    const now = new Date("2026-09-03T13:00:00.000Z"); // the same day as the SUCCEEDED run above
+    await t.db.prepare("UPDATE scheduled_job SET next_run_at = ?1 WHERE job_key = 'weekly_mp_review'").bind("2026-09-03T12:50:00.000Z").run();
+
+    const replay = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    expect(replay.replayed).toBe(true);
+
+    const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ next_run_at: string }>();
+    expect(after!.next_run_at > now.toISOString(), `next_run_at ${after!.next_run_at} is still due`).toBe(true);
+
+    // And the tick moves on: with that job no longer due, the next most overdue job runs instead.
+    const results = await runDueJobs(env, now);
+    expect(results.map((r) => r.job_key)).not.toContain("weekly_mp_review");
+  });
+
+  it("does not push a future occurrence out when a finished one is replayed by hand", async () => {
+    const now = new Date("2026-09-03T13:10:00.000Z");
+    const before = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ next_run_at: string }>();
+    expect(before!.next_run_at > now.toISOString()).toBe(true);
+    const replay = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    expect(replay.replayed).toBe(true);
+    const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ next_run_at: string }>();
+    expect(after!.next_run_at).toBe(before!.next_run_at);
+  });
+
   it("lets a FAILED occurrence be attempted again on a later tick of the same day", async () => {
     const job = await t.db.prepare("SELECT * FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ id: string; firm_scope: string }>();
     // A failure earlier today, holding the day's occurrence key — the exact production shape.
