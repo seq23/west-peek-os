@@ -815,6 +815,14 @@ export async function runDeckRework(
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
 
+/** "The current deck is 0 days old" read as a bug on 15 Sep 2026; a deck added today is said so. */
+function ageInWords(ageDays: number | null): string {
+  if (ageDays === null) return "The current deck is on the record";
+  if (ageDays <= 0) return "The current deck was added today";
+  if (ageDays === 1) return "The current deck is a day old";
+  return `The current deck is ${ageDays} days old`;
+}
+
 export async function theFund(env: Env): Promise<{ id: string; name: string }> {
   const fund = await env.WP_OS_DB.prepare("SELECT id, name FROM fund LIMIT 1").first<{ id: string; name: string }>();
   if (!fund) throw new DeckError(404, "no_fund", "there is no fund to hold a deck");
@@ -861,8 +869,8 @@ export async function handleGetDeck(ctx: RouteContext): Promise<Response> {
             changed_since: drift,
             headline:
               drift.length === 0
-                ? `The current deck is ${ageDays} day${ageDays === 1 ? "" : "s"} old and every figure in it still matches the records.`
-                : `The current deck is ${ageDays} day${ageDays === 1 ? "" : "s"} old and ${drift.length} fund figure${drift.length === 1 ? " has" : "s have"} changed since it was built.`,
+                ? `${ageInWords(ageDays)} and every figure in it still matches the records.`
+                : `${ageInWords(ageDays)} and ${drift.length} fund figure${drift.length === 1 ? " has" : "s have"} changed since it was built.`,
           }
         : null,
       note: current
