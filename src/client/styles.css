@@ -2267,6 +2267,13 @@ details h3 {
 .brief-numbered { margin: 0 0 var(--space-md); padding-left: var(--space-xl); }
 .brief-numbered li { margin-bottom: var(--space-sm); line-height: var(--lh-normal); }
 
+/* v5 citations: [n] in the prose links to the numbered source in the footer. */
+.brief-cite { color: var(--wp-orange-deep); text-decoration: none; font-size: var(--text-xs); vertical-align: super; }
+.brief-cite:hover { color: var(--wp-orange-deeper); text-decoration: underline; }
+.brief-sources-list { margin: 0 0 var(--space-md); padding-left: var(--space-xl); }
+.brief-sources-list li { margin-bottom: var(--space-2xs); line-height: var(--lh-normal); overflow-wrap: anywhere; }
+.brief-sources-list a { color: var(--wp-orange-deep); }
+
 .brief-scored { display: flex; gap: var(--space-sm); align-items: baseline; }
 .importance {
   flex-shrink: 0;

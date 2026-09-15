@@ -11,14 +11,16 @@ import {
   normaliseInterest, type PartnerInterests,
 } from "../../shared/intelligence/interests";
 import {
-  PROMPT_VERSION, REPORT_SECTIONS, buildSynthesisPrompt, parseReport, resolveEventIds, verifyReport,
-  type EvidenceEvent, type EvidencePacket,
+  PROMPT_VERSION, REPORT_SECTIONS, buildSources, buildSynthesisPrompt, citedEventIds, parseReport,
+  renderCitations, resolveEventIds, verifyBrief, verifyReport,
+  type EvidenceEvent, type EvidencePacket, type MacroReadingInput,
 } from "../../shared/intelligence/reportSchema";
 import {
   SOURCE_AUTHORITY, classify, dedupe, isAfterLocalTime, isWeekend, localReportDate, rank,
   type NormalisedItem, type PartnerLens, type SourceType,
 } from "../../shared/intelligence/pipeline";
-import { readMarket } from "./liveSearch";
+import { readMarket, type MarketRead } from "./liveSearch";
+import { fetchMacroReadings, type MacroFailure, type MacroReading } from "../effects/macroClient";
 import { deliver } from "./deliverables";
 import { machineForKey } from "./attribution";
 import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
@@ -154,15 +156,17 @@ function sourceTypeOf(kind: string | null): SourceType {
 
 /** Read what the sweeps pipeline has already collected. */
 async function gather(env: Env, firmScope: string, sinceIso: string): Promise<NormalisedItem[]> {
+  // BOUNDED ON THE WAY IN. The body is cut to what the packet keeps (700 chars) in SQL, and the
+  // window is 300 items: deserialising 500 full bodies was itself milliseconds of a 10 ms tick.
   const rows = await env.WP_OS_DB.prepare(
-    `SELECT i.id, i.title, i.body, i.url, i.published_at, i.category, i.created_at,
+    `SELECT i.id, i.title, substr(i.body, 1, 700) AS body, i.url, i.published_at, i.category, i.created_at,
             s.kind AS source_kind, s.name AS source_name
        FROM intelligence_item i
        LEFT JOIN intelligence_source s ON s.id = i.source_id
       WHERE i.archived = 0 AND i.firm_scope = ?1
         AND COALESCE(i.published_at, i.created_at) >= ?2
       ORDER BY COALESCE(i.published_at, i.created_at) DESC
-      LIMIT 500`,
+      LIMIT 300`,
   )
     .bind(firmScope, sinceIso)
     .all<Record<string, unknown>>();
@@ -195,10 +199,6 @@ async function openNarratives(env: Env, firmScope: string) {
     .bind(firmScope)
     .all<{ topic: string; summary: string; last_seen_date: string }>();
   return (rows.results ?? []).map((n) => ({ topic: n.topic, summary: n.summary, last_seen: n.last_seen_date }));
-}
-
-async function setStatus(env: Env, reportId: string, status: string): Promise<void> {
-  await env.WP_OS_DB.prepare("UPDATE intelligence_report SET status = ?2 WHERE id = ?1").bind(reportId, status).run();
 }
 
 export interface GenerateResult {
@@ -282,27 +282,73 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
   };
 };
 
-export async function generateForPartner(
-  env: Env,
-  actor: Actor,
-  firmUserId: string,
-  now: Date,
-  synthesise: Synthesise = defaultSynthesise,
-): Promise<GenerateResult> {
-  const firmScope = actor.firmScopes[0] ?? "west-peek";
+/** What the brief needs from outside the database, injectable so the pipeline is testable offline. */
+export interface BriefDeps {
+  synthesise?: Synthesise;
+  macro?: (now: Date) => Promise<{ readings: MacroReading[]; failures: MacroFailure[] }>;
+  market?: (env: Env, actor: Actor, watchlist: readonly string[]) => Promise<MarketRead>;
+}
+
+/** How long one stage may hold the row. A stage that writes the brief is one model call, ~3 min. */
+export const STAGE_LEASE_MINUTES = 10;
+
+interface ReportRow {
+  id: string;
+  firm_user_id: string;
+  report_date: string;
+  status: string;
+  attempts: number;
+  candidates_json: string | null;
+  market_json: string | null;
+  stage_lease_until: string | null;
+  ai_run_id: string | null;
+}
+
+interface StoredMarket {
+  readings: MacroReadingInput[];
+  failures: Array<{ label: string; detail: string }>;
+  levels: MarketRead["levels"];
+  calendar: MarketRead["calendar"];
+  citations: string[];
+  detail: string;
+}
+
+async function stamp(env: Env, id: string, status: string, extra: Record<string, string | number | null> = {}): Promise<void> {
+  const sets = ["status = ?2", "stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')", "stage_lease_until = NULL"];
+  const binds: (string | number | null)[] = [id, status];
+  for (const [k, v] of Object.entries(extra)) {
+    binds.push(v);
+    sets.push(`${k} = ?${binds.length}`);
+  }
+  await env.WP_OS_DB.prepare(`UPDATE intelligence_report SET ${sets.join(", ")} WHERE id = ?1`).bind(...binds).run();
+}
+
+async function failReport(env: Env, id: string, code: string, message: string, runId: string | null): Promise<GenerateResult> {
+  await env.WP_OS_DB.prepare(
+    "UPDATE intelligence_report SET status = 'FAILED', error_code = ?2, error_message = ?3, ai_run_id = ?4, stage_lease_until = NULL, stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+  )
+    .bind(id, code, message.slice(0, 600), runId)
+    .run();
+  return { report_id: id, status: "FAILED", sections: 0, candidates: 0, flags: 0 };
+}
+
+/**
+ * Open (or re-open) today's report row for a partner, counting the attempt on the way in.
+ *
+ * Idempotent on (firm_scope, firm_user_id, report_date): a second call the same day resets the same
+ * row to GATHERING rather than creating a second report.
+ */
+export async function startReport(env: Env, firmScope: string, firmUserId: string, now: Date): Promise<{ id: string; reportDate: string }> {
   const profile = await loadProfile(env, firmUserId);
   const reportDate = localReportDate(now, profile.timezone);
-
-  const user = await env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1")
-    .bind(firmUserId)
-    .first<{ full_name: string }>();
-
   const reportId = `dir_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
-    `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope)
-     VALUES (?1, ?2, ?3, 'GATHERING', ?4, ?5)
+    `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope, stage_at)
+     VALUES (?1, ?2, ?3, 'GATHERING', ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT (firm_scope, firm_user_id, report_date)
        DO UPDATE SET status = 'GATHERING', started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                     stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), stage_lease_until = NULL,
+                     candidates_json = NULL, market_json = NULL, completed_at = NULL,
                      error_code = NULL, error_message = NULL, prompt_version = excluded.prompt_version,
                      -- Counted on the way IN, so a run that dies mid-flight still spends its
                      -- attempt. Counting on success would let a crash loop retry for ever.
@@ -310,63 +356,38 @@ export async function generateForPartner(
   )
     .bind(reportId, firmUserId, reportDate, PROMPT_VERSION, firmScope)
     .run();
-
-  const report = (await env.WP_OS_DB.prepare(
+  const row = (await env.WP_OS_DB.prepare(
     "SELECT id FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
-  )
-    .bind(firmScope, firmUserId, reportDate)
-    .first<{ id: string }>())!;
-  const id = report.id;
+  ).bind(firmScope, firmUserId, reportDate).first<{ id: string }>())!;
+  return { id: row.id, reportDate };
+}
 
-  // The run id is captured by the synthesis step below and read here, so a FAILED report points at
-  // the run that actually failed. It used to be written only on success, which left the row
-  // carrying the id of whatever ran LAST TIME — so investigating a failure led straight to a
-  // healthy older run and its perfectly good output. That cost an hour once; it should cost nobody
-  // an hour again.
-  let failedRunId: string | null = null;
-  const fail = async (code: string, message: string): Promise<GenerateResult> => {
-    await env.WP_OS_DB.prepare(
-      "UPDATE intelligence_report SET status = 'FAILED', error_code = ?2, error_message = ?3, ai_run_id = ?4, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-    )
-      .bind(id, code, message, failedRunId)
-      .run();
-    return { report_id: id, status: "FAILED", sections: 0, candidates: 0, flags: 0 };
-  };
-
-  // ── Gather: the last 48 hours, so a Monday still sees the weekend. ──
+/** Stage 1 — gather, dedupe, rank. Arithmetic only. Stores the candidates on the row. */
+async function stageGather(env: Env, row: ReportRow, firmScope: string, now: Date): Promise<"RANKING" | "READY"> {
+  const profile = await loadProfile(env, row.firm_user_id);
   const since = new Date(now.getTime() - 48 * 3_600_000).toISOString();
   const raw = await gather(env, firmScope, since);
-
-  // ── Dedupe and rank: arithmetic, no model. ──
-  await setStatus(env, id, "RANKING");
   const { events: deduped, supporting } = dedupe(raw);
   const lens = lensFrom(profile);
   const entities = await firmEntities(env, firmScope);
   const candidates = rank(deduped.map((item) => ({ item, lens, firmEntities: entities, now })), { max: MAX_CANDIDATES });
 
-  await env.WP_OS_DB.prepare(
-    "UPDATE intelligence_report SET raw_count = ?2, deduped_count = ?3, candidate_count = ?4 WHERE id = ?1",
-  )
-    .bind(id, raw.length, deduped.length, candidates.length)
-    .run();
-
   if (candidates.length === 0) {
     // An empty day is a real outcome, not a failure. Say so and stop — a padded report is worse.
-    await env.WP_OS_DB.prepare("DELETE FROM intelligence_report_section WHERE report_id = ?1").bind(id).run();
-    await env.WP_OS_DB.prepare(
-      `INSERT INTO intelligence_report_section (id, report_id, section_key, position, heading, body_md)
-       VALUES (?1, ?2, 'executive_summary', 0, ?3, ?4)`,
-    )
-      .bind(`dis_${crypto.randomUUID()}`, id, "The one-minute version",
-            "Nothing reached the bar this morning. Either the sources are quiet or nothing matched what this firm follows.")
-      .run();
-    await env.WP_OS_DB.prepare(
-      "UPDATE intelligence_report SET status = 'READY', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-    ).bind(id).run();
-    return { report_id: id, status: "READY", sections: 1, candidates: 0, flags: 0 };
+    await env.WP_OS_DB.batch([
+      env.WP_OS_DB.prepare("DELETE FROM intelligence_report_section WHERE report_id = ?1").bind(row.id),
+      env.WP_OS_DB.prepare(
+        `INSERT INTO intelligence_report_section (id, report_id, section_key, position, heading, body_md)
+         VALUES (?1, ?2, 'executive_summary', 0, ?3, ?4)`,
+      ).bind(`dis_${crypto.randomUUID()}`, row.id, "One-minute executive summary",
+        "Nothing reached the bar this morning. Either the sources are quiet or nothing matched what this firm follows."),
+      env.WP_OS_DB.prepare(
+        "UPDATE intelligence_report SET status = 'READY', raw_count = ?2, deduped_count = ?3, candidate_count = 0, stage_lease_until = NULL, stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+      ).bind(row.id, raw.length, deduped.length),
+    ]);
+    return "READY";
   }
 
-  // ── Evidence packet: facts, never raw article text. ──
   const packetEvents: EvidenceEvent[] = candidates.map((c) => ({
     event_id: c.id,
     title: c.title,
@@ -378,133 +399,260 @@ export async function generateForPartner(
     importance: c.score,
     why_ranked: c.reasons,
   }));
+  await stamp(env, row.id, "RANKING", {
+    raw_count: raw.length, deduped_count: deduped.length, candidate_count: candidates.length,
+    candidates_json: JSON.stringify(packetEvents),
+  });
+  return "RANKING";
+}
 
-  // Levels and the calendar, from a search-grounded pass. Deliberately AFTER the candidate check:
-  // a day with nothing to report does not spend a search call, and the empty-day path above already
-  // returned. Failure here degrades the report rather than failing it — the swept half is unaffected,
-  // and the prompt is told to say the levels could not be read rather than to invent any.
-  const market = await readMarket(env, actor, lens.companies ?? []);
+/** Stage 2 — the numbers: fetched figures from public pages, then the search-grounded read. I/O. */
+async function stageMarket(env: Env, actor: Actor, row: ReportRow, now: Date, deps: BriefDeps): Promise<"GENERATING"> {
+  const profile = await loadProfile(env, row.firm_user_id);
+  const lens = lensFrom(profile);
+  const macroFn = deps.macro ?? ((at: Date) => fetchMacroReadings(at));
+  const marketFn = deps.market ?? readMarket;
+  const [macro, market] = await Promise.all([
+    macroFn(now).catch((err) => ({ readings: [] as MacroReading[], failures: [{ instrument: "US10Y" as const, label: "every fetched figure", detail: err instanceof Error ? err.message : String(err) }] })),
+    marketFn(env, actor, lens.companies ?? []),
+  ]);
+  const stored: StoredMarket = {
+    readings: macro.readings.map((r) => ({ label: r.label, value: r.value, asOf: r.asOf, sourceUrl: r.sourceUrl, sourceName: r.sourceName })),
+    failures: macro.failures.map((f) => ({ label: f.label, detail: f.detail })),
+    levels: market.levels,
+    calendar: market.calendar,
+    citations: market.citations,
+    detail: market.detail,
+  };
+  // Every fetched figure is also kept on its own table, dated, so a later brief (or a partner)
+  // can see what the page said on the day rather than only what the brief made of it.
+  if (macro.readings.length > 0) {
+    await env.WP_OS_DB.batch(
+      macro.readings.map((r) =>
+        env.WP_OS_DB.prepare(
+          `INSERT INTO macro_reading (id, instrument, value, numeric_value, as_of, source_url, source_name, firm_scope)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+           ON CONFLICT (firm_scope, instrument, as_of) DO UPDATE SET value = excluded.value, numeric_value = excluded.numeric_value, fetched_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+        ).bind(`mr_${crypto.randomUUID()}`, r.instrument, r.value, r.numericValue, r.asOf, r.sourceUrl, r.sourceName, actor.firmScopes[0] ?? "west-peek"),
+      ),
+    );
+  }
+  await stamp(env, row.id, "GENERATING", { market_json: JSON.stringify(stored) });
+  return "GENERATING";
+}
+
+/** Stage 3 — write, verify, persist. One model call (two if the first reply cannot be used). */
+async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: string, deps: BriefDeps): Promise<GenerateResult> {
+  const synthesise = deps.synthesise ?? defaultSynthesise;
+  const profile = await loadProfile(env, row.firm_user_id);
+  const lens = lensFrom(profile);
+  const user = await env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1").bind(row.firm_user_id).first<{ full_name: string }>();
+  const entities = await firmEntities(env, firmScope);
+  const watchlist = ((await env.WP_OS_DB.prepare(
+    "SELECT label, kind, keywords_json FROM watchlist_entry WHERE active = 1 AND firm_scope = ?1 ORDER BY label LIMIT 40",
+  ).bind(firmScope).all<{ label: string; kind: string; keywords_json: string }>()).results ?? []).map((w) => {
+    let keywords: string[] = [];
+    try { keywords = (JSON.parse(w.keywords_json) as unknown[]).filter((k): k is string => typeof k === "string"); } catch { keywords = []; }
+    return { label: w.label, note: `${w.kind.toLowerCase()}${keywords.length ? `; watch for: ${keywords.join(", ")}` : ""}` };
+  });
+
+  let events: EvidenceEvent[] = [];
+  let stored: StoredMarket = { readings: [], failures: [], levels: [], calendar: [], citations: [], detail: "" };
+  try { events = JSON.parse(row.candidates_json ?? "[]") as EvidenceEvent[]; } catch { events = []; }
+  try { stored = { ...stored, ...(JSON.parse(row.market_json ?? "{}") as Partial<StoredMarket>) }; } catch { /* the market read is optional */ }
+  if (events.length === 0) return await failReport(env, row.id, "no_candidates", "the ranked candidates were lost between ticks; build it again", null);
 
   const packet: EvidencePacket = {
-    report_date: reportDate,
+    report_date: row.report_date,
     partner_name: user?.full_name ?? "Partner",
-    market_levels: market.levels,
-    calendar: market.calendar,
-    firm_context: {
-      sectors: lens.sectors, portfolio: entities.slice(0, 40), watchlist: lens.companies, themes: lens.themes,
-    },
+    market_levels: stored.levels,
+    calendar: stored.calendar,
+    macro_readings: stored.readings,
+    macro_failures: stored.failures,
+    market_citations: stored.citations,
+    watchlist_entries: watchlist,
+    firm_context: { sectors: lens.sectors, portfolio: entities.slice(0, 40), watchlist: watchlist.map((w) => w.label), themes: lens.themes },
     open_narratives: await openNarratives(env, firmScope),
-    events: packetEvents,
+    events,
   };
+  const sources = buildSources(packet);
 
-  /*
-   * WHAT THE PARTNER SAID LAST TIME, in front of the model before it writes.
-   *
-   * This is what makes the feedback buttons on a brief worth having. A partner who says "too long,
-   * and stop leading with macro" and then reads an identical brief the next morning has learned
-   * that the feature is decoration. The chief of staff who signs this brief is told what was said
-   * about their last three, in the partner's own words, and it sits above the evidence so it is
-   * read as an instruction about how to write rather than as more material to summarise.
-   */
+  // What the partner said last time, in front of the model before it writes.
   const bylineFor = chiefOfStaffFor(user?.full_name ?? "");
   const feedback = await recentFeedbackFor(env, bylineFor);
 
-  // ── Synthesis: one governed call. ──
-  await setStatus(env, id, "GENERATING");
-  let output = "";
   let aiRunId: string | null = null;
   let model: string | null = null;
+  let output = "";
   try {
-    const result = await synthesise(env, actor, `${feedback}${buildSynthesisPrompt(packet)}`, reportDate, firmUserId);
+    const result = await synthesise(env, actor, `${feedback}${buildSynthesisPrompt(packet)}`, row.report_date, row.firm_user_id);
     aiRunId = result.aiRunId;
-    failedRunId = result.aiRunId;
     model = result.model;
-    if (result.failure) return await fail("synthesis_failed", result.failure);
+    if (result.failure) return await failReport(env, row.id, "synthesis_failed", result.failure, aiRunId);
     output = result.output;
   } catch (err) {
-    return await fail("synthesis_error", err instanceof Error ? err.message : String(err));
+    return await failReport(env, row.id, "synthesis_error", err instanceof Error ? err.message : String(err), aiRunId);
   }
 
   /*
-   * ONE RETRY WHEN THE REPLY CANNOT BE READ.
-   *
-   * A brief that fails to parse has already cost the gathering, the ranking, the market pass and a
-   * full-length generation; throwing all of it away over a formatting slip and waiting for
-   * tomorrow is the worst available trade. Both partners lost their brief this way on 18 August.
-   *
-   * The retry is ONE, and it is not a loop: a model that cannot produce the format twice is not
-   * going to on the third attempt, and a retry loop on a paid generation is how a bad morning
-   * becomes an expensive one. The second attempt is told plainly what went wrong, because
-   * repeating an identical prompt and hoping is not a strategy.
+   * ONE RETRY WHEN THE REPLY CANNOT BE USED — unparseable, or missing a section, or citing a source
+   * that does not exist. The second attempt is told exactly what was wrong. One, not a loop: a
+   * model that cannot produce the shape twice will not on the third try, and every attempt pays.
    */
-  let parsed = parseReport(output);
-  if (!parsed) {
+  const check = (raw: string) => {
+    const parsed = parseReport(raw);
+    if (!parsed) return { parsed: null, problems: [{ section: "*", problem: "missing_section" as const, detail: "the reply was not in the ===SECTION format" }] };
+    const sections = resolveEventIds(parsed, packet);
+    return { parsed: sections, problems: verifyBrief(sections, sources, { watchlistEmpty: watchlist.length === 0 }) };
+  };
+  let { parsed, problems } = check(output);
+  if (!parsed || problems.length > 0) {
+    const why = problems.map((p) => p.detail).join("; ");
     const retry = await synthesise(
-      env,
-      actor,
-      `${feedback}${buildSynthesisPrompt(packet)}\n\nYOUR PREVIOUS REPLY COULD NOT BE READ. It must use the ===SECTION / ===END delimited format exactly as described above, with no JSON and no commentary before the first ===SECTION line.`,
-      reportDate,
-      firmUserId,
+      env, actor,
+      `${feedback}${buildSynthesisPrompt(packet)}\n\nYOUR PREVIOUS REPLY WAS REJECTED: ${why}. Every required section must be present with substance, every section must cite at least one [n] from the SOURCES list, and no [n] may exceed ${sources.length}. Return the whole report again in the ===SECTION format.`,
+      row.report_date, row.firm_user_id,
     );
-    if (retry.aiRunId) {
-      aiRunId = retry.aiRunId;
-      failedRunId = retry.aiRunId;
-    }
+    if (retry.aiRunId) aiRunId = retry.aiRunId;
     if (retry.model) model = retry.model;
-    if (!retry.failure && retry.output) {
-      output = retry.output;
-      parsed = parseReport(output);
-    }
+    if (!retry.failure && retry.output) ({ parsed, problems } = check(retry.output));
   }
-  if (!parsed) return await fail("unparseable", "the model did not return a usable report, twice");
+  if (!parsed) return await failReport(env, row.id, "unparseable", "the model did not return a usable report, twice", aiRunId);
+  if (problems.length > 0) {
+    // NEVER DELIVERED THIN. A brief missing a section, or citing a source that does not exist,
+    // is failed with the reason rather than shown with holes.
+    return await failReport(env, row.id, "incomplete", `the brief was rejected twice: ${problems.map((p) => p.detail).join("; ")}`, aiRunId);
+  }
+  const sections = parsed;
 
-  // Citations first, verification second. Models abbreviate UUIDs, and an id shortened to its first
-  // block resolves to exactly one event or to none — the former is the id it meant, the latter
-  // still fails below. Without this every citation reads as invented and the whole report is
-  // withheld as unverifiable, which is precisely what happened the first time a model was good
-  // enough to write all of it.
-  const sections = resolveEventIds(parsed, packet);
-
-  // ── Verify against the evidence, deterministically. ──
-  await setStatus(env, id, "VERIFYING");
+  await stamp(env, row.id, "VERIFYING");
   const flags = verifyReport(sections, packet);
+  const flagged = new Set(flags.map((f) => f.section));
 
-  // ── Persist. Replace sections wholesale: a regenerated report is one report, not two. ──
-  await env.WP_OS_DB.prepare("DELETE FROM intelligence_report_section WHERE report_id = ?1").bind(id).run();
-  const order = new Map<string, number>(REPORT_SECTIONS.map((s, n) => [s.key as string, n]));
-  for (const s of sections) {
-    // A flagged section is dropped rather than shown. The brief's whole point is that the operator
-    // can trust it; showing a section known to cite something that does not exist would end that.
-    if (flags.some((f) => f.section === s.key)) continue;
-    await env.WP_OS_DB.prepare(
+  const order = new Map<string, number>(REPORT_SECTIONS.map((sec, n) => [sec.key as string, n]));
+  const statements = [
+    env.WP_OS_DB.prepare("DELETE FROM intelligence_report_section WHERE report_id = ?1").bind(row.id),
+    ...sections
+      // A flagged section is dropped rather than shown. The brief's whole point is that the operator
+      // can trust it; showing a section known to cite something that does not exist would end that.
+      .filter((sec) => !flagged.has(sec.key))
+      .map((sec) =>
+        env.WP_OS_DB.prepare(
+          `INSERT INTO intelligence_report_section (id, report_id, section_key, position, heading, body_md, item_ids_json)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+        ).bind(
+          `dis_${crypto.randomUUID()}`, row.id, sec.key, order.get(sec.key) ?? 99,
+          REPORT_SECTIONS.find((r) => r.key === sec.key)?.heading ?? sec.key,
+          sec.body_md,
+          // Event ids from BOTH forms: the ===EVENTS line (older prompts) and the [n] citations.
+          JSON.stringify(Array.from(new Set([...sec.event_ids, ...citedEventIds(sec.body_md, sources)]))),
+        ),
+      ),
+    // The footer the [n]s resolve to — written by the system from the sources it supplied.
+    env.WP_OS_DB.prepare(
       `INSERT INTO intelligence_report_section (id, report_id, section_key, position, heading, body_md, item_ids_json)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-    )
-      .bind(
-        `dis_${crypto.randomUUID()}`, id, s.key, order.get(s.key) ?? 99,
-        REPORT_SECTIONS.find((r) => r.key === s.key)?.heading ?? s.key,
-        s.body_md, JSON.stringify(s.event_ids),
-      )
-      .run();
-  }
-
-  await env.WP_OS_DB.prepare(
-    `UPDATE intelligence_report SET status = 'READY', model = ?2, ai_run_id = ?3,
-            verification_flags = ?4, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
-  )
-    .bind(id, model, aiRunId, flags.length)
-    .run();
+       VALUES (?1, ?2, 'citations', ?3, 'Sources', ?4, '[]')`,
+    ).bind(`dis_${crypto.randomUUID()}`, row.id, order.get("citations") ?? 90, renderCitations(sources)),
+    env.WP_OS_DB.prepare(
+      `UPDATE intelligence_report SET status = 'READY', model = ?2, ai_run_id = ?3, verification_flags = ?4,
+              stage_lease_until = NULL, stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
+    ).bind(row.id, model, aiRunId, flags.length),
+  ];
+  await env.WP_OS_DB.batch(statements);
 
   await appendEvent(env, {
     eventType: "daily_intelligence.generated",
     actorType: "system", actorId: "system",
-    objectType: "intelligence_report", objectId: id, firmScope,
-    payload: { report_date: reportDate, candidates: candidates.length, sections: sections.length, flags: flags.length, prompt_version: PROMPT_VERSION },
+    objectType: "intelligence_report", objectId: row.id, firmScope,
+    payload: { report_date: row.report_date, candidates: events.length, sections: sections.length, flags: flags.length, sources: sources.length, prompt_version: PROMPT_VERSION },
   });
 
-  const flagged = new Set(flags.map((f) => f.section));
-  const kept = sections.filter((s) => !flagged.has(s.key)).length;
-  return { report_id: id, status: "READY", sections: kept, candidates: candidates.length, flags: flags.length };
+  const kept = sections.filter((sec) => !flagged.has(sec.key)).length;
+  return { report_id: row.id, status: "READY", sections: kept, candidates: events.length, flags: flags.length };
+}
+
+/**
+ * Advance one partner's report by ONE stage. The unit of work a cron tick can carry.
+ *
+ * The lease is the lock: the cron fires every minute and the writing stage is a three-minute model
+ * call, so without it the second tick would start writing the same brief again.
+ */
+export async function advanceBrief(
+  env: Env,
+  actor: Actor,
+  firmUserId: string,
+  now: Date,
+  deps: BriefDeps = {},
+): Promise<{ report_id: string | null; status: string; stage: "gathered" | "market_read" | "written" | "failed" | "busy" | "none" }> {
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const profile = await loadProfile(env, firmUserId);
+  const reportDate = localReportDate(now, profile.timezone);
+  const lease = new Date(now.getTime() + STAGE_LEASE_MINUTES * 60_000).toISOString();
+  const claimed = await env.WP_OS_DB.prepare(
+    `UPDATE intelligence_report SET stage_lease_until = ?4
+      WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3
+        AND status NOT IN ('READY', 'FAILED')
+        AND (stage_lease_until IS NULL OR stage_lease_until < ?5)`,
+  ).bind(firmScope, firmUserId, reportDate, lease, now.toISOString()).run();
+  if ((claimed.meta?.changes ?? 0) !== 1) {
+    const existing = await env.WP_OS_DB.prepare(
+      "SELECT id, status FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
+    ).bind(firmScope, firmUserId, reportDate).first<{ id: string; status: string }>();
+    return { report_id: existing?.id ?? null, status: existing?.status ?? "NONE", stage: existing && existing.status !== "READY" && existing.status !== "FAILED" ? "busy" : "none" };
+  }
+  const row = (await env.WP_OS_DB.prepare(
+    "SELECT id, firm_user_id, report_date, status, attempts, candidates_json, market_json, stage_lease_until, ai_run_id FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
+  ).bind(firmScope, firmUserId, reportDate).first<ReportRow>())!;
+
+  try {
+    if (row.status === "QUEUED" || row.status === "GATHERING") {
+      const next = await stageGather(env, row, firmScope, now);
+      return { report_id: row.id, status: next, stage: "gathered" };
+    }
+    if (row.status === "RANKING") {
+      await stageMarket(env, actor, row, now, deps);
+      return { report_id: row.id, status: "GENERATING", stage: "market_read" };
+    }
+    // GENERATING or VERIFYING: write it (a VERIFYING row is a write that died before persisting).
+    const out = await stageWrite(env, actor, row, firmScope, deps);
+    return { report_id: row.id, status: out.status, stage: out.status === "READY" ? "written" : "failed" };
+  } catch (err) {
+    // A throw at any stage closes the row with the real error rather than leaving it mid-flight.
+    const message = err instanceof Error ? err.message : String(err);
+    await failReport(env, row.id, "generation_threw", message, row.ai_run_id).catch(() => undefined);
+    await recordSwallowed(env, "dailyIntelligence.advanceBrief", err, { firm_user_id: firmUserId, report_id: row.id });
+    return { report_id: row.id, status: "FAILED", stage: "failed" };
+  }
+}
+
+/**
+ * Generate one partner's report for one day, all stages in one call.
+ *
+ * The manual route and the tests use this; the cron uses `runBriefTick`, one stage per tick,
+ * because a tick has ten milliseconds of CPU and this whole run has three model calls' worth of
+ * parsing in it. Idempotent on (firm_scope, firm_user_id, report_date).
+ */
+export async function generateForPartner(
+  env: Env,
+  actor: Actor,
+  firmUserId: string,
+  now: Date,
+  synthesise: Synthesise = defaultSynthesise,
+  deps: Omit<BriefDeps, "synthesise"> = {},
+): Promise<GenerateResult> {
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const { id } = await startReport(env, firmScope, firmUserId, now);
+  const all: BriefDeps = { ...deps, synthesise };
+  for (let i = 0; i < 4; i++) {
+    const step = await advanceBrief(env, actor, firmUserId, now, all);
+    if (step.status === "READY" || step.status === "FAILED") {
+      const row = await env.WP_OS_DB.prepare("SELECT status, candidate_count, verification_flags FROM intelligence_report WHERE id = ?1").bind(id).first<{ status: string; candidate_count: number; verification_flags: number }>();
+      const sections = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM intelligence_report_section WHERE report_id = ?1 AND section_key != 'citations'").bind(id).first<{ n: number }>())?.n ?? 0;
+      return { report_id: id, status: row?.status ?? step.status, sections, candidates: row?.candidate_count ?? 0, flags: row?.verification_flags ?? 0 };
+    }
+    if (step.stage === "busy" || step.stage === "none") break;
+  }
+  return await failReport(env, id, "stalled", "the brief did not reach READY in one run; the row is left for the clock", null);
 }
 
 /**
@@ -645,7 +793,7 @@ export async function briefsOwedToday(env: Env, now: Date, firmScope = "west-pee
         await env.WP_OS_DB.prepare(
           `SELECT firm_user_id, report_date FROM intelligence_report
             WHERE firm_scope = ?1 AND report_date >= ?2
-              AND (status = 'READY' OR status = 'GENERATING' OR (status = 'FAILED' AND attempts >= ${MAX_BRIEF_ATTEMPTS}))`,
+              AND (status = 'READY' OR (status = 'FAILED' AND attempts >= ${MAX_BRIEF_ATTEMPTS}))`,
         )
           .bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10))
           .all<{ firm_user_id: string; report_date: string }>()
@@ -667,6 +815,7 @@ export async function runDailyForAll(
   now: Date,
   synthesise: Synthesise = defaultSynthesise,
   limit = Number.POSITIVE_INFINITY,
+  deps: Omit<BriefDeps, "synthesise"> = {},
 ): Promise<{ generated: number; failed: number; remaining: number }> {
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const partners = await env.WP_OS_DB.prepare(
@@ -733,7 +882,7 @@ export async function runDailyForAll(
   for (const p of due) {
     if (generated + failed >= limit) break;
     try {
-      const out = await generateForPartner(env, actor, p.id, now, synthesise);
+      const out = await generateForPartner(env, actor, p.id, now, synthesise, deps);
       if (out.status === "READY") {
         generated += 1;
         await deliverReport(env, out.report_id).catch(async (err) => {
@@ -777,6 +926,71 @@ export async function runDailyForAll(
 }
 
 /**
+ * ONE STAGE OF ONE PARTNER'S BRIEF — what a scheduled tick does when a brief is owed.
+ *
+ * Production, 15 Sep 2026: seven ticks in a row died building Sequoia's brief before the model was
+ * called — gather → dedupe → rank over 462 items on a 10 ms budget. A brief is now three ticks:
+ * gathered, market read, written. Fifteen minutes apart that is three quarters of an hour after
+ * the partner's earliest start, which is why the schedule starts when it does.
+ */
+export async function runBriefTick(
+  env: Env,
+  actor: Actor,
+  now: Date,
+  deps: BriefDeps = {},
+): Promise<{ partner: string | null; report_id: string | null; stage: string; status: string; detail: string }> {
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  await closeAbandonedReports(env, now).catch(async (err) => {
+    await recordSwallowed(env, "dailyIntelligence.closeAbandonedReports", err);
+    return 0;
+  });
+  const partners = await env.WP_OS_DB.prepare(
+    `SELECT u.id, COALESCE(p.enabled, 1) AS enabled, COALESCE(p.timezone,'America/Chicago') AS timezone,
+            COALESCE(p.weekends, 0) AS weekends, COALESCE(p.earliest_start_local,'06:15') AS earliest_start_local
+       FROM firm_user u
+       LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
+       JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
+      WHERE u.status = 'ACTIVE' ORDER BY u.id`,
+  ).all<{ id: string; enabled: number; timezone: string; weekends: number; earliest_start_local: string }>();
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT firm_user_id, report_date, status, attempts, stage_lease_until FROM intelligence_report
+        WHERE firm_scope = ?1 AND report_date >= ?2`,
+    ).bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10)).all<{ firm_user_id: string; report_date: string; status: string; attempts: number; stage_lease_until: string | null }>()
+  ).results ?? [];
+  const byKey = new Map(rows.map((r) => [`${r.firm_user_id}:${r.report_date}`, r]));
+
+  for (const p of partners.results ?? []) {
+    if (p.enabled !== 1) continue;
+    if (p.weekends !== 1 && isWeekend(now, p.timezone)) continue;
+    if (!isAfterLocalTime(now, p.timezone, p.earliest_start_local)) continue;
+    const date = localReportDate(now, p.timezone);
+    const row = byKey.get(`${p.id}:${date}`);
+    if (row?.status === "READY") continue;
+    if (row?.status === "FAILED" && row.attempts >= MAX_BRIEF_ATTEMPTS) continue;
+    if (row && row.status !== "FAILED" && row.stage_lease_until && row.stage_lease_until > now.toISOString()) continue;
+
+    if (!row || row.status === "FAILED") await startReport(env, firmScope, p.id, now);
+    const step = await advanceBrief(env, actor, p.id, now, deps);
+    if (step.status === "READY" && step.report_id) {
+      await deliverReport(env, step.report_id).catch(async (err) => {
+        await env.WP_OS_DB.prepare(
+          `INSERT INTO intelligence_delivery (id, report_id, channel, status, detail) VALUES (?1, ?2, 'IN_APP', 'FAILED', ?3)`,
+        ).bind(`did_${crypto.randomUUID()}`, step.report_id, String(err).slice(0, 400)).run();
+      });
+    }
+    const detail =
+      step.stage === "gathered" ? (step.status === "READY" ? "nothing reached the bar; an empty-day brief was written" : "gathered and ranked; the next tick reads the numbers")
+      : step.stage === "market_read" ? "the numbers were fetched and read; the next tick writes the brief"
+      : step.stage === "written" ? "written, verified and delivered"
+      : step.stage === "failed" ? "failed — the brief's own row says why"
+      : "another tick holds it";
+    return { partner: p.id, report_id: step.report_id, stage: step.stage, status: step.status, detail };
+  }
+  return { partner: null, report_id: null, stage: "none", status: "NONE", detail: "no brief is owed right now" };
+}
+
+/**
  * Close out reports that stopped mid-flight.
  *
  * THE CATCH ABOVE CANNOT COVER EVERY CASE, and pretending otherwise is how a row stays stuck. If
@@ -793,12 +1007,15 @@ export const STALE_AFTER_MINUTES = 30;
 
 export async function closeAbandonedReports(env: Env, now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - STALE_AFTER_MINUTES * 60_000).toISOString();
+  // Judged by the last MOVEMENT (stage_at), not the start: a brief now crosses several ticks and a
+  // row that gathered twenty minutes ago and read the market five minutes ago is alive.
   const res = await env.WP_OS_DB.prepare(
     `UPDATE intelligence_report
         SET status = 'FAILED', error_code = 'abandoned',
             error_message = 'The run stopped part-way through and never finished. Build it again.',
+            stage_lease_until = NULL,
             completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-      WHERE status NOT IN ('READY','FAILED') AND started_at < ?1`,
+      WHERE status NOT IN ('READY','FAILED') AND COALESCE(stage_at, started_at) < ?1`,
   )
     .bind(cutoff)
     .run();
@@ -923,10 +1140,32 @@ export async function handleGenerateDailyReport(ctx: RouteContext): Promise<Resp
     target = other.id;
   }
 
+  /*
+   * ONE STAGE PER REQUEST, and the page calls again until it is done. An HTTP request has the same
+   * ten milliseconds of CPU as a cron tick, so the button cannot do in one request what the tick
+   * could not do in one invocation. A READY or FAILED row is started again from the top; a row
+   * mid-flight is advanced one stage.
+   */
   try {
-    const out = await generateForPartner(ctx.env, actor, target, new Date());
-    if (out.status === "READY") await deliverReport(ctx.env, out.report_id).catch(() => undefined);
-    return json(out, { status: 201 });
+    const now = new Date();
+    const firmScope = actor.firmScopes[0] ?? "west-peek";
+    const profile = await loadProfile(ctx.env, target);
+    const reportDate = localReportDate(now, profile.timezone);
+    const existing = await ctx.env.WP_OS_DB.prepare(
+      "SELECT status FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
+    ).bind(firmScope, target, reportDate).first<{ status: string }>();
+    const fresh = !existing || existing.status === "READY" || existing.status === "FAILED";
+    if (fresh) await startReport(ctx.env, firmScope, target, now);
+    const step = await advanceBrief(ctx.env, actor, target, now, {});
+    if (step.status === "READY" && step.report_id) await deliverReport(ctx.env, step.report_id).catch(() => undefined);
+    const done = step.status === "READY" || step.status === "FAILED";
+    const row = step.report_id
+      ? await ctx.env.WP_OS_DB.prepare("SELECT status, error_message, candidate_count FROM intelligence_report WHERE id = ?1").bind(step.report_id).first<{ status: string; error_message: string | null; candidate_count: number }>()
+      : null;
+    return json({
+      report_id: step.report_id, status: row?.status ?? step.status, stage: step.stage, done,
+      candidates: row?.candidate_count ?? 0, detail: row?.error_message ?? null,
+    }, { status: 201 });
   } catch (err) {
     return errorResponse(err);
   }

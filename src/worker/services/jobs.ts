@@ -201,7 +201,6 @@ async function checkPreconditions(
 // platform killed it every run for seventeen hours — no brief, no intelligence. A tick now either
 // builds ONE partner's brief (when one is still owed today) or reads ONE source.
 const SOURCES_PER_TICK = 1;
-const PARTNERS_PER_TICK = 1;
 
 async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runId: string, now: Date, trigger: "MANUAL" | "SCHEDULED" = "SCHEDULED"): Promise<RunOutcome> {
   const artifacts: RunOutcome["artifacts"] = [];
@@ -434,16 +433,22 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     // A BRIEF OWED TODAY IS THE WHOLE TICK. Building it reads what earlier ticks gathered; it does
     // not also gather. When no brief is owed, the tick reads one source.
     // SCHEDULED ticks only: a person pressing "Run it now" expects the sweep, and gets it below.
-    const { runDailyForAll, briefsOwedToday } = await import("./dailyIntelligence");
+    const { runBriefTick, briefsOwedToday } = await import("./dailyIntelligence");
     if (trigger === "SCHEDULED" && (await briefsOwedToday(env, now))) {
-      const brief = await runDailyForAll(env, actor, now, undefined, PARTNERS_PER_TICK);
-      artifacts.push({ kind: "DAILY_BRIEFING", note: `${brief.generated} partner briefing(s)` });
+      /*
+       * ONE STAGE, NOT ONE BRIEF. On 15 Sep 2026 seven consecutive ticks died building Sequoia's
+       * brief before the model was called — the whole build in one invocation is more than 10 ms of
+       * CPU once the 48-hour window holds a few hundred items. A tick now gathers, or reads the
+       * numbers, or writes; the row carries the work between ticks.
+       */
+      const step = await runBriefTick(env, actor, now);
+      if (step.report_id) artifacts.push({ kind: "DAILY_BRIEFING", ref_type: "intelligence_report", ref_id: step.report_id, note: `${step.partner}: ${step.stage}` });
       // A failed brief does not fail the tick: the brief keeps its own attempts and its own notice
       // ("Sequoia's brief is down" says why), and a job dead-lettered for a model outage would stop
       // reading sources too. The summary says what happened.
       return {
         status: "SUCCEEDED",
-        summary: `Briefing tick: ${brief.generated} generated${brief.failed ? `, ${brief.failed} failed (the brief's own notice says why)` : ""}${brief.remaining > 0 ? `, ${brief.remaining} still to build` : ""}. Sources are read on the next tick.`,
+        summary: `Briefing tick${step.partner ? ` for ${step.partner}` : ""}: ${step.detail}. Sources are read on the next tick.`,
         artifacts,
       };
     }

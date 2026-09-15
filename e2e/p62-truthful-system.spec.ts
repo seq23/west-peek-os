@@ -79,8 +79,12 @@ test("the morning brief either arrives or states, in the schedule's own words, w
    */
   const built = await request.post("/api/daily-intelligence/generate", { headers: MP, data: {} });
   expect(built.status(), await built.text()).toBe(201);
-  const outcome = (await built.json()) as { status: string; report_id?: string };
+  const outcome = (await built.json()) as { status: string; report_id?: string; stage?: string; done?: boolean };
   expect(outcome.status, "a build must land in a named state, never in silence").toBeTruthy();
+  // v5: a request advances ONE stage (a request has the same CPU budget as a cron tick) and says
+  // which, and whether the brief is done. An empty firm has nothing to rank, so it is done at once.
+  expect(outcome.stage).toBeTruthy();
+  expect(typeof outcome.done).toBe("boolean");
 
   await page.reload();
   await gotoSurface(page, "Home");
