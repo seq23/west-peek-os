@@ -12,7 +12,10 @@ import {
   audienceTerms,
   buildConceptsPrompt,
   buildPacketPrompt,
+  buildSponsorDiscoveryMorePrompt,
   buildSponsorDiscoveryPrompt,
+  mergeCandidates,
+  pickForResearch,
   buildSponsorResearchPrompt,
   computeEconomics,
   followingMonth,
@@ -460,7 +463,11 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       state.inviteCheck = await inviteCheck(env, firmScope, brief, draft.target_max || 40);
       const found = await research(env, actor, buildSponsorDiscoveryPrompt({ brief, city, month: draft.proposed_for_month }));
       if (!found.ok) return await failStage(`sponsor discovery search failed: ${found.detail}`);
-      const parsed = parseSponsorCandidates(found.text, brief);
+      const firstPass = parseSponsorCandidates(found.text, brief);
+      // A SECOND SEARCH FROM OTHER LISTS. One sponsor page is an answer key, not a market; the
+      // second pass names what the first found and is told not to cite those hosts again.
+      const more = await research(env, actor, buildSponsorDiscoveryMorePrompt({ brief, city, month: draft.proposed_for_month, already: firstPass }));
+      const parsed = more.ok ? mergeCandidates(firstPass, parseSponsorCandidates(more.text, brief)) : firstPass;
       // Every evidence URL is asked for its status before the candidate is kept. A citation the
       // search transcribed wrongly would otherwise reach the packet as proof.
       const checked = await Promise.all(parsed.map(async (c) => { const status = await check(c.evidenceUrl); return { c, status, verdict: evidenceVerdict(status) }; }));
@@ -479,7 +486,9 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
     }
 
     if (stage === "RESEARCH") {
-      const todo = state.candidates.filter((c) => !state.researched.some((r) => sameOrg(r, c.orgName))).slice(0, Math.max(0, Math.min(RESEARCH_PER_TICK, MAX_RESEARCHED - state.research.length)));
+      // Hers first, then round-robin by category, so the six researched are not six of one kind.
+      const shortlist = pickForResearch(state.candidates, MAX_RESEARCHED);
+      const todo = shortlist.filter((c) => !state.researched.some((r) => sameOrg(r, c.orgName))).slice(0, Math.max(0, Math.min(RESEARCH_PER_TICK, MAX_RESEARCHED - state.research.length)));
       for (const c of todo) {
         const r = await research(env, actor, buildSponsorResearchPrompt({ orgName: c.orgName, roomLine: roomOneLiner(brief, city), audience: brief?.audience ?? "operators, founders and their advisers" }));
         state.researched.push(c.orgName);
@@ -507,7 +516,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
           fromBrief: c.fromBrief,
         });
       }
-      const remaining = state.candidates.filter((c) => !state.researched.some((r) => sameOrg(r, c.orgName))).length;
+      const remaining = shortlist.filter((c) => !state.researched.some((r) => sameOrg(r, c.orgName))).length;
       const done = remaining === 0 || state.research.length >= MAX_RESEARCHED;
       await saveStage(env, draft.id, done ? "CONCEPTS" : "RESEARCH", state);
       const last = state.research.slice(-todo.length);

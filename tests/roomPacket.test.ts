@@ -561,3 +561,47 @@ describe("the money, after the first production packet", () => {
     expect(html).toMatch(/break-inside:avoid/);
   });
 });
+
+describe("discovery, after the third production run", () => {
+  const brief = { audience: "Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null };
+  const list = (n: number, page: string, cat = "LEGAL") => Array.from({ length: n }, (_, i) => ({ org_name: `Org ${page.slice(-1)}${i}`, category: cat, evidence_url: page, evidence_note: `Listed as a sponsor on ${page}` }));
+
+  it("caps what one sponsor page may contribute, and a 'not evidenced' note has no evidence", async () => {
+    const { CANDIDATES_PER_PAGE, parseSponsorCandidates } = await import("../src/shared/events/roomPacket");
+    const out = parseSponsorCandidates(JSON.stringify({ results: [
+      ...list(9, "https://www.napaba.org/page/2026_SponsorList"),
+      { org_name: "Major Lindsey & Africa", category: "RECRUITING", evidence_url: "https://www.napaba.org/page/2026_SponsorList", evidence_note: "Not evidenced in the gathered search results; no qualifying sponsor-page URL was returned" },
+      { org_name: "Harvey", category: "LEGAL", evidence_url: "https://www.napaba.org/page/2026_SponsorList", evidence_note: "No sponsor-page evidence was returned for Harvey" },
+    ] }), brief);
+    expect(out.filter((c) => c.evidenceUrl.includes("napaba"))).toHaveLength(CANDIDATES_PER_PAGE);
+    expect(out.some((c) => c.orgName.startsWith("Major"))).toBe(false);
+    expect(out.some((c) => c.orgName === "Harvey")).toBe(false); // the seed comes back in DISCOVER with no evidence, researched on its own
+  });
+
+  it("merges a second pass without repeats and picks research round-robin by category, hers first", async () => {
+    const { mergeCandidates, parseSponsorCandidates, pickForResearch } = await import("../src/shared/events/roomPacket");
+    const first = parseSponsorCandidates(JSON.stringify({ results: [...list(4, "https://a.org/sponsors"), { org_name: "Harvey", category: "LEGAL", evidence_url: "https://www.harvey.ai/us-open", evidence_note: "US Open partner" }] }), brief);
+    const second = parseSponsorCandidates(JSON.stringify({ results: [
+      { org_name: "Org s0", category: "LEGAL", evidence_url: "https://b.org/sponsors", evidence_note: "listed" }, // repeat
+      { org_name: "J.P. Morgan", category: "BANKING", evidence_url: "https://b.org/sponsors", evidence_note: "listed" },
+      { org_name: "Lateral Link", category: "RECRUITING", evidence_url: "https://b.org/sponsors", evidence_note: "listed" },
+      { org_name: "Macallan", category: "HOSPITALITY", evidence_url: "https://c.org/sponsors", evidence_note: "listed" },
+    ] }), brief);
+    const merged = mergeCandidates(first, second);
+    expect(merged.map((c) => c.orgName)).toEqual(["Harvey", "Org s0", "Org s1", "Org s2", "Org s3", "J.P. Morgan", "Lateral Link", "Macallan"]);
+    const picked = pickForResearch(merged, 6);
+    expect(picked[0]!.orgName).toBe("Harvey");
+    expect(new Set(picked.map((c) => c.category))).toEqual(new Set(["LEGAL", "BANKING", "RECRUITING", "HOSPITALITY"]));
+    expect(picked).toHaveLength(6);
+  });
+
+  it("tells the second search what it already has and not to cite those hosts again", async () => {
+    const { buildSponsorDiscoveryMorePrompt, parseSponsorCandidates } = await import("../src/shared/events/roomPacket");
+    const already = parseSponsorCandidates(JSON.stringify({ results: list(3, "https://www.napaba.org/page/2026_SponsorList") }), brief);
+    const prompt = buildSponsorDiscoveryMorePrompt({ brief, city: "New York", month: "2026-10", already });
+    expect(prompt).toMatch(/SECOND PASS/);
+    expect(prompt).toContain("do NOT cite these hosts again): www.napaba.org");
+    expect(prompt).toMatch(/Lavender Law/);
+    expect(prompt).toMatch(/BANKING, RECRUITING/);
+  });
+});

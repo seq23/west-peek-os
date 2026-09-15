@@ -446,28 +446,98 @@ export interface SponsorCandidate {
   fromBrief: boolean;
 }
 
+/** How many candidates one sponsor page may contribute: one list is an answer key, not a market. */
+export const CANDIDATES_PER_PAGE = 4;
+
+/** A note that says the page does NOT show the sponsor — the model attached a URL anyway (third production run). */
+const NOT_EVIDENCED = /\b(no|not|without)\b[^.]{0,60}\b(evidence|evidenced|sponsor[- ]page|qualifying|listing|returned)\b|not (listed|found|shown)/i;
+
 export function parseSponsorCandidates(raw: string, brief: RoomBrief | null): SponsorCandidate[] {
   const p = jsonBody(raw);
   const out: SponsorCandidate[] = [];
+  const perPage = new Map<string, number>();
   for (const r of Array.isArray(p?.results) ? (p!.results as Record<string, unknown>[]) : []) {
     const orgName = str(r.org_name) ?? str(r.name);
     const evidenceUrl = httpUrl(r.evidence_url) ?? httpUrl(r.url);
-    // No evidence URL, no candidate. The whole value of discovery over memory is the citation.
-    if (!orgName || !evidenceUrl) continue;
+    const evidenceNote = str(r.evidence_note) ?? "";
+    // No evidence URL, no candidate. The whole value of discovery over memory is the citation —
+    // and a note that says "no sponsor evidence was found" with a URL attached is no citation.
+    if (!orgName || !evidenceUrl || NOT_EVIDENCED.test(evidenceNote)) continue;
     if (out.some((o) => sameOrg(o.orgName, orgName))) continue;
+    const page = normaliseUrl(evidenceUrl);
+    const fromBrief = (brief?.sponsorProspects ?? []).some((named) => sameOrg(named, orgName));
+    if (!fromBrief && (perPage.get(page) ?? 0) >= CANDIDATES_PER_PAGE) continue;
+    perPage.set(page, (perPage.get(page) ?? 0) + 1);
     const rawCat = str(r.category)?.toUpperCase() ?? "OTHER";
     out.push({
       orgName,
       category: (SPONSOR_CATEGORIES as readonly string[]).includes(rawCat) ? (rawCat as SponsorCategory) : "OTHER",
       evidenceUrl,
-      evidenceNote: str(r.evidence_note) ?? "",
+      evidenceNote,
       whyThisAudience: str(r.why_this_audience) ?? "",
-      fromBrief: (brief?.sponsorProspects ?? []).some((named) => sameOrg(named, orgName)),
+      fromBrief,
     });
   }
   // Hers first, so a seed is researched before the budget of stages runs out.
   out.sort((a, b) => Number(b.fromBrief) - Number(a.fromBrief));
   return out;
+}
+
+/** Merge a second discovery pass into the first: new organisations only, the per-page cap still held. */
+export function mergeCandidates(first: readonly SponsorCandidate[], second: readonly SponsorCandidate[]): SponsorCandidate[] {
+  const out = [...first];
+  const perPage = new Map<string, number>();
+  for (const c of first) { const k = normaliseUrl(c.evidenceUrl); perPage.set(k, (perPage.get(k) ?? 0) + 1); }
+  for (const c of second) {
+    if (out.some((o) => sameOrg(o.orgName, c.orgName))) continue;
+    const k = normaliseUrl(c.evidenceUrl);
+    if (!c.fromBrief && (perPage.get(k) ?? 0) >= CANDIDATES_PER_PAGE) continue;
+    perPage.set(k, (perPage.get(k) ?? 0) + 1);
+    out.push(c);
+  }
+  out.sort((a, b) => Number(b.fromBrief) - Number(a.fromBrief));
+  return out;
+}
+
+/**
+ * Which candidates get the full research treatment: hers first, then ROUND-ROBIN BY CATEGORY, so
+ * six slots do not go to six legal vendors when a bank and a recruiter were found too.
+ */
+export function pickForResearch(candidates: readonly SponsorCandidate[], max: number): SponsorCandidate[] {
+  const picked: SponsorCandidate[] = candidates.filter((c) => c.fromBrief).slice(0, max);
+  const rest = candidates.filter((c) => !c.fromBrief);
+  const byCat = new Map<string, SponsorCandidate[]>();
+  for (const c of rest) byCat.set(c.category, [...(byCat.get(c.category) ?? []), c]);
+  const cats = [...byCat.keys()];
+  let added = true;
+  while (picked.length < max && added) {
+    added = false;
+    for (const cat of cats) {
+      const next = byCat.get(cat)!.shift();
+      if (next) { picked.push(next); added = true; if (picked.length >= max) break; }
+    }
+  }
+  return picked;
+}
+
+/**
+ * The SECOND discovery search: other lists, other categories. The third production run took all
+ * thirteen names off NAPABA's 2026 sponsor page — a fine answer key, one list. This asks for the
+ * same thing from sources it has not used, naming what it already has so it does not repeat.
+ */
+export function buildSponsorDiscoveryMorePrompt(input: { brief: RoomBrief | null; city: string; month: string; already: readonly SponsorCandidate[] }): string {
+  const pages = Array.from(new Set(input.already.map((c) => { try { return new URL(c.evidenceUrl).hostname; } catch { return c.evidenceUrl; } })));
+  const cats = Array.from(new Set(input.already.map((c) => c.category)));
+  return [
+    buildSponsorDiscoveryPrompt(input),
+    "",
+    "THIS IS THE SECOND PASS. Already found (do NOT repeat these organisations):",
+    input.already.map((c) => `- ${c.orgName} (${c.category})`).join("\n"),
+    `Sources already used (do NOT cite these hosts again): ${pages.join(", ")}.`,
+    `Categories already covered: ${cats.join(", ")}. Favour the ones missing from [${SPONSOR_CATEGORIES.join(", ")}] — especially BANKING, RECRUITING, HOSPITALITY and adjacent premium brands.`,
+    "Read DIFFERENT sponsor lists: the National Bar Association convention, MCCA's gala, LCLD's symposium, Lavender Law, the Black In-House Counsel Network, Black law student associations' galas, legal-tech conferences (ILTACON, Legalweek, CLOC), the city bar's diversity events.",
+    "6 to 10 more candidates, no more than three from any one page.",
+  ].join("\n");
 }
 
 /** Matching an organisation name loosely: "Harvey AI (harvey.ai)" ≈ "Harvey". */
