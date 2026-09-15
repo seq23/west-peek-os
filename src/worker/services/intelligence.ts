@@ -466,15 +466,31 @@ export async function runIntelligence(
     }
 
     let acquiredFromSource = 0;
-    for (const raw of batch) {
+    // ONE QUERY FOR EVERY DUPLICATE, not one per item. CONFIRMED 15 Sep 2026 (`exceededCpu`, 37 ms):
+    // forty items meant forty SELECTs, each costing Worker CPU, and the tick was killed at the
+    // Free plan's 10 ms — 53 abandoned runs and no morning brief.
+    const hashes = await Promise.all(batch.map((raw) => sha256Hex(dedupeKeyFor(raw.title, raw.url))));
+    const known = new Set<string>();
+    for (let i = 0; i < hashes.length; i += 90) {
+      const chunk = hashes.slice(i, i + 90);
+      if (chunk.length === 0) break;
+      const rows = await env.WP_OS_DB.prepare(
+        `SELECT dedupe_hash FROM intelligence_item WHERE dedupe_hash IN (${chunk.map((_, j) => `?${j + 1}`).join(",")})`,
+      )
+        .bind(...chunk)
+        .all<{ dedupe_hash: string }>();
+      for (const r of rows.results ?? []) known.add(r.dedupe_hash);
+    }
+    for (let idx = 0; idx < batch.length; idx++) {
+      const raw = batch[idx]!;
       acquired++;
       acquiredFromSource++;
-      const hash = await sha256Hex(dedupeKeyFor(raw.title, raw.url));
-      const dupe = await env.WP_OS_DB.prepare("SELECT id FROM intelligence_item WHERE dedupe_hash = ?1").bind(hash).first<{ id: string }>();
-      if (dupe) {
+      const hash = hashes[idx]!;
+      if (known.has(hash)) {
         duplicates++;
         continue;
       }
+      known.add(hash);
       const category = raw.category ?? "OTHER";
       const relevance = scoreRelevance(
         {
