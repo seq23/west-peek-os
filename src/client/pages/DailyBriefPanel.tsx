@@ -23,6 +23,8 @@ interface Report {
   id: string; report_date: string; status: string; model: string | null;
   prompt_version: string | null; candidate_count: number; verification_flags: number;
   raw_count: number; deduped_count: number; completed_at: string | null;
+  /** "Edition: Scooter — marketing & growth lens" — whose brief, read which way. System-written. */
+  edition: string | null;
 }
 
 /** Minimal markdown: paragraphs, bullets and bold. The model is asked for prose, not documents. */
@@ -204,9 +206,12 @@ function cite(text: string): JSX.Element {
  * on a click. Sources keeps the whole thing open: that page is where you go to READ it.
  */
 
+interface LensChoice { key: "investing" | "growth"; label: string; categories: string[] }
 interface InterestsState {
   firm: { sectors: string[]; themes: string[] };
   mine: { sectors: string[]; themes: string[]; companies: string[] };
+  lens: LensChoice;
+  lenses: LensChoice[];
   suggestions: Array<{ group: string; items: string[] }>;
   note: string;
 }
@@ -233,11 +238,11 @@ function InterestsEditor(): JSX.Element {
   const data = state.data;
   const mine = data?.mine ?? { sectors: [], themes: [], companies: [] };
 
-  async function save(next: { sectors: string[]; themes: string[] }) {
+  async function save(next: { sectors: string[]; themes: string[]; lens?: LensChoice["key"] }) {
     setBusy(true);
     const res = await api<{ note?: string }>("/api/daily-intelligence/interests", {
       method: "POST",
-      body: { sectors: next.sectors, themes: next.themes },
+      body: { sectors: next.sectors, themes: next.themes, ...(next.lens ? { lens: next.lens } : {}) },
     });
     setBusy(false);
     setMessage(res.status === 201 ? (res.data?.note ?? "Saved.") : `Could not save (HTTP ${res.status}).`);
@@ -285,6 +290,34 @@ function InterestsEditor(): JSX.Element {
       {data && (
         <>
           <p className="muted small">{data.note}</p>
+
+          {/* THE LENS — the one named difference between two partners' briefs. Same sections, same
+              dashboard, same Top 5; this decides which stories lead and which angle the analysis
+              takes. It reads on the report's header as "Edition: <you> — <lens>". */}
+          <h4>Read through</h4>
+          <ul className="chip-row" data-testid="interests-lens">
+            {(data.lenses ?? []).map((l) => (
+              <li key={l.key}>
+                <button
+                  type="button"
+                  className={`chip ${l.key === data.lens?.key ? "chip-fixed" : "chip-add"}`}
+                  disabled={busy || l.key === data.lens?.key}
+                  aria-pressed={l.key === data.lens?.key}
+                  data-testid={`interests-lens-${l.key}`}
+                  title={l.categories.join(", ")}
+                  onClick={() => void save({ sectors: mine.sectors, themes: mine.themes, lens: l.key })}
+                >
+                  {l.key === data.lens?.key ? "✓ " : ""}{l.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {data.lens && (
+            <p className="muted small" data-testid="interests-lens-leads">
+              Leads with: {data.lens.categories.join(", ")}. Every partner gets the same sections, the
+              markets dashboard, the Top 5 and the West Peek read-throughs; the lens decides what leads.
+            </p>
+          )}
 
           <h4>On every partner&apos;s brief</h4>
           <ul className="chip-row" data-testid="interests-firm">
@@ -435,7 +468,8 @@ export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {})
       <header className="brief-masthead">
         <h3>Executive Intelligence Report</h3>
         {report && (
-          <span className="brief-edition">
+          <span className="brief-edition" data-testid="daily-brief-edition">
+            {report.edition ? `${report.edition} · ` : ""}
             {report.report_date}
             {report.completed_at
               ? ` · delivered ${new Date(report.completed_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`

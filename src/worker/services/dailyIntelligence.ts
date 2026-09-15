@@ -7,8 +7,8 @@ import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { notifyQuietly } from "./notifications";
 import {
-  EMPTY_INTERESTS, INTEREST_SUGGESTIONS, FIRM_INTERESTS, effectiveInterests, isFirmInterest,
-  normaliseInterest, type PartnerInterests,
+  DEFAULT_LENS, EMPTY_INTERESTS, INTEREST_SUGGESTIONS, FIRM_INTERESTS, LENSES, editionLine, effectiveInterests,
+  isFirmInterest, isLensKey, lensFor, normaliseInterest, type LensKey, type PartnerInterests,
 } from "../../shared/intelligence/interests";
 import {
   PROMPT_VERSION, REPORT_SECTIONS, buildSources, buildSynthesisPrompt, citedEventIds, parseReport,
@@ -75,6 +75,8 @@ interface ProfileRow {
   companies_json: string;
   themes_json: string;
   depth_json: string;
+  /** Which way this partner reads the brief: 'investing' or 'growth'. See interests.ts. */
+  lens: string;
 }
 
 function parseArray(raw: string): string[] {
@@ -94,7 +96,7 @@ export async function loadProfile(env: Env, firmUserId: string): Promise<Profile
   return (
     row ?? {
       firm_user_id: firmUserId, timezone: "America/Chicago", weekends: 0, enabled: 1,
-      sectors_json: "[]", companies_json: "[]", themes_json: "[]", depth_json: "{}",
+      sectors_json: "[]", companies_json: "[]", themes_json: "[]", depth_json: "{}", lens: DEFAULT_LENS,
     }
   );
 }
@@ -445,7 +447,7 @@ async function stageMarket(env: Env, actor: Actor, row: ReportRow, now: Date, de
 async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: string, deps: BriefDeps): Promise<GenerateResult> {
   const synthesise = deps.synthesise ?? defaultSynthesise;
   const profile = await loadProfile(env, row.firm_user_id);
-  const lens = lensFrom(profile);
+  const interests = lensFrom(profile);
   const user = await env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1").bind(row.firm_user_id).first<{ full_name: string }>();
   const entities = await firmEntities(env, firmScope);
   const watchlist = ((await env.WP_OS_DB.prepare(
@@ -462,16 +464,22 @@ async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: str
   try { stored = { ...stored, ...(JSON.parse(row.market_json ?? "{}") as Partial<StoredMarket>) }; } catch { /* the market read is optional */ }
   if (events.length === 0) return await failReport(env, row.id, "no_candidates", "the ranked candidates were lost between ticks; build it again", null);
 
+  // THE SAME PACKET SHAPE FOR EVERY PARTNER. The lens and the edition line are the only fields a
+  // partner's profile changes here; the section list, the sources and the verifier are shared.
+  const lens = lensFor(profile.lens);
+  const edition = editionLine(user?.full_name ?? "Partner", lens);
   const packet: EvidencePacket = {
     report_date: row.report_date,
     partner_name: user?.full_name ?? "Partner",
+    edition,
+    lens: { key: lens.key, label: lens.label, categories: lens.categories },
     market_levels: stored.levels,
     calendar: stored.calendar,
     macro_readings: stored.readings,
     macro_failures: stored.failures,
     market_citations: stored.citations,
     watchlist_entries: watchlist,
-    firm_context: { sectors: lens.sectors, portfolio: entities.slice(0, 40), watchlist: watchlist.map((w) => w.label), themes: lens.themes },
+    firm_context: { sectors: interests.sectors, portfolio: entities.slice(0, 40), watchlist: watchlist.map((w) => w.label), themes: interests.themes },
     open_narratives: await openNarratives(env, firmScope),
     events,
   };
@@ -554,9 +562,9 @@ async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: str
        VALUES (?1, ?2, 'citations', ?3, 'Sources', ?4, '[]')`,
     ).bind(`dis_${crypto.randomUUID()}`, row.id, order.get("citations") ?? 90, renderCitations(sources)),
     env.WP_OS_DB.prepare(
-      `UPDATE intelligence_report SET status = 'READY', model = ?2, ai_run_id = ?3, verification_flags = ?4,
+      `UPDATE intelligence_report SET status = 'READY', model = ?2, ai_run_id = ?3, verification_flags = ?4, edition = ?5,
               stage_lease_until = NULL, stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
-    ).bind(row.id, model, aiRunId, flags.length),
+    ).bind(row.id, model, aiRunId, flags.length, edition),
   ];
   await env.WP_OS_DB.batch(statements);
 
@@ -564,7 +572,7 @@ async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: str
     eventType: "daily_intelligence.generated",
     actorType: "system", actorId: "system",
     objectType: "intelligence_report", objectId: row.id, firmScope,
-    payload: { report_date: row.report_date, candidates: events.length, sections: sections.length, flags: flags.length, sources: sources.length, prompt_version: PROMPT_VERSION },
+    payload: { report_date: row.report_date, candidates: events.length, sections: sections.length, flags: flags.length, sources: sources.length, prompt_version: PROMPT_VERSION, lens: lens.key },
   });
 
   const kept = sections.filter((sec) => !flagged.has(sec.key)).length;
@@ -661,10 +669,10 @@ export async function generateForPartner(
  */
 export async function deliverReport(env: Env, reportId: string): Promise<{ delivered: boolean }> {
   const report = await env.WP_OS_DB.prepare(
-    "SELECT id, firm_user_id, report_date, status, firm_scope FROM intelligence_report WHERE id = ?1",
+    "SELECT id, firm_user_id, report_date, status, firm_scope, edition FROM intelligence_report WHERE id = ?1",
   )
     .bind(reportId)
-    .first<{ id: string; firm_user_id: string; report_date: string; status: string; firm_scope: string }>();
+    .first<{ id: string; firm_user_id: string; report_date: string; status: string; firm_scope: string; edition: string | null }>();
   if (!report) throw new DailyIntelError(404, "not_found");
   if (report.status !== "READY") throw new DailyIntelError(409, "not_ready", `report is ${report.status}`);
 
@@ -727,7 +735,8 @@ export async function deliverReport(env: Env, reportId: string): Promise<{ deliv
         {
           kind: "daily_brief",
           title: `Morning brief — ${report.report_date}`,
-          body: sections.map((sec) => `## ${sec.heading}\n\n${sec.body_md}`).join("\n\n"),
+          // The edition line leads the filed copy, so a brief read from Documents says whose it is.
+          body: [report.edition ? `_${report.edition}_` : "", ...sections.map((sec) => `## ${sec.heading}\n\n${sec.body_md}`)].filter(Boolean).join("\n\n"),
           preparedBy: chiefOfStaffFor(reader?.full_name ?? ""),
           preparedFor: report.firm_user_id,
           sourceType: "intelligence_report",
@@ -1181,10 +1190,16 @@ export async function handleGenerateDailyReport(ctx: RouteContext): Promise<Resp
  */
 export async function handleGetInterests(ctx: RouteContext): Promise<Response> {
   const actor = actorFromIdentity(ctx.identity!);
-  const mine = await loadInterests(ctx.env, actor.firmUserId!);
+  const profile = await loadProfile(ctx.env, actor.firmUserId!);
+  const mine: PartnerInterests = {
+    sectors: parseArray(profile.sectors_json), themes: parseArray(profile.themes_json), companies: parseArray(profile.companies_json),
+  };
   return json({
     firm: { sectors: FIRM_INTERESTS.sectors, themes: FIRM_INTERESTS.themes },
     mine,
+    // The lens: the one named difference between two partners' briefs, and the choices on offer.
+    lens: lensFor(profile.lens),
+    lenses: Object.values(LENSES),
     suggestions: INTEREST_SUGGESTIONS,
     note:
       "Firm interests are on every partner's brief and cannot be removed — a partner should still " +
@@ -1198,6 +1213,7 @@ const interestsSchema = z.object({
   sectors: z.array(z.string().trim().min(2).max(120)).max(30).optional(),
   themes: z.array(z.string().trim().min(2).max(200)).max(30).optional(),
   companies: z.array(z.string().trim().min(1).max(120)).max(60).optional(),
+  lens: z.enum(["investing", "growth"]).optional(),
 });
 
 /**
@@ -1243,15 +1259,18 @@ export async function handleSetInterests(ctx: RouteContext): Promise<Response> {
     companies: clean(parsed.data.companies, current.companies),
   };
 
+  const currentProfile = await loadProfile(ctx.env, actor.firmUserId!);
+  const lens: LensKey = parsed.data.lens ?? (isLensKey(currentProfile.lens) ? currentProfile.lens : DEFAULT_LENS);
   await ctx.env.WP_OS_DB.prepare(
-    `INSERT INTO partner_intelligence_profile (firm_user_id, sectors_json, themes_json, companies_json)
-     VALUES (?1, ?2, ?3, ?4)
+    `INSERT INTO partner_intelligence_profile (firm_user_id, sectors_json, themes_json, companies_json, lens)
+     VALUES (?1, ?2, ?3, ?4, ?5)
      ON CONFLICT (firm_user_id) DO UPDATE SET
        sectors_json = excluded.sectors_json,
        themes_json = excluded.themes_json,
-       companies_json = excluded.companies_json`,
+       companies_json = excluded.companies_json,
+       lens = excluded.lens`,
   )
-    .bind(actor.firmUserId!, JSON.stringify(next.sectors), JSON.stringify(next.themes), JSON.stringify(next.companies))
+    .bind(actor.firmUserId!, JSON.stringify(next.sectors), JSON.stringify(next.themes), JSON.stringify(next.companies), lens)
     .run();
 
   await appendEvent(ctx.env, {
@@ -1262,8 +1281,8 @@ export async function handleSetInterests(ctx: RouteContext): Promise<Response> {
     objectId: actor.firmUserId!,
     firmScope: actor.firmScopes[0] ?? "west-peek",
     // Counts, not contents: what somebody chooses to read about is theirs.
-    payload: { sectors: next.sectors.length, themes: next.themes.length, companies: next.companies.length },
+    payload: { sectors: next.sectors.length, themes: next.themes.length, companies: next.companies.length, lens },
   });
 
-  return json({ mine: next, note: "Saved. Your next brief is written against these." }, { status: 201 });
+  return json({ mine: next, lens: lensFor(lens), note: "Saved. Your next brief is written against these." }, { status: 201 });
 }

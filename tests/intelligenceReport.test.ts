@@ -180,7 +180,7 @@ describe("the report asks for depth (v3), and v5 keeps it", () => {
   });
 
   it("carries a version that says which prompt wrote it", () => {
-    expect(PROMPT_VERSION).toBe("daily-intelligence-v5");
+    expect(PROMPT_VERSION).toBe("daily-intelligence-v6");
   });
 });
 
