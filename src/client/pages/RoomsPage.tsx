@@ -480,7 +480,10 @@ function RoomProposal(props: {
     brief: Brief | null;
     venues: VenueRow[];
     sponsors: SponsorRow[];
-  }>(`/api/rooms/packets/${p.id}`, [p.id]);
+    // Re-read when the row's status changes: a card first drawn while Parker was still building
+    // (DRAFT) fetched an empty packet, and without this it kept showing "none suggested" after the
+    // build finished — seen in production on the first run, 15 Sep 2026.
+  }>(`/api/rooms/packets/${p.id}`, [p.id, p.status]);
   const brief = briefOf(p);
 
   const state = PACKET_STATE[p.status] ?? { label: p.status.toLowerCase(), tone: "help-tag help-tag-muted" };
