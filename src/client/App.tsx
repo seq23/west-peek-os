@@ -999,6 +999,7 @@ function GovernancePage({ me }: { me: MeResponse }) {
           below two explainer cards and a form with nothing announcing it. */}
       <h3>What the firm has told everyone</h3>
       <ul className="card-list" data-testid="governance-list">
+        {updates.loading && <li className="state-message" data-testid="governance-list-loading">Loading…</li>}
         {(updates.data?.governance_updates ?? []).map((u) => (
           <li key={u.id} className="card">
             <p>

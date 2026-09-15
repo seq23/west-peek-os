@@ -519,6 +519,7 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
       <h3>Providers</h3>
       {catalog.loading && !catalog.data && <p>Loading the catalogue…</p>}
       <ul className="card-list" data-testid="provider-catalog">
+        {catalog.loading && <li className="state-message" data-testid="provider-catalog-loading">Loading…</li>}
         {(catalog.data?.providers ?? []).map((p) => (
           <li key={p.id} className="card" data-testid={`catalog-provider-${p.provider_key}`}>
             <p>
@@ -607,6 +608,7 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
       <h3>Task routing</h3>
       <p className="muted small">{policies.data?.note}</p>
       <ul className="card-list small" data-testid="routing-policies">
+        {policies.loading && <li className="state-message" data-testid="routing-policies-loading">Loading…</li>}
         {(policies.data?.policies ?? []).map((p) => (
           <li key={p.id}>
             <code>{p.task_class}</code> v{p.version_no} —{" "}

@@ -314,6 +314,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
         here rather than quietly returning nothing.
       </p>
       <ul className="card-list" data-testid="intel-sources">
+        {sources.loading && <li className="state-message" data-testid="intel-sources-loading">Loading…</li>}
         {sourceRows.map((s) => (
           <li key={s.id} className="card" data-testid={`intel-source-${s.source_key}`}>
             <p>
@@ -384,6 +385,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
         </button>
       </form>
       <ul className="card-list" data-testid="intel-watchlist">
+        {watchlist.loading && <li className="state-message" data-testid="intel-watchlist-loading">Loading…</li>}
         {watchRows.map((w) => (
           <li key={w.id}>
             <strong>{w.label}</strong> <span className="muted small">{label(WATCH_WORD, w.kind)}</span>{" "}
@@ -426,6 +428,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
         </p>
       )}
       <ul className="card-list" data-testid="intel-items">
+        {items.loading && <li className="state-message" data-testid="intel-items-loading">Loading…</li>}
         {itemRows.slice(0, itemLimit).map((i) => (
           <ItemCard key={i.id} item={i} onChanged={reloadAll} />
         ))}
@@ -568,6 +571,7 @@ export function IntelligencePage({ me }: { me: MeResponse }) {
         sweep ran at all and whether a source failed in it.
       </p>
       <ul className="card-list small" data-testid="intel-runs">
+        {runs.loading && <li className="state-message" data-testid="intel-runs-loading">Loading…</li>}
         {runRows.map((r) => (
           <li key={r.id}>
             <strong>{shortDate(r.started_at)}</strong> — {label(RUN_RESULT, r.status)}: {r.items_kept} kept,{" "}
