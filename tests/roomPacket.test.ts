@@ -465,6 +465,7 @@ describe("the PDF", () => {
     sponsorThesis: "the experience", risks: ["one"], commitmentMd: "spend",
     pitchEmail: { to: "Mali Robertson", subject: "A room", body: "Mali —\n\nHello." },
     inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: ["lawyer at a firm"], namedFromRecords: ["A Person"], verdict: "CANNOT_FILL", note: "cannot fill" },
+    alsoLookedAt: ["Ghost Co"],
     generatedAt: "2026-09-15T12:00:00.000Z",
   };
 
@@ -478,6 +479,7 @@ describe("the PDF", () => {
     expect(html).toContain("harvey.ai/us-open");
     expect(html).toContain("Charlie Mitchell");
     expect(html).toContain("War Room"); // in the appendix
+    expect(html).toContain("Also looked at, left out because the cited page did not answer when checked: Ghost Co");
     expect(html).toContain("<title>The Scaled Boardroom — Room packet</title>");
     // The family ground, ink and the canonical orange; nothing else.
     expect(html).toContain("#F7F2EA");
@@ -553,7 +555,7 @@ describe("the money, after the first production packet", () => {
   });
 
   it("flows a long section onto the next sheet instead of leaving a blank one", () => {
-    const html = renderPacketHtml({ packetId: "x", title: "T", theme: "t", centralQuestion: null, month: "2026-10", format: "SALON", targetMin: 30, targetMax: 40, audience: null, origin: "PARKER", brief: null, pushback: null, concepts: [], conceptChoiceMd: null, runOfShow: [], agendaMd: null, seedQuestions: [], guestIdeas: [], venues: [], sponsors: [], economics: null, sponsorThesis: null, risks: [], commitmentMd: null, pitchEmail: null, inviteCheck: null, generatedAt: "2026-09-15T00:00:00Z" });
+    const html = renderPacketHtml({ packetId: "x", title: "T", theme: "t", centralQuestion: null, month: "2026-10", format: "SALON", targetMin: 30, targetMax: 40, audience: null, origin: "PARKER", brief: null, pushback: null, concepts: [], conceptChoiceMd: null, runOfShow: [], agendaMd: null, seedQuestions: [], guestIdeas: [], venues: [], sponsors: [], economics: null, sponsorThesis: null, risks: [], commitmentMd: null, pitchEmail: null, inviteCheck: null, alsoLookedAt: [], generatedAt: "2026-09-15T00:00:00Z" });
     expect(html).toMatch(/\.page\.cover\{min-height:11in\}/);
     expect(html).not.toMatch(/\.page\{[^}]*min-height:11in/);
     expect(html).toMatch(/break-inside:avoid/);

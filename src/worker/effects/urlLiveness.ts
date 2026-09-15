@@ -39,6 +39,34 @@ export async function urlIsLive(url: string, fetchImpl: typeof fetch = fetch): P
 }
 
 /**
+ * THE STATUS A PAGE ANSWERS WITH, or null when nothing answered (DNS, timeout, refused). Same
+ * guard, same GET-with-the-body-discarded as `urlIsLive`; the caller decides what a status means.
+ * Parker's sponsor evidence (services/roomPacket.ts) treats 401/403/405/429 as "the page exists
+ * and refused an automated read" — kept, marked for a person to verify — where a liveness check
+ * would drop a real corporate page behind bot protection alongside an invented one.
+ */
+export async function urlStatus(url: string, fetchImpl: typeof fetch = fetch): Promise<number | null> {
+  const guard = guardFeedUrl(url);
+  if (!guard.ok) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LIVENESS_TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: { "user-agent": "WestPeekOS/1.0 (+https://os.joinwestpeek.com)" },
+    });
+    try { await res.body?.cancel(); } catch { /* a body that will not cancel is still a status */ }
+    return res.status;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * THE FIRST 150 KB OF A PAGE, AS TEXT — enough to read an address off an author page, a masthead
  * or a contact page (15 Sep 2026: the address hunt in services/productions.ts). Same guard and
  * timeout as the liveness check; the body is read only up to the cap, never parsed here.
