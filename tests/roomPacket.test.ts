@@ -504,3 +504,58 @@ describe("monthKey", () => {
     expect(followingMonth("2026-12-03T12:00:00Z")).toBe("2027-01");
   });
 });
+
+describe("a contact is a person, and discovery names the sponsors, not the institutions (second production pass)", () => {
+  it("drops a role offered as a contact — 'Partner Program Lead' is where a person looks, not somebody to write to", async () => {
+    const { looksLikePersonName, parseSponsorResearch } = await import("../src/shared/events/roomPacket");
+    expect(looksLikePersonName("Mali Robertson")).toBe(true);
+    expect(looksLikePersonName("Rachel Hepworth")).toBe(true);
+    expect(looksLikePersonName("Jean-Luc de la Cruz")).toBe(true);
+    expect(looksLikePersonName("Partner Program Lead")).toBe(false);
+    expect(looksLikePersonName("Head of Brand Partnerships")).toBe(false);
+    expect(looksLikePersonName("Harvey Partnerships Team")).toBe(false);
+    expect(looksLikePersonName("mali")).toBe(false);
+    expect(looksLikePersonName("press@harvey.ai")).toBe(false);
+    const r = parseSponsorResearch(JSON.stringify({ history: [], contacts: [{ name: "Partner Program Lead", title: "—", source_url: "https://www.harvey.ai/partners" }, { name: "Mali Robertson", title: "Director of Brand Partnerships", source_url: "https://www.harvey.ai/team" }], strategic_language: [], summary: "" }));
+    expect(r.contacts.map((c) => c.name)).toEqual(["Mali Robertson"]);
+  });
+
+  it("tells discovery that the associations are the answer key and to return the companies on their sponsor pages, with a category floor", () => {
+    const prompt = buildSponsorDiscoveryPrompt({ brief: { audience: "Black lawyers", month: "2026-10", city: "New York", sponsorProspects: [], notes: null }, city: "New York", month: "2026-10" });
+    expect(prompt).toMatch(/NAME THE SPONSORS, NOT THE INSTITUTIONS/);
+    expect(prompt).toMatch(/COMPANIES listed on them/);
+    expect(prompt).toMatch(/one BANKING/);
+    expect(prompt).toMatch(/no more than\s+two firms/);
+  });
+});
+
+describe("the money, after the first production packet", () => {
+  it("raises an exclusive priced below the cash slots, and says so", () => {
+    const p = parsePacket(packetJson({ sponsorship: { slots: [{ tier: "TITLE", count: 1, ask_usd: 24000, gets: "" }, { tier: "SUPPORTING", count: 2, ask_usd: 12000, gets: "" }], exclusive_usd: 42000, rationale: "three slots" } }))!;
+    expect(p.structure.exclusiveUsd).toBe(53000);
+    expect(p.structure.rationale).toMatch(/Exclusive raised to \$53,000/);
+  });
+
+  it("counts in-kind as a cost offset, never as cash toward the keep", () => {
+    const structure = { slots: [{ tier: "PRESENTING" as const, count: 1, askUsd: 24000, gets: "" }, { tier: "IN_KIND" as const, count: 1, askUsd: 4000, gets: "" }], exclusiveUsd: null, exclusiveGets: null, rationale: "" };
+    const e = computeEconomics({ venues: [], targetAttendees: 35, structure, budgetLines: [] });
+    expect(e.sponsorTargetHighUsd).toBe(24000);
+    expect(e.scenarios[1]!.sponsorshipUsd).toBe(24000);
+    expect(e.scenarios[1]!.description).toBe("1 title + 1 in-kind (offsets $4,000 of cost)");
+    expect(e.scenarios[1]!.netHighUsd).toBe(24000 + 4000 - e.estimatedCostLowUsd);
+  });
+
+  it("tells the packet that the audience's institutions are co-hosts, not cash sponsors, and the pitch goes to a person", () => {
+    const prompt = buildPacketPrompt({ month: "2026-10", recentThemes: [], venueCandidates: [], city: "New York" });
+    expect(prompt).toMatch(/INSTITUTIONS ARE NOT CASH SPONSORS/);
+    expect(prompt).toMatch(/holds the invite list/);
+    expect(prompt).toMatch(/rank-1 CASH prospect's named contact/);
+  });
+
+  it("flows a long section onto the next sheet instead of leaving a blank one", () => {
+    const html = renderPacketHtml({ packetId: "x", title: "T", theme: "t", centralQuestion: null, month: "2026-10", format: "SALON", targetMin: 30, targetMax: 40, audience: null, origin: "PARKER", brief: null, pushback: null, concepts: [], conceptChoiceMd: null, runOfShow: [], agendaMd: null, seedQuestions: [], guestIdeas: [], venues: [], sponsors: [], economics: null, sponsorThesis: null, risks: [], commitmentMd: null, pitchEmail: null, inviteCheck: null, generatedAt: "2026-09-15T00:00:00Z" });
+    expect(html).toMatch(/\.page\.cover\{min-height:11in\}/);
+    expect(html).not.toMatch(/\.page\{[^}]*min-height:11in/);
+    expect(html).toMatch(/break-inside:avoid/);
+  });
+});

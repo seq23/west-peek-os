@@ -408,15 +408,26 @@ export function buildSponsorDiscoveryPrompt(input: { brief: RoomBrief | null; ci
     "     watches, cars, travel, hospitality — where the fit is real.",
     named.length ? `The partner already named: ${named.join("; ")} — include each as a candidate and find its sponsorship evidence like any other; do not assume it has any.` : "",
     "",
+    "NAME THE SPONSORS, NOT THE INSTITUTIONS. The National Bar Association, MCCA, LCLD, NAMWOLF, a",
+    "bar foundation, a law school and a law firm's own diversity programme ARE the audience's",
+    "institutions — they are who the sponsors pay to reach, not sponsors themselves. Open their",
+    "sponsor / partner / 'thank you to our sponsors' pages and return the COMPANIES listed on them",
+    "(the first run of this returned the associations and the firms; that is the answer key, not",
+    "the answer). A law firm counts only as an EMPLOYER with a pipeline budget, and no more than",
+    "two firms.",
+    "",
     "RULES:",
     "- A candidate qualifies ONLY with a URL that SHOWS a past sponsorship or partnership by that",
     "  organisation (a sponsor page, a press release, an event listing naming them as sponsor). A",
     "  company you believe would sponsor but cannot cite is not a candidate. No URL, no entry.",
+    "- Prefer a live HTML page as evidence over a PDF; prefer the last two years.",
     "- One line on what the cited page shows (which event, which year, what tier if stated).",
     "- One line on why THIS audience is the one they pay to reach.",
     `- Category from [${SPONSOR_CATEGORIES.join(", ")}].`,
-    "- 8 to 14 candidates. Vary the categories: three legal-tech sponsors in one room compete with",
-    "  each other and none renews.",
+    "- 10 to 14 candidates, with AT LEAST: two vendors who sell to the audience (LEGAL for",
+    "  lawyers), one BANKING (private bank, wealth manager, insurer or lender), one RECRUITING or",
+    "  employer with a pipeline budget, and one adjacent premium brand (HOSPITALITY or OTHER) —",
+    "  where evidence exists. Three vendors from one category in a room compete and none renews.",
     "- Do NOT name a person here; contacts are found separately.",
     "",
     'Return ONLY JSON: {"results":[{"org_name":"…","category":"LEGAL","evidence_url":"https://…","evidence_note":"…","why_this_audience":"…"}]}',
@@ -484,7 +495,8 @@ export function buildSponsorResearchPrompt(input: { orgName: string; roomLine: s
     "   Marketing, CMO). Name and title AND THE URL OF THE PAGE THAT SHOWS THEM (a team page, a",
     "   LinkedIn-derived profile on the company site, a press release quoting them, a conference",
     "   speaker page). Up to 3, most relevant first. The page must actually display the name — it is",
-    "   fetched and checked. Never an email address.",
+    "   fetched and checked. A PERSON'S NAME, never a role or a team ('Partner Program Lead' and",
+    "   'the partnerships team' are dropped). Never an email address.",
     "3. STRATEGIC LANGUAGE — 3 to 5 short phrases in which the organisation describes its own",
     "   strategy, positioning or the audiences it courts, quoted from its pages (e.g. 'the AI platform",
     "   for elite law firms', 'we partner with the institutions that shape the profession'). Each with",
@@ -520,7 +532,9 @@ export function parseSponsorResearch(raw: string): SponsorResearchRaw {
   for (const c of Array.isArray(p?.contacts) ? (p!.contacts as Record<string, unknown>[]) : []) {
     const name = str(c.name);
     const sourceUrl = httpUrl(c.source_url) ?? httpUrl(c.url);
-    if (!name || !sourceUrl) continue;
+    // A role is not a contact: "Partner Program Lead" with a team page is where a person LOOKS,
+    // not somebody a partner can write to.
+    if (!name || !sourceUrl || !looksLikePersonName(name)) continue;
     contacts.push({ name, title: str(c.title) ?? "title not stated", sourceUrl });
   }
   const strategicLanguage: SponsorResearchRaw["strategicLanguage"] = [];
@@ -538,6 +552,24 @@ export function parseSponsorResearch(raw: string): SponsorResearchRaw {
     summary: str(p?.summary) ?? "",
     category: rawCat && (SPONSOR_CATEGORIES as readonly string[]).includes(rawCat) ? (rawCat as SponsorCategory) : null,
   };
+}
+
+/**
+ * Is this a PERSON'S name, and not a role? The first production run kept "Partner Program Lead"
+ * as Harvey's contact because the page carried those words. A contact is two or more capitalised
+ * words with no role or team vocabulary in them; anything else is a title and is dropped.
+ */
+const ROLE_WORDS = /\b(lead|leader|head|director|manager|team|partnerships?|partner|program|programme|marketing|events?|sponsorships?|officer|chief|vp|president|group|department|office|contact|inquiries|press|media|brand|community|sales|general|counsel|associate|coordinator|specialist|the|of|and|for)\b/i;
+export function looksLikePersonName(name: string | null | undefined): boolean {
+  const n = (name ?? "").trim();
+  if (n.length < 4 || n.length > 60) return false;
+  const words = n.split(/\s+/);
+  if (words.length < 2 || words.length > 4) return false;
+  if (ROLE_WORDS.test(n)) return false;
+  if (/[@\d/:]/.test(n)) return false;
+  // Every word starts with a capital (or is a particle like "de", "van"), and at least two do.
+  const caps = words.filter((w) => /^[A-Z]/.test(w.replace(/^["'(]/, "")));
+  return caps.length >= 2 && words.every((w) => /^[A-Za-z][A-Za-z'.-]*$/.test(w.replace(/^["'(]|[")',]$/g, "")));
 }
 
 /**
@@ -824,10 +856,16 @@ export function buildPacketPrompt(input: {
     "  from the research or null. A prospect with no sponsorship history ranks last and its note says",
     "  so; a partner-named prospect with none gets a proposed replacement in `note`.",
     "- One category, one sponsor per slot: three legal sponsors in one room compete and none renews.",
+    "- THE AUDIENCE'S OWN INSTITUTIONS ARE NOT CASH SPONSORS. A bar association, a diversity",
+    "  council, a foundation or a law school of this audience (NAMWOLF, LCLD, MCCA, the NBA, a bar",
+    "  foundation) holds the LIST — rank it as IN_KIND with ask_usd 0 and a note 'co-host candidate:",
+    "  holds the invite list', never in a cash slot. The first production packet asked three of",
+    "  them for $12,000 each. Cash slots go to the companies that pay to reach the audience.",
     "- sponsor_thesis: what a sponsor is underwriting. Never access to members.",
     "",
-    "THE PITCH — pitch_email: the cold email to the rank-1 prospect's named contact (or to 'the",
-    "partnerships team at <org>' if none was found), in SEQUOIA TAYLOR's voice as a Managing Partner",
+    "THE PITCH — pitch_email: the cold email to the rank-1 CASH prospect's named contact — a person's",
+    "name from the research; if none was found, address it to 'the partnerships team at <org>' and",
+    "say in `note` that a person must be found first — in SEQUOIA TAYLOR's voice as a Managing Partner",
     "of West Peek Ventures: 120–180 words, first person, no flattery, the room in two lines, why them in",
     "their own strategic language, the slot and the number, one specific ask (a 20-minute call), her",
     "sign-off. A DRAFT for her to send; nothing is sent from the system.",
@@ -948,12 +986,21 @@ export function parseStructure(raw: unknown): SponsorshipStructure {
   // Title first, then supporting, then in kind — the order they sell in.
   const order: Record<SponsorTier, number> = { PRESENTING: 0, SUPPORTING: 1, IN_KIND: 2 };
   slots.sort((a, b) => order[a.tier] - order[b.tier] || b.askUsd - a.askUsd);
-  const exclusiveUsd = num(p.exclusive_usd) ?? num(p.exclusiveUsd);
+  let exclusiveUsd = num(p.exclusive_usd) ?? num(p.exclusiveUsd);
+  let rationale = str(p.rationale) ?? "";
+  // EXCLUSIVITY IS WORTH MORE THAN THE SLOTS IT REPLACES. The first production packet priced the
+  // exclusive at $42K against $48K of cash slots — a discount for owning the room. Raised to ten
+  // percent above the cash slots, and the rationale says so, rather than shipping the contradiction.
+  const cashSum = slots.filter((s) => s.tier !== "IN_KIND").reduce((t, s) => t + s.askUsd * s.count, 0);
+  if (exclusiveUsd && exclusiveUsd > 0 && cashSum > 0 && exclusiveUsd < cashSum) {
+    exclusiveUsd = Math.ceil((cashSum * 1.1) / 500) * 500;
+    rationale = `${rationale} (Exclusive raised to $${exclusiveUsd.toLocaleString("en-US")}: Parker had priced it below the $${cashSum.toLocaleString("en-US")} the cash slots bring together, and owning the room cannot cost less than sharing it.)`.trim();
+  }
   return {
     slots,
     exclusiveUsd: exclusiveUsd && exclusiveUsd > 0 ? exclusiveUsd : null,
     exclusiveGets: str(p.exclusive_gets) ?? str(p.exclusiveGets),
-    rationale: str(p.rationale) ?? "",
+    rationale,
   };
 }
 
@@ -1064,7 +1111,8 @@ export function parsePacket(raw: string): RoomPacket | null {
     if (sponsorProspects.some((x) => sameOrg(x.orgName, orgName))) continue;
     const rawCat = str(sp.category)?.toUpperCase() ?? "OTHER";
     const category = (SPONSOR_CATEGORIES as readonly string[]).includes(rawCat) ? (rawCat as SponsorCategory) : "OTHER";
-    const contactName = str(sp.contact_name);
+    const rawContact = str(sp.contact_name);
+    const contactName = rawContact && looksLikePersonName(rawContact) ? rawContact : null;
     sponsorProspects.push({
       orgName,
       category,
@@ -1355,20 +1403,24 @@ export function computeEconomics(input: {
   const sold: Array<{ tier: SponsorTier; askUsd: number }> = [];
   for (const s of structure.slots) for (let i = 0; i < s.count; i++) sold.push({ tier: s.tier, askUsd: s.askUsd });
   const scenarios: SponsorScenario[] = [];
-  let running = 0;
+  // IN KIND IS NOT CASH. An in-kind partner lowers a cost line; it never lands in the firm's
+  // account. The first production packet counted a $4K in-kind slot toward the keep. Cash slots
+  // add to sponsorship; in-kind adds to what is left, and the description says which.
+  let cash = 0;
+  let offset = 0;
   const tally: Record<SponsorTier, number> = { PRESENTING: 0, SUPPORTING: 0, IN_KIND: 0 };
   sold.forEach((s, i) => {
-    running += s.askUsd;
+    if (s.tier === "IN_KIND") offset += s.askUsd; else cash += s.askUsd;
     tally[s.tier] += 1;
     const description = (["PRESENTING", "SUPPORTING", "IN_KIND"] as SponsorTier[])
       .filter((t) => tally[t] > 0)
-      .map((t) => `${tally[t]} ${t === "PRESENTING" ? "title" : t === "SUPPORTING" ? "supporting" : "in-kind"}`)
+      .map((t) => `${tally[t]} ${t === "PRESENTING" ? "title" : t === "SUPPORTING" ? "supporting" : `in-kind (offsets $${offset.toLocaleString("en-US")} of cost)`}`)
       .join(" + ");
-    scenarios.push({ sponsors: i + 1, description, sponsorshipUsd: running, netLowUsd: running - estimatedCostHighUsd, netHighUsd: running - estimatedCostLowUsd });
+    scenarios.push({ sponsors: i + 1, description, sponsorshipUsd: cash, netLowUsd: cash + offset - estimatedCostHighUsd, netHighUsd: cash + offset - estimatedCostLowUsd });
   });
   const sponsorCount = sold.length;
-  const sponsorTargetHighUsd = running;
-  const sponsorTargetLowUsd = sold[0]?.askUsd ?? 0;
+  const sponsorTargetHighUsd = cash;
+  const sponsorTargetLowUsd = sold.find((s) => s.tier !== "IN_KIND")?.askUsd ?? 0;
   const exclusiveScenario: SponsorScenario | null = structure.exclusiveUsd
     ? { sponsors: 1, description: "one exclusive sponsor", sponsorshipUsd: structure.exclusiveUsd, netLowUsd: structure.exclusiveUsd - estimatedCostHighUsd, netHighUsd: structure.exclusiveUsd - estimatedCostLowUsd }
     : null;
@@ -1391,8 +1443,8 @@ export function computeEconomics(input: {
     exclusiveScenario,
     // Worst case against best case: low revenue with high cost, high revenue with low cost.
     netLowUsd: sponsorTargetLowUsd - estimatedCostHighUsd,
-    netHighUsd: sponsorTargetHighUsd - estimatedCostLowUsd,
-    reachesKeep: sponsorTargetHighUsd >= requiredUsd,
+    netHighUsd: sponsorTargetHighUsd + offset - estimatedCostLowUsd,
+    reachesKeep: sponsorTargetHighUsd + offset >= requiredUsd,
   };
 }
 

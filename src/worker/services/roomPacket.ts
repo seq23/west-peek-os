@@ -805,6 +805,10 @@ export async function packetView(env: Env, packet: PacketRow): Promise<PacketVie
 }
 
 export function viewFromRows(packet: PacketRow, venues: VenueLine[], sponsors: SponsorLine[]): PacketView {
+  // "Named by you" comes from HER BRIEF, matched on the organisation — not from the word
+  // "partner" appearing in a note (Cooley's note said "not a direct sponsorship lead … partner
+  // page" and was tagged as hers in the first production PDF).
+  const named = parseBrief(packet.brief_json)?.sponsorProspects ?? [];
   return {
     packetId: packet.id,
     title: packet.title,
@@ -834,7 +838,7 @@ export function viewFromRows(packet: PacketRow, venues: VenueLine[], sponsors: S
       rank: s.rank ?? null, orgName: s.org_name, category: s.category, tier: s.tier ?? "SUPPORTING", askUsd: s.ask_low_usd,
       fitArgument: s.fit_argument ?? s.ask_detail, pitch: s.pitch, evidenceUrl: s.evidence_url ?? s.source_url, evidenceNote: s.evidence_note ?? null,
       contactName: s.contact_name ?? null, contactTitle: s.contact_title ?? null, contactSourceUrl: s.contact_source_url ?? null,
-      note: s.note, fromBrief: Boolean(s.note?.toLowerCase().includes("partner")),
+      note: s.note, fromBrief: named.some((n) => sameOrg(n, s.org_name)),
     })),
     economics: obj<RoomEconomics>(packet.economics_json && packet.economics_json !== "{}" ? packet.economics_json : null),
     sponsorThesis: packet.sponsor_thesis,
