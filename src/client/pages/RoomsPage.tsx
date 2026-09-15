@@ -128,6 +128,9 @@ interface VenueRow {
   source_url: string;
   verification: string;
   note: string | null;
+  estimate_low_usd?: number | null;
+  estimate_high_usd?: number | null;
+  estimate_basis?: string | null;
 }
 
 interface SponsorRow {
@@ -146,11 +149,17 @@ interface SponsorRow {
   decline_reason: string | null;
 }
 
+interface BudgetLine { key: string; label: string; lowUsd: number; highUsd: number; basis: string }
+interface Scenario { sponsors: number; sponsorshipUsd: number; netLowUsd: number; netHighUsd: number }
+
 interface Economics {
   venueLowUsd: number;
   venueHighUsd: number;
   targetAttendees: number;
   sponsorCount?: number;
+  /** The full budget (packets built from 15 Sep 2026); older packets carry only the totals. */
+  lines?: BudgetLine[];
+  scenarios?: Scenario[];
   sponsorTargetLowUsd: number;
   sponsorTargetHighUsd: number;
   estimatedCostLowUsd: number;
@@ -554,109 +563,114 @@ function RoomProposal(props: {
 
       {d && (
         <>
+          {/* Open by default: the one thing a partner reads before deciding whether to read on. */}
           <p className="small">
             <strong>Who should be in the room:</strong>{" "}
             {d.packet.audience ?? <span className="muted">Parker did not say. Decide who this is for before you invite anybody.</span>}
           </p>
 
-          <p className="small"><strong>Questions to seed it with</strong></p>
-          {seedQuestions.length === 0 ? (
-            <p className="state-empty">None suggested. A Room with no opening question becomes a networking event.</p>
-          ) : (
-            <ul className="card-list small">{seedQuestions.map((q) => <li key={q}>{q}</li>)}</ul>
-          )}
+          {/* EVERYTHING ELSE FOLDS. Operator, 15 Sep 2026: "each of its subheadings need to be
+              collapsable with an arrow… it takes up too much space when things aren't collapsable
+              and becomes too busy." Each summary line carries the one number that matters, so a
+              closed packet still reads as a packet and not as a list of doors. */}
+          <Fold title="Questions to seed it with" fact={seedQuestions.length === 0 ? "none suggested" : `${seedQuestions.length} question${seedQuestions.length === 1 ? "" : "s"}`} testId={`fold-questions-${p.id}`}>
+            {seedQuestions.length === 0 ? (
+              <p className="state-empty">None suggested. A Room with no opening question becomes a networking event.</p>
+            ) : (
+              <ul className="card-list small">{seedQuestions.map((q) => <li key={q}>{q}</li>)}</ul>
+            )}
+          </Fold>
 
-          <p className="small"><strong>Guests worth asking</strong></p>
-          {guestIdeas.length === 0 ? (
-            <p className="state-empty">None suggested. The guest list is yours to build.</p>
-          ) : (
-            <ul className="card-list small">
-              {guestIdeas.map((g) => (
-                <li key={g.description}>{g.description}{g.why ? <span className="muted"> — {g.why}</span> : null}</li>
-              ))}
-            </ul>
-          )}
+          <Fold title="Guests worth asking" fact={guestIdeas.length === 0 ? "none suggested" : `${guestIdeas.length} archetype${guestIdeas.length === 1 ? "" : "s"}`} testId={`fold-guests-${p.id}`}>
+            {guestIdeas.length === 0 ? (
+              <p className="state-empty">None suggested. The guest list is yours to build.</p>
+            ) : (
+              <ul className="card-list small">
+                {guestIdeas.map((g) => (
+                  <li key={g.description}>{g.description}{g.why ? <span className="muted"> — {g.why}</span> : null}</li>
+                ))}
+              </ul>
+            )}
+          </Fold>
 
-          {d.packet.agenda_md && (
-            <details>
-              <summary>How the evening runs</summary>
+          <Fold title="How it runs" fact={d.packet.agenda_md ? `${formatLabel(p.format)}, ${p.target_min}–${p.target_max} people` : "no run of show written"} testId={`fold-agenda-${p.id}`}>
+            {d.packet.agenda_md ? (
               <p className="small" style={{ whiteSpace: "pre-wrap" }}>{d.packet.agenda_md}</p>
-            </details>
-          )}
+            ) : (
+              <p className="state-empty">Parker wrote no run of show. The evening has no shape yet.</p>
+            )}
+          </Fold>
 
-          <p className="small"><strong>Where it could be held</strong></p>
-          {d.venues.length === 0 ? (
-            <p className="state-empty">
-              No venue survived sourcing, so a person needs to find the space. That is a search
-              problem, not a reason to drop the Room.
-            </p>
-          ) : (
-            <ul className="card-list">
-              {d.venues.map((v) => (
-                <Venue key={v.id} venue={v} onChanged={() => { detail.reload(); props.onChanged(); }} />
-              ))}
-            </ul>
-          )}
+          <Fold
+            title="Where it could be held"
+            fact={d.venues.length === 0 ? "no venue survived sourcing" : `${d.venues.length} venue${d.venues.length === 1 ? "" : "s"}, est. ${venueSpan(d.venues)}`}
+            testId={`fold-venues-${p.id}`}
+          >
+            {d.venues.length === 0 ? (
+              <p className="state-empty">
+                No venue survived sourcing, so a person needs to find the space. That is a search
+                problem, not a reason to drop the Room.
+              </p>
+            ) : (
+              <ul className="card-list">
+                {d.venues.map((v) => (
+                  <Venue key={v.id} venue={v} onChanged={() => { detail.reload(); props.onChanged(); }} />
+                ))}
+              </ul>
+            )}
+          </Fold>
 
-          <p className="small">
-            <strong>Who pays for it</strong> — {p.sponsor_count} sponsor{p.sponsor_count === 1 ? "" : "s"} at $10,000 each,{" "}
-            {usd(p.sponsor_total_usd)} if all land
-          </p>
-          {d.sponsors.length === 0 ? (
-            <p className="state-empty">Parker named nobody to approach. A Room with no prospect is spend the fund carries alone.</p>
-          ) : (
-            <ul className="card-list small" data-testid={`packet-sponsors-${p.id}`}>
-              {d.sponsors.map((sp) => (
-                <li key={sp.id}>
-                  <strong>{sp.org_name}</strong>
-                  <span className="muted"> · {categoryLabel(sp.category)} · ask {usd(sp.ask_low_usd)}</span>
-                  {sp.note?.includes("partner") && <span className="help-tag help-tag-muted"> named by you</span>}
-                  <div>{sp.ask_detail ?? <span className="muted">Parker did not say why they fit.</span>}</div>
-                  {sp.pitch && <div className="muted">Open with: {sp.pitch}</div>}
-                  {sp.source_url && <a href={sp.source_url} target="_blank" rel="noreferrer noopener">where this came from</a>}
-                </li>
-              ))}
-            </ul>
-          )}
+          <Fold
+            title="Who pays for it"
+            fact={`${p.sponsor_count} sponsor${p.sponsor_count === 1 ? "" : "s"}, ${usd(p.sponsor_total_usd)} asked`}
+            testId={`fold-sponsors-${p.id}`}
+          >
+            <p className="muted small">{p.sponsor_count} sponsor{p.sponsor_count === 1 ? "" : "s"} at $10,000 each, {usd(p.sponsor_total_usd)} if all land.</p>
+            {d.sponsors.length === 0 ? (
+              <p className="state-empty">Parker named nobody to approach. A Room with no prospect is spend the fund carries alone.</p>
+            ) : (
+              <ul className="card-list small" data-testid={`packet-sponsors-${p.id}`}>
+                {d.sponsors.map((sp) => (
+                  <li key={sp.id}>
+                    <strong>{sp.org_name}</strong>
+                    <span className="muted"> · {categoryLabel(sp.category)} · ask {usd(sp.ask_low_usd)}</span>
+                    {sp.note?.includes("partner") && <span className="help-tag help-tag-muted"> named by you</span>}
+                    <div>{sp.ask_detail ?? <span className="muted">Parker did not say why they fit.</span>}</div>
+                    {sp.pitch && <div className="muted">Open with: {sp.pitch}</div>}
+                    {sp.source_url && <a href={sp.source_url} target="_blank" rel="noreferrer noopener">where this came from</a>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {p.sponsor_thesis && (
+              <p className="small"><strong>Why a sponsor underwrites this:</strong> {p.sponsor_thesis}</p>
+            )}
+          </Fold>
 
-          <p className="small"><strong>What could go wrong</strong></p>
-          {risks.length === 0 ? (
-            <p className="state-empty">Parker named no risks. Assume there are some.</p>
-          ) : (
-            <ul className="card-list small">{risks.map((r) => <li key={r}>{r}</li>)}</ul>
-          )}
+          <Fold
+            title="What it costs, and what is left"
+            fact={economics ? `${usd(economics.estimatedCostLowUsd)}–${usd(economics.estimatedCostHighUsd)} all-in; ${usd(economics.netLowUsd)} to ${usd(economics.netHighUsd)} left` : "not costed"}
+            testId={`fold-budget-${p.id}`}
+          >
+            <Budget economics={economics} />
+          </Fold>
 
-          <p className="small"><strong>What keeping it commits the firm to</strong></p>
-          {d.packet.commitment_md ? (
-            <p className="small" style={{ whiteSpace: "pre-wrap" }}>{d.packet.commitment_md}</p>
-          ) : (
-            <p className="state-empty">Parker did not say. Decide what you are agreeing to before you keep it.</p>
-          )}
+          <Fold title="What could go wrong" fact={risks.length === 0 ? "no risks named" : `${risks.length} risk${risks.length === 1 ? "" : "s"}`} testId={`fold-risks-${p.id}`}>
+            {risks.length === 0 ? (
+              <p className="state-empty">Parker named no risks. Assume there are some.</p>
+            ) : (
+              <ul className="card-list small">{risks.map((r) => <li key={r}>{r}</li>)}</ul>
+            )}
+          </Fold>
+
+          <Fold title="What keeping it commits the firm to" fact={d.packet.commitment_md ? "spend, time and approaches in the firm's name" : "Parker did not say"} testId={`fold-commitment-${p.id}`}>
+            {d.packet.commitment_md ? (
+              <p className="small" style={{ whiteSpace: "pre-wrap" }}>{d.packet.commitment_md}</p>
+            ) : (
+              <p className="state-empty">Parker did not say. Decide what you are agreeing to before you keep it.</p>
+            )}
+          </Fold>
         </>
-      )}
-
-      <p className="small"><strong>What it costs if it runs</strong></p>
-      {economics ? (
-        <table>
-          <tbody>
-            <tr><th scope="row">Venue</th><td>{usd(economics.venueLowUsd)}–{usd(economics.venueHighUsd)}</td></tr>
-            <tr><th scope="row">Estimated cost</th><td>{usd(economics.estimatedCostLowUsd)}–{usd(economics.estimatedCostHighUsd)} at {economics.targetAttendees} people</td></tr>
-            <tr><th scope="row">Sponsor target</th><td>{usd(economics.sponsorTargetLowUsd)}–{usd(economics.sponsorTargetHighUsd)}</td></tr>
-            <tr>
-              <th scope="row">Left over</th>
-              <td>
-                {usd(economics.netLowUsd)}–{usd(economics.netHighUsd)}
-                {economics.netLowUsd < 0 && <span className="muted"> — the low case does not cover itself</span>}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      ) : (
-        <p className="state-empty">Parker did not cost this one. Approving it commits spend nobody has sized.</p>
-      )}
-
-      {p.sponsor_thesis && (
-        <p className="small"><strong>Why a sponsor underwrites this:</strong> {p.sponsor_thesis}</p>
       )}
 
       {p.status === "PROPOSED" && (
@@ -819,6 +833,91 @@ function RequestRoom(props: {
   );
 }
 
+/**
+ * One folded subsection of a packet. The summary carries the fact that matters, so a partner can
+ * decide from the closed packet and open only what she wants to check.
+ */
+function Fold(props: { title: string; fact: string; testId: string; children: React.ReactNode }): JSX.Element {
+  return (
+    <details className="packet-fold" data-testid={props.testId}>
+      <summary>
+        <strong>{props.title}</strong>
+        <span className="muted small"> — {props.fact}</span>
+      </summary>
+      {props.children}
+    </details>
+  );
+}
+
+/** Cheapest low to dearest high across the venue estimates. */
+function venueSpan(venues: VenueRow[]): string {
+  const lows = venues.map((v) => v.estimate_low_usd ?? v.price_low_usd).filter((n): n is number => typeof n === "number");
+  const highs = venues.map((v) => v.estimate_high_usd ?? v.price_high_usd).filter((n): n is number => typeof n === "number");
+  if (lows.length === 0 || highs.length === 0) return "not costed";
+  return `${usd(Math.min(...lows))}–${usd(Math.max(...highs))}`;
+}
+
+/**
+ * The full budget, "from the POV of a senior event designer and coordinator": every line with its
+ * basis, the total, and what is left at one, two and four sponsors. An older packet with only the
+ * totals still renders them.
+ */
+function Budget({ economics }: { economics: Economics | null }): JSX.Element {
+  if (!economics) return <p className="state-empty">Parker did not cost this one. Keeping it commits spend nobody has sized.</p>;
+  const lines = economics.lines ?? [];
+  return (
+    <>
+      {lines.length > 0 ? (
+        <table data-testid="packet-budget">
+          <thead>
+            <tr><th>Line</th><th>Low</th><th>High</th><th>Basis</th></tr>
+          </thead>
+          <tbody>
+            {lines.map((l) => (
+              <tr key={l.key}>
+                <th scope="row">{l.label}</th>
+                <td>{usd(l.lowUsd)}</td>
+                <td>{usd(l.highUsd)}</td>
+                <td className="muted small">{l.basis}</td>
+              </tr>
+            ))}
+            <tr>
+              <th scope="row">Total at {economics.targetAttendees} people</th>
+              <td><strong>{usd(economics.estimatedCostLowUsd)}</strong></td>
+              <td><strong>{usd(economics.estimatedCostHighUsd)}</strong></td>
+              <td className="muted small">lines plus contingency</td>
+            </tr>
+          </tbody>
+        </table>
+      ) : (
+        <table>
+          <tbody>
+            <tr><th scope="row">Venue</th><td>{usd(economics.venueLowUsd)}–{usd(economics.venueHighUsd)}</td></tr>
+            <tr><th scope="row">Estimated cost</th><td>{usd(economics.estimatedCostLowUsd)}–{usd(economics.estimatedCostHighUsd)} at {economics.targetAttendees} people</td></tr>
+          </tbody>
+        </table>
+      )}
+      <p className="small">
+        <strong>Sponsorship:</strong> {usd(economics.sponsorTargetLowUsd)}–{usd(economics.sponsorTargetHighUsd)} · <strong>Left over:</strong>{" "}
+        {usd(economics.netLowUsd)} to {usd(economics.netHighUsd)}
+        {economics.netLowUsd < 0 && <span className="muted"> — the low case does not cover itself</span>}
+      </p>
+      {economics.scenarios && economics.scenarios.length > 0 ? (
+        <ul className="card-list small" data-testid="packet-scenarios">
+          {economics.scenarios.map((sc) => (
+            <li key={sc.sponsors}>
+              At <strong>{sc.sponsors} sponsor{sc.sponsors === 1 ? "" : "s"}</strong> ({usd(sc.sponsorshipUsd)}): {usd(sc.netLowUsd)} to {usd(sc.netHighUsd)} left over
+              {sc.netHighUsd < 0 ? <span className="muted"> — does not pay for itself</span> : sc.netLowUsd < 0 ? <span className="muted"> — pays only at the cheap end</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted small">Built before the sponsor scenarios existed; ask Parker again to see two versus four sponsors.</p>
+      )}
+    </>
+  );
+}
+
 /** A packet field is JSON written by a model. A malformed one is a missing list, never a crash. */
 function safeList<T>(raw: string): T[] {
   try {
@@ -857,8 +956,14 @@ function Venue(props: { venue: VenueRow; onChanged: () => void }): JSX.Element {
         </span>
         <span className={state.tone} data-testid={`venue-state-${v.id}`}>{state.label}</span>
       </div>
+      {/* THE ESTIMATE FIRST. Operator: "no venue is truly $0 and best guesses using comps should be
+          used." The published price, where the page states one, follows it. */}
       <p className="small">
-        {range(v.price_low_usd, v.price_high_usd)}
+        <strong>Est. {range(v.estimate_low_usd ?? v.price_low_usd, v.estimate_high_usd ?? v.price_high_usd)}</strong>
+        {v.estimate_basis ? <span className="muted"> — {v.estimate_basis}</span> : <span className="muted"> — estimate not recorded on this older packet</span>}
+      </p>
+      <p className="small">
+        Published: {range(v.price_low_usd, v.price_high_usd)}
         {v.price_note ? <span className="muted"> — {v.price_note}</span> : null}
       </p>
       <p className="small">

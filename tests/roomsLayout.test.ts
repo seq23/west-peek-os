@@ -141,6 +141,30 @@ describe("a declined Room goes on a shelf, not into nothing", () => {
     expect(ROOMS).toContain("<BriefBlock");
   });
 
+  it("folds every packet subsection behind a summary that carries the number, and keeps the decision outside the folds", () => {
+    // Operator, 15 Sep 2026: "each of its subheadings need to be collapsable with an arrow… it takes
+    // up too much space when things aren't collapsable and becomes too busy."
+    for (const fold of ["fold-questions", "fold-guests", "fold-agenda", "fold-venues", "fold-sponsors", "fold-budget", "fold-risks", "fold-commitment"]) {
+      expect(ROOMS).toContain(`testId={\`${fold}-\${p.id}\`}`);
+    }
+    expect(ROOMS).toContain('<details className="packet-fold"');
+    // The one-number summaries.
+    expect(ROOMS).toMatch(/venue\$\{d\.venues\.length === 1 \? "" : "s"\}, est\. \$\{venueSpan\(d\.venues\)\}/);
+    expect(ROOMS).toMatch(/sponsor\$\{p\.sponsor_count === 1 \? "" : "s"\}, \$\{usd\(p\.sponsor_total_usd\)\} asked/);
+    // Keep / Dismiss sit on the card, never inside a fold.
+    const decision = ROOMS.indexOf('data-testid={`approve-${p.id}`}');
+    const lastFold = ROOMS.lastIndexOf("</Fold>", decision);
+    expect(lastFold).toBeGreaterThan(-1);
+    expect(ROOMS.slice(lastFold, decision)).not.toContain("<Fold");
+  });
+
+  it("shows every venue's estimate with its basis, and the full budget with scenarios", () => {
+    expect(ROOMS).toContain("Est. {range(v.estimate_low_usd ?? v.price_low_usd, v.estimate_high_usd ?? v.price_high_usd)}");
+    expect(ROOMS).toContain('data-testid="packet-budget"');
+    expect(ROOMS).toContain('data-testid="packet-scenarios"');
+    expect(ROOMS).toContain("does not pay for itself");
+  });
+
   it("says what the shelf is for when it is empty, rather than rendering nothing", () => {
     // A section that disappears when empty is a section nobody learns exists.
     const shelf = ROOMS.slice(ROOMS.indexOf('data-testid="declined-proposals"'), ROOMS.indexOf("<SponsorPipeline"));

@@ -261,6 +261,7 @@ export async function buildDraft(
       venues: packet.venues,
       targetAttendees: Math.round((packet.targetMin + packet.targetMax) / 2),
       sponsorCount: packet.sponsorCount,
+      budgetLines: packet.budgetLines,
     });
 
     // A title Parker reuses within the month would trip the unique index; suffix rather than fail.
@@ -292,12 +293,13 @@ export async function buildDraft(
         env.WP_OS_DB.prepare(
           `INSERT INTO evt_packet_venue
              (id, packet_id, name, city, address, capacity, price_low_usd, price_high_usd, price_note,
-              booking_phone, booking_email, booking_url, source_url)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)`,
+              booking_phone, booking_email, booking_url, source_url, estimate_low_usd, estimate_high_usd, estimate_basis)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)`,
         ).bind(
           `rpv_${crypto.randomUUID()}`, draft.id, venue.name, venue.city, venue.address, venue.capacity,
           venue.priceLowUsd, venue.priceHighUsd, venue.priceNote, venue.bookingPhone,
           venue.bookingEmail, venue.bookingUrl, venue.sourceUrl,
+          venue.estimateLowUsd, venue.estimateHighUsd, venue.estimateBasis,
         ),
       ),
       // Every named prospect becomes a pipeline row on this packet, Parker's to work. Hers first.
@@ -371,7 +373,7 @@ export async function generatePacket(
 export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: string[]; failed: string[] }> {
   if (packet.status !== "PROPOSED") return { sent: [], failed: [] };
   const [venues, sponsors] = await env.WP_OS_DB.batch([
-    env.WP_OS_DB.prepare("SELECT name, city, capacity, price_low_usd, price_high_usd, price_note, booking_phone, booking_email, source_url FROM evt_packet_venue WHERE packet_id = ?1 ORDER BY price_low_usd").bind(packet.id),
+    env.WP_OS_DB.prepare("SELECT name, city, capacity, price_low_usd, price_high_usd, price_note, booking_phone, booking_email, source_url, estimate_low_usd, estimate_high_usd, estimate_basis FROM evt_packet_venue WHERE packet_id = ?1 ORDER BY estimate_low_usd").bind(packet.id),
     env.WP_OS_DB.prepare("SELECT org_name, category, ask_low_usd, pitch, ask_detail, source_url, note FROM evt_sponsor_prospect WHERE packet_id = ?1").bind(packet.id),
   ]);
   const text = renderPacketText(packet, (venues?.results ?? []) as VenueLine[], (sponsors?.results ?? []) as SponsorLine[]);
@@ -402,7 +404,7 @@ export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: 
   return { sent, failed };
 }
 
-interface VenueLine { name: string; city: string | null; capacity: number | null; price_low_usd: number | null; price_high_usd: number | null; price_note: string | null; booking_phone: string | null; booking_email: string | null; source_url: string }
+interface VenueLine { name: string; city: string | null; capacity: number | null; price_low_usd: number | null; price_high_usd: number | null; price_note: string | null; booking_phone: string | null; booking_email: string | null; source_url: string; estimate_low_usd?: number | null; estimate_high_usd?: number | null; estimate_basis?: string | null }
 interface SponsorLine { org_name: string; category: string; ask_low_usd: number | null; pitch: string | null; ask_detail: string | null; source_url: string | null; note: string | null }
 
 function monthWord(yyyyMm: string): string {
@@ -420,7 +422,7 @@ export function renderPacketText(packet: PacketRow, venues: VenueLine[], sponsor
   const guests = list(packet.guest_ideas_json) as Array<{ description: string; why: string | null }>;
   const seeds = list(packet.seed_questions_json) as string[];
   const risks = list(packet.risks_json) as string[];
-  let eco: { estimatedCostLowUsd: number; estimatedCostHighUsd: number; sponsorTargetLowUsd: number; sponsorTargetHighUsd: number; netLowUsd: number; netHighUsd: number; targetAttendees: number } | null = null;
+  let eco: { estimatedCostLowUsd: number; estimatedCostHighUsd: number; sponsorTargetLowUsd: number; sponsorTargetHighUsd: number; netLowUsd: number; netHighUsd: number; targetAttendees: number; lines?: Array<{ label: string; lowUsd: number; highUsd: number; basis: string }>; scenarios?: Array<{ sponsors: number; sponsorshipUsd: number; netLowUsd: number; netHighUsd: number }> } | null = null;
   try { eco = JSON.parse(packet.economics_json); } catch { eco = null; }
   const lines: string[] = [
     `${packet.title} — proposed for ${monthWord(packet.proposed_for_month)}`,
@@ -442,13 +444,15 @@ export function renderPacketText(packet: PacketRow, venues: VenueLine[], sponsor
     "",
     "VENUE SHORTLIST (nothing verified until a person has called)",
     ...(venues.length
-      ? venues.map((v) => `- ${v.name}${v.city ? `, ${v.city}` : ""}${v.capacity ? ` (holds ${v.capacity})` : ""}: ${v.price_low_usd === null && v.price_high_usd === null ? "price not published" : `${usdText(v.price_low_usd ?? v.price_high_usd)}–${usdText(v.price_high_usd ?? v.price_low_usd)}`}${v.price_note ? ` — ${v.price_note}` : ""}${v.booking_phone ? ` · ${v.booking_phone}` : ""}${v.booking_email ? ` · ${v.booking_email}` : ""} · ${v.source_url}`)
+      ? venues.map((v) => `- ${v.name}${v.city ? `, ${v.city}` : ""}${v.capacity ? ` (holds ${v.capacity})` : ""}: est. ${usdText(v.estimate_low_usd ?? v.price_low_usd)}–${usdText(v.estimate_high_usd ?? v.price_high_usd)}${v.estimate_basis ? ` (${v.estimate_basis})` : ""}${v.price_low_usd === null && v.price_high_usd === null ? "; price not published" : `; published ${usdText(v.price_low_usd ?? v.price_high_usd)}–${usdText(v.price_high_usd ?? v.price_low_usd)}`}${v.price_note ? ` — ${v.price_note}` : ""}${v.booking_phone ? ` · ${v.booking_phone}` : ""}${v.booking_email ? ` · ${v.booking_email}` : ""} · ${v.source_url}`)
       : ["- no venue survived sourcing; a person finds the space"]),
     "",
     "BUDGET VS SPONSORSHIP",
+    ...(eco?.lines ?? []).map((l) => `- ${l.label}: ${usdText(l.lowUsd)}–${usdText(l.highUsd)} — ${l.basis}`),
     eco
-      ? `Estimated cost ${usdText(eco.estimatedCostLowUsd)}–${usdText(eco.estimatedCostHighUsd)} at ${eco.targetAttendees} people. Sponsorship ${usdText(eco.sponsorTargetLowUsd)}–${usdText(eco.sponsorTargetHighUsd)} (${packet.sponsor_count} sponsor(s) at ${usdText(SPONSORSHIP_RULE.perSponsorUsd)} each). Left over ${usdText(eco.netLowUsd)}–${usdText(eco.netHighUsd)}.`
+      ? `Total ${usdText(eco.estimatedCostLowUsd)}–${usdText(eco.estimatedCostHighUsd)} at ${eco.targetAttendees} people. Sponsorship ${usdText(eco.sponsorTargetLowUsd)}–${usdText(eco.sponsorTargetHighUsd)} (${packet.sponsor_count} sponsor(s) at ${usdText(SPONSORSHIP_RULE.perSponsorUsd)} each). Left over ${usdText(eco.netLowUsd)}–${usdText(eco.netHighUsd)}.`
       : "Not costed.",
+    ...(eco?.scenarios ?? []).map((sc) => `- At ${sc.sponsors} sponsor${sc.sponsors === 1 ? "" : "s"} (${usdText(sc.sponsorshipUsd)}): ${usdText(sc.netLowUsd)} to ${usdText(sc.netHighUsd)} left over`),
     packet.sponsor_thesis ? `Why a sponsor underwrites this: ${packet.sponsor_thesis}` : "",
     "",
     `SPONSOR PROSPECTS (${sponsors.length})`,

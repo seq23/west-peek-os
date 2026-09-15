@@ -2264,6 +2264,11 @@ details h3 {
   font-variant-numeric: tabular-nums;
 }
 
+/* A packet's folded subsections: one line each, the number that matters on the line. */
+.packet-fold { margin: var(--space-2xs) 0; }
+.packet-fold > summary { cursor: pointer; padding: var(--space-2xs) 0; }
+.packet-fold[open] > summary { margin-bottom: var(--space-2xs); }
+
 .brief-numbered { margin: 0 0 var(--space-md); padding-left: var(--space-xl); }
 .brief-numbered li { margin-bottom: var(--space-sm); line-height: var(--lh-normal); }
 
