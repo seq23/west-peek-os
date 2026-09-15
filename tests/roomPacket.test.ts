@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  BUDGET_KEYS,
   SPONSORSHIP_RULE,
   buildPacketPrompt,
   computeEconomics,
+  estimateVenueCost,
   followingMonth,
   mergeBriefSponsors,
   monthKey,
@@ -168,15 +170,60 @@ describe("economics", () => {
     priceLowUsd: low, priceHighUsd: high, priceNote: null,
     bookingPhone: null, bookingEmail: null, bookingUrl: null,
     sourceUrl: "https://example.com/x",
+    estimateLowUsd: low, estimateHighUsd: high, estimateBasis: "the price stated on the cited page",
   });
 
-  it("spans the cheapest and the dearest sourced venue", () => {
+  it("spans the cheapest and the dearest venue estimate, and totals a full budget with contingency", () => {
     const e = computeEconomics({ venues: [venue(6000, 9000), venue(3000, 4000)], targetAttendees: 30 });
     expect(e.venueLowUsd).toBe(3000);
     expect(e.venueHighUsd).toBe(9000);
-    // 30 × $120 food, plus venue.
-    expect(e.estimatedCostLowUsd).toBe(3000 + 3600);
-    expect(e.estimatedCostHighUsd).toBe(9000 + 3600);
+    // Every category is a line, each with a basis, and the total is the lines plus 10%.
+    expect(e.lines.map((l) => l.key)).toEqual([...BUDGET_KEYS]);
+    expect(e.lines.every((l) => l.basis.length > 0)).toBe(true);
+    const sub = e.lines.filter((l) => l.key !== "contingency").reduce((t, l) => t + l.lowUsd, 0);
+    expect(e.estimatedCostLowUsd).toBe(Math.round(sub * 1.1));
+    expect(e.estimatedCostLowUsd).toBeGreaterThan(3000 + 3600);
+  });
+
+  it("uses Parker's own line where he wrote one, and says which lines are rules of thumb", () => {
+    const e = computeEconomics({
+      venues: [venue(6000, 9000)], targetAttendees: 30,
+      budgetLines: [{ key: "photo_video", lowUsd: 1200, highUsd: 1200, basis: "quote from the photographer we used in May" }],
+    });
+    expect(e.lines.find((l) => l.key === "photo_video")).toMatchObject({ lowUsd: 1200, highUsd: 1200, basis: "quote from the photographer we used in May" });
+    expect(e.lines.find((l) => l.key === "staffing")!.basis).toMatch(/rule of thumb/);
+  });
+
+  it("shows what is left at two sponsors and at four — the partner's real question", () => {
+    const e = computeEconomics({ venues: [venue(6000, 9000)], targetAttendees: 30, sponsorCount: 3 });
+    expect(e.scenarios.map((s) => s.sponsors)).toEqual([1, 2, 3, 4]);
+    const four = e.scenarios.find((s) => s.sponsors === 4)!;
+    expect(four.sponsorshipUsd).toBe(40_000);
+    expect(four.netHighUsd).toBe(40_000 - e.estimatedCostLowUsd);
+  });
+
+  it("never prices a venue at $0: a page price, then Parker's comp, then the room-size rule of thumb", () => {
+    const priced = estimateVenueCost({ priceLow: 6000, priceHigh: 9000, estLow: null, estHigh: null, basis: null, city: "New York", capacity: 40 });
+    expect(priced).toEqual({ low: 6000, high: 9000, basis: "the price stated on the cited page" });
+    const comped = estimateVenueCost({ priceLow: null, priceHigh: null, estLow: 4000, estHigh: 8000, basis: "gallery buy-out, weeknight", city: null, capacity: null });
+    expect(comped).toEqual({ low: 4000, high: 8000, basis: "gallery buy-out, weeknight" });
+    const blank = estimateVenueCost({ priceLow: null, priceHigh: null, estLow: null, estHigh: null, basis: null, city: "Austin", capacity: 30 });
+    expect(blank.low).toBe(150 * 30);
+    expect(blank.high).toBe(250 * 30);
+    expect(blank.basis).toMatch(/rule of thumb: private room for 30 in Austin/);
+    // And the parser applies it: a venue with no price on its page still carries an estimate.
+    const p = parsePacket(packetJson({ venues: [{ name: "Somewhere", city: "Austin", capacity: 30, source_url: SOURCES[0] }] }))!;
+    expect(p.venues[0]!.estimateLowUsd).toBe(4500);
+    expect(p.venues[0]!.estimateBasis).toMatch(/no price on the cited page/);
+  });
+
+  it("reads Parker's budget lines and drops an unknown key or a repeated one", () => {
+    const p = parsePacket(packetJson({ budget: [
+      { key: "venue", low_usd: 5000, high_usd: 8000, basis: "quoted minimum" },
+      { key: "venue", low_usd: 1, high_usd: 2, basis: "dup" },
+      { key: "balloons", low_usd: 9, high_usd: 9 },
+    ] }))!;
+    expect(p.budgetLines).toEqual([{ key: "venue", lowUsd: 5000, highUsd: 8000, basis: "quoted minimum" }]);
   });
 
   it("prices sponsorship by the operator's rule: $10k a sponsor, up to four, $40k a Room", () => {
@@ -199,10 +246,11 @@ describe("economics", () => {
     expect(e.netLowUsd).toBeLessThan(0);
   });
 
-  it("handles a Room with no priced venue without dividing by zero", () => {
+  it("handles a Room with no venue at all by costing the venue line on the rule of thumb", () => {
     const e = computeEconomics({ venues: [], targetAttendees: 25 });
     expect(e.venueLowUsd).toBe(0);
-    expect(e.estimatedCostHighUsd).toBe(3000);
+    expect(e.lines.find((l) => l.key === "venue")).toMatchObject({ lowUsd: 150 * 25, highUsd: 250 * 25 });
+    expect(e.lines.find((l) => l.key === "venue")!.basis).toMatch(/no venue was priced/);
   });
 });
 
@@ -236,6 +284,16 @@ describe("the prompt", () => {
 
   it("asks for a sponsor thesis that is never access to members", () => {
     expect(prompt).toMatch(/Never access to members/);
+  });
+
+  it("carries the memorable-experience mandate and refuses the default dinner", () => {
+    // Operator, 15 Sep 2026: "not only suggest 'dinners in nyc'… unique venues and runs of show that
+    // make for memorable experiences that keep people talking for months and years."
+    expect(prompt).toContain("Do NOT default to a seated dinner in New York");
+    expect(prompt).toMatch(/after-hours museum/);
+    expect(prompt).toMatch(/ONE signature moment/);
+    expect(prompt).toMatch(/No venue is \$0/);
+    expect(prompt).toContain("budget: a full budget");
   });
 
   it("handles a month where the search found nothing", () => {

@@ -475,6 +475,25 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
         ],
       },
       {
+        /*
+         * OPERATOR, 15 Sep 2026, after the first packets came back as dinners: "not only suggest
+         * 'dinners in nyc'. i need this employee to get creative and think of unique experiences and
+         * rooms that could make people remember west peek ventures… unique venues and runs of show
+         * that make for memorable experiences that keep people talking for months and years."
+         */
+        key: "a_room_people_talk_about_for_years",
+        title: "A Room is a memorable experience, never a default dinner",
+        when: "Proposing any Room, before choosing its format or venue.",
+        guidance: [
+          "Start from the memory you want a guest to carry out, not from the room type. If the honest answer is 'a nice dinner', you have not started yet.",
+          "Reach past dinner: a working session in an unexpected place; a private tour then a salon; a morning at a courtroom, lab, studio or kitchen; a screening with its maker in the room; a small-group expedition; a build or demo night; a chef's table with a purpose; a long walk with stops; a match-day box; an after-hours museum or archive; a rooftop at dawn; a rehearsal room.",
+          "The venue is part of the story. Prefer a place that says something about the question over a private dining room that says nothing.",
+          "Every run of show has ONE signature moment a guest will describe to someone who was not there, and a takeaway — an object, a list, an introduction — that leaves with every guest.",
+          "Propose a seated dinner in New York only when the brief asks for one. Vary the city when the audience allows, and say why this city now.",
+          "Cost it like a senior event designer and coordinator: venue or minimum, food and drink per head, AV, entertainment, speakers and gifts, design and print, photography, staffing, travel, insurance, and a 10% contingency — each with its basis. No venue is $0; where the page states no price, use a comparable and name it.",
+        ],
+      },
+      {
         key: "every_event_states_its_money",
         title: "Every proposal states how it makes money, or that it deliberately does not",
         when: "Writing any event proposal.",

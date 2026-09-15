@@ -106,6 +106,14 @@ export interface PacketVenue {
   bookingUrl: string | null;
   /** Required. Where every fact above came from. */
   sourceUrl: string;
+  /**
+   * An educated estimate of what this venue costs for this Room, ALWAYS present. Operator: "no
+   * venue is truly $0 and best guesses using comps should be used." Where the cited page states a
+   * price, the estimate is that price; otherwise it is a comparable, and `estimateBasis` says which.
+   */
+  estimateLowUsd: number;
+  estimateHighUsd: number;
+  estimateBasis: string;
 }
 
 export interface GuestIdea {
@@ -116,11 +124,52 @@ export interface GuestIdea {
   why: string | null;
 }
 
+/** One line of the budget, as a senior event designer would lay it out. */
+export interface BudgetLine {
+  key: BudgetKey;
+  label: string;
+  lowUsd: number;
+  highUsd: number;
+  /** Where the number comes from — a comp, a per-head rate, a published minimum, a rule of thumb. */
+  basis: string;
+}
+
+export const BUDGET_KEYS = [
+  "venue", "food_beverage", "av_production", "entertainment_programming", "speakers_hosts",
+  "design_print_decor", "photo_video", "staffing", "travel_accommodation", "insurance_permits", "contingency",
+] as const;
+export type BudgetKey = (typeof BUDGET_KEYS)[number];
+
+export const BUDGET_LABELS: Readonly<Record<BudgetKey, string>> = {
+  venue: "Venue hire or minimum",
+  food_beverage: "Food and beverage",
+  av_production: "AV and production",
+  entertainment_programming: "Entertainment and programming",
+  speakers_hosts: "Speaker or host fees and gifts",
+  design_print_decor: "Design, print and decor",
+  photo_video: "Photography and video",
+  staffing: "Staffing on the night",
+  travel_accommodation: "Travel and accommodation",
+  insurance_permits: "Insurance and permits",
+  contingency: "Contingency (10%)",
+};
+
+/** What is left at N sponsors, so a partner sees the Room at two sponsors and at four. */
+export interface SponsorScenario {
+  sponsors: number;
+  sponsorshipUsd: number;
+  netLowUsd: number;
+  netHighUsd: number;
+}
+
 export interface RoomEconomics {
   venueLowUsd: number;
   venueHighUsd: number;
   foodPerHeadUsd: number;
   targetAttendees: number;
+  /** The full budget, one line per category, each with its basis. */
+  lines: BudgetLine[];
+  scenarios: SponsorScenario[];
   /** How many sponsors the packet asks for, and what they bring at SPONSORSHIP_RULE.perSponsorUsd. */
   sponsorCount: number;
   sponsorTargetLowUsd: number;
@@ -153,6 +202,8 @@ export interface RoomPacket {
   risks: string[];
   /** What saying "keep" commits the firm to — spend, people, approaches made in its name. */
   commitmentMd: string | null;
+  /** Parker's budget lines, as proposed; computeEconomics fills what is missing and totals it. */
+  budgetLines: Array<{ key: BudgetKey; lowUsd: number; highUsd: number; basis: string }>;
 }
 
 export interface PacketFlag {
@@ -240,15 +291,27 @@ export function buildPacketPrompt(input: {
     // Marketing Coordinator. A title written into a prompt is a second roster, and this one had
     // drifted from the first.
     personaPrompt("Parker", AI_EMPLOYEE_ROSTER.find((e) => e.name === "Parker")?.role ?? "AI employee"),
-    `Propose ONE Room for ${input.month} in ${input.city}.`,
+    `Propose ONE Room for ${input.month}${input.brief?.city ? ` in ${input.city}` : ` — ${input.city} unless the audience argues for another city, and say why`}.`,
     methods,
     "",
     brief,
     "",
-    "A Room is a curated experience — a dinner, salon, workshop or roundtable — built around a",
-    "single important question. 25–35 people: strong operators, first-time founders, startup",
-    "lawyers, finance leaders, technical builders. Conversation is the product, not presentations.",
-    "West Peek convenes; it does not lecture.",
+    "A Room is a curated experience built around a single important question, for 25–35 people:",
+    "strong operators, first-time founders, startup lawyers, finance leaders, technical builders.",
+    "Conversation is the product, not presentations. West Peek convenes; it does not lecture.",
+    "",
+    "THE MANDATE, from a Managing Partner: \"i need this employee to get creative and think of unique",
+    "experiences and rooms that could make people remember west peek ventures… unique venues and runs",
+    "of show that make for memorable experiences that keep people talking for months and years.\"",
+    "- Do NOT default to a seated dinner in New York. Propose that only when the brief asks for it.",
+    "- Formats to reach for: a working session in an unexpected place; a private tour then a salon;",
+    "  a morning at a courtroom, lab, studio or kitchen; a screening with its maker in the room; a",
+    "  small-group expedition; a build or demo night; a chef's table with a purpose; a long walk with",
+    "  stops; a match-day box; an after-hours museum or archive; a rooftop at dawn; a rehearsal room.",
+    "- Unusual venues over private dining rooms: the place should be part of the story.",
+    "- The run of show has ONE signature moment people will describe to someone else, and a takeaway",
+    "  (a thing, a list, an introduction) that leaves with every guest.",
+    "- Vary the city when the audience allows, and say why this city now.",
     avoid,
     "",
     "VENUE CANDIDATES — the only venues you may use. Each line is a real search result:",
@@ -260,7 +323,17 @@ export function buildPacketPrompt(input: {
     "  dropped from the packet, so inventing one wastes the slot rather than filling it.",
     "- Only give a phone or email if it appears at that source. Otherwise use null. Null is a",
     "  correct answer; a plausible wrong number is not.",
-    "- Pricing as a range with a note on what the range covers. Null if the source does not say.",
+    "- Pricing as a range with a note on what the range covers. Null if the source does not say —",
+    "  BUT every venue ALSO carries estimate_low_usd / estimate_high_usd / estimate_basis: an educated",
+    "  guess at what it costs for THIS Room. No venue is $0. Where the page states a price, the",
+    "  estimate is that price; otherwise use a comparable and name it (\"private dining room for 30 in",
+    "  NYC, $150–250/head F&B minimum\", \"gallery buy-out, weeknight, $4–8K\").",
+    "- budget: a full budget as a senior event designer and coordinator would lay it out, one line per",
+    `  key from [${BUDGET_KEYS.join(", ")}], each with low_usd, high_usd and a basis (per-head rate ×`,
+    "  headcount, a published minimum, a comp, a rule of thumb). Include every possible cost: food,",
+    "  drink, AV, entertainment, speakers or hosts and their gifts, design and print, photography,",
+    "  staffing, travel, insurance, and a 10% contingency. The system totals it and compares it with",
+    "  sponsorship at one, two and four sponsors — so the numbers must be honest, not flattering.",
     "- 4–8 seed questions, phrased the way an operator would actually ask them.",
     "- Guest ideas describe KINDS of people — invitee archetypes — each with an example PROFILE",
     "  (\"a sixth-year litigation associate at an AmLaw 50 firm who just made partner\"), never a",
@@ -305,8 +378,10 @@ export function buildPacketPrompt(input: {
             price_low_usd: 0, price_high_usd: 0, price_note: "…",
             booking_phone: null, booking_email: null, booking_url: null,
             source_url: "https://… (copied exactly from the candidate list)",
+            estimate_low_usd: 0, estimate_high_usd: 0, estimate_basis: "the comp this rests on",
           },
         ],
+        budget: [{ key: "venue", low_usd: 0, high_usd: 0, basis: "…" }],
         sponsor_thesis: "…",
         sponsor_count: 4,
         sponsor_prospects: [
@@ -367,6 +442,13 @@ export function parsePacket(raw: string): RoomPacket | null {
     const sourceUrl = str(v.source_url);
     // Enforced here as well as in the DB: a venue with no source never becomes a row.
     if (!name || !sourceUrl || !/^https?:\/\//i.test(sourceUrl)) continue;
+    const priceLow = num(v.price_low_usd);
+    const priceHigh = num(v.price_high_usd);
+    const estLow = num(v.estimate_low_usd);
+    const estHigh = num(v.estimate_high_usd);
+    // NEVER $0. A published price is the estimate; a model estimate is kept with its basis; and a
+    // venue with neither gets the room-size comp below, labelled as such, rather than a blank.
+    const estimate = estimateVenueCost({ priceLow, priceHigh, estLow, estHigh, basis: str(v.estimate_basis), city: str(v.city), capacity: num(v.capacity) });
     venues.push({
       name,
       city: str(v.city),
@@ -379,7 +461,21 @@ export function parsePacket(raw: string): RoomPacket | null {
       bookingEmail: str(v.booking_email),
       bookingUrl: str(v.booking_url),
       sourceUrl,
+      estimateLowUsd: estimate.low,
+      estimateHighUsd: estimate.high,
+      estimateBasis: estimate.basis,
     });
+  }
+
+  const budgetLines: Array<{ key: BudgetKey; lowUsd: number; highUsd: number; basis: string }> = [];
+  for (const b of Array.isArray(p.budget) ? (p.budget as Record<string, unknown>[]) : []) {
+    const key = str(b.key)?.toLowerCase() as BudgetKey | undefined;
+    if (!key || !(BUDGET_KEYS as readonly string[]).includes(key)) continue;
+    const low = num(b.low_usd);
+    const high = num(b.high_usd);
+    if (low === null && high === null) continue;
+    if (budgetLines.some((l) => l.key === key)) continue;
+    budgetLines.push({ key, lowUsd: Math.max(0, low ?? high ?? 0), highUsd: Math.max(0, high ?? low ?? 0), basis: str(b.basis) ?? "Parker's estimate" });
   }
 
   const guestIdeas: GuestIdea[] = [];
@@ -444,6 +540,38 @@ export function parsePacket(raw: string): RoomPacket | null {
     sponsorProspects,
     risks,
     commitmentMd: str(p.commitment_md),
+    budgetLines,
+  };
+}
+
+/** The per-head comp used when neither a page nor Parker priced a venue. NYC-scale; stated as such. */
+export const VENUE_COMP = { perHeadLowUsd: 150, perHeadHighUsd: 250, heads: 30 } as const;
+
+/**
+ * A venue's estimated cost, never zero. Published price first; Parker's estimate with its basis
+ * second; the room-size comp last, labelled so a partner knows it is a rule of thumb.
+ */
+export function estimateVenueCost(input: {
+  priceLow: number | null; priceHigh: number | null; estLow: number | null; estHigh: number | null;
+  basis: string | null; city: string | null; capacity: number | null;
+}): { low: number; high: number; basis: string } {
+  const pub = (input.priceLow ?? 0) > 0 || (input.priceHigh ?? 0) > 0;
+  if (pub) {
+    const low = input.priceLow && input.priceLow > 0 ? input.priceLow : input.priceHigh!;
+    const high = input.priceHigh && input.priceHigh > 0 ? input.priceHigh : input.priceLow!;
+    return { low: Math.min(low, high), high: Math.max(low, high), basis: input.basis ?? "the price stated on the cited page" };
+  }
+  const est = (input.estLow ?? 0) > 0 || (input.estHigh ?? 0) > 0;
+  if (est) {
+    const low = input.estLow && input.estLow > 0 ? input.estLow : input.estHigh!;
+    const high = input.estHigh && input.estHigh > 0 ? input.estHigh : input.estLow!;
+    return { low: Math.min(low, high), high: Math.max(low, high), basis: input.basis ?? "Parker's estimate from comparable venues" };
+  }
+  const heads = Math.min(Math.max(input.capacity ?? VENUE_COMP.heads, 20), 40);
+  return {
+    low: VENUE_COMP.perHeadLowUsd * heads,
+    high: VENUE_COMP.perHeadHighUsd * heads,
+    basis: `rule of thumb: private room for ${heads} in ${input.city ?? "a major US city"} at $${VENUE_COMP.perHeadLowUsd}–${VENUE_COMP.perHeadHighUsd}/head F&B minimum — no price on the cited page`,
   };
 }
 
@@ -584,32 +712,78 @@ export function computeEconomics(input: {
    * from the pilot (one presenting at $20–25k, one supporting at $7.5–12.5k) on 15 Sep 2026.
    */
   sponsorCount?: number;
+  /** Parker's lines. Anything missing is filled from the rules of thumb below and labelled so. */
+  budgetLines?: readonly { key: BudgetKey; lowUsd: number; highUsd: number; basis: string }[];
 }): RoomEconomics {
-  const priced = input.venues.filter((v) => v.priceLowUsd !== null || v.priceHighUsd !== null);
-
-  // The cheapest sourced venue anchors the low case and the dearest the high case: the realistic
-  // spread of "we booked the affordable one" against "we booked the one we actually wanted".
-  const lows = priced.map((v) => v.priceLowUsd ?? v.priceHighUsd ?? 0);
-  const highs = priced.map((v) => v.priceHighUsd ?? v.priceLowUsd ?? 0);
+  // Every venue carries an estimate now, so the venue line spans the cheapest to the dearest.
+  const lows = input.venues.map((v) => v.estimateLowUsd);
+  const highs = input.venues.map((v) => v.estimateHighUsd);
   const venueLowUsd = lows.length ? Math.min(...lows) : 0;
   const venueHighUsd = highs.length ? Math.max(...highs) : 0;
 
   const foodPerHeadUsd = input.foodPerHeadUsd ?? 120;
   const targetAttendees = input.targetAttendees;
-  const food = foodPerHeadUsd * targetAttendees;
+  const n = Math.max(targetAttendees, 1);
+
+  /*
+   * THE FULL BUDGET, "from the POV of a senior event designer and coordinator". Parker's lines win
+   * where he wrote them; each rule of thumb below fills a line he left out, and says so in its
+   * basis, so a partner can tell an estimate from a guess. Venue is the sourced range when there is
+   * one and a comp when there is none.
+   */
+  const given = new Map((input.budgetLines ?? []).map((l) => [l.key, l]));
+  const defaults: Record<BudgetKey, { low: number; high: number; basis: string }> = {
+    venue: venueLowUsd > 0
+      ? { low: venueLowUsd, high: venueHighUsd, basis: "cheapest to dearest sourced venue estimate" }
+      : { low: VENUE_COMP.perHeadLowUsd * n, high: VENUE_COMP.perHeadHighUsd * n, basis: `rule of thumb: $${VENUE_COMP.perHeadLowUsd}–${VENUE_COMP.perHeadHighUsd}/head private-room minimum × ${n} — no venue was priced` },
+    food_beverage: { low: foodPerHeadUsd * n, high: Math.round(foodPerHeadUsd * 1.5) * n, basis: `$${foodPerHeadUsd}–${Math.round(foodPerHeadUsd * 1.5)}/head food and drink × ${n} (rule of thumb; often inside the venue minimum)` },
+    av_production: { low: 800, high: 2500, basis: "rule of thumb: mics, a speaker and a screen for a room of this size" },
+    entertainment_programming: { low: 0, high: 2500, basis: "rule of thumb: none, or one performer or facilitated segment" },
+    speakers_hosts: { low: 500, high: 3000, basis: "rule of thumb: host gifts and one honorarium; most guests speak for free" },
+    design_print_decor: { low: 400, high: 1500, basis: "rule of thumb: invitations, place cards, one printed piece, table decor" },
+    photo_video: { low: 800, high: 2500, basis: "rule of thumb: one photographer for the evening; video at the top of the range" },
+    staffing: { low: 500, high: 1500, basis: "rule of thumb: a coordinator and one runner on the night" },
+    travel_accommodation: { low: 0, high: 1500, basis: "rule of thumb: none in the home city; one out-of-town host at the top" },
+    insurance_permits: { low: 0, high: 600, basis: "rule of thumb: event insurance or a permit only if the venue requires it" },
+    contingency: { low: 0, high: 0, basis: "10% of everything above" },
+  };
+  const lines: BudgetLine[] = [];
+  for (const key of BUDGET_KEYS) {
+    if (key === "contingency") continue;
+    const g = given.get(key);
+    const d = defaults[key];
+    lines.push(g
+      ? { key, label: BUDGET_LABELS[key], lowUsd: Math.min(g.lowUsd, g.highUsd), highUsd: Math.max(g.lowUsd, g.highUsd), basis: g.basis }
+      : { key, label: BUDGET_LABELS[key], lowUsd: d.low, highUsd: d.high, basis: d.basis });
+  }
+  const subtotalLow = lines.reduce((t, l) => t + l.lowUsd, 0);
+  const subtotalHigh = lines.reduce((t, l) => t + l.highUsd, 0);
+  lines.push({ key: "contingency", label: BUDGET_LABELS.contingency, lowUsd: Math.round(subtotalLow * 0.1), highUsd: Math.round(subtotalHigh * 0.1), basis: "10% of everything above" });
+
+  const estimatedCostLowUsd = Math.round(subtotalLow * 1.1);
+  const estimatedCostHighUsd = Math.round(subtotalHigh * 1.1);
 
   const sponsorCount = Math.min(Math.max(input.sponsorCount ?? SPONSORSHIP_RULE.idealSponsors, 1), SPONSORSHIP_RULE.maxSponsors);
   const sponsorTargetLowUsd = SPONSORSHIP_RULE.perSponsorUsd;
   const sponsorTargetHighUsd = SPONSORSHIP_RULE.perSponsorUsd * sponsorCount;
 
-  const estimatedCostLowUsd = venueLowUsd + food;
-  const estimatedCostHighUsd = venueHighUsd + food;
+  // What is left at one, two and four sponsors (and at the count Parker asked for): the partner's
+  // question is not "does it pay" but "how many have to say yes before it does".
+  const counts = Array.from(new Set([1, 2, sponsorCount, SPONSORSHIP_RULE.maxSponsors])).sort((a, b) => a - b);
+  const scenarios: SponsorScenario[] = counts.map((c) => ({
+    sponsors: c,
+    sponsorshipUsd: SPONSORSHIP_RULE.perSponsorUsd * c,
+    netLowUsd: SPONSORSHIP_RULE.perSponsorUsd * c - estimatedCostHighUsd,
+    netHighUsd: SPONSORSHIP_RULE.perSponsorUsd * c - estimatedCostLowUsd,
+  }));
 
   return {
     venueLowUsd,
     venueHighUsd,
     foodPerHeadUsd,
     targetAttendees,
+    lines,
+    scenarios,
     sponsorCount,
     sponsorTargetLowUsd,
     sponsorTargetHighUsd,
