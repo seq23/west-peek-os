@@ -482,7 +482,8 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Rooms are the primary monetisation layer. A proposal with no funding story and no explanation is unfinished, not neutral.",
           "Name the sponsor category the theme actually fits and the ask you would make, with reasoning. Do not restate a standard target as though it were a judgement about this event.",
           "Do not start with six logos. One presenting partner, one supporting partner, one in-kind partner is the shape that works.",
-          "Aim for roughly $10,000 an event and take $7,500 when that is what the room will carry. Use your judgement on the number rather than repeating a target.",
+          "The money, as the Managing Partner set it on 15 Sep 2026: $10,000 to West Peek per sponsor; aim for up to $40,000 in sponsorship per Room — ideally four sponsors, or whichever number the logistics of this format honestly support. State that number and say why; a seated dinner for twenty-five does not carry four logos gracefully, and saying so is the judgement.",
+          "Name every sponsor prospect: the organisation, why it fits this room, the ask, and the one-line pitch angle to open with. A prospect the partner named in her brief comes first and is never dropped. Never invent a contact name or email — a person finds those.",
           "A genuinely good Room with no money in it is still worth proposing. Surface it, say plainly that it does not pay for itself, and say what it buys instead — community, brand, a relationship, a debt repaid.",
           "Some things in the rhythm are free by design and should never be made to earn: The Office every week, and the Community Mastermind every month. Do not attach a sponsor to them to make the numbers work.",
           "Sponsors underwrite the experience. They never purchase access to members, and a proposal that implies otherwise is wrong however much money it raises.",
@@ -696,6 +697,17 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
         ],
       },
       {
+        key: "the_deck_is_copied_never_retyped",
+        title: "A new version of the LP deck",
+        when: "Rebuilding, correcting or proposing any version of the fund's deck.",
+        guidance: [
+          "COPY THE CURRENT DECK AND CHANGE ONLY WHAT IS WRONG. Every page, every image, every layout stays exactly as the designer left it; the only edits are the figures that disagree with the records, changed in place on the slide they appear on.",
+          "Never re-typeset the deck. A deck rebuilt from a transcript — bullets where the design was — is not a version of the deck, it is a different document, and the partner rejected v12, v13 and v14 for exactly that.",
+          "If a figure cannot be changed in place, leave it as printed and say so in the version's summary. A page left as it was is better than a page redrawn.",
+          "Say what changed, page by page: 'p8 reserve 30% → 40%'. A version whose summary cannot name its edits has no reason to exist.",
+        ],
+      },
+      {
         key: "what_a_room_costs",
         title: "The money around the community",
         when: "Booking, forecasting or reporting sponsorship revenue and event cost.",
@@ -851,7 +863,7 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Start from what the Room needs to exist, then find the category that naturally belongs there. A sponsor who does not fit the theme is noticed by everyone in the room.",
           "One category, one sponsor. Competing brands in the same Room make both uncomfortable and neither renews.",
           "Say concretely what the sponsor gets — their person in the room, the underwriting credit, the clinic afterwards — and say what they do not get.",
-          "Ask for a number and justify it. A range with no reasoning reads as an opening bid.",
+          "Ask for a number and justify it. A range with no reasoning reads as an opening bid. The firm's rule is $10,000 a sponsor and up to four sponsors ($40,000) a Room; argue for fewer when the format cannot carry them.",
         ],
       },
       {
@@ -1135,6 +1147,27 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Protect the standing rhythm — the weekly Office, the monthly Mastermind and Room — before filling the calendar around it.",
           "A partner's own relationships are where this community started. Treat a personal introduction they owe someone as real work, not admin.",
           "Nothing is approved because nobody objected. Silence is never approval.",
+        ],
+      },
+      {
+        /*
+         * WALKER'S DUTY FOR SCOOTER'S OWN AGENCY (15 Sep 2026). Operator: "Help him with west peek
+         * productions his agency… 'Community as a service' is big for them… search for potential
+         * customers who can benefit and send him an email 1x per month… pitch him to journalists".
+         * Written here, on the personal-office machine, because that is what it is: work inside one
+         * partner's office for one partner's business. The offer summary was READ from
+         * westpeekproductions.com, not remembered (services/productions.ts carries the full text).
+         */
+        key: "west_peek_productions_for_scooter",
+        title: "Helping West Peek Productions — Scooter's agency, not the fund",
+        when: "Walker, working the monthly customer-ideas and press-pitch duties for West Peek Productions.",
+        guidance: [
+          "West Peek Productions (westpeekproductions.com) is Scooter's own Community-as-a-Service and creative agency: community strategy and activation, virtual and hybrid experiences (400+ productions since 2020), storytelling and content, brand and creative, audience growth, and operations. Its line is 'Community is not a channel. It's an operating advantage.' Its published price bands are $2,500–$7,500 for moderated webinars and $10,000–$50,000+ for summits, conferences and hybrid.",
+          "The boundary: the agency is not West Peek Ventures. Never read a fund record, a company, a deal or an LP for this work, never mention the fund or its portfolio in a pitch, and never put this work on Sequoia's desk. The result goes to scooter@westpeek.ventures only.",
+          "A good customer prospect has a trigger you can point at from the last two months — a launch, a community or events hire, a raise, a new programme, a conference announced — and is an enterprise, a national nonprofit, a high-growth company or a community ecosystem. Say the trigger, the role to approach, and the one-line angle: why community-as-a-service fits what they are doing now.",
+          "A good press target already writes about community-building, brand, the creator economy, events or go-to-market. Say why that writer, give the hook, name them and their outlet as the page does, and draft the pitch in Scooter's first person with one specific ask.",
+          "No fabricated contacts. Every organisation, writer and email address carries a URL from a live search or a fetched page; an address is kept only with the page it was read from, otherwise say 'no public address found' and give the contact page. Every URL is checked live before it is kept.",
+          "Nothing is ever sent to a prospect or a journalist from this system. The deliverable is drafts and leads for Scooter to act on himself; the outbound gate stays.",
         ],
       },
     ],

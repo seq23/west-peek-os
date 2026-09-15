@@ -21,10 +21,19 @@ const FUND = "fund_rework_test";
 /** A browser double that "prints" the page: enough of a PDF that the page counter finds pages. */
 const FAKE_PDF = "%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n2 0 obj << /Type /Page >> endobj\n3 0 obj << /Type /Page >> endobj\n%%EOF";
 let printed: string | null = null;
+/** What the browser was asked to copy, and with which tweaks — the copy path, not the render path. */
+let copied: { pdfBase64: string; tweaks: Array<{ page: number; was: string; now: string; field: string }> } | null = null;
 const fakeLaunch = async () => ({
   newPage: async () => ({
     setContent: async (html: string) => { printed = html; },
-    evaluate: async () => undefined,
+    // The copy runs as a string expression `(script)(args)`; the double reads the args back out.
+    evaluate: async (expr: unknown) => {
+      const m = /\)\((\{[\s\S]*\})\)$/.exec(String(expr));
+      if (!m) return undefined;
+      copied = JSON.parse(m[1]!) as typeof copied;
+      return { pdfBase64: btoa(FAKE_PDF), pageCount: 3, placed: copied!.tweaks, missing: [], repainted: [] };
+    },
+    waitForFunction: async () => undefined,
     pdf: async () => new TextEncoder().encode(FAKE_PDF).buffer,
   }),
   close: async () => undefined,
@@ -153,5 +162,36 @@ describe("the rebuild pulls from the current deck", () => {
     expect(out.corrections).toEqual([{ page: 7, field: "fund_size", was: "$25M", now: "$30M" }]);
     // A figure that already matched is bound but not a correction.
     expect(out.corrections.some((c) => c.field === "reserve_pct")).toBe(false);
+  });
+
+  it("a rebuild with a current deck COPIES it and changes figures in place — it never re-typesets", async () => {
+    const { copyDeckWithTweaks, figuresFromRecords } = await import("../src/worker/services/deck");
+    const figures = await figuresFromRecords(env, FUND);
+    // The current deck (approved earlier) has a PDF on record; the carried transcript says one figure differs.
+    const carried = {
+      slides: [], sourceVersionNo: 1, sourcePages: 3,
+      corrections: [{ page: 2, field: "reserve_pct", was: "30%", now: "40%", context: "$3M (30% of the fund)" }],
+    };
+    // A current deck with a PDF behind it — the operator approved one (the test stands in for her).
+    const withPdf = await env.WP_OS_DB.prepare("SELECT id FROM deck_version WHERE fund_id = ?1 AND document_id IS NOT NULL ORDER BY version_no DESC LIMIT 1").bind(FUND).first<{ id: string }>();
+    await env.WP_OS_DB.prepare("UPDATE deck_version SET state = 'CURRENT', approved_by = 'fu_sequoia_taylor', approved_at = '2026-09-15T00:00:00.000Z' WHERE id = ?1").bind(withPdf!.id).run();
+    printed = null; copied = null;
+    const out = await copyDeckWithTweaks(env, FUND, fakeLaunch, carried);
+    expect(out.pdfBase64, `the copy comes back from the browser: ${"reason" in out ? out.reason : ""}`).toBeTruthy();
+    expect(copied, "the browser was handed the current deck's bytes").not.toBeNull();
+    expect(copied!.pdfBase64.length).toBeGreaterThan(20);
+    expect(copied!.tweaks).toEqual([{ page: 2, field: "reserve_pct", was: "30%", now: "40%", context: "$3M (30% of the fund)" }]);
+    expect(printed === null || !/class="value"/.test(printed), "no slide HTML was rendered for a carried deck").toBe(true);
+    void figures;
+  });
+
+  it("when the copy cannot be made the rebuild says so and does NOT fall back to a re-typeset deck", async () => {
+    const { runDeckRebuild } = await import("../src/worker/services/deck");
+    const noBrowser = async () => { throw new Error("browser down"); };
+    printed = null;
+    const out = await runDeckRebuild(env, { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] }, { launch: noBrowser });
+    expect(out.rendered).toBe(false);
+    expect(out.renderNote ?? "").toMatch(/could not copy the deck|could not be read to find its figures/);
+    expect(printed, "the template renderer must not have been used as a fallback").toBeNull();
   });
 });

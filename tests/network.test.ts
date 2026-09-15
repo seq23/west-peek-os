@@ -10,7 +10,7 @@ import {
   resolveConflict,
   writeBack,
   REQUIRED_CONTRACT_CLAUSES,
-  RECORDS_PER_PULL,
+  FRESH_RECORDS_PER_TICK,
   type NetworkOsClient,
   type NetworkRecord,
 } from "../src/worker/services/networkAdapter";
@@ -212,7 +212,14 @@ describe("2. inbound sync is read-only and idempotent", () => {
     const receipts = await t.db
       .prepare("SELECT status FROM network_sync_receipt WHERE resource = 'contact' AND external_id = 'contact_1' ORDER BY created_at, id")
       .all<{ status: string }>();
-    expect((receipts.results ?? []).map((r) => r.status)).toEqual(["APPLIED", "DUPLICATE_IGNORED"]);
+    expect((receipts.results ?? []).map((r) => r.status)).toEqual(["APPLIED"]);
+    // The duplicate is on the record ONCE for the pull — "1 already applied" — not once per person.
+    // 250 rows every fifteen minutes for nothing new is what cost the tick its CPU budget (15 Sep 2026).
+    const dup = await t.db
+      .prepare("SELECT request_json FROM network_sync_receipt WHERE resource = 'contact' AND status = 'DUPLICATE_IGNORED' ORDER BY created_at DESC LIMIT 1")
+      .first<{ request_json: string }>();
+    expect(dup, "the duplicate delivery is still recorded").toBeTruthy();
+    expect(JSON.parse(dup!.request_json)).toMatchObject({ already_applied: 1 });
   });
 
   it("a divergence opens a conflict AND a resolver work card — never an overwrite", async () => {
@@ -497,9 +504,9 @@ describe("5. there is no direct cross-repo storage coupling", () => {
  *
  * This is the test that would have caught it: a community larger than one page.
  */
-describe("a community that does not fit in one pull", () => {
-  it("advances the cursor, reports IN_PROGRESS, and resumes where it stopped", async () => {
-    const records: NetworkRecord[] = Array.from({ length: RECORDS_PER_PULL + 40 }, (_, i) => ({
+describe("a community with more new people than one tick may apply", () => {
+  it("reports IN_PROGRESS, holds the window, and finishes over the following ticks", async () => {
+    const records: NetworkRecord[] = Array.from({ length: FRESH_RECORDS_PER_TICK * 3 + 2 }, (_, i) => ({
       external_id: `bigsync_${i}`,
       identity_key: `p${i}@example.test`,
       delivery_id: `bigsync_delivery_${i}`,
@@ -507,25 +514,49 @@ describe("a community that does not fit in one pull", () => {
     }));
     // One page from the far end carrying everybody: the paging under test is OURS, applied across
     // ticks so a large community does not have to arrive inside one CPU budget.
-    const client = fixtureClient({ contact: [{ records, next_cursor: null }, { records, next_cursor: null }] });
+    // The same page answered on every tick, as Network OS would answer it.
+    const client = fixtureClient({ contact: Array.from({ length: 80 }, () => ({ records, next_cursor: null })) });
 
     const first = await pullResource(env, MP_IDENTITY, "contact", client);
     expect(first.status, "a partial pass is IN_PROGRESS, never OK").toBe("IN_PROGRESS");
     expect(first.progress?.complete).toBe(false);
-    expect(first.applied).toBe(RECORDS_PER_PULL);
+    // A TICK APPLIES A FEW NEW PEOPLE, NOT A WINDOW OF THEM. Each new record is several D1
+    // statements and a scheduled tick has 10 ms of CPU (15 Sep 2026: 250 per tick was killed).
+    expect(first.applied).toBe(FRESH_RECORDS_PER_TICK);
 
-    // THE CURSOR MOVED. This is the assertion that fails against the bug: the write that records
-    // progress was rejected by the CHECK, so it stayed null and the next pass started from zero.
+    // THE CURSOR IS WRITTEN. This is the assertion that fails against the bug: the write that
+    // records progress was rejected by the CHECK, so it stayed null and the next pass started over.
     const cursor = await t.db
       .prepare("SELECT cursor_value, last_status FROM network_sync_cursor WHERE resource = 'contact'")
       .first<{ cursor_value: string | null; last_status: string }>();
     expect(cursor?.cursor_value, "without this the next tick re-reads the same page for ever").toBeTruthy();
     expect(cursor?.last_status).toBe("IN_PROGRESS");
 
-    const second = await pullResource(env, MP_IDENTITY, "contact", client);
-    expect(second.applied, "the remainder, not the same page again").toBe(40);
-    expect(second.status).toBe("OK");
-    expect(second.progress?.complete).toBe(true);
+    // Tick after tick, everybody arrives exactly once and the pass completes; no tick applies
+    // more than the cap, and the already-applied people cost one query, not one each.
+    let applied = first.applied;
+    let last = first;
+    for (let tick = 0; tick < 12 && !last.progress?.complete; tick++) {
+      last = await pullResource(env, MP_IDENTITY, "contact", client);
+      expect(last.applied).toBeLessThanOrEqual(FRESH_RECORDS_PER_TICK);
+      applied += last.applied;
+    }
+    expect(applied).toBe(records.length);
+    expect(last.status).toBe("OK");
+    expect(last.progress?.complete).toBe(true);
+    // The completed pass leaves no offset behind: the next pull must read "not in progress" and
+    // ask Network OS only for what changed since — a stale offset kept every pull whole (15 Sep).
+    const done = await t.db
+      .prepare("SELECT cursor_value FROM network_sync_cursor WHERE resource = 'contact'")
+      .first<{ cursor_value: string | null }>();
+    expect(JSON.parse(done!.cursor_value ?? "{}").offset ?? 0).toBe(0);
+    // Duplicates on a re-read are ONE receipt per pull, not one per person.
+    const before = (await t.db.prepare("SELECT COUNT(*) AS n FROM network_sync_receipt WHERE status = 'DUPLICATE_IGNORED'").first<{ n: number }>())!.n;
+    const again = await pullResource(env, MP_IDENTITY, "contact", client);
+    expect(again.applied).toBe(0);
+    expect(again.duplicates).toBe(records.length);
+    const after = (await t.db.prepare("SELECT COUNT(*) AS n FROM network_sync_receipt WHERE status = 'DUPLICATE_IGNORED'").first<{ n: number }>())!.n;
+    expect(after - before).toBe(1);
 
     // Everybody arrived exactly once.
     const mapped = await t.db

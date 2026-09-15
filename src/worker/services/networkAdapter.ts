@@ -50,7 +50,13 @@ export const NETWORK_RESOURCES = ["contact", "relationship", "touch", "gmail_thr
  * costs a duplicate-check query, an upsert and a receipt, and it is better to take twenty ticks and
  * finish than to take one and be killed halfway with no record of where.
  */
-export const RECORDS_PER_PULL = 250;
+// THE WHOLE SNAPSHOT IS ONE WINDOW WHEN NOTHING IS NEW. 250 meant nineteen ticks — five hours — to
+// walk 4,712 already-applied contacts before a pass could complete and the next pull could ask
+// only for what changed since. The duplicate check is one batched round-trip whatever the size;
+// what is bounded per tick is the NEW records applied (FRESH_RECORDS_PER_TICK), not the scan.
+export const RECORDS_PER_PULL = 10_000;
+/** New (never-seen) records applied in one scheduled tick; each one is several D1 statements. */
+export const FRESH_RECORDS_PER_TICK = 8;
 
 /** `cursor_value` doubles as the resume point. Anything unparseable means start from the top. */
 function readProgress(cursorValue: string | null): number {
@@ -96,7 +102,7 @@ export interface NetworkRecord {
  * accidentally talk to a live system.
  */
 export interface NetworkOsClient {
-  pull(resource: NetworkResource, cursor: string | null): Promise<{ records: NetworkRecord[]; next_cursor: string | null; provider_version?: string }>;
+  pull(resource: NetworkResource, cursor: string | null, opts?: { since?: string | null }): Promise<{ records: NetworkRecord[]; next_cursor: string | null; provider_version?: string }>;
   push(resource: NetworkResource, record: { external_id: string; fields: Record<string, unknown> }, idempotencyKey: string): Promise<{ ok: boolean; response: unknown }>;
 }
 
@@ -312,13 +318,21 @@ export async function pullResource(
     throw new NetworkAdapterError(503, "adapter_unconfigured", "no Network OS client is configured (UNPROVEN — INTEGRATION/CREDENTIAL GATE)");
   }
 
-  const cursorRow = await env.WP_OS_DB.prepare("SELECT cursor_value FROM network_sync_cursor WHERE resource = ?1 AND firm_scope = ?2")
+  const cursorRow = await env.WP_OS_DB.prepare("SELECT cursor_value, last_sync_at FROM network_sync_cursor WHERE resource = ?1 AND firm_scope = ?2")
     .bind(resource, firmScope)
-    .first<{ cursor_value: string | null }>();
+    .first<{ cursor_value: string | null; last_sync_at: string | null }>();
 
   let page: { records: NetworkRecord[]; next_cursor: string | null; provider_version?: string };
   try {
-    page = await client.pull(resource, cursorRow?.cursor_value ?? null);
+    // A pass still in progress re-reads the whole community (its window positions mean nothing
+    // against a filtered set); a completed pass asks only for what changed since it completed.
+    const inProgress = readProgress(cursorRow?.cursor_value ?? null) > 0;
+    // Five minutes of overlap: a row updated while the last pass was being read is asked for
+    // again rather than missed, and an already-applied row costs nothing.
+    const since = !inProgress && cursorRow?.last_sync_at ? new Date(Date.parse(cursorRow.last_sync_at) - 5 * 60_000).toISOString() : null;
+    const t0 = Date.now();
+    page = await client.pull(resource, cursorRow?.cursor_value ?? null, { since });
+    console.log("network pull", JSON.stringify({ resource, since, records: page.records.length, ms: Date.now() - t0 }));
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     // Bounded, visible failure: previously synced mappings stay readable.
@@ -370,28 +384,53 @@ export async function pullResource(
   const total = page.records.length;
   const from = startedFrom < total ? startedFrom : 0;
   const window = page.records.slice(from, from + RECORDS_PER_PULL);
-  const reachedEnd = from + window.length >= total;
+  let reachedEnd = from + window.length >= total;
 
   let applied = 0;
   let duplicates = 0;
   let conflicts = 0;
 
+  /*
+   * THE DUPLICATES ARE FOUND IN ONE QUERY, AND NOT WRITTEN DOWN ONE BY ONE.
+   *
+   * CONFIRMED 15 Sep 2026 (wrangler tail: `exceededCpu`, 37 ms): every scheduled pull of 250
+   * already-applied contacts ran one SELECT and one INSERT per record — 500 D1 statements, each
+   * costing CPU in the Worker whatever the database does — and wrote 250 DUPLICATE_IGNORED receipt
+   * rows every fifteen minutes for nothing new. The Free plan's 10 ms budget was exceeded on every
+   * run and, once the overage was consistent, the platform killed the invocation: 54 "abandoned"
+   * runs in a row, and the community stopped loading. The receipt table is a record of crossings
+   * that changed something; "still the same 250 people" is one line, once.
+   */
+  const keys = window.map((record) => `pull:${resource}:${record.delivery_id ?? record.external_id}`);
+  const already = new Set<string>();
+  const lookups = [];
+  for (let i = 0; i < keys.length; i += 90) {
+    const chunk = keys.slice(i, i + 90);
+    lookups.push(
+      env.WP_OS_DB.prepare(
+        `SELECT idempotency_key FROM network_sync_receipt WHERE firm_scope = ?1 AND idempotency_key IN (${chunk.map((_, j) => `?${j + 2}`).join(",")})`,
+      ).bind(firmScope, ...chunk),
+    );
+  }
+  // One round-trip for every chunk: statements inside a batch cost the Worker almost nothing,
+  // where the same statements awaited one by one each cost CPU (measured on Boss OS, 14 Sep).
+  for (let i = 0; i < lookups.length; i += 50) {
+    const results = await env.WP_OS_DB.batch<{ idempotency_key: string }>(lookups.slice(i, i + 50));
+    for (const res of results) for (const r of res.results ?? []) already.add(r.idempotency_key);
+  }
+  let freshHandled = 0;
+  let deferred = false;
+
   for (const record of window) {
     const idempotencyKey = `pull:${resource}:${record.delivery_id ?? record.external_id}`;
-    if (await receiptExists(env, idempotencyKey, firmScope)) {
+    if (already.has(idempotencyKey)) {
       duplicates += 1;
-      await recordReceipt(env, {
-        direction: "INBOUND",
-        resource,
-        external_id: record.external_id,
-        idempotency_key: `${idempotencyKey}:dup:${crypto.randomUUID()}`,
-        status: "DUPLICATE_IGNORED",
-        request: { delivery_id: record.delivery_id ?? null },
-        actor_id: identity.id,
-        firm_scope: firmScope,
-      });
       continue;
     }
+    // A NEW RECORD COSTS SEVERAL STATEMENTS; only a few fit in one tick. The rest are picked up on
+    // the next tick from the same window — progress is by receipt, not by position.
+    if (freshHandled >= FRESH_RECORDS_PER_TICK) { deferred = true; break; }
+    freshHandled += 1;
 
     const existing = await env.WP_OS_DB.prepare("SELECT * FROM network_external_mapping WHERE resource = ?1 AND external_id = ?2 AND firm_scope = ?3")
       .bind(resource, record.external_id, firmScope)
@@ -461,6 +500,22 @@ export async function pullResource(
     });
   }
 
+  if (deferred) reachedEnd = false;
+
+  // THE DUPLICATES, ONCE. One receipt says "N deliveries already applied" for this window, so the
+  // record of the crossing is complete without a row per person every fifteen minutes.
+  if (duplicates > 0) {
+    await recordReceipt(env, {
+      direction: "INBOUND",
+      resource,
+      idempotency_key: `pull:${resource}:dups:${crypto.randomUUID()}`,
+      status: "DUPLICATE_IGNORED",
+      request: { already_applied: duplicates, window_from: from, window_size: window.length },
+      actor_id: identity.id,
+      firm_scope: firmScope,
+    });
+  }
+
   // The success case, guarded for the same reason as the failure cases above: a fixture that
   // transformed its own records correctly has proven nothing about Network OS.
   //
@@ -469,7 +524,13 @@ export async function pullResource(
   // row, which is the same lie the fixture cursor told.
   if (!opts.isFixture) {
     await upsertCursor(env, firmScope, resource, {
-      cursor_value: reachedEnd ? page.next_cursor : writeProgress(from + window.length, total),
+      // Deferred fresh records keep the window where it is: the next tick rescans it, the
+      // already-applied rows drop out in one query, and the deferred ones are applied.
+      // A COMPLETED PASS CLEARS ITS OFFSET. `upsertCursor` COALESCEs a null into the old value, so
+      // writing `page.next_cursor` (always null from a snapshot) left the previous pass's offset in
+      // place for ever — every later pull read "in progress", never sent `since`, and re-parsed
+      // all 4,712 contacts (15 Sep 2026: since:null, 87 ms, after the pass had completed).
+      cursor_value: reachedEnd ? (page.next_cursor ?? writeProgress(0, total)) : writeProgress(deferred ? from : from + window.length, total),
       ...(reachedEnd ? { last_sync_at: new Date().toISOString() } : {}),
       last_status: reachedEnd ? "OK" : "IN_PROGRESS",
       failure_reason: null,
@@ -493,7 +554,7 @@ export async function pullResource(
     // the community was loaded when 250 of it were.
     status: reachedEnd ? "OK" : "IN_PROGRESS",
     cursor: page.next_cursor,
-    progress: { done: from + window.length, total, complete: reachedEnd },
+    progress: { done: from + window.length, total, complete: reachedEnd && !deferred },
   };
 }
 
@@ -729,8 +790,8 @@ function errorResponse(err: unknown): Response {
 export function configuredClient(env: Env): NetworkOsClient | null {
   if (!networkOsConfigured(env)) return null;
   return {
-    async pull(resource: NetworkResource) {
-      const result = await pullSnapshot(env);
+    async pull(resource: NetworkResource, _cursor: string | null, opts: { since?: string | null } = {}) {
+      const result = await pullSnapshot(env, undefined, { since: opts.since ?? null });
       if (!result.ok || !result.snapshot) throw new Error(result.detail);
       const rows = resourceRows(result.snapshot, resource);
       return {

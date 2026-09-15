@@ -54,8 +54,12 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     deliveredBy: JOINT_CHIEFS,
   },
   monthly_room_proposal: {
-    what: "Next month's Room — a proposed date, theme, guests and what it would cost.",
-    why: "So the event exists as a proposal to react to rather than a thing somebody has to start from nothing.",
+    what:
+      "Rooms. Every half hour it does one thing: builds a Room a partner asked for on Events & Rooms " +
+      "whose build did not finish, or — when the FOLLOWING month has no packet yet — proposes Parker's " +
+      "own Room for it: theme, who is in the room, run of show, venues, sponsor prospects at $10,000 " +
+      "each, risks, and what keeping it commits the firm to. The packet is emailed to both partners.",
+    why: "So a Room is proposed with time to sell its sponsors, and a Room you asked for is built even if the button's build failed.",
     deliveredBy: ["Parker"],
   },
   // EVERY JOB SAYS WHAT IT IS. Until 14 Sep 2026 five of these read "No description has been
@@ -85,6 +89,29 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     what: "Checks the machinery: every integration, credential and lane the firm depends on, and raises a notice when one goes down or comes back.",
     why: "So a broken connection is reported by the system, not discovered by a partner mid-task.",
     deliveredBy: ["the firm"],
+  },
+  // WALKER'S DUTIES FOR SCOOTER'S OWN AGENCY. West Peek Productions is not part of the fund; these
+  // two are personal-office work for Scooter and the result reaches him alone, by email. The
+  // facts say so, because a partner reading this page must be able to tell fund work from a
+  // colleague's private business at a glance.
+  productions_customer_ideas: {
+    what:
+      "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker searches " +
+      "for 10 organisations that plausibly need Community-as-a-Service right now (a launch, a hire, a " +
+      "raise, a programme), the role to approach, a one-line angle and the page it came from; every " +
+      "page is checked live before it is kept. Emailed to scooter@westpeek.ventures only. Nobody is contacted.",
+    why: "So Scooter opens the month with ten qualified leads and a reason for each, instead of a blank page.",
+    deliveredBy: ["Walker"],
+  },
+  productions_press_pitches: {
+    what:
+      "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker drafts " +
+      "pitches to 5 journalists or newsletter writers on community, brand, the creator economy or " +
+      "go-to-market: why that writer, the hook, their name and outlet, a public email address only " +
+      "when a live page shows one, and a piece proving the beat. Drafts, emailed to Scooter to send " +
+      "himself; nothing goes to a journalist from here.",
+    why: "So the agency is pitched to the press every month without Scooter starting from a blank page or the OS sending anything outside the firm.",
+    deliveredBy: ["Walker"],
   },
   wednesday_prep: {
     what: "Prepares each partner's packet for the Wednesday sync — what completed, what is waiting, and where the records and the deck disagree.",

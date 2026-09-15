@@ -119,6 +119,28 @@ describe("a declined Room goes on a shelf, not into nothing", () => {
     expect(ROOMS).toContain('p.status === "DECLINED"');
   });
 
+  it("shows the substance of a turned-down Room, not just its title", () => {
+    // Operator, 15 Sep 2026: "rooms we turned down need more info so i can see how much was proposed
+    // and what the event was about and types of people to be invited."
+    const shelf = ROOMS.slice(ROOMS.indexOf('data-testid="declined-proposals"'), ROOMS.indexOf("<SponsorPipeline"));
+    expect(shelf).toContain("Who was to be invited");
+    expect(shelf).toContain("Sponsorship proposed");
+    expect(shelf).toContain("Why we said no");
+    expect(shelf).toContain("Propose again with changes");
+    expect(shelf).toContain("p.sponsor_total_usd");
+  });
+
+  it("has two doors into one queue: her brief, or Parker's own idea", () => {
+    expect(ROOMS).toContain('data-testid="request-room-submit"');
+    expect(ROOMS).toContain('data-testid="propose-room"');
+    for (const field of ["room-audience", "room-month", "room-city", "room-sponsors", "room-notes"]) {
+      expect(ROOMS).toContain(`data-testid="${field}"`);
+    }
+    // The packet says which door it came through, and shows the brief.
+    expect(ROOMS).toContain('p.origin === "PARTNER_BRIEF"');
+    expect(ROOMS).toContain("<BriefBlock");
+  });
+
   it("says what the shelf is for when it is empty, rather than rendering nothing", () => {
     // A section that disappears when empty is a section nobody learns exists.
     const shelf = ROOMS.slice(ROOMS.indexOf('data-testid="declined-proposals"'), ROOMS.indexOf("<SponsorPipeline"));
@@ -180,7 +202,9 @@ describe("the screen speaks English, the code speaks enum", () => {
   });
 
   it("gives every state a label a partner would say out loud", () => {
-    for (const said of ["Waiting on you", "Turned down", "Nobody has called yet", "In conversation"]) {
+    // "Keep it or dismiss it" replaced "Waiting on you" on 15 Sep 2026 — operator: "its just a packet
+    // with a suggestion… that we can dismiss or keep".
+    for (const said of ["Keep it or dismiss it", "Turned down", "Nobody has called yet", "In conversation"]) {
       expect(ROOMS, `missing plain-English label: ${said}`).toContain(said);
     }
     for (const said of ["Not on the calendar yet", "On the calendar", "Happening now"]) {

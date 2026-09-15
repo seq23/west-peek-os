@@ -59,11 +59,58 @@ interface PacketRow {
   format: string;
   target_min: number;
   target_max: number;
+  audience: string | null;
   sponsor_thesis: string | null;
   economics_json: string;
   event_id: string | null;
   decided_by: string | null;
+  decision_note: string | null;
   created_at: string;
+  /** Which door: her brief, or Parker's own idea. */
+  origin: "PARKER" | "PARTNER_BRIEF";
+  brief_json: string | null;
+  requested_by: string | null;
+  sponsor_count: number;
+  sponsor_total_usd: number;
+  build_error: string | null;
+  build_attempts: number;
+  parent_packet_id: string | null;
+  emailed_at: string | null;
+}
+
+interface Brief {
+  audience: string;
+  month: string;
+  city: string | null;
+  sponsorProspects: string[];
+  notes: string | null;
+}
+
+/** The brief as stored on a packet. Malformed is null, never a crash. */
+function briefOf(p: Pick<PacketRow, "brief_json">): Brief | null {
+  if (!p.brief_json) return null;
+  try {
+    const b = JSON.parse(p.brief_json) as Partial<Brief>;
+    return b && typeof b.audience === "string"
+      ? { audience: b.audience, month: b.month ?? "", city: b.city ?? null, sponsorProspects: Array.isArray(b.sponsorProspects) ? b.sponsorProspects : [], notes: b.notes ?? null }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** YYYY-MM for a month offset from now, for the request form's default (next month). */
+function monthPlus(offset: number): string {
+  const d = new Date();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + offset);
+  return d.toISOString().slice(0, 7);
+}
+
+function monthWord(yyyyMm: string): string {
+  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const m = Number(yyyyMm.slice(5, 7));
+  return names[m - 1] ? `${names[m - 1]} ${yyyyMm.slice(0, 4)}` : yyyyMm;
 }
 
 interface VenueRow {
@@ -93,6 +140,9 @@ interface SponsorRow {
   ask_high_usd: number | null;
   committed_usd: number | null;
   pitch: string | null;
+  ask_detail?: string | null;
+  source_url?: string | null;
+  note?: string | null;
   decline_reason: string | null;
 }
 
@@ -100,6 +150,7 @@ interface Economics {
   venueLowUsd: number;
   venueHighUsd: number;
   targetAttendees: number;
+  sponsorCount?: number;
   sponsorTargetLowUsd: number;
   sponsorTargetHighUsd: number;
   estimatedCostLowUsd: number;
@@ -125,8 +176,8 @@ const range = (low: number | null, high: number | null): string => {
  * the API sends and what it will keep sending; only the label a person reads changes.
  */
 const PACKET_STATE: Record<string, { label: string; tone: string }> = {
-  DRAFT: { label: "Still being written", tone: "help-tag help-tag-muted" },
-  PROPOSED: { label: "Waiting on you", tone: "help-tag help-tag-warn" },
+  DRAFT: { label: "Parker is building it", tone: "help-tag help-tag-muted" },
+  PROPOSED: { label: "Keep it or dismiss it", tone: "help-tag help-tag-warn" },
   APPROVED: { label: "Approved", tone: "help-tag help-tag-good" },
   SCHEDULED: { label: "On the calendar", tone: "help-tag help-tag-good" },
   DECLINED: { label: "Turned down", tone: "help-tag help-tag-muted" },
@@ -184,30 +235,51 @@ export function RoomsPage(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  async function propose(): Promise<void> {
+  /*
+   * TWO DOORS, ONE QUEUE. Operator, 15 Sep 2026: "basically the 'ask parker for a room' flow needs to
+   * change where i can input what im thinking and he use my initial suggestions… i like that he can
+   * think of a room on demand but i need to be able to do that OR ask for a specific type of room."
+   *
+   * An empty body is "Parker, think of one". A body with her brief is her Room, built to her
+   * audience, month, city and named sponsors, and the packet records that it came from her. Both
+   * land in the same list above, and both are emailed to the partners when built.
+   */
+  async function propose(body: Record<string, unknown>): Promise<boolean> {
     setBusy(true);
     setMessage(null);
-    const res = await api<{ flags: { detail: string }[]; venuesKept: number; searchDetail: string }>(
-      "/api/rooms/packets", { method: "POST", body: {} },
+    const res = await api<{ flags: { detail: string }[]; venuesKept: number; searchDetail: string; error?: string; detail?: string }>(
+      "/api/rooms/packets", { method: "POST", body },
     );
     setBusy(false);
+    packets.reload();
     if (res.status === 201 && res.data) {
       const flags = res.data.flags ?? [];
       setMessage(
-        `Proposed. ${res.data.venuesKept} venue(s) found — ${res.data.searchDetail}.` +
+        `Proposed and emailed to both partners. ${res.data.venuesKept} venue(s) found — ${res.data.searchDetail}.` +
         (flags.length ? ` ${flags.length} thing(s) to know: ${flags.map((f) => f.detail).join(" · ")}` : ""),
       );
-      packets.reload();
-    } else {
-      setMessage(`Parker could not propose a Room (${res.status}). Live search or the model may be unavailable.`);
+      return true;
     }
+    setMessage(
+      `Parker could not build that Room (${res.data?.detail ?? res.status}). The request is kept below as a draft and he tries again on the half hour.`,
+    );
+    return false;
   }
 
   async function decide(id: string, decision: "APPROVED" | "DECLINED"): Promise<void> {
-    const res = await api(`/api/rooms/packets/${id}/decide`, { method: "POST", body: { decision } });
+    const body: Record<string, unknown> = { decision };
+    if (decision === "DECLINED") {
+      // The note is what makes the shelf useful: "rooms we turned down need more info".
+      const note = window.prompt("Why not? One line — it is shown on the shelf and given to Parker if you ask again.");
+      if (note === null) return;
+      if (note.trim()) body.note = note.trim();
+    }
+    const res = await api(`/api/rooms/packets/${id}/decide`, { method: "POST", body });
     if (res.status !== 200) setMessage(`Could not record that decision (${res.status}).`);
     packets.reload();
   }
+
+  const [again, setAgain] = useState<PacketRow | null>(null);
 
   const all = packets.data?.packets ?? [];
   /*
@@ -258,15 +330,16 @@ export function RoomsPage(): JSX.Element {
         </p>
       )}
 
-      <div className="form-row">
-        <button type="button" className="btn-strong" onClick={propose} disabled={busy} data-testid="propose-room">
-          {busy ? "Parker is working…" : "Ask Parker for a Room"}
-        </button>
-        <span className="muted small">
-          He picks the question, finds candidate venues by live search, and reads prices off the page
-          he cites. Nothing is booked and nobody is contacted.
-        </span>
-      </div>
+      <RequestRoom
+        busy={busy}
+        again={again}
+        onClearAgain={() => setAgain(null)}
+        onSubmit={async (body) => {
+          const ok = await propose(body);
+          if (ok) setAgain(null);
+          return ok;
+        }}
+      />
 
       <h3>Rooms we turned down</h3>
       <div className="declined-shelf" data-testid="declined-proposals">
@@ -281,16 +354,47 @@ export function RoomsPage(): JSX.Element {
           </p>
         ) : (
           <ul className="card-list small">
-            {declined.map((p) => (
-              <li key={p.id} data-testid={`declined-${p.id}`}>
-                <strong>{p.title}</strong>
-                <span className="muted">
-                  {" "}
-                  — proposed for {p.proposed_for_month}
-                  {p.decided_by ? `, turned down by ${p.decided_by}` : ""}
-                </span>
-              </li>
-            ))}
+            {declined.map((p) => {
+              const b = briefOf(p);
+              return (
+                <li key={p.id} data-testid={`declined-${p.id}`}>
+                  <strong>{p.title}</strong>
+                  <span className="muted">
+                    {" "}
+                    — proposed for {monthWord(p.proposed_for_month)}
+                    {p.origin === "PARTNER_BRIEF" ? ", asked for by a partner" : ", Parker's idea"}
+                    {p.decided_by ? `, turned down by ${p.decided_by}` : ""}
+                  </span>
+                  {/* THE SUBSTANCE. Operator: "rooms we turned down need more info so i can see how
+                      much was proposed and what the event was about and types of people to be
+                      invited." A title and a month is a filing label, not a record. */}
+                  <div className="small">
+                    {p.central_question ? <>“{p.central_question}” · </> : null}
+                    {p.theme}
+                  </div>
+                  <div className="small">
+                    <strong>Who was to be invited:</strong> {p.audience ?? b?.audience ?? <span className="muted">not recorded</span>}
+                  </div>
+                  <div className="small">
+                    <strong>Sponsorship proposed:</strong>{" "}
+                    {p.sponsor_count > 0
+                      ? `${usd(p.sponsor_total_usd)} from ${p.sponsor_count} sponsor${p.sponsor_count === 1 ? "" : "s"}`
+                      : p.status === "DECLINED" && p.build_error
+                        ? <span className="muted">never built — {p.build_error}</span>
+                        : <span className="muted">none stated</span>}
+                  </div>
+                  <div className="small">
+                    <strong>Why we said no:</strong>{" "}
+                    {p.decision_note ?? <span className="muted">no reason was written down</span>}
+                  </div>
+                  <div className="form-row">
+                    <button type="button" onClick={() => setAgain(p)} data-testid={`again-${p.id}`}>
+                      Propose again with changes
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -318,14 +422,15 @@ export function RoomsPage(): JSX.Element {
         what="Rooms are West Peek's curated gatherings — a dinner, salon or workshop for 25–35 people built around one real question. They are how members build deeper relationships, and they are the part of the community that earns money through sponsors. Everything the firm has gathered, Room or not, is recorded here too."
         when="Once a month, when you are choosing what to run next, when you are working a sponsor, or just after a gathering has happened."
         operatorDoes={[
-          "Read the Room Parker proposed this month and approve it, or decline it",
+          "Ask Parker for a Room — your audience, month, city and named sponsors — or let him think of one",
+          "Read the packet and keep it, or dismiss it with a line saying why",
           "Call a venue and mark it confirmed, wrong or unreachable",
           "Put a gathering on the record, and move it through its life",
           "Close out a gathering that has happened — who came, and what we said we would do",
           "Move a sponsor along, and record what they committed",
         ]}
         aiDoes={[
-          "Parker proposes at least one Room a month with a theme, agenda, seed questions and guest ideas",
+          "Parker builds the Room you asked for, or proposes one for next month: theme, who is in the room, run of show, venues, sponsors at $10,000 each, risks, and what keeping it commits you to — and emails both partners the packet",
           "Parker finds candidate venues by live search and reads prices off the page it cites",
           "Parker reads close-out notes and turns what West Peek committed to into assigned work",
           // Parker, not Wynn: that seat was retired in the cull and `brand_sponsorship_revenue` sits
@@ -371,10 +476,15 @@ function RoomProposal(props: {
 }): JSX.Element {
   const p = props.packet;
   const detail = useApi<{
-    packet: PacketRow & { agenda_md: string | null; seed_questions_json: string; guest_ideas_json: string; audience: string | null };
+    packet: PacketRow & { agenda_md: string | null; seed_questions_json: string; guest_ideas_json: string; audience: string | null; risks_json: string; commitment_md: string | null };
+    brief: Brief | null;
     venues: VenueRow[];
     sponsors: SponsorRow[];
-  }>(`/api/rooms/packets/${p.id}`, [p.id]);
+    // Re-read when the row's status changes: a card first drawn while Parker was still building
+    // (DRAFT) fetched an empty packet, and without this it kept showing "none suggested" after the
+    // build finished — seen in production on the first run, 15 Sep 2026.
+  }>(`/api/rooms/packets/${p.id}`, [p.id, p.status]);
+  const brief = briefOf(p);
 
   const state = PACKET_STATE[p.status] ?? { label: p.status.toLowerCase(), tone: "help-tag help-tag-muted" };
 
@@ -384,6 +494,35 @@ function RoomProposal(props: {
   const d = detail.data;
   const seedQuestions: string[] = d ? safeList<string>(d.packet.seed_questions_json) : [];
   const guestIdeas = d ? safeList<{ description: string; why: string | null }>(d.packet.guest_ideas_json) : [];
+  const risks: string[] = d ? safeList<string>(d.packet.risks_json ?? "[]") : [];
+
+  // A DRAFT is a request Parker has not finished. It shows what was asked and where the build is,
+  // and nothing else — there is no packet to read yet.
+  if (p.status === "DRAFT") {
+    return (
+      <article className="card" data-testid={`packet-${p.id}`}>
+        <div className="card-head-static">
+          <h4>{p.title}</h4>
+          <span className={state.tone} data-testid={`packet-state-${p.id}`}>{state.label}</span>
+        </div>
+        <p className="muted small">For {monthWord(p.proposed_for_month)}{brief?.city ? ` · ${brief.city}` : ""}</p>
+        {brief && <BriefBlock brief={brief} />}
+        {p.build_error ? (
+          <p className="notice notice-gate small" data-testid={`build-error-${p.id}`}>
+            Parker could not build it (attempt {p.build_attempts}): {p.build_error}. He tries again on the
+            half hour, up to three times; after that it waits here for you to ask again or dismiss it.
+          </p>
+        ) : (
+          <p className="state-empty">Parker is building this Room — searching venues and writing the packet. It lands here within the hour.</p>
+        )}
+        <div className="form-row">
+          <button type="button" onClick={() => props.onDecide(p.id, "DECLINED")} data-testid={`decline-${p.id}`}>
+            Dismiss the request
+          </button>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article className="card" data-testid={`packet-${p.id}`}>
@@ -397,6 +536,12 @@ function RoomProposal(props: {
       </p>
 
       {p.central_question && <p>“{p.central_question}”</p>}
+
+      <p className="muted small" data-testid={`origin-${p.id}`}>
+        {p.origin === "PARTNER_BRIEF" ? "Asked for by a partner — Parker built it to the brief below." : "Parker's own idea for the month."}
+        {p.emailed_at ? " Emailed to both partners." : ""}
+      </p>
+      {brief && <BriefBlock brief={brief} />}
 
       {detail.loading && <p className="state-empty">Reading the packet…</p>}
 
@@ -452,6 +597,41 @@ function RoomProposal(props: {
               ))}
             </ul>
           )}
+
+          <p className="small">
+            <strong>Who pays for it</strong> — {p.sponsor_count} sponsor{p.sponsor_count === 1 ? "" : "s"} at $10,000 each,{" "}
+            {usd(p.sponsor_total_usd)} if all land
+          </p>
+          {d.sponsors.length === 0 ? (
+            <p className="state-empty">Parker named nobody to approach. A Room with no prospect is spend the fund carries alone.</p>
+          ) : (
+            <ul className="card-list small" data-testid={`packet-sponsors-${p.id}`}>
+              {d.sponsors.map((sp) => (
+                <li key={sp.id}>
+                  <strong>{sp.org_name}</strong>
+                  <span className="muted"> · {categoryLabel(sp.category)} · ask {usd(sp.ask_low_usd)}</span>
+                  {sp.note?.includes("partner") && <span className="help-tag help-tag-muted"> named by you</span>}
+                  <div>{sp.ask_detail ?? <span className="muted">Parker did not say why they fit.</span>}</div>
+                  {sp.pitch && <div className="muted">Open with: {sp.pitch}</div>}
+                  {sp.source_url && <a href={sp.source_url} target="_blank" rel="noreferrer noopener">where this came from</a>}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <p className="small"><strong>What could go wrong</strong></p>
+          {risks.length === 0 ? (
+            <p className="state-empty">Parker named no risks. Assume there are some.</p>
+          ) : (
+            <ul className="card-list small">{risks.map((r) => <li key={r}>{r}</li>)}</ul>
+          )}
+
+          <p className="small"><strong>What keeping it commits the firm to</strong></p>
+          {d.packet.commitment_md ? (
+            <p className="small" style={{ whiteSpace: "pre-wrap" }}>{d.packet.commitment_md}</p>
+          ) : (
+            <p className="state-empty">Parker did not say. Decide what you are agreeing to before you keep it.</p>
+          )}
         </>
       )}
 
@@ -479,15 +659,15 @@ function RoomProposal(props: {
         <p className="small"><strong>Why a sponsor underwrites this:</strong> {p.sponsor_thesis}</p>
       )}
 
-      {(p.status === "PROPOSED" || p.status === "DRAFT") && (
+      {p.status === "PROPOSED" && (
         <div className="form-row">
           <button type="button" className="btn-strong" onClick={() => props.onDecide(p.id, "APPROVED")} data-testid={`approve-${p.id}`}>
-            Approve this Room
+            Keep this Room
           </button>
           <button type="button" onClick={() => props.onDecide(p.id, "DECLINED")} data-testid={`decline-${p.id}`}>
-            Decline it
+            Dismiss it
           </button>
-          <span className="muted small">Declining keeps it, greyed, further down this page.</span>
+          <span className="muted small">It is just a packet with a suggestion. Dismissing keeps it, greyed, further down this page.</span>
         </div>
       )}
       {p.status === "APPROVED" && (
@@ -501,6 +681,141 @@ function RoomProposal(props: {
         <p className="muted small">On the calendar. It appears in the record of gatherings below.</p>
       )}
     </article>
+  );
+}
+
+/** What she asked for, shown on the packet beside what Parker made of it. */
+function BriefBlock({ brief }: { brief: Brief }): JSX.Element {
+  return (
+    <div className="card" data-testid="packet-brief">
+      <p className="small"><strong>What was asked for</strong></p>
+      <p className="small">{brief.audience}{brief.city ? ` · ${brief.city}` : ""}{brief.month ? ` · ${monthWord(brief.month)}` : ""}</p>
+      {brief.sponsorProspects.length > 0 && (
+        <p className="small"><strong>Sponsors named:</strong> {brief.sponsorProspects.join(", ")}</p>
+      )}
+      {brief.notes && <p className="muted small">{brief.notes}</p>}
+    </div>
+  );
+}
+
+/**
+ * The request door.
+ *
+ * Operator: "i can input what im thinking and he use my initial suggestions". The fields are her
+ * brief — audience or theme, month, city, sponsors she has in mind, notes — and the button beside
+ * it is the old door, kept: "i like that he can think of a room on demand". When a declined Room is
+ * being proposed again, the form is prefilled from it and carries the link.
+ */
+function RequestRoom(props: {
+  busy: boolean;
+  again: PacketRow | null;
+  onClearAgain: () => void;
+  onSubmit: (body: Record<string, unknown>) => Promise<boolean>;
+}): JSX.Element {
+  const [audience, setAudience] = useState("");
+  const [month, setMonth] = useState(monthPlus(1));
+  const [city, setCity] = useState("New York");
+  const [sponsors, setSponsors] = useState("");
+  const [notes, setNotes] = useState("");
+  const [seededFrom, setSeededFrom] = useState<string | null>(null);
+
+  // Prefill from the declined packet once per "propose again" click, not on every render.
+  if (props.again && seededFrom !== props.again.id) {
+    const b = briefOf(props.again);
+    setAudience(b?.audience ?? props.again.audience ?? props.again.theme);
+    setMonth(props.again.proposed_for_month >= monthPlus(0) ? props.again.proposed_for_month : monthPlus(1));
+    setCity(b?.city ?? "New York");
+    setSponsors((b?.sponsorProspects ?? []).join(", "));
+    setNotes(
+      `Reworking "${props.again.title}"${props.again.decision_note ? ` — we said no because: ${props.again.decision_note}` : ""}. Change: `,
+    );
+    setSeededFrom(props.again.id);
+  }
+
+  async function submit(): Promise<void> {
+    const ok = await props.onSubmit({
+      audience: audience.trim(),
+      month,
+      city: city.trim() || undefined,
+      sponsor_prospects: sponsors.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean),
+      notes: notes.trim() || undefined,
+      again_from: props.again?.id,
+    });
+    if (ok) {
+      setAudience("");
+      setSponsors("");
+      setNotes("");
+      setSeededFrom(null);
+    }
+  }
+
+  return (
+    <div className="card" data-testid="request-room">
+      <h4>{props.again ? `Propose "${props.again.title}" again, with changes` : "Ask Parker for a Room"}</h4>
+      <p className="muted small">
+        Say what you are thinking and he builds it from your suggestions: who should be in the room,
+        the month, the city, and any sponsor you already have in mind. He finds venues by live
+        search, names the sponsors to approach at $10,000 each, and emails the packet to both partners.
+        Nothing is booked and nobody outside the firm is contacted.
+      </p>
+      <div className="form-row">
+        <label>
+          Audience or theme{" "}
+          <input
+            value={audience}
+            onChange={(e) => setAudience(e.target.value)}
+            placeholder="top Black lawyers on the rise"
+            data-testid="room-audience"
+            style={{ minWidth: "18rem" }}
+          />
+        </label>
+        <label>
+          Month{" "}
+          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} data-testid="room-month" />
+        </label>
+        <label>
+          City{" "}
+          <input value={city} onChange={(e) => setCity(e.target.value)} data-testid="room-city" />
+        </label>
+      </div>
+      <div className="form-row">
+        <label>
+          Sponsor prospects you have in mind{" "}
+          <input
+            value={sponsors}
+            onChange={(e) => setSponsors(e.target.value)}
+            placeholder="Harvey AI (harvey.ai), Carta"
+            data-testid="room-sponsors"
+            style={{ minWidth: "18rem" }}
+          />
+        </label>
+        <label>
+          Notes{" "}
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="anything Parker should know" data-testid="room-notes" style={{ minWidth: "18rem" }} />
+        </label>
+      </div>
+      <div className="form-row">
+        <button
+          type="button"
+          className="btn-strong"
+          onClick={submit}
+          disabled={props.busy || audience.trim().length < 3 || !/^\d{4}-\d{2}$/.test(month)}
+          data-testid="request-room-submit"
+        >
+          {props.busy ? "Parker is working…" : props.again ? "Ask Parker to propose it again" : "Ask Parker for this Room"}
+        </button>
+        {props.again ? (
+          <button type="button" onClick={() => { props.onClearAgain(); setSeededFrom(null); setAudience(""); setSponsors(""); setNotes(""); }}>
+            Never mind
+          </button>
+        ) : (
+          <button type="button" onClick={() => void props.onSubmit({ month })} disabled={props.busy} data-testid="propose-room">
+            Or let Parker think of one
+          </button>
+        )}
+        <span className="muted small">Takes about half a minute. If the build fails, the request stays on the list and he retries.</span>
+      </div>
+    </div>
   );
 }
 

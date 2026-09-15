@@ -12,19 +12,32 @@ import {
  * needs, so it cannot stand in for a real model — injecting here keeps the test about the PIPELINE
  * rather than about the adapter.
  */
+/**
+ * v5 (15 Sep 2026): every required section present, every section citing a numbered source. The
+ * fixture below yields two sources (the acquisition and the Fed story), so [1] and [2] resolve.
+ */
+const V5_OUTPUT = [
+  "executive_summary", "top_headlines", "markets_macro", "capital_markets", "venture_private",
+  "government_legal", "ai_technology", "watchlist", "investor_insight", "key_events", "watch",
+].map((k) => `===SECTION ${k}\nA substantial paragraph about ${k}, with the figure in **bold** and a citation [1].`
+  + (k === "capital_markets" ? " An acquisition was announced in the payments stack [2]." : "") + "\n===END").join("\n");
+
 const fakeModel: Synthesise = async () => ({
-  output: JSON.stringify({
-    sections: [
-      { key: "executive_summary", body_md: "Two developments matter this morning.", event_ids: [] },
-      { key: "capital_markets", body_md: "An acquisition was announced in the payments stack.", event_ids: [] },
-    ],
-    watch: { body_md: "Whether the rate path shifts before September.", event_ids: [] },
-  }),
+  output: V5_OUTPUT,
   // No ai_run row exists for a fake model, and intelligence_report.ai_run_id is a real
   // foreign key — inventing an id would only prove the FK works.
   aiRunId: null,
   model: "fake-test-model",
 });
+
+/** Offline stand-ins for the fetched figures and the search-grounded market read. */
+const DEPS = {
+  macro: async () => ({
+    readings: [{ instrument: "US10Y" as const, label: "10-year Treasury yield", value: "4.96%", numericValue: 4.96, asOf: "2026-08-14", sourceUrl: "https://fred.stlouisfed.org/series/DGS10", sourceName: "FRED DGS10" }],
+    failures: [{ instrument: "BRENT" as const, label: "Brent crude", detail: "offline" }],
+  }),
+  market: async () => ({ ok: true, levels: [], calendar: [], citations: [], aiRunId: null, detail: "offline" }),
+};
 
 /**
  * Daily Intelligence, end to end against a real database (P41).
@@ -74,7 +87,7 @@ describe("partner profile", () => {
 
 describe("the funnel", () => {
   it("runs every stage and reaches READY", async () => {
-    const out = await generateForPartner(env, MP, "fu_scooter_taylor", NOW, fakeModel);
+    const out = await generateForPartner(env, MP, "fu_scooter_taylor", NOW, fakeModel, DEPS);
     expect(out.status).toBe("READY");
   });
 
@@ -112,7 +125,7 @@ describe("the funnel", () => {
 describe("idempotency", () => {
   it("regenerating the same day updates ONE report rather than creating a second", async () => {
     // The brief's explicit requirement: a retry must not deliver two reports.
-    await generateForPartner(env, MP, "fu_scooter_taylor", NOW, fakeModel);
+    await generateForPartner(env, MP, "fu_scooter_taylor", NOW, fakeModel, DEPS);
     const rows = await env.WP_OS_DB.prepare(
       "SELECT COUNT(*) n FROM intelligence_report WHERE firm_user_id = 'fu_scooter_taylor' AND report_date = '2026-08-17'",
     ).first<{ n: number }>();
@@ -167,7 +180,7 @@ describe("quiet days and weekends", () => {
   it("says nothing reached the bar rather than padding the report", async () => {
     // A separate scope with no items at all.
     const empty: Actor = { ...MP, firmScopes: ["empty-firm"] };
-    const out = await generateForPartner(env, empty, "fu_sequoia_taylor", NOW, fakeModel);
+    const out = await generateForPartner(env, empty, "fu_sequoia_taylor", NOW, fakeModel, DEPS);
     expect(out.status).toBe("READY");
     expect(out.candidates).toBe(0);
     const s = await env.WP_OS_DB.prepare(
@@ -179,7 +192,7 @@ describe("quiet days and weekends", () => {
   it("skips weekends unless a partner asked for them", async () => {
     const saturday = new Date("2026-08-15T12:00:00Z");
     const before = await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report").first<{ n: number }>();
-    await runDailyForAll(env, MP, saturday, fakeModel);
+    await runDailyForAll(env, MP, saturday, fakeModel, undefined, DEPS);
     const after = await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report").first<{ n: number }>();
     expect(after!.n).toBe(before!.n);
   });
@@ -195,14 +208,7 @@ describe("quiet days and weekends", () => {
 import { closeAbandonedReports, STALE_AFTER_MINUTES } from "../src/worker/services/dailyIntelligence";
 
 /** The delimited format the prompt actually asks for, which parses. */
-const GOOD_OUTPUT = [
-  "===SECTION executive_summary",
-  "Two developments matter this morning.",
-  "===END",
-  "===SECTION capital_markets",
-  "An acquisition was announced in the payments stack.",
-  "===END",
-].join("\n");
+const GOOD_OUTPUT = V5_OUTPUT;
 
 describe("a reply that cannot be read", () => {
   it("is retried once rather than losing the whole morning", async () => {
@@ -212,7 +218,7 @@ describe("a reply that cannot be read", () => {
       return { output: calls === 1 ? "I'm afraid I can't help with that." : GOOD_OUTPUT, aiRunId: null, model: "fake-test-model" };
     };
 
-    const out = await generateForPartner(env, MP, "fu_sequoia_taylor", new Date("2026-08-18T09:00:00Z"), flakyThenGood);
+    const out = await generateForPartner(env, MP, "fu_sequoia_taylor", new Date("2026-08-18T09:00:00Z"), flakyThenGood, DEPS);
     expect(calls, "the first unreadable reply must be retried").toBe(2);
     expect(out.status).toBe("READY");
   });
@@ -224,7 +230,7 @@ describe("a reply that cannot be read", () => {
       return { output: "still not a report", aiRunId: null, model: "fake-test-model" };
     };
 
-    const out = await generateForPartner(env, MP, "fu_sequoia_taylor", new Date("2026-08-18T15:00:00Z"), neverParses);
+    const out = await generateForPartner(env, MP, "fu_sequoia_taylor", new Date("2026-08-18T15:00:00Z"), neverParses, DEPS);
     expect(out.status).toBe("FAILED");
     expect(calls, "two attempts, never three — a paid generation is not something to loop on").toBe(2);
 
@@ -289,7 +295,7 @@ describe("a run that stopped part-way through", () => {
       if (calls === 1) return { output: "not a report at all", aiRunId: null, model: "fake-test-model" };
       throw new Error("provider exploded mid-retry");
     };
-    await runDailyForAll(env, MP, new Date("2026-08-18T18:00:00Z"), explodes);
+    await runDailyForAll(env, MP, new Date("2026-08-18T18:00:00Z"), explodes, undefined, DEPS);
 
     const stranded = await env.WP_OS_DB.prepare(
       "SELECT COUNT(*) AS n FROM intelligence_report WHERE status NOT IN ('READY','FAILED') AND report_date = '2026-08-18'",
@@ -297,7 +303,7 @@ describe("a run that stopped part-way through", () => {
     expect(stranded?.n, "no row may be left mid-flight after a throw").toBe(0);
 
     const swallowed = await env.WP_OS_DB.prepare(
-      "SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'system.swallowed_failure' AND object_id = 'dailyIntelligence.generateForPartner'",
+      "SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'system.swallowed_failure' AND object_id IN ('dailyIntelligence.generateForPartner', 'dailyIntelligence.advanceBrief')",
     ).first<{ n: number }>();
     expect(swallowed?.n, "and the swallow must be on the ledger, not discarded").toBeGreaterThan(0);
   });
@@ -332,17 +338,17 @@ describe("the brief is built one partner at a time, across ticks", () => {
     // report has to be deleted — the rows have children and deleting them trips a foreign key.
     const now = new Date("2026-09-16T16:00:00.000Z");
 
-    const first = await runDailyForAll(env, MP, now, fakeModel, 1);
+    const first = await runDailyForAll(env, MP, now, fakeModel, 1, DEPS);
     expect(first.generated + first.failed).toBe(1);
     expect(first.remaining).toBe(count - 1);
 
     // The next tick picks up whoever is left rather than repeating the first.
-    const second = await runDailyForAll(env, MP, now, fakeModel, 1);
+    const second = await runDailyForAll(env, MP, now, fakeModel, 1, DEPS);
     expect(second.generated + second.failed).toBe(1);
     expect(second.remaining).toBe(count - 2);
 
     // And once everybody has one, a later tick does nothing at all.
-    const third = await runDailyForAll(env, MP, now, fakeModel, 1);
+    const third = await runDailyForAll(env, MP, now, fakeModel, 1, DEPS);
     expect(third.generated + third.failed).toBe(0);
     expect(third.remaining).toBe(0);
   });
@@ -367,11 +373,11 @@ describe("the brief is built one partner at a time, across ticks", () => {
 
     // 09:00 UTC is 05:00 in New York — before their 07:00. The job fires all day now, so without
     // this gate a brief would be built at five in the morning and be stale by breakfast.
-    const tooEarly = await runDailyForAll(env, MP, new Date("2026-09-17T09:00:00.000Z"), fakeModel, 1);
+    const tooEarly = await runDailyForAll(env, MP, new Date("2026-09-17T09:00:00.000Z"), fakeModel, 1, DEPS);
     expect(tooEarly.generated).toBe(0);
 
     // 12:00 UTC is 08:00 in New York, which is past it.
-    const due = await runDailyForAll(env, MP, new Date("2026-09-17T12:00:00.000Z"), fakeModel, 1);
+    const due = await runDailyForAll(env, MP, new Date("2026-09-17T12:00:00.000Z"), fakeModel, 1, DEPS);
     expect(due.generated + due.failed).toBe(1);
   });
 });
@@ -392,7 +398,7 @@ describe("a failed brief is tried again, but not for ever", () => {
   }
 
   it("counts the attempt on the way in, so a run that dies still spends one", async () => {
-    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 1);
+    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 1, DEPS);
     const first = await reportFor("fu_scooter_taylor");
     expect(first?.attempts).toBeGreaterThanOrEqual(1);
   });
@@ -404,7 +410,7 @@ describe("a failed brief is tried again, but not for ever", () => {
       )
       .run();
 
-    const out = await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5);
+    const out = await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5, DEPS);
     // He was retried rather than skipped for the day.
     expect(out.generated + out.failed).toBeGreaterThan(0);
     expect((await reportFor("fu_scooter_taylor"))?.attempts).toBeGreaterThan(1);
@@ -420,7 +426,7 @@ describe("a failed brief is tried again, but not for ever", () => {
       .run();
 
     const before = await reportFor("fu_scooter_taylor");
-    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5);
+    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5, DEPS);
     const after = await reportFor("fu_scooter_taylor");
     expect(after?.attempts).toBe(before?.attempts);
     expect(after?.status).toBe("FAILED");
@@ -434,7 +440,7 @@ describe("a failed brief is tried again, but not for ever", () => {
       .first<{ firm_user_id: string; attempts: number }>();
     if (!ready) return; // nothing succeeded in this fixture; the other cases carry the meaning
 
-    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5);
+    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5, DEPS);
     const after = await t.db
       .prepare("SELECT attempts FROM intelligence_report WHERE firm_user_id = ?1 AND report_date = '2026-10-07'")
       .bind(ready.firm_user_id)

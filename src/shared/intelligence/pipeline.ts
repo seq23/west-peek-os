@@ -137,14 +137,36 @@ export function dedupe(items: readonly NormalisedItem[], threshold = 0.62): Dedu
   // Highest authority first, so the survivor of any pair is the better source.
   const ordered = [...items].sort((a, b) => b.sourceAuthority - a.sourceAuthority);
 
+  /*
+   * BOUNDED WORK, because this runs on a cron tick with ten milliseconds of CPU.
+   *
+   * The first version recomputed titleKey() for every kept item on every comparison and compared
+   * every item against every kept item — O(n²) string work. On 15 Sep 2026 that is what killed
+   * Sequoia's brief seven ticks running: 462 items in the 48-hour window, the invocation dead before
+   * a model was ever called. Keys are now computed once, exact URL and exact key matches are hash
+   * lookups, and the Jaccard comparison runs only against kept items that share a token — a pair
+   * with no token in common cannot reach any threshold above zero, so nothing is lost.
+   */
+  const keyOf = new Map<string, string>();
+  for (const item of ordered) keyOf.set(item.id, titleKey(item.title));
+  const byUrl = new Map<string, NormalisedItem>();
+  const byKey = new Map<string, NormalisedItem>();
+  const byToken = new Map<string, NormalisedItem[]>();
+
   for (const item of ordered) {
-    const key = titleKey(item.title);
+    const key = keyOf.get(item.id)!;
     const canonicalUrl = (item.url ?? "").split("?")[0];
 
-    const match = kept.find((k) => {
-      if (canonicalUrl && (k.url ?? "").split("?")[0] === canonicalUrl) return true;
-      return similarity(titleKey(k.title), key) >= threshold;
-    });
+    let match: NormalisedItem | undefined =
+      (canonicalUrl && byUrl.get(canonicalUrl)) || byKey.get(key) || undefined;
+    if (!match) {
+      const tokens = key.split(" ").filter(Boolean);
+      const candidates = new Set<NormalisedItem>();
+      for (const tok of tokens) for (const k of byToken.get(tok) ?? []) candidates.add(k);
+      for (const k of candidates) {
+        if (similarity(keyOf.get(k.id)!, key) >= threshold) { match = k; break; }
+      }
+    }
 
     if (match) {
       removed += 1;
@@ -155,6 +177,12 @@ export function dedupe(items: readonly NormalisedItem[], threshold = 0.62): Dedu
     }
     kept.push(item);
     supporting[item.id] = supporting[item.id] ?? [];
+    if (canonicalUrl) byUrl.set(canonicalUrl, item);
+    if (key) byKey.set(key, item);
+    for (const tok of key.split(" ").filter(Boolean)) {
+      const list = byToken.get(tok);
+      if (list) list.push(item); else byToken.set(tok, [item]);
+    }
   }
 
   return { events: kept, supporting, duplicatesRemoved: removed };

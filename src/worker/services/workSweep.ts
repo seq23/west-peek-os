@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
-import { notifyPartners } from "./notifications";
+import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 import { replyToRequester } from "./requestReply";
@@ -140,6 +140,23 @@ export async function announceOutcome(
   detail: string,
 ): Promise<{ emailed: string | null }> {
   const who = await employeeName(env, card.owner_id);
+  // SCOOTER'S PERSONAL-AGENCY WORK IS TOLD TO SCOOTER. A West Peek Productions card is a duty
+  // inside his office (productions.ts); a notice about it on Sequoia's desk would be the wrong
+  // desk. The email went from the runner itself, to him only.
+  if (card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS") {
+    await notifyQuietly(env, {
+      firmUserId: "fu_scooter_taylor",
+      kind: "MEETING",
+      severity: outcome === "BLOCKED" ? "WARNING" : "INFO",
+      title: outcome === "DONE" ? `${who} finished "${card.title.slice(0, 70)}" — check your email` : `${who} is blocked on "${card.title.slice(0, 70)}"`,
+      body: detail.slice(0, 600),
+      objectType: "work_card",
+      objectId: card.id,
+      dedupeKey: `work_card:${card.id}:${outcome}:${card.work_attempts}`,
+      firmScope: card.firm_scope,
+    });
+    return { emailed: null };
+  }
   await notifyPartners(env, {
     kind: "MEETING",
     severity: outcome === "BLOCKED" ? "WARNING" : "INFO",
@@ -210,6 +227,7 @@ export async function sweepOnce(
   runners: {
     general?: (env: Env, ctx: RouteContext, cardId: string, options: { maxSteps: number }) => Promise<{ finished: boolean; blocked: boolean; detail: string; steps: Array<{ action: string; detail: string }> }>;
     deckRework?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+    productions?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -220,7 +238,7 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = card.kind === "DECK_REWORK" ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = card.kind === "DECK_REWORK" || card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS" ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -247,6 +265,13 @@ export async function sweepOnce(
   try {
     if (card.kind === "DECK_REWORK") {
       const run = runners.deckRework ?? (await import("./deck")).runDeckRework;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
+      detail = out.detail;
+    } else if (card.kind === "PRODUCTIONS_CUSTOMERS" || card.kind === "PRODUCTIONS_PRESS") {
+      // Walker's West Peek Productions duty: one search, every URL checked, one email to Scooter.
+      const run = runners.productions ?? (await import("./productions")).runProductionsCard;
       const out = await run(env, card);
       finished = out.finished;
       blocked = out.blocked;

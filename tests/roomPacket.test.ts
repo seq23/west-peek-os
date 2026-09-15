@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  SPONSORSHIP_RULE,
   buildPacketPrompt,
   computeEconomics,
+  followingMonth,
+  mergeBriefSponsors,
   monthKey,
   parsePacket,
   type PacketVenue,
@@ -176,14 +179,23 @@ describe("economics", () => {
     expect(e.estimatedCostHighUsd).toBe(9000 + 3600);
   });
 
-  it("targets the pilot's $30–45k with a presenting and a supporting partner", () => {
+  it("prices sponsorship by the operator's rule: $10k a sponsor, up to four, $40k a Room", () => {
+    // "$10,000 to us per sponsor; aim for up to $40K in sponsorships per room — ideally 4 sponsors
+    // or whichever number makes sense based on the logistics." (15 Sep 2026)
     const e = computeEconomics({ venues: [venue(6000, 9000)], targetAttendees: 30 });
-    expect(e.sponsorTargetLowUsd).toBe(27_500);
-    expect(e.sponsorTargetHighUsd).toBe(37_500);
+    expect(e.sponsorCount).toBe(SPONSORSHIP_RULE.idealSponsors);
+    expect(e.sponsorTargetLowUsd).toBe(10_000);
+    expect(e.sponsorTargetHighUsd).toBe(40_000);
+  });
+
+  it("carries the number of sponsors Parker says the format supports, clamped to the rule", () => {
+    expect(computeEconomics({ venues: [], targetAttendees: 25, sponsorCount: 2 }).sponsorTargetHighUsd).toBe(20_000);
+    expect(computeEconomics({ venues: [], targetAttendees: 25, sponsorCount: 9 }).sponsorCount).toBe(SPONSORSHIP_RULE.maxSponsors);
+    expect(computeEconomics({ venues: [], targetAttendees: 25, sponsorCount: 0 }).sponsorCount).toBe(1);
   });
 
   it("shows a negative net rather than smoothing it", () => {
-    const e = computeEconomics({ venues: [venue(40_000, 50_000)], targetAttendees: 35, tiers: ["SUPPORTING"] });
+    const e = computeEconomics({ venues: [venue(40_000, 50_000)], targetAttendees: 35, sponsorCount: 1 });
     expect(e.netLowUsd).toBeLessThan(0);
   });
 
@@ -235,5 +247,97 @@ describe("the prompt", () => {
 describe("monthKey", () => {
   it("buckets a date to the month the job checks", () => {
     expect(monthKey("2027-03-11T18:00:00.000Z")).toBe("2027-03");
+  });
+
+  it("proposes for the FOLLOWING month, so there is time to sell a sponsor", () => {
+    expect(followingMonth("2026-09-15T12:00:00.000Z")).toBe("2026-10");
+    expect(followingMonth("2026-12-03T12:00:00.000Z")).toBe("2027-01");
+  });
+});
+
+describe("a Room the partner asked for (15 Sep 2026)", () => {
+  const brief = {
+    audience: "top Black lawyers on the rise",
+    month: "2026-10",
+    city: "New York",
+    sponsorProspects: ["Harvey AI (harvey.ai)"],
+    notes: "keep it to one legal sponsor",
+  };
+
+  it("puts her brief in front of Parker before anything else about the Room", () => {
+    const prompt = buildPacketPrompt({ month: "2026-10", recentThemes: [], venueCandidates: [], city: "New York", brief });
+    expect(prompt).toContain("THE PARTNER ASKED FOR THIS ROOM");
+    expect(prompt).toContain("top Black lawyers on the rise");
+    expect(prompt).toMatch(/use these FIRST/);
+    expect(prompt).toContain("Harvey AI (harvey.ai)");
+    expect(prompt).toContain("keep it to one legal sponsor");
+    // Her brief precedes the venue list: it is the Room, the venues are where it happens.
+    expect(prompt.indexOf("THE PARTNER ASKED FOR THIS ROOM")).toBeLessThan(prompt.indexOf("VENUE CANDIDATES"));
+  });
+
+  it("states the sponsorship rule in the prompt, in dollars", () => {
+    const prompt = buildPacketPrompt({ month: "2026-10", recentThemes: [], venueCandidates: [], city: "New York" });
+    expect(prompt).toContain("$10,000");
+    expect(prompt).toContain("$40,000");
+    expect(prompt).toMatch(/sponsor_count/);
+    expect(prompt).toMatch(/example PROFILE/);
+    expect(prompt).toMatch(/commitment_md/);
+  });
+
+  it("reads sponsor prospects, risks, the commitment and the sponsor count", () => {
+    const p = parsePacket(packetJson({
+      sponsor_count: 3,
+      sponsor_prospects: [
+        { org_name: "Harvey", category: "LEGAL", ask_usd: 10000, why_fit: "legal AI for the exact audience", pitch: "Be in the room", source_url: "https://www.harvey.ai/" },
+        { org_name: "Somebody", category: "NOT_A_CATEGORY" },
+      ],
+      risks: ["The date collides with a bar association dinner"],
+      commitment_md: "Roughly $9k of venue and food, Parker's time for six weeks, and Harvey approached in West Peek's name.",
+    }))!;
+    expect(p.sponsorCount).toBe(3);
+    expect(p.sponsorProspects).toHaveLength(2);
+    expect(p.sponsorProspects[1]!.category).toBe("OTHER");
+    expect(p.sponsorProspects[1]!.askUsd).toBe(SPONSORSHIP_RULE.perSponsorUsd);
+    expect(p.risks).toEqual(["The date collides with a bar association dinner"]);
+    expect(p.commitmentMd).toMatch(/Harvey approached/);
+  });
+
+  it("clamps a sponsor count the format cannot carry", () => {
+    expect(parsePacket(packetJson({ sponsor_count: 7 }))!.sponsorCount).toBe(SPONSORSHIP_RULE.maxSponsors);
+    expect(parsePacket(packetJson({ sponsor_count: 0 }))!.sponsorCount).toBe(1);
+  });
+
+  it("never loses a prospect she named, and puts hers first", () => {
+    const parsed = parsePacket(packetJson({
+      sponsor_prospects: [{ org_name: "Carta", category: "EQUITY_CAPTABLE", ask_usd: 10000 }],
+    }))!;
+    const merged = mergeBriefSponsors(parsed, brief);
+    expect(merged.sponsorProspects.map((s) => s.orgName)).toEqual(["Harvey AI (harvey.ai)", "Carta"]);
+    expect(merged.sponsorProspects[0]!.fromBrief).toBe(true);
+    expect(merged.sponsorProspects[0]!.whyFit).toBeNull();
+  });
+
+  it("recognises her prospect when Parker wrote it under a slightly different name", () => {
+    const parsed = parsePacket(packetJson({
+      sponsor_prospects: [{ org_name: "Harvey", category: "LEGAL", ask_usd: 10000, why_fit: "fits" }],
+    }))!;
+    const merged = mergeBriefSponsors(parsed, brief);
+    expect(merged.sponsorProspects).toHaveLength(1);
+    expect(merged.sponsorProspects[0]!.fromBrief).toBe(true);
+    expect(merged.sponsorProspects[0]!.whyFit).toBe("fits");
+  });
+
+  it("keeps a sponsor whose citation the search never returned, but strips the citation", () => {
+    const parsed = parsePacket(packetJson({
+      sponsor_prospects: [{ org_name: "Harvey", category: "LEGAL", source_url: "https://invented.example/harvey" }],
+    }))!;
+    const { packet, flags } = verifyPacket(parsed, SOURCES);
+    expect(packet.sponsorProspects[0]!.sourceUrl).toBeNull();
+    expect(flags.some((f) => f.code === "invented_url" && f.detail.includes("prospect kept"))).toBe(true);
+  });
+
+  it("flags a packet with nobody to approach for the money", () => {
+    const { flags } = verifyPacket(parsePacket(packetJson())!, SOURCES);
+    expect(flags.some((f) => f.code === "no_sponsor_prospects")).toBe(true);
   });
 });

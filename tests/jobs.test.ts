@@ -261,6 +261,31 @@ describe("the scheduled tick is idempotent and produces artifacts", () => {
     expect(detail.body.artifacts.some((a) => a.kind === "INTELLIGENCE_RUN")).toBe(true);
   });
 
+  it("a tick that owes a partner's brief builds ONLY the brief; the next tick reads one source", async () => {
+    /*
+     * ONE THING PER TICK. CONFIRMED 15 Sep 2026 by wrangler tail: two feeds parsed plus a brief in
+     * one invocation was 37 ms of CPU against the Free plan's 10 ms, and the platform killed the
+     * tick every run for seventeen hours — 53 abandoned runs, no morning brief. 06:30 UTC is 01:30
+     * in Chicago, before a partner's earliest start, so no brief is owed and the tick reads a
+     * source; 13:00 UTC is 08:00, a brief is owed, and the tick does nothing else.
+     */
+    const { briefsOwedToday } = await import("../src/worker/services/dailyIntelligence");
+    const early = new Date("2026-08-13T06:30:00.000Z");
+    expect(await briefsOwedToday(env, early)).toBe(false);
+    const read = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "SCHEDULED", now: early });
+    expect(read.run.outcome_summary).not.toMatch(/Briefing tick/);
+    const later = new Date("2026-08-13T13:00:00.000Z");
+    expect(await briefsOwedToday(env, later)).toBe(true);
+    const brief = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "SCHEDULED", now: later });
+    expect(brief.run.outcome_summary).toMatch(/^Briefing tick/);
+    expect(brief.run.status, "a brief that cannot be built (no model here) does not fail the tick; the brief's own notice says why").toBe("SUCCEEDED");
+    const detail = await call<{ artifacts: Array<{ kind: string }> }>(`/api/jobs/runs/${brief.run.id}`, MP);
+    expect(detail.body.artifacts.some((a) => a.kind === "INTELLIGENCE_RUN"), "a briefing tick gathers nothing").toBe(false);
+    // A person pressing "Run it now" at the same hour gets the sweep they asked for.
+    const byHand = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "MANUAL", now: later });
+    expect(byHand.run.outcome_summary).not.toMatch(/^Briefing tick/);
+  });
+
   it("a second tick inside the same window replays instead of running twice", async () => {
     /*
      * `daily_intelligence` now runs on the tick rather than once a day, because a Cron Trigger gets

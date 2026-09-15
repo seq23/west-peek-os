@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { provisionLocalD1 } from "./support/provision";
 
 /**
  * P19 browser journey — governed orchestration (GAP-21, GAP-22).
@@ -75,4 +76,28 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
   await page.getByTestId("job-run-daily_intelligence").click();
   await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
   await expect(page.getByTestId("job-runs-daily_intelligence")).toContainText("SUCCEEDED");
+});
+
+/**
+ * Walker's duties for West Peek Productions (15 Sep 2026) are on the clock, and the page says whose
+ * business they serve. A job whose card said "no description" was the failure the facts exist to
+ * stop; a job for a partner's private agency that read like fund work would be the same failure.
+ */
+test("Walker's West Peek Productions duties are on the clock and labelled as Scooter's agency work", async ({ page }) => {
+  await signIn(page);
+  await gotoSurface(page, "Work");
+  for (const key of ["productions_customer_ideas", "productions_press_pitches"]) {
+    const job = page.getByTestId(`job-${key}`);
+    await expect(job).toBeVisible();
+    await expect(job).toContainText("Scooter's own agency, not the fund");
+    await expect(job).toContainText("Walker");
+    await expect(job).toContainText("Running");
+  }
+  // Run one by hand: it opens the month's card on Walker's desk and says so. Walker is put on duty
+  // first — an earlier journey in the suite may have paused him, and a scheduled job may never
+  // activate an employee itself (D10), so a paused Walker is a correct REFUSED, not this test.
+  provisionLocalD1("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_walker';");
+  await page.getByTestId("job-run-productions_customer_ideas").click();
+  await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
+  await expect(page.getByTestId("job-runs-productions_customer_ideas")).toContainText("Walker's desk");
 });
