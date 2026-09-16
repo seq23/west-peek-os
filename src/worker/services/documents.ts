@@ -386,19 +386,20 @@ export async function handleListDocuments(ctx: RouteContext): Promise<Response> 
   const wantArchived = new URL(ctx.request.url).searchParams.get("archived") === "1";
   const shelf = wantArchived ? "archived_at IS NOT NULL" : "archived_at IS NULL";
   const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT d.*, dv.version_no AS deck_version_no, dv.state AS deck_state, dv.id AS deck_version_id
+    `SELECT d.*, dv.version_no AS deck_version_no, dv.state AS deck_state, dv.id AS deck_version_id, dv.title AS deck_title
        FROM document d
        LEFT JOIN deck_version dv ON dv.document_id = d.id
       WHERE ${visibility} AND ${shelf}
       ORDER BY d.created_at DESC, d.id LIMIT 200`,
-  ).all<DocumentRow & { deck_version_no: number | null; deck_state: string | null; deck_version_id: string | null }>();
+  ).all<DocumentRow & { deck_version_no: number | null; deck_state: string | null; deck_version_id: string | null; deck_title: string | null }>();
   // SAID IN WORDS, AND SAID WHICH VERSION. "i should know which one is v14 in documents" — every
-  // deck row carries its version number and state; every row carries its type as a label.
+  // deck row carries its version number, state AND the deck version's own title, so Documents and
+  // Fund strategy call the same version by the same name; every row carries its type as a label.
   const documents = (rows.results ?? []).map((d) => ({
     ...d,
     type_label: documentTypeLabel(d.doc_type),
     deck: d.deck_version_no
-      ? { version_no: d.deck_version_no, state: d.deck_state, id: d.deck_version_id }
+      ? { version_no: d.deck_version_no, state: d.deck_state, id: d.deck_version_id, title: d.deck_title }
       : null,
   }));
   return json({

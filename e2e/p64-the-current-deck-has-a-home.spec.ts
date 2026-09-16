@@ -40,12 +40,15 @@ test("a deck uploaded on Documents becomes a numbered version, is previewed and 
   await expect(page.getByTestId("doc-title")).toHaveValue("Fund I — as it is in Canva");
   await page.getByTestId("doc-submit").click();
   await expect(page.getByTestId("doc-message")).toContainText("Recorded as v1 of the deck");
-  // It is on the deck's own shelf, says v1, and says it is waiting — not lost among notes.
-  const deckShelf = page.getByTestId("documents-deck-list");
+  // It is on the shelf with everything else, under "The LP deck", says v1 and says it is waiting —
+  // no special section (operator, 15 Sep 2026), but never lost among notes either.
+  const deckShelf = page.getByTestId("document-list");
+  await expect(page.getByTestId("documents-deck")).toHaveCount(0);
+  await expect(deckShelf).toContainText("The LP deck");
   await expect(deckShelf).toContainText("v1");
   await expect(deckShelf).toContainText("Fund I — as it is in Canva");
-  await expect(deckShelf).toContainText("waiting on your decision");
-  await expect(page.getByTestId("documents-deck-list").getByRole("button", { name: /^View here$/ }).first()).toBeVisible();
+  await expect(deckShelf.getByTestId(/^document-deck-state-/)).toContainText("waiting on your decision");
+  await expect(deckShelf.getByRole("button", { name: /^View here$/ }).first()).toBeVisible();
 
   // 2 · On Fund strategy it waits, previews in place, and approving makes it the current deck.
   await deckShelf.getByRole("button", { name: "Decide on Fund strategy" }).click();
@@ -67,12 +70,22 @@ test("a deck uploaded on Documents becomes a numbered version, is previewed and 
   await page.getByTestId("deck-upload").setInputFiles({ name: "Fund I — rebuilt.pdf", mimeType: "application/pdf", buffer: Buffer.from(tinyPdfBase64(), "base64") });
   await expect(page.getByTestId("deck-proposed")).toContainText("v2");
   await gotoSurface(page, "Documents");
-  await expect(page.getByTestId("documents-deck-list")).toContainText("the deck the firm sends");
-  await expect(page.getByTestId("documents-deck-list")).toContainText("v2");
-  // Neither the current deck nor the one waiting offers Archive — they are retired on Fund strategy.
-  await expect(page.getByTestId("documents-deck-list").getByRole("button", { name: "Archive" })).toHaveCount(0);
-  const docs = (await (await request.get("/api/documents", { headers: MP })).json()) as { documents: Array<{ id: string; deck: { version_no: number; state: string } | null }> };
+  const docs = (await (await request.get("/api/documents", { headers: MP })).json()) as { documents: Array<{ id: string; deck: { version_no: number; state: string; title: string } | null }> };
+  const v1 = docs.documents.find((d) => d.deck?.version_no === 1)!;
   const v2 = docs.documents.find((d) => d.deck?.version_no === 2)!;
+  // Each row is named exactly as Fund strategy names the version, wears its state as a badge, and
+  // the current one leads the one waiting.
+  expect(v2.deck!.title).toBe("Fund I — rebuilt");
+  await expect(page.getByTestId(`document-${v1.id}`)).toContainText("Fund I — as it is in Canva");
+  await expect(page.getByTestId(`document-deck-state-${v1.id}`)).toHaveText("current");
+  await expect(page.getByTestId(`document-${v2.id}`)).toContainText("Fund I — rebuilt");
+  await expect(page.getByTestId(`document-deck-state-${v2.id}`)).toHaveText("waiting on your decision");
+  const v1Top = (await page.getByTestId(`document-${v1.id}`).boundingBox())!.y;
+  const v2Top = (await page.getByTestId(`document-${v2.id}`).boundingBox())!.y;
+  expect(v1Top, "the current deck leads the shelf; the one waiting comes next").toBeLessThan(v2Top);
+  // Neither the current deck nor the one waiting offers Archive — they are retired on Fund strategy.
+  await expect(page.getByTestId(`document-${v1.id}`).getByRole("button", { name: "Archive" })).toHaveCount(0);
+  await expect(page.getByTestId(`document-${v2.id}`).getByRole("button", { name: "Archive" })).toHaveCount(0);
   const refused = await request.post(`/api/documents/${v2.id}/archive`, { headers: MP, data: { reason: "duplicate" } });
   expect(refused.status(), "v14 was archived by accident; a version waiting on a decision cannot be").toBe(409);
 
@@ -85,7 +98,7 @@ test("a deck uploaded on Documents becomes a numbered version, is previewed and 
   page.once("dialog", (d) => d.accept("clearing the shelf"));
   await page.getByTestId("doc-archive-all").click();
   await expect(page.getByTestId("doc-message")).toContainText("Kept: v1 (the deck the firm sends), v2 (waiting on your decision)");
-  await expect(page.getByTestId("documents-deck-list")).toContainText("v1");
+  await expect(page.getByTestId("document-list")).toContainText("v1");
   await page.getByTestId("documents-archived").locator("summary").click();
   await page.getByTestId(/^doc-restore-/).first().click();
   await expect(page.getByTestId("doc-message")).toContainText("Back on the shelf");

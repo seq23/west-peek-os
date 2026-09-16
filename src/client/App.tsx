@@ -1439,7 +1439,7 @@ interface DocumentRow {
   created_at: string;
   archived_at?: string | null;
   archive_reason?: string | null;
-  deck?: { version_no: number; state: string; id: string } | null;
+  deck?: { version_no: number; state: string; id: string; title?: string | null } | null;
 }
 type DocumentTypeChoice = { key: string; label: string; means: string };
 
@@ -1756,22 +1756,33 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
   const chosenType = types.find((t) => t.key === docType) ?? null;
 
   /*
-   * THE DECK HAS ITS OWN SHELF. Operator, 15 Sep 2026: "where the fuck is the section for the
-   * current deck to stay?!" Eight deck PDFs sat in one flat list under one identical title, with no
-   * version number on any of them; she archived v14 by accident and could not find the current one
-   * at all. Every deck row now says which version it is and what state it is in, the current one
-   * leads, the one waiting on her is second, and the rest are history under a lid.
+   * THE DECK SITS ON THE SHELF WITH EVERYTHING ELSE. Operator, 15 Sep 2026: no special section —
+   * the versions are documents, grouped under "The LP deck" like every other type. What makes them
+   * findable is the ROW, not a section: each says which version it is (the same v{N} badge Fund
+   * strategy shows), carries the deck version's own title (so Documents and Fund strategy call v15
+   * by one name), and wears its state as a badge. The current one leads, the one waiting on her is
+   * next, and earlier versions sit below in version order. The parking spot for the CURRENT deck
+   * stays on Fund strategy (`DeckPanel.tsx`); this page is the shelf.
    */
-  const decks = all.filter((d) => d.deck).sort((a, b) => (b.deck!.version_no - a.deck!.version_no));
-  const currentDeck = decks.find((d) => d.deck!.state === "CURRENT") ?? null;
-  const proposedDecks = decks.filter((d) => d.deck!.state === "PROPOSED");
-  const pastDecks = decks.filter((d) => d.deck!.state !== "CURRENT" && d.deck!.state !== "PROPOSED");
-  const others = all.filter((d) => !d.deck);
+  const deckRank = (d: DocumentRow): number => (d.deck!.state === "CURRENT" ? 0 : d.deck!.state === "PROPOSED" ? 1 : 2);
   const byType = new Map<string, DocumentRow[]>();
-  for (const d of others) {
+  for (const d of all) {
     const k = d.type_label ?? d.doc_type;
     byType.set(k, [...(byType.get(k) ?? []), d]);
   }
+  for (const [k, docs] of byType) {
+    if (docs.some((d) => d.deck)) {
+      byType.set(
+        k,
+        [...docs].sort((a, b) => {
+          if (a.deck && b.deck) return deckRank(a) - deckRank(b) || b.deck.version_no - a.deck.version_no;
+          return a.deck ? -1 : b.deck ? 1 : 0;
+        }),
+      );
+    }
+  }
+  const liveDecks = all.filter((d) => d.deck && (d.deck.state === "CURRENT" || d.deck.state === "PROPOSED"));
+  const others = all.filter((d) => !liveDecks.includes(d));
 
   // THE TITLE IS THE FILE'S NAME UNTIL SHE SAYS OTHERWISE. "why the title of the document doesnt
   // auto match the title of the file i upload?" — it did on submit, invisibly; now it fills the box
@@ -1801,12 +1812,14 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
 
   const deckState = (d: DocumentRow): string =>
     d.deck!.state === "CURRENT"
-      ? "the deck the firm sends"
+      ? "current"
       : d.deck!.state === "PROPOSED"
         ? "waiting on your decision"
         : d.deck!.state === "REJECTED"
           ? "sent back"
           : "superseded";
+  const deckStateClass = (d: DocumentRow): string =>
+    d.deck!.state === "CURRENT" ? "badge badge-ok" : d.deck!.state === "PROPOSED" ? "badge badge-gate" : "badge badge-quiet";
 
   const row = (d: DocumentRow, opts: { archived?: boolean } = {}) => (
     <li key={d.id} className={d.id === focus ? "card card-focus" : "card"} data-testid={`document-${d.id}`}>
@@ -1816,10 +1829,16 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
             v{d.deck.version_no}
           </span>
         )}{" "}
-        <strong>{d.title}</strong>
+        {/* A deck row is named the way Fund strategy names it: the version's own title. */}
+        <strong>{d.deck?.title ?? d.title}</strong>
+        {d.deck && (
+          <>
+            {" "}
+            <span className={deckStateClass(d)} data-testid={`document-deck-state-${d.id}`}>{deckState(d)}</span>
+          </>
+        )}
         <span className="muted small">
-          {" "}· {d.type_label ?? d.doc_type}
-          {d.deck ? ` · ${deckState(d)}` : ""} · {new Date(d.created_at).toLocaleDateString()}
+          {" "}· {d.type_label ?? d.doc_type} · {new Date(d.created_at).toLocaleDateString()}
           {opts.archived && d.archive_reason ? ` · archived: ${d.archive_reason}` : ""}
         </span>
       </div>
@@ -1884,32 +1903,13 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
           <div className="home-section-head">
             <h3>
               {focused.deck ? `v${focused.deck.version_no} — ` : ""}
-              {focused.title}
+              {focused.deck?.title ?? focused.title}
             </h3>
             <button type="button" className="link-button" onClick={() => setFocus(null)}>close</button>
           </div>
           <DocumentPreview documentId={focused.id} title={focused.title} height="70vh" />
         </div>
       )}
-
-      <section data-testid="documents-deck">
-        <div className="home-section-head">
-          <h3>The LP deck</h3>
-          <span className="muted small">one current version at a time; new ones wait on your approval on Fund strategy</span>
-        </div>
-        <ul className="card-list" data-testid="documents-deck-list">
-          {currentDeck ? row(currentDeck) : (
-            <li className="state-empty">No version of the deck is current. Upload one below as "The LP deck", then approve it on Fund strategy.</li>
-          )}
-          {proposedDecks.map((d) => row(d))}
-        </ul>
-        {pastDecks.length > 0 && (
-          <details data-testid="documents-deck-history">
-            <summary className="muted small">{pastDecks.length} earlier version{pastDecks.length === 1 ? "" : "s"} — superseded or sent back</summary>
-            <ul className="card-list">{pastDecks.map((d) => row(d))}</ul>
-          </details>
-        )}
-      </section>
 
       <form
         className="card"
@@ -1969,7 +1969,7 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
       </form>
 
       <div className="home-section-head">
-        <h3>Everything else on the shelf</h3>
+        <h3>The shelf</h3>
         {others.length > 0 && (
           <button
             type="button"
@@ -1995,7 +1995,7 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
             <ul className="card-list">{docs.map((d) => row(d))}</ul>
           </li>
         ))}
-        {others.length === 0 && <li className="state-empty">Nothing else on the shelf. Morning briefs are not filed here on purpose — they live on Home and are superseded each day.</li>}
+        {all.length === 0 && <li className="state-empty">Nothing on the shelf. Morning briefs are not filed here on purpose — they live on Home and are superseded each day.</li>}
       </ul>
 
       {(archived.data?.documents ?? []).length > 0 && (
