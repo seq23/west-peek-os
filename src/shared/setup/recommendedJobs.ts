@@ -20,8 +20,8 @@ import type { FundPriority } from "./recommendedTeam";
 export const JOB_KINDS = ["INTELLIGENCE", "PORTFOLIO_EVALUATION", "EMPLOYEE_TASK"] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
-/** Mirrors CHECK (schedule_kind IN (...)). */
-export const SCHEDULE_KINDS = ["INTERVAL", "DAILY_AT"] as const;
+/** Mirrors CHECK (schedule_kind IN (...)) — rebuilt by 0169 with MONTHLY and ON_REQUEST. */
+export const SCHEDULE_KINDS = ["INTERVAL", "DAILY_AT", "MONTHLY", "ON_REQUEST"] as const;
 export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
 
 /** Mirrors CHECK (target_kind IN (...)). */
@@ -35,8 +35,10 @@ export interface JobProposal {
   schedule_kind: ScheduleKind;
   /** Set iff schedule_kind === "INTERVAL". */
   interval_minutes?: number;
-  /** Set iff schedule_kind === "DAILY_AT". UTC "HH:MM". */
+  /** Set iff schedule_kind is "DAILY_AT" or "MONTHLY". UTC "HH:MM". */
   daily_at_utc?: string;
+  /** Set iff schedule_kind === "MONTHLY". 1–28. */
+  day_of_month?: number;
   target_kind: TargetKind;
   /** Required unless target_kind === "SYSTEM". For EMPLOYEE targets this is the roster NAME. */
   target_name?: string;

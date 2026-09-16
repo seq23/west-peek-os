@@ -11,7 +11,8 @@ import {
 import { AI_EMPLOYEE_ROSTER } from "../src/shared/registry/aiEmployees";
 
 const MIGRATION = readFileSync(
-  fileURLToPath(new URL("../migrations/0018_orchestration.sql", import.meta.url)),
+  // 0169 rebuilt the table (MONTHLY, ON_REQUEST, RETIRED); its DDL is the one that is live.
+  fileURLToPath(new URL("../migrations/0169_monthly_and_on_request_work.sql", import.meta.url)),
   "utf8",
 );
 

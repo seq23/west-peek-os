@@ -205,8 +205,10 @@ describe("one job per tick", () => {
   it("seeds the sweep ACTIVE every five minutes and puts the deck rebuild back to on-request", async () => {
     const sweep = await env.WP_OS_DB.prepare("SELECT status, schedule_kind, interval_minutes FROM scheduled_job WHERE job_key = 'employee_work_sweep'").first<{ status: string; schedule_kind: string; interval_minutes: number }>();
     expect(sweep).toMatchObject({ status: "ACTIVE", schedule_kind: "INTERVAL", interval_minutes: 5 });
-    const deck = await env.WP_OS_DB.prepare("SELECT status FROM scheduled_job WHERE job_key = 'deck_rebuild'").first<{ status: string }>();
-    expect(deck?.status).toBe("PAUSED");
+    // "On request" used to be spelled PAUSED-with-a-note; since 0169 it is a schedule kind of its
+    // own with no clock, and the row is ACTIVE because there is no timer to pause.
+    const deck = await env.WP_OS_DB.prepare("SELECT status, schedule_kind, next_run_at FROM scheduled_job WHERE job_key = 'deck_rebuild'").first<{ status: string; schedule_kind: string; next_run_at: string | null }>();
+    expect(deck).toMatchObject({ status: "ACTIVE", schedule_kind: "ON_REQUEST", next_run_at: null });
   });
 
   it("runs only the single most overdue job on a scheduled tick, leaving the rest for the next tick", async () => {

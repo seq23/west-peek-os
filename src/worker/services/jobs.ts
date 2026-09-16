@@ -53,9 +53,14 @@ export interface ScheduledJobRow {
   job_key: string;
   name: string;
   kind: "INTELLIGENCE" | "PORTFOLIO_EVALUATION" | "EMPLOYEE_TASK";
-  schedule_kind: "INTERVAL" | "DAILY_AT";
+  /**
+   * INTERVAL every N minutes; DAILY_AT once a day at hh:mm UTC; MONTHLY once a month on
+   * day_of_month at hh:mm UTC; ON_REQUEST never on a timer — only when a person or a card asks.
+   */
+  schedule_kind: "INTERVAL" | "DAILY_AT" | "MONTHLY" | "ON_REQUEST";
   interval_minutes: number | null;
   daily_at_utc: string | null;
+  day_of_month: number | null;
   target_kind: "SYSTEM" | "MACHINE" | "EMPLOYEE";
   target_id: string | null;
   capability_key: string | null;
@@ -73,13 +78,29 @@ export interface ScheduledJobRow {
   created_at: string;
 }
 
-/** Next occurrence for a job, from its own schedule. Pure, so it is directly testable. */
-export function computeNextRun(job: Pick<ScheduledJobRow, "schedule_kind" | "interval_minutes" | "daily_at_utc">, from: Date): string {
+/**
+ * Next occurrence for a job, from its own schedule. Pure, so it is directly testable.
+ *
+ * Null for ON_REQUEST: there is no next time, and `next_run_at` stays NULL. The due query
+ * excludes ON_REQUEST explicitly, because NULL otherwise reads as "due now" (see runDueJobs).
+ */
+export function computeNextRun(
+  job: Pick<ScheduledJobRow, "schedule_kind" | "interval_minutes" | "daily_at_utc"> & { day_of_month?: number | null },
+  from: Date,
+): string | null {
+  if (job.schedule_kind === "ON_REQUEST") return null;
   if (job.schedule_kind === "INTERVAL") {
     const minutes = job.interval_minutes ?? 60;
     return new Date(from.getTime() + minutes * 60_000).toISOString();
   }
   const [hh, mm] = (job.daily_at_utc ?? "06:00").split(":").map((n) => Number(n));
+  if (job.schedule_kind === "MONTHLY") {
+    // Day 1–28 only (the CHECK says so), so every month has the day and no clock skips a month.
+    const day = Math.min(28, Math.max(1, job.day_of_month ?? 1));
+    const next = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), day, hh ?? 0, mm ?? 0, 0, 0));
+    if (next.getTime() <= from.getTime()) next.setUTCMonth(next.getUTCMonth() + 1, day);
+    return next.toISOString();
+  }
   const next = new Date(from.getTime());
   next.setUTCSeconds(0, 0);
   next.setUTCHours(hh ?? 6, mm ?? 0);
@@ -90,9 +111,14 @@ export function computeNextRun(job: Pick<ScheduledJobRow, "schedule_kind" | "int
 /**
  * The idempotency key for a scheduled occurrence: job + the window it belongs to. Two triggers
  * inside the same window produce the same key, and the UNIQUE constraint refuses the second.
+ * A MONTHLY job's window is the month, so a second cron tick in the same month replays rather
+ * than re-running; a manual run mints its own key (runJob) and is never caught by this.
  */
 export function occurrenceKey(job: ScheduledJobRow, at: Date): string {
   if (job.schedule_kind === "DAILY_AT") return `${job.job_key}:${at.toISOString().slice(0, 10)}`;
+  if (job.schedule_kind === "MONTHLY") return `${job.job_key}:${at.toISOString().slice(0, 7)}`;
+  // ON_REQUEST is never due on a tick; if one is ever driven as SCHEDULED, each moment is its own occurrence.
+  if (job.schedule_kind === "ON_REQUEST") return `${job.job_key}:req:${at.toISOString()}`;
   const minutes = job.interval_minutes ?? 60;
   const window = Math.floor(at.getTime() / (minutes * 60_000));
   return `${job.job_key}:w${window}`;
@@ -166,6 +192,10 @@ async function checkPreconditions(
   opts: { trigger: "SCHEDULED" | "MANUAL"; actorType: Actor["type"] },
 ): Promise<string | null> {
   const askedByHand = opts.trigger === "MANUAL" && opts.actorType === "HUMAN";
+  // RETIRED is not paused: it is a job that will never run again, kept so its runs still resolve.
+  if (job.status === "RETIRED") {
+    return `job is RETIRED: ${job.pause_reason ?? "no reason recorded"}`;
+  }
   if (job.status === "PAUSED" && !askedByHand) {
     return `job is PAUSED: ${job.pause_reason ?? "no reason recorded"}`;
   }
@@ -257,10 +287,9 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   /*
    * Preston rebuilding the deck. Assignable rather than a command she has to run.
    *
-   * MANUAL BY DEFAULT, and deliberately: a deck is rebuilt when the records move or when a partner
-   * asks, not every fifteen minutes. The row is seeded PAUSED so the schedule exists to be switched
-   * on if she ever wants it periodic, and `POST /api/jobs/deck_rebuild/run` is the path an
-   * assignment takes today.
+   * ON REQUEST, and deliberately: a deck is rebuilt when the records move or when a partner asks,
+   * not every fifteen minutes. Since 0169 the row is schedule_kind ON_REQUEST — never due on a
+   * tick — and `POST /api/jobs/deck_rebuild/run` is the path an assignment takes.
    *
    * A RENDER IS A PROPOSAL. The version arrives PROPOSED and both partners are told; only a human
    * moves it to CURRENT, because this is the document the firm shows limited partners.
@@ -418,10 +447,11 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   /*
-   * Walker's two monthly duties for West Peek Productions — Scooter's own agency, not the fund.
-   * The job opens the month's card; the employee sweep does the work (search, verify, email
-   * Scooter) so this tick does one cheap thing. Opening a card that is already open is a success:
-   * the duty is monthly and the job fires daily.
+   * Walker's monthly duty for West Peek Productions — Scooter's own agency, not the fund. The job
+   * opens the month's card; the employee sweep does the work (search, verify, email Scooter) so
+   * this tick does one cheap thing. Opening a card that is already open is still a success: the
+   * card is month-unique by title, so "Run it now" twice in a month opens nothing the second time.
+   * MONTHLY since 0169; the two folded keys are RETIRED and dispatch here only if run by hand.
    */
   if (job.job_key === "productions_monthly" || job.job_key === "productions_customer_ideas" || job.job_key === "productions_press_pitches") {
     const { openProductionsCard } = await import("./productions");
@@ -959,7 +989,8 @@ export async function runDueJobs(
   if (limit === 0) return runDueJobsAll(env, now);
   const dueFirst = (
     await env.WP_OS_DB.prepare(
-      "SELECT * FROM scheduled_job WHERE status = 'ACTIVE' AND (next_run_at IS NULL OR next_run_at <= ?1) ORDER BY next_run_at ASC LIMIT ?2",
+      // ON_REQUEST has no clock: its next_run_at is NULL by CHECK, and NULL otherwise reads as due.
+      "SELECT * FROM scheduled_job WHERE status = 'ACTIVE' AND schedule_kind <> 'ON_REQUEST' AND (next_run_at IS NULL OR next_run_at <= ?1) ORDER BY next_run_at ASC LIMIT ?2",
     )
       .bind(now.toISOString(), limit)
       .all<ScheduledJobRow>()
@@ -995,7 +1026,7 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
 
   const due = (
     await env.WP_OS_DB.prepare(
-      "SELECT * FROM scheduled_job WHERE status = 'ACTIVE' AND (next_run_at IS NULL OR next_run_at <= ?1)",
+      "SELECT * FROM scheduled_job WHERE status = 'ACTIVE' AND schedule_kind <> 'ON_REQUEST' AND (next_run_at IS NULL OR next_run_at <= ?1)",
     )
       .bind(now.toISOString())
       .all<ScheduledJobRow>()
@@ -1037,9 +1068,10 @@ const jobSchema = z.object({
   job_key: z.string().trim().min(1),
   name: z.string().trim().min(1),
   kind: z.enum(["INTELLIGENCE", "PORTFOLIO_EVALUATION", "EMPLOYEE_TASK"]),
-  schedule_kind: z.enum(["INTERVAL", "DAILY_AT"]),
+  schedule_kind: z.enum(["INTERVAL", "DAILY_AT", "MONTHLY", "ON_REQUEST"]),
   interval_minutes: z.number().int().positive().optional(),
   daily_at_utc: z.string().trim().regex(/^\d{2}:\d{2}$/).optional(),
+  day_of_month: z.number().int().min(1).max(28).optional(),
   target_kind: z.enum(["SYSTEM", "MACHINE", "EMPLOYEE"]),
   target_id: z.string().trim().min(1).optional(),
   capability_key: z.string().trim().min(1).optional(),
@@ -1065,6 +1097,9 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
   if (b.schedule_kind === "DAILY_AT" && !b.daily_at_utc) {
     return json({ error: "invalid_input", detail: "DAILY_AT schedules need daily_at_utc" }, { status: 400 });
   }
+  if (b.schedule_kind === "MONTHLY" && (!b.daily_at_utc || !b.day_of_month)) {
+    return json({ error: "invalid_input", detail: "MONTHLY schedules need day_of_month (1–28) and daily_at_utc" }, { status: 400 });
+  }
   if (b.target_kind !== "SYSTEM" && !b.target_id) {
     return json({ error: "invalid_input", detail: `${b.target_kind} jobs need a target_id` }, { status: 400 });
   }
@@ -1081,9 +1116,9 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
   try {
     await ctx.env.WP_OS_DB.prepare(
       `INSERT INTO scheduled_job
-         (id, job_key, name, kind, schedule_kind, interval_minutes, daily_at_utc, target_kind, target_id,
+         (id, job_key, name, kind, schedule_kind, interval_minutes, daily_at_utc, day_of_month, target_kind, target_id,
           capability_key, task_class, budget_usd, data_class, payload_json, max_attempts, status, pause_reason, next_run_at, created_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'PAUSED', ?16, NULL, ?17)`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?18, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'PAUSED', ?16, NULL, ?17)`,
     )
       .bind(
         id,
@@ -1103,6 +1138,7 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
         b.max_attempts,
         "created paused: recurring work starts only when an operator switches it on",
         ctx.identity!.id,
+        b.day_of_month ?? null,
       )
       .run();
   } catch (err) {
@@ -1125,6 +1161,7 @@ export async function handlePauseJob(ctx: RouteContext): Promise<Response> {
   const authz = await authorize(ctx.env, actor, "scheduled_job.pause", { objectType: "scheduled_job", objectId: job.id });
   if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
   if (job.status === parsed.data.status) return json({ error: "already_in_state" }, { status: 409 });
+  if (job.status === "RETIRED") return json({ error: "retired", detail: "a retired job is kept for its history and never runs again" }, { status: 409 });
 
   const now = new Date();
   await ctx.env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = ?2, pause_reason = ?3, next_run_at = ?4 WHERE id = ?1")
@@ -1148,7 +1185,8 @@ export async function handlePauseJob(ctx: RouteContext): Promise<Response> {
 }
 
 export async function handleListJobs(ctx: RouteContext): Promise<Response> {
-  const jobs = (await ctx.env.WP_OS_DB.prepare("SELECT * FROM scheduled_job ORDER BY job_key").all<ScheduledJobRow>()).results ?? [];
+  // RETIRED rows are kept for their runs and cards, and are not the firm's work any more.
+  const jobs = (await ctx.env.WP_OS_DB.prepare("SELECT * FROM scheduled_job WHERE status <> 'RETIRED' ORDER BY job_key").all<ScheduledJobRow>()).results ?? [];
   const runs = (
     await ctx.env.WP_OS_DB.prepare("SELECT * FROM job_run ORDER BY started_at DESC LIMIT 200").all<Record<string, unknown>>()
   ).results ?? [];

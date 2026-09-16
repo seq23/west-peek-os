@@ -42,13 +42,12 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
   await expect(page.getByTestId("how-this-works-jobs")).toBeVisible();
 
   /*
-   * The card says "Switched off", not PAUSED. The raw enum came off every card in the plain-English
-   * pass — a page that prints its own database vocabulary makes the reader translate — and the
-   * state itself is unchanged, so what this asserts is unchanged too.
+   * The card says "Paused" with the reason beside it (15 Sep 2026: a job is on unless there is a
+   * stated reason, so the reason is the thing worth showing). The raw enum never reaches the page.
    */
   const job = page.getByTestId("job-daily_intelligence");
-  await expect(job).toContainText("Switched off");
-  await expect(job).toContainText("operator must switch recurring work on");
+  await expect(job.getByTestId("job-state-daily_intelligence")).toHaveText("Paused");
+  await expect(job.getByTestId("job-paused-daily_intelligence")).toContainText("operator must switch recurring work on");
 
   /*
    * A PAUSE STOPS THE TIMER, NOT A PARTNER.
@@ -65,17 +64,47 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
    */
   await page.getByTestId("job-run-daily_intelligence").click();
   await expect(page.getByTestId("jobs-message")).toContainText("while the job is PAUSED");
-  // Still switched off. Running it by hand is not switching it on.
-  await expect(page.getByTestId("job-daily_intelligence")).toContainText("Switched off");
+  // Still paused. Running it by hand is not putting it back on.
+  await expect(page.getByTestId("job-state-daily_intelligence")).toHaveText("Paused");
 
-  // Switch it on deliberately, then run it.
-  await page.getByTestId("job-reason").fill("operator switching the daily brief on");
-  await page.getByTestId("job-toggle-daily_intelligence").click();
-  await expect(page.getByTestId("job-daily_intelligence")).toContainText("Running");
+  // Put it back on deliberately, then run it. It sits under "Scheduled work" with an honest cadence.
+  await page.getByTestId("job-resume-daily_intelligence").click();
+  await expect(page.getByTestId("job-state-daily_intelligence")).toHaveText("Scheduled");
+  await expect(page.getByTestId("job-list").getByTestId("job-daily_intelligence")).toBeVisible();
+  await expect(page.getByTestId("job-cadence-daily_intelligence")).toContainText(/Every \d+ minutes|Every hour|Every day at/);
 
   await page.getByTestId("job-run-daily_intelligence").click();
   await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
   await expect(page.getByTestId("job-runs-daily_intelligence")).toContainText("SUCCEEDED");
+
+  // PAUSING NEEDS A REASON. An empty prompt leaves it on; a reason pauses it and is shown beside it.
+  page.once("dialog", (d) => d.dismiss());
+  await page.getByTestId("job-pause-daily_intelligence").click();
+  await expect(page.getByTestId("jobs-message")).toContainText("a reason is required");
+  await expect(page.getByTestId("job-state-daily_intelligence")).toHaveText("Scheduled");
+  page.once("dialog", (d) => d.accept("the sources are being re-registered this week"));
+  await page.getByTestId("job-pause-daily_intelligence").click();
+  await expect(page.getByTestId("job-state-daily_intelligence")).toHaveText("Paused");
+  await expect(page.getByTestId("job-paused-daily_intelligence")).toContainText("the sources are being re-registered this week");
+  await page.getByTestId("job-resume-daily_intelligence").click();
+  await expect(page.getByTestId("job-state-daily_intelligence")).toHaveText("Scheduled");
+});
+
+/**
+ * Two sections (15 Sep 2026): work on a clock, and work that runs only when asked. The deck
+ * rebuild is ON_REQUEST — no timer, "Only when asked" — and nothing on the page is hard-coded by
+ * job key to say so.
+ */
+test("the deck rebuild is on request, under its own heading, with no clock", async ({ page }) => {
+  await signIn(page);
+  await gotoSurface(page, "Work");
+  const onRequest = page.getByTestId("job-list-on-request");
+  await expect(onRequest.getByTestId("job-deck_rebuild")).toBeVisible();
+  await expect(page.getByTestId("job-state-deck_rebuild")).toHaveText("On request");
+  await expect(page.getByTestId("job-cadence-deck_rebuild")).toContainText("Only when asked");
+  await expect(page.getByTestId("job-cadence-deck_rebuild")).not.toContainText("next ");
+  await expect(page.getByTestId("job-list").getByTestId("job-deck_rebuild")).toHaveCount(0);
+  await expect(page.getByTestId("job-run-deck_rebuild")).toBeVisible();
 });
 
 /**
@@ -86,17 +115,16 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
 test("Walker's West Peek Productions duty is on the clock, one note a month, labelled as Scooter's agency work", async ({ page }) => {
   await signIn(page);
   await gotoSurface(page, "Work");
-  // ONE job now (15 Sep 2026: "why is scooter getting 2 emails?"); the two it replaced are paused
-  // with the reason and still read on the page.
+  // ONE job now (15 Sep 2026: "why is scooter getting 2 emails?"), MONTHLY on the 1st (0169); the
+  // two it replaced and the one-off introduction are RETIRED and off the page.
   const job = page.getByTestId("job-productions_monthly");
   await expect(job).toBeVisible();
   await expect(job).toContainText("Scooter's own agency, not the fund");
   await expect(job).toContainText("Walker");
-  await expect(job).toContainText("Running");
-  for (const key of ["productions_customer_ideas", "productions_press_pitches"]) {
-    const old = page.getByTestId(`job-${key}`);
-    await expect(old).toContainText("Switched off");
-    await expect(old).toContainText("Folded into productions_monthly");
+  await expect(page.getByTestId("job-state-productions_monthly")).toHaveText("Scheduled");
+  await expect(page.getByTestId("job-cadence-productions_monthly")).toContainText("On the 1st of every month at 14:00 UTC");
+  for (const key of ["productions_customer_ideas", "productions_press_pitches", "productions_intro_note"]) {
+    await expect(page.getByTestId(`job-${key}`)).toHaveCount(0);
   }
   // Run it by hand: it opens the month's card on Walker's desk and says so. Walker is put on duty
   // first — an earlier journey in the suite may have paused him, and a scheduled job may never

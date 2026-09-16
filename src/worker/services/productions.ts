@@ -861,12 +861,12 @@ export async function runIntroNote(env: Env): Promise<{ status: "SUCCEEDED" | "F
     "SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND payload_json LIKE '%Walker, your chief of staff%'",
   ).first<{ n: number }>();
   if ((already?.n ?? 0) > 0) {
-    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED', pause_reason = 'Sent once on its first run; a second introduction would be noise.' WHERE job_key = 'productions_intro_note'").run();
+    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED', pause_reason = 'Sent once on its first run; a second introduction would be noise.' WHERE job_key = 'productions_intro_note' AND status = 'ACTIVE'").run();
     return { status: "SUCCEEDED", summary: "already sent; the job paused itself" };
   }
   const note = renderIntroNote();
   const mail = await emailPartnerDeliverable(env, { to: SCOOTER_EMAIL, subject: note.subject, text: note.text, objectType: "scheduled_job", objectId: "sjb_productions_intro_note", firmScope: "west-peek", actorId: "aie_walker" });
   if (!mail.sent) return { status: "FAILED", summary: `not sent: ${mail.reason}` };
-  await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED', pause_reason = 'Sent once (Walker introduced himself). Kept as the record of it.' WHERE job_key = 'productions_intro_note'").run();
+  await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED', pause_reason = 'Sent once (Walker introduced himself). Kept as the record of it.' WHERE job_key = 'productions_intro_note' AND status = 'ACTIVE'").run();
   return { status: "SUCCEEDED", summary: `sent to ${SCOOTER_EMAIL}: "${note.subject}"; the job paused itself` };
 }

@@ -88,10 +88,12 @@ describe("what Walker is told", () => {
     expect(skill!.guidance.join(" ")).toMatch(/No fabricated contacts/);
   });
 
-  it("describes both jobs on the Work page as Scooter's agency duty, not fund work", () => {
-    for (const key of ["productions_customer_ideas", "productions_press_pitches"]) {
-      expect(JOB_FACTS[key]?.what).toMatch(/Scooter's own agency, not the fund/);
-      expect(JOB_FACTS[key]?.deliveredBy).toEqual(["Walker"]);
+  it("describes the one monthly job on the Work page as Scooter's agency duty, not fund work", () => {
+    expect(JOB_FACTS.productions_monthly?.what).toMatch(/Scooter's own agency, not the fund/);
+    expect(JOB_FACTS.productions_monthly?.deliveredBy).toEqual(["Walker"]);
+    // The two it folded and the one-off introduction are RETIRED (0169): off the page, out of the facts.
+    for (const key of ["productions_customer_ideas", "productions_press_pitches", "productions_intro_note"]) {
+      expect(JOB_FACTS[key], `${key} is retired and must not be described as live work`).toBeUndefined();
     }
   });
 });
@@ -218,7 +220,8 @@ describe("the monthly card on Walker's desk", () => {
   });
 
   it("is dispatched by job_key from the scheduler, and re-running is a success that opens nothing", async () => {
-    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED' WHERE job_key NOT IN ('productions_press_pitches')").run();
+    // Only the live rows: a RETIRED row (0169) is not paused, it is retired, and stays so.
+    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED' WHERE status = 'ACTIVE' AND job_key NOT IN ('productions_press_pitches')").run();
     await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'ACTIVE', next_run_at = ?1 WHERE job_key = 'productions_press_pitches'").bind(NOW.toISOString()).run();
     const results = await runDueJobs(env, new Date(NOW.getTime() + 60_000));
     const run = results.find((r) => r.job_key === "productions_press_pitches");
@@ -248,8 +251,9 @@ describe("the monthly card on Walker's desk", () => {
     expect(first.status, first.summary).toBe("SUCCEEDED");
     expect(sends[0]).toContain("scooter@westpeek.ventures");
     expect(first.summary).toMatch(/sent to scooter@westpeek\.ventures/);
+    // 0169 retired the job; sending the note must not quietly bring it back to PAUSED (or ACTIVE).
     const job = await env.WP_OS_DB.prepare("SELECT status FROM scheduled_job WHERE job_key = 'productions_intro_note'").first<{ status: string }>();
-    expect(job?.status).toBe("PAUSED");
+    expect(job?.status).toBe("RETIRED");
     const again = await runIntroNote(withMail);
     expect(again.summary).toMatch(/already sent/);
     const sent = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND payload_json LIKE '%Walker, your chief of staff%'").first<{ n: number }>())!.n;

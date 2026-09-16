@@ -55,9 +55,9 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
   },
   monthly_room_proposal: {
     what:
-      "Rooms. Every quarter hour it does one cheap thing: opens Parker's card for a Room a partner asked " +
-      "for on Events & Rooms, or — when the FOLLOWING month has no packet yet — queues Parker's own Room " +
-      "for it. The employee sweep then runs the chain a stage at a time: who pays to be in front of this " +
+      "Rooms. The quarter-hour tick is for Rooms you ask for: it opens Parker's card for a Room a partner " +
+      "requested on Events & Rooms. Parker's OWN Room is proposed once a month — only when the FOLLOWING " +
+      "month has no packet yet — inside the same tick. The employee sweep then runs the chain a stage at a time: who pays to be in front of this " +
       "audience (with evidence and the named person who runs partnerships), three concepts compared and one " +
       "chosen, venues with a reason, the run of show to the minute, the budget with its basis, a sponsorship " +
       "structure priced to cost plus the firm's keep, the pitch email, and a PDF emailed to both partners.",
@@ -74,7 +74,7 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
   },
   deck_rebuild: {
     what: "Rebuilds the LP deck: reads the current deck page by page, carries everything over, corrects every figure to the fund records, and proposes the new version on Fund strategy.",
-    why: "Runs when you send a version back — that opens a card for Preston — or when you press Run it now. Not on a timer: a deck is rebuilt when somebody asks, not every morning.",
+    why: "Runs when you send a version back — that opens a card for Preston — or when you press Run it now. Only when asked: a deck is rebuilt when somebody wants one, not every morning.",
     deliveredBy: ["Preston"],
   },
   deck_reading: {
@@ -103,34 +103,7 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
       "approach, the page it came from) and five press pitches chosen with intent, each with the " +
       "writer's address read off a live page and a draft to send. Nothing goes to a prospect or a " +
       "journalist from here.",
-    why: "So the agency gets its leads and its press in one note from his chief of staff, not two emails from a machine (folded 15 Sep 2026).",
-    deliveredBy: ["Walker"],
-  },
-  productions_customer_ideas: {
-    what:
-      "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker searches " +
-      "for 10 organisations that plausibly need Community-as-a-Service right now (a launch, a hire, a " +
-      "raise, a programme), the role to approach, a one-line angle and the page it came from; every " +
-      "page is checked live before it is kept. Emailed to scooter@westpeek.ventures only. Nobody is contacted.",
-    why: "So Scooter opens the month with ten qualified leads and a reason for each, instead of a blank page.",
-    deliveredBy: ["Walker"],
-  },
-  productions_press_pitches: {
-    what:
-      "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker drafts " +
-      "pitches to 5 journalists or newsletter writers on community, brand, the creator economy or " +
-      "go-to-market: why that writer, the hook, their name and outlet, a public email address only " +
-      "when a live page shows one, and a piece proving the beat. Drafts, emailed to Scooter to send " +
-      "himself; nothing goes to a journalist from here.",
-    why: "So the agency is pitched to the press every month without Scooter starting from a blank page or the OS sending anything outside the firm.",
-    deliveredBy: ["Walker"],
-  },
-  productions_intro_note: {
-    what:
-      "One note, once: Walker introduces himself to Scooter as his chief of staff, owns the weak " +
-      "first Productions run, says what changed, and reminds him that requests go to " +
-      "os@joinwestpeek.com. Sent on its first run, then the job pauses itself and stays as the record.",
-    why: "So the first two emails Scooter received from a name he had not been introduced to are explained, and he knows how to reach the team.",
+    why: "So the agency gets its leads and its press in one note from his chief of staff, not two emails from a machine (folded 15 Sep 2026; on the 1st of the month since 0169).",
     deliveredBy: ["Walker"],
   },
   wednesday_prep: {
@@ -154,7 +127,12 @@ export function cadenceInWords(job: {
   schedule_kind: string;
   interval_minutes: number | null;
   daily_at_utc: string | null;
+  day_of_month?: number | null;
 }): string {
+  if (job.schedule_kind === "ON_REQUEST") return "Only when asked";
+  if (job.schedule_kind === "MONTHLY" && job.daily_at_utc) {
+    return `On the ${ordinal(job.day_of_month ?? 1)} of every month at ${job.daily_at_utc} UTC`;
+  }
   if ((job.schedule_kind === "DAILY_AT" || job.schedule_kind === "DAILY") && job.daily_at_utc) {
     return `Every day at ${job.daily_at_utc} UTC`;
   }
@@ -164,6 +142,19 @@ export function cadenceInWords(job: {
   if (m % 1440 === 0) return m === 1440 ? "Once a day" : `Every ${m / 1440} days`;
   if (m % 60 === 0) return m === 60 ? "Every hour" : `Every ${m / 60} hours`;
   return `Every ${m} minutes`;
+}
+
+/** 1st, 2nd, 3rd, 4th … 21st, 22nd, 23rd, 28th. */
+export function ordinal(n: number): string {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  const rem10 = n % 10;
+  return `${n}${rem10 === 1 ? "st" : rem10 === 2 ? "nd" : rem10 === 3 ? "rd" : "th"}`;
+}
+
+/** Recurring on a clock, or only when somebody asks. The Work page is split on this. */
+export function isOnRequest(job: { schedule_kind: string }): boolean {
+  return job.schedule_kind === "ON_REQUEST";
 }
 
 /**
