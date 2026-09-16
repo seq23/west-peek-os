@@ -2183,8 +2183,12 @@ details h3 {
   margin: var(--space-lg) 0;
 }
 .company-card { padding: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-sm); }
-.company-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-sm); }
-.company-card-head h4 { margin: 0; font-size: var(--text-md); font-weight: 700; }
+/* The name owns the whole row; the sector goes UNDER it and wraps. On 15 Sep 2026 the two shared a
+   flex row with a nowrap badge, so "Functional non-alcoholic beverage / CPG" squeezed "Sensori" to
+   one letter per line. `tests/companiesLayout.test.ts` guards the shape. */
+.company-card-head { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-xs); }
+.company-card-head h4 { margin: 0; font-size: var(--text-md); font-weight: 700; overflow-wrap: anywhere; }
+.company-card-head .badge { white-space: normal; text-align: left; }
 .company-oneliner { margin: 0; font-size: var(--text-sm); line-height: var(--lh-snug); color: var(--wp-ink-2); }
 .company-facts {
   margin: auto 0 0;
