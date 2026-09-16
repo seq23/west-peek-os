@@ -317,13 +317,10 @@ describe("real subsystems emit notifications", () => {
      * firm-wide row has nobody whose preferences could be read. This proves the loop closes for the
      * kind the operator sees most.
      */
-    // A WINDOW THAT COVERS THE WHOLE CLOCK. `{start: 0, end: 23}` does not: the window is
-    // [start, end), so hour 23 UTC fell outside it and this test failed on every CI run between
-    // 23:00 and midnight UTC (twice on 15 Sep 2026). A window that crosses midnight and ends one
-    // hour before it starts covers every hour there is — starting NOW, so now is inside it.
-    const startHour = new Date().getUTCHours();
     const saved = await call("/api/notifications/preferences", MP, "POST", {
-      quiet_hours: { start: startHour, end: (startHour + 23) % 24, timezone: "UTC" },
+      // A window built around NOW, so this does not depend on when the suite runs. (It used to be
+      // 0–23, which is "every hour but 23:00" — the suite went red at 23:xx UTC on 15 Sep 2026.)
+      quiet_hours: { start: new Date().getUTCHours(), end: (new Date().getUTCHours() + 2) % 24, timezone: "UTC" },
       push_enabled: false,
     });
     expect(saved.status).toBe(201);
