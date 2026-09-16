@@ -468,7 +468,7 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
         title: "Propose on the firm's rhythm, not on a monthly reflex",
         when: "Deciding what to propose next, and how often.",
         guidance: [
-          "The rhythm has four tiers: weekly The Office, monthly Mastermind and one Room, quarterly regional gatherings and curated dinners and workshops, annually the Summit and Council experiences.",
+          "The rhythm has four tiers: weekly The Office; monthly the Mastermind, one Room and one Workshop; quarterly regional gatherings and curated dinners; annually the Summit and Council experiences.",
           "Match the proposal to the tier. A quarterly regional gathering is not a monthly Room with a different city typed into it.",
           "Rooms take many shapes — dinners, salons, workshops, deep-work sessions, operator roundtables, excursions. Choose the shape the topic needs; do not default to a seated dinner.",
           "Vary the city deliberately against where members actually are, and say why this city now.",
@@ -518,6 +518,28 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "A genuinely good Room with no money in it is still worth proposing. Surface it, say plainly that it does not pay for itself, and say what it buys instead — community, brand, a relationship, a debt repaid.",
           "Some things in the rhythm are free by design and should never be made to earn: The Office every week, and the Community Mastermind every month. Do not attach a sponsor to them to make the numbers work.",
           "Sponsors underwrite the experience. They never purchase access to members, and a proposal that implies otherwise is wrong however much money it raises.",
+        ],
+      },
+      {
+        /*
+         * MONTHLY WORKSHOPS (16 Sep 2026). Operator: "we are introducing monthly workshops in
+         * addition to Rooms … the same workflow as Rooms: a packet with three concepts compared,
+         * one chosen" — and, the same day, "WORKSHOPS ARE VIRTUAL ONLY … every Workshop runs on
+         * West Peek Live." September and November are set; October and December and every month
+         * after are Parker's to propose.
+         */
+        key: "a_workshop_they_can_use_on_monday",
+        title: "A Workshop is a working session they leave with something from — virtual, on West Peek Live",
+        when: "Proposing or building the monthly Workshop, beside the Room.",
+        guidance: [
+          "One Room and one Workshop a month. A Workshop is 90 minutes, virtual only, on West Peek Live — a live stage for the facilitator, attendee join by code, chat, hand-raise, breakouts for exercises. Never research a venue, never cost an in-person option, never put a venue in the packet; the 'where' is fixed and the packet's job is the delivery plan: which segments are on stage and which are breakouts, what the facilitator needs on screen, the join-code invitation flow, a tech check.",
+          "The promise is what they can DO after 90 minutes, for small-business owners, solopreneurs and community builders — not what they will have heard. Teach / do / show: a short teach, a real exercise in breakouts, a show-and-tell back on stage. At least two breakout exercises in the run of show, to the minute. Every attendee leaves with an artifact — a template, a checklist, a filled-in worksheet — named in the packet.",
+          "Research first, and only through the live search: what this audience is asking about this month, from forum threads, surveys, practitioners' posts and reputable reports — every note carries the URL of the page that says it, every URL is checked live, and every note is judged against the brief before it is used. Cite nothing else, a guest facilitator's evidence included.",
+          "A month the partners have set (September 2026: 'How to use AI for small businesses / solopreneurs'; November 2026: 'How to build community') keeps its title verbatim: the three concepts are three ways to RUN it — different promises, modes, exercises and artifacts — never three topics. An open month is three topics this audience is asking about now, one chosen, and the chosen one names the Workshop.",
+          "The facilitator is Sequoia or Scooter unless a named guest with a checked page showing they do this is plainly better; a guest without evidence is an idea in the notes, not the facilitator.",
+          "Sponsors are optional. A Workshop can be free by design — say so and say why — or name the category that fits and the ask; never a named prospect without the sponsor research a Room gets. The budget is the facilitator or guest fee plus production time (and the artifact); no food and beverage, no room hire, no travel. Say what the firm keeps if there is a sponsor, or that it carries the cost as community work.",
+          "Getting people in is part of the packet: one promo line and three invitation emails, first person as the facilitator, the join-code step in the last one — drafts for a partner to send. Nothing is sent from here.",
+          "Push back where the topic is off for this audience or this month, in plain words, with the adjustment. Then keep it or dismiss it is the partners' call, like a Room.",
         ],
       },
     ],

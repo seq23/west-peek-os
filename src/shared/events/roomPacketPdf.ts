@@ -1,4 +1,5 @@
 import type { InviteCheck, RoomBrief, RoomConcept, RoomEconomics, RunOfShowLine, SponsorTier } from "./roomPacket";
+import { WORKSHOP_WHERE, parkerWorkshopIntroduction, type WorkshopConcept, type WorkshopView } from "./workshopPacket";
 
 /**
  * The Room packet as a document — HTML a browser prints to PDF (15 Sep 2026).
@@ -127,6 +128,60 @@ export function packetFilename(view: Pick<PacketView, "title" | "month">): strin
   const slug = view.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "room-packet";
   return `west-peek-room-${view.month}-${slug}.pdf`;
 }
+
+/** The one stylesheet both packets print with: the family ground and ink, the canonical orange as the rule. */
+const PACKET_CSS = `  /* The family ground and ink (WEST_PEEK_BRAND_SYSTEM.md); the canonical orange as the one rule. */
+  :root{ --paper:#F7F2EA; --ink:#050505; --muted:#5F5B55; --rule:#D9D2C6; --accent:#F05A1A; --warn:#A8422A; }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink)}
+  body{font-family:"Public Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;font-size:11.5px;line-height:1.5}
+  /* A SECTION FLOWS ONTO THE NEXT SHEET; only the cover is a full sheet. The first render fixed
+     every section at 11in and broke after it, so a section that ran long left a sheet that was
+     nine-tenths blank (found by reading the rendered PDF, not the HTML). */
+  .page{width:8.5in;padding:0.6in 0.7in 0.55in;background:var(--paper);page-break-after:always;break-after:page;position:relative;display:flex;flex-direction:column}
+  .page.cover{min-height:11in}
+  .page:last-child{page-break-after:auto;break-after:auto}
+  tr,.venue,.fit,.concept,.callout,.email{break-inside:avoid;page-break-inside:avoid}
+  header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--rule);padding-bottom:6px;margin-bottom:18px}
+  .wordmark{font-family:"Oswald","Public Sans",sans-serif;font-weight:600;letter-spacing:.18em;font-size:11px}
+  .folio{font-size:9.5px;color:var(--muted);letter-spacing:.04em}
+  footer{margin-top:auto;padding-top:10px;border-top:1px solid var(--rule);font-size:8.5px;color:var(--muted);letter-spacing:.03em}
+  h1{font-family:"Oswald","Public Sans",sans-serif;font-weight:500;font-size:44px;line-height:1.04;margin:6px 0 14px;text-transform:uppercase;max-width:14ch;text-wrap:balance}
+  h2{font-family:"Oswald","Public Sans",sans-serif;font-weight:500;font-size:22px;line-height:1.1;text-transform:uppercase;letter-spacing:.01em;margin:14px 0 8px;padding-top:6px;border-top:3px solid var(--accent);display:inline-block}
+  h2 + *{margin-top:0}
+  h3{font-size:12.5px;font-weight:600;margin:12px 0 4px}
+  p{margin:0 0 6px;max-width:72ch}
+  ul{margin:0 0 8px 18px;padding:0}li{margin:0 0 3px}
+  .muted{color:var(--muted)}.warn{color:var(--warn)}
+  .kicker{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-top:40px}
+  .question{font-size:17px;line-height:1.4;max-width:52ch;margin:0 0 10px}
+  .meta{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .intro{margin-top:34px;max-width:64ch;border-left:3px solid var(--accent);padding-left:14px}
+  .intro p{font-size:12.5px}
+  .sig{font-family:"Oswald","Public Sans",sans-serif;font-size:13px;letter-spacing:.06em}
+  .cover-facts{display:flex;gap:26px;margin-top:auto;padding-top:22px;flex-wrap:wrap}
+  .cover-facts div{display:flex;flex-direction:column;gap:2px}
+  .cover-facts .label{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .cover-facts .value{font-family:"Oswald","Public Sans",sans-serif;font-size:20px;font-variant-numeric:tabular-nums}
+  .callout{border:1px solid var(--rule);border-left:3px solid var(--accent);padding:8px 12px;margin:10px 0}
+  .callout h3{margin-top:0}
+  .tag{display:inline-block;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--ink);border-radius:2px;padding:0 4px;margin-left:4px;vertical-align:middle}
+  table{width:100%;border-collapse:collapse;margin:4px 0 12px;font-size:10.5px}
+  th,td{text-align:left;vertical-align:top;padding:5px 6px;border-bottom:1px solid var(--rule)}
+  thead th{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--ink)}
+  tbody th{font-weight:600}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tr.total th,tr.total td{border-bottom:2px solid var(--ink);font-weight:600}
+  tr.chosen th,tr.chosen td{background:rgba(240,90,26,.07)}
+  .ros td.time{white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:600}
+  .concept{margin:0 0 10px}.concept.chosen{border-left:3px solid var(--accent);padding-left:10px}
+  .venue{margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--rule)}.venue.fallback{opacity:.85}
+  .fit{margin:0 0 8px}
+  .email{border:1px solid var(--rule);padding:10px 14px;margin:6px 0 8px;background:rgba(5,5,5,.02)}
+  a{color:var(--ink);text-decoration:underline;text-decoration-color:var(--rule)}
+  @page{size:8.5in 11in;margin:0}
+  @media print{.page{margin:0}}
+`;
 
 export function renderPacketHtml(v: PacketView): string {
   const chosen = v.concepts.find((c) => c.chosen) ?? null;
@@ -275,58 +330,7 @@ export function renderPacketHtml(v: PacketView): string {
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Public+Sans:ital,wght@0,400;0,600;1,400&display=swap">
 <style>
-  /* The family ground and ink (WEST_PEEK_BRAND_SYSTEM.md); the canonical orange as the one rule. */
-  :root{ --paper:#F7F2EA; --ink:#050505; --muted:#5F5B55; --rule:#D9D2C6; --accent:#F05A1A; --warn:#A8422A; }
-  *{box-sizing:border-box}
-  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink)}
-  body{font-family:"Public Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;font-size:11.5px;line-height:1.5}
-  /* A SECTION FLOWS ONTO THE NEXT SHEET; only the cover is a full sheet. The first render fixed
-     every section at 11in and broke after it, so a section that ran long left a sheet that was
-     nine-tenths blank (found by reading the rendered PDF, not the HTML). */
-  .page{width:8.5in;padding:0.6in 0.7in 0.55in;background:var(--paper);page-break-after:always;break-after:page;position:relative;display:flex;flex-direction:column}
-  .page.cover{min-height:11in}
-  .page:last-child{page-break-after:auto;break-after:auto}
-  tr,.venue,.fit,.concept,.callout,.email{break-inside:avoid;page-break-inside:avoid}
-  header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--rule);padding-bottom:6px;margin-bottom:18px}
-  .wordmark{font-family:"Oswald","Public Sans",sans-serif;font-weight:600;letter-spacing:.18em;font-size:11px}
-  .folio{font-size:9.5px;color:var(--muted);letter-spacing:.04em}
-  footer{margin-top:auto;padding-top:10px;border-top:1px solid var(--rule);font-size:8.5px;color:var(--muted);letter-spacing:.03em}
-  h1{font-family:"Oswald","Public Sans",sans-serif;font-weight:500;font-size:44px;line-height:1.04;margin:6px 0 14px;text-transform:uppercase;max-width:14ch;text-wrap:balance}
-  h2{font-family:"Oswald","Public Sans",sans-serif;font-weight:500;font-size:22px;line-height:1.1;text-transform:uppercase;letter-spacing:.01em;margin:14px 0 8px;padding-top:6px;border-top:3px solid var(--accent);display:inline-block}
-  h2 + *{margin-top:0}
-  h3{font-size:12.5px;font-weight:600;margin:12px 0 4px}
-  p{margin:0 0 6px;max-width:72ch}
-  ul{margin:0 0 8px 18px;padding:0}li{margin:0 0 3px}
-  .muted{color:var(--muted)}.warn{color:var(--warn)}
-  .kicker{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-top:40px}
-  .question{font-size:17px;line-height:1.4;max-width:52ch;margin:0 0 10px}
-  .meta{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-  .intro{margin-top:34px;max-width:64ch;border-left:3px solid var(--accent);padding-left:14px}
-  .intro p{font-size:12.5px}
-  .sig{font-family:"Oswald","Public Sans",sans-serif;font-size:13px;letter-spacing:.06em}
-  .cover-facts{display:flex;gap:26px;margin-top:auto;padding-top:22px;flex-wrap:wrap}
-  .cover-facts div{display:flex;flex-direction:column;gap:2px}
-  .cover-facts .label{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-  .cover-facts .value{font-family:"Oswald","Public Sans",sans-serif;font-size:20px;font-variant-numeric:tabular-nums}
-  .callout{border:1px solid var(--rule);border-left:3px solid var(--accent);padding:8px 12px;margin:10px 0}
-  .callout h3{margin-top:0}
-  .tag{display:inline-block;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--ink);border-radius:2px;padding:0 4px;margin-left:4px;vertical-align:middle}
-  table{width:100%;border-collapse:collapse;margin:4px 0 12px;font-size:10.5px}
-  th,td{text-align:left;vertical-align:top;padding:5px 6px;border-bottom:1px solid var(--rule)}
-  thead th{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--ink)}
-  tbody th{font-weight:600}
-  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-  tr.total th,tr.total td{border-bottom:2px solid var(--ink);font-weight:600}
-  tr.chosen th,tr.chosen td{background:rgba(240,90,26,.07)}
-  .ros td.time{white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:600}
-  .concept{margin:0 0 10px}.concept.chosen{border-left:3px solid var(--accent);padding-left:10px}
-  .venue{margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--rule)}.venue.fallback{opacity:.85}
-  .fit{margin:0 0 8px}
-  .email{border:1px solid var(--rule);padding:10px 14px;margin:6px 0 8px;background:rgba(5,5,5,.02)}
-  a{color:var(--ink);text-decoration:underline;text-decoration-color:var(--rule)}
-  @page{size:8.5in 11in;margin:0}
-  @media print{.page{margin:0}}
-</style></head>
+${PACKET_CSS}</style></head>
 <body>
 ${cover}
 ${verdict}
@@ -335,6 +339,141 @@ ${ros}
 ${sponsors}
 ${money}
 ${pitch}
+${appendix}
+</body></html>`;
+}
+
+/**
+ * THE WORKSHOP PACKET as a document (16 Sep 2026). The same paper, ink and rule as the Room packet
+ * — two packets a month apart read as one firm's work — with the Workshop's own pages: the
+ * promise, three ways to run it, the run of show with its breakouts, WHERE as a delivery plan on
+ * West Peek Live (never a venue), what they leave with, the invitations, the money, the risks.
+ */
+export function renderWorkshopHtml(v: PacketView, w: WorkshopView): string {
+  const title = v.title.replace(/^Workshop: /, "");
+  const concepts = v.concepts as WorkshopConcept[];
+  const chosen = concepts.find((c) => c.chosen) ?? null;
+  const others = concepts.filter((c) => !c.chosen);
+  const eco = w.economics;
+  const dateWord = new Date(v.generatedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+  const head = (folio: string) => `<header><span class="wordmark">WEST&thinsp;PEEK VENTURES</span><span class="folio">${esc(folio)}</span></header>`;
+
+  const cover = `<section class="page cover">
+  ${head(`Workshop packet · ${monthWord(v.month)}`)}
+  <p class="kicker">The ${esc(monthWord(v.month))} Workshop${w.topicSet ? " · title set by the partners" : ""}</p>
+  <h1>${esc(title)}</h1>
+  <p class="question">${esc(w.promise)}</p>
+  <p class="meta">${esc(WORKSHOP_WHERE)} · 90 minutes · ${v.targetMin}–${v.targetMax} people · ${esc(w.mode.toLowerCase())}</p>
+  <div class="intro">
+    ${parkerWorkshopIntroduction().map((l) => `<p>${esc(l)}</p>`).join("")}
+    <p class="sig">— Parker</p>
+  </div>
+  <div class="cover-facts">
+    <div><span class="label">Facilitator</span><span class="value">${esc(w.facilitator.name)}</span></div>
+    <div><span class="label">Cost</span><span class="value">${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}</span></div>
+    <div><span class="label">Sponsorship</span><span class="value">${eco.free ? "free by design" : usd(eco.sponsorshipUsd)}</span></div>
+    <div><span class="label">Breakout exercises</span><span class="value">${w.runOfShow.filter((l) => l.segment === "BREAKOUT").length}</span></div>
+  </div>
+  <footer>Prepared ${esc(dateWord)} by Parker for Sequoia Taylor and Scooter Taylor · Private &amp; Confidential</footer>
+</section>`;
+
+  const brief = `<section class="page">
+  ${head(title)}
+  <h2>The brief, and Parker's read of it</h2>
+  ${w.topicSet ? `<h3>Set by the partners</h3><p>The ${esc(monthWord(v.month))} Workshop's title was decided: <strong>${esc(title)}</strong>. Parker built the packet from it and did not re-ideate the topic.</p>` : v.brief && v.origin === "PARTNER_BRIEF" ? `<h3>What was asked for</h3><p>${esc(v.brief.audience)}${v.brief.notes ? ` <span class="muted">— ${esc(v.brief.notes)}</span>` : ""}</p>` : `<h3>Parker's own idea for the month</h3><p>Nobody asked for a particular Workshop; Parker proposed three and chose this one.</p>`}
+  ${v.pushback ? `<div class="callout"><h3>Where I push back</h3>${paras(v.pushback)}</div>` : ""}
+  <h3>Who it is for</h3><p>${esc(w.whoItsFor)}</p>
+  <h3>The promise — what they can do after 90 minutes</h3><p>${esc(w.promise)}</p>
+  <h3>Facilitator</h3><p><strong>${esc(w.facilitator.name)}</strong> (${w.facilitator.kind === "PARTNER" ? "partner" : "guest"}) — ${esc(w.facilitator.why)}${w.facilitator.evidenceUrl ? ` · ${link(w.facilitator.evidenceUrl)}` : ""}</p>
+  ${w.notes.length ? `<h3>What the audience is asking this month</h3><ul>${w.notes.map((n) => `<li>${esc(n.fact)} <span class="muted">— ${esc(n.source)}${n.date ? `, ${esc(n.date)}` : ""} · ${link(n.url)}</span></li>`).join("")}</ul>` : "<p class=\"muted\">No research note survived the live check and the judgement pass; the design is from the brief.</p>"}
+</section>`;
+
+  const conceptRow = (c: WorkshopConcept) => `<tr class="${c.chosen ? "chosen" : ""}">
+    <th scope="row">${esc(c.title === title ? c.promise : c.title)}${c.chosen ? ' <span class="tag">chosen</span>' : ""}<br><span class="muted">${esc(c.mode.toLowerCase())}</span></th>
+    <td>${esc(c.whoItsFor)}</td><td>${esc(c.signatureMoment)}</td><td>${esc(c.leaveWith)}</td><td>${esc(c.facilitator.name)}</td><td>${esc(c.costBand)}</td>
+  </tr>`;
+  const conceptsPage = concepts.length
+    ? `<section class="page">
+  ${head(title)}
+  <h2>Three ways to run it, compared — and the one I chose</h2>
+  ${concepts.map((c) => `<div class="concept${c.chosen ? " chosen" : ""}"><h3>${esc(c.title === title ? c.promise : c.title)}${c.chosen ? ' <span class="tag">chosen</span>' : ""}</h3><p>${esc(c.title === title ? `${c.mode.toLowerCase()} — ${c.signatureMoment}` : c.promise)}</p><p class="muted"><strong>They leave with:</strong> ${esc(c.leaveWith)}</p></div>`).join("")}
+  <table class="compare"><thead><tr><th>Concept</th><th>Who it is for</th><th>Signature exercise</th><th>They leave with</th><th>Facilitator</th><th>Cost band</th></tr></thead><tbody>${concepts.map(conceptRow).join("")}</tbody></table>
+  ${v.conceptChoiceMd ? `<div class="callout"><h3>Why ${esc(chosen ? (chosen.title === title ? "this way" : chosen.title) : "this one")} wins</h3>${paras(v.conceptChoiceMd)}</div>` : ""}
+</section>`
+    : "";
+
+  const ros = `<section class="page">
+  ${head(title)}
+  <h2>Run of show — 90 minutes</h2>
+  ${w.runOfShow.length
+    ? `<table class="ros"><thead><tr><th>Time</th><th>Min</th><th>Where</th><th>What happens</th><th>Who</th></tr></thead><tbody>${w.runOfShow.map((l) => `<tr><td class="time">${esc(l.time)}</td><td class="num">${l.minutes || ""}</td><td class="muted">${l.segment === "BREAKOUT" ? "breakout" : "stage"}</td><td>${esc(l.what)}</td><td class="muted">${esc(l.who)}</td></tr>`).join("")}</tbody></table>`
+    : "<p>No run of show was written.</p>"}
+  <h3>The exercises</h3>
+  ${w.exercises.length ? `<ul>${w.exercises.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : "<p class=\"muted\">None written.</p>"}
+  <h3>What they leave with</h3>
+  ${w.leaveWith.length ? `<ul>${w.leaveWith.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : "<p class=\"warn\">Not stated — a Workshop with no artifact is a talk.</p>"}
+  <h2>Where — ${esc(WORKSHOP_WHERE)}</h2>
+  <p>Virtual only: a live stage for the facilitator, attendee join by code, chat, hand-raise, breakouts for the exercises. No venue, no catering, no travel.</p>
+  <h3>Platform run of show</h3>
+  ${w.delivery.platformRunOfShow.length ? `<ol>${w.delivery.platformRunOfShow.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "<p class=\"muted\">Not written.</p>"}
+  <h3>On screen</h3>
+  ${w.delivery.onScreen.length ? `<ul>${w.delivery.onScreen.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "<p class=\"muted\">Not written.</p>"}
+  <h3>The join-code invitation flow</h3>
+  ${w.delivery.joinFlow.length ? `<ol>${w.delivery.joinFlow.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "<p class=\"muted\">Not written.</p>"}
+  ${w.delivery.techCheck ? `<h3>Tech check</h3>${paras(w.delivery.techCheck)}` : ""}
+</section>`;
+
+  const invites = `<section class="page">
+  ${head(title)}
+  <h2>Getting people in</h2>
+  ${w.promoOneLiner ? `<h3>The promo line</h3><p class="question">“${esc(w.promoOneLiner)}”</p>` : ""}
+  <h3>Three invitation emails — yours to send</h3>
+  ${w.invitations.length ? w.invitations.map((i) => `<div class="email"><p class="muted">${i.n}. ${esc(i.sendWhen)}</p><p><strong>${esc(i.subject)}</strong></p>${paras(i.body)}</div>`).join("") : "<p class=\"muted\">No invitations were drafted.</p>"}
+  <p class="muted">Nothing has been sent. Copy, edit, send from your own account.</p>
+</section>`;
+
+  const money = `<section class="page">
+  ${head(title)}
+  <h2>What it costs</h2>
+  <table class="budget"><thead><tr><th>Line</th><th class="num">Low</th><th class="num">High</th><th>Basis</th></tr></thead><tbody>
+  ${eco.lines.map((l) => `<tr><th scope="row">${esc(l.label)}</th><td class="num">${usd(l.lowUsd)}</td><td class="num">${usd(l.highUsd)}</td><td class="muted">${esc(l.basis)}</td></tr>`).join("")}
+  <tr class="total"><th scope="row">Total</th><td class="num">${usd(eco.estimatedCostLowUsd)}</td><td class="num">${usd(eco.estimatedCostHighUsd)}</td><td class="muted">no venue, no food and beverage, no room hire — a Workshop is virtual</td></tr>
+  </tbody></table>
+  <h2>Sponsorship</h2>
+  ${eco.free
+    ? `<p><strong>Free by design.</strong> ${esc(w.sponsorship.note)} The firm carries ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)} as community work.</p>`
+    : `<p><strong>A sponsor fits:</strong> ${esc(w.sponsorship.categoryFit ?? "category not stated")}, ask ${usd(eco.sponsorshipUsd)} — ${esc(w.sponsorship.note)} At the high-case cost the firm keeps ${usd(eco.keepUsd)}. No prospect is named without evidence; sponsor research can follow on request.</p>`}
+  <h2>What could go wrong</h2>
+  ${v.risks.length ? `<ul>${v.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : "<p>No risks named. Assume there are some.</p>"}
+  <h2>What keeping it commits the firm to</h2>
+  ${paras(v.commitmentMd ?? "Parker did not say — decide before you keep it.")}
+  ${w.flags.length ? `<p class="muted">Flags: ${esc(w.flags.map((f) => f.detail).join("; "))}.</p>` : ""}
+</section>`;
+
+  const appendix = others.length
+    ? `<section class="page">
+  ${head(`${title} · appendix`)}
+  <h2>Appendix — the two ways this one beat</h2>
+  ${others.map((c) => `<div class="concept"><h3>${esc(c.title === title ? c.promise : c.title)} <span class="muted">· ${esc(c.mode.toLowerCase())} · ${esc(c.costBand)}</span></h3><p>${esc(c.title === title ? c.signatureMoment : c.promise)}</p><p><strong>Who it is for:</strong> ${esc(c.whoItsFor)}</p><p><strong>They leave with:</strong> ${esc(c.leaveWith)}</p><p><strong>Facilitator:</strong> ${esc(c.facilitator.name)} — ${esc(c.facilitator.why)}</p></div>`).join("")}
+  <footer>Packet ${esc(v.packetId)} · built ${esc(v.generatedAt)} · West Peek OS</footer>
+</section>`
+    : "";
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>${esc(title)} — Workshop packet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Public+Sans:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+${PACKET_CSS}</style></head>
+<body>
+${cover}
+${brief}
+${conceptsPage}
+${ros}
+${invites}
+${money}
 ${appendix}
 </body></html>`;
 }

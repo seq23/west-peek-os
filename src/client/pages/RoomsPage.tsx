@@ -3,6 +3,7 @@ import { api, getDevUser, useApi } from "../lib/api";
 import { EventsPage } from "./EventsPage";
 import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
 import { sameOrg } from "@shared/events/roomPacket";
+import { WORKSHOP_SERIES, WORKSHOP_WHERE, type WorkshopView } from "@shared/events/workshopPacket";
 import { HowThisWorks } from "./HowThisWorks";
 
 /**
@@ -87,7 +88,12 @@ interface PacketRow {
   /** The downloadable PDF, once rendered. */
   document_id?: string | null;
   pushback_md?: string | null;
+  /** ROOM or WORKSHOP (16 Sep 2026). Absent on rows older than the column: a Room. */
+  kind?: "ROOM" | "WORKSHOP" | null;
 }
+
+const kindOf = (p: Pick<PacketRow, "kind">): "ROOM" | "WORKSHOP" => (p.kind === "WORKSHOP" ? "WORKSHOP" : "ROOM");
+const kindWord = (p: Pick<PacketRow, "kind">): string => (kindOf(p) === "WORKSHOP" ? "Workshop" : "Room");
 
 /** What the page says while Parker is on each stage; mirrors BUILD_STAGE_LABELS on the worker. */
 const BUILD_STAGES = ["DISCOVER", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "PDF"] as const;
@@ -101,6 +107,18 @@ const STAGE_LABELS: Record<string, string> = {
   PDF: "rendering the PDF and emailing both partners",
   DONE: "done",
 };
+/** A Workshop's stages read differently: no sponsors, no venue. Mirrors WORKSHOP_STAGE_LABELS on the worker. */
+const WORKSHOP_STAGE_LABELS: Record<string, string> = {
+  QUEUED: "waiting for Parker to pick it up",
+  DISCOVER: "researching what small-business owners, solopreneurs and community builders are asking this month",
+  RESEARCH: "(no sponsor research for a Workshop — sponsors are optional)",
+  CONCEPTS: "ideating three ways to run it and choosing one",
+  VENUES: `(no venue — a Workshop is virtual on ${WORKSHOP_WHERE})`,
+  PACKET: "writing the packet — the run of show with exercises, the delivery plan, the invitations",
+  PDF: "rendering the PDF and emailing both partners",
+  DONE: "done",
+};
+const buildStageLabel = (p: Pick<PacketRow, "kind">, stage: string): string => (kindOf(p) === "WORKSHOP" ? WORKSHOP_STAGE_LABELS : STAGE_LABELS)[stage] ?? stage;
 
 interface Concept { title: string; format: string; premise: string; tone: string; valueToSponsor: string; whoItFits: string; costBand: string; signatureMoment: string; venueDirection: string; chosen: boolean }
 interface RunOfShowLine { time: string; minutes: number; what: string; who: string }
@@ -339,7 +357,9 @@ export function RoomsPage(): JSX.Element {
     if (res.status === 201 && res.data) {
       setMessage(
         res.data.queued
-          ? "On Parker's desk. He runs the chain a stage every few minutes — sponsors with evidence, three concepts, venues, the packet, the PDF — and emails both partners when it lands, usually within the hour. The card below says which stage he is on."
+          ? kindOf(res.data.packet) === "WORKSHOP"
+            ? "On Parker's desk. He runs the chain a stage every few minutes — what the audience is asking this month, three ways to run it, the packet with its delivery plan on West Peek Live, the PDF — and emails both partners when it lands. The card under Workshops says which stage he is on."
+            : "On Parker's desk. He runs the chain a stage every few minutes — sponsors with evidence, three concepts, venues, the packet, the PDF — and emails both partners when it lands, usually within the hour. The card below says which stage he is on."
           : `That Room is already ${(PACKET_STATE[res.data.packet.status]?.label ?? res.data.packet.status).toLowerCase()}: ${res.data.packet.title}.`,
       );
       return true;
@@ -378,9 +398,16 @@ export function RoomsPage(): JSX.Element {
    */
   const live = all.filter((p) => p.status !== "DECLINED");
   const declined = all.filter((p) => p.status === "DECLINED");
-  const waiting = live.filter((p) => p.status === "PROPOSED" || p.status === "DRAFT");
+  // ROOMS AND WORKSHOPS ARE ONE QUEUE, TWO COLLECTIONS (16 Sep 2026): the same card, the same
+  // keep/dismiss, shown under their own heading so a month's Room and its Workshop do not read as
+  // two proposals for the same evening.
+  const rooms = live.filter((p) => kindOf(p) === "ROOM");
+  const workshops = live.filter((p) => kindOf(p) === "WORKSHOP");
+  const waiting = rooms.filter((p) => p.status === "PROPOSED" || p.status === "DRAFT");
   // THE KEPT COLLECTION. Approved, and approved-then-dated: both are Rooms the firm said yes to.
-  const kept = live.filter((p) => p.status === "APPROVED" || p.status === "SCHEDULED");
+  const kept = rooms.filter((p) => p.status === "APPROVED" || p.status === "SCHEDULED");
+  const workshopsWaiting = workshops.filter((p) => p.status === "PROPOSED" || p.status === "DRAFT");
+  const workshopsKept = workshops.filter((p) => p.status === "APPROVED" || p.status === "SCHEDULED");
 
   return (
     <section data-testid="rooms-page">
@@ -440,6 +467,35 @@ export function RoomsPage(): JSX.Element {
         ))}
       </div>
 
+      {/* THE WORKSHOPS COLLECTION (16 Sep 2026). Operator: "we are introducing monthly workshops in
+          addition to Rooms … the same workflow as Rooms". Same cards, same decision, own heading —
+          and September's and November's carry the titles the partners set. Virtual only. */}
+      <h3 data-testid="workshops-heading">Workshops</h3>
+      <p className="muted small">
+        One a month beside the Room: a 90-minute working session on {WORKSHOP_WHERE} for small-business
+        owners, solopreneurs and community builders — a promise they can act on, breakout exercises, an
+        artifact they leave with. {Object.keys(WORKSHOP_SERIES).sort().map((m) => `${monthWord(m)}: “${WORKSHOP_SERIES[m]}”`).join("; ")} are set by the partners; every other month Parker proposes three and chooses.
+      </p>
+      <div data-testid="workshops-waiting">
+        {!packets.loading && workshopsWaiting.length === 0 && (
+          <p className="state-empty" data-testid="workshops-empty">
+            No Workshop is being built or waiting on you. Ask Parker for one above (switch the request to Workshop), or the monthly job proposes next month's by itself.
+          </p>
+        )}
+        {workshopsWaiting.map((p) => (
+          <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} startCollapsed={false} />
+        ))}
+      </div>
+      <h4>Approved Workshops</h4>
+      <div data-testid="workshops-approved">
+        {!packets.loading && workshopsKept.length === 0 && (
+          <p className="state-empty" data-testid="workshops-approved-empty">No Workshop has been kept yet. Keeping one above puts it here.</p>
+        )}
+        {workshopsKept.map((p) => (
+          <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} startCollapsed={true} />
+        ))}
+      </div>
+
       {/* Events fold in here rather than living on their own tab. A Room IS an event, and two tabs
           for one idea made the operator choose between them every time. The distinction that
           matters is not Rooms-versus-Events but proposed-versus-happened: above is the Room being
@@ -477,7 +533,7 @@ export function RoomsPage(): JSX.Element {
                   <strong>{p.title}</strong>
                   <span className="muted">
                     {" "}
-                    — proposed for {monthWord(p.proposed_for_month)}
+                    — {kindWord(p)} proposed for {monthWord(p.proposed_for_month)}
                     {p.origin === "PARTNER_BRIEF" ? ", asked for by a partner" : ", Parker's idea"}
                     {p.decided_by ? `, turned down by ${p.decided_by}` : ""}
                   </span>
@@ -594,6 +650,8 @@ function RoomProposal(props: {
     brief: Brief | null;
     venues: VenueRow[];
     sponsors: SponsorRow[];
+    /** Only a built Workshop carries one. */
+    workshop?: WorkshopView | null;
     // Re-read when the row's status changes: a card first drawn while Parker was still building
     // (DRAFT) fetched an empty packet, and without this it kept showing "none suggested" after the
     // build finished — seen in production on the first run, 15 Sep 2026.
@@ -655,7 +713,7 @@ function RoomProposal(props: {
         {brief && <BriefBlock brief={brief} />}
         <p className="small" data-testid={`build-stage-${p.id}`}>
           <strong>Stage {Math.max(1, BUILD_STAGES.indexOf((p.build_stage === "QUEUED" ? "DISCOVER" : p.build_stage ?? "DISCOVER") as (typeof BUILD_STAGES)[number]) + 1)} of {BUILD_STAGES.length}:</strong>{" "}
-          {STAGE_LABELS[p.build_stage ?? "QUEUED"] ?? p.build_stage}.
+          {buildStageLabel(p, p.build_stage ?? "QUEUED")}.
           {p.work_card_id ? " The card is on Parker's desk on Work; the sweep advances it every few minutes." : " Parker's card opens on the next tick of the Rooms job."}
         </p>
         {p.build_error ? (
@@ -664,7 +722,7 @@ function RoomProposal(props: {
             same stage, up to three times; after that the card is blocked and waits for you to ask again or dismiss it.
           </p>
         ) : (
-          <p className="state-empty">Parker is building this Room. Every stage he finishes is kept, so a retried tick picks up where he left off. It lands here, and in both partners' inboxes with the PDF, when the chain is done.</p>
+          <p className="state-empty">Parker is building this {kindWord(p)}. Every stage he finishes is kept, so a retried tick picks up where he left off. It lands here, and in both partners' inboxes with the PDF, when the chain is done.</p>
         )}
         <div className="form-row">
           <button type="button" onClick={() => props.onDecide(p.id, "DECLINED")} data-testid={`decline-${p.id}`}>
@@ -727,7 +785,11 @@ function RoomProposal(props: {
         </p>
       )}
 
-      {d && (
+      {d && d.workshop && kindOf(p) === "WORKSHOP" && (
+        <WorkshopBody packet={p} w={d.workshop} concepts={concepts as WorkshopConceptRow[]} choice={d.packet.concept_choice_md ?? null} risks={risks} commitment={d.packet.commitment_md ?? null} />
+      )}
+
+      {d && !(d.workshop && kindOf(p) === "WORKSHOP") && (
         <>
           {/* Open by default: the one thing a partner reads before deciding whether to read on. */}
           <p className="small">
@@ -909,7 +971,7 @@ function RoomProposal(props: {
       {p.status === "PROPOSED" && (
         <div className="form-row">
           <button type="button" className="btn-strong" onClick={() => props.onDecide(p.id, "APPROVED")} data-testid={`approve-${p.id}`}>
-            Keep this Room
+            Keep this {kindWord(p)}
           </button>
           <button type="button" onClick={() => props.onDecide(p.id, "DECLINED")} data-testid={`decline-${p.id}`}>
             Dismiss it
@@ -928,6 +990,122 @@ function RoomProposal(props: {
         <p className="muted small">On the calendar. It appears in the record of gatherings below.</p>
       )}
     </article>
+  );
+}
+
+interface WorkshopConceptRow extends Concept { whoItsFor: string; promise: string; mode: string; leaveWith: string; facilitator: { name: string; kind: string; why: string; evidenceUrl: string | null } }
+
+/**
+ * A built Workshop, folded the way a Room is. No venues, no sponsor ranking, no pitch: the
+ * promise, three ways to run it, the run of show with its breakouts, the delivery plan on West
+ * Peek Live, what they leave with, the invitations, the money.
+ */
+function WorkshopBody(props: { packet: PacketRow; w: WorkshopView; concepts: WorkshopConceptRow[]; choice: string | null; risks: string[]; commitment: string | null }): JSX.Element {
+  const { packet: p, w } = props;
+  const title = p.title.replace(/^Workshop: /, "");
+  const chosen = props.concepts.find((c) => c.chosen) ?? null;
+  const eco = w.economics;
+  const breakouts = w.runOfShow.filter((l) => l.segment === "BREAKOUT").length;
+  return (
+    <div data-testid={`workshop-body-${p.id}`}>
+      <p className="small" data-testid={`workshop-promise-${p.id}`}>
+        <strong>The promise — what they can do after 90 minutes:</strong> {w.promise}
+      </p>
+      <p className="small">
+        <strong>For:</strong> {w.whoItsFor} · <strong>Facilitator:</strong> {w.facilitator.name}{w.facilitator.kind === "GUEST" ? " (guest)" : ""} — {w.facilitator.why}
+        {w.facilitator.evidenceUrl && <> · <a href={w.facilitator.evidenceUrl} target="_blank" rel="noreferrer noopener">evidence</a></>}
+      </p>
+      <p className="small" data-testid={`workshop-where-${p.id}`}><strong>Where:</strong> {WORKSHOP_WHERE} — virtual only; no venue.</p>
+
+      <Fold title="Three ways to run it, and the one chosen" fact={props.concepts.length === 0 ? "no concepts recorded" : `${chosen ? (chosen.title === title ? chosen.mode.toLowerCase() : chosen.title) : "chosen"} over ${props.concepts.length - 1} other${props.concepts.length === 2 ? "" : "s"}`} testId={`fold-concepts-${p.id}`}>
+        {props.concepts.length === 0 ? (
+          <p className="state-empty">No concepts were recorded for this one.</p>
+        ) : (
+          <>
+            <table data-testid={`packet-concepts-${p.id}`}>
+              <thead><tr><th>Concept</th><th>Who it is for</th><th>Signature exercise</th><th>They leave with</th><th>Facilitator</th><th>Cost band</th></tr></thead>
+              <tbody>
+                {props.concepts.map((c, i) => (
+                  <tr key={`${c.title}-${i}`}>
+                    <th scope="row">{c.title === title ? c.promise : c.title}{c.chosen && <span className="help-tag help-tag-good"> chosen</span>}<div className="muted small">{c.mode?.toLowerCase()}</div></th>
+                    <td className="small">{c.whoItsFor}</td><td className="small">{c.signatureMoment}</td><td className="small">{c.leaveWith}</td><td className="small">{c.facilitator?.name}</td><td className="small">{c.costBand}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {props.choice && <p className="small"><strong>Why this one:</strong> {props.choice}</p>}
+          </>
+        )}
+      </Fold>
+
+      <Fold title="Run of show — 90 minutes" fact={w.runOfShow.length ? `${w.runOfShow.length} lines, ${breakouts} breakout exercise${breakouts === 1 ? "" : "s"}` : "no run of show written"} testId={`fold-agenda-${p.id}`}>
+        {w.runOfShow.length ? (
+          <table data-testid={`packet-ros-${p.id}`}>
+            <thead><tr><th>Time</th><th>Min</th><th>Where</th><th>What happens</th><th>Who</th></tr></thead>
+            <tbody>
+              {w.runOfShow.map((l, i) => (
+                <tr key={`${l.time}-${i}`}><th scope="row">{l.time}</th><td>{l.minutes || ""}</td><td className="muted small">{l.segment === "BREAKOUT" ? "breakout" : "stage"}</td><td className="small">{l.what}</td><td className="muted small">{l.who}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="state-empty">Parker wrote no run of show. The session has no shape yet.</p>
+        )}
+        {w.exercises.length > 0 && <p className="small"><strong>Exercises:</strong> {w.exercises.join(" · ")}</p>}
+      </Fold>
+
+      <Fold title="What they leave with" fact={w.leaveWith.length ? w.leaveWith.slice(0, 2).join("; ") : "not stated"} testId={`fold-leave-with-${p.id}`}>
+        {w.leaveWith.length ? <ul className="card-list small">{w.leaveWith.map((e) => <li key={e}>{e}</li>)}</ul> : <p className="state-empty">Not stated. A Workshop with no artifact is a talk.</p>}
+      </Fold>
+
+      <Fold title={`Delivery on ${WORKSHOP_WHERE}`} fact={`${w.delivery.platformRunOfShow.length} platform step${w.delivery.platformRunOfShow.length === 1 ? "" : "s"}, ${w.delivery.joinFlow.length} join step${w.delivery.joinFlow.length === 1 ? "" : "s"}`} testId={`fold-delivery-${p.id}`}>
+        <p className="muted small">A live stage for the facilitator, attendee join by code, chat, hand-raise, breakouts for the exercises. No venue, no catering, no travel.</p>
+        {w.delivery.platformRunOfShow.length > 0 && <><p className="small"><strong>Platform run of show</strong></p><ol className="card-list small">{w.delivery.platformRunOfShow.map((x) => <li key={x}>{x}</li>)}</ol></>}
+        {w.delivery.onScreen.length > 0 && <><p className="small"><strong>On screen</strong></p><ul className="card-list small">{w.delivery.onScreen.map((x) => <li key={x}>{x}</li>)}</ul></>}
+        {w.delivery.joinFlow.length > 0 && <><p className="small"><strong>Join-code invitation flow</strong></p><ol className="card-list small">{w.delivery.joinFlow.map((x) => <li key={x}>{x}</li>)}</ol></>}
+        {w.delivery.techCheck && <p className="small"><strong>Tech check:</strong> {w.delivery.techCheck}</p>}
+      </Fold>
+
+      <Fold title="Getting people in" fact={w.invitations.length ? `${w.invitations.length} invitation email${w.invitations.length === 1 ? "" : "s"} drafted` : "no invitations drafted"} testId={`fold-invites-${p.id}`}>
+        {w.promoOneLiner && <p className="small"><strong>Promo line:</strong> “{w.promoOneLiner}”</p>}
+        {w.invitations.length === 0 ? (
+          <p className="state-empty">Parker drafted no invitations.</p>
+        ) : (
+          w.invitations.map((i) => (
+            <div className="card small" key={i.n}>
+              <p className="muted">{i.n}. {i.sendWhen}</p>
+              <p><strong>{i.subject}</strong></p>
+              <p style={{ whiteSpace: "pre-wrap" }}>{i.body}</p>
+            </div>
+          ))
+        )}
+        <p className="muted small">Nothing has been sent. Copy, edit, send from your own account.</p>
+      </Fold>
+
+      <Fold title="What it costs, and sponsorship" fact={`${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}; ${eco.free ? "free by design" : `sponsor ask ${usd(eco.sponsorshipUsd)}`}`} testId={`fold-budget-${p.id}`}>
+        <table data-testid={`workshop-budget-${p.id}`}>
+          <thead><tr><th>Line</th><th>Low</th><th>High</th><th>Basis</th></tr></thead>
+          <tbody>
+            {eco.lines.map((l) => <tr key={l.key}><th scope="row">{l.label}</th><td>{usd(l.lowUsd)}</td><td>{usd(l.highUsd)}</td><td className="muted small">{l.basis}</td></tr>)}
+            <tr><th scope="row">Total</th><td>{usd(eco.estimatedCostLowUsd)}</td><td>{usd(eco.estimatedCostHighUsd)}</td><td className="muted small">no venue, no food and beverage, no room hire</td></tr>
+          </tbody>
+        </table>
+        <p className="small">
+          {eco.free
+            ? <><strong>Free by design.</strong> {w.sponsorship.note}</>
+            : <><strong>A sponsor fits:</strong> {w.sponsorship.categoryFit ?? "category not stated"}, ask {usd(eco.sponsorshipUsd)} — the firm keeps {usd(eco.keepUsd)} at the high case. {w.sponsorship.note} No prospect is named without evidence; sponsor research can follow.</>}
+        </p>
+      </Fold>
+
+      <Fold title="What could go wrong" fact={props.risks.length === 0 ? "no risks named" : `${props.risks.length} risk${props.risks.length === 1 ? "" : "s"}`} testId={`fold-risks-${p.id}`}>
+        {props.risks.length === 0 ? <p className="state-empty">Parker named no risks. Assume there are some.</p> : <ul className="card-list small">{props.risks.map((r) => <li key={r}>{r}</li>)}</ul>}
+      </Fold>
+
+      <Fold title="What keeping it commits the firm to" fact={props.commitment ? "a date, the facilitator's time, an invitation to the community" : "Parker did not say"} testId={`fold-commitment-${p.id}`}>
+        {props.commitment ? <p className="small" style={{ whiteSpace: "pre-wrap" }}>{props.commitment}</p> : <p className="state-empty">Parker did not say. Decide what you are agreeing to before you keep it.</p>}
+      </Fold>
+      {w.flags.length > 0 && <p className="muted small">Flags: {w.flags.map((f) => f.detail).join("; ")}.</p>}
+    </div>
   );
 }
 
@@ -965,10 +1143,15 @@ function RequestRoom(props: {
   const [sponsors, setSponsors] = useState("");
   const [notes, setNotes] = useState("");
   const [seededFrom, setSeededFrom] = useState<string | null>(null);
+  // ROOM OR WORKSHOP (16 Sep 2026): one door, a switch. A Workshop is virtual — the city goes away —
+  // and a month the partners have set carries their title, locked.
+  const [kind, setKind] = useState<"ROOM" | "WORKSHOP">("ROOM");
+  const setTitle = kind === "WORKSHOP" ? (WORKSHOP_SERIES[month] ?? null) : null;
 
   // Prefill from the declined packet once per "propose again" click, not on every render.
   if (props.again && seededFrom !== props.again.id) {
     const b = briefOf(props.again);
+    setKind(kindOf(props.again));
     setAudience(b?.audience ?? props.again.audience ?? props.again.theme);
     setMonth(props.again.proposed_for_month >= monthPlus(0) ? props.again.proposed_for_month : monthPlus(1));
     setCity(b?.city ?? "New York");
@@ -981,9 +1164,10 @@ function RequestRoom(props: {
 
   async function submit(): Promise<void> {
     const ok = await props.onSubmit({
-      audience: audience.trim(),
+      kind,
+      audience: (setTitle ?? audience).trim(),
       month,
-      city: city.trim() || undefined,
+      city: kind === "WORKSHOP" ? undefined : city.trim() || undefined,
       sponsor_prospects: sponsors.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean),
       notes: notes.trim() || undefined,
       again_from: props.again?.id,
@@ -998,23 +1182,35 @@ function RequestRoom(props: {
 
   return (
     <div className="card" data-testid="request-room">
-      <h4>{props.again ? `Propose "${props.again.title}" again, with changes` : "Ask Parker for a Room"}</h4>
+      <h4>{props.again ? `Propose "${props.again.title}" again, with changes` : `Ask Parker for a ${kind === "WORKSHOP" ? "Workshop" : "Room"}`}</h4>
+      <div className="form-row" role="radiogroup" aria-label="Room or Workshop" data-testid="request-kind">
+        <label>
+          <input type="radio" name="request-kind" value="ROOM" checked={kind === "ROOM"} onChange={() => setKind("ROOM")} data-testid="request-kind-room" /> Room
+        </label>
+        <label>
+          <input type="radio" name="request-kind" value="WORKSHOP" checked={kind === "WORKSHOP"} onChange={() => setKind("WORKSHOP")} data-testid="request-kind-workshop" /> Workshop
+        </label>
+        <span className="muted small">
+          {kind === "WORKSHOP"
+            ? `A Workshop is 90 minutes, virtual only, on ${WORKSHOP_WHERE}: a promise they can act on, breakout exercises, an artifact they leave with. No venue.`
+            : "A Room is one evening built around one real question, for 25–35 people, with a venue and sponsors."}
+        </span>
+      </div>
       <p className="muted small">
-        Say what you are thinking and he builds it from your suggestions: who should be in the room,
-        the month, the city, and any sponsor you already have in mind. A sponsor you name is a seed —
-        he researches it, finds others, and ranks them all with evidence and a named contact. He
-        compares three concepts, picks one, prices the sponsorship to cover the cost plus the firm's
-        keep, and emails both partners the packet as a PDF. Nothing is booked and nobody outside the
-        firm is contacted.
+        {kind === "WORKSHOP"
+          ? "Say the topic and he builds it: what the audience is asking this month (live, checked, judged), three ways to run it compared and one chosen, the run of show with its breakouts, the delivery plan on West Peek Live, who facilitates, what they leave with, three invitation emails, the budget — and a PDF emailed to both partners. Sponsors are optional; nothing is scheduled and nobody outside the firm is contacted."
+          : "Say what you are thinking and he builds it from your suggestions: who should be in the room, the month, the city, and any sponsor you already have in mind. A sponsor you name is a seed — he researches it, finds others, and ranks them all with evidence and a named contact. He compares three concepts, picks one, prices the sponsorship to cover the cost plus the firm's keep, and emails both partners the packet as a PDF. Nothing is booked and nobody outside the firm is contacted."}
       </p>
       <div className="form-row">
         <label>
-          Audience or theme{" "}
+          Audience or topic{" "}
           <input
-            value={audience}
+            value={setTitle ?? audience}
             onChange={(e) => setAudience(e.target.value)}
-            placeholder="top Black lawyers on the rise"
+            placeholder={kind === "WORKSHOP" ? "how to price a service business" : "top Black lawyers on the rise"}
             data-testid="room-audience"
+            readOnly={setTitle !== null}
+            aria-describedby={setTitle ? "request-set-title" : undefined}
             style={{ minWidth: "18rem" }}
           />
         </label>
@@ -1022,14 +1218,21 @@ function RequestRoom(props: {
           Month{" "}
           <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} data-testid="room-month" />
         </label>
-        <label>
-          City{" "}
-          <input value={city} onChange={(e) => setCity(e.target.value)} data-testid="room-city" />
-        </label>
+        {kind === "ROOM" && (
+          <label>
+            City{" "}
+            <input value={city} onChange={(e) => setCity(e.target.value)} data-testid="room-city" />
+          </label>
+        )}
       </div>
+      {setTitle && (
+        <p className="notice small" id="request-set-title" data-testid="request-set-title">
+          The {monthWord(month)} Workshop's title is set by the partners — Parker builds its packet from “{setTitle}” and does not re-ideate the topic. Notes still reach him.
+        </p>
+      )}
       <div className="form-row">
         <label>
-          Sponsor prospects you have in mind{" "}
+          {kind === "WORKSHOP" ? "Sponsor prospects (optional for a Workshop)" : "Sponsor prospects you have in mind"}{" "}
           <input
             value={sponsors}
             onChange={(e) => setSponsors(e.target.value)}
@@ -1048,17 +1251,17 @@ function RequestRoom(props: {
           type="button"
           className="btn-strong"
           onClick={submit}
-          disabled={props.busy || audience.trim().length < 3 || !/^\d{4}-\d{2}$/.test(month)}
+          disabled={props.busy || (setTitle ?? audience).trim().length < 3 || !/^\d{4}-\d{2}$/.test(month)}
           data-testid="request-room-submit"
         >
-          {props.busy ? "Parker is working…" : props.again ? "Ask Parker to propose it again" : "Ask Parker for this Room"}
+          {props.busy ? "Parker is working…" : props.again ? "Ask Parker to propose it again" : `Ask Parker for this ${kind === "WORKSHOP" ? "Workshop" : "Room"}`}
         </button>
         {props.again ? (
           <button type="button" onClick={() => { props.onClearAgain(); setSeededFrom(null); setAudience(""); setSponsors(""); setNotes(""); }}>
             Never mind
           </button>
         ) : (
-          <button type="button" onClick={() => void props.onSubmit({ month })} disabled={props.busy} data-testid="propose-room">
+          <button type="button" onClick={() => void props.onSubmit({ month, kind })} disabled={props.busy} data-testid="propose-room">
             Or let Parker think of one
           </button>
         )}
