@@ -83,7 +83,7 @@ export function boldNumbers(line: string): string {
   return line
     .split(/(\*\*[^*]+\*\*)/)
     .map((part) =>
-      part.startsWith("**") ? part : part.replace(/(?<![\w*/.#-])(\$?\d[\d,]*(?:\.\d+)?(?:%|[kKmM]\b)?)(?!\d)(?!-\d)(?![\w*/.-]*[A-Za-z/])/g, "**$1**"),
+      part.startsWith("**") ? part : part.replace(/(?<![\w*/.#-])(?<!(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\s)(\$?\d(?:[\d,]*\d)?(?:\.\d+)?(?:%|[kKmM]\b)?)(?!\d)(?!-\d)(?![\w*/.-]*[A-Za-z/])/g, "**$1**"),
     )
     .join("");
 }

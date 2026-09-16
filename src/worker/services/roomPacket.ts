@@ -42,7 +42,31 @@ import {
   type SponsorCandidate,
   type SponsorResearch,
 } from "../../shared/events/roomPacket";
-import { packetFilename, parkerIntroduction, renderPacketHtml, type PacketView, type SponsorView, type VenueView } from "../../shared/events/roomPacketPdf";
+import { packetFilename, parkerIntroduction, renderPacketHtml, renderWorkshopHtml, type PacketView, type SponsorView, type VenueView } from "../../shared/events/roomPacketPdf";
+import {
+  WORKSHOP_SERIES,
+  WORKSHOP_WHERE,
+  buildWorkshopConceptsPrompt,
+  buildWorkshopDiscoveryPrompt,
+  buildWorkshopJudgePrompt,
+  buildWorkshopPacketPrompt,
+  computeWorkshopEconomics,
+  packetKindOf,
+  parkerWorkshopIntroduction,
+  parseWorkshopConcepts,
+  parseWorkshopNotes,
+  parseWorkshopPacket,
+  parseWorkshopVerdicts,
+  renderWorkshopText,
+  setWorkshopTitle,
+  verifyWorkshopPacket,
+  workshopTopic,
+  type PacketKind,
+  type WorkshopConcept,
+  type WorkshopFlag,
+  type WorkshopNote,
+  type WorkshopView,
+} from "../../shared/events/workshopPacket";
 import { guidanceBlock } from "../../shared/skills/library";
 import { writtenGuidance } from "./firmSkills";
 import { sendPartnerEmail } from "./execEmail";
@@ -129,6 +153,10 @@ export interface PacketRow {
   pushback_md: string | null;
   document_id: string | null;
   created_at: string;
+  /** ROOM or WORKSHOP (0171). Every row before then is a Room. */
+  kind?: PacketKind | null;
+  /** What only a Workshop has — see shared/events/workshopPacket.ts `WorkshopView`. */
+  workshop_json?: string | null;
 }
 
 /** The brief as stored. A malformed one is null, never a crash on the page. */
@@ -172,6 +200,28 @@ export const BUILD_STAGE_LABELS: Readonly<Record<BuildStage, string>> = {
   DONE: "done",
 };
 
+/**
+ * The same stages, read differently for a Workshop (16 Sep 2026): no sponsors are researched and
+ * no venue is searched — a Workshop is virtual on West Peek Live — so DISCOVER is "what is the
+ * audience asking this month", RESEARCH and VENUES are passed through, and the packet is the
+ * delivery plan. One list of stages, so the page's progress bar and the sweep's retry logic are
+ * one thing; the labels say what Parker is actually doing.
+ */
+export const WORKSHOP_STAGE_LABELS: Readonly<Record<BuildStage, string>> = {
+  QUEUED: "waiting for Parker to pick it up",
+  DISCOVER: "researching what small-business owners, solopreneurs and community builders are asking this month",
+  RESEARCH: "(no sponsor research for a Workshop — sponsors are optional)",
+  CONCEPTS: "ideating three ways to run it and choosing one",
+  VENUES: "(no venue — a Workshop is virtual on West Peek Live)",
+  PACKET: "writing the packet — the run of show with exercises, the delivery plan, the invitations",
+  PDF: "rendering the PDF and emailing both partners",
+  DONE: "done",
+};
+
+export function stageLabelFor(kind: PacketKind, stage: BuildStage): string {
+  return kind === "WORKSHOP" ? WORKSHOP_STAGE_LABELS[stage] : BUILD_STAGE_LABELS[stage];
+}
+
 /** How many sponsors get the full research treatment, and how many per tick. */
 export const MAX_RESEARCHED = 6;
 export const RESEARCH_PER_TICK = 2;
@@ -195,10 +245,15 @@ export interface BuildState {
   discoveryDetail: string | null;
   /** Candidates discovery dropped, with the status their page answered — so the packet can say who was looked at. */
   dropped: Array<{ orgName: string; url: string; status: number | null }>;
+  /** A Workshop's research: what the audience is asking, live-checked and judged. */
+  workshopNotes: WorkshopNote[];
+  workshopDropped: string[];
+  workshopRejected: Array<{ url: string; reason: string }>;
+  workshopFlags: WorkshopFlag[];
 }
 
 export function emptyState(): BuildState {
-  return { candidates: [], research: [], researched: [], inviteCheck: null, concepts: [], choiceRationale: null, pushback: null, venueHits: [], venueCitations: [], venueDetail: null, flags: [], pdfError: null, discoveryDetail: null, dropped: [] };
+  return { candidates: [], research: [], researched: [], inviteCheck: null, concepts: [], choiceRationale: null, pushback: null, venueHits: [], venueCitations: [], venueDetail: null, flags: [], pdfError: null, discoveryDetail: null, dropped: [], workshopNotes: [], workshopDropped: [], workshopRejected: [], workshopFlags: [] };
 }
 
 export function parseState(raw: string | null): BuildState {
@@ -239,9 +294,13 @@ const GUARDED_NOTE = " [page exists but refused an automated read — verify by 
 export type PageText = (url: string) => Promise<string | null>;
 export type RenderPdf = (html: string) => Promise<{ pdfBase64: string; pageCount: number } | { pdfBase64: null; reason: string }>;
 
+/** The judgement pass over what the search model found (a Workshop's research notes). */
+export type Judge = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
+
 export interface ChainDeps {
   search?: VenueSearch;
   research?: ResearchSearch;
+  judge?: Judge;
   synthesise?: Synthesise;
   urlCheck?: UrlCheck;
   pageText?: PageText;
@@ -267,6 +326,21 @@ const defaultResearch: ResearchSearch = async (env, actor, prompt) => {
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", citations: [], detail: run.failure_reason ?? `run ${run.status}` };
   if (run.model !== SEARCH_MODEL) return { ok: false, text: "", citations: [], detail: `search was routed to ${run.model ?? "an unknown model"}, which cannot search the web` };
   return { ok: true, text: run.output_text, citations: extractUrls(run.output_text), detail: "ok" };
+};
+
+/** The judge reads what the searcher wrote and holds it to the brief; it must not be the search model. */
+const defaultJudge: Judge = async (env, actor, prompt) => {
+  const { run } = await runAi(env, {
+    purpose: "Parker: Workshop research judgement",
+    actor,
+    inputs: [prompt],
+    sensitivity: "PUBLIC" as never,
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter" },
+    routing: { category: "INTELLIGENCE" },
+  });
+  if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
+  if (run.model === SEARCH_MODEL) return { ok: false, text: "", detail: "the judgement was routed to the search model" };
+  return { ok: true, text: run.output_text, detail: "ok" };
 };
 
 async function defaultSynthesise(env: Env, actor: Actor, purpose: string, prompt: string, expectedOutputTokens: number): Promise<{ text: string; aiRunId: string | null }> {
@@ -323,15 +397,40 @@ export const PARKER_ACTOR = (firmScope: string): Actor => ({ type: "AI", aiEmplo
 export async function queueDraft(
   env: Env,
   actor: Actor,
-  input: { month: string; origin: PacketOrigin; brief?: RoomBrief | null; parentPacketId?: string | null },
+  input: { month: string; origin: PacketOrigin; brief?: RoomBrief | null; parentPacketId?: string | null; kind?: PacketKind },
 ): Promise<PacketRow> {
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const authz = await authorize(env, actor, "room_packet.manage", { objectType: "room_packet", firmScope });
   if (authz.decision !== "ALLOW") throw new RoomPacketError(403, "forbidden", authz.reason);
 
+  const kind: PacketKind = input.kind ?? "ROOM";
   const id = `rpk_${crypto.randomUUID()}`;
-  const theme = input.brief?.audience ?? "Parker's proposal for the month";
-  const title = input.brief ? `Room requested: ${input.brief.audience.slice(0, 70)}` : `Parker's Room for ${input.month}`;
+  // A WORKSHOP IN A SERIES MONTH IS BUILT FROM THE SET TITLE, whatever was typed: the partners
+  // decided September and November; the brief's own words are kept as notes for Parker.
+  const setTitle = kind === "WORKSHOP" ? setWorkshopTitle(input.month) : null;
+  let brief = input.brief ?? null;
+  if (kind === "WORKSHOP") {
+    const asked = brief?.audience?.trim() && brief.audience !== "Parker's own Room" ? brief.audience.trim() : null;
+    brief = {
+      audience: setTitle ?? asked ?? "Parker's own Workshop",
+      month: input.month,
+      city: null,
+      sponsorProspects: brief?.sponsorProspects ?? [],
+      notes: [setTitle && asked && asked !== setTitle ? `Asked as: ${asked}` : null, brief?.notes ?? null].filter(Boolean).join(" · ") || null,
+      kind: "WORKSHOP",
+    } as RoomBrief;
+  }
+  const theme = kind === "WORKSHOP" ? (setTitle ?? brief?.audience ?? "Parker's Workshop for the month") : (brief?.audience ?? "Parker's proposal for the month");
+  const title =
+    kind === "WORKSHOP"
+      ? setTitle
+        ? `Workshop: ${setTitle.slice(0, 70)}`
+        : brief && brief.audience !== "Parker's own Workshop" && input.origin === "PARTNER_BRIEF"
+          ? `Workshop requested: ${brief.audience.slice(0, 70)}`
+          : `Parker's Workshop for ${input.month}`
+      : brief
+        ? `Room requested: ${brief.audience.slice(0, 70)}`
+        : `Parker's Room for ${input.month}`;
   const existing = await env.WP_OS_DB.prepare(
     "SELECT * FROM evt_room_packet WHERE firm_scope = ?1 AND proposed_for_month = ?2 AND title = ?3",
   ).bind(firmScope, input.month, title).first<PacketRow>();
@@ -340,15 +439,16 @@ export async function queueDraft(
   await env.WP_OS_DB.prepare(
     `INSERT INTO evt_room_packet
        (id, title, theme, status, proposed_for_month, origin, brief_json, requested_by, parent_packet_id,
-        firm_scope, created_by, build_stage)
-     VALUES (?1,?2,?3,'DRAFT',?4,?5,?6,?7,?8,?9,?10,'QUEUED')`,
+        firm_scope, created_by, build_stage, kind, format)
+     VALUES (?1,?2,?3,'DRAFT',?4,?5,?6,?7,?8,?9,?10,'QUEUED',?11,?12)`,
   )
     .bind(
       id, title, theme, input.month, input.origin,
-      input.brief ? JSON.stringify(input.brief) : null,
+      brief ? JSON.stringify(brief) : null,
       input.origin === "PARTNER_BRIEF" ? (actor.firmUserId ?? null) : null,
       input.parentPacketId ?? null,
       firmScope, actor.firmUserId ?? actor.aiEmployeeId ?? "Parker",
+      kind, kind === "WORKSHOP" ? "WORKSHOP" : "DINNER",
     )
     .run();
 
@@ -357,7 +457,7 @@ export async function queueDraft(
     actorType: actor.type === "HUMAN" ? "firm_user" : "ai_employee",
     actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "Parker",
     objectType: "room_packet", objectId: id, firmScope,
-    payload: { month: input.month, origin: input.origin, sponsors_named: input.brief?.sponsorProspects.length ?? 0, parent: input.parentPacketId ?? null },
+    payload: { month: input.month, origin: input.origin, kind, sponsors_named: brief?.sponsorProspects.length ?? 0, parent: input.parentPacketId ?? null, title_set: Boolean(setTitle) },
   });
   return await requirePacket(env, id);
 }
@@ -372,15 +472,27 @@ export async function openPacketCard(env: Env, draft: PacketRow): Promise<{ open
     if (live && live.state !== "CANCELLED" && live.state !== "DONE") return { opened: false, cardId: live.id };
   }
   const brief = parseBrief(draft.brief_json);
-  const title = `Parker: build the ${monthWord(draft.proposed_for_month)} Room packet — ${draft.title.slice(0, 60)}`;
+  const kind = packetKindOf(draft.kind);
+  const title = kind === "WORKSHOP"
+    ? `Parker: build the ${monthWord(draft.proposed_for_month)} Workshop packet — ${draft.title.replace(/^Workshop(?: requested)?: /, "").slice(0, 60)}`
+    : `Parker: build the ${monthWord(draft.proposed_for_month)} Room packet — ${draft.title.slice(0, 60)}`;
   const card = await createWorkCardInternal(env, sweepIdentity(draft.firm_scope), {
     title,
-    description: [
-      brief ? `A partner asked for this Room: "${brief.audience}"${brief.city ? ` in ${brief.city}` : ""}${brief.sponsorProspects.length ? `; sponsors named: ${brief.sponsorProspects.join(", ")}` : ""}${brief.notes ? `. Notes: ${brief.notes}` : "."}` : `Parker's own Room for ${monthWord(draft.proposed_for_month)}.`,
-      "",
-      "The chain, one stage per sweep tick: read the firm's list and discover who pays to reach this audience → research each sponsor (programme, the people who run partnerships, their own words) → three concepts compared, one chosen → venues for the winner → the packet (run of show to the minute, budget with basis, sponsorship structure priced to cost + the firm's keep, the pitch email) → the PDF, emailed to both partners.",
-      `Packet: ${draft.id}. Nothing is booked and nobody outside the firm is contacted.`,
-    ].join("\n"),
+    description: kind === "WORKSHOP"
+      ? [
+          setWorkshopTitle(draft.proposed_for_month)
+            ? `The ${monthWord(draft.proposed_for_month)} Workshop's title is SET by the partners: "${setWorkshopTitle(draft.proposed_for_month)}". Build its packet from that title; do not re-ideate the topic.${brief?.notes ? ` Notes: ${brief.notes}` : ""}`
+            : brief && brief.audience !== "Parker's own Workshop" ? `A partner asked for this Workshop: "${brief.audience}"${brief.notes ? `. Notes: ${brief.notes}` : "."}` : `Parker's own Workshop for ${monthWord(draft.proposed_for_month)}: propose three and choose.`,
+          "",
+          `The chain, one stage per sweep tick: research what small-business owners, solopreneurs and community builders are asking this month (live search, every URL checked, every note judged) → three ways to run it compared, one chosen → the packet (the promise, the run of show to the minute with breakout exercises, what they leave with, the facilitator, the delivery plan on ${WORKSHOP_WHERE}, sponsorship optional, the promo line, three invitation emails, the budget) → the PDF, emailed to both partners.`,
+          `Packet: ${draft.id}. Virtual only — no venue is researched. Nothing is scheduled and nobody outside the firm is contacted.`,
+        ].join("\n")
+      : [
+          brief ? `A partner asked for this Room: "${brief.audience}"${brief.city ? ` in ${brief.city}` : ""}${brief.sponsorProspects.length ? `; sponsors named: ${brief.sponsorProspects.join(", ")}` : ""}${brief.notes ? `. Notes: ${brief.notes}` : "."}` : `Parker's own Room for ${monthWord(draft.proposed_for_month)}.`,
+          "",
+          "The chain, one stage per sweep tick: read the firm's list and discover who pays to reach this audience → research each sponsor (programme, the people who run partnerships, their own words) → three concepts compared, one chosen → venues for the winner → the packet (run of show to the minute, budget with basis, sponsorship structure priced to cost + the firm's keep, the pitch email) → the PDF, emailed to both partners.",
+          `Packet: ${draft.id}. Nothing is booked and nobody outside the firm is contacted.`,
+        ].join("\n"),
     owner_type: "AI",
     owner_id: "aie_parker",
     priority: "NORMAL",
@@ -458,6 +570,16 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
     await env.WP_OS_DB.prepare("UPDATE evt_room_packet SET build_error = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1").bind(draft.id, `${stage}: ${detail}`.slice(0, 500)).run();
     throw new RoomPacketError(502, "stage_failed", `${stage}: ${detail}`);
   };
+
+  // A WORKSHOP TAKES THE SAME STAGES WITH A DIFFERENT BRIEF — and no sponsors, no venue.
+  if (packetKindOf(draft.kind) === "WORKSHOP") {
+    try {
+      return await runWorkshopStage(env, draft, stage, state, { research, judge: deps.judge ?? defaultJudge, synth, check, render: deps.render ?? ((html: string) => defaultRender(env, html)), actor });
+    } catch (err) {
+      if (err instanceof RoomPacketError) throw err;
+      return await failStage(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   try {
     if (stage === "DISCOVER") {
@@ -623,6 +745,187 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
     if (err instanceof RoomPacketError) throw err;
     return await failStage(err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * THE WORKSHOP BRANCH of the chain (16 Sep 2026). DISCOVER researches what the audience is asking
+ * this month — the search model finds pages, every URL is checked live, every note is judged by a
+ * second model before it is kept. RESEARCH and VENUES are passed straight through: sponsors are
+ * optional for a Workshop and the "where" is fixed (Virtual · West Peek Live). CONCEPTS ideates
+ * three ways to run it (or three topics, for an open month) and chooses one; PACKET writes the
+ * delivery plan; PDF renders and emails, exactly as a Room does.
+ */
+async function runWorkshopStage(
+  env: Env,
+  draft: PacketRow,
+  stage: BuildStage,
+  state: BuildState,
+  deps: { research: ResearchSearch; judge: Judge; synth: (purpose: string, prompt: string, tokens: number) => Promise<{ text: string; aiRunId: string | null }>; check: UrlCheck; render: RenderPdf; actor: Actor },
+): Promise<StageResult> {
+  const firmScope = draft.firm_scope;
+  const brief = parseBrief(draft.brief_json);
+  const { topic, set } = workshopTopic(draft.proposed_for_month, brief);
+  const setTitle = set ? topic : null;
+  const fail = (detail: string): never => { throw new Error(detail); };
+
+  if (stage === "DISCOVER") {
+    let notes: WorkshopNote[] = [];
+    let why = "";
+    let nudge = "";
+    for (let attempt = 0; attempt < 2 && notes.length === 0; attempt += 1) {
+      const found = await deps.research(env, deps.actor, buildWorkshopDiscoveryPrompt({ month: draft.proposed_for_month, topic, set, brief }) + (nudge ? `\n\n${nudge}` : ""));
+      if (!found.ok) { why = `the live search failed: ${found.detail}`; continue; }
+      const parsed = parseWorkshopNotes(found.text);
+      const checked = await Promise.all(parsed.map(async (n) => ({ n, verdict: evidenceVerdict(await deps.check(n.url)) })));
+      const live = checked.filter((c) => c.verdict !== "dead").map((c) => c.n);
+      state.workshopDropped = checked.filter((c) => c.verdict === "dead").map((c) => c.n.url);
+      if (live.length === 0) {
+        why = parsed.length === 0 ? "the search answered with no usable entry (no url on any)" : `every cited page was dead: ${state.workshopDropped.join(", ")}`;
+        nudge = `Your previous answer was discarded: ${why}. Every entry MUST carry the url of a live page that states it.`;
+        continue;
+      }
+      const judged = await deps.judge(env, deps.actor, buildWorkshopJudgePrompt({ topic, notes: live }));
+      if (!judged.ok) return fail(`the judgement pass failed: ${judged.detail}`);
+      const verdicts = parseWorkshopVerdicts(judged.text);
+      if (verdicts.size === 0) return fail("the judge answered with no verdicts");
+      state.workshopRejected = [];
+      for (const n of live) {
+        const v = verdicts.get(n.url.toLowerCase());
+        if (v?.keep) notes.push(n);
+        else state.workshopRejected.push({ url: n.url, reason: v?.reason ?? "the judge gave no verdict on it" });
+      }
+      if (notes.length === 0) {
+        why = `the judge rejected every note: ${state.workshopRejected.map((r) => `${r.url} — ${r.reason}`).join("; ")}`;
+        nudge = `Your previous answer was discarded. Rejected: ${state.workshopRejected.map((r) => `${r.url} (${r.reason})`).join("; ")}. Find specific, dated questions and findings on credible pages.`;
+      }
+    }
+    // A Workshop CAN be designed from what the firm knows this audience needs; a Room's sponsors
+    // cannot. So no note is not a failure — the packet says the research came back empty.
+    state.workshopNotes = notes;
+    state.discoveryDetail = notes.length ? `${notes.length} note(s) on what the audience is asking, live-checked and judged` : `no research note survived (${why || "nothing usable"}); designing from the brief`;
+    await saveStage(env, draft.id, "CONCEPTS", state);
+    return { stage, next: "CONCEPTS", note: state.discoveryDetail };
+  }
+
+  if (stage === "RESEARCH" || stage === "VENUES") {
+    // Passed through: a Workshop researches no sponsor and searches no venue.
+    const next: BuildStage = stage === "RESEARCH" ? "CONCEPTS" : "PACKET";
+    await saveStage(env, draft.id, next, state);
+    return { stage, next, note: stage === "RESEARCH" ? "no sponsor research for a Workshop" : `no venue — ${WORKSHOP_WHERE}` };
+  }
+
+  if (stage === "CONCEPTS") {
+    const recent = await env.WP_OS_DB.prepare(
+      "SELECT title FROM evt_room_packet WHERE firm_scope = ?1 AND id != ?2 AND status != 'DRAFT' ORDER BY created_at DESC LIMIT 8",
+    ).bind(firmScope, draft.id).all<{ title: string }>();
+    const prompt = buildWorkshopConceptsPrompt({ month: draft.proposed_for_month, topic, set, brief, notes: state.workshopNotes, recentTitles: (recent.results ?? []).map((r) => r.title), guidance: await guidanceFor(env, firmScope) });
+    const { text } = await deps.synth("Workshop packet: three concepts", prompt, 3000);
+    const parsed = parseWorkshopConcepts(text, setTitle);
+    if (!parsed) return fail("the concepts did not come back in a usable shape");
+    state.concepts = parsed.concepts;
+    state.choiceRationale = parsed.choiceRationale;
+    state.pushback = parsed.pushback;
+    await saveStage(env, draft.id, "PACKET", state);
+    const chosen = parsed.concepts.find((c) => c.chosen)!;
+    return { stage, next: "PACKET", note: `chose "${chosen.title}" (${(chosen as WorkshopConcept).mode.toLowerCase()}: ${(chosen as WorkshopConcept).promise.slice(0, 80)}) over ${parsed.concepts.length - 1} other(s)${set ? "; the title is the partners'" : ""}${parsed.pushback ? `; pushback: ${parsed.pushback.slice(0, 120)}` : ""}` };
+  }
+
+  if (stage === "PACKET") {
+    const prompt = buildWorkshopPacketPrompt({
+      month: draft.proposed_for_month, topic, set, brief, notes: state.workshopNotes,
+      concepts: state.concepts as WorkshopConcept[], choiceRationale: state.choiceRationale, pushback: state.pushback,
+      guidance: await guidanceFor(env, firmScope),
+    });
+    const { text, aiRunId } = await deps.synth("Workshop packet proposal", prompt, 6000);
+    const parsed = parseWorkshopPacket(text, setTitle);
+    if (!parsed) return fail("the proposal did not come back as a usable Workshop packet");
+    const verified = verifyWorkshopPacket(parsed, state.workshopNotes.map((n) => n.url), text);
+    const economics = computeWorkshopEconomics(verified.packet);
+    state.workshopFlags = verified.flags;
+    await storeWorkshopPacket(env, draft, verified.packet, economics, aiRunId, state, set);
+    return { stage, next: "PDF", note: `"${verified.packet.title}": ${verified.packet.runOfShow.length} run-of-show lines (${verified.packet.runOfShow.filter((l) => l.segment === "BREAKOUT").length} breakouts), ${verified.packet.leaveWith.length} artifact(s), ${verified.packet.invitations.length} invitation(s), ${verified.packet.sponsorship.free ? "free by design" : `sponsor ask $${(verified.packet.sponsorship.askUsd ?? 0).toLocaleString("en-US")}`}${verified.flags.length ? `; flags: ${verified.flags.map((f) => f.code).join(", ")}` : ""}` };
+  }
+
+  if (stage === "PDF") {
+    const built = await requirePacket(env, draft.id);
+    const view = await packetView(env, built);
+    const w = workshopViewOf(built);
+    if (!w) return fail("the Workshop packet was not stored; nothing to render");
+    const out = await deps.render(renderWorkshopHtml(view, w));
+    let documentId: string | null = null;
+    if (out.pdfBase64 === null) {
+      state.pdfError = out.reason;
+    } else {
+      const { document } = await uploadDocument(env, deps.actor, {
+        title: `Workshop packet — ${built.title} (${monthWord(built.proposed_for_month)})`,
+        doc_type: "ROOM_PACKET",
+        privacy_label: "INTERNAL",
+        content_base64: out.pdfBase64,
+        content_type: "application/pdf",
+      });
+      documentId = document.id;
+      state.pdfError = null;
+      await env.WP_OS_DB.prepare("UPDATE evt_room_packet SET document_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1").bind(built.id, documentId).run();
+    }
+    await saveStage(env, draft.id, "DONE", state);
+    const mail = await emailPacket(env, { ...built, document_id: documentId });
+    return { stage, next: "DONE", note: `${documentId ? `PDF ${documentId} (${out.pdfBase64 !== null ? out.pageCount : 0} pages)` : `no PDF: ${state.pdfError}`}; emailed to ${mail.sent.length ? mail.sent.join(" and ") : "nobody"}${mail.failed.length ? ` (not sent: ${mail.failed.join(", ")})` : ""}` };
+  }
+
+  return { stage, next: "DONE", note: "already done" };
+}
+
+/** The Workshop's rows: the packet row with `workshop_json`. NO venue rows and NO sponsor rows are written — ever. */
+async function storeWorkshopPacket(env: Env, draft: PacketRow, packet: WorkshopPacketShape, economics: ReturnType<typeof computeWorkshopEconomics>, aiRunId: string | null, state: BuildState, topicSet: boolean): Promise<void> {
+  const firmScope = draft.firm_scope;
+  const clash = await env.WP_OS_DB.prepare(
+    "SELECT id FROM evt_room_packet WHERE firm_scope = ?1 AND proposed_for_month = ?2 AND title = ?3 AND id != ?4",
+  ).bind(firmScope, draft.proposed_for_month, packet.title, draft.id).first<{ id: string }>();
+  const title = clash ? `${packet.title} (${draft.proposed_for_month})` : packet.title;
+  const view: WorkshopView = {
+    whoItsFor: packet.whoItsFor, promise: packet.promise, mode: packet.mode, runOfShow: packet.runOfShow, exercises: packet.exercises,
+    leaveWith: packet.leaveWith, facilitator: packet.facilitator, delivery: packet.delivery, sponsorship: packet.sponsorship,
+    promoOneLiner: packet.promoOneLiner, invitations: packet.invitations, economics, notes: state.workshopNotes, flags: state.workshopFlags, topicSet,
+  };
+  await env.WP_OS_DB.batch([
+    env.WP_OS_DB.prepare(
+      `UPDATE evt_room_packet
+          SET title = ?2, theme = ?3, central_question = ?4, status = 'PROPOSED', format = 'WORKSHOP',
+              target_min = ?5, target_max = ?6, audience = ?7, agenda_md = NULL, seed_questions_json = ?8,
+              guest_ideas_json = '[]', economics_json = ?9, sponsor_thesis = ?10, ai_run_id = ?11,
+              sponsor_count = ?12, sponsor_total_usd = ?13, risks_json = ?14, commitment_md = ?15,
+              concepts_json = ?16, concept_choice_md = ?17, run_of_show_json = ?18, pitch_email_json = NULL,
+              invite_check_json = NULL, pushback_md = ?19, build_stage = 'PDF', build_state_json = ?20,
+              workshop_json = ?21, live_url = 'https://westpeek.live',
+              build_error = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1`,
+    ).bind(
+      draft.id, title, packet.topic, packet.promise,
+      packet.targetMin, packet.targetMax, packet.whoItsFor, JSON.stringify(packet.exercises),
+      JSON.stringify(economics), packet.sponsorship.free ? null : packet.sponsorship.note, aiRunId,
+      packet.sponsorship.free ? 0 : 1, economics.sponsorshipUsd, JSON.stringify(packet.risks), packet.commitmentMd,
+      JSON.stringify(state.concepts), packet.conceptChoiceMd ?? state.choiceRationale, JSON.stringify(packet.runOfShow),
+      packet.pushback ?? state.pushback, JSON.stringify(state), JSON.stringify(view),
+    ),
+    // A rebuild replaces what an earlier attempt wrote, and a Workshop never has a venue.
+    env.WP_OS_DB.prepare("DELETE FROM evt_packet_venue WHERE packet_id = ?1").bind(draft.id),
+    env.WP_OS_DB.prepare("DELETE FROM evt_sponsor_prospect WHERE packet_id = ?1 AND stage = 'IDENTIFIED'").bind(draft.id),
+  ]);
+  await appendEvent(env, {
+    eventType: "room_packet.proposed",
+    actorType: "ai_employee",
+    actorId: "aie_parker",
+    objectType: "room_packet", objectId: draft.id, firmScope,
+    payload: { kind: "WORKSHOP", month: draft.proposed_for_month, origin: draft.origin, title_set: topicSet, free: packet.sponsorship.free, cost_high_usd: economics.estimatedCostHighUsd, concept: state.concepts.find((c) => c.chosen)?.title ?? null, flags: state.workshopFlags.map((f) => f.code) },
+  });
+}
+
+type WorkshopPacketShape = NonNullable<ReturnType<typeof parseWorkshopPacket>>;
+
+/** The Workshop half of a packet row, or null for a Room / an unbuilt Workshop. */
+export function workshopViewOf(packet: Pick<PacketRow, "kind" | "workshop_json">): WorkshopView | null {
+  if (packetKindOf(packet.kind) !== "WORKSHOP" || !packet.workshop_json) return null;
+  try { return JSON.parse(packet.workshop_json) as WorkshopView; } catch { return null; }
 }
 
 async function guidanceFor(env: Env, firmScope: string): Promise<string> {
@@ -934,6 +1237,65 @@ export function packetSummary(packet: PacketRow, venues: VenueLine[], sponsors: 
   };
 }
 
+/** The Workshop as plain text, from its stored view. */
+export function renderWorkshopPacketText(packet: PacketRow, w: WorkshopView): string {
+  return renderWorkshopText({
+    title: packet.title.replace(/^Workshop: /, ""),
+    month: packet.proposed_for_month,
+    monthWord: monthWord(packet.proposed_for_month),
+    documentId: packet.document_id,
+    brief: parseBrief(packet.brief_json),
+    concepts: list<WorkshopConcept>(packet.concepts_json),
+    conceptChoiceMd: packet.concept_choice_md,
+    pushback: packet.pushback_md,
+    view: w,
+    risks: list<string>(packet.risks_json),
+    commitmentMd: packet.commitment_md,
+  });
+}
+
+/** The busy-executive summary above a Workshop packet: the promise, who runs it, what it costs, the one decision. */
+export function workshopSummary(packet: PacketRow, w: WorkshopView): { tldr: string; sections: ExecEmailInput["sections"] } {
+  const title = packet.title.replace(/^Workshop: /, "");
+  const concepts = list<WorkshopConcept>(packet.concepts_json);
+  const others = concepts.filter((c) => !c.chosen);
+  const eco = w.economics;
+  const usd = (n: number): string => `$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
+  return {
+    tldr: `A ${monthWord(packet.proposed_for_month)} Workshop proposed: **${title}** — ${w.promise.replace(/[.\s]+$/, "")}. ${WORKSHOP_WHERE}, ${packet.target_min}–${packet.target_max} people, ${eco.free ? "free by design" : `sponsor ask ${usd(eco.sponsorshipUsd)}`}, cost ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}. Keep it or dismiss it on Events & Rooms.`,
+    sections: [
+      { label: "What you asked", bullets: [w.topicSet ? `The ${monthWord(packet.proposed_for_month)} Workshop, title set by the partners: **${title}**.` : parseBrief(packet.brief_json)?.audience && packet.origin === "PARTNER_BRIEF" ? `A Workshop on: ${parseBrief(packet.brief_json)!.audience}` : `Parker's own Workshop for ${monthWord(packet.proposed_for_month)} — three proposed, one chosen.`] },
+      {
+        label: "What I did",
+        bullets: [
+          `Researched what the audience is asking this month: **${w.notes.length}** note(s) live-checked and judged.`,
+          `Compared **${concepts.length}** ways to run it and chose one; wrote the run of show with **${w.runOfShow.filter((l) => l.segment === "BREAKOUT").length}** breakout exercise(s), the delivery plan on West Peek Live, and **${w.invitations.length}** invitation emails.`,
+          packet.document_id ? `Filed the packet as a PDF: https://os.joinwestpeek.com/api/documents/${packet.document_id}/download` : "The PDF did not file; the packet is on Events & Rooms.",
+        ],
+      },
+      {
+        label: "What I found",
+        bullets: [
+          `Promise: ${w.promise}`,
+          `For: ${w.whoItsFor} · mode: ${w.mode.toLowerCase()} · facilitator: **${w.facilitator.name}**${w.facilitator.kind === "GUEST" ? " (guest)" : ""}.`,
+          ...(w.leaveWith.length ? [`They leave with: ${w.leaveWith.slice(0, 3).join("; ")}.`] : []),
+          ...(others.length ? [`Beat: ${others.map((c) => `**${c.title === title ? c.promise.slice(0, 60) : c.title}**`).join(", ")}.`] : []),
+          eco.free ? `Money: ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}, carried by the firm as community work — no sponsor sought.` : `Money: cost ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}; a ${w.sponsorship.categoryFit ?? "sponsor"} at ${usd(eco.sponsorshipUsd)} leaves the firm ${usd(eco.keepUsd)}.`,
+          ...(w.flags.length ? [`Flags: ${w.flags.map((f) => f.detail).join("; ")}.`] : []),
+        ],
+      },
+      {
+        label: "Your call",
+        bullets: [
+          "Keep it or dismiss it: https://os.joinwestpeek.com/#/rooms",
+          ...(packet.pushback_md ? [`Where I push back: ${packet.pushback_md}`] : []),
+          "Virtual on West Peek Live; nothing is scheduled and nobody outside the firm has been contacted.",
+        ],
+      },
+    ],
+  };
+}
+
 /** The packet as plain text — the email body, and what a partner can forward. */
 export function renderPacketText(packet: PacketRow, venues: VenueLine[], sponsors: SponsorLine[]): string {
   const v = viewFromRows(packet, venues, sponsors);
@@ -1024,15 +1386,16 @@ export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: 
   ]);
   const venueRows = (venues?.results ?? []) as VenueLine[];
   const sponsorRows = (sponsors?.results ?? []) as SponsorLine[];
-  const text = renderPacketText(packet, venueRows, sponsorRows);
+  const workshop = workshopViewOf(packet);
+  const text = workshop ? renderWorkshopPacketText(packet, workshop) : renderPacketText(packet, venueRows, sponsorRows);
   const monthName = monthWord(packet.proposed_for_month);
-  const summary = packetSummary(packet, venueRows, sponsorRows);
+  const summary = workshop ? workshopSummary(packet, workshop) : packetSummary(packet, venueRows, sponsorRows);
   const sent: string[] = [];
   const failed: string[] = [];
   for (const to of ASSIGNING_PARTNERS) {
     const out = await sendPartnerEmail(env, {
       to,
-      email: { employee: "Parker", what: `your ${monthName} Room — ${packet.title}${packet.document_id ? " (PDF inside)" : ""}`, tldr: summary.tldr, sections: summary.sections, details: text },
+      email: { employee: "Parker", what: `your ${monthName} ${workshop ? "Workshop" : "Room"} — ${packet.title.replace(/^Workshop: /, "")}${packet.document_id ? " (PDF inside)" : ""}`, tldr: summary.tldr, sections: summary.sections, details: text },
       objectType: "room_packet", objectId: packet.id, firmScope: packet.firm_scope, actorId: "aie_parker",
     });
     (out.sent ? sent : failed).push(to);
@@ -1044,8 +1407,10 @@ export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: 
   await notifyPartners(env, {
     kind: "MEETING",
     severity: "INFO",
-    title: `Parker proposed a Room for ${monthName}: ${packet.title.slice(0, 70)}`,
-    body: `${packet.central_question ?? packet.theme} · ${packet.sponsor_count} sponsor slot(s), $${Math.round(packet.sponsor_total_usd).toLocaleString("en-US")} if all land.${packet.document_id ? " PDF attached on Events & Rooms." : ""} Keep it or dismiss it there.`,
+    title: `Parker proposed a ${workshop ? "Workshop" : "Room"} for ${monthName}: ${packet.title.replace(/^Workshop: /, "").slice(0, 70)}`,
+    body: workshop
+      ? `${workshop.promise} · ${WORKSHOP_WHERE} · ${workshop.sponsorship.free ? "free by design" : `sponsor ask $${Math.round(workshop.economics.sponsorshipUsd).toLocaleString("en-US")}`}.${packet.document_id ? " PDF attached on Events & Rooms." : ""} Keep it or dismiss it there.`
+      : `${packet.central_question ?? packet.theme} · ${packet.sponsor_count} sponsor slot(s), $${Math.round(packet.sponsor_total_usd).toLocaleString("en-US")} if all land.${packet.document_id ? " PDF attached on Events & Rooms." : ""} Keep it or dismiss it there.`,
     objectType: "room_packet",
     objectId: packet.id,
     dedupeKey: `room_packet:${packet.id}:proposed`,
@@ -1125,18 +1490,23 @@ export async function scheduleRoom(
   await env.WP_OS_DB.prepare(
     `INSERT INTO evt_event (id, title, event_type, event_class, cadence, theme, status, starts_at,
                             ends_at, location, live_url, summary, packet_id, target_min, target_max,
-                            firm_scope, created_by)
-     VALUES (?1,?2,?3,'ROOM','MONTHLY',?4,'PLANNED',?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)`,
+                            firm_scope, created_by, kind)
+     VALUES (?1,?2,?3,?15,'MONTHLY',?4,'PLANNED',?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?16)`,
   )
     .bind(
       eventId, packet.title,
       // The packet's format is the Room's flavour; DINNER and WORKSHOP already exist in the
       // event_type vocabulary, and anything else lands on OTHER rather than failing the CHECK.
       ["DINNER", "WORKSHOP"].includes(packet.format) ? packet.format : "OTHER",
-      packet.theme, input.startsAt, input.endsAt ?? null, input.location ?? null,
+      packet.theme, input.startsAt, input.endsAt ?? null,
+      // A Workshop's "where" is fixed: virtual, on West Peek Live.
+      packetKindOf(packet.kind) === "WORKSHOP" ? WORKSHOP_WHERE : (input.location ?? null),
       input.liveUrl ?? packet.live_url, packet.central_question, packet.id,
       packet.target_min, packet.target_max, packet.firm_scope,
       actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+      // A Workshop is not a ROOM in event_class's vocabulary; `kind` names the series it is in.
+      packetKindOf(packet.kind) === "WORKSHOP" ? "OTHER" : "ROOM",
+      packetKindOf(packet.kind),
     )
     .run();
 
@@ -1205,23 +1575,27 @@ export async function runMonthlyRoomProposal(
     return { generated: true, detail: `opened Parker's card for the Room that was asked for: ${drafts[0].title} (card ${card.cardId})`, packetId: drafts[0].id };
   }
 
+  // ONE ROOM AND ONE WORKSHOP A MONTH (16 Sep 2026). Each kind is guarded on its own: a month with
+  // a Room and no Workshop gets the Workshop on this run. Still one cheap thing per run — the Room
+  // first, the Workshop on the next tick a quarter of an hour later.
   const month = followingMonth(now);
-  const existing = await env.WP_OS_DB.prepare(
-    "SELECT COUNT(*) AS n FROM evt_room_packet WHERE firm_scope = ?1 AND proposed_for_month = ?2",
-  ).bind(firmScope, month).first<{ n: number }>();
-  if ((existing?.n ?? 0) > 0) {
-    const building = await env.WP_OS_DB.prepare(
-      "SELECT COUNT(*) AS n FROM evt_room_packet WHERE firm_scope = ?1 AND status = 'DRAFT'",
-    ).bind(firmScope).first<{ n: number }>();
-    return {
-      generated: false,
-      detail: `${month} already has a proposal${(building?.n ?? 0) > 0 ? `; ${building!.n} request(s) being built by Parker in the sweep` : ""}`,
-    };
+  for (const kind of ["ROOM", "WORKSHOP"] as const) {
+    const existing = await env.WP_OS_DB.prepare(
+      "SELECT COUNT(*) AS n FROM evt_room_packet WHERE firm_scope = ?1 AND proposed_for_month = ?2 AND COALESCE(kind, 'ROOM') = ?3",
+    ).bind(firmScope, month, kind).first<{ n: number }>();
+    if ((existing?.n ?? 0) > 0) continue;
+    const draft = await queueDraft(env, actor, { month, origin: "PARKER", kind });
+    const card = await openPacketCard(env, draft);
+    const set = kind === "WORKSHOP" ? setWorkshopTitle(month) : null;
+    return { generated: true, detail: `queued Parker's own ${kind === "WORKSHOP" ? "Workshop" : "Room"} for ${month}${set ? ` — title set by the partners: "${set}"` : ""} (card ${card.cardId}); the sweep builds it`, packetId: draft.id };
   }
-
-  const draft = await queueDraft(env, actor, { month, origin: "PARKER" });
-  const card = await openPacketCard(env, draft);
-  return { generated: true, detail: `queued Parker's own Room for ${month} (card ${card.cardId}); the sweep builds it`, packetId: draft.id };
+  const building = await env.WP_OS_DB.prepare(
+    "SELECT COUNT(*) AS n FROM evt_room_packet WHERE firm_scope = ?1 AND status = 'DRAFT'",
+  ).bind(firmScope).first<{ n: number }>();
+  return {
+    generated: false,
+    detail: `${month} already has a Room and a Workshop proposal${(building?.n ?? 0) > 0 ? `; ${building!.n} request(s) being built by Parker in the sweep` : ""}`,
+  };
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -1232,6 +1606,7 @@ function fail(err: unknown): Response {
 }
 
 const briefSchema = z.object({
+  kind: z.enum(["ROOM", "WORKSHOP"]).optional(),
   audience: z.string().trim().min(3).max(400),
   month: z.string().regex(/^\d{4}-\d{2}$/),
   city: z.string().trim().max(80).optional(),
@@ -1265,11 +1640,12 @@ export async function handleGeneratePacket(ctx: RouteContext): Promise<Response>
         sponsorProspects: (b.sponsor_prospects ?? []).filter((x) => x.length > 0),
         notes: b.notes && b.notes.length > 0 ? b.notes : null,
       };
-      draft = await queueDraft(ctx.env, actor, { month: b.month, brief, origin: "PARTNER_BRIEF", parentPacketId: b.again_from ?? null });
+      draft = await queueDraft(ctx.env, actor, { month: b.month, brief, origin: "PARTNER_BRIEF", parentPacketId: b.again_from ?? null, kind: b.kind ?? "ROOM" });
     } else {
       const month = typeof body.month === "string" && /^\d{4}-\d{2}$/.test(body.month) ? body.month : followingMonth(new Date().toISOString());
       const city = typeof body.city === "string" && body.city.trim() ? body.city.trim().slice(0, 80) : null;
-      draft = await queueDraft(ctx.env, actor, { month, origin: "PARKER", brief: city ? { audience: "Parker's own Room", month, city, sponsorProspects: [], notes: null } : null });
+      const kind: PacketKind = packetKindOf(body.kind);
+      draft = await queueDraft(ctx.env, actor, { month, origin: "PARKER", kind, brief: city && kind === "ROOM" ? { audience: "Parker's own Room", month, city, sponsorProspects: [], notes: null } : null });
     }
     const card = draft.status === "DRAFT" ? await openPacketCard(ctx.env, draft) : null;
     return json({ packet: await requirePacket(ctx.env, draft.id), queued: draft.status === "DRAFT", cardId: card?.cardId ?? draft.work_card_id }, { status: 201 });
@@ -1284,10 +1660,10 @@ export async function handleListPackets(ctx: RouteContext): Promise<Response> {
             target_max, audience, sponsor_thesis, economics_json, event_id, decided_by, decided_at,
             decision_note, created_at, origin, brief_json, requested_by, sponsor_count,
             sponsor_total_usd, build_error, build_attempts, parent_packet_id, emailed_at,
-            build_stage, work_card_id, document_id, pushback_md
+            build_stage, work_card_id, document_id, pushback_md, kind
      FROM evt_room_packet ORDER BY proposed_for_month DESC, created_at DESC LIMIT 60`,
   ).all();
-  return json({ packets: rows.results ?? [], stageLabels: BUILD_STAGE_LABELS, stages: BUILD_STAGES, keepTargetUsd: SPONSORSHIP_TARGET.keepUsd });
+  return json({ packets: rows.results ?? [], stageLabels: BUILD_STAGE_LABELS, workshopStageLabels: WORKSHOP_STAGE_LABELS, stages: BUILD_STAGES, keepTargetUsd: SPONSORSHIP_TARGET.keepUsd, workshopSeries: WORKSHOP_SERIES_FOR_PAGE });
 }
 
 export async function handleGetPacket(ctx: RouteContext): Promise<Response> {
@@ -1303,8 +1679,9 @@ export async function handleGetPacket(ctx: RouteContext): Promise<Response> {
          FROM evt_sponsor_prospect WHERE packet_id = ?1 ORDER BY COALESCE(rank, 99), created_at`,
     ).bind(packet.id).all();
     // The build state is Parker's working memory, not the packet; the page gets the flags only.
-    const { build_state_json, ...rest } = packet;
-    return json({ packet: rest, brief: parseBrief(packet.brief_json), venues: venues.results ?? [], sponsors: sponsors.results ?? [], flags: parseState(build_state_json).flags });
+    const { build_state_json, workshop_json, ...rest } = packet;
+    const workshop = workshopViewOf(packet);
+    return json({ packet: rest, brief: parseBrief(packet.brief_json), venues: venues.results ?? [], sponsors: sponsors.results ?? [], flags: workshop ? workshop.flags : parseState(build_state_json).flags, workshop });
   } catch (err) {
     return fail(err);
   }
@@ -1365,5 +1742,8 @@ export async function handleVerifyVenue(ctx: RouteContext): Promise<Response> {
     return fail(err);
   }
 }
+
+/** The set months, for the page's request form: a Workshop in one of these months carries the partners' title. */
+const WORKSHOP_SERIES_FOR_PAGE = WORKSHOP_SERIES;
 
 export { monthKey, packetFilename };

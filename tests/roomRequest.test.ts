@@ -328,9 +328,15 @@ describe("the Rooms job does one cheap thing", () => {
     expect(own.status).toBe("DRAFT");
     expect(own.work_card_id).not.toBeNull();
 
+    // ONE ROOM AND ONE WORKSHOP A MONTH (16 Sep 2026): the next run queues December's Workshop —
+    // its own guard, its own card — and only then is the month stocked.
     const third = await runMonthlyRoomProposal(env, actor(), "2026-11-16T12:00:00.000Z");
-    expect(third.generated).toBe(false);
-    expect(third.detail).toMatch(/2026-12 already has a proposal; \d+ request\(s\) being built/);
+    expect(third.generated).toBe(true);
+    expect(third.detail).toMatch(/queued Parker's own Workshop for 2026-12/);
+    expect((await row(third.packetId!)).kind).toBe("WORKSHOP");
+    const fourth = await runMonthlyRoomProposal(env, actor(), "2026-11-16T12:30:00.000Z");
+    expect(fourth.generated).toBe(false);
+    expect(fourth.detail).toMatch(/2026-12 already has a Room and a Workshop proposal; \d+ request\(s\) being built/);
   });
 
   it("'propose again with changes' links the new packet to the declined one", async () => {
