@@ -277,7 +277,12 @@ export function buildCustomerPrompt(month: string): string {
     "- Organisations in the United States, or serving a US audience, from English-language sources.",
     "  The first run of this duty (15 Sep 2026) returned Russian and French press pages; those are",
     "  not buyers of a New York agency. Each organisation ONCE — two triggers at one company is one entry.",
-    "- Only organisations you can cite a live page for that SHOWS the trigger. No URL, no entry.",
+    "- Only organisations you can cite a live page for that SHOWS the trigger. No URL, no entry. The",
+    "  url field is MANDATORY on every entry — an entry without it is discarded unread.",
+    "- Organisations that actually HIRE agencies like this: brands, B2B software companies, creator",
+    "  businesses, membership bodies and professional associations, conference producers, universities,",
+    "  national nonprofits, high-growth startups. NOT government departments, militaries or programmes",
+    "  that procure by tender — the 15 Sep 2026 run named the State Department and the Space Force.",
     "- The person or ROLE to approach (a title is fine — 'Head of Community', 'VP Marketing'). Do NOT",
     "  invent a person's name or email; if you name a person it must appear on the cited page.",
     "- One line on the angle: why Community-as-a-Service fits what they are doing now.",
@@ -553,19 +558,54 @@ export async function runProductionsCard(
   const check = deps.urlCheck ?? defaultUrlCheck;
   const kind = card.kind as ProductionsKind;
 
+  /** One search, and one more with the miss named if nothing usable came back. `why` is for the card. */
+  async function searchUntilSome<T>(
+    prompt: string,
+    parse: (text: string) => Promise<{ kept: T[]; dropped: string[] }>,
+    nudge: string,
+  ): Promise<{ kept: T[]; dropped: string[]; why: string }> {
+    let why = "";
+    for (const attempt of [prompt, `${prompt}\n\n${nudge}`]) {
+      const found = await search(env, actor, attempt);
+      if (!found.ok) { why = `the live search failed: ${found.detail}`; continue; }
+      const parsed = await parse(found.text);
+      if (parsed.kept.length) return { ...parsed, why: "" };
+      why = parsed.dropped.length ? `every cited page was dead: ${parsed.dropped.join(", ")}` : "the search answered with no usable entry (no url on any)";
+    }
+    return { kept: [], dropped: [], why };
+  }
+
   let subject: string;
   let text: string;
   let count: number;
   let dropped: string[];
   if (kind === "PRODUCTIONS_MONTHLY") {
     const pageText = deps.pageText ?? defaultPageText;
-    const customers = await search(env, actor, buildCustomerPrompt(month));
-    const press = await search(env, actor, buildPressPrompt(month));
-    if (!customers.ok && !press.ok) {
-      return { finished: false, blocked: false, detail: `the live search failed: ${customers.detail}` };
+    // BOTH HALVES OR NOTHING. The first monthly note (16 Sep 2026, 00:02Z) went to Scooter reading
+    // "0 customer lead(s) and 4 press pitch(es)": the customer search had answered without a url on
+    // any entry, the parser rightly dropped them all, and the card still emailed and went DONE. A
+    // half note is worse than none — it reads as the work having been done. So a half that comes
+    // back empty is searched once more with the miss named, and if either half is still empty the
+    // card is BLOCKED with the reason on it and no email goes out.
+    const ideas = await searchUntilSome(
+      buildCustomerPrompt(month),
+      (text) => keepLive(parseCustomerIdeas(text), (i) => i.url, check),
+      "Your previous answer was discarded: no entry carried a url. Every entry MUST have the url of the live page that shows the trigger.",
+    );
+    const pitchesLive = await searchUntilSome(
+      buildPressPrompt(month),
+      (text) => keepLive(parsePressPitches(text), (p) => p.proofUrl, check),
+      "Your previous answer was discarded: no entry carried a live proof_url. Every entry MUST have the url of a live page proving the beat.",
+    );
+    const missing = [
+      ideas.kept.length === 0 ? `no customer lead survived (${ideas.why})` : null,
+      pitchesLive.kept.length === 0 ? `no press pitch survived (${pitchesLive.why})` : null,
+    ].filter((m): m is string => m !== null);
+    if (missing.length) {
+      const why = `Not sending a half note — ${missing.join("; ")}. Nothing was emailed. Run it again, or tell Walker where to look.`;
+      await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, why).run();
+      return { finished: false, blocked: true, detail: why };
     }
-    const ideas = customers.ok ? await keepLive(parseCustomerIdeas(customers.text), (i) => i.url, check) : { kept: [] as CustomerIdea[], dropped: [] as string[] };
-    const pitchesLive = press.ok ? await keepLive(parsePressPitches(press.text), (p) => p.proofUrl, check) : { kept: [] as PressPitch[], dropped: [] as string[] };
     const hunted: PressPitch[] = [];
     for (const p of pitchesLive.kept) hunted.push(await findWriterAddress(env, actor, { ...p, email: null }, { search, pageText }));
     count = ideas.kept.length + hunted.length;
