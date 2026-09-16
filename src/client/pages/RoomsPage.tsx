@@ -21,12 +21,16 @@ import { HowThisWorks } from "./HowThisWorks";
  * THE ORDER, AND WHY THIS ONE. It is the sequence a partner actually asks walking in, which is
  * also the life of a Room:
  *
- *   1 What is Parker asking me to decide?   — the live proposals, each open, decision on the card.
- *   2 What have we already turned down?     — so the same idea in March is checked against February.
- *   3 Who is paying for it?                 — a Room and its funding are one decision, not two tabs.
+ *   1 What is Parker asking me to decide?   — Rooms being built or waiting, each open, decision on the card.
+ *   2 How do I ask for one?                 — the request door, near the top.
+ *   3 What have we kept?                    — Approved Rooms, each collapsed to one line, expandable.
  *   4 What actually happened?               — the firm's record of every gathering.
- *   5 How do I add one that Parker did not propose?
+ *   5 What have we already turned down?     — one closed lid, the substance inside, above the rhythm.
  *   6 How often should we be doing this?    — the stance and the rhythm.
+ *   7 Who is paying for it?                 — the sponsor pipeline.
+ *
+ * DECLUTTERED 15 Sep 2026. Every packet card collapses to its title (remembered per browser), the
+ * kept collection starts collapsed, and the turned-down pile is one closed <details>.
  *
  * The alternative order — stance first, because it is the constraint on everything below — is what
  * this page used to do, and it is why the operator could not find the decision. The stance is a
@@ -375,10 +379,12 @@ export function RoomsPage(): JSX.Element {
   const live = all.filter((p) => p.status !== "DECLINED");
   const declined = all.filter((p) => p.status === "DECLINED");
   const waiting = live.filter((p) => p.status === "PROPOSED" || p.status === "DRAFT");
+  // THE KEPT COLLECTION. Approved, and approved-then-dated: both are Rooms the firm said yes to.
+  const kept = live.filter((p) => p.status === "APPROVED" || p.status === "SCHEDULED");
 
   return (
     <section data-testid="rooms-page">
-      <h3>Rooms we could run</h3>
+      <h3>Rooms waiting on you</h3>
 
       {/* The stance, in one line, where it constrains the decision being made. In full at the end. */}
       <p className="muted">
@@ -391,16 +397,18 @@ export function RoomsPage(): JSX.Element {
 
       {packets.loading && <p className="state-empty">Reading what Parker has proposed…</p>}
 
-      {!packets.loading && live.length === 0 && (
+      {!packets.loading && waiting.length === 0 && (
         <p className="state-empty" data-testid="rooms-empty">
-          Nothing is proposed. Ask Parker for one below, or switch on <strong>Monthly Room
+          Nothing is being built or waiting on you. Ask Parker for one below, or switch on <strong>Monthly Room
           proposal</strong> in Scheduled work and he will put one here each month.
         </p>
       )}
 
-      {live.map((p) => (
-        <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} />
-      ))}
+      <div data-testid="rooms-waiting">
+        {waiting.map((p) => (
+          <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} startCollapsed={false} />
+        ))}
+      </div>
 
       {waiting.length > 0 && (
         <p className="muted small">
@@ -419,15 +427,45 @@ export function RoomsPage(): JSX.Element {
         }}
       />
 
-      <h3>Rooms we turned down</h3>
-      <div className="declined-shelf" data-testid="declined-proposals">
+      <h3>Approved Rooms</h3>
+      <p className="muted small">
+        The Rooms the firm kept. Each is one line until you open it; the full packet is still there.
+      </p>
+      <div data-testid="rooms-approved">
+        {!packets.loading && kept.length === 0 && (
+          <p className="state-empty" data-testid="rooms-approved-empty">No Room has been kept yet. Keeping one above puts it here.</p>
+        )}
+        {kept.map((p) => (
+          <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} startCollapsed={true} />
+        ))}
+      </div>
+
+      {/* Events fold in here rather than living on their own tab. A Room IS an event, and two tabs
+          for one idea made the operator choose between them every time. The distinction that
+          matters is not Rooms-versus-Events but proposed-versus-happened: above is the Room being
+          planned and kept, here is the firm's record of what actually took place. It renders its
+          own h3 sections at this level — it used to be mounted inside a subsection, two ranks down. */}
+      <EventsPage />
+
+      {/* ONE CLOSED LID, DIRECTLY ABOVE THE RHYTHM. Operator, 15 Sep 2026: the turned-down pile is
+          history and must not take up the page; but the substance stays inside — how much was
+          proposed, what it was about, who would have been invited — because that is what the same
+          idea in March gets checked against. The section renders even when empty: a shelf that
+          appears only once something is on it is a shelf nobody learns exists. */}
+      <details className="declined-shelf" data-testid="declined-proposals">
+        <summary>
+          <h3>Rooms we turned down</h3>
+          <span className="muted small" data-testid="declined-count">
+            {declined.length === 0 ? "nothing yet" : `${declined.length} kept for the record`}
+          </span>
+        </summary>
         <p className="muted small">
           Kept because the same idea will be proposed again, and knowing it was already considered is
           the useful part.
         </p>
         {declined.length === 0 ? (
           <p className="state-empty">
-            Nothing has been turned down yet. Declining a Room above moves it here rather than
+            Nothing has been turned down yet. Dismissing a Room above moves it here rather than
             deleting it.
           </p>
         ) : (
@@ -475,7 +513,9 @@ export function RoomsPage(): JSX.Element {
             })}
           </ul>
         )}
-      </div>
+      </details>
+
+      <Programme />
 
       <SponsorPipeline
         sponsors={sponsors.data?.sponsors ?? []}
@@ -483,15 +523,6 @@ export function RoomsPage(): JSX.Element {
         loading={sponsors.loading}
         onChanged={() => sponsors.reload()}
       />
-
-      {/* Events fold in here rather than living on their own tab. A Room IS an event, and two tabs
-          for one idea made the operator choose between them every time. The distinction that
-          matters is not Rooms-versus-Events but proposed-versus-happened: above is the Room being
-          planned, below is the firm's record of what actually took place. It renders its own h3
-          sections at this level — it used to be mounted inside a subsection, two ranks down. */}
-      <EventsPage />
-
-      <Programme />
 
       {/* The detailed version, at the bottom, for someone already working. Covers both halves of the
           page because they are one page now. */}
@@ -552,9 +583,12 @@ function RoomProposal(props: {
   packet: PacketRow;
   onDecide: (id: string, decision: "APPROVED" | "DECLINED") => Promise<void>;
   onChanged: () => void;
+  /** How the card starts the first time this browser sees it: kept Rooms closed, live ones open. */
+  startCollapsed: boolean;
 }): JSX.Element {
   const p = props.packet;
   const [pdfProblem, setPdfProblem] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useCollapsed(p.id, props.startCollapsed);
   const detail = useApi<{
     packet: PacketRow & { agenda_md: string | null; seed_questions_json: string; guest_ideas_json: string; audience: string | null; risks_json: string; commitment_md: string | null; concepts_json?: string; concept_choice_md?: string | null; run_of_show_json?: string; pitch_email_json?: string | null; invite_check_json?: string | null };
     brief: Brief | null;
@@ -583,15 +617,40 @@ function RoomProposal(props: {
   let pitchEmail: PitchEmail | null = null;
   try { pitchEmail = d?.packet.pitch_email_json ? (JSON.parse(d.packet.pitch_email_json) as PitchEmail) : null; } catch { pitchEmail = null; }
 
+  // THE HEAD IS THE SAME OPEN OR SHUT: title, state, month, and the toggle. Collapsed, the card is
+  // that one line and nothing else — "title · Approved · month" — so a kept collection of ten reads
+  // as a list, not as ten packets.
+  const head = (
+    <div className="card-head-static packet-head">
+      <h4>{p.title}</h4>
+      <span className={state.tone} data-testid={`packet-state-${p.id}`}>{state.label}</span>
+      <span className="muted small">{monthWord(p.proposed_for_month)}</span>
+      <button
+        type="button"
+        className="link-button packet-toggle"
+        aria-expanded={!collapsed}
+        data-testid={`packet-toggle-${p.id}`}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        {collapsed ? "Open the packet" : "Collapse to the title"}
+      </button>
+    </div>
+  );
+
+  if (collapsed) {
+    return (
+      <article className="card packet-collapsed" data-testid={`packet-${p.id}`} data-collapsed="true">
+        {head}
+      </article>
+    );
+  }
+
   // A DRAFT is a request Parker has not finished. It shows what was asked and where the build is,
   // and nothing else — there is no packet to read yet.
   if (p.status === "DRAFT") {
     return (
       <article className="card" data-testid={`packet-${p.id}`}>
-        <div className="card-head-static">
-          <h4>{p.title}</h4>
-          <span className={state.tone} data-testid={`packet-state-${p.id}`}>{state.label}</span>
-        </div>
+        {head}
         <p className="muted small">For {monthWord(p.proposed_for_month)}{brief?.city ? ` · ${brief.city}` : ""}</p>
         {brief && <BriefBlock brief={brief} />}
         <p className="small" data-testid={`build-stage-${p.id}`}>
@@ -618,10 +677,7 @@ function RoomProposal(props: {
 
   return (
     <article className="card" data-testid={`packet-${p.id}`}>
-      <div className="card-head-static">
-        <h4>{p.title}</h4>
-        <span className={state.tone} data-testid={`packet-state-${p.id}`}>{state.label}</span>
-      </div>
+      {head}
       <p className="muted small">
         For {p.proposed_for_month} · {formatLabel(p.format)} · {p.target_min}–{p.target_max} people ·{" "}
         {p.theme}
@@ -1016,6 +1072,40 @@ function RequestRoom(props: {
  * One folded subsection of a packet. The summary carries the fact that matters, so a partner can
  * decide from the closed packet and open only what she wants to check.
  */
+/**
+ * Whether a packet card is shut, remembered per browser.
+ *
+ * localStorage, because it is a reading preference and not a fact about the Room: she collapses
+ * the ones she has read and they stay collapsed on this machine, and nothing about that belongs in
+ * the firm's record. Every read and write is wrapped — a private window or blocked storage just
+ * means the page starts from the default each visit, which is fine.
+ */
+const COLLAPSED_KEY = "wpos.rooms.collapsed";
+function readCollapsed(): Record<string, boolean> {
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+function useCollapsed(id: string, fallback: boolean): [boolean, (next: boolean) => void] {
+  const [collapsed, setState] = useState<boolean>(() => {
+    const saved = readCollapsed()[id];
+    return typeof saved === "boolean" ? saved : fallback;
+  });
+  const set = (next: boolean) => {
+    setState(next);
+    try {
+      window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify({ ...readCollapsed(), [id]: next }));
+    } catch {
+      /* fine — the preference lasts the page, not the browser */
+    }
+  };
+  return [collapsed, set];
+}
+
 function Fold(props: { title: string; fact: string; testId: string; children: React.ReactNode }): JSX.Element {
   return (
     <details className="packet-fold" data-testid={props.testId}>
@@ -1196,6 +1286,56 @@ function Venue(props: { venue: VenueRow; onChanged: () => void }): JSX.Element {
 }
 
 /**
+ * How often West Peek gathers, and what that is for.
+ *
+ * WHAT WAS WRONG: half of this sat behind a "Show the rhythm" toggle that defaulted closed, so the
+ * only part of the page that answers "what should we be running" was invisible until somebody
+ * clicked a link they had no reason to click. Nothing here is expensive to render and nothing here
+ * is private; the toggle was hiding the content from the person it was written for.
+ *
+ * Every word comes from `shared/events/programme.ts`, which mirrors docs/COMMUNITY.md and is pinned
+ * by a test. Nothing is restated here, so nothing here can drift.
+ */
+function Programme(): JSX.Element {
+  return (
+    <>
+      <h3>How often West Peek gathers</h3>
+      <p data-testid="programme-stance">
+        <strong>{EVENT_ETHOS.stance}</strong> {EVENT_ETHOS.notThis.join(" ")}
+      </p>
+      <p className="small">{EVENT_ETHOS.job}</p>
+      <p className="muted small">
+        {EVENT_ETHOS.posture} {EVENT_ETHOS.product}
+      </p>
+      <p className="muted small" data-testid="programme-money">{EVENT_ETHOS.money}</p>
+
+      <div className="card">
+        <h4>At full speed</h4>
+        <p className="muted small">
+          The cadence when the community is running properly — not a promise about this month. Being
+          earlier in the sequence is not being behind.
+        </p>
+        <ul className="card-list" data-testid="programme-rhythm">
+          {OPERATING_RHYTHM.map((i) => (
+            <li key={i.key} data-testid={`rhythm-${i.key}`}>
+              <strong>{i.label}</strong> — {i.runs.join(" · ")}
+              <br />
+              <span className="muted small">{i.purpose}</span>
+              <br />
+              <span className="small">
+                <em>Parker suggests:</em> {i.recommendation}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <p className="muted small" data-testid="programme-why">{WHY_THE_RHYTHM}</p>
+    </>
+  );
+}
+
+/**
  * Who is paying for it.
  *
  * The decline reason sits next to a sponsor who said no: why AWS said no is the most useful thing
@@ -1328,56 +1468,6 @@ function SponsorPipeline(props: {
         </p>
         {error && <p className="notice notice-gate small" data-testid="sponsor-error" role="status">{error}</p>}
       </div>
-    </>
-  );
-}
-
-/**
- * How often West Peek gathers, and what that is for.
- *
- * WHAT WAS WRONG: half of this sat behind a "Show the rhythm" toggle that defaulted closed, so the
- * only part of the page that answers "what should we be running" was invisible until somebody
- * clicked a link they had no reason to click. Nothing here is expensive to render and nothing here
- * is private; the toggle was hiding the content from the person it was written for.
- *
- * Every word comes from `shared/events/programme.ts`, which mirrors docs/COMMUNITY.md and is pinned
- * by a test. Nothing is restated here, so nothing here can drift.
- */
-function Programme(): JSX.Element {
-  return (
-    <>
-      <h3>How often West Peek gathers</h3>
-      <p data-testid="programme-stance">
-        <strong>{EVENT_ETHOS.stance}</strong> {EVENT_ETHOS.notThis.join(" ")}
-      </p>
-      <p className="small">{EVENT_ETHOS.job}</p>
-      <p className="muted small">
-        {EVENT_ETHOS.posture} {EVENT_ETHOS.product}
-      </p>
-      <p className="muted small" data-testid="programme-money">{EVENT_ETHOS.money}</p>
-
-      <div className="card">
-        <h4>At full speed</h4>
-        <p className="muted small">
-          The cadence when the community is running properly — not a promise about this month. Being
-          earlier in the sequence is not being behind.
-        </p>
-        <ul className="card-list" data-testid="programme-rhythm">
-          {OPERATING_RHYTHM.map((i) => (
-            <li key={i.key} data-testid={`rhythm-${i.key}`}>
-              <strong>{i.label}</strong> — {i.runs.join(" · ")}
-              <br />
-              <span className="muted small">{i.purpose}</span>
-              <br />
-              <span className="small">
-                <em>Parker suggests:</em> {i.recommendation}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <p className="muted small" data-testid="programme-why">{WHY_THE_RHYTHM}</p>
     </>
   );
 }

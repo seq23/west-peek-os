@@ -33,9 +33,20 @@ test("Events & Rooms explains itself and offers a proposal", async ({ page }) =>
   /*
    * Operator: "declined proposals should go somewhere after they are declined. somewhere below
    * greyed out." The shelf is a section that renders even when it is empty — a shelf that appears
-   * only once something is on it is a shelf nobody learns exists.
+   * only once something is on it is a shelf nobody learns exists. Since 15 Sep 2026 it is ONE
+   * closed lid, directly above "How often West Peek gathers", and the kept collection has its own
+   * section above the record.
    */
-  await expect(page.getByTestId("declined-proposals")).toBeVisible();
+  const shelf = page.getByTestId("declined-proposals");
+  await expect(shelf).toBeVisible();
+  expect(await shelf.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
+  await expect(shelf.locator("summary")).toContainText("Rooms we turned down");
+  await expect(page.getByTestId("rooms-approved-empty")).toBeVisible();
+  const shelfTop = (await shelf.boundingBox())!.y;
+  const rhythmTop = (await page.getByTestId("programme-stance").boundingBox())!.y;
+  const sponsorsTop = (await page.getByTestId("add-sponsor").boundingBox())!.y;
+  expect(shelfTop, "the turned-down lid sits directly above the rhythm").toBeLessThan(rhythmTop);
+  expect(rhythmTop, "who is paying comes after the rhythm").toBeLessThan(sponsorsTop);
 });
 
 /**
@@ -76,10 +87,29 @@ test("asking Parker for a Room records the brief and opens his card before anyth
   expect(cardRow.build_stage).toBe("QUEUED");
   expect(cardRow.work_card_id).toBeTruthy();
 
-  // Dismiss it with a reason; the shelf shows who was to be invited and why we said no.
+  // EVERY PACKET CARD COLLAPSES TO ITS TITLE, and the browser remembers. Collapsed, the card is one
+  // line: title, state, month — the brief and the stage are gone until it is opened again.
+  const toggle = card.locator('[data-testid^="packet-toggle-"]');
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(card).toHaveAttribute("data-collapsed", "true");
+  await expect(card.getByTestId("packet-brief")).toHaveCount(0);
+  await expect(card).toContainText("Parker is building it");
+  await page.reload();
+  const cardAgain = page.locator('[data-testid^="packet-rpk_"]').first();
+  await expect(cardAgain).toHaveAttribute("data-collapsed", "true");
+  expect(await page.evaluate(() => localStorage.getItem("wpos.rooms.collapsed"))).toMatch(/"rpk_[^"]+":true/);
+  await cardAgain.locator('[data-testid^="packet-toggle-"]').click();
+  await expect(cardAgain.getByTestId("packet-brief")).toBeVisible();
+
+  // Dismiss it with a reason; the shelf (one closed lid) shows who was to be invited and why we said no.
   page.once("dialog", (d) => d.accept("wrong month for this crowd"));
-  await card.locator('[data-testid^="decline-"]').click();
+  await cardAgain.locator('[data-testid^="decline-"]').click();
   const shelf = page.getByTestId("declined-proposals");
+  await expect(shelf.getByTestId("declined-count")).toContainText("1 kept for the record");
+  await expect(shelf.locator('li[data-testid^="declined-rpk_"]').first()).toBeHidden();
+  await shelf.locator("summary").click();
   await expect(shelf).toContainText("Room requested: top Black lawyers on the rise");
   await expect(shelf).toContainText("asked for by a partner");
   await expect(shelf).toContainText("Who was to be invited");
