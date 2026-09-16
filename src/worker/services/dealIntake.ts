@@ -1,3 +1,4 @@
+import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { FirmUserIdentity } from "../auth";
@@ -856,6 +857,21 @@ export async function openAssignmentCard(
   await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2 WHERE id = ?1")
     .bind(card.id, input.partnerAddress.toLowerCase())
     .run();
+
+  /*
+   * BLOG HELP IS READ AT THE DOOR (16 Sep 2026). "Help me make an outline for a blog post on X",
+   * "write a blog post on X", "a phrase I can repeat across posts" — Porter marks the card
+   * BLOG_HELP and records the modes and topic, so the sweep hands it to the blog runner
+   * (services/blogHelp.ts) instead of the general loop. Only the CONTENT of the ask is read here,
+   * and only to choose a runner: authority came from the authenticated address above and nothing
+   * in the text can widen it.
+   */
+  const blog = parseBlogAsk(input.subject, input.raw);
+  if (blog) {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'BLOG_HELP', request_json = ?2, next_action = ?3 WHERE id = ?1")
+      .bind(card.id, JSON.stringify(blog), `Blog help — ${describeModes(blog.modes)} on: ${blog.topic}. Research live and judged, write in the partner's voice, file it, email them once.`)
+      .run();
+  }
   return card.id;
 }
 

@@ -1202,6 +1202,28 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
           "Nothing is ever sent to a prospect or a journalist from this system. The deliverable is drafts and leads for Scooter to act on himself; the outbound gate stays.",
         ],
       },
+      {
+        /*
+         * BLOG HELP (16 Sep 2026). The partners are starting blogs. Operator: a partner emails
+         * os@joinwestpeek.com — "help me make an outline for a blog post on X and do research",
+         * "write a blog post on X", "help me come up with a phrase I can repeat across posts to
+         * build authority" — and it lands on their own chief of staff as a BLOG_HELP card with the
+         * ask parsed into a mode. Written on the personal-office machine because a partner's blog
+         * is theirs, not the firm's: their voice, their byline, their call on every word.
+         */
+        key: "blog_help_for_a_partner",
+        title: "Helping a partner write their blog — outline, draft, or signature phrase",
+        when: "Wren for Sequoia, Walker for Scooter: any BLOG_HELP card, whichever mode was asked for.",
+        guidance: [
+          "Read the ask for the MODE before anything else. OUTLINE is a spine with research; DRAFT is the whole post; PHRASE is a line they can repeat across posts. They combine — 'outline it and then write it' is both — and a blog ask with no clear verb is an outline, with the reply saying how to ask for the draft.",
+          "Research first, and only through the live search: every fact carries the URL of the page that states it, every URL is checked live, and every surviving fact is JUDGED against the brief before it is used — about the topic, specific, from a page that plausibly says it, credible, current where currency matters. A fact that fails any of those is dropped with the reason kept. Cite nothing you did not check; a URL the writer offers that was not checked is removed.",
+          "An OUTLINE is: a working title and three alternates, the one-sentence thesis, a section-by-section spine where each section says what it proves and the two or three facts (with URLs) it should lean on, a suggested opening and closing, and five research notes with URLs. A spine that leans on nothing is not help; if no source survives, block with the reason and send nothing.",
+          "A DRAFT is the full post in the partner's voice: first person, plain, direct, specific, an operator who has done the thing. Read their profile and what they said about the last pieces before writing. 900–1,400 words unless they said otherwise; sources footnoted with numbered markers; no invented quotes or numbers; it ends on the takeaway, never on 'reach out' or 'join us'.",
+          "A PHRASE is five candidates, each 3–10 words, concrete and sayable, true of how West Peek actually works — early inclusion, good people meeting good people, community as an operating advantage — without naming the fund; for each, why it builds authority and how it recurs (opening line, sign-off, section header, refrain), then one recommendation with the reason.",
+          "Never let a sentence read as selling access to the community or marketing the fund, and never quote a company, a deal or an LP from the firm's records into a public post. The partner decides every word; nothing is published from here.",
+          "File the result as a `blog_help` deliverable — on the partner's Home under your name, in Documents as markdown — and email them ONCE in the busy-executive format: TL;DR, what they asked, what you did, what you found, their call; the piece itself under the rule.",
+        ],
+      },
     ],
   },
   /*

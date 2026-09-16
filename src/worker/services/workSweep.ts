@@ -152,6 +152,10 @@ export async function announceOutcome(
   // as its own notice (services/roomPacket.ts emailPacket), so a second "finished the card" notice
   // would ring twice for one thing. A BLOCKED packet card still tells both partners below.
   if (card.kind === "ROOM_PACKET" && outcome === "DONE") return { emailed: null };
+  // BLOG HELP EMAILS ITSELF: the runner files the deliverable, emails the partner who asked in the
+  // busy-executive format, and posts its own notice to them (services/blogHelp.ts). A second
+  // "finished the card" email would be the same thing twice. A BLOCKED one still tells both below.
+  if (card.kind === "BLOG_HELP" && outcome === "DONE") return { emailed: card.requested_by_email ?? null };
   if (isProductionsKind(card.kind)) {
     await notifyQuietly(env, {
       firmUserId: "fu_scooter_taylor",
@@ -238,6 +242,7 @@ export async function sweepOnce(
     deckRework?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     productions?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
+    blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -248,7 +253,7 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -287,6 +292,13 @@ export async function sweepOnce(
       finished = out.finished;
       blocked = out.blocked;
       progressed = out.progressed;
+      detail = out.detail;
+    } else if (card.kind === "BLOG_HELP") {
+      // A partner's blog help: research judged, the piece written in their voice, filed, one email.
+      const run = runners.blogHelp ?? (await import("./blogHelp")).runBlogHelpCard;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
       detail = out.detail;
     } else if (isProductionsKind(card.kind)) {
       // Walker's West Peek Productions duty: one search, every URL checked, one email to Scooter.

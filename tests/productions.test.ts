@@ -256,7 +256,7 @@ describe("the monthly card on Walker's desk", () => {
     expect(job?.status).toBe("RETIRED");
     const again = await runIntroNote(withMail);
     expect(again.summary).toMatch(/already sent/);
-    const sent = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND payload_json LIKE '%Walker, your chief of staff%'").first<{ n: number }>())!.n;
+    const sent = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND object_id = 'sjb_productions_intro_note'").first<{ n: number }>())!.n;
     expect(sent).toBe(1);
   });
 
@@ -279,7 +279,8 @@ describe("the monthly card on Walker's desk", () => {
     expect(out.outcome).toBe("DONE");
     const mails = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all<{ payload_json: string }>()).results ?? [];
     const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
-    expect(delivered).toMatch(/Walker: West Peek Productions this month — \d+ customer lead\(s\) and \d+ press pitch\(es\)/);
+    // The subject is the busy-executive one (≤ 70 chars, "Walker: <what>"), and the note is under it.
+    expect(delivered).toMatch(/Walker: West Peek Productions this month — \d+ lead\(s\), \d+ pitch\(es\)/);
     expect(delivered).toMatch(/═══ 1 · WHO COULD BUY THIS MONTH/);
     expect(delivered).toMatch(/═══ 2 · PRESS PITCHES — YOURS TO SEND/);
     expect(delivered).toMatch(/Walker, your chief of staff/);
@@ -356,7 +357,7 @@ describe("the monthly card on Walker's desk", () => {
     expect(judgePrompts.length, "one judgement per half").toBe(2);
     expect(judgePrompts[0]).toMatch(/KEEP a lead only if ALL of these hold \(this month is 2027-01\)/);
     const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
-    expect(delivered).toMatch(/1 customer lead\(s\) and 1 press pitch\(es\)/);
+    expect(delivered).toMatch(/1 lead\(s\), 1 pitch\(es\)/);
     expect(delivered).toMatch(/1\. Example Nonprofit/);
     expect(delivered).not.toMatch(/\n\d+\. VK\n/);
     expect(delivered).not.toMatch(/B\. Guesser — GTM Letter/);

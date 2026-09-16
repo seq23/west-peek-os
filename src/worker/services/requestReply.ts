@@ -1,8 +1,7 @@
 import type { Env } from "../env";
-import { appendEvent } from "../events";
-import { sendViaResend } from "../effects/resendClient";
-import { aiOutboundSwitches } from "../../shared/policy/aiOutbound";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
+import { bulletsFrom } from "../../shared/email/execEmail";
+import { sendPartnerEmail } from "./execEmail";
 
 /**
  * A request that came in by email is answered by email.
@@ -16,16 +15,17 @@ import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
  * WHY THIS IS NOT THE BYPASS `inboundEmail.ts` WARNS ABOUT. That file declined an auto-reply because
  * every `email.send` is an external effect behind a human-approved receipt, and an automatic send
  * on the path that accepts outside instructions would be a bypass around that gate. This reply is
- * bounded on every axis that gate protects:
+ * bounded on every axis that gate protects, and the bounds live in ONE place — `execEmail.ts`:
  *
  *   · THE DESTINATION IS NEVER CHOSEN BY CONTENT. It is the AUTHENTICATED address the request came
  *     from (`work_card.requested_by_email`, set only by `openAssignmentCard` after DKIM/DMARC passed),
- *     and it is checked here against `ASSIGNING_PARTNERS` — the two partners — before anything is
- *     sent. An address that is not one of the two is refused whatever the column says.
+ *     and it is checked against `ASSIGNING_PARTNERS` — the two partners — before anything is sent.
  *   · THE SWITCH IS THE DEPLOYMENT'S. `WP_OS_AI_EMAIL_PARTNERS` governs "may an employee email the
- *     partners" and was turned on for exactly this, in the diff that added this file.
+ *     partners".
  *   · THE TRANSPORT DEFUSES TRIGGERS, so a finding that quotes "#wpdealflow" cannot re-enter the
  *     mailbox as a new instruction.
+ *   · THE FORMAT IS THE BUSY-EXECUTIVE ONE (16 Sep 2026): TL;DR first, what was asked, what was
+ *     done, the finding as bullets, and the partner's call — the employee's full words below the rule.
  *
  * Nothing here can reach a founder, an LP, or anyone outside the firm.
  */
@@ -41,84 +41,40 @@ export async function replyToRequester(
   if (!ASSIGNING_PARTNERS.includes(to)) {
     return { sent: false, to, reason: `${to} is not one of the two partner addresses; a reply goes nowhere else` };
   }
-  if (!aiOutboundSwitches(env).toPartners) {
-    return { sent: false, to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off" };
-  }
 
-  const subject = outcome === "DONE" ? `Done: ${card.title.slice(0, 80)}` : `Blocked: ${card.title.slice(0, 80)}`;
-  const text = [
-    outcome === "DONE" ? `${who} finished what you asked for.` : `${who} is blocked on what you asked for and needs you.`,
-    "",
-    detail.slice(0, 4000),
-    "",
-    `The card, with everything that was done on it: https://os.joinwestpeek.com/#/work (card ${card.id})`,
-    "",
-    "— West Peek OS. Reply to this address and nothing happens; write to os@joinwestpeek.com to ask for something else.",
-  ].join("\n");
-
-  let result: { sent: boolean; detail: string; provider_message_id: string | null };
-  try {
-    result = await sendViaResend(env, { to, subject, text });
-  } catch (err) {
-    result = { sent: false, detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
-  }
-  await appendEvent(env, {
-    eventType: result.sent ? "work_card.replied_by_email" : "work_card.reply_not_sent",
-    actorType: "system",
-    actorId: "work_sweep",
+  // The card's title is "From sequoia@…: <subject>" at the door; the partner knows who they are.
+  const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
+  const finding = bulletsFrom(detail);
+  const cardLink = `https://os.joinwestpeek.com/#/work (card ${card.id})`;
+  const out = await sendPartnerEmail(env, {
+    to,
+    email: {
+      employee: who,
+      what: outcome === "DONE" ? `done — ${asked}` : `blocked — ${asked}`,
+      tldr:
+        outcome === "DONE"
+          ? `Finished what you asked for: ${asked}. Nothing needs deciding unless you want more.`
+          : `Blocked on what you asked for: ${asked}. One decision from you unblocks it.`,
+      sections: [
+        { label: "What you asked", bullets: [asked] },
+        outcome === "DONE"
+          ? { label: "What I found", bullets: finding.length ? finding : ["Finished. The findings are on the card."] }
+          : { label: "Where I am stuck", bullets: finding.length ? finding : ["I need a decision from you before I can go on."] },
+        {
+          label: "Your call",
+          bullets:
+            outcome === "DONE"
+              ? ["Nothing, unless you want it taken further — reply and say how.", `Everything done on it is on the card: ${cardLink}`]
+              : ["Answer the question above by replying to this email, or on the card.", `The card: ${cardLink}`],
+        },
+      ],
+      details: detail,
+    },
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
-    payload: { to, outcome, subject, detail: result.detail, provider_message_id: result.provider_message_id },
+    actorId: "work_sweep",
+    events: { sent: "work_card.replied_by_email", notSent: "work_card.reply_not_sent" },
   });
-  return { sent: result.sent, to, reason: result.detail };
-}
-
-/**
- * An employee emails a partner a finished deliverable (15 Sep 2026).
- *
- * Operator, on Rooms: "when i request a room they should email me and scooter with the deliverable
- * as well. b/c we requested the room we should get an email with the finished deliverable." And on
- * Walker's monthly work for Scooter's agency: "send him an email 1x per month of potential customer
- * ideas". Same bounds as the reply above, lifted out so every deliverable that leaves by email takes
- * the one door: the destination is checked against the two partner addresses, the switch is the
- * deployment's, the transport defuses triggers, and the send is recorded as an event either way.
- * Nothing here can reach anyone outside the firm.
- */
-export async function emailPartnerDeliverable(
-  env: Env,
-  input: {
-    to: string;
-    subject: string;
-    text: string;
-    /** What the email is about, for the event spine. */
-    objectType: string;
-    objectId: string;
-    firmScope: string;
-    actorId?: string;
-  },
-): Promise<{ sent: boolean; to: string; reason: string }> {
-  const to = input.to.trim().toLowerCase();
-  if (!ASSIGNING_PARTNERS.includes(to)) {
-    return { sent: false, to, reason: `${to} is not one of the two partner addresses; a deliverable goes nowhere else` };
-  }
-  if (!aiOutboundSwitches(env).toPartners) {
-    return { sent: false, to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off" };
-  }
-  let result: { sent: boolean; detail: string; provider_message_id: string | null };
-  try {
-    result = await sendViaResend(env, { to, subject: input.subject.slice(0, 200), text: input.text.slice(0, 60_000) });
-  } catch (err) {
-    result = { sent: false, detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
-  }
-  await appendEvent(env, {
-    eventType: result.sent ? "deliverable.emailed_to_partner" : "deliverable.email_not_sent",
-    actorType: "system",
-    actorId: input.actorId ?? "work_sweep",
-    objectType: input.objectType,
-    objectId: input.objectId,
-    firmScope: input.firmScope,
-    payload: { to, subject: input.subject, detail: result.detail, provider_message_id: result.provider_message_id },
-  });
-  return { sent: result.sent, to, reason: result.detail };
+  return { sent: out.sent, to, reason: out.reason };
 }

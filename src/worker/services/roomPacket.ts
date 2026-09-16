@@ -45,7 +45,8 @@ import {
 import { packetFilename, parkerIntroduction, renderPacketHtml, type PacketView, type SponsorView, type VenueView } from "../../shared/events/roomPacketPdf";
 import { guidanceBlock } from "../../shared/skills/library";
 import { writtenGuidance } from "./firmSkills";
-import { emailPartnerDeliverable } from "./requestReply";
+import { sendPartnerEmail } from "./execEmail";
+import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { notifyPartners } from "./notifications";
 import { createWorkCardInternal } from "./workCards";
@@ -886,6 +887,53 @@ export function monthWord(yyyyMm: string): string {
 const usdText = (n: number | null | undefined): string => (n === null || n === undefined ? "—" : `${n < 0 ? "−" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`);
 const tierWord = (t: string | null | undefined): string => (t === "PRESENTING" ? "title" : t === "IN_KIND" ? "in kind" : "supporting");
 
+/**
+ * The busy-executive summary above the packet (16 Sep 2026): the concept, the venue, the money,
+ * and the one decision — keep it or dismiss it. The whole packet is the details under it.
+ */
+export function packetSummary(packet: PacketRow, venues: VenueLine[], sponsors: SponsorLine[]): { tldr: string; sections: ExecEmailInput["sections"] } {
+  const v = viewFromRows(packet, venues, sponsors);
+  const eco = v.economics;
+  const chosen = v.concepts.find((c) => c.chosen);
+  const others = v.concepts.filter((c) => !c.chosen);
+  const firstVenue = v.venues.find((x) => !x.isFallback) ?? v.venues[0];
+  const total = eco ? `${usdText(eco.estimatedCostLowUsd)}–${usdText(eco.estimatedCostHighUsd)}` : "not costed";
+  const asked = v.brief ? `${v.brief.audience}${v.brief.city ? ` in ${v.brief.city}` : ""}` : `Parker's own Room for ${monthWord(v.month)}`;
+  return {
+    tldr: `A ${monthWord(v.month)} Room proposed: **${v.title}**${chosen ? ` — ${chosen.format.replace(/_/g, " ").toLowerCase()}` : ""}, ${v.targetMin}–${v.targetMax} people, ${total}, **${v.sponsors.length}** sponsor(s) ranked. Keep it or dismiss it on Events & Rooms.`,
+    sections: [
+      { label: "What you asked", bullets: [asked] },
+      {
+        label: "What I did",
+        bullets: [
+          "Read the firm's list, found who pays to reach this audience, researched each sponsor on live pages.",
+          `Compared **${v.concepts.length}** concepts and chose one; sourced venues; priced the room to cost plus the firm's keep.`,
+          packet.document_id ? `Filed the packet as a PDF: https://os.joinwestpeek.com/api/documents/${packet.document_id}/download` : "The PDF did not file; the packet is on Events & Rooms.",
+        ],
+      },
+      {
+        label: "What I found",
+        bullets: [
+          chosen ? `Concept: **${chosen.title}** — ${chosen.premise}` : "No concept chosen.",
+          ...(others.length ? [`Beat: ${others.map((c) => `**${c.title}**`).join(", ")}.`] : []),
+          firstVenue ? `Venue: **${firstVenue.name}**${firstVenue.city ? `, ${firstVenue.city}` : ""}, est. ${usdText(firstVenue.estimateLowUsd)}–${usdText(firstVenue.estimateHighUsd)}.` : "Venue: none survived sourcing; a person finds the space.",
+          eco ? `Money: cost ${total}; all slots sold ${usdText(eco.sponsorTargetHighUsd)} — ${eco.reachesKeep ? "the firm's keep is reached" : `SHORT by ${usdText(eco.requiredUsd - eco.sponsorTargetHighUsd)}`}.` : "Money: not costed.",
+          v.sponsors.length ? `Sponsors: ${v.sponsors.slice(0, 3).map((sp) => `**${sp.orgName}**`).join(", ")}${v.sponsors.length > 3 ? ` and ${v.sponsors.length - 3} more` : ""}.` : "Sponsors: none named.",
+          ...(v.inviteCheck ? [`Our own list: **${v.inviteCheck.matchingCount}** of **${v.inviteCheck.totalContacts}** contacts fit — ${v.inviteCheck.verdict.replace(/_/g, " ").toLowerCase()}.`] : []),
+        ],
+      },
+      {
+        label: "Your call",
+        bullets: [
+          "Keep it or dismiss it: https://os.joinwestpeek.com/#/rooms",
+          ...(v.pushback ? [`Where I push back: ${v.pushback}`] : []),
+          "Nothing is booked and nobody outside the firm has been contacted.",
+        ],
+      },
+    ],
+  };
+}
+
 /** The packet as plain text — the email body, and what a partner can forward. */
 export function renderPacketText(packet: PacketRow, venues: VenueLine[], sponsors: SponsorLine[]): string {
   const v = viewFromRows(packet, venues, sponsors);
@@ -974,14 +1022,18 @@ export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: 
     env.WP_OS_DB.prepare(`SELECT ${PACKET_VENUE_COLUMNS} FROM evt_packet_venue WHERE packet_id = ?1 ORDER BY is_fallback, estimate_low_usd`).bind(packet.id),
     env.WP_OS_DB.prepare(`SELECT ${PACKET_SPONSOR_COLUMNS} FROM evt_sponsor_prospect WHERE packet_id = ?1 ORDER BY COALESCE(rank, 99), created_at`).bind(packet.id),
   ]);
-  const text = renderPacketText(packet, (venues?.results ?? []) as VenueLine[], (sponsors?.results ?? []) as SponsorLine[]);
+  const venueRows = (venues?.results ?? []) as VenueLine[];
+  const sponsorRows = (sponsors?.results ?? []) as SponsorLine[];
+  const text = renderPacketText(packet, venueRows, sponsorRows);
   const monthName = monthWord(packet.proposed_for_month);
-  const subject = `Parker: your ${monthName} Room — ${packet.title}${packet.document_id ? " (PDF inside)" : ""}`.slice(0, 180);
+  const summary = packetSummary(packet, venueRows, sponsorRows);
   const sent: string[] = [];
   const failed: string[] = [];
   for (const to of ASSIGNING_PARTNERS) {
-    const out = await emailPartnerDeliverable(env, {
-      to, subject, text, objectType: "room_packet", objectId: packet.id, firmScope: packet.firm_scope, actorId: "aie_parker",
+    const out = await sendPartnerEmail(env, {
+      to,
+      email: { employee: "Parker", what: `your ${monthName} Room — ${packet.title}${packet.document_id ? " (PDF inside)" : ""}`, tldr: summary.tldr, sections: summary.sections, details: text },
+      objectType: "room_packet", objectId: packet.id, firmScope: packet.firm_scope, actorId: "aie_parker",
     });
     (out.sent ? sent : failed).push(to);
   }

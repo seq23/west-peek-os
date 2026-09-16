@@ -82,6 +82,7 @@ export async function sendViaResend(
   // digest that writes "#wpdealflow" is ingested as a submission and loops back here.
   const subject = defuseTriggers(payload.subject);
   const text = defuseTriggers(payload.text);
+  const html = payload.html ? defuseTriggers(payload.html) : null;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -92,7 +93,14 @@ export async function sendViaResend(
         authorization: `Bearer ${env.RESEND_API_KEY}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ from, to: [payload.to], subject, text }),
+      body: JSON.stringify({
+        from,
+        to: [payload.to],
+        subject,
+        text,
+        ...(html ? { html } : {}),
+        ...(payload.replyTo ? { reply_to: payload.replyTo } : {}),
+      }),
       signal: controller.signal,
     });
 
