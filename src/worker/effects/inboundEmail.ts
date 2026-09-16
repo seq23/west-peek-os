@@ -499,7 +499,16 @@ export async function handleInboundEmail(
 
   let dealCompany: string | null = null;
   if (wantsDeal) {
-    const deal = dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"));
+    let deal = dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"));
+    // An untagged subject names a company only when the register already knows it. "check this
+    // out" with the tag in the body is a conversation, and a company by that name at the top of the
+    // funnel is what the owner's placement matrix caught (16 Sep 2026). A real forward — "Fwd:
+    // Northwind Robotics" — matches and goes through; the rest is Porter's ambiguity.
+    if (deal?.subjectUntagged) {
+      const known = await matchFunnelCompany(env, deal.company);
+      if (known) deal.company = known.canonical_name;
+      else deal = null;
+    }
     if (deal) {
       /*
        * THE DECK ITSELF, HANDED OVER RATHER THAN MENTIONED.
@@ -604,7 +613,7 @@ export async function handleInboundEmail(
   // above stays here as this side's evidence of having sent it.
   let relayed: { ok: boolean; detail: string } | null = null;
   if (summary.triggers.includes("#wpnetwork")) {
-    const person = personFromMessage(summary.from, raw);
+    const person = personFromMessage(summary.from, raw, summary.subject);
 
     /*
      * ONE EMAIL, TWO RECORDS, AND THE LINK BETWEEN THEM KEPT.
@@ -714,12 +723,17 @@ export function extractAddress(header: string | null): string | null {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate) ? candidate : null;
 }
 
-export function personFromMessage(from: string, body: string): { name: string; email?: string | null; company?: string | null } | null {
+export function personFromMessage(from: string, body: string, subject = ""): { name: string; email?: string | null; company?: string | null } | null {
   const field = (key: string): string | null => {
     const m = new RegExp(`^\\s*${key}\\s*:\\s*(.+?)\\s*$`, "im").exec(body);
     return m ? m[1]! : null;
   };
-  const name = field("name") ?? field("full name");
+  // "#wpnetwork Test Person" as the whole subject is the natural way to write it from a phone; the
+  // stripped subject is the name when it reads like one (two or more words, no punctuation of a
+  // sentence) and the tag was up there with it.
+  const fromSubject = /#wpnetwork/i.test(subject) ? strippedSubject(subject) : "";
+  const subjectName = /^[A-Za-z][A-Za-z'’.-]*(?:\s+[A-Za-z][A-Za-z'’.-]*){1,3}$/.test(fromSubject) ? fromSubject : null;
+  const name = field("name") ?? field("full name") ?? subjectName;
   if (!name) return null;
   return { name, email: field("email") ?? from, company: field("company") };
 }

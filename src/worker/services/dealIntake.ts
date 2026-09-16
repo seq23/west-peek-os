@@ -216,6 +216,8 @@ export interface EmailDeal {
   /** True when the message said the substance is in an attachment. */
   isDeck: boolean;
   raw: string;
+  /** The company came from a subject that carried no tag — accept only if the register knows it. */
+  subjectUntagged?: boolean;
   /** Extra lines for the work card — what came attached, and what could not be read. */
   notes?: string[];
   /**
@@ -247,8 +249,21 @@ export function dealFromMessage(subject: string, body: string, from: string, isD
   // `strippedSubject`; it lives in one place now because it was inlined here and there at once.
   const fromSubject = strippedSubject(subject);
 
+  /*
+   * THE SUBJECT NAMES THE COMPANY ONLY WHEN THE TAG IS IN THE SUBJECT. "#wpdealflow Northwind
+   * Robotics" is a routing line and the rest of it is the company. "check this out" with the tag
+   * three lines down in the body is a conversation — reading it as the company would put a company
+   * called "check this out" at the top of the funnel (owner's placement matrix, 16 Sep 2026). A
+   * body-only tag with no `Company:` line is exactly Porter's ambiguity, and the caller routes it
+   * there when this returns null.
+   */
+  const tagInSubject = /#wp[a-z]+/i.test(subject);
   const company = named ?? (fromSubject.length >= 2 ? fromSubject : null);
   if (!company) return null;
+  // "Fwd: Northwind Robotics" with the tag in the body is a real forward, so the untagged subject is
+  // still offered — flagged, so the handler accepts it only when the register already knows the
+  // name and hands anything else to Porter.
+  const subjectUntagged = !named && !tagInSubject;
 
   return {
     company,
@@ -258,6 +273,7 @@ export function dealFromMessage(subject: string, body: string, from: string, isD
     from,
     isDeck,
     raw: body,
+    subjectUntagged,
   };
 }
 
