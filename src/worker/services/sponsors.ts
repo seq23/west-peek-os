@@ -244,14 +244,22 @@ function fail(err: unknown): Response {
 }
 
 export async function handleListSponsors(ctx: RouteContext): Promise<Response> {
+  // A DECLINED packet's research stays on the record but leaves the table. On 15 Sep 2026 the
+  // pipeline showed Harvey three times at three prices — one row per pass of a Room that was
+  // rebuilt twice — beside sponsors nobody would now approach. A prospect that was only ever
+  // IDENTIFIED or RESEARCHING for a packet the partners turned down is not being pursued; one
+  // that somebody actually moved (DRAFTED onward, or PARKED on purpose) is, whatever its packet.
   const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT id, org_name, tier, category, stage, ask_low_usd, ask_high_usd, committed_usd, pitch,
-            packet_id, event_id, contact_name, owner_employee, decline_reason, note, created_at
-     FROM evt_sponsor_prospect ORDER BY
-       CASE stage WHEN 'COMMITTED' THEN 0 WHEN 'IN_CONVERSATION' THEN 1 WHEN 'SENT' THEN 2
+    `SELECT s.id, s.org_name, s.tier, s.category, s.stage, s.ask_low_usd, s.ask_high_usd, s.committed_usd, s.pitch,
+            s.packet_id, s.event_id, s.contact_name, s.owner_employee, s.decline_reason, s.note, s.created_at
+     FROM evt_sponsor_prospect s
+     LEFT JOIN evt_room_packet p ON p.id = s.packet_id
+     WHERE NOT (COALESCE(p.status, '') = 'DECLINED' AND s.stage IN ('IDENTIFIED', 'RESEARCHING'))
+     ORDER BY
+       CASE s.stage WHEN 'COMMITTED' THEN 0 WHEN 'IN_CONVERSATION' THEN 1 WHEN 'SENT' THEN 2
                   WHEN 'DRAFTED' THEN 3 WHEN 'RESEARCHING' THEN 4 WHEN 'IDENTIFIED' THEN 5
                   WHEN 'PARKED' THEN 6 ELSE 7 END,
-       created_at DESC
+       s.created_at DESC
      LIMIT 200`,
   ).all();
 
