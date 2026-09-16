@@ -38,6 +38,15 @@ const customerJson = JSON.stringify({
   ],
 });
 
+/** A judge that keeps everything it is shown — for tests about the plumbing, not the judgement. */
+const keepAll = async (_e: unknown, _a: unknown, prompt: string) => {
+  const key = /"verdicts":\[\{"organisation"/.test(prompt) ? "organisation" : "writer";
+  const start = prompt.indexOf(key === "organisation" ? "LEADS:\n" : "PITCHES:\n");
+  const end = prompt.lastIndexOf("Return ONLY JSON");
+  const body = JSON.parse(prompt.slice(start, end).replace(/^(LEADS|PITCHES):\n/, "")) as Record<string, string>[];
+  return { ok: true, text: JSON.stringify({ verdicts: body.map((b) => ({ [key]: b[key], keep: true, reason: "fine" })) }), detail: "ok" };
+};
+
 const pressJson = JSON.stringify({
   results: [
     { writer: "A. Writer", outlet: "Community Weekly", email: "a.writer@communityweekly.example", contact_url: "https://communityweekly.example/about", why_this_writer: "covers community programmes", hook: "Community is an operating advantage", proof_url: "https://communityweekly.example/piece", draft: "Hi A —\nI run West Peek Productions." },
@@ -257,6 +266,7 @@ describe("the monthly card on Walker's desk", () => {
       productions: (e, card) => runProductionsCard(e, card, {
         search: async (_e, _a, prompt) => { searches += 1; return { ok: true, text: /journalists/.test(prompt) ? pressJson : customerJson, detail: "ok" }; },
         urlCheck,
+        judge: keepAll,
         pageText: async () => "Contact: a.writer@communityweekly.example",
         now: new Date("2026-11-01T14:05:00.000Z"),
       }),
@@ -290,6 +300,7 @@ describe("the monthly card on Walker's desk", () => {
           customerPrompts.push(prompt);
           return { ok: true, text: noUrls, detail: "ok" };
         },
+        judge: keepAll,
         urlCheck,
         pageText: async () => "Contact: a.writer@communityweekly.example",
         now: new Date("2026-12-01T14:05:00.000Z"),
@@ -298,11 +309,73 @@ describe("the monthly card on Walker's desk", () => {
     expect(out.card?.id).toBe(opened.cardId);
     expect(out.outcome).toBe("BLOCKED");
     expect(customerPrompts.length, "asked once, then once more with the miss named").toBe(2);
-    expect(customerPrompts[1]).toMatch(/no entry carried a url/);
+    expect(customerPrompts[1]).toMatch(/Your previous answer was discarded[\s\S]*Rejected last time: nothing usable was returned/);
     const mails = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all<{ payload_json: string }>()).results ?? [];
     expect(mails.length, "a half note must not be sent").toBe(0);
     const row = (await env.WP_OS_DB.prepare("SELECT state, next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; next_action: string }>())!;
     expect(row.state).toBe("BLOCKED");
     expect(row.next_action).toMatch(/Not sending a half note — no customer lead survived \(the search answered with no usable entry/);
+  });
+  it("THE JUDGEMENT PASS: what the searcher found is held to the brief by a second model; failures are dropped and the reason is on the note", async () => {
+    // 16 Sep 2026: the searcher, told "United States, no government", returned VK, the Space Force
+    // and a 2025 basketball schedule. The judge is the fix — not another line in the search prompt.
+    const { openProductionsCard } = await import("../src/worker/services/productions");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-01-01T14:00:00.000Z"));
+    const mixed = JSON.stringify({ results: [
+      { organisation: "Example Nonprofit", trigger: "announced a national summit for March", approach: "Head of Community", angle: "the summit needs a community", url: "https://example.org/summit" },
+      { organisation: "VK", trigger: "Uchi.ru unveiled a new visual style", approach: "Head of Brand", angle: "segmentation", url: "https://vk.company/ru/press/releases/12400/" },
+      { organisation: "U.S. Space Force", trigger: "launch programme forecast to grow", approach: "Comms lead", angle: "storytelling", url: "https://www.spaceforce.mil/News/" },
+    ] });
+    const judgePrompts: string[] = [];
+    const out = await sweepOnce(env, new Date("2027-01-01T14:05:00.000Z"), {
+      productions: (e, card) => runProductionsCard(e, card, {
+        search: async (_e, _a, prompt) => ({ ok: true, text: /journalists/.test(prompt) ? pressJson : mixed, detail: "ok" }),
+        judge: async (_e, _a, prompt) => {
+          judgePrompts.push(prompt);
+          if (/"verdicts":\[\{"organisation"/.test(prompt)) {
+            return { ok: true, text: JSON.stringify({ verdicts: [
+              { organisation: "Example Nonprofit", keep: true, reason: "US nonprofit, summit announced" },
+              { organisation: "VK", keep: false, reason: "Russian company; a .ru press page is not a US buyer" },
+              { organisation: "U.S. Space Force", keep: false, reason: "a military; does not hire agencies like this" },
+            ] }), detail: "ok" };
+          }
+          return { ok: true, text: JSON.stringify({ verdicts: [{ writer: "A. Writer", keep: true, reason: "covers community programmes" }, { writer: "B. Guesser", keep: false, reason: "hook is the positioning restated" }] }), detail: "ok" };
+        },
+        urlCheck: async () => true,
+        pageText: async () => "Contact: a.writer@communityweekly.example",
+        now: new Date("2027-01-01T14:05:00.000Z"),
+      }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome).toBe("DONE");
+    expect(judgePrompts.length, "one judgement per half").toBe(2);
+    expect(judgePrompts[0]).toMatch(/KEEP a lead only if ALL of these hold \(this month is 2027-01\)/);
+    const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
+    expect(delivered).toMatch(/1 customer lead\(s\) and 1 press pitch\(es\)/);
+    expect(delivered).toMatch(/1\. Example Nonprofit/);
+    expect(delivered).not.toMatch(/\n\d+\. VK\n/);
+    expect(delivered).not.toMatch(/B\. Guesser — GTM Letter/);
+    expect(delivered).toMatch(/Left out on judgement .*VK — Russian company.*U\.S\. Space Force — a military.*B\. Guesser — hook is the positioning restated/);
+  });
+
+  it("a judge that cannot answer BLOCKS the card: unjudged research is never sent", async () => {
+    const { openProductionsCard } = await import("../src/worker/services/productions");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-02-01T14:00:00.000Z"));
+    const out = await sweepOnce(env, new Date("2027-02-01T14:05:00.000Z"), {
+      productions: (e, card) => runProductionsCard(e, card, {
+        search: async (_e, _a, prompt) => ({ ok: true, text: /journalists/.test(prompt) ? pressJson : customerJson, detail: "ok" }),
+        judge: async () => ({ ok: false, text: "", detail: "provider 503" }),
+        urlCheck,
+        pageText: async () => null,
+        now: new Date("2027-02-01T14:05:00.000Z"),
+      }),
+    });
+    expect(out.outcome).toBe("BLOCKED");
+    const mails = (await env.WP_OS_DB.prepare("SELECT 1 FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all()).results ?? [];
+    expect(mails.length).toBe(0);
+    const row = (await env.WP_OS_DB.prepare("SELECT next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ next_action: string }>())!;
+    expect(row.next_action).toMatch(/the judgement pass failed: provider 503/);
   });
 });

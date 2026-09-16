@@ -345,13 +345,13 @@ describe("the sponsor discovery and research stages", () => {
 
 describe("ideate, compare, commit", () => {
   it("asks for three concepts that differ in format, compared on tone, sponsor value, fit and cost, and one chosen with the reason", () => {
-    const prompt = buildConceptsPrompt({ month: "2026-10", city: "New York", brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, recentThemes: ["operator to founder"], inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: [], namedFromRecords: [], verdict: "CANNOT_FILL", note: "cannot fill" }, sponsors: [HARVEY] });
+    const prompt = buildConceptsPrompt({ month: "2026-10", city: "New York", brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, recentThemes: ["operator to founder"], inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: [], namedFromRecords: [], verdict: "STARTING_LIST", note: "a starting list" }, sponsors: [HARVEY] });
     expect(prompt).toMatch(/THREE distinct concepts/);
     expect(prompt).toMatch(/war room/);
     expect(prompt).toMatch(/Dinner is ALLOWED/);
     expect(prompt).toMatch(/CHOOSE ONE/);
     expect(prompt).toMatch(/PUSH BACK/);
-    expect(prompt).toContain("12 of 4712 contacts");
+    expect(prompt).toContain("12 of 4712 community contacts");
     expect(prompt).toContain("Mali Robertson");
     expect(prompt).toContain("operator to founder");
   });
@@ -386,7 +386,7 @@ describe("the packet prompt", () => {
   });
 
   it("carries the chosen concept, the research and the invite check into the packet", () => {
-    const prompt = buildPacketPrompt({ ...base, brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, concepts: [{ title: "Boardroom", format: "DINNER", premise: "a serious table", tone: "", valueToSponsor: "", whoItFits: "", costBand: "$22K", signatureMoment: "the brief", venueDirection: "", chosen: true }], choiceRationale: "it wins", pushback: "widen the audience", sponsors: [HARVEY], inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: ["lawyer at Sullivan & Cromwell"], namedFromRecords: [], verdict: "CANNOT_FILL", note: "cannot fill" } });
+    const prompt = buildPacketPrompt({ ...base, brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, concepts: [{ title: "Boardroom", format: "DINNER", premise: "a serious table", tone: "", valueToSponsor: "", whoItFits: "", costBand: "$22K", signatureMoment: "the brief", venueDirection: "", chosen: true }], choiceRationale: "it wins", pushback: "widen the audience", sponsors: [HARVEY], inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: ["lawyer at Sullivan & Cromwell"], namedFromRecords: [], verdict: "STARTING_LIST", note: "a starting list" } });
     expect(prompt).toContain("THE CONCEPT YOU CHOSE");
     expect(prompt).toContain("Boardroom");
     expect(prompt).toContain("widen the audience");
@@ -437,12 +437,19 @@ describe("the invite-list reality check", () => {
     expect(audienceTerms("everyone").terms).toEqual([]);
   });
 
-  it("needs roughly three invitations a seat, and says what falling short means", () => {
-    expect(inviteVerdict(150, 40).verdict).toBe("CAN_FILL");
-    expect(inviteVerdict(50, 40).verdict).toBe("PARTIAL");
-    const short = inviteVerdict(12, 40);
-    expect(short.verdict).toBe("CANNOT_FILL");
-    expect(short.note).toMatch(/widen the audience|co-host/);
+  it("the count is a starting list, never a veto: a thin match does not tell Parker to widen, co-host or push back", () => {
+    // 16 Sep 2026: "only 6 of 4,712 contacts read as lawyers" became pushback on the October Room.
+    // The community records under-read job functions and the partners' network is larger.
+    for (const [matching, seats] of [[150, 40], [50, 40], [6, 40]] as const) {
+      const v = inviteVerdict(matching, seats);
+      expect(v.verdict).toBe("STARTING_LIST");
+      expect(v.note).toMatch(/starting list, not a ceiling/);
+      expect(v.note).toMatch(/do not widen the audience, decline, or push back/);
+      expect(v.note).not.toMatch(/cannot fill/i);
+    }
+    const concepts = buildConceptsPrompt({ month: "2026-10", city: "New York", brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: [], notes: null }, recentThemes: [], inviteCheck: { totalContacts: 4712, matchingCount: 6, matchedOn: ["lawyers and legal roles"], archetypes: [], namedFromRecords: [], verdict: "STARTING_LIST", note: inviteVerdict(6, 40).note }, sponsors: [] });
+    expect(concepts).toMatch(/NOT a constraint on the Room/);
+    expect(concepts).toMatch(/Never cite this count as a reason to widen the audience/);
   });
 });
 
@@ -464,7 +471,7 @@ describe("the PDF", () => {
     economics: computeEconomics({ venues: [], targetAttendees: 40, structure: defaultStructure() }),
     sponsorThesis: "the experience", risks: ["one"], commitmentMd: "spend",
     pitchEmail: { to: "Mali Robertson", subject: "A room", body: "Mali —\n\nHello." },
-    inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: ["lawyer at a firm"], namedFromRecords: ["A Person"], verdict: "CANNOT_FILL", note: "cannot fill" },
+    inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: ["lawyer at a firm"], namedFromRecords: ["A Person"], verdict: "STARTING_LIST", note: "a starting list" },
     alsoLookedAt: ["Ghost Co"],
     generatedAt: "2026-09-15T12:00:00.000Z",
   };

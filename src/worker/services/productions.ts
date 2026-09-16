@@ -456,7 +456,7 @@ export async function findWriterAddress(
 }
 
 /** The one monthly note: who Walker is, the leads, the pitches. */
-export function renderMonthlyEmail(month: string, ideas: readonly CustomerIdea[], pitches: readonly PressPitch[], dropped: readonly string[]): string {
+export function renderMonthlyEmail(month: string, ideas: readonly CustomerIdea[], pitches: readonly PressPitch[], dropped: readonly string[], rejected: readonly { name: string; reason: string }[] = []): string {
   const lines = [
     `Scooter — Walker, your chief of staff. This is West Peek Productions' month in one note: ${ideas.length} organisation(s) that could buy Community-as-a-Service, and ${pitches.length} press pitch draft(s) for you to send. Nobody has been contacted from here; that stays yours.`,
     "",
@@ -491,6 +491,7 @@ export function renderMonthlyEmail(month: string, ideas: readonly CustomerIdea[]
     ]),
     pitches.length === 0 ? "No writer with a live citation this month — say where to look and I will." : "",
     dropped.length ? `Left out because the cited page did not answer when checked: ${dropped.join(", ")}` : "",
+    rejected.length ? `Left out on judgement (searched, then held to the brief and failed it): ${rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}` : "",
     "",
     "— Walker. Anything you want from me or the team: email os@joinwestpeek.com from this address and Porter routes it. This is Productions work, on your desk only; nothing here touches the fund.",
   ];
@@ -523,6 +524,134 @@ export function renderPressEmail(month: string, pitches: readonly PressPitch[], 
 
 // ── The runner the sweep calls ───────────────────────────────────────────────
 
+/**
+ * THE JUDGEMENT PASS. The search model (perplexity/sonar) finds pages; it does not keep rules. The
+ * 16 Sep 2026 run, on a prompt that said "United States" and "no government", sent Scooter VK
+ * (Russian), a 2025 college-basketball schedule and the Space Force. So every lead and every pitch
+ * that survives the live-URL check is put to a second, stronger model with the rules and a verdict
+ * per entry; what fails is dropped and the reason kept for the card. The judge does not search —
+ * it reads what the searcher wrote and holds it to the brief.
+ */
+export type ProductionsJudge = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
+
+export interface Verdict {
+  keep: boolean;
+  reason: string;
+}
+
+export function buildLeadJudgePrompt(month: string, ideas: readonly CustomerIdea[]): string {
+  return [
+    walkerIdentity(),
+    "",
+    "You are the JUDGE, not the researcher. A web-search model produced the customer leads below for",
+    "West Peek Productions, Scooter's Community-as-a-Service agency in New York. Hold each one to the",
+    "brief and return a verdict per lead. Be strict: fewer, all real, beats ten with a stretch.",
+    "",
+    "WHAT THE AGENCY SELLS:",
+    PRODUCTIONS_OFFER,
+    "",
+    `KEEP a lead only if ALL of these hold (this month is ${month}):`,
+    "- It is an organisation that actually hires an agency like this: a brand, a B2B software",
+    "  company, a creator business, a membership body or professional association, a conference",
+    "  producer, a university, a national nonprofit, a high-growth startup.",
+    "- It is in the United States or plainly serves a US audience. (VK is Russian. A .ru press page is",
+    "  not a US buyer.)",
+    "- The trigger is a real, recent event — within roughly the last 60 days of this month — and is",
+    "  the KIND of thing that creates a need for community, experiences or content: a launch, a",
+    "  community or events hire, a raise, a new programme, a summit announced, a rebrand, a new audience.",
+    "  A schedule announcement from last year is not a trigger. A news release existing is not a trigger.",
+    "- The cited URL plausibly belongs to that organisation or to a page about it (a source page for",
+    "  a DIFFERENT organisation, or a generic listing, fails).",
+    "DROP government departments, militaries, and anything that reads as a media outlet being",
+    "counted as a buyer because it happened to publish the trigger.",
+    "",
+    "LEADS:",
+    JSON.stringify(ideas.map((i) => ({ organisation: i.organisation, trigger: i.trigger, approach: i.approach, angle: i.angle, url: i.url })), null, 1),
+    "",
+    'Return ONLY JSON: {"verdicts":[{"organisation":"…","keep":true,"reason":"one line"}]} — one verdict per lead, in order, organisation copied exactly.',
+  ].join("\n");
+}
+
+export function buildPitchJudgePrompt(month: string, pitches: readonly PressPitch[]): string {
+  return [
+    walkerIdentity(),
+    "",
+    "You are the JUDGE, not the researcher. A web-search model produced the press pitches below for",
+    "Scooter to send about West Peek Productions. Hold each one to the brief and return a verdict per",
+    "pitch. Be strict: a pitch Scooter would be embarrassed to send is worse than no pitch.",
+    "",
+    "WHAT THE AGENCY SELLS:",
+    PRODUCTIONS_OFFER,
+    "",
+    `KEEP a pitch only if ALL of these hold (this month is ${month}):`,
+    "- The writer is named and the 'why this writer' names a beat or a specific piece that a person",
+    "  covering community, brand, events, the creator economy or go-to-market would recognise. A",
+    "  pitch whose own reasoning admits it is 'an outlet contact, not a writer-earned pitch' or 'the",
+    "  weakest of the five' fails.",
+    "- The outlet is one that could plausibly cover a New York community-and-events agency for a US",
+    "  business readership.",
+    "- The hook is specific to that writer, not the agency's positioning restated.",
+    "- The draft is short, sendable as-is by Scooter, and does not claim a fact the offer does not state.",
+    "",
+    "PITCHES:",
+    JSON.stringify(pitches.map((p) => ({ writer: p.writer, outlet: p.outlet, why_this_writer: p.whyThisWriter, hook: p.hook, proof_url: p.proofUrl, draft: p.draft })), null, 1),
+    "",
+    'Return ONLY JSON: {"verdicts":[{"writer":"…","keep":true,"reason":"one line"}]} — one verdict per pitch, in order, writer copied exactly.',
+  ].join("\n");
+}
+
+/** Verdicts keyed by the entry's name; an entry the judge did not mention is dropped, not waved through. */
+export function parseVerdicts(raw: string, keyField: "organisation" | "writer"): Map<string, Verdict> {
+  const p = jsonBody(raw);
+  const out = new Map<string, Verdict>();
+  for (const r of Array.isArray(p?.verdicts) ? (p!.verdicts as Record<string, unknown>[]) : []) {
+    const key = str(r[keyField]);
+    if (!key) continue;
+    out.set(key.toLowerCase(), { keep: r.keep === true, reason: str(r.reason) ?? "no reason given" });
+  }
+  return out;
+}
+
+export async function judgeEntries<T>(
+  env: Env,
+  actor: Actor,
+  entries: readonly T[],
+  prompt: string,
+  keyOf: (t: T) => string,
+  keyField: "organisation" | "writer",
+  judge: ProductionsJudge,
+): Promise<{ kept: T[]; rejected: { name: string; reason: string }[]; failed: string | null }> {
+  if (entries.length === 0) return { kept: [], rejected: [], failed: null };
+  const found = await judge(env, actor, prompt);
+  if (!found.ok) return { kept: [], rejected: [], failed: found.detail };
+  const verdicts = parseVerdicts(found.text, keyField);
+  if (verdicts.size === 0) return { kept: [], rejected: [], failed: "the judge answered with no verdicts" };
+  const kept: T[] = [];
+  const rejected: { name: string; reason: string }[] = [];
+  for (const e of entries) {
+    const v = verdicts.get(keyOf(e).toLowerCase());
+    if (v?.keep) kept.push(e);
+    else rejected.push({ name: keyOf(e), reason: v?.reason ?? "the judge gave no verdict on it" });
+  }
+  return { kept, rejected, failed: null };
+}
+
+const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
+  const { run } = await runAi(env, {
+    purpose: "Walker: West Peek Productions judgement",
+    actor,
+    inputs: [prompt],
+    // Judging public research; nothing of the firm's leaves.
+    sensitivity: "PUBLIC" as never,
+    // No preferred model: the router's default (a Claude model) reads and reasons; it must not search.
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter" },
+    routing: { category: "INTELLIGENCE" },
+  });
+  if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
+  if (run.model === SEARCH_MODEL) return { ok: false, text: "", detail: "the judgement was routed to the search model" };
+  return { ok: true, text: run.output_text, detail: "ok" };
+};
+
 export type ProductionsSearch = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
 
 const defaultSearch: ProductionsSearch = async (env, actor, prompt) => {
@@ -549,30 +678,39 @@ const defaultSearch: ProductionsSearch = async (env, actor, prompt) => {
 export async function runProductionsCard(
   env: Env,
   card: SweepCard,
-  deps: { search?: ProductionsSearch; urlCheck?: UrlCheck; pageText?: PageText; now?: Date } = {},
+  deps: { search?: ProductionsSearch; judge?: ProductionsJudge; urlCheck?: UrlCheck; pageText?: PageText; now?: Date } = {},
 ): Promise<{ finished: boolean; blocked: boolean; detail: string }> {
   const now = deps.now ?? new Date();
   const month = monthOf(now);
   const actor: Actor = { type: "AI", aiEmployeeId: "aie_walker", roles: [], firmScopes: [card.firm_scope] };
   const search = deps.search ?? defaultSearch;
   const check = deps.urlCheck ?? defaultUrlCheck;
+  const judge = deps.judge ?? defaultJudge;
   const kind = card.kind as ProductionsKind;
 
   /** One search, and one more with the miss named if nothing usable came back. `why` is for the card. */
+  type Judged<T> = { kept: T[]; dropped: string[]; rejected: { name: string; reason: string }[]; failed: string | null };
   async function searchUntilSome<T>(
     prompt: string,
-    parse: (text: string) => Promise<{ kept: T[]; dropped: string[] }>,
+    parse: (text: string) => Promise<Judged<T>>,
     nudge: string,
-  ): Promise<{ kept: T[]; dropped: string[]; why: string }> {
+  ): Promise<Judged<T> & { why: string }> {
     let why = "";
-    for (const attempt of [prompt, `${prompt}\n\n${nudge}`]) {
-      const found = await search(env, actor, attempt);
+    let last: Judged<T> = { kept: [], dropped: [], rejected: [], failed: null };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const found = await search(env, actor, attempt === 0 ? prompt : `${prompt}\n\n${nudge}`);
       if (!found.ok) { why = `the live search failed: ${found.detail}`; continue; }
       const parsed = await parse(found.text);
+      last = parsed;
+      if (parsed.failed) return { ...parsed, why: `the judgement pass failed: ${parsed.failed}` };
       if (parsed.kept.length) return { ...parsed, why: "" };
-      why = parsed.dropped.length ? `every cited page was dead: ${parsed.dropped.join(", ")}` : "the search answered with no usable entry (no url on any)";
+      why = parsed.rejected.length
+        ? `the judge rejected every entry: ${parsed.rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}`
+        : parsed.dropped.length ? `every cited page was dead: ${parsed.dropped.join(", ")}` : "the search answered with no usable entry (no url on any)";
+      // The second attempt is told what was wrong with the first, so it is not the same answer twice.
+      nudge = `${nudge} Rejected last time: ${parsed.rejected.map((r) => `${r.name} (${r.reason})`).join("; ") || "nothing usable was returned"}.`;
     }
-    return { kept: [], dropped: [], why };
+    return { ...last, kept: [], why };
   }
 
   let subject: string;
@@ -589,14 +727,23 @@ export async function runProductionsCard(
     // card is BLOCKED with the reason on it and no email goes out.
     const ideas = await searchUntilSome(
       buildCustomerPrompt(month),
-      (text) => keepLive(parseCustomerIdeas(text), (i) => i.url, check),
-      "Your previous answer was discarded: no entry carried a url. Every entry MUST have the url of the live page that shows the trigger.",
+      async (text) => {
+        const live = await keepLive(parseCustomerIdeas(text), (i) => i.url, check);
+        const judged = await judgeEntries(env, actor, live.kept, buildLeadJudgePrompt(month, live.kept), (i) => i.organisation, "organisation", judge);
+        return { ...judged, dropped: live.dropped };
+      },
+      "Your previous answer was discarded. Every entry MUST have the url of the live page that shows the trigger, be a US organisation that hires agencies, and have a trigger from the last ~60 days.",
     );
     const pitchesLive = await searchUntilSome(
       buildPressPrompt(month),
-      (text) => keepLive(parsePressPitches(text), (p) => p.proofUrl, check),
-      "Your previous answer was discarded: no entry carried a live proof_url. Every entry MUST have the url of a live page proving the beat.",
+      async (text) => {
+        const live = await keepLive(parsePressPitches(text), (p) => p.proofUrl, check);
+        const judged = await judgeEntries(env, actor, live.kept, buildPitchJudgePrompt(month, live.kept), (p) => p.writer, "writer", judge);
+        return { ...judged, dropped: live.dropped };
+      },
+      "Your previous answer was discarded. Every entry MUST have a live proof_url, a named writer whose beat is shown, and a hook specific to that writer.",
     );
+    const rejected = [...ideas.rejected, ...pitchesLive.rejected];
     const missing = [
       ideas.kept.length === 0 ? `no customer lead survived (${ideas.why})` : null,
       pitchesLive.kept.length === 0 ? `no press pitch survived (${pitchesLive.why})` : null,
@@ -611,7 +758,7 @@ export async function runProductionsCard(
     count = ideas.kept.length + hunted.length;
     dropped = [...ideas.dropped, ...pitchesLive.dropped];
     subject = `Walker: West Peek Productions this month — ${ideas.kept.length} customer lead(s) and ${hunted.length} press pitch(es)`;
-    text = renderMonthlyEmail(month, ideas.kept, hunted, dropped);
+    text = renderMonthlyEmail(month, ideas.kept, hunted, dropped, rejected);
   } else {
   const found = await search(env, actor, kind === "PRODUCTIONS_CUSTOMERS" ? buildCustomerPrompt(month) : buildPressPrompt(month));
   if (!found.ok) {

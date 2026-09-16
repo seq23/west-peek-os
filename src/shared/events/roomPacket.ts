@@ -303,8 +303,15 @@ export interface InviteCheck {
   archetypes: string[];
   /** Named people FROM THE FIRM'S OWN RECORDS only, as a starting list. */
   namedFromRecords: string[];
-  verdict: "CAN_FILL" | "PARTIAL" | "CANNOT_FILL";
-  /** What the verdict means for the concept — fill from partners' own networks, co-host, widen the audience. */
+  /**
+   * Always STARTING_LIST. Until 16 Sep 2026 this could be CANNOT_FILL, and Parker used it to push
+   * back on a Room ("only 6 of 4,712 contacts read as lawyers — widen the audience or co-host").
+   * Sequoia's ruling: the community records are a partial read — job functions have not been
+   * surveyed, and the partners' broader network is far larger than the community snapshot — so the
+   * count is a starting list, never a ceiling and never a reason to widen, decline or push back.
+   */
+  verdict: "STARTING_LIST";
+  /** What the count means: where the list starts; the broader network fills the rest. */
   note: string;
 }
 
@@ -686,9 +693,10 @@ export function buildConceptsPrompt(input: {
     : "Nobody asked for a particular Room this month — propose the one the community needs now.";
   const invite = input.inviteCheck
     ? [
-        "WHAT THE FIRM'S OWN NETWORK CAN PUT IN THE ROOM (read from its records, not guessed):",
-        `- ${input.inviteCheck.matchingCount} of ${input.inviteCheck.totalContacts} contacts read as ${input.inviteCheck.matchedOn.join(" / ")}; verdict: ${input.inviteCheck.verdict}.`,
+        "A STARTING GUEST LIST FROM THE FIRM'S RECORDS (information for planning the ask — NOT a constraint on the Room):",
+        `- ${input.inviteCheck.matchingCount} of ${input.inviteCheck.totalContacts} community contacts read as ${input.inviteCheck.matchedOn.join(" / ")}.`,
         `- ${input.inviteCheck.note}`,
+        "- Never cite this count as a reason to widen the audience, co-host instead, or push back. The partners fill Rooms from their broader network.",
         input.inviteCheck.archetypes.length ? `- Archetypes present: ${input.inviteCheck.archetypes.join("; ")}` : null,
       ].filter(Boolean).join("\n")
     : "";
@@ -734,10 +742,10 @@ export function buildConceptsPrompt(input: {
     "- Compare the three honestly on: tone; value to the sponsor (what their executive gets to do in",
     "  the room, and for how long); who it fits (which of the audience it actually draws); cost band.",
     "- CHOOSE ONE. Say why it wins and what the other two lose on. The other two go in the appendix.",
-    "- PUSHBACK: if the brief's audience is narrower than the firm's network can fill, or the named",
-    "  sponsor has no sponsorship history, or the money asked for does not fit the format, say so in",
-    "  `pushback` in plain words and propose the adjustment (widen to 'lawyers and the founders who",
-    "  need them', co-host with an association, replace the sponsor). Empty string if none.",
+    "- PUSHBACK: if the named sponsor has no sponsorship history, or the money asked for does not fit",
+    "  the format, say so in `pushback` in plain words and propose the adjustment (replace the sponsor,",
+    "  restructure the ask). The size of the starting guest list is NEVER pushback — the partners",
+    "  fill the room from their broader network. Empty string if none.",
     "",
     'Return ONLY JSON:',
     JSON.stringify({
@@ -838,7 +846,7 @@ export function buildPacketPrompt(input: {
     : "";
 
   const invite = input.inviteCheck
-    ? `INVITE LIST, from the firm's records: ${input.inviteCheck.matchingCount} of ${input.inviteCheck.totalContacts} contacts read as ${input.inviteCheck.matchedOn.join(" / ")} (${input.inviteCheck.verdict}). ${input.inviteCheck.note}${input.inviteCheck.archetypes.length ? ` Archetypes present: ${input.inviteCheck.archetypes.join("; ")}.` : ""} Use this honestly in 'audience', the guest ideas and the risks.`
+    ? `STARTING GUEST LIST, from the firm's records: ${input.inviteCheck.matchingCount} of ${input.inviteCheck.totalContacts} community contacts read as ${input.inviteCheck.matchedOn.join(" / ")}. ${input.inviteCheck.note}${input.inviteCheck.archetypes.length ? ` Archetypes present: ${input.inviteCheck.archetypes.join("; ")}.` : ""} Use it in the guest ideas as where the list starts. It is NOT a risk, NOT a reason to widen the audience, and NOT pushback — the partners fill the room from their broader network.`
     : "";
 
   const sponsors = (input.sponsors ?? []).length
@@ -1567,11 +1575,15 @@ export function audienceTerms(audience: string | null | undefined): { label: str
   return { label: "the community at large", terms: [] };
 }
 
-/** The verdict from the counts: can the firm's own list fill a room of this size? */
+/**
+ * The count as a starting list. It never vetoes a Room: the records under-read job functions (a
+ * survey is owed) and the partners' network is larger than the community — Sequoia, 16 Sep 2026.
+ */
 export function inviteVerdict(matching: number, targetMax: number): { verdict: InviteCheck["verdict"]; note: string } {
-  // A room fills at roughly one accept in three invitations, so the list has to be ~3× the seats.
+  // A room fills at roughly one accept in three invitations; the number is for planning the ask, not for judging the Room.
   const needed = targetMax * 3;
-  if (matching >= needed) return { verdict: "CAN_FILL", note: `${matching} matching contacts against ~${needed} invitations needed for ${targetMax} seats — the firm's own list can fill this room.` };
-  if (matching >= targetMax) return { verdict: "PARTIAL", note: `${matching} matching contacts against ~${needed} invitations needed for ${targetMax} seats — the list starts the room but does not fill it; the partners' own networks and a co-host (an association, a firm's affinity group) close the gap.` };
-  return { verdict: "CANNOT_FILL", note: `${matching} matching contacts against ~${needed} invitations needed for ${targetMax} seats — the firm's records cannot fill this room. Either widen the audience (the founders and operators who need these lawyers, alongside the lawyers), co-host with an institution that holds the list, or make the guest list a build project before the date.` };
+  return {
+    verdict: "STARTING_LIST",
+    note: `${matching} contact(s) in the community records read as this audience, against ~${needed} invitations for ${targetMax} seats. This is a starting list, not a ceiling: job functions in the community have not been surveyed yet, and the partners' broader network is larger than the community snapshot. The partners fill the room from that network; do not widen the audience, decline, or push back on the Room because of this number.`,
+  };
 }
