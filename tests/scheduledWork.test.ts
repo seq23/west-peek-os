@@ -29,6 +29,18 @@ describe("how often a job runs, in words", () => {
     expect(at(30)).toBe("Every 30 minutes");
   });
 
+  it("says a monthly duty is monthly, and an on-request job is only when asked", () => {
+    // Until 0169 productions_monthly was DAILY_AT and the page said "Every day at 14:00 UTC" for a
+    // job that opened nothing 29 days out of 30; deck_rebuild was DAILY_AT with the page hard-coding
+    // "On request" by job key. Both are real schedule kinds now and the words come from the row.
+    expect(cadenceInWords({ schedule_kind: "MONTHLY", interval_minutes: null, daily_at_utc: "14:00", day_of_month: 1 }))
+      .toBe("On the 1st of every month at 14:00 UTC");
+    expect(cadenceInWords({ schedule_kind: "MONTHLY", interval_minutes: null, daily_at_utc: "09:30", day_of_month: 22 }))
+      .toBe("On the 22nd of every month at 09:30 UTC");
+    expect(cadenceInWords({ schedule_kind: "ON_REQUEST", interval_minutes: null, daily_at_utc: null }))
+      .toBe("Only when asked");
+  });
+
   it("says so plainly when there genuinely is no cadence", () => {
     // Distinct from the bug above: nothing scheduled at all is a real state and reads as one.
     expect(cadenceInWords({ schedule_kind: "MANUAL", interval_minutes: null, daily_at_utc: null }))

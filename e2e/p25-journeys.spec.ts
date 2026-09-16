@@ -132,14 +132,11 @@ test("journey 4 — machine → scheduled run → artifact → notification → 
 
   // Switch the daily intelligence job on and run it.
   await gotoSurface(page, "Work");
-  await page.getByTestId("job-reason").fill("journey 4");
-  // The toggle's own label is the reliable signal: the card body also carries run history, which
-  // may legitimately mention an earlier PAUSED refusal from another spec.
-  const toggle = page.getByTestId("job-toggle-daily_intelligence");
-  if ((await toggle.textContent())?.includes("Switch on")) {
-    await toggle.click();
-    // "Switch off" is what the control says once the job is running; it used to read "Pause".
-    await expect(toggle).toContainText("Switch off");
+  // A paused job shows "Put it back on"; a running one shows "Pause… (why?)". Put it on if needed.
+  const resume = page.getByTestId("job-resume-daily_intelligence");
+  if (await resume.isVisible().catch(() => false)) {
+    await resume.click();
+    await expect(page.getByTestId("job-state-daily_intelligence")).toHaveText("Scheduled");
   }
   await page.getByTestId("job-run-daily_intelligence").click();
   await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
