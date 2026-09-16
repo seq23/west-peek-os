@@ -274,4 +274,35 @@ describe("the monthly card on Walker's desk", () => {
     expect(searches).toBeGreaterThanOrEqual(2);
     expect(renderMonthlyEmail("2026-11", [], [], [])).toMatch(/Nothing with a live citation this month/);
   });
+
+  it("BOTH HALVES OR NOTHING: a customer search with no urls is asked once more, and if still empty the card is BLOCKED and NO email goes out", async () => {
+    // 16 Sep 2026, 00:02Z: Scooter received "0 customer lead(s) and 4 press pitch(es)" because the
+    // customer search answered without a url on any entry and the card emailed anyway.
+    const { openProductionsCard } = await import("../src/worker/services/productions");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2026-12-01T14:00:00.000Z"));
+    const noUrls = JSON.stringify({ results: [{ organisation: "U.S. Space Force", trigger: "a launch programme", approach: "Comms lead", angle: "n/a" }] });
+    const customerPrompts: string[] = [];
+    const out = await sweepOnce(env, new Date("2026-12-01T14:05:00.000Z"), {
+      productions: (e, card) => runProductionsCard(e, card, {
+        search: async (_e, _a, prompt) => {
+          if (/journalists/.test(prompt)) return { ok: true, text: pressJson, detail: "ok" };
+          customerPrompts.push(prompt);
+          return { ok: true, text: noUrls, detail: "ok" };
+        },
+        urlCheck,
+        pageText: async () => "Contact: a.writer@communityweekly.example",
+        now: new Date("2026-12-01T14:05:00.000Z"),
+      }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome).toBe("BLOCKED");
+    expect(customerPrompts.length, "asked once, then once more with the miss named").toBe(2);
+    expect(customerPrompts[1]).toMatch(/no entry carried a url/);
+    const mails = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all<{ payload_json: string }>()).results ?? [];
+    expect(mails.length, "a half note must not be sent").toBe(0);
+    const row = (await env.WP_OS_DB.prepare("SELECT state, next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; next_action: string }>())!;
+    expect(row.state).toBe("BLOCKED");
+    expect(row.next_action).toMatch(/Not sending a half note — no customer lead survived \(the search answered with no usable entry/);
+  });
 });
