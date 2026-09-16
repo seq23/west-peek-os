@@ -3679,6 +3679,17 @@ export function App() {
   const refresh = useCallback(() => setRefreshNonce((n) => n + 1), []);
   const authed = me.status === 200 && me.data;
 
+  /*
+   * VISITING A PAGE IS LOOKING AT IT. Home's "Who has something for you" counts what is new since
+   * the partner last looked at each module, and the mark is left by pressing Open OR by reaching
+   * the module's page any other way — the nav, a bookmark, a link from an approval. Home itself is
+   * not a module. Fire-and-forget: a mark that fails to land costs one stale row, never the page.
+   */
+  useEffect(() => {
+    if (!authed || active === "home") return;
+    void api("/api/mp-home/visited", { method: "POST", body: { route: active } });
+  }, [authed, active]);
+
   // On the phone sheet, choosing a destination is the whole interaction — close behind it.
   const navigate = useCallback((rawKey: string) => {
     // A merged or legacy key resolves here too, not only when typed into the URL.

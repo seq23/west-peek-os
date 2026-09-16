@@ -27,6 +27,8 @@ interface Deliverable {
   acknowledged_at: string | null;
   dismissed_at: string | null;
   prepared_for_name: string | null;
+  /** Why it is on the put-away list: she put it there, or a week went by unread. */
+  put_away?: "BY_YOU" | "AFTER_A_WEEK" | null;
 }
 
 /** The one-word reads a partner can leave without writing a sentence. */
@@ -58,7 +60,7 @@ export function DeliverableList({
   // The default view is what still wants attention. Dismissed pieces are one toggle away, never
   // more than that, because "where did it go" is the question dismissing usually creates.
   const [showDismissed, setShowDismissed] = useState(false);
-  const list = useApi<{ deliverables: Deliverable[] }>(
+  const list = useApi<{ deliverables: Deliverable[]; put_away_after_days?: number }>(
     `/api/deliverables?limit=${limit}${kind ? `&kind=${kind}` : ""}${showDismissed ? "&dismissed=1" : ""}${mine ? "&mine=1" : ""}`,
   );
   const [open, setOpen] = useState<string | null>(null);
@@ -113,15 +115,21 @@ export function DeliverableList({
     );
   }
 
+  // THE RULE, ON THE PAGE. A piece that vanishes after a week with no word about why reads as a
+  // bug; the same piece under "Show what I put away" with the rule stated beside the toggle is a
+  // tidy desk (operator, 15 Sep 2026).
   const dismissedToggle = (
-    <button
-      type="button"
-      className="link-button small"
-      data-testid="deliverables-toggle-dismissed"
-      onClick={() => setShowDismissed(!showDismissed)}
-    >
-      {showDismissed ? "← Back to current" : "Show what I put away"}
-    </button>
+    <p className="muted small" data-testid="deliverables-put-away-rule">
+      <button
+        type="button"
+        className="link-button small"
+        data-testid="deliverables-toggle-dismissed"
+        onClick={() => setShowDismissed(!showDismissed)}
+      >
+        {showDismissed ? "← Back to current" : "Show what I put away"}
+      </button>
+      {" "}· anything not marked as read within {list.data?.put_away_after_days ?? 7} days is put away by itself; the latest morning brief replaces the one before.
+    </p>
   );
 
   if (!list.loading && rows.length === 0) {
@@ -165,7 +173,11 @@ export function DeliverableList({
                 {d.acknowledged_at && !d.dismissed_at && (
                   <span className="badge badge-quiet" data-testid={`deliverable-read-${d.id}`}>read</span>
                 )}
-                {d.dismissed_at && <span className="badge badge-quiet">put away</span>}
+                {d.put_away === "AFTER_A_WEEK" ? (
+                  <span className="badge badge-quiet" data-testid={`deliverable-aged-${d.id}`}>put away after a week, unread</span>
+                ) : d.dismissed_at ? (
+                  <span className="badge badge-quiet">put away</span>
+                ) : null}
                 {/* On a shared surface, whose piece this is. A morning brief is addressed and
                     signed by that partner's own chief of staff, so an unlabelled one sitting in
                     somebody else's list reads as their chief of staff having changed. */}
@@ -220,7 +232,7 @@ export function DeliverableList({
                   says where it goes, because "dismiss" on its own reads as delete. Feedback is the
                   one that changes next week's version, so it names who receives it. */}
               <div className="form-row deliverable-answer">
-                {d.dismissed_at ? (
+                {d.dismissed_at || d.put_away === "AFTER_A_WEEK" ? (
                   <button
                     type="button"
                     className="link-button"

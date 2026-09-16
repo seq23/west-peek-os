@@ -32,6 +32,11 @@ export interface HomeModule {
   items: Array<Record<string, unknown>>;
   /** Present when a module cannot be computed truthfully; the UI must show it. */
   note?: string;
+  /** When this partner last opened the module (pressed Open, or visited its page). Null: never. */
+  seen_at?: string | null;
+  /** Items newer than that mark — what "has something for you" now means. */
+  new_count?: number;
+  has_new?: boolean;
 }
 
 export const HOME_MODULE_KEYS = [
@@ -171,7 +176,7 @@ async function allocationConstraintsModule(env: Env): Promise<HomeModule> {
 async function meetingsModule(env: Env, identity: FirmUserIdentity, now: Date): Promise<HomeModule> {
   const visibility = privacyVisibilityClause(identity, "privacy_label");
   const rows = await env.WP_OS_DB.prepare(
-    `SELECT id, title, meeting_type, scheduled_at, status, company_id
+    `SELECT id, title, meeting_type, scheduled_at, status, company_id, created_at
        FROM meeting
       WHERE status = 'SCHEDULED' AND scheduled_at IS NOT NULL AND scheduled_at >= ?1 AND ${visibility}
       ORDER BY scheduled_at
@@ -194,7 +199,7 @@ async function meetingsModule(env: Env, identity: FirmUserIdentity, now: Date): 
 async function icPrioritiesModule(env: Env, identity: FirmUserIdentity): Promise<HomeModule> {
   const visibility = privacyVisibilityClause(identity, "o.privacy_label");
   const rows = await env.WP_OS_DB.prepare(
-    `SELECT o.id, o.title, o.opportunity_type, o.status, o.company_id, c.canonical_name
+    `SELECT o.id, o.title, o.opportunity_type, o.status, o.company_id, c.canonical_name, o.created_at
        FROM investment_opportunity o
        LEFT JOIN canonical_company c ON c.id = o.company_id
       WHERE o.status IN ('IC_READY','DILIGENCE') AND ${visibility}
@@ -469,6 +474,165 @@ function oneThingToWatch(modules: HomeModule[]): { headline: string; because: st
   return null;
 }
 
+/**
+ * Where each module's Open button lands, held once so a visit to that page can be read back as
+ * "she has now looked at this module" (`handleMarkRouteVisited`). Each module function repeats
+ * its own `link`; `tests/homeFreshness.test.ts` holds the two together.
+ */
+export const HOME_MODULE_LINKS: Record<(typeof HOME_MODULE_KEYS)[number], string> = {
+  approvals: "approvals",
+  employees: "employees",
+  intelligence: "sources-and-sweeps",
+  portfolio_risk: "portfolio",
+  allocation_constraints: "allocation",
+  meetings: "meetings",
+  ic_priorities: "dealflow",
+  lp_signals: "lp",
+  reconciliation: "lp",
+  ai_spend: "cockpit",
+  what_changed: "activity",
+  my_work: "work",
+  health: "diagnostics",
+};
+
+/** One module, or null when the reader lacks the scope (omitted, never emptied). */
+export async function buildModule(env: Env, identity: FirmUserIdentity, key: string, now: Date): Promise<HomeModule | null> {
+  switch (key) {
+    case "approvals":
+      return approvalsModule(env, identity);
+    case "intelligence":
+      return intelligenceModule(env, identity);
+    case "portfolio_risk":
+      return portfolioRiskModule(env);
+    case "allocation_constraints":
+      return allocationConstraintsModule(env);
+    case "meetings":
+      return meetingsModule(env, identity, now);
+    case "ic_priorities":
+      return icPrioritiesModule(env, identity);
+    case "lp_signals":
+      // Omitted entirely without the scope: an empty LP module would still tell the
+      // reader that LP conversations exist.
+      return canAccessPrivacyLabel(identity, "LP_PRIVATE") ? lpSignalsModule(env) : null;
+    case "reconciliation":
+      return canAccessPrivacyLabel(identity, "BANKING_RESTRICTED") ? reconciliationModule(env) : null;
+    case "ai_spend":
+      return aiSpendModule(env, identity);
+    case "employees":
+      return employeesModule(env);
+    case "what_changed":
+      return whatChangedModule(env, identity);
+    case "my_work":
+      return myWorkModule(env, identity);
+    case "health":
+      return healthModule(env);
+    default:
+      return null;
+  }
+}
+
+/*
+ * NEW SINCE YOU LAST LOOKED.
+ *
+ * Operator, 15 Sep 2026: "Who has something for you" counted modules that merely HAD items, so
+ * five companies in the pipeline was "something" forever and pressing Open never quieted it. A
+ * module has something only if it holds items newer than the moment this partner last opened it.
+ *
+ * Two ways to tell, because the modules are not alike:
+ *   · items that carry a timestamp — created, updated, last seen, first seen — are new when that
+ *     stamp is later than the mark;
+ *   · items that carry none (the workforce roster, today's spend) are new when the SET changed:
+ *     the ids are hashed at the moment of opening and compared. After the first Open such a
+ *     module is quiet until its set moves.
+ * Never opened means everything is new, which is what the page said before and is still true.
+ */
+const ITEM_STAMPS = ["updated_at", "last_seen_at", "created_at", "first_seen_at", "escalated_at"] as const;
+
+function stampOf(item: Record<string, unknown>): string | null {
+  for (const k of ITEM_STAMPS) {
+    const v = item[k];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return null;
+}
+
+export function itemsHash(items: Array<Record<string, unknown>>): string {
+  const ids = items.map((it) => (typeof it.id === "string" || typeof it.id === "number" ? String(it.id) : JSON.stringify(it)));
+  // FNV-1a over the sorted ids: stable, short, and needs no crypto for a set-equality check.
+  let h = 0x811c9dc5;
+  for (const ch of ids.sort().join("\u0000")) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `h${h.toString(16)}`;
+}
+
+/** Pure: what a module's freshness is, given the mark this partner left on it. */
+export function freshness(
+  items: Array<Record<string, unknown>>,
+  seen: { seen_at: string; items_hash: string | null } | null,
+): { new_count: number; has_new: boolean } {
+  if (items.length === 0) return { new_count: 0, has_new: false };
+  if (!seen) return { new_count: items.length, has_new: true };
+  const stamped = items.filter((it) => stampOf(it) !== null);
+  if (stamped.length > 0) {
+    const newer = stamped.filter((it) => stampOf(it)! > seen.seen_at).length;
+    return { new_count: newer, has_new: newer > 0 };
+  }
+  const changed = itemsHash(items) !== seen.items_hash;
+  return { new_count: changed ? items.length : 0, has_new: changed };
+}
+
+async function markFreshness(env: Env, identity: FirmUserIdentity, modules: HomeModule[]): Promise<void> {
+  const rows = await env.WP_OS_DB.prepare(
+    "SELECT module_key, seen_at, items_hash FROM mp_home_module_seen WHERE firm_user_id = ?1",
+  )
+    .bind(identity.id)
+    .all<{ module_key: string; seen_at: string; items_hash: string | null }>();
+  const seen = new Map((rows.results ?? []).map((r) => [r.module_key, r]));
+  for (const m of modules) {
+    const mark = seen.get(m.key) ?? null;
+    const f = freshness(m.items, mark);
+    m.seen_at = mark?.seen_at ?? null;
+    m.new_count = f.new_count;
+    m.has_new = f.has_new;
+  }
+}
+
+/** Record that this partner has now looked at a module: the moment, and the set they saw. */
+export async function markModuleSeen(env: Env, identity: FirmUserIdentity, key: string, now = new Date()): Promise<{ seen_at: string } | null> {
+  if (!(HOME_MODULE_KEYS as readonly string[]).includes(key)) return null;
+  const module = await buildModule(env, identity, key, now);
+  const seenAt = now.toISOString();
+  await env.WP_OS_DB.prepare(
+    `INSERT INTO mp_home_module_seen (firm_user_id, module_key, seen_at, items_hash) VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT (firm_user_id, module_key) DO UPDATE SET seen_at = excluded.seen_at, items_hash = excluded.items_hash`,
+  )
+    .bind(identity.id, key, seenAt, module ? itemsHash(module.items) : null)
+    .run();
+  return { seen_at: seenAt };
+}
+
+/** POST /api/mp-home/modules/:key/seen — Open was pressed. */
+export async function handleMarkModuleSeen(ctx: RouteContext): Promise<Response> {
+  const out = await markModuleSeen(ctx.env, ctx.identity!, ctx.params.key!);
+  if (!out) return json({ error: "unknown_module" }, { status: 404 });
+  return json({ ok: true, module: ctx.params.key, ...out });
+}
+
+/**
+ * POST /api/mp-home/visited { route } — the partner reached a page by any door. Every module whose
+ * Open lands there is now seen; a route no module points at is a no-op, not an error.
+ */
+export async function handleMarkRouteVisited(ctx: RouteContext): Promise<Response> {
+  const body = (await ctx.request.json().catch(() => ({}))) as { route?: unknown };
+  const route = typeof body.route === "string" ? body.route : "";
+  const keys = (Object.entries(HOME_MODULE_LINKS) as Array<[string, string]>).filter(([, link]) => link === route).map(([k]) => k);
+  const now = new Date();
+  for (const key of keys) await markModuleSeen(ctx.env, ctx.identity!, key, now);
+  return json({ ok: true, modules: keys });
+}
+
 export async function buildHome(
   env: Env,
   identity: FirmUserIdentity,
@@ -491,57 +655,12 @@ export async function buildHome(
     }
   }
 
-  const canSeeLp = canAccessPrivacyLabel(identity, "LP_PRIVATE");
-  const canSeeBanking = canAccessPrivacyLabel(identity, "BANKING_RESTRICTED");
-
   const modules: HomeModule[] = [];
   for (const key of enabled) {
-    switch (key) {
-      case "approvals":
-        modules.push(await approvalsModule(env, identity));
-        break;
-      case "intelligence":
-        modules.push(await intelligenceModule(env, identity));
-        break;
-      case "portfolio_risk":
-        modules.push(await portfolioRiskModule(env));
-        break;
-      case "allocation_constraints":
-        modules.push(await allocationConstraintsModule(env));
-        break;
-      case "meetings":
-        modules.push(await meetingsModule(env, identity, now));
-        break;
-      case "ic_priorities":
-        modules.push(await icPrioritiesModule(env, identity));
-        break;
-      case "lp_signals":
-        // Omitted entirely without the scope: an empty LP module would still tell the
-        // reader that LP conversations exist.
-        if (canSeeLp) modules.push(await lpSignalsModule(env));
-        break;
-      case "reconciliation":
-        if (canSeeBanking) modules.push(await reconciliationModule(env));
-        break;
-      case "ai_spend":
-        modules.push(await aiSpendModule(env, identity));
-        break;
-      case "employees":
-        modules.push(await employeesModule(env));
-        break;
-      case "what_changed":
-        modules.push(await whatChangedModule(env, identity));
-        break;
-      case "my_work":
-        modules.push(await myWorkModule(env, identity));
-        break;
-      case "health":
-        modules.push(await healthModule(env));
-        break;
-      default:
-        break;
-    }
+    const m = await buildModule(env, identity, key, now);
+    if (m) modules.push(m);
   }
+  await markFreshness(env, identity, modules);
 
   const byQuestion = (q: string) => modules.find((m) => m.answers.includes(q))?.key ?? null;
   const questions = [

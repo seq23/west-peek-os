@@ -29,7 +29,18 @@ interface HomeModule {
   count: number;
   items: Array<Record<string, unknown>>;
   note?: string;
+  /** When the reader last opened this module; null if never. */
+  seen_at?: string | null;
+  /** Items newer than that mark. "Has something for you" means this, not "has items". */
+  new_count?: number;
+  has_new?: boolean;
 }
+
+/** New since the reader last looked — never opened counts as new, an empty module never does. */
+const hasNew = (m: HomeModule): boolean => (typeof m.has_new === "boolean" ? m.has_new : m.items.length > 0);
+
+const sinceWhen = (iso: string): string =>
+  new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 interface HomeResponse {
   /** Mail that reached the firm's inbox carrying no trigger anyone could route. */
@@ -119,17 +130,26 @@ function Face({ name, role, size = 36 }: { name: string; role: string; size?: nu
  * An empty delivery keeps its byline and says what silence means. Twelve panels reading "Nothing
  * here." is what made this product feel broken when it was merely unloaded.
  */
-function DeliveryCard({ module, onNavigate }: { module: HomeModule; onNavigate: (key: string) => void }) {
+function DeliveryCard({ module, onNavigate, onOpened }: { module: HomeModule; onNavigate: (key: string) => void; onOpened: (key: string) => Promise<void> }) {
   const delivery = deliveryFor(module.key);
   const role = delivery ? roleFor(delivery.by) : null;
   const empty = module.items.length === 0;
+  const fresh = hasNew(module);
+  /*
+   * THREE STATES, NOT TWO. Empty: the colleague has nothing. Quiet: they have things, you have seen
+   * them, nothing has arrived since — greyed, and it says since when. New: something arrived after
+   * you last looked. Only the third is "has something for you"; the other two used to look the same
+   * as it did, which is why Open never quieted a module (operator, 15 Sep 2026).
+   */
+  const quiet = !empty && !fresh;
 
   return (
     <li
-      className={empty ? "delivery delivery-quiet" : "delivery"}
+      className={empty || quiet ? "delivery delivery-quiet" : "delivery"}
       data-testid={`home-module-${module.key}`}
+      data-fresh={fresh ? "new" : quiet ? "quiet" : "empty"}
     >
-      {delivery && <Face name={delivery.by} role={role ?? ""} size={empty ? 28 : 36} />}
+      {delivery && <Face name={delivery.by} role={role ?? ""} size={fresh ? 36 : 28} />}
 
       <div className="delivery-what">
         {delivery && (
@@ -143,9 +163,24 @@ function DeliveryCard({ module, onNavigate }: { module: HomeModule; onNavigate: 
           <div className="muted small" data-testid={`home-module-empty-${module.key}`}>
             {delivery?.whenEmpty ?? module.note ?? "Nothing to report."}
           </div>
+        ) : quiet ? (
+          <div className="muted small" data-testid={`home-module-quiet-${module.key}`}>
+            nothing new since {module.seen_at ? sinceWhen(module.seen_at) : "you last looked"}
+            {" · "}
+            <button type="button" className="link-button" data-testid={`home-open-${module.key}`} onClick={() => void onOpened(module.key).then(() => onNavigate(module.link))}>
+              Open anyway
+            </button>
+          </div>
         ) : (
           <>
-            <div className="delivery-headline">{delivery?.headline ?? module.title}</div>
+            <div className="delivery-headline">
+              {delivery?.headline ?? module.title}
+              {typeof module.new_count === "number" && module.seen_at && (
+                <span className="muted small" data-testid={`home-module-new-${module.key}`}>
+                  {" "}· {module.new_count} new since {sinceWhen(module.seen_at)}
+                </span>
+              )}
+            </div>
             <ul className="module-items">
               {module.items.slice(0, 2).map((item, i) => (
                 <li key={String(item.id ?? i)}>{summarize(module.key, item)}</li>
@@ -155,8 +190,8 @@ function DeliveryCard({ module, onNavigate }: { module: HomeModule; onNavigate: 
         )}
       </div>
 
-      {!empty && (
-        <button type="button" data-testid={`home-open-${module.key}`} onClick={() => onNavigate(module.link)}>
+      {fresh && (
+        <button type="button" data-testid={`home-open-${module.key}`} onClick={() => void onOpened(module.key).then(() => onNavigate(module.link))}>
           Open
         </button>
       )}
@@ -396,6 +431,11 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
   // Approvals are pulled out of the grid; everything else is a delivery.
   const waiting = data.modules.find((m) => m.key === "approvals") ?? null;
   const deliveries = data.modules.filter((m) => m.key !== "approvals");
+  const rank = (m: HomeModule): number => (hasNew(m) ? 0 : m.items.length > 0 ? 1 : 2);
+  // Open leaves the mark BEFORE navigating, so the module is quiet the next time Home is read.
+  const markOpened = async (key: string): Promise<void> => {
+    await api(`/api/mp-home/modules/${encodeURIComponent(key)}/seen`, { method: "POST", body: {} });
+  };
 
   /**
    * Who signs the morning off. The reader's own Chief of Staff — Wren for Sequoia, Walker for
@@ -461,12 +501,14 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
             described. It now sits ON the briefing, the way a byline sits on an article. */}
         <div className="home-signed">
           {/* "1 of your team have something" — the verb has to agree with the count, and one
-              colleague is singular. Small, but it is the first line on the page every morning. */}
+              colleague is singular. Small, but it is the first line on the page every morning.
+              NEW, not merely present: a module she has opened and nothing has reached since is
+              quiet, and quiet colleagues are not counted. */}
           {(() => {
-            const n = deliveries.filter((m) => m.items.length > 0).length + (waiting && waiting.items.length > 0 ? 1 : 0);
+            const n = deliveries.filter(hasNew).length + (waiting && hasNew(waiting) ? 1 : 0);
             return (
-              <div className="muted small">
-                {n === 1 ? "One of your team has something for you" : `${n} of your team have something for you`}
+              <div className="muted small" data-testid="home-team-count">
+                {n === 0 ? "Nothing new from your team since you last looked" : n === 1 ? "One of your team has something new for you" : `${n} of your team have something new for you`}
               </div>
             );
           })()}
@@ -675,17 +717,23 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           emptyNote="Nothing else has been prepared for you yet. Research packets and the weekly review arrive here once somebody produces one."
         />
 
-        <h4>Who has something for you</h4>
-        <p className="muted small">
-          {deliveries.filter((m) => m.items.length > 0).length} of {deliveries.length} have something
-        </p>
-        {/* Anyone with something to say first; everyone else stays on the page, quieter. Silence
-            from a named colleague is information — an absent card is just a gap. */}
+        <div className="home-section-head">
+          <h4>Who has something for you</h4>
+          <span className="muted small" data-testid="home-deliveries-count">
+            {(() => {
+              const n = deliveries.filter(hasNew).length;
+              return n === 0 ? "nothing new since you last looked" : `${n} ${n === 1 ? "has" : "have"} something new`;
+            })()}
+          </span>
+        </div>
+        {/* Anyone with something NEW first; then colleagues you have already heard from, greyed and
+            saying since when; then everyone with nothing. Silence from a named colleague is
+            information — an absent card is just a gap. */}
         <ul className="delivery-list">
           {[...deliveries]
-            .sort((a, b) => (b.items.length > 0 ? 1 : 0) - (a.items.length > 0 ? 1 : 0))
+            .sort((a, b) => rank(a) - rank(b))
             .map((m) => (
-              <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} />
+              <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} onOpened={markOpened} />
             ))}
         </ul>
       </section>
