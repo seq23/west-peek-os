@@ -196,8 +196,10 @@ describe("the deck on the shelf", () => {
     expect(deck.body.versions[0]).toMatchObject({ version_no: 1, state: "PROPOSED", page_count: 3 });
     expect(deck.body.versions[0]!.document_id).toBe(up.body.id);
     // And on the shelf it SAYS it is v1 and what state it is in.
-    const list = await call2<{ documents: Array<{ id: string; deck: { version_no: number; state: string } | null }> }>("/api/documents");
-    expect(list.body.documents.find((d) => d.id === up.body.id)!.deck).toMatchObject({ version_no: 1, state: "PROPOSED" });
+    const list = await call2<{ documents: Array<{ id: string; deck: { version_no: number; state: string; title: string } | null }> }>("/api/documents");
+    // The shelf row carries the deck version's OWN title, so Documents and Fund strategy call v1 by
+    // the same name (operator, 15 Sep 2026: the row must read exactly as Fund strategy shows it).
+    expect(list.body.documents.find((d) => d.id === up.body.id)!.deck).toMatchObject({ version_no: 1, state: "PROPOSED", title: "Aug 2026 West Peek Ventures Fund I (Deck as it is in Canva)" });
   });
 
   it("a version waiting on a decision, or the current deck, cannot be archived from the shelf", async () => {
