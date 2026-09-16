@@ -47,15 +47,15 @@ async function cardsOwnedBy(owner: string): Promise<Card[]> {
   return (await env.WP_OS_DB.prepare("SELECT id, title, owner_id, state, description, requested_by_email, assigned_from_card_id FROM work_card WHERE owner_id = ?1 ORDER BY created_at").bind(owner).all<Card>()).results ?? [];
 }
 
-const sent: Array<{ to: string; subject: string; text: string; from: string }> = [];
+const sent: Array<{ to: string; subject: string; text: string; from: string; html?: string; reply_to?: string }> = [];
 
 beforeAll(async () => {
   t = await createTestDb();
   env = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_EMAIL_SEND: "enabled", RESEND_API_KEY: "re_test_not_a_real_key", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Partial<Env>);
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).includes("api.resend.com")) {
-      const body = JSON.parse(String(init?.body)) as { to: string[]; subject: string; text: string; from: string };
-      sent.push({ to: body.to[0]!, subject: body.subject, text: body.text, from: body.from });
+      const body = JSON.parse(String(init?.body)) as { to: string[]; subject: string; text: string; from: string; html?: string; reply_to?: string };
+      sent.push({ to: body.to[0]!, subject: body.subject, text: body.text, from: body.from, html: body.html, reply_to: body.reply_to });
       return new Response(JSON.stringify({ id: `re_${sent.length}` }), { status: 200 });
     }
     throw new Error(`unexpected fetch in test: ${String(url)}`);
@@ -139,10 +139,20 @@ describe("Sequoia emails a request", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("sequoia@westpeek.ventures");
     expect(sent[0]!.from).toBe("os@westpeek.ventures");
-    expect(sent[0]!.subject).toMatch(/^Done: Verify Sensori is real/);
-    expect(sent[0]!.text).toMatch(/Wyatt finished what you asked for/);
+    // THE BUSY-EXECUTIVE FORMAT (16 Sep 2026): "<Employee>: <what>", TL;DR first, labelled
+    // sections as bullets, the employee's full words under the rule, a footer that names them.
+    expect(sent[0]!.subject).toMatch(/^Wyatt: done — Verify Sensori is real/);
+    expect(sent[0]!.subject.length).toBeLessThanOrEqual(70);
+    expect(sent[0]!.text.split("\n")[0]).toMatch(/^\*\*TL;DR:\*\* Finished what you asked for/);
+    expect(sent[0]!.text).toMatch(/\*\*What you asked\*\*\n• Verify Sensori/);
+    expect(sent[0]!.text).toMatch(/\*\*What I found\*\*\n• Sensori is real/);
+    expect(sent[0]!.text).toMatch(/\*\*Your call\*\*/);
     expect(sent[0]!.text).toMatch(/Worth a call/);
     expect(sent[0]!.text).toMatch(/os\.joinwestpeek\.com\/#\/work/);
+    expect(sent[0]!.text).toMatch(/— Details —/);
+    expect(sent[0]!.text.trim().split("\n").pop()).toMatch(/^— Wyatt, .*os@joinwestpeek\.com/);
+    expect(sent[0]!.html, "an HTML part with the same content").toMatch(/<strong>TL;DR:<\/strong>/);
+    expect(sent[0]!.reply_to, "replies go to the intake mailbox, so 'reply to this email' is true").toBe("os@joinwestpeek.com");
     const ev = await env.WP_OS_DB.prepare("SELECT event_type FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.replied_by_email'").bind(analystCard.id).first();
     expect(ev).toBeTruthy();
   });
@@ -158,9 +168,9 @@ describe("Sequoia emails a request", () => {
     });
     const last = sent[sent.length - 1]!;
     expect(last.to).toBe("scooter@westpeek.ventures");
-    expect(last.subject).toBe("Blocked: Find the LP letter");
-    expect(last.text).toMatch(/needs you/);
-    expect(last.text).toMatch(/Which quarter/);
+    expect(last.subject).toBe("Wesley: blocked — Find the LP letter");
+    expect(last.text).toMatch(/^\*\*TL;DR:\*\* Blocked on what you asked for/);
+    expect(last.text).toMatch(/\*\*Where I am stuck\*\*\n• Which quarter do you mean\?/);
   });
 });
 

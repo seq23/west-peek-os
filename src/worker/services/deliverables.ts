@@ -12,8 +12,8 @@ import {
   kindDef,
   renderMarkdown,
 } from "../../shared/deliverables/deliverable";
-import { isCloudflareEmailEnabled, sendViaCloudflare } from "../effects/cloudflareEmailClient";
-import { isEmailSendEnabled, sendViaResend } from "../effects/resendClient";
+import { sendFirmUserCopy } from "./execEmail";
+import { isBulletOrLabel, type ExecEmailInput } from "../../shared/email/execEmail";
 
 /**
  * Delivering things, and letting people keep them.
@@ -512,29 +512,47 @@ export async function handleEmailDeliverable(ctx: RouteContext): Promise<Respons
     );
   }
 
+  // THE SAME LAYOUT AS EVERYTHING ELSE AN EMPLOYEE SENDS (16 Sep 2026): the copy arrives with a
+  // TL;DR and the piece's own headings as the summary, the full markdown under the rule, signed
+  // by whoever prepared it. `sendFirmUserCopy` is the one transport door and records the send.
   const markdown = renderMarkdown(toExport(row, recipient.full_name));
-  const message = {
-    to: recipient.email,
-    subject: `${kindDef(row.kind)?.label ?? "Deliverable"}: ${row.title}`,
-    text: markdown,
-    from: ctx.env.WP_OS_EMAIL_FROM,
-  };
-
-  const result = isCloudflareEmailEnabled(ctx.env)
-    ? await sendViaCloudflare(ctx.env, message)
-    : isEmailSendEnabled(ctx.env)
-      ? await sendViaResend(ctx.env, message)
-      : { sent: false, provider: "resend" as const, detail: "Email sending is switched off, so nothing was sent." };
-
-  await appendEvent(ctx.env, {
-    eventType: "deliverable.emailed",
-    actorType: "firm_user",
-    actorId: ctx.identity!.id,
+  const result = await sendFirmUserCopy(ctx.env, {
+    recipient: { id: recipient.id, email: recipient.email },
+    email: copyEmail(row, recipient.full_name, markdown),
     objectType: "deliverable",
     objectId: row.id,
     firmScope: row.firm_scope,
-    payload: { to: recipient.id, sent: result.sent, provider: result.provider },
+    byFirmUserId: ctx.identity!.id,
   });
 
-  return json({ sent: result.sent, detail: result.detail, to: recipient.full_name });
+  return json({ sent: result.sent, detail: result.reason, to: recipient.full_name });
+}
+
+/**
+ * A deliverable as a busy-executive email: what it is, what is in it (its own headings), and the
+ * whole thing below the rule. Signed by the employee who prepared it.
+ */
+export function copyEmail(row: Pick<DeliverableRow, "kind" | "title" | "body" | "prepared_by" | "created_at">, forName: string, markdown: string): ExecEmailInput {
+  const label = kindDef(row.kind)?.label ?? "Deliverable";
+  const headings = row.body
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /^#{1,3}\s+\S/.test(l))
+    .map((l) => l.replace(/^#+\s+/, ""));
+  const firstLines = row.body
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !isBulletOrLabel(l) && !l.startsWith("_"))
+    .slice(0, 2);
+  const employee = row.prepared_by.split(/\s+and\s+/i)[0]?.trim() || row.prepared_by;
+  return {
+    employee,
+    what: `${label.toLowerCase()} — ${row.title}`,
+    tldr: `A copy of the ${label.toLowerCase()} "${row.title}", as you asked from Home. Nothing to decide.`,
+    sections: [
+      { label: "What this is", bullets: [`${label}, prepared for **${forName}** by **${row.prepared_by}** on ${new Date(row.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}.`] },
+      { label: "What is in it", bullets: headings.length ? headings : firstLines.length ? firstLines : ["The full text is below."] },
+    ],
+    details: markdown,
+  };
 }

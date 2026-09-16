@@ -97,6 +97,12 @@ jobs:
       - name: An emailed assignment needs an authenticated partner
         run: npm run validate:mail-authority
 
+      # Every email an employee sends a partner leaves through services/execEmail.ts, which lays it
+      # out (TL;DR, labelled bullets, details under a rule, footer) and lints it before any
+      # transport sees it. A service calling a transport itself fails here.
+      - name: Every partner email takes the one door
+        run: npm run validate:partner-email
+
       - name: Build client
         run: npm run build
 

@@ -13,9 +13,17 @@
 export interface EmailPayload {
   to: string;
   subject: string;
-  /** Plain text. No HTML path yet: nothing in the product composes HTML mail. */
+  /** Plain text. Always present: the part every client renders and every log can read. */
   text: string;
+  /**
+   * An optional HTML part carrying the SAME content as `text`, laid out. Composed only by
+   * `services/execEmail.ts`, the one place an employee's email to a partner is put together; a
+   * transport never invents one.
+   */
+  html?: string;
   from?: string;
+  /** Where a reply should go when it is not the sender — the intake mailbox, for an employee's mail. */
+  replyTo?: string;
 }
 
 export interface EmailSendResult {

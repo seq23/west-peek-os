@@ -95,6 +95,8 @@ export async function sendViaCloudflare(
     // Defused at the transport so neither send path can loop — see defuseTriggers.
     subject: defuseTriggers(payload.subject),
     text: defuseTriggers(payload.text),
+    ...(payload.html ? { html: defuseTriggers(payload.html) } : {}),
+    ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
   });
 
   // The real message id, straight from the platform. It is what makes the receipt checkable against

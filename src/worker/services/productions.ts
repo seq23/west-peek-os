@@ -6,7 +6,8 @@ import { SEARCH_MODEL } from "./liveSearch";
 import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
-import { emailPartnerDeliverable } from "./requestReply";
+import { sendPartnerEmail } from "./execEmail";
+import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { guidanceBlock } from "../../shared/skills/library";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
@@ -522,6 +523,76 @@ export function renderPressEmail(month: string, pitches: readonly PressPitch[], 
   return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
 }
 
+// ── The executive summary above the note ────────────────────────────────────
+
+/**
+ * What a busy reader sees first (16 Sep 2026): counts, names, and what is theirs to do. The full
+ * note — every trigger, every draft — is the details under it. Nobody is contacted from here.
+ */
+function names(list: readonly string[], max = 4): string {
+  const shown = list.slice(0, max).map((n) => `**${n}**`);
+  return list.length > max ? `${shown.join(", ")} and ${list.length - max} more` : shown.join(", ");
+}
+
+export function monthlySummary(
+  month: string,
+  ideas: readonly CustomerIdea[],
+  pitches: readonly PressPitch[],
+  dropped: readonly string[],
+  rejected: readonly { name: string; reason: string }[],
+): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
+  const withAddress = pitches.filter((p) => p.email).length;
+  return {
+    what: `West Peek Productions this month — ${ideas.length} lead(s), ${pitches.length} pitch(es)`,
+    tldr: `${ideas.length} organisation(s) that could buy Community-as-a-Service this month and ${pitches.length} press pitch draft(s) ready to send. Nobody has been contacted; you choose who to approach.`,
+    sections: [
+      { label: "What you asked", bullets: [`The monthly Productions note for ${month}: who could buy, and who to pitch.`] },
+      {
+        label: "What I did",
+        bullets: [
+          "Searched live sources for buyers with a trigger in the last ~60 days and writers earned by a recent piece.",
+          "Checked every cited page is live, then held each entry to the brief in a second judgement pass.",
+          `Hunted an address for every writer: **${withAddress}** of **${pitches.length}** read off a live page.`,
+        ],
+      },
+      {
+        label: "What I found",
+        bullets: [
+          ...(ideas.length ? [`Leads: ${names(ideas.map((i) => i.organisation))}.`] : ["No customer lead survived the checks this month."]),
+          ...(pitches.length ? [`Writers: ${names(pitches.map((p) => `${p.writer} (${p.outlet})`))}.`] : ["No writer survived the checks this month."]),
+          ...(dropped.length ? [`Dropped ${dropped.length} entry(ies) whose cited page did not answer.`] : []),
+          ...(rejected.length ? [`Rejected ${rejected.length} on judgement; the reasons are in the details.`] : []),
+        ],
+      },
+      { label: "Your call", bullets: ["Pick the leads to approach and the pitches to send — they are drafted in your voice below.", "Nothing goes to a prospect or a journalist from here."] },
+    ],
+  };
+}
+
+export function customerSummary(month: string, ideas: readonly CustomerIdea[], dropped: readonly string[]): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
+  return {
+    what: `${ideas.length} who could buy Community-as-a-Service this month`,
+    tldr: `${ideas.length} organisation(s) with a live trigger that could buy Community-as-a-Service this month. Nobody has been contacted; you choose who to approach.`,
+    sections: [
+      { label: "What you asked", bullets: [`Customer ideas for West Peek Productions, ${month}.`] },
+      { label: "What I found", bullets: [ideas.length ? `Leads: ${names(ideas.map((i) => i.organisation))}.` : "Nothing with a live citation this month.", ...(dropped.length ? [`Dropped ${dropped.length} whose cited page did not answer.`] : [])] },
+      { label: "Your call", bullets: ["Pick who to approach; each entry below has the trigger, the role and the page."] },
+    ],
+  };
+}
+
+export function pressSummary(month: string, pitches: readonly PressPitch[], dropped: readonly string[]): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
+  return {
+    what: `${pitches.length} press pitch drafts — yours to send`,
+    tldr: `${pitches.length} press pitch draft(s) for West Peek Productions, each earned by a recent piece. Yours to send; nothing has gone out.`,
+    sections: [
+      { label: "What you asked", bullets: [`Press pitches for West Peek Productions, ${month}.`] },
+      { label: "What I found", bullets: [pitches.length ? `Writers: ${names(pitches.map((p) => `${p.writer} (${p.outlet})`))}.` : "No writer with a live citation this month.", ...(dropped.length ? [`Dropped ${dropped.length} whose cited page did not answer.`] : [])] },
+      { label: "Your call", bullets: ["Copy, paste and send the ones you like; each draft below names the page its address came from."] },
+    ],
+  };
+}
+
 // ── The runner the sweep calls ───────────────────────────────────────────────
 
 /**
@@ -717,6 +788,8 @@ export async function runProductionsCard(
   let text: string;
   let count: number;
   let dropped: string[];
+  /** The busy-executive summary; `text` (the full note) goes under its details. */
+  let summary: { what: string; tldr: string; sections: ExecEmailInput["sections"] };
   if (kind === "PRODUCTIONS_MONTHLY") {
     const pageText = deps.pageText ?? defaultPageText;
     // BOTH HALVES OR NOTHING. The first monthly note (16 Sep 2026, 00:02Z) went to Scooter reading
@@ -759,6 +832,7 @@ export async function runProductionsCard(
     dropped = [...ideas.dropped, ...pitchesLive.dropped];
     subject = `Walker: West Peek Productions this month — ${ideas.kept.length} customer lead(s) and ${hunted.length} press pitch(es)`;
     text = renderMonthlyEmail(month, ideas.kept, hunted, dropped, rejected);
+    summary = monthlySummary(month, ideas.kept, hunted, dropped, rejected);
   } else {
   const found = await search(env, actor, kind === "PRODUCTIONS_CUSTOMERS" ? buildCustomerPrompt(month) : buildPressPrompt(month));
   if (!found.ok) {
@@ -771,6 +845,7 @@ export async function runProductionsCard(
     dropped = live.dropped;
     subject = `Walker: ${count} who could buy Community-as-a-Service this month`;
     text = renderCustomerEmail(month, live.kept, live.dropped);
+    summary = customerSummary(month, live.kept, live.dropped);
   } else {
     const parsed = parsePressPitches(found.text);
     const live = await keepLive(parsed, (p) => p.proofUrl, check);
@@ -783,6 +858,7 @@ export async function runProductionsCard(
     dropped = live.dropped;
     subject = `Walker: ${count} press pitch drafts for West Peek Productions — yours to send`;
     text = renderPressEmail(month, live.kept, live.dropped);
+    summary = pressSummary(month, live.kept, live.dropped);
   }
   }
 
@@ -792,15 +868,15 @@ export async function runProductionsCard(
     return { finished: false, blocked: true, detail: why };
   }
 
-  const mail = await emailPartnerDeliverable(env, {
+  const mail = await sendPartnerEmail(env, {
     to: SCOOTER_EMAIL,
-    subject,
-    text,
+    email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: summary.sections, details: text },
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
     actorId: "aie_walker",
   });
+  subject = mail.subject;
 
   const finding = [
     `• ${subject}`,
@@ -858,14 +934,31 @@ export function renderIntroNote(): { subject: string; text: string } {
 /** The scheduled branch: send once, record it, pause the job. Rule 0: a second run says why it did nothing. */
 export async function runIntroNote(env: Env): Promise<{ status: "SUCCEEDED" | "FAILED"; summary: string }> {
   const already = await env.WP_OS_DB.prepare(
-    "SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND payload_json LIKE '%Walker, your chief of staff%'",
+    "SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'deliverable.emailed_to_partner' AND object_type = 'scheduled_job' AND object_id = 'sjb_productions_intro_note'",
   ).first<{ n: number }>();
   if ((already?.n ?? 0) > 0) {
     await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED', pause_reason = 'Sent once on its first run; a second introduction would be noise.' WHERE job_key = 'productions_intro_note' AND status = 'ACTIVE'").run();
     return { status: "SUCCEEDED", summary: "already sent; the job paused itself" };
   }
   const note = renderIntroNote();
-  const mail = await emailPartnerDeliverable(env, { to: SCOOTER_EMAIL, subject: note.subject, text: note.text, objectType: "scheduled_job", objectId: "sjb_productions_intro_note", firmScope: "west-peek", actorId: "aie_walker" });
+  const mail = await sendPartnerEmail(env, {
+    to: SCOOTER_EMAIL,
+    email: {
+      employee: "Walker",
+      what: "your chief of staff — about that first email, and how to reach me",
+      tldr: "I'm Walker, your chief of staff. The first Productions email was below standard; the search and the address hunt are fixed. Reply here or write to os@joinwestpeek.com for anything.",
+      sections: [
+        { label: "What was wrong", bullets: ["The customer list wandered outside the US market and repeated an entry.", "The press drafts came with almost no addresses."] },
+        { label: "What changed", bullets: ["Customer search is US-only, one entry per organisation.", "Every writer's address is hunted across live pages and the page is named.", "Five writers chosen with intent: trade press, a newsletter, a business title, an events outlet, one earned by a recent piece."] },
+        { label: "Your call", bullets: ["Nothing now. One note from me on the first of each month; nothing goes to a prospect or a journalist from here."] },
+      ],
+      details: note.text,
+    },
+    objectType: "scheduled_job",
+    objectId: "sjb_productions_intro_note",
+    firmScope: "west-peek",
+    actorId: "aie_walker",
+  });
   if (!mail.sent) return { status: "FAILED", summary: `not sent: ${mail.reason}` };
   await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED', pause_reason = 'Sent once (Walker introduced himself). Kept as the record of it.' WHERE job_key = 'productions_intro_note' AND status = 'ACTIVE'").run();
   return { status: "SUCCEEDED", summary: `sent to ${SCOOTER_EMAIL}: "${note.subject}"; the job paused itself` };
