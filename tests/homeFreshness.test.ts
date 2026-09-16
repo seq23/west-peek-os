@@ -3,6 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
 import { buildHome, freshness, HOME_MODULE_KEYS, HOME_MODULE_LINKS, itemsHash } from "../src/worker/services/mpHome";
+import type { FirmUserIdentity } from "../src/worker/auth";
 
 /**
  * "Who has something for you" means NEW SINCE YOU LAST LOOKED.
@@ -17,14 +18,14 @@ import { buildHome, freshness, HOME_MODULE_KEYS, HOME_MODULE_LINKS, itemsHash } 
 let t: TestDb;
 let env: Env;
 
-const SEQUOIA = {
+const SEQUOIA: FirmUserIdentity = {
   id: "fu_sequoia_taylor",
   email: "sequoia@westpeek.ventures",
   fullName: "Sequoia Taylor",
   status: "ACTIVE",
   roles: ["MANAGING_PARTNER"],
   authorityScopes: [],
-} as const;
+};
 
 const AS_MP = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
 function req(path: string, method = "GET", body?: unknown): Request {
