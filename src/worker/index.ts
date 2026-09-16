@@ -433,7 +433,7 @@ import {
   handleSynthesizeItem,
   handleUpdateSource,
 } from "./services/intelligence";
-import { handleMarkHomeSeen, handleMpHome } from "./services/mpHome";
+import { handleMarkHomeSeen, handleMarkModuleSeen, handleMarkRouteVisited, handleMpHome } from "./services/mpHome";
 import {
   handleAcknowledgeGovernance,
   handleAssignMachine,
@@ -1123,6 +1123,8 @@ const router = new Router()
   // P14 — MP command center. One read-only aggregation; it owns no records.
   .get("/api/mp-home", handleMpHome)
   .post("/api/mp-home/seen", handleMarkHomeSeen)
+  .post("/api/mp-home/modules/:key/seen", handleMarkModuleSeen)
+  .post("/api/mp-home/visited", handleMarkRouteVisited)
   .get("/api/mp-home/preferences", handleGetPreferences)
   .post("/api/mp-home/preferences", handleSetPreferences)
   // P14 — daily intelligence engine. An item is never evidence by itself.

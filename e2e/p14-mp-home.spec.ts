@@ -153,3 +153,69 @@ test("mp-home never widens privacy: an investment-team member gets no LP module"
   const broken = body.questions.find((q: { question: string }) => q.question === "What is broken?");
   expect(broken.module).toBe("health");
 });
+
+/**
+ * "WHO HAS SOMETHING FOR YOU" MEANS NEW SINCE YOU LAST LOOKED.
+ *
+ * Operator, 15 Sep 2026: the section counted modules that merely had items, so Open never quieted
+ * it. Walked as she would: a colleague is loud → Open → back on Home the same colleague is quiet,
+ * says since when, is greyed, and sits below anyone who still has something new; the count line
+ * says how many are new, not how many have anything.
+ */
+test("pressing Open quiets a colleague until something new arrives, and the count says new, not present", async ({ page, request }) => {
+  // Something genuinely new in her name: a work card, so `my_work` is loud whatever earlier specs
+  // looked at. (Every spec drives one D1, so a module's mark can already exist by the time this
+  // runs — the test makes its own news rather than assuming a fresh firm.) Made BEFORE signing in,
+  // because signing in lands on Home and reads the modules once.
+  const made = await request.post("/api/work-cards", {
+    headers: { "x-wpos-dev-user": "scooter@westpeek.ventures" },
+    data: { title: "Read the Sensori memo before Thursday", description: "Opened by the e2e suite.", owner_type: "HUMAN", owner_id: "fu_scooter_taylor", priority: "NORMAL" },
+  });
+  expect(made.status(), await made.text()).toBe(201);
+
+  await signIn(page);
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await expect(page.getByTestId("home-page")).toBeVisible();
+
+  const wren = page.getByTestId("home-module-my_work");
+  await expect(wren).toHaveAttribute("data-fresh", "new");
+  await expect(wren).toContainText("Read the Sensori memo before Thursday");
+  await expect(page.getByTestId("home-deliveries-count")).toContainText(/\d+ (has|have) something new/);
+  const loudKeys = async () =>
+    Promise.all((await page.locator('[data-testid^="home-module-"][data-fresh="new"]').all()).map((l) => l.getAttribute("data-testid")));
+  const loudBefore = await loudKeys();
+
+  await wren.getByTestId("home-open-my_work").click();
+  await expect(page.getByTestId("work-cards-page")).toBeVisible();
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await expect(page.getByTestId("home-page")).toBeVisible();
+
+  await expect(wren).toHaveAttribute("data-fresh", "quiet");
+  await expect(wren.getByTestId("home-module-quiet-my_work")).toContainText(/nothing new since \d/);
+  await expect(wren).toHaveClass(/delivery-quiet/);
+  const loudAfter = await loudKeys();
+  expect(loudBefore).toContain("home-module-my_work");
+  expect(loudAfter).not.toContain("home-module-my_work");
+  // Nobody became loud by her looking. ("What changed" may go EMPTY between two visits — Home's
+  // own visit mark makes it a diff — which is the older rule and not this one.)
+  for (const k of loudAfter) expect(loudBefore).toContain(k);
+  // Quiet drops below new: every loud card is above the quiet one.
+  const wrenTop = (await wren.boundingBox())!.y;
+  for (const loud of await page.locator('[data-testid^="home-module-"][data-fresh="new"]').all()) {
+    expect((await loud.boundingBox())!.y).toBeLessThan(wrenTop);
+  }
+
+  // Something new in her name again: loud again, and it says how many since when.
+  const again = await request.post("/api/work-cards", {
+    headers: { "x-wpos-dev-user": "scooter@westpeek.ventures" },
+    data: { title: "Call the Sensori founder", description: "Opened by the e2e suite.", owner_type: "HUMAN", owner_id: "fu_scooter_taylor", priority: "HIGH" },
+  });
+  expect(again.status()).toBe(201);
+  await page.reload();
+  await expect(page.getByTestId("home-page")).toBeVisible();
+  await expect(wren).toHaveAttribute("data-fresh", "new");
+  await expect(wren.getByTestId("home-module-new-my_work")).toContainText(/1 new since \d/);
+
+  // The rule is on the page for the things prepared for her, too: a week puts them away.
+  await expect(page.getByTestId("deliverables-put-away-rule")).toContainText("put away by itself");
+});

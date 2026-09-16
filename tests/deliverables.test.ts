@@ -513,3 +513,81 @@ describe("only the latest morning brief is still a delivery", () => {
     expect(current.filter((d) => d.kind === "weekly_review" && d.prepared_for === HIS).length).toBe(2);
   });
 });
+
+// ── A week puts things away ──────────────────────────────────────────────────
+//
+// Operator, 15 Sep 2026: research packets, weekly reviews and Room packets nobody read piled up on
+// Home for weeks. The brief rule above already supersedes by the next morning; everything ELSE
+// that is older than seven days and was never marked as read or put away is put away BY AGE —
+// derived in the query, written nowhere, restorable, and visible on `?dismissed=1` like anything
+// she put away herself.
+describe("a week puts an unread deliverable away, by derivation", () => {
+  let aged: TestDb;
+  let agedEnv: Env;
+  beforeAll(async () => {
+    aged = await createTestDb();
+    agedEnv = makeTestEnv(aged.db);
+  });
+  afterAll(async () => {
+    await disposeTestDb(aged);
+  });
+
+  async function list(query = ""): Promise<Array<Record<string, unknown>>> {
+    const res = await handleRequest(apiReq(`/api/deliverables?limit=50${query}`), agedEnv);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { deliverables: Array<Record<string, unknown>> }).deliverables;
+  }
+
+  async function packet(title: string, daysOld: number, kind = "research_packet"): Promise<string> {
+    const row = await deliver(agedEnv, ACTOR, {
+      kind, title, body: "findings", preparedBy: "Wyatt", preparedFor: "fu_sequoia_taylor",
+      sourceType: "research_project", sourceId: `rp_${title.replace(/\W+/g, "_")}`,
+    });
+    const at = new Date(Date.now() - daysOld * 86_400_000).toISOString();
+    await agedEnv.WP_OS_DB.prepare("UPDATE deliverable SET created_at = ?2 WHERE id = ?1").bind(row.id, at).run();
+    return row.id;
+  }
+
+  it("keeps a six-day-old packet on the page and puts an eight-day-old one away", async () => {
+    const fresh = await packet("six days", 6);
+    const old = await packet("eight days", 8);
+    const current = await list();
+    expect(current.some((d) => d.id === fresh)).toBe(true);
+    expect(current.some((d) => d.id === old), "eight days unread must leave the page").toBe(false);
+
+    const putAway = await list("&dismissed=1");
+    const row = putAway.find((d) => d.id === old);
+    expect(row, "and must be on the put-away list").toBeTruthy();
+    expect(row!.put_away).toBe("AFTER_A_WEEK");
+    expect(row!.dismissed_at, "DERIVED — nothing was written to say she decided").toBeNull();
+    // The page is told the rule, in numbers, so it can say so.
+    const res = await handleRequest(apiReq("/api/deliverables?limit=1"), agedEnv);
+    expect(((await res.json()) as { put_away_after_days: number }).put_away_after_days).toBe(7);
+  });
+
+  it("never ages out something she marked as read, or a morning brief", async () => {
+    const read = await packet("read three weeks ago", 21);
+    expect((await handleRequest(apiReq(`/api/deliverables/${read}/acknowledge`, "POST", {}), agedEnv)).status).toBe(200);
+    const brief = await packet("an old brief", 30, "daily_brief");
+    const current = await list();
+    expect(current.some((d) => d.id === read), "read is a decision; age does not overrule it").toBe(true);
+    // The brief rule is the other rule: the latest brief stays whatever its age.
+    expect(current.some((d) => d.id === brief)).toBe(true);
+  });
+
+  it("puts one back for another week, and says on the put-away list which ones she chose", async () => {
+    const old = await packet("put me back", 10);
+    const byHand = await packet("put away by hand", 1);
+    expect((await handleRequest(apiReq(`/api/deliverables/${byHand}/dismiss`, "POST", {}), agedEnv)).status).toBe(200);
+
+    const putAway = await list("&dismissed=1");
+    expect(putAway.find((d) => d.id === byHand)!.put_away).toBe("BY_YOU");
+    expect(putAway.find((d) => d.id === old)!.put_away).toBe("AFTER_A_WEEK");
+
+    expect((await handleRequest(apiReq(`/api/deliverables/${old}/dismiss?restore=1`, "POST", {}), agedEnv)).status).toBe(200);
+    const current = await list();
+    expect(current.some((d) => d.id === old), "Put it back must beat the age rule, or the button does nothing").toBe(true);
+    const row = await agedEnv.WP_OS_DB.prepare("SELECT restored_at FROM deliverable WHERE id = ?1").bind(old).first<{ restored_at: string | null }>();
+    expect(row?.restored_at).toBeTruthy();
+  });
+});

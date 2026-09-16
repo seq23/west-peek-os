@@ -45,7 +45,23 @@ export interface DeliverableRow {
   acknowledged_by: string | null;
   dismissed_at: string | null;
   dismissed_by: string | null;
+  /** When "Put it back" last rescued it from the put-away list; the week counts from here. */
+  restored_at?: string | null;
 }
+
+/**
+ * A WEEK PUTS THINGS AWAY.
+ *
+ * Operator, 15 Sep 2026: research packets, weekly reviews and Room packets that nobody read piled
+ * up on Home for weeks. Anything that is not a morning brief (those are superseded by the next
+ * one, below), is older than seven days, and was never marked as read or put away, is PUT AWAY BY
+ * AGE. Derived in the query, like the brief rule: nothing is written, nothing claims she decided.
+ * It sits on the put-away list beside what she put away herself, and "Put it back" gives it
+ * another week from the moment it came back.
+ */
+export const PUT_AWAY_AFTER_DAYS = 7;
+const AGED_OUT = `(d.kind <> 'daily_brief' AND d.acknowledged_at IS NULL AND d.dismissed_at IS NULL
+                   AND COALESCE(d.restored_at, d.created_at) < strftime('%Y-%m-%dT%H:%M:%fZ','now','-${PUT_AWAY_AFTER_DAYS} days'))`;
 
 export interface DeliverInput {
   kind: string;
@@ -181,7 +197,8 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
    * partner clearing a busy page should not be able to destroy the week's work with one click.
    */
   const dismissed = url.searchParams.get("dismissed") === "1";
-  const dismissClause = dismissed ? "dismissed_at IS NOT NULL" : "dismissed_at IS NULL";
+  // Put away by hand OR by age; the row says which (`put_away`), so the page can say "after a week".
+  const dismissClause = dismissed ? `(d.dismissed_at IS NOT NULL OR ${AGED_OUT})` : `(d.dismissed_at IS NULL AND NOT ${AGED_OUT})`;
   /*
    * "PREPARED FOR YOU" HAS TO MEAN FOR YOU.
    *
@@ -236,7 +253,8 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
   // filtered by the visibility clause, which is where that decision belongs.
   // The reader's name travels with each row so a shared list can say whose a piece is without a
   // second request per row.
-  const select = `SELECT d.*, (SELECT full_name FROM firm_user u WHERE u.id = d.prepared_for) AS prepared_for_name
+  const select = `SELECT d.*, (SELECT full_name FROM firm_user u WHERE u.id = d.prepared_for) AS prepared_for_name,
+                         CASE WHEN d.dismissed_at IS NOT NULL THEN 'BY_YOU' WHEN ${AGED_OUT} THEN 'AFTER_A_WEEK' END AS put_away
                     FROM deliverable d`;
   const me = ctx.identity!.id;
   const rows = kind
@@ -255,7 +273,11 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
         .bind(...(mineOnly ? [limit, me] : [limit]))
         .all<DeliverableRow>();
 
-  return json({ deliverables: rows.results ?? [] });
+  return json({
+    deliverables: rows.results ?? [],
+    put_away_after_days: PUT_AWAY_AFTER_DAYS,
+    note: `A morning brief is replaced by the next one. Anything else not marked as read within ${PUT_AWAY_AFTER_DAYS} days is put away by itself and can be put back.`,
+  });
 }
 
 /*
@@ -308,9 +330,11 @@ export async function handleDismissDeliverable(ctx: RouteContext): Promise<Respo
   // Idempotent both ways: dismissing a dismissed row and restoring a live one are both fine, and
   // neither is an error worth showing a partner.
   const restore = new URL(ctx.request.url).searchParams.get("restore") === "1";
+  // Putting it back also restarts the week: a row rescued from the age rule would otherwise be
+  // put away again on the next read, and the button would appear to do nothing.
   await ctx.env.WP_OS_DB.prepare(
     restore
-      ? "UPDATE deliverable SET dismissed_at = NULL, dismissed_by = NULL WHERE id = ?1"
+      ? "UPDATE deliverable SET dismissed_at = NULL, dismissed_by = NULL, restored_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1"
       : "UPDATE deliverable SET dismissed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), dismissed_by = ?2 WHERE id = ?1",
   )
     .bind(...(restore ? [row.id] : [row.id, ctx.identity!.id]))
