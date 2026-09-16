@@ -196,7 +196,7 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     expect(JSON.parse(p.pitch_email_json!).subject).toContain("Harvey");
     const invite = JSON.parse(p.invite_check_json!) as { verdict: string; matchedOn: string[]; totalContacts: number };
     expect(invite.matchedOn).toEqual(["lawyers and legal roles"]);
-    expect(invite.verdict).toBe("CANNOT_FILL"); // an empty test firm cannot fill a room, and says so
+    expect(invite.verdict).toBe("STARTING_LIST"); // an empty test firm is a starting list of zero — information, never a veto
     const eco = JSON.parse(p.economics_json) as { sponsorCount: number; sponsorTargetHighUsd: number; keepTargetUsd: number; requiredUsd: number; lines: Array<{ key: string; basis: string }> };
     expect(eco.sponsorCount).toBe(3);
     expect(eco.sponsorTargetHighUsd).toBe(40_000);
