@@ -65,12 +65,15 @@ describe("Events & Rooms keeps the ranks the shell expects", () => {
 });
 
 describe("Events & Rooms reads the order a partner asks in", () => {
-  it("leads with the decision, then history, then who pays, then what happened", () => {
+  it("leads with what waits on her, then what was kept, then history above the rhythm, then who pays", () => {
+    // Operator, 15 Sep 2026: building/waiting first; the kept collection next, collapsed; the
+    // turned-down pile as one closed lid directly ABOVE "How often West Peek gathers"; sponsors last.
     expect(sections(ROOMS)).toEqual([
-      "Rooms we could run",
+      "Rooms waiting on you",
+      "Approved Rooms",
       "Rooms we turned down",
-      "Who is paying for it",
       "How often West Peek gathers",
+      "Who is paying for it",
     ]);
     expect(sections(EVENTS)).toEqual([
       "Every gathering on the record",
@@ -110,8 +113,37 @@ describe("a declined Room goes on a shelf, not into nothing", () => {
     expect(css).toMatch(/\.declined-shelf\s*\{[^}]*opacity/);
   });
 
-  it("puts the shelf below the live list", () => {
-    expect(ROOMS.indexOf("Rooms we could run")).toBeLessThan(ROOMS.indexOf("Rooms we turned down"));
+  it("puts the shelf below the live list and the kept collection, as one closed lid above the rhythm", () => {
+    expect(ROOMS.indexOf("<h3>Rooms waiting on you</h3>")).toBeLessThan(ROOMS.indexOf("<h3>Approved Rooms</h3>"));
+    expect(ROOMS.indexOf("<h3>Approved Rooms</h3>")).toBeLessThan(ROOMS.indexOf("<h3>Rooms we turned down</h3>"));
+    expect(ROOMS.indexOf("<h3>Rooms we turned down</h3>")).toBeLessThan(ROOMS.indexOf("<Programme />"));
+    expect(ROOMS.indexOf("<Programme />")).toBeLessThan(ROOMS.indexOf("<SponsorPipeline"));
+    // One <details>, closed by default (no `open` attribute), with the heading in its summary.
+    expect(ROOMS).toMatch(/<details className="declined-shelf" data-testid="declined-proposals">\s*<summary>\s*<h3>Rooms we turned down<\/h3>/);
+    expect(ROOMS).not.toMatch(/<details className="declined-shelf"[^>]*\bopen\b/);
+  });
+
+  it("splits the live list into what waits on her and what she kept", () => {
+    expect(ROOMS).toContain('p.status === "PROPOSED" || p.status === "DRAFT"');
+    expect(ROOMS).toContain('p.status === "APPROVED" || p.status === "SCHEDULED"');
+    expect(ROOMS).toContain('data-testid="rooms-waiting"');
+    expect(ROOMS).toContain('data-testid="rooms-approved"');
+    // The kept collection starts collapsed to one line; what waits on her starts open.
+    expect(ROOMS).toMatch(/waiting\.map\([\s\S]*?startCollapsed=\{false\}/);
+    expect(ROOMS).toMatch(/kept\.map\([\s\S]*?startCollapsed=\{true\}/);
+  });
+
+  it("gives every packet card a collapse-to-title toggle, remembered per browser", () => {
+    // One head for every state of the card (DRAFT, open, collapsed), so the toggle cannot be lost
+    // on one branch; localStorage behind try/catch so a private window just starts from default.
+    expect(ROOMS).toContain('data-testid={`packet-toggle-${p.id}`}');
+    expect(ROOMS).toContain("aria-expanded={!collapsed}");
+    expect(ROOMS).toContain('data-collapsed="true"');
+    expect(ROOMS).toContain('const COLLAPSED_KEY = "wpos.rooms.collapsed"');
+    expect(ROOMS).toMatch(/try \{\s*const raw = window\.localStorage\.getItem\(COLLAPSED_KEY\)/);
+    expect(ROOMS).toMatch(/try \{\s*window\.localStorage\.setItem\(COLLAPSED_KEY/);
+    // The hook is called before the DRAFT early return, so it is never conditional.
+    expect(ROOMS.indexOf("useCollapsed(p.id, props.startCollapsed)")).toBeLessThan(ROOMS.indexOf('if (p.status === "DRAFT") {'));
   });
 
   it("filters DECLINED out of the live list and only into the shelf", () => {

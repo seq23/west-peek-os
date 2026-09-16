@@ -4418,7 +4418,22 @@ body {
    second border-top of its own a few pixels under that one, which reads as a mistake. */
 .declined-shelf {
   opacity: 0.72;
+  /* One closed lid at section rank (15 Sep 2026). It carries the section rule itself, because the
+     h3 sits inside its summary and `details h3` drops the rule an open heading would draw. */
+  margin-top: var(--space-xl);
+  border-top: 1px solid var(--wp-line);
+  padding-top: var(--space-xl);
 }
+.declined-shelf > summary { cursor: pointer; min-height: 44px; }
+.declined-shelf > summary h3 { display: inline; margin: 0; }
+.declined-shelf > summary .muted { margin-left: var(--space-sm); }
+.declined-shelf[open] > summary { margin-bottom: var(--space-sm); }
+
+/* A packet card's head is the same open or shut; the toggle sits at the far end of the line, and a
+   collapsed card is that one line and nothing else. */
+.packet-head { justify-content: flex-start; }
+.packet-head .packet-toggle { margin-left: auto; }
+.packet-collapsed { padding-top: var(--space-sm); padding-bottom: var(--space-sm); }
 
 
 /* ══════════════════════════════════════════════════════════════════════════
