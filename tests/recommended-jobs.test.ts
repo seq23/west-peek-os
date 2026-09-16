@@ -11,8 +11,8 @@ import {
 import { AI_EMPLOYEE_ROSTER } from "../src/shared/registry/aiEmployees";
 
 const MIGRATION = readFileSync(
-  // 0169 rebuilt the table (MONTHLY, ON_REQUEST, RETIRED); its DDL is the one that is live.
-  fileURLToPath(new URL("../migrations/0169_monthly_and_on_request_work.sql", import.meta.url)),
+  // 0172 rebuilt the table again (WEEKLY, after 0169's MONTHLY, ON_REQUEST, RETIRED); its DDL is the one that is live.
+  fileURLToPath(new URL("../migrations/0172_weekly_hire_search.sql", import.meta.url)),
   "utf8",
 );
 
@@ -62,6 +62,8 @@ describe("recommended recurring work fits the real schema", () => {
       if (j.schedule_kind === "INTERVAL") expect(j.interval_minutes).toBeGreaterThan(0);
       // CHECK (schedule_kind <> 'DAILY_AT' OR daily_at_utc IS NOT NULL)
       if (j.schedule_kind === "DAILY_AT") expect(j.daily_at_utc).toMatch(/^\d{2}:\d{2}$/);
+      // CHECK (schedule_kind <> 'WEEKLY' OR (day_of_week IS NOT NULL AND daily_at_utc IS NOT NULL))
+      if (j.schedule_kind === "WEEKLY") { expect(j.day_of_week).toBeGreaterThanOrEqual(0); expect(j.daily_at_utc).toMatch(/^\d{2}:\d{2}$/); }
       // CHECK (target_kind = 'SYSTEM' OR target_id IS NOT NULL)
       if (j.target_kind !== "SYSTEM") expect(j.target_name).toBeTruthy();
     }

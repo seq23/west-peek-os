@@ -4248,6 +4248,23 @@ body {
 .deliverable-feedback select { max-width: 20rem; }
 .deliverable-feedback .btn-primary { align-self: flex-start; }
 
+/* The candidates behind a hire-search note, each with Contacted / Pass. */
+.hire-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+  padding: var(--space-sm);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-md);
+  background: var(--wp-surface-2);
+}
+.hire-candidate-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-sm); }
+.hire-candidate { display: flex; flex-direction: column; gap: var(--space-xs); }
+.hire-candidate-head { display: flex; flex-wrap: wrap; gap: var(--space-sm); align-items: center; }
+.hire-candidate-name { font-weight: 600; }
+.hire-candidate-actions { gap: var(--space-sm); align-items: center; flex-wrap: wrap; }
+
 /* — Employing someone. One press, an optional reason, and the trail underneath it.
      The reason input only exists once asked for, so the common case is a single button and the
      box never becomes another empty field to skip past. */

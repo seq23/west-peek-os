@@ -18,6 +18,7 @@
 
 export const DELIVERABLE_KINDS = [
   "daily_brief", "weekly_review", "research_packet", "ask_brief", "meeting_prep", "discrepancy_list", "blog_help",
+  "productions_hire_search",
 ] as const;
 
 export type DeliverableKind = (typeof DELIVERABLE_KINDS)[number];
@@ -123,6 +124,21 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     key: "blog_help",
     label: "Blog help",
     blurb: "An outline with research, a full draft, or signature phrases for your blog — sources checked live.",
+    page: "home",
+    docType: "BRIEF",
+    file: true,
+  },
+  /*
+   * WALKER'S WEEKLY HIRE SEARCH FOR WEST PEEK PRODUCTIONS (16 Sep 2026). Scooter's agency, not the
+   * fund: the week's candidates for a senior experiential producer, freelance, each on a live page
+   * and judged against the archetype. On his Home under Walker's name, where he marks each one
+   * Contacted or Passed so the next note leaves them out. Filed: "who did we see in September" is
+   * a question a hire search gets asked.
+   */
+  productions_hire_search: {
+    key: "productions_hire_search",
+    label: "Hire search",
+    blurb: "This week's candidates for West Peek Productions' senior experiential producer — every profile checked live, judged, scored.",
     page: "home",
     docType: "BRIEF",
     file: true,

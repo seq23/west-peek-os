@@ -16,6 +16,7 @@ import { sendFirmUserCopy, sendPartnerEmail } from "../src/worker/services/execE
 import { copyEmail } from "../src/worker/services/deliverables";
 import { customerSummary, monthlySummary, pressSummary, renderIntroNote, renderMonthlyEmail } from "../src/worker/services/productions";
 import { blogHelpEmail } from "../src/worker/services/blogHelp";
+import { hireSummary, renderHireNote, type HireCandidate } from "../src/worker/services/productionsHire";
 
 /**
  * EVERY EMAIL AN EMPLOYEE SENDS A PARTNER IS THE SAME SHAPE (16 Sep 2026).
@@ -73,6 +74,20 @@ function everyKind(): Array<{ name: string; input: ExecEmailInput }> {
     { name: "Walker: monthly Productions note", input: { employee: "Walker", what: monthly.what, tldr: monthly.tldr, sections: monthly.sections, details: renderMonthlyEmail("2026-10", ideas, pitches, ["https://dead.example"], [{ name: "VK", reason: "Russian" }]) } },
     { name: "Walker: customer ideas", input: { employee: "Walker", ...customerSummary("2026-10", ideas, []), details: "the note" } },
     { name: "Walker: press pitches", input: { employee: "Walker", ...pressSummary("2026-10", pitches, []), details: "the note" } },
+    {
+      name: "Walker: weekly hire search",
+      input: (() => {
+        const fresh: HireCandidate[] = [
+          { name: "Jordan Example", title: "Senior Experiential Producer (freelance)", company: "Independent", city: "Brooklyn, NY", profileUrl: "https://linkedin.com/in/jordan-example", evidenceUrl: "https://agency.example/team/jordan", why: "Team page lists 12 brand activations produced end to end.\nBio says freelance since 2023 and names two sponsorship deals closed.", openingLine: "Your Nike House of Innovation build is the kind of thing we want more of.", fit: 8, profileCheck: "refused" },
+          { name: "Sam Sample", title: "Executive Producer", company: "Freelance", city: "Los Angeles, CA", profileUrl: "https://samsample.example", evidenceUrl: null, why: "Portfolio shows brand partnerships sold and produced.", openingLine: "Loved the Coachella activation.", fit: 7, profileCheck: "live" },
+        ];
+        const seen = [{ ...fresh[1]!, firstSeen: "2026-09-14T14:00:00.000Z" }];
+        const acted = [{ name: "Old Name", status: "CONTACTED" as const }];
+        const dropped = [{ name: "Dead Link", reason: "the profile page did not answer (404)" }];
+        const rejected = [{ name: "Not Senior", reason: "three years, not eight" }];
+        return { employee: "Walker", ...hireSummary("2026-W38", fresh, seen, acted, dropped, rejected), details: renderHireNote("2026-W38", fresh, seen, acted, dropped, rejected) };
+      })(),
+    },
     { name: "Walker: introduction", input: { employee: "Walker", what: "your chief of staff — about that first email, and how to reach me", tldr: "I'm Walker, your chief of staff. The first note was below standard and is fixed.", sections: [{ label: "What was wrong", bullets: ["The list wandered.", "No addresses."] }, { label: "Your call", bullets: ["Nothing now."] }], details: intro.text } },
     {
       name: "Parker: Room packet (shape)",

@@ -1,0 +1,437 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { handleRequest } from "../src/worker/index";
+import type { Env } from "../src/worker/env";
+import type { Actor } from "../src/worker/services/authorize";
+import { computeNextRun, isoWeekOf, occurrenceKey, runDueJobs, runJob, type ScheduledJobRow } from "../src/worker/services/jobs";
+import {
+  HIRE_ARCHETYPE,
+  HIRE_ROLE,
+  buildHireJudgePrompt,
+  buildHireSearchPrompt,
+  canonicalProfileUrl,
+  checkCandidatePages,
+  openHireSearchCard,
+  parseHireCandidates,
+  runHireSearchCard,
+} from "../src/worker/services/productionsHire";
+import { sweepOnce } from "../src/worker/services/workSweep";
+import { JOB_FACTS, cadenceInWords } from "../src/shared/work/scheduledWork";
+import { skillsForMachines } from "../src/shared/skills/library";
+import { DELIVERABLE_KINDS, kindDef } from "../src/shared/deliverables/deliverable";
+import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
+
+/**
+ * Walker's WEEKLY hire search for West Peek Productions (16 Sep 2026), proven offline.
+ *
+ * What must be true:
+ *   · WEEKLY is a real schedule kind: the next Monday 14:00 is computed, the occurrence key is the
+ *     ISO week, a second tick in the same week replays, Run it now mints a fresh key, next week is new.
+ *   · Every candidate is on a page that answered — or, for LinkedIn's 999, a second page answered —
+ *     and every survivor is judged against the archetype; a search that names nobody usable BLOCKS
+ *     the card and emails nothing.
+ *   · Candidates are remembered across weeks: a CONTACTED or PASSED one never returns; an unacted
+ *     one is "seen before", not a fresh entry.
+ *   · ONE email, through the exec-email door, to scooter@ and nobody else; a deliverable on his Home;
+ *     Sequoia gets no notice. The OS contacts no candidate: the only outbound is to scooter@.
+ *   · Scooter marks a candidate from Home; Sequoia cannot see the list.
+ */
+
+let t: TestDb;
+let env: Env;
+
+const SCOOTER = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
+const SEQUOIA = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
+const MP_ACTOR: Actor = { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
+
+function req(path: string, headers: Record<string, string>, method = "GET", body?: unknown): Request {
+  return new Request(`https://test.local${path}`, {
+    method,
+    headers: body === undefined ? headers : { ...headers, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+const MON_W39 = new Date("2026-09-21T14:00:30.000Z");
+const MON_W40 = new Date("2026-09-28T14:00:30.000Z");
+
+const searchJson = JSON.stringify({
+  results: [
+    // A LinkedIn profile (refuses automated reads) with a live team page behind it: kept, marked "refused".
+    { name: "Jordan Example", title: "Senior Experiential Producer (freelance)", company: "Independent", city: "Brooklyn, NY", profile_url: "https://www.linkedin.com/in/jordan-example/", evidence_url: "https://agency.example/team/jordan", why: "Team page lists 12 brand activations produced end to end.\nBio says freelance since 2023 and names two sponsorship deals closed.", opening_line: "Your Nike House of Innovation build is the kind of thing we want more of.", fit: 8 },
+    // A portfolio site that answers: kept, marked "live".
+    { name: "Sam Sample", title: "Executive Producer", company: "Freelance", city: "Los Angeles, CA", profile_url: "https://samsample.example", why: "Portfolio shows brand partnerships sold and produced.", opening_line: "Loved the Coachella activation.", fit: 7 },
+    // A LinkedIn profile with no second page: dropped — nothing could be shown to exist.
+    { name: "Only LinkedIn", title: "Producer", company: "x", city: "Austin, TX", profile_url: "https://linkedin.com/in/only-linkedin", why: "says freelance", opening_line: "hi", fit: 6 },
+    // A dead page: dropped.
+    { name: "Dead Link", title: "Producer", company: "x", city: "Chicago, IL", profile_url: "https://dead.example/p", evidence_url: "https://dead.example/e", why: "…", opening_line: "hi", fit: 5 },
+    // No URL at all: discarded unread.
+    { name: "No URL", title: "Producer", company: "x", city: "Miami, FL", why: "…", fit: 9 },
+    // The judge will reject this one on seniority.
+    { name: "Not Senior", title: "Associate Producer", company: "Big Agency", city: "New York, NY", profile_url: "https://notsenior.example", why: "three years of event coordination", opening_line: "hi", fit: 4 },
+  ],
+});
+
+/** Statuses by URL: LinkedIn answers 999, dead.example answers nothing, everything else 200. */
+const statusOf = async (url: string): Promise<number | null> => {
+  if (url.includes("linkedin.com")) return 999;
+  if (url.includes("dead.example")) return null;
+  return 200;
+};
+
+/** A judge that rejects "Not Senior" and keeps the rest with its own fit. */
+const judge = async (_e: unknown, _a: unknown, prompt: string) => {
+  const start = prompt.indexOf("CANDIDATES:\n");
+  const end = prompt.lastIndexOf("Return ONLY JSON");
+  const body = JSON.parse(prompt.slice(start + "CANDIDATES:\n".length, end)) as Array<{ name: string; fit: number }>;
+  return {
+    ok: true,
+    text: JSON.stringify({ verdicts: body.map((b) => (b.name === "Not Senior" ? { name: b.name, keep: false, fit: 2, reason: "three years, not eight" } : { name: b.name, keep: true, fit: b.fit + 1, reason: "fits the archetype" })) }),
+    detail: "ok",
+  };
+};
+
+beforeAll(async () => {
+  t = await createTestDb();
+  env = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
+  await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_walker'").run();
+});
+
+afterAll(async () => {
+  await disposeTestDb(t);
+});
+
+describe("WEEKLY is a real schedule kind", () => {
+  it("computes the next Monday 14:00 UTC — today if it has not passed, next week once it has", () => {
+    const job = { schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "14:00", day_of_week: 1 } as const;
+    expect(computeNextRun(job, new Date("2026-09-16T10:00:00.000Z"))).toBe("2026-09-21T14:00:00.000Z"); // a Wednesday
+    expect(computeNextRun(job, new Date("2026-09-21T13:59:00.000Z"))).toBe("2026-09-21T14:00:00.000Z"); // Monday, before
+    expect(computeNextRun(job, new Date("2026-09-21T14:00:00.000Z"))).toBe("2026-09-28T14:00:00.000Z"); // Monday, on the dot
+    expect(computeNextRun(job, new Date("2026-09-27T23:59:00.000Z"))).toBe("2026-09-28T14:00:00.000Z"); // Sunday
+    expect(computeNextRun({ ...job, day_of_week: 0 }, new Date("2026-09-21T14:00:00.000Z"))).toBe("2026-09-27T14:00:00.000Z"); // Sunday = 0
+  });
+
+  it("keys a WEEKLY occurrence by the ISO week, so Monday and the following Sunday share a key and the next Monday does not", () => {
+    const job = { job_key: "k", schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "14:00", day_of_week: 1 } as unknown as ScheduledJobRow;
+    expect(occurrenceKey(job, new Date("2026-09-21T14:00:00.000Z"))).toBe("k:2026-W39");
+    expect(occurrenceKey(job, new Date("2026-09-27T23:00:00.000Z"))).toBe("k:2026-W39");
+    expect(occurrenceKey(job, new Date("2026-09-28T14:00:00.000Z"))).toBe("k:2026-W40");
+    // ISO year boundaries: 2026 has 53 weeks; 1 Jan 2027 is still 2026-W53; 30 Dec 2024 is 2025-W01.
+    expect(isoWeekOf(new Date("2027-01-01T12:00:00.000Z"))).toBe("2026-W53");
+    expect(isoWeekOf(new Date("2024-12-30T12:00:00.000Z"))).toBe("2025-W01");
+    expect(isoWeekOf(new Date("2026-09-16T12:00:00.000Z"))).toBe("2026-W38");
+  });
+
+  it("0172 seeded productions_hire_search WEEKLY on Monday at 14:00, ACTIVE, due on a Monday", async () => {
+    const row = await t.db.prepare("SELECT schedule_kind, day_of_week, daily_at_utc, next_run_at, status, target_id FROM scheduled_job WHERE job_key = 'productions_hire_search'")
+      .first<{ schedule_kind: string; day_of_week: number; daily_at_utc: string; next_run_at: string; status: string; target_id: string }>();
+    expect(row).toMatchObject({ schedule_kind: "WEEKLY", day_of_week: 1, daily_at_utc: "14:00", status: "ACTIVE", target_id: "aie_walker" });
+    expect(row!.next_run_at).toMatch(/T14:00:00\.000Z$/);
+    expect(new Date(row!.next_run_at).getUTCDay(), "a Monday").toBe(1);
+    expect(row!.next_run_at > new Date().toISOString(), "due on the NEXT Monday, not in the past").toBe(true);
+  });
+
+  it("refuses a WEEKLY job without its day at the schema, and a day outside 0–6", async () => {
+    await expect(
+      t.db.prepare("INSERT INTO scheduled_job (id, job_key, name, kind, schedule_kind, daily_at_utc, target_kind, created_by) VALUES ('sj_bad_w1','bad_weekly','x','EMPLOYEE_TASK','WEEKLY','14:00','SYSTEM','test')").run(),
+    ).rejects.toThrow(/CHECK/);
+    await expect(
+      t.db.prepare("INSERT INTO scheduled_job (id, job_key, name, kind, schedule_kind, daily_at_utc, day_of_week, target_kind, created_by) VALUES ('sj_bad_w2','bad_weekly2','x','EMPLOYEE_TASK','WEEKLY','14:00',7,'SYSTEM','test')").run(),
+    ).rejects.toThrow(/CHECK/);
+  });
+
+  it("the Work page says 'Every Monday at 14:00 UTC', and the facts name Walker and Scooter's agency", () => {
+    expect(cadenceInWords({ schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "14:00", day_of_week: 1 })).toBe("Every Monday at 14:00 UTC");
+    expect(cadenceInWords({ schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "09:30", day_of_week: 5 })).toBe("Every Friday at 09:30 UTC");
+    expect(JOB_FACTS.productions_hire_search?.what).toMatch(/Scooter's own agency, not the fund/);
+    expect(JOB_FACTS.productions_hire_search?.what).toMatch(/senior experiential producer, freelance/);
+    expect(JOB_FACTS.productions_hire_search?.deliveredBy).toEqual(["Walker"]);
+  });
+
+  it("a second cron tick in the same week replays; Run it now mints a fresh key; next week is new", async () => {
+    const ran = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "SCHEDULED", now: MON_W39 });
+    expect(ran.replayed).toBe(false);
+    expect(ran.run.status, String(ran.run.outcome_summary)).toBe("SUCCEEDED");
+    expect(String(ran.run.idempotency_key)).toBe("productions_hire_search:2026-W39");
+    expect(String(ran.run.outcome_summary)).toMatch(/Opened "Walker: West Peek Productions hire search \(2026-W39\)" on Walker's desk/);
+    const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'productions_hire_search'").first<{ next_run_at: string }>();
+    expect(after!.next_run_at).toBe("2026-09-28T14:00:00.000Z");
+
+    // The same week, days later, with the clock wrongly put back: still one occurrence.
+    await t.db.prepare("UPDATE scheduled_job SET next_run_at = ?1 WHERE job_key = 'productions_hire_search'").bind("2026-09-24T00:00:00.000Z").run();
+    const again = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "SCHEDULED", now: new Date("2026-09-24T14:05:00.000Z") });
+    expect(again.replayed, "a second tick in the week must not open a second card").toBe(true);
+    const runs = await t.db.prepare("SELECT COUNT(*) AS n FROM job_run WHERE job_id = 'sjb_productions_hire_search' AND trigger_kind = 'SCHEDULED'").first<{ n: number }>();
+    expect(runs!.n).toBe(1);
+    const repaired = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'productions_hire_search'").first<{ next_run_at: string }>();
+    expect(repaired!.next_run_at).toBe("2026-09-28T14:00:00.000Z");
+
+    // A person asking gets a fresh occurrence, same week; the card is week-unique so nothing new opens.
+    const byHand = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "MANUAL", now: new Date("2026-09-24T14:06:00.000Z") });
+    expect(byHand.replayed).toBe(false);
+    expect(String(byHand.run.idempotency_key)).toMatch(/^productions_hire_search:manual:/);
+    expect(String(byHand.run.outcome_summary)).toMatch(/already open or done/);
+    const cards = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card WHERE kind = 'PRODUCTIONS_HIRE_SEARCH' AND state != 'CANCELLED'").first<{ n: number }>();
+    expect(cards!.n).toBe(1);
+
+    // Next Monday is a new occurrence and a new card.
+    const next = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "SCHEDULED", now: MON_W40 });
+    expect(next.replayed).toBe(false);
+    expect(String(next.run.idempotency_key)).toBe("productions_hire_search:2026-W40");
+    expect(String(next.run.outcome_summary)).toMatch(/\(2026-W40\)/);
+    // Tidy: the W40 card is cancelled so the runner tests below work W39's then their own.
+    await t.db.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE title LIKE '%(2026-W40)%'").run();
+  });
+
+  it("is picked up by the tick when due", async () => {
+    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'PAUSED' WHERE status = 'ACTIVE' AND job_key <> 'productions_hire_search'").run();
+    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET next_run_at = ?1 WHERE job_key = 'productions_hire_search'").bind("2026-10-05T14:00:00.000Z").run();
+    const results = await runDueJobs(env, new Date("2026-10-05T14:00:40.000Z"));
+    const run = results.find((r) => r.job_key === "productions_hire_search");
+    expect(run?.status).toBe("SUCCEEDED");
+    expect(run?.summary).toMatch(/\(2026-W41\)/);
+    await t.db.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE title LIKE '%(2026-W41)%'").run();
+    await env.WP_OS_DB.prepare("UPDATE scheduled_job SET status = 'ACTIVE' WHERE status = 'PAUSED' AND pause_reason IS NULL").run();
+  });
+});
+
+describe("what Walker is told", () => {
+  it("carries a written archetype, the sources, the boundary, and the no-invention rules", () => {
+    expect(HIRE_ROLE).toBe("senior experiential producer, freelance");
+    expect(HIRE_ARCHETYPE).toMatch(/written from the title; the reference\s+profile did not render publicly/);
+    expect(HIRE_ARCHETYPE).toMatch(/BRINGS IN BRAND DEALS/);
+    const prompt = buildHireSearchPrompt("2026-W39");
+    expect(prompt).toContain("Scooter's OWN agency");
+    expect(prompt).toMatch(/linkedin\.com\/in\//);
+    expect(prompt).toMatch(/agency team pages/);
+    expect(prompt).toMatch(/speaker lists/);
+    expect(prompt).toMatch(/award lists/);
+    expect(prompt).toMatch(/Never construct or guess a URL/);
+    expect(prompt).toMatch(/Never read behind a login/);
+    expect(prompt).toMatch(/Never invent a person/);
+    const judgePrompt = buildHireJudgePrompt("2026-W39", parseHireCandidates(searchJson));
+    expect(judgePrompt).toMatch(/You are the JUDGE, not the researcher/);
+    expect(judgePrompt).toMatch(/Freelance, independent, or plainly open to freelance/);
+    expect(judgePrompt).toMatch(/SALES experience is claimed from a page/);
+  });
+
+  it("has the method on Scooter's personal-office machine: the archetype, the sources, the memory, the one email", () => {
+    const skill = skillsForMachines(["mp_personal_office"]).find((s) => s.key === "west_peek_productions_for_scooter");
+    const text = skill!.guidance.join(" ");
+    expect(text).toMatch(/WEEKLY HIRE SEARCH/);
+    expect(text).toMatch(/senior experiential producer, freelance/);
+    expect(text).toMatch(/sold, scoped or closed sponsorships/);
+    expect(text).toMatch(/Contacted or Passed/);
+    expect(text).toMatch(/The OS never contacts a candidate/);
+  });
+
+  it("is a deliverable kind that files and lands on Home", () => {
+    expect(DELIVERABLE_KINDS).toContain("productions_hire_search");
+    expect(kindDef("productions_hire_search")).toMatchObject({ label: "Hire search", page: "home", file: true });
+  });
+});
+
+describe("what survives the search", () => {
+  it("parses only entries with a profile URL, normalises the URL, and keeps one per person", () => {
+    const parsed = parseHireCandidates(searchJson);
+    expect(parsed.map((c) => c.name)).toEqual(["Jordan Example", "Sam Sample", "Only LinkedIn", "Dead Link", "Not Senior"]);
+    expect(parsed[0]!.profileUrl).toBe("https://linkedin.com/in/jordan-example");
+    expect(canonicalProfileUrl("http://WWW.LinkedIn.com/in/x/?trk=abc#top")).toBe("https://linkedin.com/in/x");
+    const twice = parseHireCandidates(JSON.stringify({ results: [{ name: "A", profile_url: "https://a.example/" }, { name: "A again", profile_url: "https://www.a.example" }] }));
+    expect(twice).toHaveLength(1);
+  });
+
+  it("keeps a page that answered, keeps a LinkedIn 999 only with a live second page, and drops the rest with the reason", async () => {
+    const out = await checkCandidatePages(parseHireCandidates(searchJson), statusOf);
+    expect(out.kept.map((c) => [c.name, c.profileCheck])).toEqual([["Jordan Example", "refused"], ["Sam Sample", "live"], ["Not Senior", "live"]]);
+    expect(out.dropped.map((d) => d.name).sort()).toEqual(["Dead Link", "Only LinkedIn"]);
+    expect(out.dropped.find((d) => d.name === "Only LinkedIn")!.reason).toMatch(/refused an automated read \(999\) and no second page/);
+    expect(out.dropped.find((d) => d.name === "Dead Link")!.reason).toMatch(/did not answer/);
+  });
+});
+
+describe("the weekly card on Walker's desk", () => {
+  it("is worked by the sweep: search, check, judge, remember, deliverable on Scooter's Home, ONE email to scooter@ — and Sequoia is not told", async () => {
+    // W39's card is open from the schedule test above.
+    const open = await openHireSearchCard(env, MON_W39);
+    expect(open.opened).toBe(false);
+    const cardId = open.cardId;
+    const searches: string[] = [];
+    const out = await sweepOnce(env, new Date("2026-09-21T14:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, {
+        search: async (_e, _a, prompt) => { searches.push(prompt); return { ok: true, text: searchJson, detail: "ok" }; },
+        judge,
+        urlStatus: statusOf,
+        now: new Date("2026-09-21T14:05:00.000Z"),
+      }),
+    });
+    expect(out.card?.id).toBe(cardId);
+    expect(out.outcome, out.summary).toBe("DONE");
+    expect(searches).toHaveLength(1);
+
+    // ONE email, to Scooter, through the exec-email door: the busy-executive subject.
+    const mails = (await env.WP_OS_DB.prepare("SELECT event_type, payload_json FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(cardId).all<{ event_type: string; payload_json: string }>()).results!;
+    expect(mails).toHaveLength(1);
+    const payload = JSON.parse(mails[0]!.payload_json) as { to: string; subject: string };
+    expect(payload.to).toBe("scooter@westpeek.ventures");
+    expect(payload.subject).toBe("Walker: hire search — 2 candidate(s) this week");
+
+    // The deliverable: on Scooter's Home under Walker, with the note as its body.
+    const dlv = await env.WP_OS_DB.prepare("SELECT id, kind, prepared_by, prepared_for, title, body FROM deliverable WHERE source_type = 'work_card' AND source_id = ?1").bind(cardId).first<{ id: string; kind: string; prepared_by: string; prepared_for: string; title: string; body: string }>();
+    expect(dlv).toMatchObject({ kind: "productions_hire_search", prepared_by: "Walker", prepared_for: "fu_scooter_taylor" });
+    expect(dlv!.title).toBe("Hire search 2026-W39: 2 candidate(s) for senior experiential producer, freelance");
+    expect(dlv!.body).toMatch(/1\. Jordan Example — Senior Experiential Producer \(freelance\), Independent · Brooklyn, NY · fit 9\/10/);
+    expect(dlv!.body).toMatch(/refused an automated read — LinkedIn's standard answer; open it to confirm\. The page that answered: https:\/\/agency\.example\/team\/jordan/);
+    expect(dlv!.body).toMatch(/2\. Sam Sample — Executive Producer, Freelance · Los Angeles, CA · fit 8\/10/);
+    expect(dlv!.body).toMatch(/Opening line for you: "Loved the Coachella activation\."/);
+    expect(dlv!.body).toMatch(/Left out because the page did not answer when checked: .*Dead Link/);
+    expect(dlv!.body).toMatch(/Left out on judgement .*Not Senior — three years, not eight/);
+    expect(dlv!.body).toMatch(/HOW TO MARK THEM: on your Home page/);
+    expect(dlv!.body).toMatch(/nothing is sent to a candidate from here/);
+
+    // The summary above the note renders clean through the formatter and names the top pick.
+    const { hireSummary } = await import("../src/worker/services/productionsHire");
+    const rows = (await env.WP_OS_DB.prepare("SELECT name, title, company, city, url AS profileUrl, evidence_url AS evidenceUrl, why, opening_line AS openingLine, fit_score AS fit FROM productions_candidate WHERE last_card_id = ?1 ORDER BY fit_score DESC").bind(cardId).all<{ name: string; title: string; company: string; city: string; profileUrl: string; evidenceUrl: string | null; why: string; openingLine: string; fit: number }>()).results!;
+    const summary = hireSummary("2026-W39", rows, [], [], [], []);
+    const rendered = renderExecEmail({ employee: "Walker", ...summary, details: dlv!.body });
+    expect(lintExecEmail(rendered.subject, rendered.text, "Walker")).toEqual([]);
+    expect(rendered.text).toMatch(/\*\*TL;DR:\*\* \*\*2\*\* new candidate\(s\) .* top pick \*\*Jordan Example\*\*/);
+
+    // Scooter is told quietly; Sequoia is not.
+    const notices = (await env.WP_OS_DB.prepare("SELECT firm_user_id FROM notification WHERE object_type IN ('work_card','deliverable') AND object_id IN (?1, ?2)").bind(cardId, dlv!.id).all<{ firm_user_id: string | null }>()).results!;
+    expect(notices.length).toBeGreaterThan(0);
+    expect(new Set(notices.map((n) => n.firm_user_id))).toEqual(new Set(["fu_scooter_taylor"]));
+
+    // Remembered: two rows, NEW, keyed by the normalised URL, this week, this card.
+    const remembered = (await env.WP_OS_DB.prepare("SELECT url, status, week, last_card_id FROM productions_candidate ORDER BY name").all<{ url: string; status: string; week: string; last_card_id: string }>()).results!;
+    expect(remembered).toEqual([
+      { url: "https://linkedin.com/in/jordan-example", status: "NEW", week: "2026-W39", last_card_id: cardId },
+      { url: "https://samsample.example", status: "NEW", week: "2026-W39", last_card_id: cardId },
+    ]);
+
+    const done = await env.WP_OS_DB.prepare("SELECT state, description FROM work_card WHERE id = ?1").bind(cardId).first<{ state: string; description: string }>();
+    expect(done!.state).toBe("DONE");
+    expect(done!.description).toMatch(/Deliverable dlv_/);
+  });
+
+  it("THE ONLY OUTBOUND IS TO scooter@: with a real transport stubbed, one send, to him, and no request to any candidate page beyond a status check", async () => {
+    await env.WP_OS_DB.prepare("DELETE FROM productions_candidate").run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    const opened = await openHireSearchCard(env, new Date("2026-10-12T14:00:00.000Z"));
+    const sends: Array<{ to: string[]; subject: string }> = [];
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      fetched.push(u);
+      if (u.includes("api.resend.com")) { sends.push(JSON.parse(String(init?.body)) as { to: string[]; subject: string }); return new Response(JSON.stringify({ id: "re_hire" }), { status: 200 }); }
+      throw new Error(`unexpected fetch ${u}`);
+    });
+    const withMail = { ...env, RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
+    const out = await sweepOnce(withMail, new Date("2026-10-12T14:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, { search: async () => ({ ok: true, text: searchJson, detail: "ok" }), judge, urlStatus: statusOf, now: new Date("2026-10-12T14:05:00.000Z") }),
+    });
+    vi.unstubAllGlobals();
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome, out.summary).toBe("DONE");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.to).toEqual(["scooter@westpeek.ventures"]);
+    expect(sends[0]!.subject).toMatch(/^Walker: hire search/);
+    // Every request that left: the one transport call. The status checks were injected, so no
+    // candidate page was fetched here — and nothing, ever, is POSTed to a candidate.
+    expect(fetched.filter((u) => !u.includes("api.resend.com"))).toEqual([]);
+  });
+
+  it("DEDUPE ACROSS WEEKS: a candidate Scooter marked CONTACTED never returns; one he left is 'seen before'; a new one is new", async () => {
+    // Scooter marks Jordan CONTACTED from Home (the API the panel calls).
+    const jordan = await env.WP_OS_DB.prepare("SELECT id FROM productions_candidate WHERE url = 'https://linkedin.com/in/jordan-example'").first<{ id: string }>();
+    const marked = await handleRequest(req(`/api/productions/candidates/${jordan!.id}/status`, SCOOTER, "POST", { status: "CONTACTED" }), env);
+    expect(marked.status).toBe(200);
+    expect(((await marked.json()) as { candidate: { status: string; status_changed_by: string } }).candidate).toMatchObject({ status: "CONTACTED", status_changed_by: "fu_scooter_taylor" });
+
+    // The next week's search finds the same two plus a new one.
+    const nextWeek = JSON.stringify({ results: [
+      ...(JSON.parse(searchJson) as { results: unknown[] }).results,
+      { name: "New Person", title: "Senior Producer, Experiential (freelance)", company: "Independent", city: "Atlanta, GA", profile_url: "https://newperson.example", why: "Site lists sponsorship deals sold for three festivals.", opening_line: "Your Essence Fest build.", fit: 7 },
+    ] });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    const opened = await openHireSearchCard(env, new Date("2026-10-19T14:00:00.000Z"));
+    const out = await sweepOnce(env, new Date("2026-10-19T14:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, { search: async () => ({ ok: true, text: nextWeek, detail: "ok" }), judge, urlStatus: statusOf, now: new Date("2026-10-19T14:05:00.000Z") }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome, out.summary).toBe("DONE");
+    const dlv = await env.WP_OS_DB.prepare("SELECT body, title FROM deliverable WHERE source_id = ?1").bind(opened.cardId).first<{ body: string; title: string }>();
+    expect(dlv!.title).toMatch(/^Hire search 2026-W43: 1 candidate\(s\)/);
+    expect(dlv!.body).toMatch(/1\. New Person/);
+    expect(dlv!.body).not.toMatch(/\d\. Jordan Example/);
+    expect(dlv!.body).not.toMatch(/\d\. Sam Sample/);
+    expect(dlv!.body).toMatch(/SEEN BEFORE, STILL OPEN[\s\S]*- Sam Sample — Executive Producer · first seen 2026-10-12/);
+    expect(dlv!.body).toMatch(/Left out because you already acted on them: Jordan Example \(contacted\)/);
+    const rows = (await env.WP_OS_DB.prepare("SELECT name, status, week FROM productions_candidate ORDER BY name").all<{ name: string; status: string; week: string }>()).results!;
+    expect(rows).toEqual([
+      { name: "Jordan Example", status: "CONTACTED", week: "2026-W42" },
+      { name: "New Person", status: "NEW", week: "2026-W43" },
+      { name: "Sam Sample", status: "SEEN", week: "2026-W43" },
+    ]);
+
+    // A third week with nothing new: BLOCKED with the reason, nothing emailed.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    const third = await openHireSearchCard(env, new Date("2026-10-26T14:00:00.000Z"));
+    const again = await sweepOnce(env, new Date("2026-10-26T14:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, { search: async () => ({ ok: true, text: nextWeek, detail: "ok" }), judge, urlStatus: statusOf, now: new Date("2026-10-26T14:05:00.000Z") }),
+    });
+    expect(again.card?.id).toBe(third.cardId);
+    expect(again.outcome).toBe("BLOCKED");
+    expect(again.summary).toMatch(/Nothing new this week: 2 candidate\(s\) were in an earlier note and 1 you already contacted or passed/);
+    const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(third.cardId).first<{ n: number }>();
+    expect(mails!.n).toBe(0);
+  });
+
+  it("blocks with the reason and emails nothing when nothing survives; the second search is told what was wrong", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    const opened = await openHireSearchCard(env, new Date("2026-11-02T14:00:00.000Z"));
+    const prompts: string[] = [];
+    const out = await sweepOnce(env, new Date("2026-11-02T14:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, {
+        search: async (_e, _a, prompt) => { prompts.push(prompt); return { ok: true, text: JSON.stringify({ results: [{ name: "Nobody", profile_url: "https://dead.example/x" }] }), detail: "ok" }; },
+        judge,
+        urlStatus: statusOf,
+        now: new Date("2026-11-02T14:05:00.000Z"),
+      }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome).toBe("BLOCKED");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toMatch(/Your previous answer was discarded: every page was dead or unreadable: Nobody/);
+    expect(out.summary).toMatch(/No candidate survived the checks this week/);
+    const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(opened.cardId).first<{ n: number }>();
+    expect(mails!.n).toBe(0);
+  });
+});
+
+describe("Scooter marks a candidate from Home", () => {
+  it("lists the candidates behind a note for Scooter, 404s for Sequoia, and refuses a status that is not a status", async () => {
+    const dlv = await env.WP_OS_DB.prepare("SELECT id FROM deliverable WHERE kind = 'productions_hire_search' ORDER BY created_at DESC LIMIT 1").first<{ id: string }>();
+    const mine = await handleRequest(req(`/api/productions/candidates?deliverable=${dlv!.id}`, SCOOTER), env);
+    expect(mine.status).toBe(200);
+    const list = (await mine.json()) as { candidates: Array<{ name: string; status: string }> };
+    expect(list.candidates.map((c) => c.name).sort()).toEqual(["New Person", "Sam Sample"]);
+
+    const hers = await handleRequest(req(`/api/productions/candidates?deliverable=${dlv!.id}`, SEQUOIA), env);
+    expect(hers.status, "the list is Scooter's; for anyone else it does not exist").toBe(404);
+
+    const sam = list.candidates.find((c) => c.name === "Sam Sample")!;
+    const id = (await env.WP_OS_DB.prepare("SELECT id FROM productions_candidate WHERE name = 'Sam Sample'").first<{ id: string }>())!.id;
+    expect(sam.status).toBe("SEEN");
+    const bad = await handleRequest(req(`/api/productions/candidates/${id}/status`, SCOOTER, "POST", { status: "HIRED" }), env);
+    expect(bad.status).toBe(400);
+    const hersToo = await handleRequest(req(`/api/productions/candidates/${id}/status`, SEQUOIA, "POST", { status: "PASSED" }), env);
+    expect(hersToo.status).toBe(404);
+    const passed = await handleRequest(req(`/api/productions/candidates/${id}/status`, SCOOTER, "POST", { status: "PASSED" }), env);
+    expect(passed.status).toBe(200);
+    const back = await handleRequest(req(`/api/productions/candidates/${id}/status`, SCOOTER, "POST", { status: "NEW" }), env);
+    expect(((await back.json()) as { candidate: { status: string } }).candidate.status).toBe("NEW");
+    const events = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'productions.candidate_marked' AND object_id = ?1").bind(id).first<{ n: number }>();
+    expect(events!.n).toBe(2);
+  });
+});

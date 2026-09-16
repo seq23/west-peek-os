@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { kindDef } from "@shared/deliverables/deliverable";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
+import { HireCandidatePanel } from "./HireCandidatePanel";
 
 /**
  * Things the firm has handed you.
@@ -199,6 +200,9 @@ export function DeliverableList({
               {!isOpen && <p className="muted small">{def?.blurb}</p>}
 
               {isOpen && <pre className="deliverable-body">{d.body}</pre>}
+              {/* Walker's hire search carries the candidates behind it, each with Contacted / Pass,
+                  so Scooter answers the note where he reads it and next week's leaves them out. */}
+              {isOpen && d.kind === "productions_hire_search" && <HireCandidatePanel deliverableId={d.id} />}
 
               <div className="form-row deliverable-actions">
                 {/* A plain link, not a fetch: the browser handles the save dialog and the filename

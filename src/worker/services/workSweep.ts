@@ -8,7 +8,7 @@ import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 
 /** A Productions card, by kind — kept here (not imported) so the sweep and productions.ts do not import each other. */
 function isProductionsKind(kind: string | null | undefined): boolean {
-  return kind === "PRODUCTIONS_CUSTOMERS" || kind === "PRODUCTIONS_PRESS" || kind === "PRODUCTIONS_MONTHLY";
+  return kind === "PRODUCTIONS_CUSTOMERS" || kind === "PRODUCTIONS_PRESS" || kind === "PRODUCTIONS_MONTHLY" || kind === "PRODUCTIONS_HIRE_SEARCH";
 }
 import { replyToRequester } from "./requestReply";
 
@@ -241,6 +241,7 @@ export async function sweepOnce(
     general?: (env: Env, ctx: RouteContext, cardId: string, options: { maxSteps: number }) => Promise<{ finished: boolean; blocked: boolean; detail: string; steps: Array<{ action: string; detail: string }> }>;
     deckRework?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     productions?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+    productionsHire?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
   } = {},
@@ -296,6 +297,14 @@ export async function sweepOnce(
     } else if (card.kind === "BLOG_HELP") {
       // A partner's blog help: research judged, the piece written in their voice, filed, one email.
       const run = runners.blogHelp ?? (await import("./blogHelp")).runBlogHelpCard;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
+      detail = out.detail;
+    } else if (card.kind === "PRODUCTIONS_HIRE_SEARCH") {
+      // Walker's weekly hire search for West Peek Productions: search, every page checked, judged,
+      // remembered across weeks, one deliverable on Scooter's Home, one email to Scooter.
+      const run = runners.productionsHire ?? (await import("./productionsHire")).runHireSearchCard;
       const out = await run(env, card);
       finished = out.finished;
       blocked = out.blocked;

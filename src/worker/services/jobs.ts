@@ -54,12 +54,15 @@ export interface ScheduledJobRow {
   name: string;
   kind: "INTELLIGENCE" | "PORTFOLIO_EVALUATION" | "EMPLOYEE_TASK";
   /**
-   * INTERVAL every N minutes; DAILY_AT once a day at hh:mm UTC; MONTHLY once a month on
-   * day_of_month at hh:mm UTC; ON_REQUEST never on a timer — only when a person or a card asks.
+   * INTERVAL every N minutes; DAILY_AT once a day at hh:mm UTC; WEEKLY once a week on day_of_week
+   * (0 = Sunday … 6 = Saturday) at hh:mm UTC; MONTHLY once a month on day_of_month at hh:mm UTC;
+   * ON_REQUEST never on a timer — only when a person or a card asks.
    */
-  schedule_kind: "INTERVAL" | "DAILY_AT" | "MONTHLY" | "ON_REQUEST";
+  schedule_kind: "INTERVAL" | "DAILY_AT" | "WEEKLY" | "MONTHLY" | "ON_REQUEST";
   interval_minutes: number | null;
   daily_at_utc: string | null;
+  /** WEEKLY only (0172). 0 = Sunday … 6 = Saturday, matching `Date.getUTCDay()`. */
+  day_of_week: number | null;
   day_of_month: number | null;
   target_kind: "SYSTEM" | "MACHINE" | "EMPLOYEE";
   target_id: string | null;
@@ -85,7 +88,7 @@ export interface ScheduledJobRow {
  * excludes ON_REQUEST explicitly, because NULL otherwise reads as "due now" (see runDueJobs).
  */
 export function computeNextRun(
-  job: Pick<ScheduledJobRow, "schedule_kind" | "interval_minutes" | "daily_at_utc"> & { day_of_month?: number | null },
+  job: Pick<ScheduledJobRow, "schedule_kind" | "interval_minutes" | "daily_at_utc"> & { day_of_month?: number | null; day_of_week?: number | null },
   from: Date,
 ): string | null {
   if (job.schedule_kind === "ON_REQUEST") return null;
@@ -94,6 +97,16 @@ export function computeNextRun(
     return new Date(from.getTime() + minutes * 60_000).toISOString();
   }
   const [hh, mm] = (job.daily_at_utc ?? "06:00").split(":").map((n) => Number(n));
+  if (job.schedule_kind === "WEEKLY") {
+    // The next day_of_week at hh:mm — today if it is that day and the time has not passed. Not an
+    // INTERVAL of 10080: an interval counts from whenever it last ran (a manual run would move
+    // Monday to Thursday), and it cannot say "Monday" on the Work page.
+    const day = Math.min(6, Math.max(0, job.day_of_week ?? 1));
+    const next = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate(), hh ?? 0, mm ?? 0, 0, 0));
+    next.setUTCDate(next.getUTCDate() + ((day - next.getUTCDay() + 7) % 7));
+    if (next.getTime() <= from.getTime()) next.setUTCDate(next.getUTCDate() + 7);
+    return next.toISOString();
+  }
   if (job.schedule_kind === "MONTHLY") {
     // Day 1–28 only (the CHECK says so), so every month has the day and no clock skips a month.
     const day = Math.min(28, Math.max(1, job.day_of_month ?? 1));
@@ -114,8 +127,24 @@ export function computeNextRun(
  * A MONTHLY job's window is the month, so a second cron tick in the same month replays rather
  * than re-running; a manual run mints its own key (runJob) and is never caught by this.
  */
+/**
+ * The ISO 8601 week a moment falls in, as `YYYY-Www` (weeks start Monday; week 1 holds the year's
+ * first Thursday). A WEEKLY job's occurrence window: Monday 14:00 and the following Sunday share
+ * it, and the next Monday starts a new one.
+ */
+export function isoWeekOf(at: Date): string {
+  const d = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  // Move to the Thursday of this week (Monday = 0); its year is the ISO year.
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7) + 3);
+  const isoYear = d.getUTCFullYear();
+  const jan4 = new Date(Date.UTC(isoYear, 0, 4));
+  const week = 1 + Math.round(((d.getTime() - jan4.getTime()) / 86_400_000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);
+  return `${isoYear}-W${String(week).padStart(2, "0")}`;
+}
+
 export function occurrenceKey(job: ScheduledJobRow, at: Date): string {
   if (job.schedule_kind === "DAILY_AT") return `${job.job_key}:${at.toISOString().slice(0, 10)}`;
+  if (job.schedule_kind === "WEEKLY") return `${job.job_key}:${isoWeekOf(at)}`;
   if (job.schedule_kind === "MONTHLY") return `${job.job_key}:${at.toISOString().slice(0, 7)}`;
   // ON_REQUEST is never due on a tick; if one is ever driven as SCHEDULED, each moment is its own occurrence.
   if (job.schedule_kind === "ON_REQUEST") return `${job.job_key}:req:${at.toISOString()}`;
@@ -462,6 +491,25 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
       summary: out.opened
         ? `Opened "${out.title}" on Walker's desk; the employee sweep works it within minutes and emails Scooter.`
         : `This month's card is already open or done: "${out.title}".`,
+      artifacts,
+    };
+  }
+
+  /*
+   * Walker's WEEKLY hire search for West Peek Productions (16 Sep 2026): the agency wants a senior
+   * experiential producer, freelance, to bring in brand deals. Same shape as the monthly note: the
+   * job opens the week's card, the sweep does the search, the checks, the judgement, the
+   * deliverable and the one email. The card is week-unique by title.
+   */
+  if (job.job_key === "productions_hire_search") {
+    const { openHireSearchCard } = await import("./productionsHire");
+    const out = await openHireSearchCard(env, now, job.firm_scope);
+    artifacts.push({ kind: "WORK_CARD", ref_type: "work_card", ref_id: out.cardId });
+    return {
+      status: "SUCCEEDED",
+      summary: out.opened
+        ? `Opened "${out.title}" on Walker's desk; the employee sweep works it within minutes and emails Scooter.`
+        : `This week's card is already open or done: "${out.title}".`,
       artifacts,
     };
   }
@@ -1068,9 +1116,10 @@ const jobSchema = z.object({
   job_key: z.string().trim().min(1),
   name: z.string().trim().min(1),
   kind: z.enum(["INTELLIGENCE", "PORTFOLIO_EVALUATION", "EMPLOYEE_TASK"]),
-  schedule_kind: z.enum(["INTERVAL", "DAILY_AT", "MONTHLY", "ON_REQUEST"]),
+  schedule_kind: z.enum(["INTERVAL", "DAILY_AT", "WEEKLY", "MONTHLY", "ON_REQUEST"]),
   interval_minutes: z.number().int().positive().optional(),
   daily_at_utc: z.string().trim().regex(/^\d{2}:\d{2}$/).optional(),
+  day_of_week: z.number().int().min(0).max(6).optional(),
   day_of_month: z.number().int().min(1).max(28).optional(),
   target_kind: z.enum(["SYSTEM", "MACHINE", "EMPLOYEE"]),
   target_id: z.string().trim().min(1).optional(),
@@ -1097,6 +1146,9 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
   if (b.schedule_kind === "DAILY_AT" && !b.daily_at_utc) {
     return json({ error: "invalid_input", detail: "DAILY_AT schedules need daily_at_utc" }, { status: 400 });
   }
+  if (b.schedule_kind === "WEEKLY" && (!b.daily_at_utc || b.day_of_week === undefined)) {
+    return json({ error: "invalid_input", detail: "WEEKLY schedules need day_of_week (0 = Sunday … 6 = Saturday) and daily_at_utc" }, { status: 400 });
+  }
   if (b.schedule_kind === "MONTHLY" && (!b.daily_at_utc || !b.day_of_month)) {
     return json({ error: "invalid_input", detail: "MONTHLY schedules need day_of_month (1–28) and daily_at_utc" }, { status: 400 });
   }
@@ -1116,9 +1168,9 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
   try {
     await ctx.env.WP_OS_DB.prepare(
       `INSERT INTO scheduled_job
-         (id, job_key, name, kind, schedule_kind, interval_minutes, daily_at_utc, day_of_month, target_kind, target_id,
+         (id, job_key, name, kind, schedule_kind, interval_minutes, daily_at_utc, day_of_week, day_of_month, target_kind, target_id,
           capability_key, task_class, budget_usd, data_class, payload_json, max_attempts, status, pause_reason, next_run_at, created_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?18, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'PAUSED', ?16, NULL, ?17)`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?19, ?18, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'PAUSED', ?16, NULL, ?17)`,
     )
       .bind(
         id,
@@ -1139,6 +1191,7 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
         "created paused: recurring work starts only when an operator switches it on",
         ctx.identity!.id,
         b.day_of_month ?? null,
+        b.day_of_week ?? null,
       )
       .run();
   } catch (err) {

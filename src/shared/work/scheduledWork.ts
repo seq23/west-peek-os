@@ -106,6 +106,20 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     why: "So the agency gets its leads and its press in one note from his chief of staff, not two emails from a machine (folded 15 Sep 2026; on the 1st of the month since 0169).",
     deliveredBy: ["Walker"],
   },
+  // THE WEEKLY HIRE SEARCH (16 Sep 2026). Same office, same boundary: Scooter's agency, his desk
+  // only. The OS never contacts a candidate; it finds, checks, judges and reports.
+  productions_hire_search: {
+    what:
+      "For West Peek Productions — Scooter's own agency, not the fund. Every Monday Walker searches " +
+      "live public sources for a senior experiential producer, freelance, who can bring in brand deals: " +
+      "LinkedIn profiles, agency team pages, speaker lists, portfolios, award lists. Every profile URL " +
+      "is checked, every candidate is judged against the written archetype, and Scooter gets ONE note — " +
+      "who they are, why they fit with the page that shows it, a suggested opening line, a fit score. " +
+      "Candidates are remembered week to week; he marks each Contacted or Passed on Home and it never " +
+      "comes back. Nothing is sent to a candidate from here.",
+    why: "So the agency's hire search runs every week without Scooter running it, and every name in the note is a real person on a live page.",
+    deliveredBy: ["Walker"],
+  },
   wednesday_prep: {
     what: "Prepares each partner's packet for the Wednesday sync — what completed, what is waiting, and where the records and the deck disagree.",
     why: "So the sync starts from a page, not from memory.",
@@ -123,13 +137,19 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
  * SQL; in TypeScript a string comparison against the wrong literal just quietly never matches, so
  * the test below asserts against the values production actually stores.
  */
+export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+
 export function cadenceInWords(job: {
   schedule_kind: string;
   interval_minutes: number | null;
   daily_at_utc: string | null;
+  day_of_week?: number | null;
   day_of_month?: number | null;
 }): string {
   if (job.schedule_kind === "ON_REQUEST") return "Only when asked";
+  if (job.schedule_kind === "WEEKLY" && job.daily_at_utc) {
+    return `Every ${DAY_NAMES[job.day_of_week ?? 1] ?? "Monday"} at ${job.daily_at_utc} UTC`;
+  }
   if (job.schedule_kind === "MONTHLY" && job.daily_at_utc) {
     return `On the ${ordinal(job.day_of_month ?? 1)} of every month at ${job.daily_at_utc} UTC`;
   }
