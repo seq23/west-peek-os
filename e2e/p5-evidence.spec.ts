@@ -111,3 +111,42 @@ test("P5 evidence journey: document upload → conflicting claims → contradict
   expect(summary.claims_by_status.UNVERIFIED).toBe(2);
   expect(summary.unresolved_material_contradictions).toHaveLength(0); // resolved above
 });
+
+/**
+ * A badge can never shrink a company's name again.
+ *
+ * Operator, 15 Sep 2026: on the register, "Sensori" rendered one letter per line because its
+ * sector tag ("Functional non-alcoholic beverage / CPG") shared the name's flex row and refused to
+ * wrap. At ~1000px the grid is three cards wide — the width where it happened. The name must take
+ * the full row and stay on one or two lines; the tag sits under it.
+ */
+test("a long sector tag sits under the company name and cannot squeeze it", async ({ page, request }) => {
+  const marker = `E2E-P5-WIDE-${Date.now()}`;
+  const created = await request.post("/api/companies", {
+    headers: MP,
+    data: { canonical_name: `${marker} Sensori`, sector: "Functional non-alcoholic beverage / CPG and adjacent categories" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const { id } = (await created.json()) as { id: string };
+
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await page.goto("/");
+  await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
+  await page.getByTestId("dev-login-submit").click();
+  await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
+  await gotoSurface(page, "Companies");
+
+  const card = page.getByTestId(`company-${id}`);
+  await expect(card).toBeVisible();
+  const name = card.locator(".company-card-head h4");
+  const badge = card.locator(".company-card-head .badge");
+  const cardBox = (await card.boundingBox())!;
+  const nameBox = (await name.boundingBox())!;
+  const badgeBox = (await badge.boundingBox())!;
+  const nameLineHeight = await name.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight));
+  // The name owns most of the card's width and is at most two lines tall — never a column of letters.
+  expect(nameBox.width).toBeGreaterThan(cardBox.width * 0.6);
+  expect(nameBox.height).toBeLessThanOrEqual(nameLineHeight * 2 + 2);
+  // The tag is below the name, not beside it.
+  expect(badgeBox.y).toBeGreaterThanOrEqual(nameBox.y + nameBox.height - 1);
+});
