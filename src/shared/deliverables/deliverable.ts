@@ -17,7 +17,7 @@
  */
 
 export const DELIVERABLE_KINDS = [
-  "daily_brief", "weekly_review", "research_packet", "ask_brief", "meeting_prep", "discrepancy_list",
+  "daily_brief", "weekly_review", "research_packet", "ask_brief", "meeting_prep", "discrepancy_list", "blog_help",
 ] as const;
 
 export type DeliverableKind = (typeof DELIVERABLE_KINDS)[number];
@@ -111,6 +111,20 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     blurb: "Where the firm's own records and its fund deck disagree, and whether anyone acted.",
     page: "fund",
     docType: "REVIEW",
+    file: true,
+  },
+  /*
+   * A PARTNER'S OWN WRITING, HELPED (16 Sep 2026). The partners are starting blogs; an outline
+   * with research, a full draft, or a set of signature phrases comes back from their chief of
+   * staff as one of these — on their Home, signed, and filed so it can be found when they sit
+   * down to write. Kept: a spine is referred back to for weeks.
+   */
+  blog_help: {
+    key: "blog_help",
+    label: "Blog help",
+    blurb: "An outline with research, a full draft, or signature phrases for your blog — sources checked live.",
+    page: "home",
+    docType: "BRIEF",
     file: true,
   },
 };

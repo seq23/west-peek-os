@@ -15,6 +15,7 @@ import {
 import { sendFirmUserCopy, sendPartnerEmail } from "../src/worker/services/execEmail";
 import { copyEmail } from "../src/worker/services/deliverables";
 import { customerSummary, monthlySummary, pressSummary, renderIntroNote, renderMonthlyEmail } from "../src/worker/services/productions";
+import { blogHelpEmail } from "../src/worker/services/blogHelp";
 
 /**
  * EVERY EMAIL AN EMPLOYEE SENDS A PARTNER IS THE SAME SHAPE (16 Sep 2026).
@@ -84,6 +85,29 @@ function everyKind(): Array<{ name: string; input: ExecEmailInput }> {
     {
       name: "a research packet, emailed to yourself from Home",
       input: copyEmail({ kind: "research_packet", title: "Functional drinks in the US", body: "A question, the sources, what they support.", prepared_by: "Wyatt", created_at: "2026-09-10T10:00:00.000Z" }, "Scooter Taylor", "# Functional drinks\n\ntext"),
+    },
+    {
+      name: "blog help: outline",
+      input: blogHelpEmail({
+        employee: "Wren",
+        ask: { modes: ["OUTLINE"], topic: "why early-stage founders should hire a recruiter before a CFO", ask: "help me make an outline…" },
+        outline: { title: "The first hire is the hire who hires", alternates: ["Recruiter before CFO", "Who builds the team", "Your first ten"], thesis: "People are the scarce resource at seed.", sections: [{ heading: "The cash myth", proves: "x", leansOn: [] }, { heading: "What a recruiter does at 8 people", proves: "y", leansOn: [] }], opening: "o", closing: "c", notes: [] },
+        draft: null, phrases: null,
+        research: { notes: [{ fact: "f", whyItMatters: "", source: "s", url: "https://a.example/1", date: null }], dropped: ["https://dead.example"], rejected: [] },
+        strippedUrls: 1, failures: [], body: "## Outline\n\ntext", deliverableId: "dlv_1",
+      }),
+    },
+    {
+      name: "blog help: draft and phrases together",
+      input: blogHelpEmail({
+        employee: "Walker",
+        ask: { modes: ["DRAFT", "PHRASE"], topic: "what LPs get wrong about emerging managers", ask: "write a blog post…" },
+        outline: null,
+        draft: { title: "What LPs get wrong", bodyMarkdown: "## One\n\ntext [1]", sources: [{ n: 1, url: "https://a.example/1", note: "" }], words: 1010 },
+        phrases: { candidates: [{ phrase: "Good people should meet good people", reasoning: "r", recursAs: "sign-off" }, { phrase: "Early inclusion beats early access", reasoning: "r", recursAs: "header" }], recommendation: "Early inclusion beats early access", why: "it is what we do" },
+        research: { notes: [{ fact: "f", whyItMatters: "", source: "s", url: "https://a.example/1", date: null }], dropped: [], rejected: [] },
+        strippedUrls: 0, failures: [], body: "## Draft\n\n" + Array.from({ length: 12 }, (_, i) => `Line ${i + 1} of a hard-wrapped paragraph.`).join("\n"), deliverableId: "dlv_2",
+      }),
     },
   ];
 }
