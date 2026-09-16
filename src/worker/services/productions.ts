@@ -61,6 +61,71 @@ export const PRODUCTIONS_OFFER = [
   "Backed by the broader West Peek community of 5,000+ founders, operators, investors, creatives and builders.",
 ].join("\n");
 
+/**
+ * WHO ALREADY BUYS (16 Sep 2026, from the operator). Two uses, both mandatory: the customer search
+ * is told to find organisations LIKE these, and a search result that names one of them is dropped
+ * before it reaches Scooter — a lead list that pitches a current customer reads as not knowing the
+ * business. One list, read by the prompt, the judge, the exclusion and the skill text.
+ */
+export interface ProductionsCustomer {
+  name: string;
+  /** Other names a search result might use for the same organisation. */
+  aliases: readonly string[];
+  what: string;
+  bought: string;
+  /** The look-alike this customer seeds: what to search for because of them. */
+  lookAlike: string;
+}
+
+export const PRODUCTIONS_CUSTOMERS: readonly ProductionsCustomer[] = [
+  {
+    name: "Exec Leadership Council",
+    aliases: ["Executive Leadership Council", "MLM Symposium"],
+    what: "runs the MLM Symposium, a meeting and conference for mid-level managers, 29–30 October 2026",
+    bought: "the event platform and virtual event production",
+    lookAlike: "associations and councils running an annual symposium or managers' conference that need a virtual or hybrid platform and production",
+  },
+  {
+    name: "TNTP",
+    aliases: ["The New Teacher Project"],
+    what: "a foundation with a small marketing team, not up to date on trends, social, virtual or AI",
+    bought: "community, content and virtual work its own team is not staffed for",
+    lookAlike: "foundations and nonprofits with small marketing teams who are behind on social, virtual and AI",
+  },
+];
+
+/** The customer, when a search result names one; null when it does not. Case-insensitive, aliases included. */
+export function currentCustomerNamed(text: string): ProductionsCustomer | null {
+  const hay = text.toLowerCase();
+  for (const c of PRODUCTIONS_CUSTOMERS) {
+    if ([c.name, ...c.aliases].some((n) => hay.includes(n.toLowerCase()))) return c;
+  }
+  return null;
+}
+
+/** Leads that name a current customer are not leads. `excluded` carries the reason for the note. */
+export function excludeCurrentCustomers(ideas: readonly CustomerIdea[]): { kept: CustomerIdea[]; excluded: { name: string; reason: string }[] } {
+  const kept: CustomerIdea[] = [];
+  const excluded: { name: string; reason: string }[] = [];
+  for (const i of ideas) {
+    const c = currentCustomerNamed(`${i.organisation} ${i.trigger} ${i.url}`);
+    if (c) excluded.push({ name: i.organisation, reason: `a current customer (${c.name}) — never listed as a lead` });
+    else kept.push(i);
+  }
+  return { kept, excluded };
+}
+
+/** The customer block the search prompt and the judge both carry. */
+export function customersBlock(): string {
+  return [
+    "CURRENT CUSTOMERS — the look-alike seeds, and NEVER a lead:",
+    ...PRODUCTIONS_CUSTOMERS.map((c) => `- ${c.name}: ${c.what}; bought ${c.bought}. Find more like this: ${c.lookAlike}.`),
+    "Find organisations like these — associations and councils running annual symposia or manager",
+    "conferences that need a virtual/hybrid platform; foundations and nonprofits with small marketing",
+    "teams behind on social, virtual and AI — and never list a current customer.",
+  ].join("\n");
+}
+
 export type ProductionsKind = "PRODUCTIONS_CUSTOMERS" | "PRODUCTIONS_PRESS" | "PRODUCTIONS_MONTHLY";
 
 export const PRODUCTIONS_JOBS: Readonly<Record<string, { kind: ProductionsKind; title: (month: string) => string }>> = {
@@ -167,16 +232,16 @@ export interface PressPitch {
   draft: string;
 }
 
-function str(v: unknown): string | null {
+export function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
-function httpUrl(v: unknown): string | null {
+export function httpUrl(v: unknown): string | null {
   const s = str(v);
   return s && /^https?:\/\//i.test(s) ? s : null;
 }
 
-function jsonBody(raw: string): Record<string, unknown> | null {
+export function jsonBody(raw: string): Record<string, unknown> | null {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   const body = (fenced?.[1] ?? raw).trim();
   const start = body.indexOf("{");
@@ -252,7 +317,7 @@ export async function keepLive<T>(
 
 // ── Prompts ──────────────────────────────────────────────────────────────────
 
-function walkerIdentity(): string {
+export function walkerIdentity(): string {
   return personaPrompt("Walker", AI_EMPLOYEE_ROSTER.find((e) => e.name === "Walker")?.role ?? "Scooter's Chief of Staff");
 }
 
@@ -265,6 +330,8 @@ export function buildCustomerPrompt(month: string): string {
     "",
     "WHAT THE AGENCY SELLS:",
     PRODUCTIONS_OFFER,
+    "",
+    customersBlock(),
     "",
     guidanceBlock(["mp_personal_office"]),
     "",
@@ -288,6 +355,9 @@ export function buildCustomerPrompt(month: string): string {
     "  invent a person's name or email; if you name a person it must appear on the cited page.",
     "- One line on the angle: why Community-as-a-Service fits what they are doing now.",
     "- Fewer, all real, beats ten with guesses.",
+    "- At least three of the ten should be look-alikes of the current customers above (a council or",
+    "  association with an annual symposium; a foundation with a small marketing team). None may BE",
+    "  a current customer.",
     "",
     'Return ONLY JSON: {"results":[{"organisation":"…","trigger":"…","approach":"…","angle":"…","url":"https://…"}]}',
   ].join("\n");
@@ -621,6 +691,8 @@ export function buildLeadJudgePrompt(month: string, ideas: readonly CustomerIdea
     "WHAT THE AGENCY SELLS:",
     PRODUCTIONS_OFFER,
     "",
+    customersBlock(),
+    "",
     `KEEP a lead only if ALL of these hold (this month is ${month}):`,
     "- It is an organisation that actually hires an agency like this: a brand, a B2B software",
     "  company, a creator business, a membership body or professional association, a conference",
@@ -634,7 +706,7 @@ export function buildLeadJudgePrompt(month: string, ideas: readonly CustomerIdea
     "- The cited URL plausibly belongs to that organisation or to a page about it (a source page for",
     "  a DIFFERENT organisation, or a generic listing, fails).",
     "DROP government departments, militaries, and anything that reads as a media outlet being",
-    "counted as a buyer because it happened to publish the trigger.",
+    "counted as a buyer because it happened to publish the trigger. DROP a current customer.",
     "",
     "LEADS:",
     JSON.stringify(ideas.map((i) => ({ organisation: i.organisation, trigger: i.trigger, approach: i.approach, angle: i.angle, url: i.url })), null, 1),
@@ -801,9 +873,11 @@ export async function runProductionsCard(
     const ideas = await searchUntilSome(
       buildCustomerPrompt(month),
       async (text) => {
-        const live = await keepLive(parseCustomerIdeas(text), (i) => i.url, check);
+        // A current customer is not a lead, whatever the searcher and the judge think of it.
+        const fresh = excludeCurrentCustomers(parseCustomerIdeas(text));
+        const live = await keepLive(fresh.kept, (i) => i.url, check);
         const judged = await judgeEntries(env, actor, live.kept, buildLeadJudgePrompt(month, live.kept), (i) => i.organisation, "organisation", judge);
-        return { ...judged, dropped: live.dropped };
+        return { ...judged, rejected: [...fresh.excluded, ...judged.rejected], dropped: live.dropped };
       },
       "Your previous answer was discarded. Every entry MUST have the url of the live page that shows the trigger, be a US organisation that hires agencies, and have a trigger from the last ~60 days.",
     );
@@ -839,7 +913,7 @@ export async function runProductionsCard(
     return { finished: false, blocked: false, detail: `the live search failed: ${found.detail}` };
   }
   if (kind === "PRODUCTIONS_CUSTOMERS") {
-    const parsed = parseCustomerIdeas(found.text);
+    const parsed = excludeCurrentCustomers(parseCustomerIdeas(found.text)).kept;
     const live = await keepLive(parsed, (i) => i.url, check);
     count = live.kept.length;
     dropped = live.dropped;

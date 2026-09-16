@@ -2,8 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import {
+  PRODUCTIONS_CUSTOMERS,
   PRODUCTIONS_OFFER,
   buildCustomerPrompt,
+  buildLeadJudgePrompt,
+  currentCustomerNamed,
+  excludeCurrentCustomers,
   buildPressPrompt,
   keepLive,
   openProductionsCard,
@@ -78,6 +82,64 @@ describe("what Walker is told", () => {
     const press = buildPressPrompt("2026-10");
     expect(press).toMatch(/ONLY if a live page shows it/);
     expect(press).toMatch(/Never guess an address pattern/);
+  });
+
+  /*
+   * THE CURRENT CUSTOMERS (16 Sep 2026, from the operator): Exec Leadership Council (the MLM
+   * Symposium, 29–30 Oct 2026; bought the platform and virtual production) and TNTP (a foundation
+   * with a small marketing team, behind on social / virtual / AI). They seed the search as
+   * look-alikes AND are never listed as leads.
+   */
+  it("knows the current customers: the prompt carries both as look-alike seeds, the judge is told to drop them, and the method names them", () => {
+    expect(PRODUCTIONS_CUSTOMERS.map((c) => c.name)).toEqual(["Exec Leadership Council", "TNTP"]);
+    const prompt = buildCustomerPrompt("2026-10");
+    expect(prompt).toContain("Exec Leadership Council");
+    expect(prompt).toContain("MLM Symposium");
+    expect(prompt).toContain("TNTP");
+    expect(prompt).toMatch(/associations and councils running annual symposia or manager\s+conferences that need a virtual\/hybrid platform/);
+    expect(prompt).toMatch(/foundations and nonprofits with small marketing\s+teams behind on social, virtual and AI/);
+    expect(prompt).toMatch(/never list a current customer/);
+    const judgePrompt = buildLeadJudgePrompt("2026-10", []);
+    expect(judgePrompt).toContain("TNTP");
+    expect(judgePrompt).toMatch(/DROP a current customer/);
+    const skill = skillsForMachines(["mp_personal_office"]).find((s) => s.key === "west_peek_productions_for_scooter");
+    expect(skill!.guidance.join(" ")).toMatch(/Exec Leadership Council/);
+    expect(skill!.guidance.join(" ")).toMatch(/TNTP/);
+  });
+
+  it("drops a search result naming a current customer, by name or alias, before it can reach the note", async () => {
+    const raw = JSON.stringify({ results: [
+      { organisation: "Exec Leadership Council", trigger: "announced the MLM Symposium", approach: "Head of Events", url: "https://elc.example/symposium" },
+      { organisation: "The New Teacher Project", trigger: "hired a comms lead", approach: "CMO", url: "https://tntp.example/news" },
+      { organisation: "Some Council", trigger: "its symposium is announced for the MLM Symposium week", approach: "Director", url: "https://some.example" },
+      { organisation: "Fresh Association", trigger: "announced its annual managers' conference", approach: "Head of Events", url: "https://fresh.example/conf" },
+    ] });
+    const { kept, excluded } = excludeCurrentCustomers(parseCustomerIdeas(raw));
+    expect(kept.map((i) => i.organisation)).toEqual(["Fresh Association"]);
+    expect(excluded.map((e) => e.name)).toEqual(["Exec Leadership Council", "The New Teacher Project", "Some Council"]);
+    expect(excluded[1]!.reason).toMatch(/a current customer \(TNTP\)/);
+    expect(currentCustomerNamed("nothing here")).toBeNull();
+
+    // End to end through the monthly card: the customer is in the searcher's answer, the judge would
+    // keep it, and it still never reaches the note — the exclusion is before the judge, not after.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-03-01T14:00:00.000Z"));
+    const out = await sweepOnce(env, new Date("2027-03-01T14:05:00.000Z"), {
+      productions: (e, card) => runProductionsCard(e, card, {
+        search: async (_e, _a, prompt) => ({ ok: true, text: /journalists/.test(prompt) ? pressJson : raw, detail: "ok" }),
+        urlCheck: async () => true,
+        judge: keepAll,
+        pageText: async () => "Contact: a.writer@communityweekly.example",
+        now: new Date("2027-03-01T14:05:00.000Z"),
+      }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome).toBe("DONE");
+    const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
+    expect(delivered).toMatch(/1\. Fresh Association/);
+    expect(delivered).not.toMatch(/\d\. Exec Leadership Council/);
+    expect(delivered).not.toMatch(/\d\. The New Teacher Project/);
+    expect(delivered).toMatch(/Left out on judgement .*Exec Leadership Council — a current customer \(Exec Leadership Council\)/);
   });
 
   it("has a written method on Scooter's personal-office machine that states the boundary", () => {

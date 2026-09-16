@@ -134,3 +134,24 @@ test("Walker's West Peek Productions duty is on the clock, one note a month, lab
   await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
   await expect(page.getByTestId("job-runs-productions_monthly")).toContainText("Walker's desk");
 });
+
+/**
+ * The weekly hire search (16 Sep 2026) is a WEEKLY job — a real schedule kind since 0172, not an
+ * interval of 10,080 minutes — and the page says "Every Monday at 14:00 UTC". Run it now opens the
+ * week's card on Walker's desk.
+ */
+test("Walker's weekly hire search is WEEKLY on Monday at 14:00 UTC, labelled as Scooter's agency work, and runs by hand", async ({ page }) => {
+  await signIn(page);
+  await gotoSurface(page, "Work");
+  const job = page.getByTestId("job-productions_hire_search");
+  await expect(job).toBeVisible();
+  await expect(job).toContainText("Scooter's own agency, not the fund");
+  await expect(job).toContainText("senior experiential producer, freelance");
+  await expect(job).toContainText("Walker");
+  await expect(page.getByTestId("job-state-productions_hire_search")).toHaveText("Scheduled");
+  await expect(page.getByTestId("job-cadence-productions_hire_search")).toContainText("Every Monday at 14:00 UTC");
+  provisionLocalD1("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_walker';");
+  await page.getByTestId("job-run-productions_hire_search").click();
+  await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
+  await expect(page.getByTestId("job-runs-productions_hire_search")).toContainText("Walker's desk");
+});

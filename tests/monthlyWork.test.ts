@@ -163,25 +163,33 @@ describe("RETIRED is off the page and never runs", () => {
 });
 
 describe("the rebuild survives foreign keys from job_run", () => {
-  it("replays 0169's rebuild over a database that has runs, and every run still points at its job", async () => {
+  it("replays 0172's rebuild (the live DDL, after 0169's) over a database that has runs, and every run still points at its job", async () => {
     const before = await t.db.prepare("SELECT COUNT(*) AS n FROM job_run").first<{ n: number }>();
     expect(before!.n, "the premise: runs exist before the rebuild").toBeGreaterThan(0);
-    // The migration's statements up to (not including) the row updates and the version stamp.
-    const sql = readFileSync(new URL("../migrations/0169_monthly_and_on_request_work.sql", import.meta.url), "utf8");
-    const rebuild = sql.slice(0, sql.indexOf("-- Walker's Productions note"));
+    // The migration's scheduled_job statements: from the PRAGMA up to (not including) the seed of
+    // the weekly job.
+    const sql = readFileSync(new URL("../migrations/0172_weekly_hire_search.sql", import.meta.url), "utf8");
+    const rebuild = sql.slice(0, sql.indexOf("-- Walker's weekly hire search"));
     const statements = rebuild
       .split("\n").filter((l) => !l.trim().startsWith("--")).join("\n")
       .split(";").map((s) => s.trim()).filter(Boolean)
-      // The live table already carries day_of_month (this database ran 0169 once); the migration's
-      // copy list is written for the table BEFORE 0169, which had no such column. Carry it here so
-      // the MONTHLY row survives its own CHECK — the mechanics under test are DROP + FK, not the list.
-      .map((s) => s.startsWith("INSERT INTO scheduled_job (") ? s.replace("interval_minutes, daily_at_utc, target_kind", "interval_minutes, daily_at_utc, day_of_month, target_kind").replace("interval_minutes, daily_at_utc, target_kind", "interval_minutes, daily_at_utc, day_of_month, target_kind") : s);
+      // The live table already carries day_of_week (this database ran 0172 once, and its seed put a
+      // WEEKLY row in); the migration's copy list is written for the table BEFORE 0172, which had no
+      // such column. Carry it here so the WEEKLY row survives its own CHECK — the mechanics under
+      // test are DROP + FK, not the list.
+      .map((s) => s.startsWith("INSERT INTO scheduled_job (") ? s.replaceAll("interval_minutes, daily_at_utc, day_of_month, target_kind", "interval_minutes, daily_at_utc, day_of_week, day_of_month, target_kind") : s);
     expect(statements[0]).toMatch(/^PRAGMA defer_foreign_keys/);
     await t.db.batch(statements.map((s) => t.db.prepare(s)));
     const orphans = await t.db.prepare("SELECT COUNT(*) AS n FROM job_run r WHERE NOT EXISTS (SELECT 1 FROM scheduled_job j WHERE j.id = r.job_id)").first<{ n: number }>();
     expect(orphans!.n).toBe(0);
     const after = await t.db.prepare("SELECT COUNT(*) AS n FROM job_run").first<{ n: number }>();
     expect(after!.n).toBe(before!.n);
+    const weekly = await t.db.prepare("SELECT day_of_week FROM scheduled_job WHERE job_key = 'productions_hire_search'").first<{ day_of_week: number }>();
+    expect(weekly?.day_of_week, "the WEEKLY row came through the rebuild intact").toBe(1);
+    // The WEEKLY CHECK is live on the rebuilt table.
+    await expect(
+      t.db.prepare("INSERT INTO scheduled_job (id, job_key, name, kind, schedule_kind, daily_at_utc, target_kind, created_by) VALUES ('sj_bad3','bad_weekly','x','EMPLOYEE_TASK','WEEKLY','14:00','SYSTEM','test')").run(),
+    ).rejects.toThrow(/CHECK/);
     // And the foreign key is still enforced on the rebuilt table.
     await expect(
       t.db.prepare("INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, requested_by) VALUES ('jrun_orphan','sjb_nope','k','MANUAL','QUEUED','test')").run(),
