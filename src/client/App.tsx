@@ -144,6 +144,17 @@ interface GovernanceUpdateRow {
   created_at: string;
 }
 
+interface MemoRow {
+  id: string;
+  audience: string;
+  department: string | null;
+  title: string;
+  body: string;
+  author_type: string;
+  author_id: string;
+  created_at: string;
+}
+
 interface ApprovalVolume {
   targetPerDay: number;
   days: Array<{ date: string; count: number; overTarget: boolean }>;
@@ -853,6 +864,112 @@ function ActivityPage({ refreshNonce }: { me: MeResponse; refreshNonce: number }
   );
 }
 
+/**
+ * Firmwide notices — the standing things every employee reads before doing anything.
+ *
+ * Under Governance rather than as a section of its own, because that is where the firm already
+ * writes down what it operates under. A governance update is an ACT with a date: this changed on
+ * this day. A notice is a STANDING FACT: this is how we work, and it is true on every run.
+ *
+ * The list is honest when empty. It is not seeded with filler, and it does not claim employees are
+ * reading something the firm has not written.
+ */
+function FirmNotices({ isMp }: { isMp: boolean }) {
+  const memos = useApi<{ memos: MemoRow[] }>("/api/workforce/memos");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+
+  const notices = (memos.data?.memos ?? []).filter((m) => m.audience === "FIRM");
+
+  return (
+    <section className="card" data-testid="firm-notices">
+      <h3>Notices every employee reads</h3>
+      <p className="muted small">
+        Standing facts about how this firm works, not a log of changes. Every one of these is put in
+        front of an AI employee at the start of every piece of work they do — so a notice here is an
+        instruction they actually follow, not a page somebody has to remember to open.
+      </p>
+      <ul className="card-list" data-testid="firm-notices-list">
+        {memos.loading && (
+          <li className="state-message" data-testid="firm-notices-loading">
+            Loading…
+          </li>
+        )}
+        {notices.map((n) => (
+          <li key={n.id} className="card" data-testid="firm-notice">
+            <p>
+              <strong>{n.title}</strong>{" "}
+              <span className="muted small">
+                {n.author_type === "SYSTEM" ? "the firm's standing practice" : n.author_id} ·{" "}
+                {readableDate(n.created_at)}
+              </span>
+            </p>
+            <p>{n.body}</p>
+          </li>
+        ))}
+        {!memos.loading && notices.length === 0 && (
+          <li className="state-empty" data-testid="firm-notices-empty">
+            No firmwide notices have been written. Until one is, employees are given none — this
+            list is empty because the firm has written nothing down, not because something failed.
+          </li>
+        )}
+      </ul>
+      {isMp && (
+        <form
+          data-testid="firm-notice-form"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const { status, data } = await api<MemoRow & { error?: string }>("/api/workforce/memos", {
+              method: "POST",
+              body: { audience: "FIRM", title, body },
+            });
+            setMessage(
+              status === 201
+                ? "Written. Every employee reads it from their next piece of work onwards."
+                : `Failed: ${data?.error ?? status}`,
+            );
+            if (status === 201) {
+              setTitle("");
+              setBody("");
+              memos.reload();
+            }
+          }}
+        >
+          <h4>Write a notice</h4>
+          {/* A notice is permanent: internal_memo rejects UPDATE at the database. Saying so before
+              the box is cheaper than saying so after. */}
+          <p className="muted small">
+            A notice cannot be edited or deleted once written — a correction is a new notice. Write
+            it as something an employee can act on, in the words you would use out loud.
+          </p>
+          <div className="form-row">
+            <label>
+              Title{" "}
+              <input data-testid="firm-notice-title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            </label>
+          </div>
+          <div className="form-row">
+            <textarea
+              aria-label="What the notice says"
+              data-testid="firm-notice-body"
+              rows={3}
+              style={{ width: "100%" }}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="What every employee should know"
+            />
+          </div>
+          <button type="submit" data-testid="firm-notice-submit">
+            Write it
+          </button>
+          {message && <p>{message}</p>}
+        </form>
+      )}
+    </section>
+  );
+}
+
 function GovernancePage({ me }: { me: MeResponse }) {
   const updates = useApi<{ governance_updates: GovernanceUpdateRow[] }>("/api/governance/updates");
   const [updateType, setUpdateType] = useState("BULLETIN");
@@ -892,6 +1009,8 @@ function GovernancePage({ me }: { me: MeResponse }) {
           ))}
         </ul>
       </section>
+
+      <FirmNotices isMp={isMp} />
 
       {isMp && RECOMMENDED_GOVERNANCE.length > 0 && (
         <section className="card" data-testid="governance-recommended">
@@ -937,7 +1056,7 @@ function GovernancePage({ me }: { me: MeResponse }) {
             });
             // Was `Issued gov_01H…` — a row id handed to the operator as confirmation. What she
             // needs to know is that it landed and where to look, not its primary key.
-            setMessage(status === 201 ? "Issued. It is in the list below and every employee reads it." : `Failed: ${data?.error ?? status}`);
+            setMessage(status === 201 ? "Issued. It is in the list below, and people acknowledge it. If employees must act on it, write it as a notice above too." : `Failed: ${data?.error ?? status}`);
             if (status === 201) {
               setTitle("");
               setBody("");
