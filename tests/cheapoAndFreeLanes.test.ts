@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import { runAi } from "../src/worker/ai/runAi";
-import { firmBudgetStates, FIRM_BUDGET_ALERT_PCTS } from "../src/worker/ai/spend";
+import { firmBudgetStates, FIRM_BUDGET_ALERT_USD } from "../src/worker/ai/spend";
 
 /**
  * CHEAPO FOR EVERYTHING, FREE FRONTIER CAPACITY FOR THE IMPORTANT THINGS, AND A HARD LINE.
@@ -112,36 +112,35 @@ describe("the firm is on CHEAPO, and the caps are the ones the owner set", () =>
     const states = await firmBudgetStates(t.db && (env() as Env), "west-peek");
     const monthly = states.find((s) => s.budget_window === "MONTHLY")!;
     // 31 x $2.50 of daily cap is $77.50. A daily cap alone was never a monthly ceiling.
-    expect(monthly.cap_usd).toBe(50);
-    expect(monthly.reason).toContain("the table was empty");
+    // 0179 raised it to $75 and made $50 the NOTIFY line instead of the stop, which is the ladder
+    // the owner actually set: she is told at $50 and the firm stops at $75.
+    expect(monthly.cap_usd).toBe(75);
+    expect(monthly.reason).toContain("$50 is where she is NOTIFIED");
   });
 
-  it("warns at the owner's own number, not at 80% of a cap ten times larger", () => {
-    // 10% of $50 is $5, which is what she expects the whole month to cost. A first warning at 80%
-    // would speak at $40 — eight times her expectation, and far too late to be information.
-    expect(FIRM_BUDGET_ALERT_PCTS[0]).toBe(10);
-    expect(FIRM_BUDGET_ALERT_PCTS).toEqual([10, 50, 80]);
+  it("warns at the owner's own numbers, in dollars, not at a percentage of a ceiling that moved", () => {
+    // These were percentages — 10/50/80 — which worked only while the ceiling was $50 and 10% of it
+    // happened to land on her $5 target. The ceiling is now $75 and 10% of it is $7.50, a number she
+    // never named. A threshold expressed as a fraction of something else moves when that thing moves.
+    expect(FIRM_BUDGET_ALERT_USD).toEqual([5, 10, 50]);
   });
 
   it("raises a WARNING before the ceiling bites, and only one per threshold", async () => {
     const e = env();
     const { raiseFirmBudgetWarning } = await import("../src/worker/ai/spend");
     const now = new Date("2026-09-17T12:00:00.000Z");
-    await raiseFirmBudgetWarning(e, "west-peek", "MONTHLY", 50, 6.2, now);
-    await raiseFirmBudgetWarning(e, "west-peek", "MONTHLY", 50, 7.4, now);
+    await raiseFirmBudgetWarning(e, "west-peek", "MONTHLY", 75, 6.2, now);
+    await raiseFirmBudgetWarning(e, "west-peek", "MONTHLY", 75, 7.4, now);
     const alerts = await t.db
-      .prepare("SELECT threshold_pct, severity, observed_usd FROM cost_alert WHERE scope_type = 'FIRM' AND scope_id = 'west-peek'")
-      .all<{ threshold_pct: number; severity: string; observed_usd: number }>();
+      .prepare("SELECT severity, observed_usd FROM cost_alert WHERE scope_type = 'FIRM' AND scope_id = 'west-peek'")
+      .all<{ severity: string; observed_usd: number }>();
     expect(alerts.results.length).toBe(1);
-    expect(alerts.results[0]!.threshold_pct).toBe(10);
     expect(alerts.results[0]!.severity).toBe("WARNING");
 
     // A second, higher threshold is a separate fact and gets its own alert.
-    await raiseFirmBudgetWarning(e, "west-peek", "MONTHLY", 50, 26, now);
-    const after = await t.db
-      .prepare("SELECT threshold_pct FROM cost_alert WHERE scope_type = 'FIRM' ORDER BY threshold_pct")
-      .all<{ threshold_pct: number }>();
-    expect(after.results.map((r) => r.threshold_pct)).toEqual([10, 50]);
+    await raiseFirmBudgetWarning(e, "west-peek", "MONTHLY", 75, 12, now);
+    const after = await t.db.prepare("SELECT dedupe_key FROM cost_alert WHERE scope_type = 'FIRM'").all<{ dedupe_key: string }>();
+    expect(after.results.map((r) => r.dedupe_key.split(":").pop()).sort()).toEqual(["USD10", "USD5"]);
   });
 });
 

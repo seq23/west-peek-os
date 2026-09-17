@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { legacyCostModeFor, translateLegacyCostMode } from "../../shared/ai/spendLever";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -173,7 +174,28 @@ const surgeSchema = z.object({
 });
 
 const budgetUpdateSchema = z.object({
-  cost_mode: z.enum(["NORMAL", "CHEAPO", "CRITICAL_ONLY", "STRATEGIC_SURGE"]),
+  /**
+   * THE ONE LEVER SHE TOUCHES. Optional, because `cost_mode` below is still accepted from older
+   * clients and translated — see the resolution in the handler.
+   */
+  spend_lever: z.enum(["FREE_ONLY", "MODERATE", "OPEN"]).optional(),
+  /**
+   * "What work runs at all", which is NOT a spend level and now has its own field. Optional and
+   * defaulting to false, so a caller that does not mention it does not accidentally defer the
+   * firm's work as a side effect of changing how much it spends.
+   */
+  defer_non_critical: z.boolean().optional(),
+  /**
+   * LEGACY, STILL ACCEPTED, NO LONGER CONSULTED BY ROUTING.
+   *
+   * Anything still sending one of these four values keeps working: the value is TRANSLATED to a
+   * lever position (and, for CRITICAL_ONLY, to the separate defer flag) by
+   * `translateLegacyCostMode`, rather than being ignored or refused. `spend_lever` wins when both
+   * are sent, because an explicit new-world instruction is not ambiguous.
+   *
+   * Optional now: a caller that sends only `spend_lever` should not have to name a dead field.
+   */
+  cost_mode: z.enum(["NORMAL", "CHEAPO", "CRITICAL_ONLY", "STRATEGIC_SURGE"]).optional(),
   privacy_mode: z.enum(["LOCAL", "FRONTIER", "LOCKDOWN"]),
   daily_cap_usd: z.number().min(0),
   per_run_cap_usd: z.number().min(0),
@@ -203,9 +225,29 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
   const parsed = budgetUpdateSchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   const input = parsed.data;
+  if (input.spend_lever === undefined && input.cost_mode === undefined) {
+    return json({ error: "invalid_input", detail: "say which way the lever goes: spend_lever is one of FREE_ONLY, MODERATE, OPEN" }, { status: 400 });
+  }
   if (input.cost_mode === "STRATEGIC_SURGE" && !input.strategic_surge) {
     return json({ error: "invalid_input", detail: "STRATEGIC_SURGE requires a strategic_surge record (purpose/owner/budget/end)" }, { status: 400 });
   }
+
+  /*
+   * ── RESOLVING THE TWO WORLDS, AND THE ARROW ONLY POINTS ONE WAY ─────────────────────────────
+   *
+   * `spend_lever` is the control. `cost_mode` is translated INTO it when that is all a caller sent,
+   * and the `cost_mode` actually written to the row is then DERIVED from the resolved lever so the
+   * NOT NULL column stays truthful for any reader that has not been migrated.
+   *
+   * What it is NOT is a second input to routing. Nothing in runAi.ts reads the column any more, and
+   * `scripts/validate/one-lever-not-four.mjs` fails the build if anything starts to again — because
+   * "four values answering three questions" is not a thing you fix once, it is a thing that grows
+   * back the first time somebody needs a fifth behaviour and the enum is right there.
+   */
+  const legacy = translateLegacyCostMode(input.cost_mode ?? "NORMAL", input.honours_pins, input.prefers_frontier);
+  const lever = input.spend_lever ?? legacy.lever;
+  const deferNonCritical = input.defer_non_critical ?? (input.spend_lever ? false : legacy.deferNonCritical);
+  const costModeToStore = legacyCostModeFor(lever);
 
   const actor = actorFromIdentity(ctx.identity!);
   const firmScope = actor.firmScopes[0] ?? "west-peek";
@@ -246,19 +288,21 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
 
     const id = `bp_${crypto.randomUUID()}`;
     await ctx.env.WP_OS_DB.prepare(
-      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, strategic_surge_json, honours_pins, prefers_frontier, set_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, strategic_surge_json, honours_pins, prefers_frontier, spend_lever, defer_non_critical, set_by)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
     )
       .bind(
         id,
         firmScope,
-        input.cost_mode,
+        costModeToStore,
         input.privacy_mode,
         input.daily_cap_usd,
         input.per_run_cap_usd,
         input.strategic_surge ? JSON.stringify(input.strategic_surge) : null,
         input.honours_pins ? 1 : 0,
         input.prefers_frontier ? 1 : 0,
+        lever,
+        deferNonCritical ? 1 : 0,
         actor.firmUserId!,
       )
       .run();
@@ -277,7 +321,12 @@ export async function handleUpdateAiBudget(ctx: RouteContext): Promise<Response>
       objectId: id,
       firmScope,
       payload: {
-        cost_mode: input.cost_mode,
+        spend_lever: lever,
+        defer_non_critical: deferNonCritical,
+        // Recorded when a caller sent one, so "who was still using the old field" is a query.
+        legacy_cost_mode_sent: input.cost_mode ?? null,
+        legacy_translation: input.spend_lever ? null : legacy.note,
+        cost_mode: costModeToStore,
         privacy_mode: input.privacy_mode,
         daily_cap_usd: input.daily_cap_usd,
         per_run_cap_usd: input.per_run_cap_usd,

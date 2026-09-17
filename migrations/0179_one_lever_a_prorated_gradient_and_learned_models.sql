@@ -186,9 +186,14 @@ CREATE TABLE IF NOT EXISTS model_job_outcome (
   ai_run_id   TEXT NOT NULL,
   firm_scope  TEXT NOT NULL,
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  -- One outcome per (run, kind of outcome). A human cannot accept the same run twice, and a
+  -- One outcome per (run, model, kind of outcome). A human cannot accept the same run twice, and a
   -- re-delivery must not look like a second success.
-  UNIQUE (ai_run_id, outcome)
+  --
+  -- MODEL IS IN THE KEY, and it has to be: a run that failed over twice touched two models, and a
+  -- key of (run, outcome) alone would silently keep the first REWORKED row and drop the second —
+  -- the second model's failure would vanish into an INSERT OR IGNORE. That is exactly the "counts
+  -- but quietly loses some" defect this table exists to replace.
+  UNIQUE (ai_run_id, model, outcome)
 );
 CREATE INDEX IF NOT EXISTS idx_model_job_outcome_cell ON model_job_outcome (task_kind, provider_id, model);
 
