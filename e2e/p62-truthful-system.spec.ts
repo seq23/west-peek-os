@@ -302,8 +302,12 @@ test("a spending ceiling is a partner's decision, it persists, and a cost mode a
   ).toContainText("No limit set");
   await expect(
     page.getByTestId("firm-budget-cap-MONTHLY"),
-    "the monthly ceiling migration 0178 set must be drawn, with its figure, rather than left implicit",
-  ).toContainText("50.00");
+    "the monthly ceiling the owner set must be drawn, with its figure, rather than left implicit",
+    // $75 SINCE 0179, not $50. She named two numbers where there had been one: $50 is where she is
+    // NOTIFIED with the bypass decision in front of her, and $75 is where the firm stops. A single
+    // ceiling could only be one of those, and making $50 the stop meant the first she would hear of
+    // $50 was work failing.
+  ).toContainText("75.00");
   await expect(page.getByTestId("firm-budget-none-MONTHLY")).toHaveCount(0);
 
   await page.getByTestId("firm-budget-input-MONTHLY").fill("250");
@@ -338,6 +342,15 @@ test("a spending ceiling is a partner's decision, it persists, and a cost mode a
    * every money refusal uses: the run is RECORDED, blocked, with a reason on its own row, rather
    * than throwing or silently not happening.
    */
+  /*
+   * AND THIS IS ALSO THE LIVE PROOF THAT THE OLD FIELD STILL WORKS.
+   *
+   * `cost_mode` is retired as a control — nothing about routing reads it — but the API still accepts
+   * it and TRANSLATES it rather than ignoring or refusing it. CRITICAL_ONLY never answered "how much
+   * money" at all; it answered "what work runs at all", which is now its own `defer_non_critical`
+   * field. A caller still sending the old value gets the behaviour it always meant, end to end, in
+   * a browser, which is the only place that claim is worth anything.
+   */
   const policy = await request.post("/api/ai/budget", {
     headers: MP,
     data: {
@@ -363,7 +376,7 @@ test("a spending ceiling is a partner's decision, it persists, and a cost mode a
     await expect(page.getByTestId("ai-message")).toContainText("BLOCKED_DEFERRED");
     const blockedRun = page.locator('li[data-testid^="ai-run-"]').filter({ hasText: `${marker} tidy up` }).first();
     await expect(blockedRun).toBeVisible();
-    await expect(blockedRun).toContainText("cost_mode_critical_only");
+    await expect(blockedRun).toContainText("defer_non_critical");
 
     // NOTHING WAS BOUGHT, and the spend definition says so: a refused run counts as nothing,
     // because nothing was bought.
@@ -372,7 +385,7 @@ test("a spending ceiling is a partner's decision, it persists, and a cost mode a
     };
     const mine = run.runs.find((r) => r.purpose.includes(`${marker} tidy up`))!;
     expect(mine.status).toBe("BLOCKED_DEFERRED");
-    expect(mine.failure_reason).toContain("cost_mode_critical_only");
+    expect(mine.failure_reason).toContain("defer_non_critical");
 
     // Work the firm HAS decided is critical still runs — a ceiling is a priority, not a shutdown.
     const critical = await request.post("/api/ai/run", {
@@ -388,13 +401,13 @@ test("a spending ceiling is a partner's decision, it persists, and a cost mode a
   } finally {
     /*
      * PUT THE FIRM BACK. Every spec after this one drives the same database, and leaving the firm in
-     * CRITICAL_ONLY would refuse their runs for a reason that has nothing to do with them — which is
+     * deferring non-critical work would refuse their runs for a reason that has nothing to do with them — which is
      * the state this suite's README warns about: "anything a spec switches off is switched off for
      * everything after it".
      */
     await request.post("/api/ai/budget", {
       headers: MP,
-      data: { cost_mode: "NORMAL", privacy_mode: "LOCKDOWN", daily_cap_usd: 25, per_run_cap_usd: 5 },
+      data: { spend_lever: "MODERATE", defer_non_critical: false, privacy_mode: "LOCKDOWN", daily_cap_usd: 25, per_run_cap_usd: 5 },
     });
     await request.post("/api/ai/firm-budget", {
       headers: MP,

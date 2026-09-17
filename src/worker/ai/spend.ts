@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { periodStart } from "./routing";
+import { evaluateSpend, LADDER, type SpendBehaviour, type SpendLever } from "../../shared/ai/spendLever";
 
 /**
  * ONE definition of what the firm has spent. Everything that puts a spend figure on a screen, or
@@ -255,17 +256,35 @@ export async function firmBudgetStates(env: Env, firmScope: string, now: Date = 
 }
 
 /**
- * Thresholds at which month-to-date spend becomes worth saying out loud, as a percentage of the
- * ceiling. 10% of the $50 cap is $5 — the figure the owner actually expects the month to cost, so
- * crossing it means the month is going differently from the plan while there is still a month left
- * to do something about it.
+ * THE OWNER'S LADDER, IN DOLLARS, because that is how she stated it.
+ *
+ * This used to be three PERCENTAGES of the ceiling — 10/50/80 — which worked only while the ceiling
+ * was $50 and 10% of it happened to land on her $5 target. The ceiling is now $75, and 10% of $75
+ * is $7.50, a number she never named. A threshold expressed as a fraction of something else moves
+ * when that something else moves, silently, which is precisely what a warning must not do.
+ *
+ * So the thresholds are absolute and they are hers: $5 and $10 are the gradient's own lines, $50 is
+ * where she is NOTIFIED with the bypass decision attached, and $75 is where the firm stops. The
+ * `threshold_pct` column is still populated — the schema requires it — but it is now DERIVED from
+ * the dollar figure for display, not the thing being compared.
  */
-export const FIRM_BUDGET_ALERT_PCTS = [10, 50, 80] as const;
+export const FIRM_BUDGET_ALERT_USD = [LADDER.tighteningUsd, LADDER.cautiousUsd, LADDER.notifyUsd] as const;
+
+/** Severity escalates at the notify line: $50 is not the same kind of event as $5. */
+function severityFor(thresholdUsd: number): "WARNING" | "BREACH" {
+  return thresholdUsd >= LADDER.notifyUsd ? "BREACH" : "WARNING";
+}
 
 /**
- * Raise a deduped WARNING as spend approaches a firmwide ceiling. Never blocks; the block is
- * `checkFirmBudgets` itself. `INSERT OR IGNORE` on the unique dedupe key does the deduping, so this
- * costs one insert that usually does nothing.
+ * Raise a deduped alert as month-to-date spend crosses one of the owner's lines. Never blocks; the
+ * block is `checkFirmBudgets` itself. `INSERT OR IGNORE` on the unique dedupe key does the deduping,
+ * so this costs one insert that usually does nothing.
+ *
+ * AT $50 IT CARRIES THE BYPASS DECISION. Her instruction was not "tell me at $50", it was "notify
+ * her, with the bypass decision in front of her" — a notification that only says a number has been
+ * passed leaves her to go and find the control, which is how a warning becomes noise. So the $50
+ * alert is raised at BREACH severity and `notifyAtFiftyReason` states what the decision is and what
+ * happens if she does nothing.
  */
 export async function raiseFirmBudgetWarning(
   env: Env,
@@ -276,24 +295,77 @@ export async function raiseFirmBudgetWarning(
   now: Date = new Date(),
 ): Promise<void> {
   if (capUsd <= 0) return;
-  const pct = (observedUsd / capUsd) * 100;
-  const crossed = [...FIRM_BUDGET_ALERT_PCTS].reverse().find((t) => pct >= t);
+  const crossed = [...FIRM_BUDGET_ALERT_USD].reverse().find((t) => observedUsd >= t);
   if (crossed === undefined) return;
   const period = window === "MONTHLY" ? now.toISOString().slice(0, 7) : "ever";
   await env.WP_OS_DB.prepare(
     `INSERT OR IGNORE INTO cost_alert (id, scope_type, scope_id, period, threshold_pct, cap_usd, observed_usd, severity, dedupe_key)
-     VALUES (?1, 'FIRM', ?2, ?3, ?4, ?5, ?6, 'WARNING', ?7)`,
+     VALUES (?1, 'FIRM', ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
   )
     .bind(
       `calr_${crypto.randomUUID()}`,
       firmScope,
       window,
-      crossed,
+      // Derived for the column, not the comparison. Rounded to the integer the schema wants.
+      Math.round((crossed / capUsd) * 100),
       capUsd,
       Math.round(observedUsd * 1_000_000) / 1_000_000,
-      `FIRM:${firmScope}:${window}:${period}:PCT${crossed}`,
+      severityFor(crossed),
+      `FIRM:${firmScope}:${window}:${period}:USD${crossed}`,
     )
     .run();
+}
+
+/**
+ * The $50 notification, in the words she needs to decide with. Exported so the page, the alert list
+ * and any future delivery channel print the same sentence rather than three glosses of it.
+ */
+export function notifyAtFiftyReason(observedUsd: number): string {
+  return (
+    `The firm has spent $${observedUsd.toFixed(2)} this month. You asked to be told at $${LADDER.notifyUsd}. ` +
+    `Nothing has stopped: work continues until $${LADDER.hardStopUsd}, where it stops automatically. ` +
+    `The decision in front of you is whether to grant a bypass now — a bypass names a higher ceiling, a reason and an ` +
+    `expiry, and it lapses on its own. Doing nothing is a real choice and it means the firm stops at $${LADDER.hardStopUsd}.`
+  );
+}
+
+// ── Bypass: an event with an expiry and a name ──────────────────────────────────────────────
+
+export interface SpendBypassRow {
+  id: string;
+  firm_scope: string;
+  budget_window: FirmBudgetWindow;
+  ceiling_cents: number;
+  reason: string;
+  granted_by: string;
+  expires_at: string;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+/**
+ * The bypass in force right now, or null.
+ *
+ * STRATEGIC_SURGE was a LEVER POSITION, which meant "lift the caps" was a state somebody could
+ * leave the firm in by forgetting about it — and the code that read it had to re-validate an
+ * expiry, an owner and a budget out of a JSON blob on every call, treating a malformed one as
+ * NORMAL. A bypass is a row with those as columns: unexpired, unrevoked, highest ceiling wins, and
+ * it lapses without anybody remembering to undo it.
+ */
+export async function liveBypass(
+  env: Env,
+  firmScope: string,
+  window: FirmBudgetWindow,
+  now: Date = new Date(),
+): Promise<SpendBypassRow | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT * FROM spend_bypass
+      WHERE firm_scope = ?1 AND budget_window = ?2 AND revoked_at IS NULL AND expires_at > ?3
+      ORDER BY ceiling_cents DESC, created_at DESC LIMIT 1`,
+  )
+    .bind(firmScope, window, now.toISOString())
+    .first<SpendBypassRow>();
+  return row ?? null;
 }
 
 export interface FirmBudgetVerdict {
@@ -355,11 +427,60 @@ export async function checkFirmBudgets(
      */
     await raiseFirmBudgetWarning(env, firmScope, w, cap, wouldBe, now);
     if (wouldBe > cap) {
+      /*
+       * THE HARD STOP IS AUTOMATIC, AND THE BYPASS IS A SEPARATE DECISION SOMEBODY TOOK.
+       *
+       * $75 is not a lever position she selects — it is where the firm stops, on its own, because
+       * she said so once. What she can do is decide, at a moment, for a reason, until a time, that
+       * this month may go further; that decision is a `spend_bypass` row and it is consulted HERE
+       * rather than folded into the ceiling, so the ceiling she set stays the number she set and
+       * the override stays visible as an override.
+       *
+       * Checked only on the failing path. A firm with no bypass — which is every firm, almost
+       * always — pays nothing for this.
+       */
+      const bypass = await liveBypass(env, firmScope, w, now);
+      if (bypass) {
+        const bypassCap = centsToUsd(bypass.ceiling_cents);
+        if (wouldBe <= bypassCap) continue;
+        return {
+          ok: false,
+          reason:
+            `firm_${w.toLowerCase()}_cap_exceeded:${wouldBe.toFixed(6)}>${bypassCap.toFixed(2)} ` +
+            `(the $${cap.toFixed(2)} ceiling is bypassed until ${bypass.expires_at} by ${bypass.granted_by}, to $${bypassCap.toFixed(2)}, and that is exceeded too)`,
+        };
+      }
       return {
         ok: false,
-        reason: `firm_${w.toLowerCase()}_cap_exceeded:${wouldBe.toFixed(6)}>${cap.toFixed(2)}`,
+        reason:
+          `firm_${w.toLowerCase()}_cap_exceeded:${wouldBe.toFixed(6)}>${cap.toFixed(2)} ` +
+          `(this is the automatic stop, not a setting. A bypass names a higher ceiling, a reason and an expiry, and lapses on its own.)`,
       };
     }
   }
   return { ok: true };
+}
+
+// ── Where the firm is on the gradient ───────────────────────────────────────────────────────
+
+/**
+ * WHAT THE FIRM IS ACTUALLY DOING RIGHT NOW: the lever she set, plus — inside MODERATE only — where
+ * this month's spend against this month's elapsed time has put it on the gradient.
+ *
+ * ONE FUNCTION, so the page, the router and the run record cannot disagree about where she is. The
+ * arithmetic itself is pure and lives in shared/ai/spendLever.ts; this is only the read of what the
+ * month has cost, through `firmSpend`, which is the same figure every ceiling is measured against.
+ *
+ * HER HAND ALWAYS WINS, and nothing here writes. The gradient can never move `spend_lever`: if she
+ * sets FREE_ONLY it stays free at $0 spent, and if she sets OPEN it stays open at $40. This decides
+ * behaviour BETWEEN her instructions and nothing else.
+ */
+export async function currentSpendBehaviour(
+  env: Env,
+  firmScope: string,
+  lever: SpendLever,
+  now: Date = new Date(),
+): Promise<SpendBehaviour> {
+  const spend = await firmSpend(env, firmScope, "THIS_MONTH", now);
+  return evaluateSpend(lever, spend.total_usd, now);
 }

@@ -117,6 +117,15 @@ jobs:
       - name: Everything she says reaches a thinking model
         run: npm run validate:instructions
 
+      # ONE LEVER, NOT FOUR. `cost_mode` held four values answering three unrelated questions, and
+      # 17 Sep 2026's near-miss came straight out of that: CHEAPO meant "spend less" and, because
+      # the same column also answered "how good", it ignored preferredModel — which would have sent
+      # all eight live-search calls to a model with no web access. That model does not error; it
+      # answers from memory. The column still exists for the archive, so this fails the build if a
+      # routing decision ever reads it again, and equally if the new lever stops being consulted.
+      - name: How much money and how good are different decisions
+        run: npm run validate:one-lever
+
       - name: Build client
         run: npm run build
 

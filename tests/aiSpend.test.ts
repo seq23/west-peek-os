@@ -7,7 +7,7 @@ import { runAi } from "../src/worker/ai/runAi";
 import { firmSpend } from "../src/worker/ai/spend";
 import { acceptQuarantinedOutput, discardQuarantinedOutput } from "../src/worker/services/aiRuns";
 import { runHealthChecks } from "../src/worker/services/health";
-import { SPEND_POSTURES, postureFor } from "../src/shared/ai/spendPosture";
+import { SPEND_LEVERS, leverDef, leverFromPolicy } from "../src/shared/ai/spendLever";
 
 /**
  * Item 21 — the Cockpit overhaul. Three defects the operator found on the deployed system, and one
@@ -144,23 +144,34 @@ afterAll(async () => {
   await disposeTestDb(t);
 });
 
-// ── 1. Two postures that were one policy ──
+// ── 1. One lever, three positions, each a distinct stored value ──
 
-describe("the spend lever has four settings and four behaviours", () => {
-  it("gives every posture a distinct stored policy — the defect was two of them being identical", () => {
-    const signatures = SPEND_POSTURES.map((p) => `${p.costMode}|${p.honoursPins}|${p.prefersFrontier}`);
-    expect(new Set(signatures).size).toBe(SPEND_POSTURES.length);
+describe("the spend lever has three positions and each one is stored as itself", () => {
+  /*
+   * THE DEFECT THIS REPLACES, TWICE OVER.
+   *
+   * Four postures were encoded as a cost_mode plus two booleans, and two of them — "Balanced" and
+   * "Best available" — wrote byte-identical rows, so choosing the expensive one gave the cheap
+   * behaviour and the page then told the partner they were on Balanced. The fix at the time was a
+   * third column. The fix now is that the position is stored AS ITSELF, in one field, so there is
+   * no combination to collide and nothing to read back through a lookup table.
+   */
+  it("stores each position as one distinct value — there is no combination left to collide", () => {
+    const keys = SPEND_LEVERS.map((l) => l.key);
+    expect(new Set(keys).size).toBe(SPEND_LEVERS.length);
+    expect(keys).toEqual(["FREE_ONLY", "MODERATE", "OPEN"]);
   });
 
-  it("reads every stored policy back as the posture that wrote it", () => {
-    // The visible half of the same bug: choosing "Best available" showed "Balanced" as current,
-    // because the two were indistinguishable once written.
-    for (const p of SPEND_POSTURES) {
-      expect(postureFor(p.costMode, p.honoursPins, p.prefersFrontier), p.key).toBe(p.key);
+  it("reads every stored position back as itself, and every position has a stated downside", () => {
+    for (const l of SPEND_LEVERS) {
+      expect(leverFromPolicy({ spend_lever: l.key }), l.key).toBe(l.key);
+      expect(leverDef(l.key).label, l.key).toBe(l.label);
+      // A lever that only advertises its upside is how the brief got quietly wrecked the first time.
+      expect(l.tradeoff.length, l.key).toBeGreaterThan(20);
     }
   });
 
-  it("sends unpinned work to the dearest model under 'best available' and the cheapest under 'balanced'", async () => {
+  it("sends unpinned work to the dearest model at OPEN and the cheapest when economising", async () => {
     await enableProvider("prov_openai");
     await enableProvider("prov_google");
 
@@ -241,7 +252,7 @@ describe("spend has exactly one definition", () => {
 // ── 3. The firmwide ceiling: persists, and binds ──
 
 describe("the firm can set what it will spend, and the number stops work", () => {
-  it("ships with the monthly ceiling migration 0178 set, and invents nothing beyond it", async () => {
+  it("ships with the monthly ceiling the owner set, and invents nothing beyond it", async () => {
     const res = await call<{ firm_budgets: Array<{ budget_window: string; cap_usd: number | null; reason: string | null }> }>("/api/ai/cost", MP);
     expect(res.body.firm_budgets.map((b) => b.budget_window).sort()).toEqual(["ALL_TIME", "MONTHLY"]);
     /*
@@ -251,8 +262,14 @@ describe("the firm can set what it will spend, and the number stops work", () =>
      * rows in it reads as protection and provides none.
      */
     const monthly = res.body.firm_budgets.find((b) => b.budget_window === "MONTHLY")!;
-    expect(monthly.cap_usd).toBe(50);
-    expect(monthly.reason).toContain("the table was empty");
+    /*
+     * $75, NOT $50, SINCE 0179. The owner named two numbers where 0178 had one, and they do
+     * different jobs: $50 is where she is NOTIFIED with the bypass decision in front of her, and
+     * $75 is where the firm stops. A single ceiling could only ever be one of those, and making
+     * $50 the stop meant the first she would hear of $50 was work failing.
+     */
+    expect(monthly.cap_usd).toBe(75);
+    expect(monthly.reason).toContain("$50 is where she is NOTIFIED");
     // ALL_TIME is still null, and stays null: nothing is invented for a window nobody set.
     expect(res.body.firm_budgets.find((b) => b.budget_window === "ALL_TIME")!.cap_usd).toBeNull();
   });
@@ -271,16 +288,18 @@ describe("the firm can set what it will spend, and the number stops work", () =>
       cap_cents: 9000,
       reason: "raised for the month",
     });
-    // 3, not 2: migration 0178 wrote version 1 when it gave this firm its first monthly ceiling.
-    expect(second.body.budget.version_no).toBe(3);
+    // 4, not 2: 0178 wrote version 1 giving this firm its first monthly ceiling, and 0179 wrote
+    // version 2 raising it to $75. A migration that raises a ceiling is itself a version.
+    expect(second.body.budget.version_no).toBe(4);
 
     const read = await call<{ firm_budgets: Array<{ budget_window: string; cap_usd: number | null; version_no: number | null }> }>("/api/ai/cost", MP);
     const monthly = read.body.firm_budgets.find((b) => b.budget_window === "MONTHLY")!;
     expect(monthly.cap_usd).toBe(90);
-    expect(monthly.version_no).toBe(3);
+    expect(monthly.version_no).toBe(4);
     // The earlier version is still on the record — a budget is a versioned policy, not a field.
     const versions = await t.db.prepare("SELECT COUNT(*) AS n FROM firm_spend_budget WHERE budget_window = 'MONTHLY'").first<{ n: number }>();
-    expect(versions!.n).toBe(3);
+    // Four rows: 0178's first ceiling, 0179's raise to $75, and the two this test wrote.
+    expect(versions!.n).toBe(4);
   });
 
   it("refuses a ceiling below what has already been spent, and says both figures", async () => {

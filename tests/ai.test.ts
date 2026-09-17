@@ -398,7 +398,10 @@ describe("6. CRITICAL_ONLY and CHEAPO", () => {
     await setPolicy({ cost_mode: "CRITICAL_ONLY", privacy_mode: "LOCAL", daily_cap_usd: 100, per_run_cap_usd: 100 });
     const deferred = await run({ purpose: "summarize this casual note" });
     expect(deferred.run.status).toBe("BLOCKED_DEFERRED");
-    expect(deferred.run.failure_reason).toContain("cost_mode_critical_only");
+    // The reason renamed with the field. CRITICAL_ONLY answered "what work runs at all", which is
+    // not a spend level, so it became its own column — and a policy row still carrying the old
+    // value is still honoured, which is what this line proves.
+    expect(deferred.run.failure_reason).toContain("defer_non_critical");
 
     const critical = await run({ purpose: "compliance deadline review" });
     expect(critical.run.status).toBe("COMPLETED");
@@ -407,7 +410,7 @@ describe("6. CRITICAL_ONLY and CHEAPO", () => {
     expect(flagged.run.status).toBe("COMPLETED");
   });
 
-  it("CHEAPO selects the cheapest adequate model; NORMAL honors a model preference", async () => {
+  it("NO LONGER SILENTLY IGNORES preferredModel — which is the near-miss this change exists to fix", async () => {
     await setAllProviders(0);
     await t.db.prepare("UPDATE provider_registry SET enabled = 1 WHERE id = 'prov_openai'").run();
     // Since 0177 a price alone no longer adopts a model (selection requires ACTIVE), and a price
@@ -418,10 +421,24 @@ describe("6. CRITICAL_ONLY and CHEAPO", () => {
       )
       .run();
 
+    /*
+     * THIS TEST USED TO ASSERT THE DEFECT.
+     *
+     * It read: "CHEAPO selects the cheapest adequate model", and it passed, because CHEAPO ignored
+     * `preferredModel` outright — gpt-4o was asked for and gpt-4o-mini was used. That is the exact
+     * behaviour that would have sent all eight live-search calls to a model with no web access,
+     * which does not error: it answers fluently, from memory, about this morning's market.
+     *
+     * A stored CHEAPO row now reads as the MODERATE lever (it honoured pins, so it was the "as
+     * cheap as sensible" posture, not the free-only one), and at MODERATE on pace a caller's stated
+     * preference is honoured. Spending less is no longer allowed to also mean "any model will do".
+     * The downgrade that IS still wanted — unpinned, unprotected work at the cautious end of the
+     * gradient — is proven in tests/spendGradient.test.ts against the gradient that governs it.
+     */
     await setPolicy({ cost_mode: "CHEAPO", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
     const cheapo = await run({ budgetContext: { preferredModel: "gpt-4o" } }, { fetchImpl: stubFetch().fetchImpl });
     expect(cheapo.run.status).toBe("COMPLETED");
-    expect(cheapo.run.model).toBe("gpt-4o-mini"); // cheaper than gpt-4o per pricing snapshot
+    expect(cheapo.run.model).toBe("gpt-4o");
 
     await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
     const normal = await run({ budgetContext: { preferredModel: "gpt-4o" } }, { fetchImpl: stubFetch().fetchImpl });
@@ -430,51 +447,46 @@ describe("6. CRITICAL_ONLY and CHEAPO", () => {
   });
 });
 
-// ── 7. Strategic Surge ──
+// ── 7. STRATEGIC_SURGE is retired; a cap lift is a bypass event ──
 
-describe("7. STRATEGIC_SURGE window semantics", () => {
-  it("within the window, caps lift to the surge budget; after expiry, NORMAL applies", async () => {
+describe("7. a stored STRATEGIC_SURGE no longer lifts anything", () => {
+  it("is inert: the per-run cap holds, and the run is refused as it would be on any other policy", async () => {
     await setAllProviders(0);
     await t.db.prepare("UPDATE provider_registry SET enabled = 1 WHERE id = 'prov_openai'").run();
-    // Since 0177 a price alone no longer adopts a model (selection requires ACTIVE), and a price
-    // nobody read takes no part in a cost comparison. A fixture has to say both.
     await t.db
       .prepare(
         "UPDATE provider_model SET status = 'ACTIVE', pricing_state = 'SOURCED', pricing_sourced_at = '2026-09-17T00:00:00.000Z' WHERE provider_id = 'prov_openai'",
       )
       .run();
     const futureEnd = new Date(Date.now() + 3_600_000).toISOString();
-    const pastEnd = new Date(Date.now() - 3_600_000).toISOString();
 
-    // Unexpired, fully-specified surge: the tiny per-run cap is lifted.
+    /*
+     * THE OLD TEST ASSERTED THAT THIS LIFTED BOTH CAPS TO THE SURGE BUDGET, and that is precisely
+     * what was wrong with it: one JSON blob in one policy row could turn a $0.75 per-run cap into a
+     * $100 one for every call in the firm, for as long as nobody noticed the row was still there.
+     *
+     * A surge was a LEVER POSITION, so it was a state somebody could leave the firm in by
+     * forgetting about it, and its expiry had to be re-parsed and re-validated on every single call
+     * — with a malformed blob degrading silently to NORMAL, a safety feature whose failure mode was
+     * indistinguishable from its success.
+     *
+     * It is gone. A perfectly well-formed, unexpired surge record now lifts nothing: the caps the
+     * owner set are the caps that apply. Lifting the monthly CEILING is a `spend_bypass` row —
+     * a reason, a named person and an expiry — and that is proven in tests/spendGradient.test.ts.
+     */
     await setPolicy({
       cost_mode: "STRATEGIC_SURGE",
       privacy_mode: "FRONTIER",
       daily_cap_usd: 0.0001,
       per_run_cap_usd: 0.0001,
-      strategic_surge: { purpose: "IC sprint", owner: "Scooter Taylor", budget: 100, start: pastEnd, end: futureEnd, success_metric: "memo shipped", kill_condition: "scope creep" },
+      strategic_surge: { purpose: "IC sprint", owner: "Scooter Taylor", budget: 100, end: futureEnd, success_metric: "memo shipped" },
     });
-    const inWindow = await run({}, { fetchImpl: stubFetch().fetchImpl });
-    expect(inWindow.run.status).toBe("COMPLETED");
-    expect(inWindow.run.cost_mode).toBe("STRATEGIC_SURGE");
-    expect(JSON.parse(inWindow.run.cost_estimate_json).surge_applied).toBe(true);
-
-    // Same policy, but the clock is past the surge end → surge ignored (NORMAL).
-    const afterExpiry = await run({}, { fetchImpl: stubFetch().fetchImpl, now: new Date(Date.now() + 7_200_000) });
-    expect(afterExpiry.run.status).toBe("BUDGET_BLOCKED");
-    expect(afterExpiry.run.cost_mode).toBe("NORMAL");
-
-    // Surge missing required fields (no owner) → treated as NORMAL (fail closed).
-    await setPolicy({
-      cost_mode: "STRATEGIC_SURGE",
-      privacy_mode: "FRONTIER",
-      daily_cap_usd: 0.0001,
-      per_run_cap_usd: 0.0001,
-      strategic_surge: { purpose: "incomplete surge", budget: 100, end: futureEnd },
-    });
-    const invalid = await run({}, { fetchImpl: stubFetch().fetchImpl });
-    expect(invalid.run.status).toBe("BUDGET_BLOCKED");
-    expect(invalid.run.cost_mode).toBe("NORMAL");
+    const attempted = await run({}, { fetchImpl: stubFetch().fetchImpl });
+    expect(attempted.run.status).toBe("BUDGET_BLOCKED");
+    expect(attempted.run.failure_reason).toContain("per_run_cap_exceeded");
+    // And the run records the lever it was actually on, not the retired enum value.
+    expect(attempted.run.cost_mode).toBe("NORMAL");
+    expect(JSON.parse(attempted.run.cost_estimate_json).surge_applied).toBe(false);
   });
 });
 

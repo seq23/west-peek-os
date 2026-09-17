@@ -32,6 +32,7 @@
     "validate:employee-sender": "node scripts/validate/employee-sender-domain.mjs && node scripts/validate/employee-sender-domain.mjs --self-test",
     "validate:instructions": "node scripts/validate/an-instruction-reaches-a-model.mjs && node scripts/validate/an-instruction-reaches-a-model.mjs --self-test",
     "validate:mail-authority": "node scripts/validate/mail-assignment-needs-authentication.mjs && node scripts/validate/mail-assignment-needs-authentication.mjs --self-test",
+    "validate:one-lever": "node scripts/validate/one-lever-not-four.mjs && node scripts/validate/one-lever-not-four.mjs --self-test",
     "validate:network-boundary": "node scripts/validate/no-cross-repo-coupling.mjs && node scripts/validate/no-cross-repo-coupling.mjs --self-test",
     "validate:partner-email": "node scripts/validate/partner-email-boundary.mjs && node scripts/validate/partner-email-boundary.mjs --self-test",
     "validate:sql": "node scripts/validate/sql-against-schema.mjs && node scripts/validate/sql-against-schema.mjs --self-test",

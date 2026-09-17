@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { readableDate, shortDate } from "../lib/dates";
 import { api, useApi, type MeResponse } from "../lib/api";
-import { SPEND_POSTURES, postureDef, postureFor } from "@shared/ai/spendPosture";
+import { SPEND_LEVERS, leverDef } from "@shared/ai/spendLever";
 import { PrivacyModePanel } from "./PrivacyModePanel";
 
 /**
@@ -74,6 +74,27 @@ interface QuarantineResponse {
 interface CostResponse {
   period: string;
   firm_budgets: FirmBudgetState[];
+  spend_lever: {
+    lever: "FREE_ONLY" | "MODERATE" | "OPEN";
+    position: "NORMAL" | "TIGHTENING" | "CAUTIOUS";
+    gradient_applies: boolean;
+    why: string;
+    capability_cost: string;
+    month_to_date_usd: number;
+    month_elapsed_pct: number;
+    tightening_allowance_usd: number;
+    cautious_allowance_usd: number;
+    projected_month_end_usd: number;
+    approaching: null | "TIGHTENING" | "CAUTIOUS" | "NOTIFY" | "HARD_STOP";
+    ladder: { tightening_usd: number; cautious_usd: number; notify_usd: number; hard_stop_usd: number };
+    notification: string | null;
+    bypass: null | { ceiling_usd: number; reason: string; granted_by: string; expires_at: string };
+  };
+  model_evidence: {
+    min_runs_for_evidence: number;
+    note: string;
+    cells: Array<{ taskKind: string; model: string; succeeded: number; reworked: number; rejected: number; decided: number; acceptanceRate: number | null; verdict: string }>;
+  };
   firm_policy: {
     cost_mode: string;
     privacy_mode: string;
@@ -658,59 +679,129 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
             allowed to override a pin, on the record, with the consequence stated rather than
             discovered in a thin brief.
           */}
+          {/*
+            THE $50 NOTIFICATION, ABOVE EVERYTHING, CARRYING THE DECISION.
+
+            Her instruction was not "tell me at $50", it was "notify her, with the bypass decision
+            in front of her". A banner saying a number has been passed leaves her to go and find
+            the control, which is how a warning becomes noise. This says what the choice is, what
+            happens if she does nothing, and offers the bypass in the same place.
+          */}
+          {cost.data.spend_lever.notification && (
+            <section className="card spend-notify" data-testid="spend-notification">
+              <h3>You asked to be told at ${cost.data.spend_lever.ladder.notify_usd}</h3>
+              <p>{cost.data.spend_lever.notification}</p>
+              {cost.data.spend_lever.bypass && (
+                <p className="muted small" data-testid="spend-bypass-live">
+                  A bypass to ${cost.data.spend_lever.bypass.ceiling_usd.toFixed(2)} is in force until{" "}
+                  {readableDate(cost.data.spend_lever.bypass.expires_at)}, granted by{" "}
+                  {cost.data.spend_lever.bypass.granted_by}: {cost.data.spend_lever.bypass.reason}. It lapses on its own.
+                </p>
+              )}
+            </section>
+          )}
+
+          {/*
+            WHERE SHE IS ON THE GRADIENT, AND WHY — visible without asking, and BEFORE it bites.
+
+            `why` and `capability_cost` are printed verbatim from shared/ai/spendLever.ts, the same
+            sentences the router records on the run. The page does not reword them: three glosses of
+            one number is how this firm once had three different answers to "what has it spent".
+          */}
+          <section className="card spend-gradient" data-testid="spend-gradient">
+            <div className="home-section-head">
+              <h3>Where the month is</h3>
+              <span className="muted small" data-testid="gradient-position">
+                {cost.data.spend_lever.gradient_applies
+                  ? { NORMAL: "on pace", TIGHTENING: "making cheaper choices", CAUTIOUS: "moving cautiously" }[
+                      cost.data.spend_lever.position
+                    ]
+                  : "your setting, not the gradient"}
+              </span>
+            </div>
+            <p data-testid="gradient-why">{cost.data.spend_lever.why}</p>
+            {/* WHAT IT IS COSTING HER IN CAPABILITY. A spend control that only shows dollars hides
+                the half of the trade she is actually making. */}
+            <p className="muted small" data-testid="gradient-capability-cost">
+              <strong>What this costs you:</strong> {cost.data.spend_lever.capability_cost}
+            </p>
+            <p className="muted small">
+              ${cost.data.spend_lever.month_to_date_usd.toFixed(2)} this month with{" "}
+              {cost.data.spend_lever.month_elapsed_pct}% of it gone. At this rate the month comes to $
+              {cost.data.spend_lever.projected_month_end_usd.toFixed(2)}. The ${cost.data.spend_lever.ladder.cautious_usd}{" "}
+              line sits at ${cost.data.spend_lever.cautious_allowance_usd.toFixed(2)} today because it is measured against
+              how much of the month has elapsed — ${cost.data.spend_lever.ladder.cautious_usd} spent on the 3rd and on
+              the 25th are not the same situation.
+            </p>
+            {/* APPROACHING, NOT ARRIVED. Named for the specific line ahead, so it is a fact rather
+                than a mood, and it appears before behaviour changes rather than at the moment it does. */}
+            {cost.data.spend_lever.approaching && (
+              <p className="muted small" data-testid="gradient-approaching">
+                Approaching{" "}
+                {
+                  {
+                    TIGHTENING: `the $${cost.data.spend_lever.ladder.tightening_usd} line, where unpinned routine work starts taking cheaper models`,
+                    CAUTIOUS: `the $${cost.data.spend_lever.ladder.cautious_usd} line, where routine work goes free-first and paid models are kept for protected work`,
+                    NOTIFY: `$${cost.data.spend_lever.ladder.notify_usd}, where you are notified with the bypass decision`,
+                    HARD_STOP: `the $${cost.data.spend_lever.ladder.hard_stop_usd} ceiling, where the firm stops automatically`,
+                  }[cost.data.spend_lever.approaching]
+                }
+                . Nothing has changed yet.
+              </p>
+            )}
+            {/* THE GUARANTEE, ON THE SCREEN. It is the reason an automatic gradient is safe to run
+                at all, and she should not have to take it on trust from a commit message. */}
+            <p className="muted small" data-testid="gradient-guarantee">
+              Work marked as judgement or interpretation is never downgraded at any point on this
+              gradient. It keeps its model, or it stops and says so.
+            </p>
+          </section>
+
           {isMp && (
-            <section className="card spend-lever" data-testid="spend-posture">
+            <section className="card spend-lever" data-testid="spend-lever">
               <div className="home-section-head">
                 <h3>How much to spend</h3>
-                <span className="muted small">applies to everything the firm runs</span>
+                <span className="muted small">one control; the gradient above runs inside Moderate</span>
               </div>
               <ul className="posture-list">
-                {SPEND_POSTURES.map((p) => {
-                  const current =
-                    postureFor(
-                      cost.data!.firm_policy.cost_mode,
-                      cost.data!.firm_policy.honours_pins,
-                      cost.data!.firm_policy.prefers_frontier,
-                    ) === p.key;
+                {SPEND_LEVERS.map((l) => {
+                  const current = cost.data!.spend_lever.lever === l.key;
                   return (
-                    <li key={p.key} className={current ? "posture is-current" : "posture"}>
+                    <li key={l.key} className={current ? "posture is-current" : "posture"}>
                       <button
                         type="button"
                         className="posture-pick"
                         aria-pressed={current}
-                        data-testid={`posture-${p.key}`}
+                        data-testid={`lever-${l.key}`}
                         onClick={async () => {
                           const res = await api<{ error?: string; detail?: string }>("/api/ai/budget", {
                             method: "POST",
                             body: {
-                              cost_mode: p.costMode,
+                              // ONE FIELD. The old call sent a cost_mode plus two booleans that had
+                              // to be kept consistent by whoever wrote the button.
+                              spend_lever: l.key,
                               privacy_mode: cost.data!.firm_policy.privacy_mode,
                               daily_cap_usd: cost.data!.firm_policy.daily_cap_usd,
                               per_run_cap_usd: cost.data!.firm_policy.per_run_cap_usd,
-                              honours_pins: p.honoursPins,
-                              // The bit that makes "Best available" a different setting rather than
-                              // a second button that writes the Balanced policy.
-                              prefers_frontier: p.prefersFrontier,
                             },
                           });
                           setMessage(
                             res.status === 201 || res.status === 200
-                              ? `Now on “${p.label}”. ${p.tradeoff}`
+                              ? `Now on “${l.label}”. ${l.tradeoff}`
                               : `Refused: ${res.data?.detail ?? res.data?.error ?? res.status}`,
                           );
                           cost.reload();
                         }}
                       >
                         <span className="posture-label">
-                          {p.label}
+                          {l.label}
                           {current && <span className="badge badge-ok">current</span>}
                         </span>
-                        <span className="small">{p.what}</span>
-                        <span className="muted small">{p.cost}</span>
+                        <span className="small">{l.what}</span>
                         {/* THE DOWNSIDE, ON THE CONTROL. Every one of these has one, and a lever
                             that only advertises its upside is how the brief got quietly wrecked
                             the first time. */}
-                        <span className="muted small posture-tradeoff">{p.tradeoff}</span>
+                        <span className="muted small posture-tradeoff">{l.tradeoff}</span>
                       </button>
                     </li>
                   );
@@ -784,16 +875,7 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
               spent that has produced nothing until somebody decides about it, below.
             </p>
             <p className="muted small">
-              Currently on{" "}
-              {
-                postureDef(
-                  postureFor(
-                    cost.data.firm_policy.cost_mode,
-                    cost.data.firm_policy.honours_pins,
-                    cost.data.firm_policy.prefers_frontier,
-                  ),
-                ).label
-              }
+              Currently on {leverDef(cost.data.spend_lever.lever).label}
               {", privacy "}
               {cost.data.firm_policy.privacy_mode.toLowerCase()} · today ${cost.data.firm_policy.spent_today_usd.toFixed(4)}{" "}
               of a ${cost.data.firm_policy.daily_cap_usd} daily limit

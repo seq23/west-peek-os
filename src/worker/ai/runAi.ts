@@ -16,7 +16,17 @@ import {
   recordRouting,
   type RoutingCandidate,
 } from "./routing";
-import { checkFirmBudgets, firmSpend } from "./spend";
+import { checkFirmBudgets, currentSpendBehaviour, firmSpend } from "./spend";
+import {
+  deferNonCriticalFromPolicy,
+  legacyCostModeFor,
+  leverFromPolicy,
+  protectedFromSpendPressure,
+  taskKindOf,
+  type SpendBehaviour,
+  type TaskKind,
+} from "../../shared/ai/spendLever";
+import { evidenceForTaskKind, orderByEvidence, recordModelJobOutcome } from "./modelLearning";
 import { directVendorRouteFor } from "../../shared/ai/directVendorRoute";
 import { credentialConfigured } from "../../shared/ai/providerCredentials";
 import { isProviderOutage, outageKind } from "../../shared/ai/providerFailure";
@@ -62,7 +72,16 @@ export const AI_RUN_STATUSES = [
 export type AIRunStatus = (typeof AI_RUN_STATUSES)[number];
 
 export type PrivacyMode = "LOCAL" | "FRONTIER" | "LOCKDOWN";
-export type CostMode = "NORMAL" | "CHEAPO" | "CRITICAL_ONLY" | "STRATEGIC_SURGE";
+/**
+ * THE RETIRED ENUM, narrowed to the two values anything still WRITES.
+ *
+ * `budget_policy.cost_mode` is NOT NULL and historical rows carry all four values, so the column
+ * cannot go; what can go is the pretence that it is a control. It is now derived from the lever by
+ * `legacyCostModeFor`, which emits only these two, and nothing about routing reads it.
+ * CRITICAL_ONLY and STRATEGIC_SURGE are absent from the type because nothing writes them any more —
+ * they are read, where they appear in history, through `translateLegacyCostMode`.
+ */
+export type CostMode = "NORMAL" | "CHEAPO";
 
 export interface AIRunRow {
   id: string;
@@ -85,6 +104,8 @@ export interface AIRunRow {
   trace_id: string;
   failure_reason: string | null;
   firm_scope: string;
+  /** Which of the four job kinds this call declared. Null on runs made before migration 0179. */
+  task_kind: TaskKind | null;
   created_at: string;
   completed_at: string | null;
 }
@@ -396,50 +417,30 @@ export async function getLatestBudgetPolicy(env: Env, firmScope: string): Promis
   };
 }
 
-export interface StrategicSurge {
-  purpose: string;
-  owner: string;
-  budget: number;
-  scope?: string;
-  start?: string;
-  end?: string;
-  success_metric?: string;
-  kill_condition?: string;
-}
 
 /**
- * Resolve the effective cost mode. A STRATEGIC_SURGE policy applies only while an
- * unexpired, fully-specified surge record exists (purpose + owner + budget + end);
- * an expired or malformed surge is treated as NORMAL (fail closed).
+ * ── STRATEGIC_SURGE IS RETIRED, AND THIS IS WHAT REPLACED IT ────────────────────────────────
+ *
+ * It was a LEVER POSITION meaning "lift the caps for a while", which is the wrong shape for that
+ * idea in three ways, and all three bit:
+ *
+ *   · it sat in the same enum as NORMAL and CHEAPO, so "spend more temporarily" and "spend less"
+ *     were mutually exclusive settings of one control, and choosing either was choosing both;
+ *   · it was a STATE somebody could leave the firm in by forgetting about it, since a lever stays
+ *     where it was put;
+ *   · its expiry, owner and budget lived in a JSON blob that had to be re-validated on every single
+ *     call, with a malformed one silently degrading to NORMAL — a safety feature whose failure mode
+ *     was indistinguishable from its success.
+ *
+ * A bypass is now a `spend_bypass` ROW: a decision taken at a moment, for a reason, by a named
+ * person, until a time. It lapses on its own, it is consulted only on the path where a ceiling
+ * would actually bite (see `checkFirmBudgets`), and it cannot be confused with how much the firm
+ * wants to spend in general, which is what the lever is for.
+ *
+ * `resolveEffectiveCostMode` and the `StrategicSurge` interface are gone with it. A policy row
+ * still carrying `strategic_surge_json` is simply not read: the column stays for the history, and
+ * `scripts/validate/one-lever-not-four.mjs` fails the build if any routing decision reads it again.
  */
-export function resolveEffectiveCostMode(
-  policy: BudgetPolicyRow,
-  now: Date,
-): { mode: CostMode; surge: StrategicSurge | null } {
-  if (policy.cost_mode !== "STRATEGIC_SURGE" || !policy.strategic_surge_json) {
-    return { mode: policy.cost_mode, surge: null };
-  }
-  let surge: Partial<StrategicSurge>;
-  try {
-    surge = JSON.parse(policy.strategic_surge_json) as Partial<StrategicSurge>;
-  } catch {
-    return { mode: "NORMAL", surge: null };
-  }
-  const end = surge.end ? new Date(surge.end) : null;
-  const complete =
-    typeof surge.purpose === "string" &&
-    surge.purpose.length > 0 &&
-    typeof surge.owner === "string" &&
-    surge.owner.length > 0 &&
-    typeof surge.budget === "number" &&
-    surge.budget > 0 &&
-    end !== null &&
-    !Number.isNaN(end.getTime());
-  if (!complete || !end || end.getTime() <= now.getTime()) {
-    return { mode: "NORMAL", surge: null };
-  }
-  return { mode: "STRATEGIC_SURGE", surge: surge as StrategicSurge };
-}
 
 const CRITICAL_PURPOSE = /critical|risk|deadline|\blp\b|\bic\b|deal|compliance/i;
 
@@ -576,6 +577,12 @@ interface RunRecordInput {
   firmScope: string;
   privacyMode: PrivacyMode;
   costMode: CostMode;
+  /**
+   * WHICH JOB THIS WAS, stored on the run so that an outcome recorded later — at the moment a human
+   * accepts or throws the output away — knows which (task kind, model) cell it belongs to. Without
+   * it the learning table could only ever be populated by guessing at a purpose string.
+   */
+  taskKind: TaskKind;
   providerId: string | null;
   /** Provider key for the routing record; the run row itself stores provider_id. */
   providerKey?: string | null;
@@ -593,8 +600,8 @@ async function insertRun(env: Env, rec: RunRecordInput): Promise<AIRunRow> {
     `INSERT INTO ai_run
        (id, purpose, actor_type, actor_id, ai_employee_id, capability_requirement, sensitivity,
         privacy_mode, cost_mode, provider_id, model, status, cost_estimate_json, input_hash,
-        trace_id, failure_reason, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)`,
+        trace_id, failure_reason, firm_scope, task_kind)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
   )
     .bind(
       rec.runId,
@@ -614,6 +621,7 @@ async function insertRun(env: Env, rec: RunRecordInput): Promise<AIRunRow> {
       rec.traceId,
       rec.failureReason ?? null,
       rec.firmScope,
+      rec.taskKind,
     )
   .run();
   return (await env.WP_OS_DB.prepare("SELECT * FROM ai_run WHERE id = ?1").bind(rec.runId).first<AIRunRow>())!;
@@ -828,7 +836,29 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   const now = deps.now ?? new Date();
   const firmScope = input.actor.firmScopes[0] ?? "west-peek";
   const policy = await getLatestBudgetPolicy(env, firmScope);
-  const { mode: effectiveCostMode, surge } = resolveEffectiveCostMode(policy, now);
+
+  /*
+   * ── WHERE THE FIRM IS, AND WHAT KIND OF CALL THIS IS ────────────────────────────────────────
+   *
+   * Two independent readings, and keeping them independent is the entire point of this change.
+   *
+   * `behaviour` is HOW MUCH MONEY: the lever she set, plus — inside MODERATE only — where this
+   * month's spend against this month's ELAPSED TIME has put the gradient. Computed once, here, so
+   * every branch below reads the same answer and none of them re-derives a posture from a mode
+   * name and two booleans, which is how `cost_mode` came to mean four things.
+   *
+   * `isProtected` is HOW GOOD, and it comes from the CALL SITE's own marker, never from money.
+   * This is the guarantee that makes the gradient safe to run automatically: no threshold, no
+   * month-end pressure and no lever position may downgrade a call marked judgement, interpretation
+   * or requiresSearch. Every gradient branch below asks `isProtected` first.
+   *
+   * The lever never moves the mode and the mode never moves the lever. They are two controls here
+   * for that reason and must never be merged.
+   */
+  const spendLever = leverFromPolicy(policy as unknown as Parameters<typeof leverFromPolicy>[0]);
+  const behaviour: SpendBehaviour = await currentSpendBehaviour(env, firmScope, spendLever, now);
+  const isProtected = protectedFromSpendPressure(input.budgetContext ?? {});
+  const taskKind: TaskKind = taskKindOf(input.budgetContext ?? {});
 
   const traceId = `trc_${crypto.randomUUID()}`;
   const runId = `air_${crypto.randomUUID()}`;
@@ -851,7 +881,13 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     model: null,
     input_per_mtok_usd: null,
     output_per_mtok_usd: null,
-    surge_applied: surge !== null,
+    /*
+     * Always false now. The field stays because `cost_estimate_json` is written on every historical
+     * run and a reader of the archive must still find the key it expects; a surge is no longer a
+     * thing a run can be inside. Cap lifting is a `spend_bypass` row, checked against the firmwide
+     * ceiling rather than folded into a per-run estimate.
+     */
+    surge_applied: false,
   };
 
   /*
@@ -865,7 +901,11 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     input,
     firmScope,
     privacyMode: policy.privacy_mode,
-    costMode: effectiveCostMode,
+    // DERIVED FROM THE LEVER, never consulted by it. `ai_run.cost_mode` is NOT NULL and every
+    // archived run carries it, so it keeps being written — as a description of the lever position,
+    // which is the only honest thing it can now say.
+    costMode: legacyCostModeFor(spendLever),
+    taskKind,
     inputHash,
     traceId,
     runId,
@@ -965,10 +1005,21 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     }
   }
 
-  // 1. Cost-mode gate: CRITICAL_ONLY runs only critical/risk/deadline/LP/IC/deal/
-  //    compliance purposes; everything else is deferred, not discarded.
-  if (effectiveCostMode === "CRITICAL_ONLY" && !isCriticalPurpose(input.purpose, input.budgetContext)) {
-    return { run: await blocked("BLOCKED_DEFERRED", "cost_mode_critical_only:non_critical_purpose") };
+  /*
+   * 1. "WHAT WORK RUNS AT ALL" — its own question, and now its own column.
+   *
+   * This was `cost_mode = 'CRITICAL_ONLY'`, sitting in the same enum as NORMAL and CHEAPO as though
+   * "run less work" were a spend level. It is not: it composes with every lever position, and a
+   * firm can perfectly well want MODERATE spending AND only critical work, or FREE_ONLY spending
+   * and all of it. Merging them meant choosing either was choosing both.
+   *
+   * `defer_non_critical` is read directly rather than through the lever, and the old value still
+   * works: migration 0179 set this flag on every historical CRITICAL_ONLY row, and
+   * `translateLegacyCostMode` sets it for any caller still sending that value.
+   */
+  const deferNonCritical = deferNonCriticalFromPolicy(policy as unknown as Parameters<typeof deferNonCriticalFromPolicy>[0]);
+  if (deferNonCritical && !isCriticalPurpose(input.purpose, input.budgetContext)) {
+    return { run: await blocked("BLOCKED_DEFERRED", "defer_non_critical:non_critical_purpose") };
   }
 
   // 2. Credential scrub: no credentials in LLM context, ever.
@@ -1318,7 +1369,68 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
       reasoningFilterApplied = filtered.length < judged.length;
     }
   }
-  const routingCandidates: RoutingCandidate[] = reasoningOnly;
+  /*
+   * ── FREE_ONLY: NOTHING PAID, AT ALL — AND THE ONE COLLISION, WHICH FAILS LOUDLY ─────────────
+   *
+   * At this lever position the head of the run must cost $0. That means the free lanes are eligible
+   * to WIN a selection here, which they deliberately are not anywhere else (a $0 price would
+   * otherwise make them the cheapest thing in the catalogue and quietly capture every public call
+   * in the firm). Here it is not a side effect of a zero; it is the instruction.
+   *
+   * They arrive already filtered for confidentiality — step 4b removed every training-permitting
+   * lane from `options` when the call is marked confidential — and they must clear the SAME
+   * adequacy bar the paid head would have cleared. A free model does not get to read a partner's
+   * instruction just because it costs nothing.
+   *
+   * THE COLLISION, AND SHE HAS DECIDED IT: FAIL LOUDLY.
+   *
+   * Protected work at FREE_ONLY that has no adequate free model STOPS and says so, naming the work
+   * and naming the lever. It never quietly takes a weaker model. She understands this can stop her
+   * morning brief; that is the intended behaviour, and it is the only honest resolution of two
+   * instructions that genuinely conflict — "nothing paid" and "never downgrade this". The
+   * alternative, silently using a weaker model, is the failure mode this whole file exists to
+   * prevent: the cheap tier once produced "the 30-year U.S. tax at 19 year high" and shipped it as
+   * fact, on the page the partners read first.
+   */
+  let routingCandidates: RoutingCandidate[] = reasoningOnly;
+  let freeOnlyNote = "";
+  if (behaviour.freeOnly) {
+    const freeAdequate = options
+      .filter((o) => estimateFor(o) === 0)
+      .filter((o) => credentialConfigured(env, o.provider.provider_key))
+      // The same bar, expressed against `options` because the free lanes are not in `allCandidates`.
+      .filter((o) => (requiresSearch ? isSearchGrounded(o.pricing.model) : !(isJudgement && isSearchGrounded(o.pricing.model))))
+      .filter((o) => !isInterpretation || o.pricing.supports_reasoning === 1);
+
+    if (freeAdequate.length === 0) {
+      if (isProtected) {
+        return {
+          run: await blocked(
+            "PREFLIGHT_BLOCKED",
+            `free_only_cannot_serve_protected_work:this call is marked '${taskKind}' and needs a paid model, ` +
+              `and the lever is set to FREE_ONLY. Purpose: ${input.purpose}. It has been stopped rather than ` +
+              `quietly given a weaker model. Move the lever to MODERATE to let it run.`,
+          ),
+        };
+      }
+      return {
+        run: await blocked(
+          "PREFLIGHT_BLOCKED",
+          `free_only_no_free_model_available:the lever is set to FREE_ONLY and no free model is available and adequate for this call`,
+        ),
+      };
+    }
+    routingCandidates = freeAdequate.map((o) => ({
+      providerId: o.provider.id,
+      providerKey: o.provider.provider_key,
+      model: o.pricing.model,
+      estimatedCostUsd: 0,
+      baseUrl: o.provider.base_url,
+    }));
+    freeOnlyNote =
+      ` The lever is set to Free only, so only models costing nothing were candidates` +
+      (isProtected ? `, and this protected call found one — had it not, the run would have stopped rather than been downgraded.` : `.`);
+  }
   const interpretationNote = !isInterpretation
     ? ""
     : reasoningFilterApplied
@@ -1353,19 +1465,37 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
       ordered = [];
       explanation = `machine ${input.routing!.machineId} pins ${machinePolicy.preferred_provider_key}/${machinePolicy.preferred_model}, which is not available (disabled, egress-denied, or unpriced)`;
     }
-  } else if (routePolicy && !(effectiveCostMode === "CHEAPO" && Number(policy.honours_pins ?? 1) === 0)) {
+  /*
+   * DOES A ROUTING PIN SURVIVE THE MONEY? Exactly one condition, in one place.
+   *
+   * A pin is somebody's per-task quality decision, and it stands unless the firm is genuinely
+   * economising AND this call is not protected. `behaviour.freeFirst` is true at FREE_ONLY and at
+   * the CAUTIOUS end of the gradient — the two positions where the owner said paid models are kept
+   * for protected work — and `isProtected` is the guarantee that keeps judgement, interpretation
+   * and search work out of reach of any of it.
+   *
+   * This used to read `cost_mode === "CHEAPO" && honours_pins === 0`: two columns, in two different
+   * vocabularies, expressing one idea that neither of them named.
+   */
+  } else if (routePolicy && !(behaviour.freeFirst && !isProtected)) {
     ordered = orderByPolicy(routePolicy, routingCandidates);
     explanation =
       ordered.length > 0
         ? `routing policy '${routePolicy.task_class}' v${routePolicy.version_no}: ${ordered.map((c) => `${c.providerKey}/${c.model}`).join(" → ")}${routePolicy.allow_fallback ? " (fallback allowed)" : " (no fallback)"}`
         : `routing policy '${routePolicy.task_class}' v${routePolicy.version_no} names no available candidate`;
-  } else if (routePolicy && (isJudgement || requiresSearch)) {
-    // THE ONE POSTURE THAT OVERRIDES A PIN DOES NOT OVERRIDE JUDGEMENT. "Free only" is a lever for
-    // volume; the pin on work that decides what a partner meant is a quality decision and stands.
+  } else if (routePolicy && isProtected) {
+    /*
+     * UNREACHABLE BY CONSTRUCTION, AND KEPT AS THE PROOF OF THAT.
+     *
+     * The branch above already admits every protected call, because `!(freeFirst && !isProtected)`
+     * is true whenever `isProtected` is. This exists so that if anybody ever loosens that condition,
+     * protected work still lands on its pin rather than falling through to the cheapest-available
+     * branch below — the guarantee has a second floor under it rather than resting on one boolean.
+     */
     ordered = orderByPolicy(routePolicy, routingCandidates);
     explanation =
-      `spend posture is 'free only', but routing policy '${routePolicy.task_class}' v${routePolicy.version_no} stands: ` +
-      `this call interprets or drafts and is not downgradeable by a cost posture.${judgementNote}`;
+      `the firm is economising, but routing policy '${routePolicy.task_class}' v${routePolicy.version_no} stands: ` +
+      `this call is marked '${taskKind}' and is not downgradeable by a spend position.${judgementNote}`;
   } else if (routePolicy) {
     /*
      * THE ONE POSTURE THAT OVERRIDES A PIN, and it says so on the record.
@@ -1381,9 +1511,10 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     const cheapest = costRanked(routingCandidates).reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
     ordered = [cheapest];
     explanation =
-      `spend posture is 'free only', which overrides routing policy '${routePolicy.task_class}' ` +
-      `v${routePolicy.version_no} (pinned ${orderByPolicy(routePolicy, routingCandidates)[0]?.model ?? "nothing available"}). ` +
-      `Cheapest available used instead: ${cheapest.providerKey}/${cheapest.model}. Quality on pinned work is lower by design.`;
+      `${behaviour.why} That overrides routing policy '${routePolicy.task_class}' ` +
+      `v${routePolicy.version_no} (pinned ${orderByPolicy(routePolicy, routingCandidates)[0]?.model ?? "nothing available"}) ` +
+      `for this call, which is marked '${taskKind}' and is therefore not protected. ` +
+      `Cheapest available used instead: ${cheapest.providerKey}/${cheapest.model}. Quality on this pinned work is lower by design.${freeOnlyNote}`;
   } else {
     const preferred = input.budgetContext?.preferredModel;
     /*
@@ -1403,22 +1534,82 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
      * Only reached when nothing is pinned. A pin is somebody's per-task quality decision and this
      * posture must never be able to make pinned work worse.
      */
-    // Judgement work reads as "best available" whatever the posture says — see `judgement` above.
-    const prefersFrontier = (Number(policy.prefers_frontier ?? 0) === 1 && effectiveCostMode !== "CHEAPO") || isJudgement;
-    const rankable = costRanked(routingCandidates);
-    const cheapest = rankable.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+    /*
+     * WHICH WAY UNPINNED WORK LEANS.
+     *
+     * Two independent reasons to take the dearest capable model, and they compose rather than
+     * override each other:
+     *   · she set the lever to OPEN, and the gradient is not tightening (it never tightens at OPEN,
+     *     so `cheaperChoices` is false there by construction — the second clause is the belt);
+     *   · the call is protected, which reads as "best available" whatever the money says.
+     *
+     * `isProtected` is on the right of the OR, alone, deliberately: it is sufficient by itself and
+     * depends on nothing about spend. That is the guarantee, written as an expression.
+     */
+    const prefersFrontier = (behaviour.prefersFrontier && !behaviour.cheaperChoices) || isProtected;
+
+    /*
+     * ── WHAT THESE MODELS HAVE ACTUALLY DONE, AS OPPOSED TO WHAT THEIR SPECS SAY ────────────────
+     *
+     * Reached only here, in the unpinned branch, and that scope is deliberate twice over. A machine
+     * pin or a routing policy NAMES a model: that is a person's decision and a thin outcome table
+     * does not get to overrule it. And this branch is exactly where the failure happened — migration
+     * 0158 priced `perplexity/sonar` at $1/$1, which made it the cheapest priced model on the
+     * account, and by that single configuration row it became the answer for every unpinned call in
+     * the firm. It then refused its own answer three times.
+     *
+     * Evidence can only REORDER candidates that have already passed every capability and privacy
+     * filter. It can never widen the set, and it can never promote a model past one the catalogue
+     * says cannot do the job. That constraint is what makes a few hundred runs of history safe to
+     * consult at all: the worst a wrong call here can do is pick a differently-adequate model.
+     *
+     * AND IT USUALLY DOES NOTHING, WHICH IS THE HONEST STATE. A cell needs 20 decided outcomes
+     * before it says anything; below that it reports INSUFFICIENT_EVIDENCE, the ordering is
+     * returned untouched, and the run says so in as many words rather than implying a judgement
+     * nobody has earned. An unproven model is unknown, not good.
+     */
+    const evidence = await evidenceForTaskKind(env, taskKind);
+    const learned = orderByEvidence(costRanked(routingCandidates), evidence, taskKind);
+    const learnedNote = learned.note;
+
+    /*
+     * A MEASURED FAILURE IS DISQUALIFYING EVEN AT THE EXPENSIVE END. `orderByEvidence` puts POOR
+     * cells last, so dropping them here stops "dearest capable" from handing protected work to a
+     * model that has demonstrably not done this job — which is the sonar case exactly, since sonar
+     * is not cheap once its $0.005 per-request fee is counted.
+     */
+    const notPoor = learned.applied
+      ? learned.ordered.filter((c) => evidence.get(`${c.providerId} ${c.model}`)?.verdict !== "POOR")
+      : learned.ordered;
+    const rankable = notPoor.length > 0 ? notPoor : learned.ordered;
+
+    // The cheapest PROVEN model where evidence exists, and the cheapest outright where it does not:
+    // `learned.ordered` is already proven-first and price-sorted within each tier.
+    const cheapest = learned.applied
+      ? rankable[0]!
+      : rankable.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
     const dearest = rankable.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
     let head: RoutingCandidate;
     // `requiresSearch` joins `isJudgement` here: CHEAPO is a lever for volume, and neither the model
     // that reads a partner's instruction nor the one that has to reach the web is downgradeable by
     // a cost posture.
-    if ((effectiveCostMode !== "CHEAPO" || isJudgement || requiresSearch) && preferred) {
+    /*
+     * A CALLER'S `preferredModel` IS HONOURED UNLESS THE FIRM IS ECONOMISING AND THIS CALL IS NOT
+     * PROTECTED — and getting this condition wrong is the whole of this morning's near-miss.
+     *
+     * CHEAPO ignored `preferredModel` outright. Eight call sites pinned the live-search model that
+     * way and marked nothing, so flipping the firm to CHEAPO would have sent every live search to a
+     * model with no web access, which does not error: it answers fluently, from memory, about this
+     * morning's market. Those eight now carry `requiresSearch`, which makes them protected, which
+     * makes this condition true for them at every position on the gradient.
+     */
+    if ((!behaviour.cheaperChoices || isProtected) && preferred) {
       head = routingCandidates.find((c) => c.model === preferred) ?? (prefersFrontier ? dearest : cheapest);
       explanation =
         head.model === preferred
           ? `no routing policy for this task; caller preferred ${preferred}`
           : `no routing policy for this task; preferred model ${preferred} unavailable, fell to ${prefersFrontier ? "the dearest available (spend posture 'best available')" : "cheapest adequate"}`;
-      explanation += judgementNote + provenanceNote;
+      explanation += judgementNote + provenanceNote + learnedNote;
     } else if (prefersFrontier) {
       head = dearest;
       explanation =
@@ -1426,13 +1617,17 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
           ? `this call interprets or drafts, so it takes the dearest priced capable model rather than the cheapest: `
           : `spend posture is 'best available', so unpinned work takes the dearest priced capable model rather than the cheapest: `) +
         `${head.providerKey}/${head.model}. Price is the only quality signal ` +
-        `in the model registry, so this is a proxy for capability and not a benchmark result.${judgementNote}${provenanceNote}`;
+        `in the model registry, so this is a proxy for capability and not a benchmark result.${judgementNote}${provenanceNote}${learnedNote}`;
     } else {
       head = cheapest;
       explanation =
-        (effectiveCostMode === "CHEAPO"
-          ? "CHEAPO cost mode: cheapest adequate priced model"
-          : "no routing policy for this task; cheapest adequate priced model") + judgementNote + provenanceNote;
+        (behaviour.cheaperChoices
+          ? `${behaviour.why} So this unpinned, unprotected call took the cheapest adequate priced model`
+          : "no routing policy for this task; cheapest adequate priced model") +
+        judgementNote +
+        provenanceNote +
+        freeOnlyNote +
+        learnedNote;
     }
     // No policy → no fallback. Behaviour is exactly P4's.
     ordered = [head];
@@ -1519,10 +1714,17 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     }
   }
 
-  // 7. Cost preflight: per-run and daily caps. A valid unexpired surge lifts both
-  //    caps to the surge budget.
-  const perRunCap = surge ? surge.budget : policy.per_run_cap_usd;
-  const dailyCap = surge ? surge.budget : policy.daily_cap_usd;
+  /*
+   * 7. Cost preflight: per-run and daily caps, as the owner set them — $0.75 and $2.50.
+   *
+   * NOTHING LIFTS THESE ANY MORE, and that is a deliberate narrowing. A surge used to raise both to
+   * its own budget, which meant one JSON blob could quietly turn a $0.75 per-run cap into a $200
+   * one for every call in the firm. These are operational throttles on a SINGLE run and a SINGLE
+   * day; the thing a person actually wants to lift when a quarter needs closing is the monthly
+   * ceiling, and that is what a `spend_bypass` lifts — one number, named, with an expiry.
+   */
+  const perRunCap = policy.per_run_cap_usd;
+  const dailyCap = policy.daily_cap_usd;
   if (estimate.estimated_cost_usd > perRunCap) {
     return {
       run: await blocked(
@@ -1554,10 +1756,10 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * — item 23. So the ceiling is read here, before the money moves, from the same function that
    * draws it on the page. No ceiling set means no ceiling applied; nothing is invented.
    *
-   * A surge does NOT lift these. `daily_cap_usd` is an operational throttle and a surge is exactly
-   * the argument for raising it for a fortnight; the all-time ceiling is the firm saying how much
-   * of its money may ever go to this, and a lever that quietly stepped over it would make it
-   * decorative.
+   * THIS is where a bypass applies, and the only place one does. `checkFirmBudgets` consults
+   * `spend_bypass` on the failing path: an unexpired, unrevoked row naming a higher ceiling and the
+   * person who granted it lets the run through, and the refusal names the bypass when even that is
+   * exceeded. The $75 stop is automatic; stepping over it is a decision with a name on it.
    */
   const firmCeiling = await checkFirmBudgets(env, firmScope, estimate.estimated_cost_usd, now);
   if (!firmCeiling.ok) {
@@ -1826,5 +2028,28 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     fallbackUsed: attempts.some((a) => a.outcome === "FAILED_OVER"),
     explanation,
   });
+
+  /*
+   * THE THIRD OUTCOME: REWORKED.
+   *
+   * A model that handed the work on did not do the job — something else finished it. That is a
+   * weaker signal than a human rejection and it is counted as a weaker one: REWORKED sits in the
+   * denominator of the acceptance rate without being a rejection, so a model is neither punished as
+   * though a person refused its output nor credited as though it had succeeded.
+   *
+   * Recorded against the model that FAILED OVER, not against the one that finished. The one that
+   * finished gets its own outcome when a human decides about the output, which is the accept path.
+   */
+  for (const a of attempts.filter((x) => x.outcome === "FAILED_OVER")) {
+    const failedOver = options.find((o) => o.provider.provider_key === a.provider_key && o.pricing.model === a.model);
+    await recordModelJobOutcome(env, {
+      taskKind,
+      providerId: failedOver?.provider.id ?? null,
+      model: a.model,
+      outcome: "REWORKED",
+      aiRunId: run.id,
+      firmScope,
+    });
+  }
   return { run };
 }

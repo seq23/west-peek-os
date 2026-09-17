@@ -6,6 +6,7 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } from "./authorize";
 import { runAi, type AIRunRow, type RunAiDeps } from "../ai/runAi";
 import { committedCostOf } from "../ai/spend";
+import { recordModelJobOutcome } from "../ai/modelLearning";
 import { privacyLabelSchema } from "../../shared/privacy";
 import { aiOutboundSwitches } from "../../shared/policy/aiOutbound";
 
@@ -251,6 +252,27 @@ export async function acceptQuarantinedOutput(env: Env, actor: Actor, runId: str
 
   await env.WP_OS_DB.prepare("UPDATE ai_run SET output_quarantine = 0 WHERE id = ?1").bind(runId).run();
   await recordOutputDecision(env, run, actor, "ACCEPTED", reason ?? null);
+  /*
+   * WHAT THIS MODEL ACTUALLY DID, recorded at the only moment anybody knows.
+   *
+   * A human accepting the output is the strongest signal this system has that a model did the job,
+   * and it was being thrown away. `provider_model` records a context window, two capability
+   * booleans and a price, and nothing else — which is how one pricing row (0158, perplexity/sonar
+   * at $1/$1) elected an unsuitable model for every unpinned call in the firm and nothing in the
+   * catalogue registered that it had gone badly.
+   *
+   * Recorded AFTER the accept has committed, and `recordModelJobOutcome` never throws: this is
+   * bookkeeping attached to a decision already taken, and a lost data point is recoverable where a
+   * failed accept is not.
+   */
+  await recordModelJobOutcome(env, {
+    taskKind: run.task_kind,
+    providerId: run.provider_id,
+    model: run.model,
+    outcome: "SUCCEEDED",
+    aiRunId: runId,
+    firmScope: run.firm_scope,
+  });
   await appendEvent(env, {
     eventType: "ai_output.accepted",
     actorType: "firm_user",
@@ -298,6 +320,16 @@ export async function discardQuarantinedOutput(env: Env, actor: Actor, runId: st
   }
 
   await recordOutputDecision(env, run, actor, "DISCARDED", reason.trim());
+  // The other half of the signal, and the more valuable half: a person looked at this and threw it
+  // away. Twenty of these in one (task kind, model) cell is what makes a model POOR for that job.
+  await recordModelJobOutcome(env, {
+    taskKind: run.task_kind,
+    providerId: run.provider_id,
+    model: run.model,
+    outcome: "REJECTED",
+    aiRunId: runId,
+    firmScope: run.firm_scope,
+  });
   await appendEvent(env, {
     eventType: "ai_output.discarded",
     actorType: "firm_user",

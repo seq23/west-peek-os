@@ -78,6 +78,32 @@ test("a Managing Partner sets a scoped budget and the cost centre shows its defi
   // The two adjacent figures the operator asked about now say why there are two of them.
   await expect(page.getByTestId("cost-two-blocks")).toContainText("not the same number");
 
+  /*
+   * ── WHAT SHE MUST BE ABLE TO SEE WITHOUT ASKING ─────────────────────────────────────────────
+   *
+   * Where the lever is, where the month has put her on the gradient AND WHY, and what that position
+   * is costing her in capability. Before this, all three were unanswerable from the page: the only
+   * spend information was dollars, which hides the half of the trade she is actually making.
+   */
+  await expect(page.getByTestId("spend-gradient")).toBeVisible();
+  await expect(page.getByTestId("gradient-position")).not.toBeEmpty();
+  // WHY, with the arithmetic in it, so it is a figure she can check rather than a mood.
+  await expect(page.getByTestId("gradient-why")).toContainText("of the month gone");
+  await expect(page.getByTestId("gradient-capability-cost")).toContainText("What this costs you");
+  /*
+   * THE GUARANTEE, ON THE SCREEN. It is the reason an automatic gradient is safe to run at all, and
+   * she should not have to take it on trust from a commit message.
+   */
+  await expect(page.getByTestId("gradient-guarantee")).toContainText("never downgraded");
+
+  // ONE LEVER, THREE POSITIONS, each carrying its own stated downside.
+  await expect(page.getByTestId("spend-lever")).toBeVisible();
+  await expect(page.getByTestId("lever-MODERATE")).toBeVisible();
+  await expect(page.getByTestId("lever-FREE_ONLY")).toContainText("Nothing paid");
+  // The collision she decided, printed on the control that causes it.
+  await expect(page.getByTestId("lever-FREE_ONLY")).toContainText("STOPS");
+  await expect(page.getByTestId("lever-OPEN")).toBeVisible();
+
   // The firmwide ceiling — both windows, present even when nothing has been set.
   await expect(page.getByTestId("firm-budget-MONTHLY")).toContainText("Most it may spend in a month");
   await expect(page.getByTestId("firm-budget-ALL_TIME")).toContainText("Most it may ever spend");
