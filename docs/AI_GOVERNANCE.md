@@ -27,9 +27,11 @@ Every invocation — including blocked ones — lands in `ai_run` with a unique
 
 ### Pipeline (fail closed at every step)
 
-1. **Cost-mode gate.** `CRITICAL_ONLY` runs only purposes flagged critical
+1. **The defer gate.** `defer_non_critical` runs only purposes flagged critical
    (`budget_context.critical`) or matching critical/risk/deadline/LP/IC/deal/compliance;
-   everything else is `BLOCKED_DEFERRED`.
+   everything else is `BLOCKED_DEFERRED`. This is "what work runs at all" and it is a
+   separate question from how much money — a policy row still carrying the retired
+   `cost_mode = 'CRITICAL_ONLY'` is honoured here for compatibility.
 2. **Credential scrub** (`src/worker/ai/scrub.ts`). Inputs are scanned for
    secret-shaped patterns — vendor API keys, vault key names (`ANTHROPIC_API_KEY`),
    bearer tokens, secret assignments, wire-instruction text. Any match blocks the run
@@ -61,14 +63,61 @@ Every invocation — including blocked ones — lands in `ai_run` with a unique
    `BLOCKED_DEFERRED` with the reason visible; the deterministic app (work cards,
    approvals, activity) is unaffected.
 
-## Cost modes
+## The spend lever (17 Sep 2026)
 
-| Mode | Behavior |
+One control the owner touches, three positions, named identically to Boss OS —
+adopted, written fresh, never imported.
+
+| Position | Behaviour |
 |---|---|
-| `NORMAL` | Default. Honors an optional model preference; else cheapest adequate model. Caps enforced. |
-| `CHEAPO` | Cheapest adequate model from the pricing snapshot, regardless of preference. Caps enforced. |
-| `CRITICAL_ONLY` | Only critical purposes run; everything else `BLOCKED_DEFERRED`. |
-| `STRATEGIC_SURGE` | Caps lift to the surge budget only inside an unexpired surge record carrying purpose + owner + budget + end. An expired or incomplete surge is treated as `NORMAL` (fail closed); expiry is enforced by timestamp comparison. |
+| `FREE_ONLY` | Nothing paid, at all. Only zero-cost candidates. Protected work with no adequate free model **stops and says so**, naming the work and the lever; it never quietly takes a weaker model. |
+| `MODERATE` | **The default, and what production is on.** The gradient below runs inside this position. |
+| `OPEN` | Spend what is needed up to the ceiling. The gradient stops tightening; unpinned work takes the dearest capable model. |
+
+### The gradient, measured against the month ELAPSED
+
+Runs **only inside `MODERATE`**, automatically and continuously. The owner's
+ladder, pro-rated: a threshold's allowance at any instant is
+`threshold × monthElapsedFraction`, floored at one day's share.
+
+| Month-to-date vs. pro-rated line | Behaviour |
+|---|---|
+| under the $5 line | normal |
+| $5 – $10 line | cheaper choices on unpinned, unprotected work |
+| over the $10 line | free-first; paid models kept for protected work |
+| $50 (absolute) | **notify**, carrying the bypass decision. Nothing stops. |
+| $75 (absolute) | **hard stop**, automatic, bypass available |
+
+$8 on the 3rd is over pace and tightens; the same $8 on the 25th is on pace and
+does not. A raw month-to-date total would put one heavy build day into austerity
+for the rest of the month, which is why the elapsed month is the denominator. It
+is also self-healing: a heavy day eases back on its own as the month catches up.
+
+### The guarantee
+
+**Protected work is never downgraded at any position on the gradient.** A call
+marked `judgement`, `interpretation` or `requiresSearch` keeps its model or fails
+loudly. One predicate — `protectedFromSpendPressure` — decides, and every branch
+asks it rather than re-deriving. Proven in `tests/spendGradient.test.ts` by
+driving spend past every threshold.
+
+**Her hand always wins.** The gradient never writes `spend_lever`. `FREE_ONLY`
+stays free at $0 spent; `OPEN` stays open at $40.
+
+### The retired `cost_mode`
+
+`NORMAL | CHEAPO | CRITICAL_ONLY | STRATEGIC_SURGE` was four values answering
+three unrelated questions. The column remains (it is NOT NULL and the archive
+carries it) but is now **derived from** the lever and read by nothing.
+`scripts/validate/one-lever-not-four.mjs` fails the build if a routing decision
+reads it again. Anything still sending a `cost_mode` to `/api/ai/budget` is
+translated, not ignored: CHEAPO+pins→`MODERATE`, CHEAPO−pins→`FREE_ONLY`,
+NORMAL+frontier→`OPEN`, CRITICAL_ONLY→`MODERATE` plus `defer_non_critical`,
+STRATEGIC_SURGE→`OPEN` plus the offer of a bypass.
+
+A **bypass** is a `spend_bypass` row — a higher ceiling, a reason, a named
+person, an expiry — that lapses on its own. It lifts only the monthly ceiling;
+the per-run and daily caps are no longer lifted by anything.
 
 ## Privacy modes (D8)
 
