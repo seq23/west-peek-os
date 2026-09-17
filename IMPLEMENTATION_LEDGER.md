@@ -5524,3 +5524,40 @@ Each pass also proved the plumbing end to end: one stage per sweep tick with no 
 for progress (~40 minutes queue-to-inbox), the PDF in R2 as a `ROOM_PACKET` document linked on
 the packet, both partners emailed with Parker's introduction and the download link, the Rooms page
 showing the stage while it built and the download button when done.
+
+## 17 Sep 2026 — Firmwide notices, and the table that held nothing for a hundred and sixty-seven migrations
+
+`internal_memo` shipped in migration `0014`. It had a create route, a list route, an append-only
+`UPDATE` trigger, a permission in the action-type registry, and a privacy-visibility clause added
+later when a review found it leaking. It had **zero rows**, and nothing anywhere read it into a
+prompt. A noticeboard, in a room nobody walks through, with a lock on the door.
+
+The same was true one surface over and worse: the Governance page's own confirmation said *"Issued.
+It is in the list below and every employee reads it."* Nothing feeds `governance_update` into a
+prompt — it is written, listed and acknowledged, and never read by a model. That sentence has been
+corrected rather than left as the fourth instance this month of a specification no code reads.
+
+**What was added.** No new table and no new section. A firmwide notice IS an `internal_memo` with
+`audience='FIRM'` — already a title, a body, an author and a timestamp.
+
+| | |
+|---|---|
+| `migrations/0181_firmwide_notices.sql` | Twelve notices, every one **descriptive** of how the firm already works. Not one is new policy; each was a code comment, a prompt line or a handler's reasoning that only its author remembered. `author_type='SYSTEM'` because claiming a partner typed them would be the exact fabrication notice 6 forbids. Deliberately excluded: the spend ladder — enforced at the router, not actionable by an employee, so a notice would be decoration. |
+| `src/worker/ai/firmNotices.ts` | `firmNoticesBlock(env, firmScope)` — the notices as prompt lines, `""` when there are none. A `DEPARTMENT` memo is not a firmwide notice and is not read here. |
+| `src/worker/ai/runAi.ts` | **The one insertion.** Inside the governed AI boundary, for every run carrying an `aiEmployeeId`. Not at the seventeen call sites that name an employee: a rule each caller must remember is a rule the next caller silently skips, which is how `internal_memo` came to hold zero rows in the first place. Prepended inside the boundary, so the scrubber, the budget estimate and the input hash all see what is actually sent. |
+| `src/client/App.tsx` | One card under Governance. Honest when empty — no filler rows, and no claim that employees are reading something the firm has not written. |
+
+**Proof — the assertion is on the bytes, not the row.** `tests/firmNotices.test.ts`, 9 tests, asserts
+that each notice's own words appear in the request body put on the wire to the provider during an
+employee run. Zero-item hard fail: the seeded count is asserted before anything reads it, so a
+migration that stopped seeding cannot leave a file of vacuously-true assertions behind it.
+
+**Negative proof, both halves, run rather than described.** (1) In-test: with the notices deleted
+the identical employee run stops carrying them, and carries no empty heading either. (2) At the
+source: with the one line in `runAi.ts` disabled, 2 of 9 tests go red — the two that assert on the
+wire; the rest, correctly, do not move.
+
+Counts: vitest **2236/2236** (was 2227; +9), `tsc --noEmit` green, and `validate:sql`,
+`validate:css-classes`, `validate:css-variables`, `validate:brand`, `validate:design-tokens`,
+`validate:instructions`, `validate:ai-boundary`, `validate:authority`, `validate:one-lever`,
+`validate:blocks` all PASSED with their self-tests.

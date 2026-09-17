@@ -65,3 +65,5 @@ INSERT OR IGNORE INTO internal_memo (id, author_type, author_id, audience, depar
   ('memo_notice_12_a_run_that_did_nothing', 'SYSTEM', 'west-peek-os', 'FIRM', NULL,
    'A run that produced nothing must say why',
    'Quiet success and silent failure must never look the same. A site-audit pass once exited clean at fixed=0 with 118 real errors still outstanding, and it looked exactly like a quiet week. If you examined nothing, say you examined nothing. If you found nothing, say what you looked at. Never report an empty result in the same words you would use for a finished one.');
+
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0181_firmwide_notices');
