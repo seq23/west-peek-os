@@ -6,12 +6,17 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, authorize } from "./authorize";
 import { activeBudgetScopes, periodStart, scopeSpendUsd, type BudgetPeriod, type BudgetScopeType } from "../ai/routing";
 import { getLatestBudgetPolicy } from "../ai/runAi";
+import { evidenceGrid, MIN_RUNS_FOR_EVIDENCE } from "../ai/modelLearning";
+import { LADDER, leverFromPolicy } from "../../shared/ai/spendLever";
 import {
   COMMITTED_SPEND_DEFINITION,
   centsToUsd,
   committedCostOf,
   firmBudgetStates,
   firmSpend,
+  currentSpendBehaviour,
+  liveBypass,
+  notifyAtFiftyReason,
   type FirmBudgetWindow,
 } from "../ai/spend";
 
@@ -175,6 +180,20 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
       ORDER BY spent DESC`,
   ).all<{ vendor: string; spent: number; calls: number; unpriced: number; first_call: string }>()).results ?? []);
 
+  /*
+   * ── WHAT SHE MUST BE ABLE TO SEE WITHOUT ASKING ─────────────────────────────────────────────
+   *
+   * Four things, and they were four separate unanswerable questions before: where the lever is,
+   * where she is on the gradient AND WHY, what the position is costing her in capability, and — at
+   * $50 — the notification carrying the bypass decision rather than just the number.
+   *
+   * Computed from `currentSpendBehaviour`, which is the same function the AI boundary routes on.
+   * The page cannot show a position the router is not in, because there is only one of them.
+   */
+  const lever = leverFromPolicy(policy as unknown as Parameters<typeof leverFromPolicy>[0]);
+  const behaviour = await currentSpendBehaviour(ctx.env, firmScope, lever, now);
+  const bypass = await liveBypass(ctx.env, firmScope, "MONTHLY", now);
+
   return json({
     /**
      * Since the very first run. Stated apart from the period totals because they answer different
@@ -200,6 +219,53 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
     })),
     period,
     since,
+    /**
+     * THE LEVER AND THE GRADIENT, in one block, in her words.
+     *
+     * `why` and `capability_cost` are sentences written once in shared/ai/spendLever.ts and printed
+     * verbatim. The page does not get to reword them: three glosses of one number is how this firm
+     * ended up with three different answers to "what has it spent".
+     */
+    spend_lever: {
+      lever,
+      position: behaviour.position,
+      // False at FREE_ONLY and OPEN. Her hand is on the control and the gradient does not move it.
+      gradient_applies: behaviour.gradientApplies,
+      why: behaviour.why,
+      capability_cost: behaviour.capabilityCost,
+      month_to_date_usd: behaviour.monthToDateUsd,
+      month_elapsed_pct: Math.round(behaviour.elapsedFraction * 1000) / 10,
+      // The pro-rated lines, so "why am I being careful" is arithmetic she can check rather than a mood.
+      tightening_allowance_usd: behaviour.tighteningAllowanceUsd,
+      cautious_allowance_usd: behaviour.cautiousAllowanceUsd,
+      projected_month_end_usd: behaviour.projectedMonthEndUsd,
+      // VISIBLE BEFORE IT BITES. Null until she is 80% of the way to a line that has not yet acted.
+      approaching: behaviour.approaching,
+      ladder: { tightening_usd: LADDER.tighteningUsd, cautious_usd: LADDER.cautiousUsd, notify_usd: LADDER.notifyUsd, hard_stop_usd: LADDER.hardStopUsd },
+      /**
+       * THE $50 NOTIFICATION, CARRYING THE DECISION. Not "you have passed $50" — what the choice is,
+       * what happens if she does nothing, and what a bypass would mean. Null below the line.
+       */
+      notification: behaviour.notify ? notifyAtFiftyReason(behaviour.monthToDateUsd) : null,
+      bypass: bypass
+        ? { ceiling_usd: centsToUsd(bypass.ceiling_cents), reason: bypass.reason, granted_by: bypass.granted_by, expires_at: bypass.expires_at }
+        : null,
+    },
+    /**
+     * WHAT THE MODELS HAVE ACTUALLY DONE, by task kind — and the gaps reported as gaps.
+     *
+     * A cell below the evidence threshold shows INSUFFICIENT_EVIDENCE and a null rate rather than a
+     * percentage computed from three runs. An unproven model is unknown, not good, and the screen
+     * has to say so as plainly as the router acts on it.
+     */
+    model_evidence: {
+      min_runs_for_evidence: MIN_RUNS_FOR_EVIDENCE,
+      cells: await evidenceGrid(ctx.env),
+      note:
+        `A model must have ${MIN_RUNS_FOR_EVIDENCE} decided outcomes on a task kind before it counts as proven or poor. ` +
+        `Below that the answer is 'not enough evidence', not a rate — and routing falls back to capability and price, ` +
+        `exactly as it does today.`,
+    },
     firm_policy: {
       cost_mode: policy.cost_mode,
       // Which posture this is, so the lever can show where it currently sits rather than making
