@@ -123,6 +123,14 @@ export interface EmailThreadRow {
   token: string;
   object_type: string;
   object_id: string;
+  /**
+   * The `work_card.kind`, when the conversation is about one.
+   *
+   * THE KIND AND NOT ONLY THE CARD, because a recurring duty opens a new card every week and closes
+   * it the same day. A reply that arrives on Thursday answers a card that is already DONE; carried
+   * as a kind, it steers next Monday's run instead of a row nothing will read again.
+   */
+  card_kind: string | null;
   /** The employee whose note it was, for the card and for the event trail. */
   employee: string | null;
   /** Who it was addressed to, before any preview redirect. */

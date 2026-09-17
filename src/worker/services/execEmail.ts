@@ -7,6 +7,7 @@ import { aiOutboundSwitches } from "../../shared/policy/aiOutbound";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { lintExecEmail, renderExecEmail, type ExecEmailInput } from "../../shared/email/execEmail";
+import { recordThreadDelivery, startThread } from "./emailThread";
 
 /**
  * THE ONE DOOR an email to a partner leaves through (16 Sep 2026).
@@ -44,6 +45,15 @@ export interface PartnerEmailInput {
   actorId?: string;
   /** Event names, so a caller's existing tests and readers keep their vocabulary. */
   events?: { sent: string; notSent: string };
+  /**
+   * The `work_card.kind` this note is about, when it is about one.
+   *
+   * WHY THE KIND AND NOT ONLY THE CARD. A weekly duty opens a NEW card every week and closes it the
+   * same day, so a reply that arrives on Thursday is answering a card that is already DONE. Carrying
+   * the kind is what lets the reply steer the WORK — next Monday's run and the one after — rather
+   * than a row nothing will read again. See migration 0180.
+   */
+  cardKind?: string | null;
 }
 
 export interface PartnerEmailOutcome {
@@ -51,9 +61,14 @@ export interface PartnerEmailOutcome {
   to: string;
   reason: string;
   subject: string;
+  /** The conversation a reply to this message will be matched to. Null on the copy-to-self path. */
+  threadToken?: string | null;
 }
 
-async function transport(env: Env, message: { to: string | readonly string[]; subject: string; text: string; html: string }): Promise<EmailSendResult> {
+async function transport(
+  env: Env,
+  message: { to: string | readonly string[]; subject: string; text: string; html: string; headers?: Record<string, string> },
+): Promise<EmailSendResult> {
   const payload = { ...message, replyTo: INTAKE_MAILBOX };
   return isCloudflareEmailEnabled(env) ? await sendViaCloudflare(env, payload) : await sendViaResend(env, payload);
 }
@@ -97,16 +112,39 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
     return { sent: false, to, reason, subject: rendered.subject };
   }
 
+  /*
+   * THE THREAD THIS NOTE STARTS — 7 · REPLIES.
+   *
+   * Every employee-to-partner note now carries a token in its `References` header, and a partner's
+   * reply carries it back. That is what lets "not this one" be matched to the search it is about
+   * without a code in the subject (which RFC 2047 eats) and without `provider_message_id` (which is
+   * not the Message-ID a reply points at — see shared/email/thread.ts, confirmed against both
+   * transports' documentation).
+   *
+   * MINTED BEFORE THE SEND, because a reply can arrive within seconds of one.
+   */
+  const thread = await startThread(env, {
+    objectType: input.objectType,
+    objectId: input.objectId,
+    cardKind: input.cardKind ?? null,
+    employee: input.email.employee,
+    to,
+    subject: rendered.subject,
+    firmScope: input.firmScope,
+  });
+
   let result: EmailSendResult;
   try {
-    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html });
+    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html, headers: thread.headers });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
   }
+  if (result.sent) await recordThreadDelivery(env, thread.token, result);
   await record(env, actor, result.sent ? events.sent : events.notSent, {
     to, subject: rendered.subject, detail: result.detail, provider_message_id: result.provider_message_id,
+    thread_token: thread.token,
   });
-  return { sent: result.sent, to, reason: result.detail, subject: rendered.subject };
+  return { sent: result.sent, to, reason: result.detail, subject: rendered.subject, threadToken: thread.token };
 }
 
 /**

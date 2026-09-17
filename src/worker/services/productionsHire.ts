@@ -14,6 +14,7 @@ import { sendPartnerEmail } from "./execEmail";
 import { deliver } from "./deliverables";
 import { notifyQuietly } from "./notifications";
 import { isoWeekOf } from "./jobs";
+import { standingSteer } from "./emailThread";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { guidanceBlock } from "../../shared/skills/library";
 import {
@@ -500,10 +501,20 @@ export function renderHireNote(
   seenBefore: readonly (HireCandidate & { firstSeen: string })[],
   dropped: readonly { name: string; reason: string }[],
   rejected: readonly { name: string; reason: string }[],
+  /**
+   * What the interpreter understood his last reply to mean, when he has sent one.
+   *
+   * THE PROMISE THE NOTE MAKES, KEPT. The closing paragraph says "I read it before I search again,
+   * and I will say back what I understood it to mean." A promise a partner cannot see kept is a
+   * promise he stops believing — and this is the one line that tells him his words landed, in the
+   * model's own words, without him having to open the card.
+   */
+  understood: string | null = null,
 ): string {
   const lines = [
     `Scooter — Walker, your chief of staff. The week's hire search for a ${HIRE_ROLE} at West Peek Productions (${week}): ${fresh.length} new candidate(s). Nobody has been contacted from here; that stays yours.`,
     "",
+    ...(understood ? [`You told me: ${understood.trim()}`, "That is what I searched on this week.", ""] : []),
     `═══ 1 · NEW THIS WEEK ═══`,
     "Each one is on a live page; the fit is judged against the archetype, not the title alone.",
     "",
@@ -674,14 +685,29 @@ export async function runHireSearchCard(
    * the week this matters: before this, that note went into a column this runner never read, the
    * same search ran again, and he got the same people.
    */
+  /*
+   * AND WHAT HE SAID BY REPLYING TO AN EARLIER NOTE, which is now the only way he steers this at all.
+   *
+   * WITHOUT THIS THE WHOLE REPLY PATH IS INERT, and it would have looked like it worked. `steerFor`
+   * reads notes on the card it is given; this duty opens a NEW card every week and closes it the
+   * same day, so a reply arriving on Thursday answers a card that is already DONE. The note would be
+   * stored, acknowledged, and read by nothing — next Monday's card is a different row with no notes
+   * on it. `standingSteer` reads what the partners have said about this KIND of work, so "stop
+   * showing me agency people" applies next week and the week after.
+   *
+   * It is passed as `extra`, which is exactly what that parameter is for: prose the chain holds
+   * outside the card's own columns. One model call reads all of it, as before.
+   */
+  const replies = await standingSteer(env, HIRE_CARD_KIND, card.firm_scope);
   const steer = await steerFor(env, actor, {
     cardId: card.id,
-    cardKind: "PRODUCTIONS_HIRE_SEARCH",
+    cardKind: HIRE_CARD_KIND,
     title: card.title,
     employee: "Walker",
     chain: "the weekly hire search for West Peek Productions",
     steps: [...HIRE_SEARCH_STEPS],
     firmScope: card.firm_scope,
+    extra: replies,
   }, deps.interpret);
   if (steer.cannot.length > 0) {
     const why2 = await blockCard(env, card, {
@@ -745,7 +771,7 @@ export async function runHireSearchCard(
     return { finished: false, blocked: true, detail: blocked };
   }
 
-  const text = renderHireNote(week, remembered.fresh, remembered.seenBefore, dropped, rejected);
+  const text = renderHireNote(week, remembered.fresh, remembered.seenBefore, dropped, rejected, steer.interpretation?.understood ?? null);
   const summary = hireSummary(week, remembered.fresh, remembered.seenBefore, dropped, rejected);
   const title = `Hire search ${week}: ${remembered.fresh.length} candidate(s) for ${HIRE_ROLE}`;
 
@@ -764,6 +790,9 @@ export async function runHireSearchCard(
     email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: summary.sections, details: text },
     objectType: "work_card",
     objectId: card.id,
+    // The KIND goes with it, so a reply steers the SEARCH rather than a card that will be DONE
+    // before he opens his inbox. See services/emailThread.ts and migration 0180.
+    cardKind: HIRE_CARD_KIND,
     firmScope: card.firm_scope,
     actorId: "aie_walker",
   });
