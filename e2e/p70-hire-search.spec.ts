@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { provisionLocalD1, queryLocalD1 } from "./support/provision";
+import { gotoSurface } from "./support/nav";
 import { kindDef } from "../src/shared/deliverables/deliverable";
 
 /**
@@ -90,4 +91,40 @@ test("the hire-search note renders on Scooter's Home with its candidates, and th
   expect((await request.get(`/api/productions/candidates?deliverable=${dlvId}`, { headers: SCOOTER })).status()).toBe(200);
   const hers = (await (await request.get("/api/deliverables?kind=productions_hire_search&mine=1", { headers: SEQUOIA })).json()) as { deliverables: Array<{ id: string }> };
   expect(hers.deliverables.some((d) => d.id === dlvId)).toBe(false);
+});
+
+/**
+ * And the way she actually runs one: a button on Work, next to the job.
+ *
+ * WHY THIS JOURNEY EXISTS. Production is behind Cloudflare Access, so without a control on a page
+ * she is already signed in to, "preview it" means fetching an Access token and composing a curl
+ * line — which is the owner doing a task a machine could do. A route with no door is also this
+ * repo's "exists but nothing invokes it" defect wearing a different hat.
+ *
+ * It does NOT press the button: the preview does the real work, and the local server has no search
+ * model. What is proven is that the door is there, on the right jobs and not on the others, and
+ * that it says what it costs and where it goes before anybody presses it.
+ */
+test("a partner can ask for a preview from the Work page, on the jobs that have something to preview", async ({ page }) => {
+  await page.goto("/");
+  const login = page.getByTestId("dev-login-email");
+  await login.waitFor({ state: "visible" });
+  await login.fill("sequoia@westpeek.ventures");
+  await page.getByTestId("dev-login-submit").click();
+  await expect(page.getByTestId("identity-status")).toContainText("Sequoia Taylor");
+
+  await gotoSurface(page, "Work");
+  await expect(page.getByTestId("jobs-page")).toBeVisible();
+  const button = page.getByTestId("job-preview-productions_hire_search");
+  await expect(button, "the hire search can be previewed").toBeVisible();
+  await expect(button).toHaveText("Preview it to me");
+  await expect(button).toHaveAttribute("title", /emails the result to sequoia@westpeek\.ventures only/);
+  await expect(button).toHaveAttribute("title", /Nothing is filed and the scheduled run is untouched/);
+
+  // NOT offered where there is no deliverable to preview — a button that answers "not previewable"
+  // is worse than no button.
+  await expect(page.getByTestId("job-preview-employee_work_sweep")).toHaveCount(0);
+  await expect(page.getByTestId("job-preview-daily_intelligence")).toHaveCount(0);
+  // The scheduled run's own control is still there and is still the primary one.
+  await expect(page.getByTestId("job-run-productions_hire_search")).toBeVisible();
 });
