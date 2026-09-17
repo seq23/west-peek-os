@@ -5,6 +5,13 @@ import { json } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize } from "./authorize";
 import { privacyLabelSchema } from "../../shared/privacy";
+import {
+  credentialConfigured,
+  credentialNameFor,
+  credentialSourceName,
+  GENERIC_CREDENTIAL_NAME,
+} from "../../shared/ai/providerCredentials";
+import { directVendorRouteFor } from "../../shared/ai/directVendorRoute";
 
 /**
  * Provider / model router surface (P16, GAP-03).
@@ -35,18 +42,20 @@ async function parseJsonBody(request: Request): Promise<unknown | null> {
   }
 }
 
-/** Which env var backs which provider. Names only — values are never read for display. */
-export function credentialNameFor(providerKey: string): string {
-  if (providerKey === "openrouter") return "OPENROUTER_API_KEY";
-  if (providerKey === "fireworks") return "FIREWORKS_API_KEY";
-  return "AI_PROVIDER_API_KEY";
-}
-
-export function credentialConfigured(env: Env, providerKey: string): boolean {
-  const name = credentialNameFor(providerKey);
-  const value = (env as unknown as Record<string, unknown>)[name];
-  return typeof value === "string" && value.length > 0;
-}
+/*
+ * WHICH ENV VAR BACKS WHICH PROVIDER — now one name per vendor, and this is a correctness fix
+ * rather than a tidy-up.
+ *
+ * This function used to return `AI_PROVIDER_API_KEY` for every vendor except OpenRouter and
+ * Fireworks. One name shared by five companies cannot answer the only question that matters during
+ * an outage — "is Anthropic configured?" — it can only answer "is SOMETHING configured?". So the
+ * Cockpit was reporting one boolean five times over: green beside OpenAI because a key belonging to
+ * somebody else existed. `credential_configured` was wrong for four of five vendors.
+ *
+ * The map now lives in src/shared/ai/providerCredentials.ts, shared with the router, so the page
+ * and the thing that actually makes the call cannot disagree about what is configured.
+ */
+export { credentialNameFor, credentialConfigured } from "../../shared/ai/providerCredentials";
 
 export async function handleProviderCatalog(ctx: RouteContext): Promise<Response> {
   const providers = (
@@ -88,23 +97,99 @@ export async function handleProviderCatalog(ctx: RouteContext): Promise<Response
     ).all<{ provider_id: string; mode: string; ok: number; latency_ms: number | null; detail: string; created_at: string }>()
   ).results ?? [];
 
+  /*
+   * WHEN DID THIS FIRM LAST ACTUALLY FALL BACK?
+   *
+   * The page could say a provider was configured and could not say whether anything had ever
+   * survived that provider failing. A fallback nobody has seen work is not a fallback, so the
+   * evidence is served: the last handovers, each naming what failed, what caught it, and when.
+   * Read from `ai_run_routing`, which is written by the boundary itself — not from a counter
+   * somebody remembers to increment.
+   */
+  const fallbacks = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT r.ai_run_id, r.selected_provider_key, r.selected_model, r.attempts_json, a.created_at
+         FROM ai_run_routing r
+         JOIN ai_run a ON a.id = r.ai_run_id
+        WHERE r.fallback_used = 1
+        ORDER BY a.created_at DESC
+        LIMIT 10`,
+    ).all<{ ai_run_id: string; selected_provider_key: string | null; selected_model: string | null; attempts_json: string; created_at: string }>()
+  ).results ?? [];
+
+  const recentFallbacks = fallbacks.map((f) => {
+    let attempts: Array<{ provider_key?: string; model?: string; outcome?: string; detail?: string }> = [];
+    try {
+      attempts = JSON.parse(f.attempts_json) as typeof attempts;
+    } catch {
+      attempts = [];
+    }
+    const handedOn = attempts.find((a) => a.outcome === "FAILED_OVER");
+    return {
+      ai_run_id: f.ai_run_id,
+      at: f.created_at,
+      failed: handedOn ? `${handedOn.provider_key}/${handedOn.model}` : null,
+      // The classifier's label, ahead of the raw message: AUTH_REJECTED, RATE_LIMITED,
+      // VENDOR_ERROR, TIMEOUT_OR_NETWORK, REFUSED_BY_VENDOR, MODEL_NOT_SERVED.
+      why: handedOn?.detail?.split(":")[0] ?? null,
+      caught_by: `${f.selected_provider_key}/${f.selected_model}`,
+      completed: attempts.some((a) => a.outcome === "COMPLETED"),
+    };
+  });
+
   return json({
-    providers: providers.map((p) => ({
-      ...p,
-      credential_name: credentialNameFor(p.provider_key),
-      credential_configured: credentialConfigured(ctx.env, p.provider_key),
-      allowed_data_classes: policies.filter((d) => d.provider_id === p.id).map((d) => d.privacy_label),
-      latest_health: health.find((h) => h.provider_id === p.id) ?? null,
+    providers: providers.map((p) => {
+      const configured = credentialConfigured(ctx.env, p.provider_key);
+      return {
+        ...p,
+        /** The name THIS vendor's own credential lives under — a binding name where it is one. */
+        credential_name: credentialSourceName(p.provider_key),
+        credential_configured: configured,
+        /*
+         * ENABLED IS NOT THE SAME AS AVAILABLE, and conflating them is how a lane reads green and
+         * cannot be called. A provider that is switched on with no credential is reported here as
+         * unavailable, with the reason, rather than as configured.
+         */
+        available: p.enabled === 1 && p.kill_switched !== 1 && configured,
+        unavailable_reason:
+          p.enabled !== 1
+            ? "provider is disabled"
+            : p.kill_switched === 1
+              ? "provider is kill-switched"
+              : configured
+                ? null
+                : `no credential: ${credentialSourceName(p.provider_key)} is not set in this environment`,
+        allowed_data_classes: policies.filter((d) => d.provider_id === p.id).map((d) => d.privacy_label),
+        latest_health: health.find((h) => h.provider_id === p.id) ?? null,
+      };
+    }),
+    models: models.map((m) => ({
+      ...m,
+      /*
+       * Where an outage on this model would land. Derived from the model id rather than registered,
+       * so it cannot drift into a weaker "equivalent": it is the same model at its own vendor.
+       */
+      direct_fallback: (() => {
+        const direct = directVendorRouteFor(String(m.model ?? ""));
+        if (!direct) return null;
+        return {
+          provider_key: direct.providerKey,
+          model: direct.model,
+          configured: credentialConfigured(ctx.env, direct.providerKey),
+        };
+      })(),
     })),
-    models,
+    recent_fallbacks: recentFallbacks,
     notes: {
       credentials:
-        "credential_configured reports only whether a secret NAME is populated in this environment. No secret value is read, returned, or logged.",
+        `credential_configured reports only whether THIS VENDOR'S OWN secret name is populated in this environment. No secret value is read, returned, or logged. A provider whose own name is unset still falls back to the shared ${GENERIC_CREDENTIAL_NAME}, which is why a vendor can be configured without its own name being set.`,
       pricing:
-        "pricing_state is the provenance of the number beside it. ILLUSTRATIVE means placeholder configuration, not a vendor price.",
+        "pricing_state is the provenance of the number beside it. SOURCED means a vendor figure was read on the date recorded; ILLUSTRATIVE means nobody ever read one, and such a price takes no part in any cost comparison the router makes.",
       health:
         "A LOCAL_FIXTURE check verifies configuration coherence only. It is NOT evidence that the vendor is reachable.",
       egress: "Default deny: a data class not listed under a provider may never egress to it.",
+      fallback:
+        "recent_fallbacks is read from ai_run_routing, written by the AI boundary itself. An empty list means no run has ever failed over — not that failover is untested; the tests that prove it are tests/aiFallback.test.ts.",
     },
   });
 }
@@ -213,7 +298,17 @@ export async function handleRegisterModel(ctx: RouteContext): Promise<Response> 
   return json(row, { status: 201 });
 }
 
-const promoteSchema = z.object({ status: z.enum(["ACTIVE", "BENCH", "DEPRECATED"]), reason: z.string().trim().min(1) });
+const promoteSchema = z.object({
+  status: z.enum(["ACTIVE", "BENCH", "DEPRECATED"]),
+  reason: z.string().trim().min(1),
+  /**
+   * Required to promote a model whose price nobody has read. Not a formality: ACTIVE is what makes
+   * a model selectable, and price is what orders the selectable ones, so promoting on a placeholder
+   * number is how a guess becomes the firm's default. Saying so out loud makes it a decision on the
+   * record instead of a default nobody noticed.
+   */
+  price_unread_acknowledged: z.boolean().default(false),
+});
 
 export async function handlePromoteModel(ctx: RouteContext): Promise<Response> {
   const parsed = promoteSchema.safeParse(await parseJsonBody(ctx.request));
@@ -240,6 +335,25 @@ export async function handlePromoteModel(ctx: RouteContext): Promise<Response> {
         "promote to ACTIVE only with at least one recorded evaluation; record one (with its method) first",
       );
     }
+    /*
+     * A PLACEHOLDER PRICE MAY NOT QUIETLY BECOME THE FIRM'S DEFAULT.
+     *
+     * runAi keeps an unread price out of every cost comparison, which is the structural half. This
+     * is the other half, at the door where models become selectable at all: promoting a model whose
+     * `pricing_state` is ILLUSTRATIVE or UNKNOWN takes an explicit acknowledgement, and the
+     * acknowledgement is stored on the event. Migration 0158 needed neither, and a single seeded
+     * row re-elected an unsuitable model for every unpinned call in the firm.
+     */
+    if (
+      (model.pricing_state === "ILLUSTRATIVE" || model.pricing_state === "UNKNOWN") &&
+      !parsed.data.price_unread_acknowledged
+    ) {
+      return errorResponse(
+        409,
+        "price_never_read",
+        `this model's price is ${model.pricing_state} — nobody has read a figure from the vendor. Source a price first, or promote with price_unread_acknowledged: true and say why in the reason. Until a price is read it takes no part in any cost comparison, so this model will only ever run when something names it explicitly.`,
+      );
+    }
   }
 
   await ctx.env.WP_OS_DB.prepare("UPDATE provider_model SET status = ?2 WHERE id = ?1").bind(model.id, parsed.data.status).run();
@@ -249,7 +363,13 @@ export async function handlePromoteModel(ctx: RouteContext): Promise<Response> {
     actorId: ctx.identity!.id,
     objectType: "provider_model",
     objectId: model.id,
-    payload: { from: model.status, to: parsed.data.status, reason: parsed.data.reason },
+    payload: {
+      from: model.status,
+      to: parsed.data.status,
+      reason: parsed.data.reason,
+      pricing_state: model.pricing_state,
+      price_unread_acknowledged: parsed.data.price_unread_acknowledged,
+    },
   });
   return json(await ctx.env.WP_OS_DB.prepare("SELECT * FROM provider_model WHERE id = ?1").bind(model.id).first());
 }
@@ -283,7 +403,7 @@ export async function handleProviderHealthCheck(ctx: RouteContext): Promise<Resp
 
   const ok = problems.length === 0;
   const detail = ok
-    ? "LOCAL_FIXTURE: configuration is coherent. This is NOT evidence that the vendor is reachable — no request was made."
+    ? "LOCAL_FIXTURE: configuration is coherent. This is NOT evidence that the vendor is reachable. No request was made."
     : `LOCAL_FIXTURE: ${problems.join("; ")}. No request was made.`;
 
   await ctx.env.WP_OS_DB.prepare(

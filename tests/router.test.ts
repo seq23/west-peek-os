@@ -60,6 +60,28 @@ async function setFrontier(dailyCap = 100, perRunCap = 100): Promise<void> {
 /** Enable a provider and allow one label to egress to it. */
 async function enableProvider(providerId: string, label = "PUBLIC"): Promise<void> {
   await t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = ?1").bind(providerId).run();
+  /*
+   * TWO THINGS A FIXTURE NOW HAS TO SAY, both of them the point of migration 0177.
+   *
+   * ADOPTED: selection requires `provider_model.status = 'ACTIVE'`. Reading the pricing table alone
+   * is how three BENCH Workers AI models came to take every unpinned call in the firm, so a price
+   * no longer adopts a model — a human decision does.
+   *
+   * PRICED BY SOMEBODY: a price whose `pricing_state` is ILLUSTRATIVE takes no part in any cost
+   * comparison, because ranking on a number nobody read is how migration 0158 elected a search
+   * model for every judgement call. The seeded catalogue is entirely placeholders, so a fixture
+   * that wants its model to win on price has to state that the price is real. Tests that exercise
+   * the guard itself plant their own rows — see tests/aiFallback.test.ts.
+   */
+  await t.db
+    .prepare(
+      `UPDATE provider_model
+          SET status = 'ACTIVE', pricing_state = 'SOURCED', pricing_sourced_at = '2026-09-17T00:00:00.000Z'
+        WHERE provider_id = ?1`,
+    )
+    .bind(providerId)
+    .run();
+
   await t.db
     .prepare("INSERT OR REPLACE INTO provider_data_policy (id, provider_id, privacy_label, allowed) VALUES (?1, ?2, ?3, 1)")
     .bind(`pdp_${providerId}_${label}`, providerId, label)
@@ -76,7 +98,18 @@ function stubFetch(handler: (url: string) => { ok: boolean; body: unknown }): ty
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = makeTestEnv(t.db);
+  /*
+   * OPENROUTER IS DELIBERATELY LEFT UNCONFIGURED — the credential-gate test below depends on it.
+   * The other vendors are configured because their adapters fail closed before any network call
+   * (`credential_missing:<vendor>`), which the old generic adapter did not: it sent the request
+   * with no authorization header and a stub answered it. A test that expects a vendor call to
+   * complete now has to say that vendor is configured.
+   */
+  env = makeTestEnv(t.db, {
+    OPENAI_API_KEY: "test-openai",
+    WP_ANTHROPIC_API_KEY: "test-anthropic",
+    GEMINI_API_KEY: "test-gemini",
+  });
 });
 
 afterAll(async () => {
@@ -127,9 +160,19 @@ describe("the catalogue is honest about credentials, pricing, and health", () =>
     expect(res.status).toBe(201);
     expect(res.body.mode).toBe("LOCAL_FIXTURE");
     expect(res.body.detail).toContain("No request was made");
-    // Disabled + no credential in this environment, so it is not "healthy" either.
-    expect(res.body.ok).toBe(false);
-    expect(res.body.problems.join(" ")).toContain("OPENROUTER_API_KEY".replace("OPENROUTER", "AI_PROVIDER"));
+    // OpenAI is enabled since 0177 (a key exists in production) and configured in this suite's
+    // environment, so its configuration IS coherent — and the check still refuses to call that
+    // evidence the vendor is reachable, which is the whole point of the LOCAL_FIXTURE stamp.
+    expect(res.body.ok).toBe(true);
+
+    // Fireworks is the provider with no key anywhere, so it is the one that must report a MISSING
+    // CREDENTIAL BY ITS OWN NAME. THE FIX THIS ASSERTS: every vendor but OpenRouter used to report
+    // AI_PROVIDER_API_KEY, one name shared by five companies, which could not tell anybody which
+    // of them was actually unconfigured.
+    const fw = await call<{ ok: boolean; problems: string[] }>("/api/ai/providers/fireworks/health-check", MP, "POST");
+    expect(fw.body.ok).toBe(false);
+    expect(fw.body.problems.join(" ")).toContain("FIREWORKS_API_KEY");
+    expect(fw.body.problems.join(" ")).not.toContain("AI_PROVIDER_API_KEY");
   });
 
   it("refuses a LIVE evaluation that cites no run", async () => {
@@ -160,12 +203,33 @@ describe("the catalogue is honest about credentials, pricing, and health", () =>
     });
     expect(evaluated.status).toBe(201);
 
-    const promoted = await call<{ status: string }>("/api/ai/models/pm_openai_gpt4o_mini/status", MP, "POST", {
+    /*
+     * AND AN EVALUATION IS NO LONGER THE ONLY GATE. gpt-4o-mini's price is ILLUSTRATIVE — the P4
+     * seed, never read from anybody — and ACTIVE is what makes a model selectable at all. Promoting
+     * on a placeholder number is how a guess becomes the firm's default, so it now takes an
+     * explicit acknowledgement rather than happening by omission.
+     */
+    const unacknowledged = await call<{ error: string; detail: string }>("/api/ai/models/pm_openai_gpt4o_mini/status", MP, "POST", {
       status: "ACTIVE",
       reason: "best offline score for drafting",
     });
+    expect(unacknowledged.status).toBe(409);
+    expect(unacknowledged.body.error).toBe("price_never_read");
+    expect(unacknowledged.body.detail).toContain("nobody has read a figure from the vendor");
+
+    const promoted = await call<{ status: string }>("/api/ai/models/pm_openai_gpt4o_mini/status", MP, "POST", {
+      status: "ACTIVE",
+      reason: "best offline score for drafting; priced by nobody and we know it",
+      price_unread_acknowledged: true,
+    });
     expect(promoted.status).toBe(200);
     expect(promoted.body.status).toBe("ACTIVE");
+
+    // The acknowledgement is ON THE RECORD, not just accepted at the door.
+    const ev = await t.db
+      .prepare("SELECT payload_json FROM event_record WHERE object_id = 'pm_openai_gpt4o_mini' ORDER BY rowid DESC LIMIT 1")
+      .first<{ payload_json: string }>();
+    expect(JSON.parse(ev!.payload_json).price_unread_acknowledged).toBe(true);
   });
 });
 
@@ -321,6 +385,8 @@ describe("adapters fail closed without a credential", () => {
     const routing = await call<{ routing: { attempts_json: string; explanation: string } }>(`/api/ai/runs/${run.id}/routing`, MP);
     expect(routing.status).toBe(200);
     const attempts = JSON.parse(routing.body.routing.attempts_json) as Array<{ outcome: string; detail: string }>;
+    // FAILED, not FAILED_OVER: openrouter has no key here and nothing caught the work, which is
+    // exactly what the record should say. The two outcomes are different facts.
     expect(attempts[0]!.outcome).toBe("FAILED");
     expect(attempts[0]!.detail).toContain("credential_missing");
   });
@@ -403,7 +469,18 @@ describe("routing is explained, ordered, and opt-in", () => {
     const fetchImpl = stubFetch((url) =>
       url.includes("openai")
         ? { ok: false, body: { error: "upstream down" } }
-        : { ok: true, body: { text: "fallback answer", model: "gemini-1.5-flash", usage: { input_tokens: 5, output_tokens: 5, cost_usd: 0.0001 } } },
+        : {
+            ok: true,
+            // Gemini's own wire shape since 0177: `google` no longer resolves to the generic
+            // adapter, which posted to a path no vendor implements.
+            body: {
+              text: "fallback answer",
+              model: "gemini-1.5-flash",
+              candidates: [{ content: { parts: [{ text: "fallback answer" }] } }],
+              usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 5 },
+              usage: { input_tokens: 5, output_tokens: 5, cost_usd: 0.0001 },
+            },
+          },
     );
 
     const { run } = await runAi(
@@ -423,7 +500,9 @@ describe("routing is explained, ordered, and opt-in", () => {
     const routing = await call<{ routing: { attempts_json: string; fallback_used: number } }>(`/api/ai/runs/${run.id}/routing`, MP);
     const attempts = JSON.parse(routing.body.routing.attempts_json) as Array<{ provider_key: string; outcome: string }>;
     expect(attempts).toHaveLength(2);
-    expect(attempts[0]!.outcome).toBe("FAILED");
+    // FAILED_OVER, not FAILED: the attempt failed AND handed the work on, and the record says so
+    // rather than leaving "did anything catch this?" to be inferred.
+    expect(attempts[0]!.outcome).toBe("FAILED_OVER");
     expect(attempts[0]!.provider_key).toBe("openai");
     expect(attempts[1]!.outcome).toBe("COMPLETED");
     expect(routing.body.routing.fallback_used).toBe(1);
