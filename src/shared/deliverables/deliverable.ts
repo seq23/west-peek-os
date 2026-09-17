@@ -19,6 +19,7 @@
 export const DELIVERABLE_KINDS = [
   "daily_brief", "weekly_review", "research_packet", "ask_brief", "meeting_prep", "discrepancy_list", "blog_help",
   "productions_hire_search",
+  "event_kit",
 ] as const;
 
 export type DeliverableKind = (typeof DELIVERABLE_KINDS)[number];
@@ -140,6 +141,25 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     label: "Hire search",
     blurb: "This week's candidates for West Peek Productions' senior experiential producer — every profile checked live, judged, scored.",
     page: "home",
+    docType: "BRIEF",
+    file: true,
+  },
+  /*
+   * PARKER'S DRAFT PROPOSED EVENT KIT (17 Sep 2026). One with every monthly proposal, Rooms and
+   * Workshops both, for the single angle he would run — the header, the published description, the
+   * run of show with its On Screen column, the discussion guide and the two social posts.
+   *
+   * A DELIVERABLE RATHER THAN AN ATTACHMENT, AND THAT IS THE WHOLE DESIGN. The owner's own product
+   * says it in West Peek Live's instruction pages: "The email never carries the text, so correcting
+   * a page corrects it for everyone who already has the link." A kit is a DRAFT — it changes when a
+   * date moves or a co-host is named — and an attachment cannot be corrected once it has been sent.
+   * So the email carries the TL;DR and the link, and this is what the link opens.
+   */
+  event_kit: {
+    key: "event_kit",
+    label: "Draft event kit",
+    blurb: "The month's proposed event, written to run: run of show with who is on screen, the host's questions, and the posts.",
+    page: "rooms",
     docType: "BRIEF",
     file: true,
   },
