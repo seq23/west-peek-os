@@ -13,6 +13,7 @@ import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { guidanceBlock } from "../../shared/skills/library";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
+import { PRODUCTIONS_PARTNER } from "../../shared/registry/partners";
 
 /**
  * Walker helping West Peek Productions — Scooter's OWN agency, not part of the fund (15 Sep 2026).
@@ -40,8 +41,19 @@ import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
  */
 
 export const PRODUCTIONS_SITE = "https://westpeekproductions.com";
-export const SCOOTER_EMAIL = "scooter@westpeek.ventures";
-export const SCOOTER_FIRM_USER_ID = "fu_scooter_taylor";
+
+/*
+ * SCOOTER, ASKED FOR RATHER THAN TYPED (17 Sep 2026).
+ *
+ * These two constants used to be string literals here — a second statement of what `firm_user` and
+ * `ASSIGNING_PARTNERS` already said, and the pair a new feature could check neither of. They are
+ * now a view of `shared/registry/partners.ts`, the one place the firm answers "is this one of the
+ * two partners, and which one?". The names stay because every caller in this file and in
+ * `productionsHire.ts` reads them; what changed is that they can no longer drift from the identity
+ * the database and the mail boundary use.
+ */
+export const SCOOTER_EMAIL = PRODUCTIONS_PARTNER.email;
+export const SCOOTER_FIRM_USER_ID = PRODUCTIONS_PARTNER.firmUserId;
 
 /**
  * What West Peek Productions sells, read from westpeekproductions.com on 15 Sep 2026 (fetched,

@@ -7,7 +7,7 @@ import { fromAddressFor } from "../services/sendAs";
 import { trySendAsPartner } from "../services/googleConnect";
 import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
 import { aiOutboundSwitches, mayAiEmail } from "../../shared/policy/aiOutbound";
-import { MANAGING_PARTNERS } from "../../shared/registry/managingPartners";
+import { PARTNERS, PARTNER_EMAILS } from "../../shared/registry/partners";
 import { employeeSenderAddress } from "../../shared/registry/employeeMail";
 import type { EmailSendResult } from "./emailTransport";
 import {
@@ -355,6 +355,16 @@ export async function executeExternalEffect(
  * on it is EXTERNAL, which is the safe direction to be wrong in.
  */
 function managingPartnerEmails(env: Env): string[] {
-  const domain = env.WP_OS_PARTNER_EMAIL_DOMAIN ?? "westpeek.ventures";
-  return MANAGING_PARTNERS.map((mp) => `${mp.firstName.toLowerCase()}@${domain}`);
+  /*
+   * THE REGISTRY'S OWN ADDRESSES WHEN THE DOMAIN IS THE FIRM'S, rebuilt from first names only when
+   * an environment has overridden the domain (a preview stack, a rehearsal domain). Before 17 Sep
+   * 2026 this ALWAYS rebuilt the address from a first name and a domain, which is a third way of
+   * spelling a partner's address and could disagree with the two that already existed. Asking
+   * `shared/registry/partners.ts` is the default; the override is kept because a firm's mail domain
+   * is not something to hard-code, and anything not on the list is EXTERNAL either way — the safe
+   * direction to be wrong in.
+   */
+  const domain = env.WP_OS_PARTNER_EMAIL_DOMAIN;
+  if (!domain) return [...PARTNER_EMAILS];
+  return PARTNERS.map((p) => `${p.firstName.toLowerCase()}@${domain}`);
 }
