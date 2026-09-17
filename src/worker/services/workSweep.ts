@@ -4,6 +4,7 @@ import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
+import { blockCard, resurfaceStaleBlocks } from "./blocks";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 
 /** A Productions card, by kind — kept here (not imported) so the sweep and productions.ts do not import each other. */
@@ -225,13 +226,28 @@ export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCa
       .all<SweepCard>()
   ).results ?? [];
   for (const card of rows) {
-    const why = `Could not finish after ${MAX_WORK_ATTEMPTS} attempts. The last attempt was cut off before it could report (the run was killed mid-step). Decide what to do with it: reassign, rewrite the brief, or cancel.`;
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2, lease_until = NULL WHERE id = ?1 AND state = 'IN_PROGRESS'")
-      .bind(card.id, why)
-      .run();
+    const why = await blockCard(env, card, {
+      reason: "stopped_part_way",
+      trying: card.title,
+      employee: await employeeName(env, card.owner_id),
+      who: isProductionsKind(card.kind) ? "SCOOTER" : "SEQUOIA",
+    }, now);
     await announceOutcome(env, card, "BLOCKED", why);
   }
   return rows;
+}
+
+/**
+ * The technical account of a failed attempt, kept WHERE AN ENGINEER LOOKS and not on the partner's
+ * sentence. Deleting it would trade one bad outcome for another: a block nobody can diagnose.
+ */
+async function appendFailureNote(env: Env, cardId: string, detail: string): Promise<void> {
+  if (!detail.trim()) return;
+  await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• For an engineer, the last attempt reported: ' || ?2, 1, 16000) WHERE id = ?1",
+  )
+    .bind(cardId, detail.slice(0, 900))
+    .run();
 }
 
 export async function sweepOnce(
@@ -247,6 +263,8 @@ export async function sweepOnce(
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
+  // NOTHING STAYS STUCK SILENTLY: a block nobody has acted on rings again rather than ageing out.
+  await resurfaceStaleBlocks(env, now);
   const card = await claimNextCard(env, now);
   if (!card) {
     return { status: "SUCCEEDED", summary: "nothing waiting: every card an employee owns is done, blocked, or being worked", card: null, outcome: "NOTHING_WAITING" };
@@ -383,10 +401,22 @@ export async function sweepOnce(
 
   // Neither done nor blocked: the run died or the employee chose nothing usable.
   if (card.work_attempts >= MAX_WORK_ATTEMPTS) {
-    const why = `Could not finish after ${MAX_WORK_ATTEMPTS} attempts. Last attempt: ${detail || "no usable action was chosen"}. Decide what to do with it: reassign, rewrite the brief, or cancel.`;
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
-      .bind(card.id, why)
-      .run();
+    /*
+     * WHAT THE LAST ATTEMPT SAID IS NOT WHAT SHE READS.
+     *
+     * This line used to paste `detail` — a thrown message from wherever the run died — straight
+     * onto the card. Parker's October Workshop therefore said "DISCOVER: the judgement pass failed:
+     * the judgement was routed to the search model", which named three internal things and asked
+     * her to fix none of them. The failure text is still kept, on the card's own record where an
+     * engineer can find it; what the partner reads is a sentence and four buttons.
+     */
+    await appendFailureNote(env, card.id, detail);
+    const why = await blockCard(env, card, {
+      reason: "tried_and_could_not_finish",
+      trying: card.title,
+      employee: await employeeName(env, card.owner_id),
+      who: isProductionsKind(card.kind) ? "SCOOTER" : "SEQUOIA",
+    }, now);
     await announceOutcome(env, card, "BLOCKED", why);
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" blocked after ${MAX_WORK_ATTEMPTS} failed attempts and handed to you: ${detail.slice(0, 140)}`, card, outcome: "BLOCKED" };
   }

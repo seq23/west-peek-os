@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { Actor } from "../services/authorize";
 import type { PrivacyLabel } from "../../shared/privacy";
+import { isSearchGrounded } from "../../shared/ai/models";
 import { createMockLocalAdapter, MOCK_LOCAL_MODEL } from "./providers/mockLocal";
 import type { ProviderAdapter } from "./providers/types";
 import { redactInputs, scrubInputs } from "./scrub";
@@ -92,6 +93,25 @@ export interface RunAiBudgetContext {
   expectedOutputTokens?: number;
   /** NORMAL-mode model preference (CHEAPO overrides with cheapest adequate). */
   preferredModel?: string;
+  /**
+   * THIS CALL IS JUDGEMENT, NOT MACHINERY (16 Sep 2026).
+   *
+   * Set it when the call INTERPRETS what a partner meant, DECIDES what is worth keeping, or DRAFTS
+   * something she will send. Two consequences, and both exist because of a specific failure:
+   *
+   *   1. A SEARCH-GROUNDED MODEL IS NEVER A CANDIDATE. Parker's Workshop packet blocked three times
+   *      because the judge was routed to `perplexity/sonar` — the cheapest priced model on the
+   *      account since 0158 — and refused its own answer. Callers said "must not be the search
+   *      model" in an if-statement AFTER the run; now they say it to the router before one.
+   *   2. A COST POSTURE CANNOT DOWNGRADE IT. CHEAPO exists so the firm can get to nearly nothing,
+   *      and it should: a URL check, a format pass, a dedupe. Writing the packet Sequoia forwards
+   *      to Scooter is not the place to save two dollars, and the difference between those two
+   *      kinds of call was implicit in whoever remembered to pass `preferredModel`. It is explicit
+   *      here.
+   *
+   * Mechanical steps leave it off and stay cheap. That is the whole distinction.
+   */
+  judgement?: boolean;
   /** Pin a specific provider by provider_key. */
   providerKey?: string;
 }
@@ -966,13 +986,29 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   // Precedence, most specific first: machine model policy → task routing policy →
   // explicit preferred model → cheapest adequate. Every step is recorded in the
   // explanation, so "why this model?" is answerable from stored fact.
-  const routingCandidates: RoutingCandidate[] = options.map((o) => ({
+  const allCandidates: RoutingCandidate[] = options.map((o) => ({
     providerId: o.provider.id,
     providerKey: o.provider.provider_key,
     model: o.pricing.model,
     estimatedCostUsd: estimateFor(o),
     baseUrl: o.provider.base_url,
   }));
+
+  /*
+   * JUDGEMENT WORK DOES NOT GO TO A SEARCH MODEL, and the filter happens here rather than in the
+   * caller's if-statement afterwards. Falls back to the whole list when filtering would leave
+   * nothing: a firm with only a search model registered should get a worse answer and an
+   * explanation on the run, not a refusal it cannot act on.
+   */
+  const isJudgement = input.budgetContext?.judgement === true;
+  const notSearch = allCandidates.filter((c) => !isSearchGrounded(c.model));
+  const routingCandidates: RoutingCandidate[] = isJudgement && notSearch.length > 0 ? notSearch : allCandidates;
+  const searchExcluded = isJudgement && notSearch.length > 0 && notSearch.length < allCandidates.length;
+  const judgementNote = searchExcluded
+    ? " This call interprets or drafts, so the search-grounded models were not candidates."
+    : isJudgement && notSearch.length === 0
+      ? " This call interprets or drafts, but every available model is search-grounded, so one was used anyway."
+      : "";
 
   const machinePolicy = input.routing?.machineId
     ? await env.WP_OS_DB.prepare("SELECT * FROM machine_model_policy WHERE machine_id = ?1")
@@ -1000,6 +1036,13 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
       ordered.length > 0
         ? `routing policy '${routePolicy.task_class}' v${routePolicy.version_no}: ${ordered.map((c) => `${c.providerKey}/${c.model}`).join(" → ")}${routePolicy.allow_fallback ? " (fallback allowed)" : " (no fallback)"}`
         : `routing policy '${routePolicy.task_class}' v${routePolicy.version_no} names no available candidate`;
+  } else if (routePolicy && isJudgement) {
+    // THE ONE POSTURE THAT OVERRIDES A PIN DOES NOT OVERRIDE JUDGEMENT. "Free only" is a lever for
+    // volume; the pin on work that decides what a partner meant is a quality decision and stands.
+    ordered = orderByPolicy(routePolicy, routingCandidates);
+    explanation =
+      `spend posture is 'free only', but routing policy '${routePolicy.task_class}' v${routePolicy.version_no} stands: ` +
+      `this call interprets or drafts and is not downgradeable by a cost posture.${judgementNote}`;
   } else if (routePolicy) {
     /*
      * THE ONE POSTURE THAT OVERRIDES A PIN, and it says so on the record.
@@ -1037,28 +1080,32 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
      * Only reached when nothing is pinned. A pin is somebody's per-task quality decision and this
      * posture must never be able to make pinned work worse.
      */
-    const prefersFrontier = Number(policy.prefers_frontier ?? 0) === 1 && effectiveCostMode !== "CHEAPO";
+    // Judgement work reads as "best available" whatever the posture says — see `judgement` above.
+    const prefersFrontier = (Number(policy.prefers_frontier ?? 0) === 1 && effectiveCostMode !== "CHEAPO") || isJudgement;
     const cheapest = routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
     const dearest = routingCandidates.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
     let head: RoutingCandidate;
-    if (effectiveCostMode !== "CHEAPO" && preferred) {
+    if ((effectiveCostMode !== "CHEAPO" || isJudgement) && preferred) {
       head = routingCandidates.find((c) => c.model === preferred) ?? (prefersFrontier ? dearest : cheapest);
       explanation =
         head.model === preferred
           ? `no routing policy for this task; caller preferred ${preferred}`
           : `no routing policy for this task; preferred model ${preferred} unavailable, fell to ${prefersFrontier ? "the dearest available (spend posture 'best available')" : "cheapest adequate"}`;
+      explanation += judgementNote;
     } else if (prefersFrontier) {
       head = dearest;
       explanation =
-        `spend posture is 'best available', so unpinned work takes the dearest priced capable model ` +
-        `rather than the cheapest: ${head.providerKey}/${head.model}. Price is the only quality signal ` +
-        `in the model registry, so this is a proxy for capability and not a benchmark result.`;
+        (isJudgement
+          ? `this call interprets or drafts, so it takes the dearest priced capable model rather than the cheapest: `
+          : `spend posture is 'best available', so unpinned work takes the dearest priced capable model rather than the cheapest: `) +
+        `${head.providerKey}/${head.model}. Price is the only quality signal ` +
+        `in the model registry, so this is a proxy for capability and not a benchmark result.${judgementNote}`;
     } else {
       head = cheapest;
       explanation =
-        effectiveCostMode === "CHEAPO"
+        (effectiveCostMode === "CHEAPO"
           ? "CHEAPO cost mode: cheapest adequate priced model"
-          : "no routing policy for this task; cheapest adequate priced model";
+          : "no routing policy for this task; cheapest adequate priced model") + judgementNote;
     }
     // No policy → no fallback. Behaviour is exactly P4's.
     ordered = [head];

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { readableDate, shortDate } from "../lib/dates";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
+import type { Block, BlockActionKey } from "@shared/work/blocks";
 import { portraitFor } from "../lib/employeePortraits";
 
 /**
@@ -50,6 +51,8 @@ interface WorkCardRow {
   allows_browser?: number;
   kind?: string | null;
   work_attempts?: number;
+  /** 0173 — present only while the card is blocked: the four sentences and the doors. */
+  block?: (Block & { blockedAt: string | null }) | null;
   looks?: Array<{
     id: string; objective: string; start_url: string; status: string;
     result_text: string | null; refusal_reason: string | null;
@@ -133,6 +136,16 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
       if (!next.delete(id)) next.add(id);
       return next;
     });
+  /**
+   * THE BLOCK YOU ARE CLEARING, and what you are typing into it.
+   *
+   * Operator, 16 Sep 2026: "parker is blocked … i dont understand what he is blocked on and how to
+   * help him myself." A blocked card now opens its own panel whether or not the card is expanded —
+   * it is the one state where the card is a question addressed to you, and making you press a
+   * chevron first to find that out is the same dead end with an extra click.
+   */
+  const [clearing, setClearing] = useState<{ card: string; action: BlockActionKey } | null>(null);
+  const [clearText, setClearText] = useState("");
   const [lookObjective, setLookObjective] = useState("");
   const [lookUrl, setLookUrl] = useState("");
   const [title, setTitle] = useState("");
@@ -275,6 +288,23 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
     });
     setMessage(res.data?.detail ?? null);
     board.reload();
+  }
+
+  /**
+   * Clear a block. The answer is not a comment: the server reopens the card, resets its attempts
+   * and puts what you typed where the employee reads it on their next run.
+   */
+  async function clearBlock(id: string, action: BlockActionKey, choice?: string) {
+    setBusy(true);
+    const res = await api<{ ok?: boolean; said?: string }>(`/api/work-cards/${id}/unblock`, {
+      method: "POST",
+      body: { action, ...(clearText.trim() ? { text: clearText.trim() } : {}), ...(choice ? { choice } : {}) },
+    });
+    setBusy(false);
+    setMessage(res.data?.said ?? "Could not do that.");
+    if (res.data?.ok) { setClearing(null); setClearText(""); }
+    board.reload();
+    onChanged();
   }
 
   async function move(id: string, state: string) {
@@ -534,21 +564,117 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         not by reading eight owner lines. */}
                     <span className="work-card-foot">
                       <OwnerChip name={c.owner_type === "UNASSIGNED" ? null : c.owner_name ?? null} />
-                      {c.next_action && <span className="muted small work-card-next">{c.next_action}</span>}
+                      {/* A blocked card's next action IS the block sentence, and the panel below
+                          says it properly with its buttons. Twice is noise. */}
+                      {c.next_action && !c.block && <span className="muted small work-card-next">{c.next_action}</span>}
                     </span>
                   </button>
+
+
+                  {/*
+                    THE BLOCK, OUTSIDE THE FOLD. Everything else on a card is detail you go looking
+                    for; a block is a question addressed to you, and it reads before you open
+                    anything. Four sentences in the order a person asks them — what was this, what
+                    stopped, what would fix it, who can — and then the doors.
+                  */}
+                  {c.block && (
+                    <div className="card-block" data-testid={`work-card-block-${c.id}`}>
+                      <p className="lbl">Blocked — waiting on {c.block.who === "ENGINEER" ? "an engineer" : c.block.who === "SCOOTER" ? "Scooter" : "you"}</p>
+                      <p data-testid={`work-card-block-stopped-${c.id}`}><strong>{c.block.stopped}</strong></p>
+                      <p className="small">What was asked for: {c.block.trying}</p>
+                      <p className="small" data-testid={`work-card-block-needed-${c.id}`}>What would clear it: {c.block.needed}</p>
+                      {c.block.who === "ENGINEER" && (
+                        <p className="notice small">
+                          This one is not yours to answer. Sending it on tells whoever maintains the system
+                          what happened and what they will need; the card stays here until they have fixed it.
+                        </p>
+                      )}
+
+                      <div className="notification-actions">
+                        {c.block.actions.map((a) => (
+                          <button
+                            key={a.key}
+                            type="button"
+                            className={a.key === "ANSWER" ? "btn-strong" : undefined}
+                            data-testid={`work-card-block-${a.key.toLowerCase()}-${c.id}`}
+                            title={a.hint}
+                            onClick={() => {
+                              setClearText("");
+                              setClearing(clearing?.card === c.id && clearing.action === a.key ? null : { card: c.id, action: a.key });
+                            }}
+                          >
+                            {a.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {clearing?.card === c.id && (
+                        <div className="card-block-form" data-testid={`work-card-block-form-${c.id}`}>
+                          <p className="muted small">
+                            {c.block.actions.find((a) => a.key === clearing.action)?.hint}
+                          </p>
+                          {/* A YES-OR-NO ANSWER IS TWO BUTTONS, not a box to type "yes" into. The
+                              choice also DOES the thing — saying yes to a page grants it. */}
+                          {clearing.action === "ANSWER" && (c.block.actions.find((a) => a.key === "ANSWER")?.choices ?? []).length > 0 ? (
+                            <div className="notification-actions">
+                              {c.block.actions.find((a) => a.key === "ANSWER")!.choices!.map((ch) => (
+                                <button
+                                  key={ch.key}
+                                  type="button"
+                                  className="btn-strong"
+                                  disabled={busy}
+                                  data-testid={`work-card-block-choice-${ch.key}-${c.id}`}
+                                  onClick={() => void clearBlock(c.id, "ANSWER", ch.key)}
+                                >
+                                  {ch.label}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <>
+                              <textarea
+                                rows={3}
+                                value={clearing.card === c.id ? clearText : ""}
+                                data-testid={`work-card-block-text-${c.id}`}
+                                aria-label={`Your answer for ${c.title}`}
+                                placeholder={
+                                  clearing.action === "DROP"
+                                    ? "Why you are dropping it — kept on the record"
+                                    : clearing.action === "ESCALATE"
+                                      ? "Anything an engineer should know (optional)"
+                                      : clearing.action === "CHANGE"
+                                        ? "The job, rewritten in your own words"
+                                        : "Your answer, in your own words"
+                                }
+                                onChange={(e) => setClearText(e.target.value)}
+                              />
+                              <button
+                                type="button"
+                                className="btn-strong"
+                                disabled={busy}
+                                data-testid={`work-card-block-send-${c.id}`}
+                                onClick={() => void clearBlock(c.id, clearing.action)}
+                              >
+                                {clearing.action === "DROP" ? "Drop it" : clearing.action === "ESCALATE" ? "Send it on" : "Send it"}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {isOpen && (
                     <>
               <div className="work-card-body">
-                {c.next_action ? (
+                {c.next_action && !c.block ? (
                   <div>
                     <p className="lbl">Next</p>
                     {/* Usually one line. When an employee blocks, its whole question lands here,
                         which is a paragraph — so this is bounded like the findings are. */}
                     <div className="work-card-longtext">{c.next_action}</div>
                   </div>
-                ) : (
+                ) : c.block ? null : (
                   <p className="muted small">No next action — nobody knows what to do with this yet.</p>
                 )}
                 {/* WHAT IS IN THE DESCRIPTION, and why it needed a box of its own.

@@ -2410,6 +2410,39 @@ details h3 {
    the things the grid does not. */
 .work-card-body { min-width: 0; }
 
+/* ── A block, which is a question addressed to you ─────────────────────────────
+ * Operator, 16 Sep 2026: "i dont understand what he is blocked on and how to help
+ * him myself." A blocked card renders this WHETHER OR NOT the card is expanded,
+ * because it is the one state where the card is asking you something — making you
+ * find it behind a chevron is the same dead end with an extra click.
+ *
+ * WARN, NOT ACCENT. Orange is this system's "do this one thing" colour and it is
+ * spent on the primary action inside the panel, not on the panel itself; a board
+ * of blocked cards all glowing accent would spend it on nothing.
+ * ───────────────────────────────────────────────────────────────────────────── */
+.card-block {
+  margin: var(--space-md) 0 0;
+  padding: var(--space-md);
+  border: 1px solid var(--wp-line);
+  border-left: 3px solid var(--wp-warn);
+  border-radius: var(--radius-sm);
+  background: var(--wp-warn-tint);
+}
+
+.card-block p { margin: 0 0 var(--space-sm); }
+
+.card-block-form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--wp-line);
+}
+
+.card-block-form textarea { width: 100%; }
+
 /* ── Disclosures that have to LOOK like buttons ────────────────────────────────
  * A <details><summary> is the right control for "reveal a form I rarely need" —
  * native, keyboard-operable, no state to manage. Its default rendering is the

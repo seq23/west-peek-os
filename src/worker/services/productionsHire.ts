@@ -5,6 +5,7 @@ import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { SEARCH_MODEL } from "./liveSearch";
+import { blockCard } from "./blocks";
 import { urlStatus } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
@@ -558,7 +559,7 @@ const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
     actor,
     inputs: [prompt],
     sensitivity: "PUBLIC" as never,
-    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter" },
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
@@ -612,8 +613,13 @@ export async function runHireSearchCard(
   }
 
   if (kept.length === 0) {
-    const blocked = `No candidate survived the checks this week — ${why}. Nothing was emailed. Run it again, or tell Walker where to look.`;
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, blocked).run();
+    const blocked = await blockCard(env, card, {
+      reason: "nothing_good_enough_to_send",
+      trying: card.title,
+      employee: "Walker",
+      who: "SCOOTER",
+      detail: "Tell Walker where to look or what would count, or leave it until next week — nobody he found this week stood up to the checks.",
+    });
     return { finished: false, blocked: true, detail: blocked };
   }
 
@@ -621,8 +627,13 @@ export async function runHireSearchCard(
   if (remembered.fresh.length === 0) {
     // Everything found this week was already shown or acted on. A note that repeats last week's
     // names is noise; the card says why and the quiet notice reaches Scooter.
-    const blocked = `Nothing new this week: ${remembered.seenBefore.length} candidate(s) were in an earlier note and ${remembered.actedOn.length} you already contacted or passed. Nothing was emailed. Run it again, or tell Walker where to look.`;
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, blocked).run();
+    const blocked = await blockCard(env, card, {
+      reason: "nothing_new_since_last_time",
+      trying: card.title,
+      employee: "Walker",
+      who: "SCOOTER",
+      detail: `Say whether to widen the search — ${remembered.seenBefore.length} name(s) were in an earlier note and ${remembered.actedOn.length} you have already contacted or passed.`,
+    });
     return { finished: false, blocked: true, detail: blocked };
   }
 

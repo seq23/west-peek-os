@@ -178,6 +178,7 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('work_card.create', 'Create work card', 'Create a unit of governed work, optionally from a capture.', 0, 0),
   ('standing_authority.grant', 'Delegate an approval ahead of time', 'Grant standing authority for one action, bounded by a use count and an expiry. Can never cover a reserved action or an external effect — those come back to a partner every time.', 0, 0),
   ('work_card.update', 'Update work card', 'Change work-card state, owner, priority, or next action.', 0, 0),
+  ('work_card.unblock', 'Clear a block on an employee''s work', 'Answer the question an employee is stuck on, change what was asked for, drop the work, or send it to an engineer. An answer reaches the employee on their next run.', 0, 0),
   ('approval.request', 'Request approval', 'Draft or submit an approval card for a governed action.', 0, 0),
   ('approval.decide', 'Decide approval', 'Approve, reject, or request revision on a pending approval card (human with required role only).', 0, 0),
   ('approval.reopen', 'Change a decision already made', 'Record a new decision that supersedes an earlier one on the same card, with a required reason. The original decision is never edited or erased, and something already carried out can never be reopened.', 0, 0),

@@ -5,6 +5,7 @@ import { createWorkCardInternal } from "../src/worker/services/workCards";
 import { MAX_WORK_ATTEMPTS, claimNextCard, settleAbandonedCards, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { runDueJobs } from "../src/worker/services/jobs";
 import { STEPS_PER_TICK } from "../src/shared/work/employeeLoop";
+import { blockCard } from "../src/worker/services/blocks";
 
 /**
  * The sweep that works the cards employees own — proven without a model.
@@ -86,10 +87,15 @@ describe("assignment causes work", () => {
   it("a card the employee cannot finish goes BLOCKED with the question, and the partners are told", async () => {
     const id = await card("Deal flow: Helios Grid");
     const out = await sweepOnce(env, NOW, {
+      // 0173: a card cannot reach BLOCKED by raw UPDATE any more — the trigger refuses a block
+      // that does not say what stopped it and how to clear it. The loop goes through `blockCard`.
       general: async (e, _ctx, cardId) => {
-        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
-          .bind(cardId, "Is a $2M pre-seed inside the mandate?")
-          .run();
+        await blockCard(e, { id: cardId, title: "Deal flow: Helios Grid", firm_scope: "west-peek", owner_id: "aie_wyatt" }, {
+          reason: "a_question_for_you",
+          trying: "Deal flow: Helios Grid",
+          employee: "Wyatt",
+          detail: "Is a $2M pre-seed inside the mandate?",
+        });
         return { finished: false, blocked: true, detail: "Is a $2M pre-seed inside the mandate?", steps: [{ action: "blocked", detail: "Is a $2M pre-seed inside the mandate?" }] };
       },
     });
@@ -97,6 +103,12 @@ describe("assignment causes work", () => {
     const n = await notices(id);
     expect(n[0]!.title).toMatch(/Wyatt is blocked on/);
     expect(n[0]!.severity).toBe("WARNING");
+    // WHAT SHE READS: a plain sentence, the assignment in her words, and what would clear it.
+    const blocked = await state(id);
+    expect(blocked.next_action).toMatch(/Wyatt needs something from you/);
+    expect(blocked.next_action).toMatch(/Is a \$2M pre-seed inside the mandate\?/);
+    expect(blocked.next_action).not.toMatch(/work_card|next_action|BLOCKED/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
   });
 
   it("a run that took its steps and ran out is PROGRESSED, costs no attempt, and the next tick continues the same card", async () => {
@@ -147,8 +159,13 @@ describe("assignment causes work", () => {
     expect(last.outcome).toBe("BLOCKED");
     const s = await state(id);
     expect(s.state).toBe("BLOCKED");
-    expect(s.next_action).toMatch(/Could not finish after 3 attempts/);
-    expect(s.next_action).toMatch(/provider returned 429/);
+    // THE PARTNER'S SENTENCE CARRIES NO MACHINE DETAIL (0173). The failure itself is kept, on the
+    // card's own record where an engineer looks, and not in the line she reads.
+    expect(s.next_action).toMatch(/Wyatt tried three times and could not get this done/);
+    expect(s.next_action).toMatch(/Find accelerators in Texas/);
+    expect(s.next_action).not.toMatch(/provider returned 429/);
+    const found = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(id).first<{ description: string | null }>())!;
+    expect(found.description).toMatch(/provider returned 429/);
     // And it is not picked up again.
     const next = await sweepOnce(env, new Date(NOW.getTime() + 10 * 60_000), { general: failing });
     expect(next.card?.id).not.toBe(id);
@@ -164,7 +181,7 @@ describe("assignment causes work", () => {
     const s = await state(id);
     expect(s.state).toBe("BLOCKED");
     expect(s.lease_until).toBeNull();
-    expect(s.next_action).toMatch(/cut off before it could report/);
+    expect(s.next_action).toMatch(/was part way through this and the work stopped before they could report/);
     expect((await notices(id))[0]!.title).toMatch(/is blocked on/);
     // A card whose lease is still held is a run in flight, not abandoned.
     const live = await card("Still running");

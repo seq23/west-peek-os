@@ -12,6 +12,7 @@ import type { Binding, Slide } from "../../shared/deck/definition";
 import { runAi } from "../ai/runAi";
 import { getDocument, getDocumentVersion } from "./documents";
 import { createWorkCardInternal } from "./workCards";
+import { blockCard } from "./blocks";
 import type { FirmUserIdentity } from "../auth";
 import {
   initialCapitalUsd, investableBase, reserveUsd, sleeveTargetUsd, usd,
@@ -877,9 +878,9 @@ export async function runDeckRework(
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1").bind(card.id).run();
     return { finished: true, blocked: false, detail };
   }
-  await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
-    .bind(card.id, `The deck could not be rendered: ${out.renderNote}`)
-    .run();
+  // THE RENDER FAULT IS AN ENGINEER'S, and the block says so rather than handing her a reason she
+  // cannot act on. The technical note stays on the card's own record, written above.
+  await blockCard(env, card, { reason: "the_file_would_not_build", trying: card.title, employee: DECK_OWNER });
   return { finished: false, blocked: true, detail };
 }
 

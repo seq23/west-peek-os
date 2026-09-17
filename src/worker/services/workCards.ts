@@ -7,6 +7,7 @@ import { appendEvent } from "../events";
 import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy";
 import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityClause } from "./authorize";
 import { getVisibleCapture } from "./captures";
+import { blockOf } from "./blocks";
 
 /**
  * Work spine (P3): the unit of governed work. State transitions are enforced
@@ -480,6 +481,20 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
   const authz = await authorize(env, actor, "work_card.update", { objectType: "work_card", objectId: card.id, firmScope: card.firm_scope });
   if (authz.decision !== "ALLOW") return json({ error: "forbidden", reason: authz.reason }, { status: 403 });
 
+  /*
+   * A PERSON DOES NOT BLOCK A CARD FROM HERE (0173). A block has to say what stopped the work,
+   * what would clear it and who can clear it — the columns are NOT NULL at the row for that
+   * reason — and this handler carries none of them, so the write would be refused by the trigger
+   * with a message nobody could act on. Nothing in the UI offers it; what a person does with work
+   * they have decided against is Drop, which is its own state and its own record.
+   */
+  if (input.state === "BLOCKED" && card.state !== "BLOCKED") {
+    return json(
+      { error: "cannot_block_by_hand", detail: "Only an employee blocks work, and only with a reason and a way to clear it. If you have decided against this, drop it." },
+      { status: 409 },
+    );
+  }
+
   if (input.state !== undefined && input.state !== card.state) {
     if (!canTransition(card.state as WorkCardState, input.state)) {
       return json(
@@ -545,6 +560,11 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   const cards = await ctx.env.WP_OS_DB.prepare(
     `SELECT wc.id, wc.title, wc.description, wc.state, wc.priority, wc.owner_type, wc.owner_id,
             wc.next_action, wc.due_at, wc.capture_id, wc.created_at, wc.allows_browser,
+            COALESCE(wc.work_attempts, 0) AS work_attempts,
+            -- 0173: a block carries its own sentences and its own doors, so the page never has to
+            -- guess what a partner can do about it.
+            wc.block_reason, wc.block_trying, wc.block_stopped, wc.block_needed, wc.block_who,
+            wc.block_actions_json, wc.blocked_at, wc.block_answered_at,
             COALESCE(e.name, u.full_name) AS owner_name,
             e.role AS owner_role
        FROM work_card wc
@@ -593,7 +613,11 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   ).all<{ id: string; full_name: string }>();
 
   return json({
-    cards: (cards.results ?? []).map((c) => ({ ...c, looks: looksByCard.get(String(c.id)) ?? [] })),
+    cards: (cards.results ?? []).map((c) => ({
+      ...c,
+      looks: looksByCard.get(String(c.id)) ?? [],
+      block: blockOf(c as never),
+    })),
     recent_runs: runs.results ?? [],
     /** Everyone a card can be given to, so the UI never offers an owner the server would refuse. */
     assignable: {

@@ -382,7 +382,10 @@ describe("the weekly card on Walker's desk", () => {
     });
     expect(again.card?.id).toBe(third.cardId);
     expect(again.outcome).toBe("BLOCKED");
-    expect(again.summary).toMatch(/Nothing new this week: 2 candidate\(s\) were in an earlier note and 1 you already contacted or passed/);
+    expect(again.summary).toMatch(/Everything Walker found this time you have already seen/);
+    const row = await env.WP_OS_DB.prepare("SELECT next_action, block_who FROM work_card WHERE id = ?1").bind(third.cardId).first<{ next_action: string; block_who: string }>();
+    expect(row!.next_action).toMatch(/2 name\(s\) were in an earlier note and 1 you have already contacted or passed/);
+    expect(row!.block_who, "Walker's Productions work is Scooter's desk").toBe("SCOOTER");
     const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(third.cardId).first<{ n: number }>();
     expect(mails!.n).toBe(0);
   });
@@ -403,7 +406,7 @@ describe("the weekly card on Walker's desk", () => {
     expect(out.outcome).toBe("BLOCKED");
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toMatch(/Your previous answer was discarded: every page was dead or unreadable: Nobody/);
-    expect(out.summary).toMatch(/No candidate survived the checks this week/);
+    expect(out.summary).toMatch(/Walker looked and found nothing solid enough to put in front of you/);
     const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(opened.cardId).first<{ n: number }>();
     expect(mails!.n).toBe(0);
   });
