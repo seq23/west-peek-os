@@ -103,9 +103,16 @@ test("asking Parker for a Room records the brief and opens his card before anyth
   await cardAgain.locator('[data-testid^="packet-toggle-"]').click();
   await expect(cardAgain.getByTestId("packet-brief")).toBeVisible();
 
-  // Dismiss it with a reason; the shelf (one closed lid) shows who was to be invited and why we said no.
-  page.once("dialog", (d) => d.accept("wrong month for this crowd"));
+  /*
+   * Dismiss it with a reason, IN THE PAGE. It used to be `window.prompt`, which is cramped on a
+   * phone and freezes the page for anything automated — this spec had to catch a native `dialog`
+   * to get past it, which is the tell. Now the reason box is a control on the card.
+   */
   await cardAgain.locator('[data-testid^="decline-"]').click();
+  const dismiss = page.locator('[data-testid^="dismiss-form-rpk_"]').first();
+  await expect(dismiss).toBeVisible();
+  await dismiss.locator('[data-testid^="dismiss-note-"]').fill("wrong month for this crowd");
+  await dismiss.locator('[data-testid^="dismiss-confirm-"]').click();
   const shelf = page.getByTestId("declined-proposals");
   await expect(shelf.getByTestId("declined-count")).toContainText("1 kept for the record");
   await expect(shelf.locator('li[data-testid^="declined-rpk_"]').first()).toBeHidden();

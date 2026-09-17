@@ -70,7 +70,7 @@ import {
   type WorkshopNote,
   type WorkshopView,
 } from "../../shared/events/workshopPacket";
-import { deliveryMonth, dueOn, planFor, previousMonth, topicFor, type Stream } from "../../shared/events/monthlyPlan";
+import { adjacencyWindow, deliveryMonth, dueOn, planFor, topicFor, type Stream } from "../../shared/events/monthlyPlan";
 import { howToAnswer } from "../../shared/events/packetDecisionToken";
 import { tokenForPacket } from "./packetReplyDecision";
 import { guidanceBlock } from "../../shared/skills/library";
@@ -867,7 +867,7 @@ async function whatActuallyRan(
   month: string,
   stream: Stream,
 ): Promise<Array<{ month: string; topic: string; note: string }>> {
-  const window = [previousMonth(month)];
+  const window = adjacencyWindow(month);
   const out: Array<{ month: string; topic: string; note: string }> = [];
 
   const events = (await env.WP_OS_DB.prepare(

@@ -218,6 +218,20 @@ export const WORKSHOP_SERIES: Readonly<Record<string, string>> = Object.freeze(
  */
 export const ADJACENCY_MONTHS_BACK = 1;
 
+/**
+ * The months the adjacency rule looks at — derived from `ADJACENCY_MONTHS_BACK` so the window is
+ * the constant rather than a hardcoded `[previousMonth(m)]` in two files.
+ */
+export function adjacencyWindow(month: string): string[] {
+  const out: string[] = [];
+  let m = month;
+  for (let i = 0; i < ADJACENCY_MONTHS_BACK; i += 1) {
+    m = previousMonth(m);
+    out.push(m);
+  }
+  return out;
+}
+
 /** The YYYY-MM immediately before this one. */
 export function previousMonth(month: string): string {
   const [y, m] = month.split("-").map((n) => Number(n));
@@ -233,7 +247,7 @@ export function previousMonth(month: string): string {
  * externally hosted session was never a packet here.
  */
 export function plannedSubjectsNear(month: string, stream: Stream): Array<{ month: string; topic: string; note: string }> {
-  const window = [previousMonth(month)];
+  const window = adjacencyWindow(month);
   return MONTHLY_PLAN.filter(
     (p) => p.stream === stream && window.includes(p.month) && p.topic && (p.status === "SET" || p.status === "EXTERNAL"),
   ).map((p) => ({
@@ -268,14 +282,15 @@ export function deliveryMonth(nowIso: string): string {
   return m > 12 ? `${y + 1}-01` : `${y}-${String(m).padStart(2, "0")}`;
 }
 
-/** The date that month's packets were due: the 1st of the month prior. */
+/**
+ * The date that month's packets were due: `DELIVERY_DAY_OF_MONTH` of the month prior.
+ *
+ * Derived from the constant rather than written as "-01", for the same reason the Workshop's length
+ * is interpolated: a date typed into a string is a second copy of the rule, and the second copy is
+ * the one that goes stale.
+ */
 export function dueOn(month: string): string {
-  return `${previousMonth(month)}-01`;
-}
-
-/** True once the delivery date for `month` has arrived. A floor, so a late tick still delivers. */
-export function deliveryDue(month: string, nowIso: string): boolean {
-  return nowIso.slice(0, 10) >= dueOn(month);
+  return `${previousMonth(month)}-${String(DELIVERY_DAY_OF_MONTH).padStart(2, "0")}`;
 }
 
 // ── Angles ─────────────────────────────────────────────────────────────────────────────────────

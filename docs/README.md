@@ -37,7 +37,7 @@ most surprising behaviour in the codebase traces back to one of them.
 | [DEAL_MATH_VERIFICATION.md](DEAL_MATH_VERIFICATION.md) | Ownership, dilution and the arithmetic behind deal packets. |
 | [ALLOCATION_VERIFICATION.md](ALLOCATION_VERIFICATION.md) | Cross-sleeve capital allocation. |
 | [IMPORT_CONTRACTS.md](IMPORT_CONTRACTS.md) | Dry-run import contracts. Imports never persist on a first pass. |
-| [WORKSHOPS.md](WORKSHOPS.md) | Monthly Workshops beside the Rooms: the set series, the Workshop branch of Parker's chain, virtual only on West Peek Live. |
+| [WORKSHOPS.md](WORKSHOPS.md) | How the monthly Rooms and Workshops are planned: one topic a month with several angles on it, who sets the topic, adjacency, the cadence, the two emails, deciding by reply, and the plan on the record. Read by `tests/workshopsDocument.test.ts`. |
 | [PARTNER_EMAIL_AND_BLOG_HELP.md](PARTNER_EMAIL_AND_BLOG_HELP.md) | The one shape every employee email to a partner takes, and how a blog ask becomes an outline, a draft or a phrase. |
 
 ## Design

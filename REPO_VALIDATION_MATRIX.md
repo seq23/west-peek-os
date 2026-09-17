@@ -52,7 +52,7 @@ questions answered, nine cross-system journeys.
 
 | Command | Proves | Does NOT prove |
 |---|---|---|
-| `npx vitest run` (142 suites, 2121 tests) | every rule above, against local miniflare D1 | anything external |
+| `npx vitest run` (144 suites, 2174 tests) | every rule above, against local miniflare D1 | anything external |
 | `npx playwright test` (21 specs, 45 tests) | the operator journeys in a real browser, including 9 cross-system journeys and a 390×844 mobile pass | a physical device, an installed PWA, or a delivered push |
 | `POST /api/jobs/tick` | the scheduled-work code path end to end | that Cloudflare's cron trigger fired it |
 | connector / provider `check` routes | configuration coherence, stamped LOCAL_FIXTURE | that any external system is reachable |
