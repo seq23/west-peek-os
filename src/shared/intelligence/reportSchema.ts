@@ -195,8 +195,23 @@ export function buildSources(packet: EvidencePacket): NumberedSource[] {
 
 export interface BriefProblem {
   section: string;
-  problem: "missing_section" | "empty_section" | "no_citation" | "unknown_citation" | "invented_url";
+  problem: "missing_section" | "empty_section" | "no_citation" | "unknown_citation" | "invented_url" | "missing_importance_score";
   detail: string;
+}
+
+/**
+ * Five headlines, each scored. The specification (docs/EXECUTIVE_BRIEF_SPECIFICATION.md, §2) asks
+ * for exactly this and the prompt has asked for it since v5 — but ASKING was the whole of it, so a
+ * model that returned three headlines and no scores produced a brief that passed every check and
+ * was delivered. The score is not decoration: it is the only thing in the report that says which
+ * of five things to read first, which is what a one-minute brief is for.
+ */
+export const HEADLINES_REQUIRED = 5;
+const IMPORTANCE = /Investor Importance:\s*(\d{1,2})\s*\/\s*10/gi;
+
+/** How many headlines in this section carry a score. Exported so the spec test can use one rule. */
+export function importanceScores(body: string): number[] {
+  return Array.from(body.matchAll(IMPORTANCE)).map((m) => Number(m[1]));
 }
 
 /**
@@ -237,6 +252,22 @@ export function verifyBrief(
     }
     const url = s.body_md.match(/https?:\/\/[^\s)"']+/);
     if (url) problems.push({ section: key, problem: "invented_url", detail: `${key} contains a URL the system did not supply: ${url[0]}` });
+
+    // The one thing the specification asks for that nothing checked. See HEADLINES_REQUIRED.
+    if (key === "top_headlines") {
+      const scores = importanceScores(s.body_md);
+      if (scores.length < HEADLINES_REQUIRED) {
+        problems.push({
+          section: key,
+          problem: "missing_importance_score",
+          detail: `top_headlines carries ${scores.length} Investor Importance score(s); the brief is five headlines, each scored`,
+        });
+      }
+      const bad = scores.find((n) => n < 1 || n > 10);
+      if (bad !== undefined) {
+        problems.push({ section: key, problem: "missing_importance_score", detail: `top_headlines scores a headline ${bad}/10, which is not a score on the scale` });
+      }
+    }
   }
   return problems;
 }

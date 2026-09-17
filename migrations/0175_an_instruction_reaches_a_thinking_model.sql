@@ -80,4 +80,75 @@ BEGIN
   SELECT RAISE(ABORT, 'a record of what a partner asked for cannot be deleted (0175)');
 END;
 
+-- ── The model that does the reading has to exist in the catalogue ────────────────────────────
+--
+-- FOUND WHILE BUILDING THE ABOVE, and it is the same defect as 0147 for the third time.
+--
+-- `runAi` now asks the catalogue which models can reason, because price must not be allowed to
+-- decide who reads a partner's instruction (see RunAiBudgetContext.interpretation). Asked of a
+-- freshly migrated database, the answer was NONE: the only ACTIVE `provider_model` row in the repo
+-- is `perplexity/sonar`, which is `supports_reasoning = 0` and is the search model this must never
+-- use. A capability filter that can never match anything is the "runs but inert" shape, so the
+-- filter is only half the fix.
+--
+-- The other half is worse. FIVE routing policies — `university` (0088), `market-map` (0088),
+-- `research-packet` (0088), `deck_reading` (0147) and the lanes that followed — all pin
+-- `openrouter` / `anthropic/claude-sonnet-5`, and that model has NO `provider_model` row and NO
+-- `provider_pricing_snapshot` row anywhere in `migrations/`. `runAi` routes only to a priced model,
+-- so on a fresh database every one of those pins resolves to "names no available candidate" and the
+-- run is refused. 0147's own comment describes this exact failure and fixed one lane of it by
+-- writing the policy; nobody registered the model the policy names.
+--
+-- Registered ACTIVE and priced so it is reachable, `supports_reasoning = 1` because that is what it
+-- is and it is now a routing input rather than a decoration, and INSERTed with WHERE NOT EXISTS so
+-- a production database that already carries a live price keeps it.
+--
+-- The price is ILLUSTRATIVE and says so. $2/$10 per Mtok is the figure this repo already states for
+-- this model in `src/shared/ai/models.ts`; it is a placeholder, not a vendor invoice, and nothing
+-- may present it to an operator as a current price. It matters here only for ORDERING among models
+-- that have already passed the capability filter — which is the entire point of doing it that way
+-- round.
+
+INSERT INTO provider_model
+  (id, provider_id, model, display_name, capabilities_json, context_window, max_output_tokens,
+   supports_tools, supports_reasoning, max_data_class, pricing_state, pricing_source_note,
+   status, registered_by, firm_scope)
+SELECT
+  'pm_openrouter_claude_sonnet_5', 'prov_openrouter', 'anthropic/claude-sonnet-5',
+  'Claude Sonnet 5 (reasoning)', '["text-completion"]', 200000, 8192,
+  1, 1, 'INTERNAL', 'ILLUSTRATIVE',
+  'Placeholder rate matching the figure stated in src/shared/ai/models.ts. Not a vendor invoice.',
+  'ACTIVE', 'migration:0175', 'west-peek'
+WHERE NOT EXISTS (
+  SELECT 1 FROM provider_model WHERE provider_id = 'prov_openrouter' AND model = 'anthropic/claude-sonnet-5'
+);
+
+INSERT INTO provider_pricing_snapshot (id, provider_id, model, input_per_mtok_usd, output_per_mtok_usd, captured_at)
+SELECT 'pps_openrouter_claude_sonnet_5', 'prov_openrouter', 'anthropic/claude-sonnet-5', 2.00, 10.00, '2026-09-16T00:00:00.000Z'
+WHERE NOT EXISTS (
+  SELECT 1 FROM provider_pricing_snapshot WHERE provider_id = 'prov_openrouter' AND model = 'anthropic/claude-sonnet-5'
+);
+
+-- ── The lane this interpretation runs in ──────────────────────────────────────────────────────
+--
+-- Pinned for the same reason `university` and `research-packet` are: unpinned work falls to a price
+-- comparison, and this is the call every other call in the firm inherits its instructions from.
+-- The pin and the capability filter agree here — belt and braces, deliberately, because they fail
+-- differently: a pin is a decision that can go stale, a capability filter is a property that cannot.
+--
+-- NO FALLBACK. Falling back means falling to a model the catalogue does not credit with reasoning,
+-- which for this call is the failure rather than the recovery. A run that cannot be interpreted
+-- blocks the card with a sentence she can act on, which is a better outcome than a cheap guess at
+-- what she meant carried silently through six stages of work.
+
+INSERT INTO routing_policy
+  (id, task_class, version_no, candidates_json, require_capability, max_data_class, allow_fallback, notes, set_by, firm_scope)
+SELECT
+  'rpol_instruction_interpretation_v1', 'instruction-interpretation', 1,
+  '[{"provider_key":"openrouter","model":"anthropic/claude-sonnet-5"}]',
+  'text-completion', 'INTERNAL', 0,
+  'Reading what a partner asked for, before any work is done on it. Everything downstream carries whatever this decides she meant, so it is never the cheap tier and never a search-grounded model.',
+  'migration:0175', 'west-peek'
+WHERE NOT EXISTS (SELECT 1 FROM routing_policy WHERE task_class = 'instruction-interpretation');
+
 INSERT OR IGNORE INTO schema_version (migration) VALUES ('0175_an_instruction_reaches_a_thinking_model');

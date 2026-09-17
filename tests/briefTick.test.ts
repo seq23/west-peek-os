@@ -25,7 +25,14 @@ const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
 const V5 = (over: Record<string, string> = {}) => [
   "executive_summary", "top_headlines", "markets_macro", "capital_markets", "venture_private",
   "government_legal", "ai_technology", "watchlist", "investor_insight", "key_events", "watch",
-].map((k) => `===SECTION ${k}\n${over[k] ?? `A substantial paragraph about ${k}, the figure in **bold**, cited [1].`}\n===END`).join("\n");
+].map((k) => `===SECTION ${k}\n${over[k] ?? (k === "top_headlines" ? HEADLINES : `A substantial paragraph about ${k}, the figure in **bold**, cited [1].`)}\n===END`).join("\n");
+
+// Five headlines, each scored, because a brief without the scores is refused
+// (docs/EXECUTIVE_BRIEF_SPECIFICATION.md §2). The fixture stands for a good brief, so it is one.
+const HEADLINES = Array.from(
+  { length: 5 },
+  (_, i) => `**${i + 1}. A headline as a full claim** [1] — the figure in **bold**.\n\n**Investor Importance: ${i + 2}/10**`,
+).join("\n\n");
 
 const deps = (output: string | (() => string)): BriefDeps => ({
   synthesise: async () => ({ output: typeof output === "function" ? output() : output, aiRunId: null, model: "fake-test-model" }),

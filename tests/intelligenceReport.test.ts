@@ -474,8 +474,19 @@ describe("v5: the example brief's shape, and citations that resolve", () => {
     expect(p).toMatch(/I do not have a reliable print/);
   });
 
+  // FIVE HEADLINES, EACH SCORED, because a compliant brief has them and `verifyBrief` now says so
+  // (docs/EXECUTIVE_BRIEF_SPECIFICATION.md §2). The prompt has asked for the score since v5 and
+  // nothing checked it, so a model returning three unscored headlines produced a brief that passed
+  // every gate and was delivered. The fixture is what a good brief looks like; the cases below vary
+  // one thing from it at a time.
+  const headlines = Array.from(
+    { length: 5 },
+    (_, i) => `**${i + 1}. A headline as a full claim** [1]\n\nWhy it matters: it moves a number this firm watches.\n\n**Investor Importance: ${i + 2}/10**`,
+  ).join("\n\n");
   const full = (over: Partial<Record<string, string>> = {}) =>
-    REQUIRED_SECTIONS.map((k) => `===SECTION ${k}\n${over[k] ?? `A substantial paragraph about ${k} that carries a claim worth reading [1].`}\n===END`).join("\n");
+    REQUIRED_SECTIONS.map(
+      (k) => `===SECTION ${k}\n${over[k] ?? (k === "top_headlines" ? headlines : `A substantial paragraph about ${k} that carries a claim worth reading [1].`)}\n===END`,
+    ).join("\n");
 
   it("passes a brief with every section present and every section cited", () => {
     const sections = parseReport(full())!;

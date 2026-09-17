@@ -106,8 +106,18 @@ describe("one template for both partners", () => {
  * END TO END: two profiles, one fixture, one fake model. Both reach READY on the same prompt
  * version with the same section set; the edition column is the only thing that tells them apart.
  */
+// The headlines carry their five Investor Importance scores because a brief without them is
+// refused (docs/EXECUTIVE_BRIEF_SPECIFICATION.md §2, verifyBrief). This fixture stands for a good
+// brief, so it has to be one.
+const HEADLINES = Array.from(
+  { length: 5 },
+  (_, i) => `**${i + 1}. A headline as a full claim** [1] — why it matters, in **bold** figures.\n\n**Investor Importance: ${i + 2}/10**`,
+).join("\n\n");
 const OUTPUT = REQUIRED_SECTIONS
-  .map((k) => `===SECTION ${k}\nA substantial paragraph about ${k}, with the figure in **bold** and a citation [1].\n===END`)
+  .map(
+    (k) =>
+      `===SECTION ${k}\n${k === "top_headlines" ? HEADLINES : `A substantial paragraph about ${k}, with the figure in **bold** and a citation [1].`}\n===END`,
+  )
   .join("\n");
 const prompts: Record<string, string> = {};
 const fakeModel: Synthesise = async (_env, _actor, prompt, _date, firmUserId) => {
