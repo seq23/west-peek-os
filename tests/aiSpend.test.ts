@@ -45,10 +45,20 @@ async function call<T = any>(path: string, headers: Record<string, string>, meth
 function stubFetch(text = "stubbed output", costUsd: number | null = 0.001): typeof fetch {
   return (async () =>
     new Response(
+      // One body carrying every wire shape the adapters now speak — see tests/ai.test.ts for why.
       JSON.stringify({
         text,
         model: "stub-model",
-        usage: costUsd === null ? { input_tokens: 10, output_tokens: 20 } : { input_tokens: 10, output_tokens: 20, cost_usd: costUsd },
+        choices: [{ message: { content: text } }],
+        content: [{ type: "text", text }],
+        candidates: [{ content: { parts: [{ text }] } }],
+        // Gemini reports usage under its own name. Without it the adapter reports zero tokens and
+        // the run is priced at zero, which is how "spent today" once stayed permanently at $0.
+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 20 },
+        usage:
+          costUsd === null
+            ? { input_tokens: 10, output_tokens: 20, prompt_tokens: 10, completion_tokens: 20 }
+            : { input_tokens: 10, output_tokens: 20, cost_usd: costUsd, prompt_tokens: 10, completion_tokens: 20 },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     )) as unknown as typeof fetch;
@@ -75,6 +85,28 @@ async function setPolicy(over: Partial<{ cost_mode: string; privacy_mode: string
 /** Enable one provider and let PUBLIC egress to it. Everything else stays default-deny. */
 async function enableProvider(providerId: string): Promise<void> {
   await t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = ?1").bind(providerId).run();
+  /*
+   * TWO THINGS A FIXTURE NOW HAS TO SAY, both of them the point of migration 0177.
+   *
+   * ADOPTED: selection requires `provider_model.status = 'ACTIVE'`. Reading the pricing table alone
+   * is how three BENCH Workers AI models came to take every unpinned call in the firm, so a price
+   * no longer adopts a model — a human decision does.
+   *
+   * PRICED BY SOMEBODY: a price whose `pricing_state` is ILLUSTRATIVE takes no part in any cost
+   * comparison, because ranking on a number nobody read is how migration 0158 elected a search
+   * model for every judgement call. The seeded catalogue is entirely placeholders, so a fixture
+   * that wants its model to win on price has to state that the price is real. Tests that exercise
+   * the guard itself plant their own rows — see tests/aiFallback.test.ts.
+   */
+  await t.db
+    .prepare(
+      `UPDATE provider_model
+          SET status = 'ACTIVE', pricing_state = 'SOURCED', pricing_sourced_at = '2026-09-17T00:00:00.000Z'
+        WHERE provider_id = ?1`,
+    )
+    .bind(providerId)
+    .run();
+
   await t.db
     .prepare("INSERT OR REPLACE INTO provider_data_policy (id, provider_id, privacy_label, allowed) VALUES (?1, ?2, 'PUBLIC', 1)")
     .bind(`pdp_${providerId}_PUBLIC`, providerId)
@@ -91,7 +123,21 @@ function run(overrides: Partial<Parameters<typeof runAi>[1]> = {}, deps: Paramet
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = makeTestEnv(t.db);
+  /*
+   * THE DIRECT-VENDOR ADAPTERS FAIL CLOSED, which the old generic one did not.
+   *
+   * `httpExternal` sent its request with no authorization header when no key was set, so a stubbed
+   * fetch answered and the run "succeeded" without a credential. The real vendors do not work that
+   * way, and since these adapters speak their actual wire contracts they throw
+   * `credential_missing:<vendor>` before any network attempt — the same contract OpenRouter and
+   * Fireworks have always had. A suite that expects a vendor call to complete therefore has to
+   * configure that vendor, which is the honest precondition.
+   */
+  env = makeTestEnv(t.db, {
+    OPENAI_API_KEY: "test-openai",
+    WP_ANTHROPIC_API_KEY: "test-anthropic",
+    GEMINI_API_KEY: "test-gemini",
+  });
 });
 
 afterAll(async () => {
@@ -195,10 +241,20 @@ describe("spend has exactly one definition", () => {
 // ── 3. The firmwide ceiling: persists, and binds ──
 
 describe("the firm can set what it will spend, and the number stops work", () => {
-  it("starts with no ceiling and says so rather than inventing one", async () => {
-    const res = await call<{ firm_budgets: Array<{ budget_window: string; cap_usd: number | null }> }>("/api/ai/cost", MP);
+  it("ships with the monthly ceiling migration 0178 set, and invents nothing beyond it", async () => {
+    const res = await call<{ firm_budgets: Array<{ budget_window: string; cap_usd: number | null; reason: string | null }> }>("/api/ai/cost", MP);
     expect(res.body.firm_budgets.map((b) => b.budget_window).sort()).toEqual(["ALL_TIME", "MONTHLY"]);
-    for (const b of res.body.firm_budgets) expect(b.cap_usd).toBeNull();
+    /*
+     * MONTHLY WAS NULL UNTIL 17 SEP 2026, and that was the defect rather than the feature. This
+     * table was empty: there was no monthly ceiling at all, only a daily cap, and 31 x $2.50 of
+     * daily cap is $77.50 — past the $50 the owner named as her worst case. A budget table with no
+     * rows in it reads as protection and provides none.
+     */
+    const monthly = res.body.firm_budgets.find((b) => b.budget_window === "MONTHLY")!;
+    expect(monthly.cap_usd).toBe(50);
+    expect(monthly.reason).toContain("the table was empty");
+    // ALL_TIME is still null, and stays null: nothing is invented for a window nobody set.
+    expect(res.body.firm_budgets.find((b) => b.budget_window === "ALL_TIME")!.cap_usd).toBeNull();
   });
 
   it("saves a ceiling, reads it back, and versions a change instead of overwriting it", async () => {
@@ -215,15 +271,16 @@ describe("the firm can set what it will spend, and the number stops work", () =>
       cap_cents: 9000,
       reason: "raised for the month",
     });
-    expect(second.body.budget.version_no).toBe(2);
+    // 3, not 2: migration 0178 wrote version 1 when it gave this firm its first monthly ceiling.
+    expect(second.body.budget.version_no).toBe(3);
 
     const read = await call<{ firm_budgets: Array<{ budget_window: string; cap_usd: number | null; version_no: number | null }> }>("/api/ai/cost", MP);
     const monthly = read.body.firm_budgets.find((b) => b.budget_window === "MONTHLY")!;
     expect(monthly.cap_usd).toBe(90);
-    expect(monthly.version_no).toBe(2);
+    expect(monthly.version_no).toBe(3);
     // The earlier version is still on the record — a budget is a versioned policy, not a field.
     const versions = await t.db.prepare("SELECT COUNT(*) AS n FROM firm_spend_budget WHERE budget_window = 'MONTHLY'").first<{ n: number }>();
-    expect(versions!.n).toBe(2);
+    expect(versions!.n).toBe(3);
   });
 
   it("refuses a ceiling below what has already been spent, and says both figures", async () => {

@@ -17,7 +17,33 @@ export interface Env {
    */
   OPENROUTER_API_KEY?: string;
   FIREWORKS_API_KEY?: string;
+  /**
+   * The name every vendor but OpenRouter and Fireworks used to share. KEPT, and still read as a
+   * fallback for any provider whose own name is unset — an environment configured before the
+   * per-vendor names existed keeps working unchanged. It is no longer what any vendor is REPORTED
+   * as using, because one boolean cannot say "Anthropic is configured, OpenAI is not".
+   */
   AI_PROVIDER_API_KEY?: string;
+
+  // ── Direct vendor credentials (P16 failover) ──
+  // One name per vendor, so "is Anthropic configured?" is answerable independently of every other
+  // vendor. Set in Cloudflare production by the operator; never handled, echoed or logged here.
+  // The single source of truth for which name belongs to which vendor is
+  // src/shared/ai/providerCredentials.ts — these declarations must match it.
+  OPENAI_API_KEY?: string;
+  /**
+   * WP_-PREFIXED DELIBERATELY. DO NOT RENAME TO `ANTHROPIC_API_KEY`.
+   *
+   * The owner's credential vault treats the bare name as reserved — alongside ANTHROPIC_AUTH_TOKEN,
+   * ANTHROPIC_BASE_URL, CLAUDE_CODE_USE_BEDROCK, PATH and LD_PRELOAD — because emitting it into a
+   * process environment would hijack her own Claude tooling. The prefix is the reason it can exist
+   * at all.
+   */
+  WP_ANTHROPIC_API_KEY?: string;
+  /** Google Gemini. Unrelated to GOOGLE_OAUTH_CLIENT_ID/SECRET, which are the calendar client. */
+  GEMINI_API_KEY?: string;
+  /** Declared, not configured: no Perplexity key exists in the vault. The lane stays invisible. */
+  PERPLEXITY_API_KEY?: string;
   /** Specialist lane (P23). No vendor account exists; these are names only. */
   HARVEY_API_KEY?: string;
   NORM_API_KEY?: string;

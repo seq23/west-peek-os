@@ -304,7 +304,7 @@ export async function askLiveHelp(
         // provider policy rather than quietly downgraded to reach a permitted lane.
         sensitivity: meeting.privacy_label as never,
         aiEmployeeId: emp.ai_employee_id,
-        budgetContext: { expectedOutputTokens: 350 },
+        budgetContext: { judgement: true, expectedOutputTokens: 350 },
         routing: { category: "INTELLIGENCE" },
       });
 

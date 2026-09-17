@@ -4,7 +4,12 @@ import { createHttpExternalAdapter } from "./providers/httpExternal";
 import { createOpenRouterAdapter } from "./providers/openRouter";
 import { createWorkersAiAdapter, type WorkersAiBinding } from "./providers/workersAi";
 import { createFireworksAdapter } from "./providers/fireworks";
+import { createAnthropicAdapter } from "./providers/anthropic";
+import { createOpenAiChatAdapter } from "./providers/openAiChat";
+import { createGoogleAdapter } from "./providers/google";
+import { createPerplexityAdapter } from "./providers/perplexity";
 import { createSpecialistAdapter } from "./providers/specialist";
+import { credentialConfigured, credentialValueFor } from "../../shared/ai/providerCredentials";
 
 /**
  * Routing + scoped budgets for the governed AI boundary (P16; GAP-02, GAP-03).
@@ -70,17 +75,33 @@ export function orderByPolicy(policy: RoutingPolicyRow, available: RoutingCandid
   return ordered;
 }
 
-/** Pick the adapter for a provider. Named vendors get their own; anything else uses the generic. */
+/**
+ * Pick the adapter for a provider. Named vendors get their own wire contract; anything else uses
+ * the generic one.
+ *
+ * EVERY VENDOR THE OWNER HOLDS A KEY FOR NOW HAS A REAL ADAPTER. Before this, `openai`,
+ * `anthropic`, `google` and `perplexity` all fell through to `createHttpExternalAdapter`, which
+ * posts `{model, purpose, inputs}` to `{baseUrl}/complete` — a protocol invented for a fixture that
+ * none of those vendors implement. The failover lane existed in the type system and would have
+ * 404'd on its first real call. `httpExternal` remains only for a provider that genuinely speaks
+ * that shape.
+ *
+ * `credentialConfigured` here is per-vendor (src/shared/ai/providerCredentials.ts), so "Anthropic
+ * is configured" no longer means "some key, belonging to somebody, is set".
+ */
 export function adapterFor(
   env: Env,
   candidate: RoutingCandidate,
   fetchImpl?: typeof fetch,
 ): { adapter: ProviderAdapter; credentialConfigured: boolean } {
   const baseUrl = candidate.baseUrl ?? "";
-  if (candidate.providerKey === "openrouter") {
+  const key = credentialValueFor(env, candidate.providerKey);
+  const configured = credentialConfigured(env, candidate.providerKey);
+
+  if (candidate.providerKey === "openrouter" || candidate.providerKey === "openrouter_free") {
     return {
-      adapter: createOpenRouterAdapter({ baseUrl, model: candidate.model, apiKey: env.OPENROUTER_API_KEY, fetchImpl }),
-      credentialConfigured: typeof env.OPENROUTER_API_KEY === "string" && env.OPENROUTER_API_KEY.length > 0,
+      adapter: createOpenRouterAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+      credentialConfigured: configured,
     };
   }
   /*
@@ -102,14 +123,49 @@ export function adapterFor(
   }
   if (candidate.providerKey === "fireworks") {
     return {
-      adapter: createFireworksAdapter({ baseUrl, model: candidate.model, apiKey: env.FIREWORKS_API_KEY, fetchImpl }),
-      credentialConfigured: typeof env.FIREWORKS_API_KEY === "string" && env.FIREWORKS_API_KEY.length > 0,
+      adapter: createFireworksAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+      credentialConfigured: configured,
+    };
+  }
+  if (candidate.providerKey === "anthropic") {
+    return {
+      adapter: createAnthropicAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+      credentialConfigured: configured,
+    };
+  }
+  if (candidate.providerKey === "perplexity") {
+    /*
+     * NOT the OpenAI shape, though it was until 17 Sep 2026 and every other integration guide still
+     * says so. Sonar has moved to the Responses API: `POST /chat/completions` answers HTTP 403
+     * `chat_completions_not_available` even with a perfectly valid key. See providers/perplexity.ts
+     * for the probe that established this.
+     */
+    return {
+      adapter: createPerplexityAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+      credentialConfigured: configured,
+    };
+  }
+  if (candidate.providerKey === "openai") {
+    return {
+      adapter: createOpenAiChatAdapter({
+        providerKey: candidate.providerKey,
+        baseUrl,
+        model: candidate.model,
+        apiKey: key,
+        fetchImpl,
+      }),
+      credentialConfigured: configured,
+    };
+  }
+  if (candidate.providerKey === "google" || candidate.providerKey === "google_free") {
+    return {
+      adapter: createGoogleAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+      credentialConfigured: configured,
     };
   }
   if (candidate.providerKey === "harvey" || candidate.providerKey === "norm") {
     // Specialist lane (P23): same boundary, same quarantine, no bypass. Fails closed with a
     // named reason because neither vendor endpoint nor credential exists here.
-    const key = candidate.providerKey === "harvey" ? env.HARVEY_API_KEY : env.NORM_API_KEY;
     return {
       adapter: createSpecialistAdapter({
         vendor: candidate.providerKey,
@@ -118,12 +174,12 @@ export function adapterFor(
         apiKey: key,
         fetchImpl,
       }),
-      credentialConfigured: typeof key === "string" && key.length > 0,
+      credentialConfigured: configured,
     };
   }
   return {
-    adapter: createHttpExternalAdapter({ baseUrl, model: candidate.model, apiKey: env.AI_PROVIDER_API_KEY, fetchImpl }),
-    credentialConfigured: typeof env.AI_PROVIDER_API_KEY === "string" && env.AI_PROVIDER_API_KEY.length > 0,
+    adapter: createHttpExternalAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+    credentialConfigured: configured,
   };
 }
 

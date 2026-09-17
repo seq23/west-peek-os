@@ -47,8 +47,26 @@ function stubFetch(responseText = "stubbed provider output", costUsd = 0.001) {
     calls.push(String(url));
     const body = (init as { body?: unknown } | undefined)?.body;
     bodies.push(typeof body === "string" ? body : body === undefined ? "" : String(body));
+    /*
+     * ONE BODY, BOTH WIRE SHAPES.
+     *
+     * `httpExternal`'s invented `{text, model, usage}` protocol AND the OpenAI chat-completions
+     * shape the real vendor adapters speak, because `openai`, `anthropic` and `google` stopped
+     * resolving to the generic adapter in 0177 — that generic adapter posts to `{baseUrl}/complete`,
+     * which no vendor implements, so the failover lane could never have worked. A superset body
+     * keeps every existing assertion meaningful without pretending the vendors agree on a format.
+     */
     return new Response(
-      JSON.stringify({ text: responseText, model: "stub-model", usage: { input_tokens: 10, output_tokens: 20, cost_usd: costUsd } }),
+      JSON.stringify({
+        text: responseText,
+        model: "stub-model",
+        usage: { input_tokens: 10, output_tokens: 20, cost_usd: costUsd, prompt_tokens: 10, completion_tokens: 20 },
+        choices: [{ message: { content: responseText } }],
+        content: [{ type: "text", text: responseText }],
+        candidates: [{ content: { parts: [{ text: responseText }] } }],
+        // Gemini reports usage under its own name; without it a run prices at zero.
+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 20 },
+      }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }) as unknown as typeof fetch;
@@ -116,7 +134,21 @@ async function approvedCard(actionKey: string, objectType: string, objectId: str
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = makeTestEnv(t.db);
+  /*
+   * THE DIRECT-VENDOR ADAPTERS FAIL CLOSED, which the old generic one did not.
+   *
+   * `httpExternal` sent its request with no authorization header when no key was set, so a stubbed
+   * fetch answered and the run "succeeded" without a credential. The real vendors do not work that
+   * way, and since these adapters speak their actual wire contracts they throw
+   * `credential_missing:<vendor>` before any network attempt — the same contract OpenRouter and
+   * Fireworks have always had. A suite that expects a vendor call to complete therefore has to
+   * configure that vendor, which is the honest precondition.
+   */
+  env = makeTestEnv(t.db, {
+    OPENAI_API_KEY: "test-openai",
+    WP_ANTHROPIC_API_KEY: "test-anthropic",
+    GEMINI_API_KEY: "test-gemini",
+  });
   await t.db
     .prepare("INSERT INTO firm_user (id, email, full_name, status) VALUES ('fu_p4_member', 'p4-member@westpeek.ventures', 'P4 Member', 'ACTIVE')")
     .run();
@@ -378,6 +410,13 @@ describe("6. CRITICAL_ONLY and CHEAPO", () => {
   it("CHEAPO selects the cheapest adequate model; NORMAL honors a model preference", async () => {
     await setAllProviders(0);
     await t.db.prepare("UPDATE provider_registry SET enabled = 1 WHERE id = 'prov_openai'").run();
+    // Since 0177 a price alone no longer adopts a model (selection requires ACTIVE), and a price
+    // nobody read takes no part in a cost comparison. A fixture has to say both.
+    await t.db
+      .prepare(
+        "UPDATE provider_model SET status = 'ACTIVE', pricing_state = 'SOURCED', pricing_sourced_at = '2026-09-17T00:00:00.000Z' WHERE provider_id = 'prov_openai'",
+      )
+      .run();
 
     await setPolicy({ cost_mode: "CHEAPO", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
     const cheapo = await run({ budgetContext: { preferredModel: "gpt-4o" } }, { fetchImpl: stubFetch().fetchImpl });
@@ -397,6 +436,13 @@ describe("7. STRATEGIC_SURGE window semantics", () => {
   it("within the window, caps lift to the surge budget; after expiry, NORMAL applies", async () => {
     await setAllProviders(0);
     await t.db.prepare("UPDATE provider_registry SET enabled = 1 WHERE id = 'prov_openai'").run();
+    // Since 0177 a price alone no longer adopts a model (selection requires ACTIVE), and a price
+    // nobody read takes no part in a cost comparison. A fixture has to say both.
+    await t.db
+      .prepare(
+        "UPDATE provider_model SET status = 'ACTIVE', pricing_state = 'SOURCED', pricing_sourced_at = '2026-09-17T00:00:00.000Z' WHERE provider_id = 'prov_openai'",
+      )
+      .run();
     const futureEnd = new Date(Date.now() + 3_600_000).toISOString();
     const pastEnd = new Date(Date.now() - 3_600_000).toISOString();
 
@@ -437,6 +483,13 @@ describe("7. STRATEGIC_SURGE window semantics", () => {
 describe("8. provider kill switch + global disable, with audit events", () => {
   it("kill-switch route requires the governance approval path; a switched provider refuses runs", async () => {
     await t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = 'prov_anthropic'").run();
+    // Since 0177 a price alone no longer adopts a model (selection requires ACTIVE), and a price
+    // nobody read takes no part in a cost comparison. A fixture has to say both.
+    await t.db
+      .prepare(
+        "UPDATE provider_model SET status = 'ACTIVE', pricing_state = 'SOURCED', pricing_sourced_at = '2026-09-17T00:00:00.000Z' WHERE provider_id = 'prov_anthropic'",
+      )
+      .run();
 
     // Non-MP is DENIED the reserved governance action outright.
     const denied = await handleRequest(req("/api/ai/providers/anthropic/kill-switch", MEMBER, "POST", {}), env);
@@ -697,6 +750,13 @@ describe("11. external output quarantine", () => {
   it("external output stays quarantined until a human accept; quarantined text never enters other tables", async () => {
     await setAllProviders(0);
     await t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = 'prov_openai'").run();
+    // Since 0177 a price alone no longer adopts a model (selection requires ACTIVE), and a price
+    // nobody read takes no part in a cost comparison. A fixture has to say both.
+    await t.db
+      .prepare(
+        "UPDATE provider_model SET status = 'ACTIVE', pricing_state = 'SOURCED', pricing_sourced_at = '2026-09-17T00:00:00.000Z' WHERE provider_id = 'prov_openai'",
+      )
+      .run();
     await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
 
     const marker = `QUARANTINE-MARKER-${crypto.randomUUID()}`;
@@ -742,6 +802,13 @@ describe("12. provider failure → BLOCKED_DEFERRED with a visible reason; the a
     await setPolicy({ cost_mode: "NORMAL", privacy_mode: "FRONTIER", daily_cap_usd: 100, per_run_cap_usd: 100 });
     await setAllProviders(0);
     await t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = 'prov_openai'").run();
+    // Since 0177 a price alone no longer adopts a model (selection requires ACTIVE), and a price
+    // nobody read takes no part in a cost comparison. A fixture has to say both.
+    await t.db
+      .prepare(
+        "UPDATE provider_model SET status = 'ACTIVE', pricing_state = 'SOURCED', pricing_sourced_at = '2026-09-17T00:00:00.000Z' WHERE provider_id = 'prov_openai'",
+      )
+      .run();
 
     const { run: r } = await run({}, { fetchImpl: throwingFetch });
     expect(r.status).toBe("BLOCKED_DEFERRED");

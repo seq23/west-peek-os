@@ -256,7 +256,7 @@ export async function handleBuildPacket(ctx: RouteContext): Promise<Response> {
     actor,
     inputs: [buildPrompt(`${project.title} — ${project.question}`, promptEvents)],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 1800 },
+    budgetContext: { judgement: true, expectedOutputTokens: 1800 },
     // Pinned: this synthesis is the research product itself, grounded against source ids and
     // read by a partner as findings. The cheap tier is for small frequent work, not this.
     routing: { category: "INTELLIGENCE", taskClass: "research-packet" },

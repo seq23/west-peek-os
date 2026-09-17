@@ -806,7 +806,7 @@ const defaultSearch: ProductionsSearch = async (env, actor, prompt) => {
     inputs: [prompt],
     // Public web research; the query leaves for a search engine. Never raised.
     sensitivity: "PUBLIC" as never,
-    budgetContext: { expectedOutputTokens: 2500, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
+    budgetContext: { requiresSearch: true, expectedOutputTokens: 2500, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };

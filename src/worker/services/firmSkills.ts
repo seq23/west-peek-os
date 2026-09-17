@@ -184,7 +184,7 @@ export async function handleDraftFirmSkill(ctx: RouteContext): Promise<Response>
     actor,
     inputs: [buildTranslationPrompt(machine.name, parsed.data.plain_english)],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 600 },
+    budgetContext: { judgement: true, expectedOutputTokens: 600 },
     // Pinned: this becomes an instruction every employee on the machine follows, which is not work
     // for the cheapest adequate model.
     routing: { category: "OPERATIONS", taskClass: "employee-work" },

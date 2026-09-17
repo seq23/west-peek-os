@@ -391,7 +391,7 @@ export async function handleDraftLpReport(ctx: RouteContext): Promise<Response> 
       ].join("\n"),
     ],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 1400 },
+    budgetContext: { judgement: true, confidential: true, expectedOutputTokens: 1400 },
     // Pinned for the same reason University is: an LP letter written by whichever model was cheapest
     // that minute is not a saving.
     routing: { category: "OPERATIONS", taskClass: "lp_report" },

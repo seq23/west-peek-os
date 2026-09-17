@@ -452,6 +452,7 @@ export async function runLens(env: Env, identity: FirmUserIdentity, packetId: st
         `Produce: ${def.produces}`,
       ],
       sensitivity: (packet.privacy_label as never) ?? "INTERNAL",
+      budgetContext: { judgement: true },
       routing: { taskClass: packet.task_class ?? undefined, machineId: packet.machine_id ?? undefined, category: "OPERATIONS" },
     });
     runId = run.id;
@@ -575,6 +576,7 @@ export async function executePacket(env: Env, identity: FirmUserIdentity, packet
       `Assumptions: ${packet.assumptions_json}`,
     ],
     sensitivity: (packet.privacy_label as never) ?? "INTERNAL",
+    budgetContext: { judgement: true },
     aiEmployeeId: packet.recommended_employee_id ?? undefined,
     routing: {
       taskClass: packet.task_class ?? undefined,

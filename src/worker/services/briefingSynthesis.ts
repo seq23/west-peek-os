@@ -128,7 +128,7 @@ export async function synthesiseBriefing(
       // Items are PUBLIC news; the brief inherits that. Never raise this: a higher label would
       // permit sending firm-sensitive material to the provider lane.
       sensitivity: "PUBLIC",
-      budgetContext: { expectedOutputTokens: 900 },
+      budgetContext: { judgement: true, expectedOutputTokens: 900 },
       routing: { category: "INTELLIGENCE" },
     });
 

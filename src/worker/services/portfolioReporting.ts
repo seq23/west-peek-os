@@ -307,7 +307,7 @@ export async function handleDraftPortfolioSummary(ctx: RouteContext): Promise<Re
       ].join("\n"),
     ],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 900 },
+    budgetContext: { judgement: true, confidential: true, expectedOutputTokens: 900 },
     routing: { category: "OPERATIONS", taskClass: "portfolio_summary" },
   });
 

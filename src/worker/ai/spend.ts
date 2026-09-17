@@ -254,6 +254,48 @@ export async function firmBudgetStates(env: Env, firmScope: string, now: Date = 
   return out;
 }
 
+/**
+ * Thresholds at which month-to-date spend becomes worth saying out loud, as a percentage of the
+ * ceiling. 10% of the $50 cap is $5 — the figure the owner actually expects the month to cost, so
+ * crossing it means the month is going differently from the plan while there is still a month left
+ * to do something about it.
+ */
+export const FIRM_BUDGET_ALERT_PCTS = [10, 50, 80] as const;
+
+/**
+ * Raise a deduped WARNING as spend approaches a firmwide ceiling. Never blocks; the block is
+ * `checkFirmBudgets` itself. `INSERT OR IGNORE` on the unique dedupe key does the deduping, so this
+ * costs one insert that usually does nothing.
+ */
+export async function raiseFirmBudgetWarning(
+  env: Env,
+  firmScope: string,
+  window: FirmBudgetWindow,
+  capUsd: number,
+  observedUsd: number,
+  now: Date = new Date(),
+): Promise<void> {
+  if (capUsd <= 0) return;
+  const pct = (observedUsd / capUsd) * 100;
+  const crossed = [...FIRM_BUDGET_ALERT_PCTS].reverse().find((t) => pct >= t);
+  if (crossed === undefined) return;
+  const period = window === "MONTHLY" ? now.toISOString().slice(0, 7) : "ever";
+  await env.WP_OS_DB.prepare(
+    `INSERT OR IGNORE INTO cost_alert (id, scope_type, scope_id, period, threshold_pct, cap_usd, observed_usd, severity, dedupe_key)
+     VALUES (?1, 'FIRM', ?2, ?3, ?4, ?5, ?6, 'WARNING', ?7)`,
+  )
+    .bind(
+      `calr_${crypto.randomUUID()}`,
+      firmScope,
+      window,
+      crossed,
+      capUsd,
+      Math.round(observedUsd * 1_000_000) / 1_000_000,
+      `FIRM:${firmScope}:${window}:${period}:PCT${crossed}`,
+    )
+    .run();
+}
+
 export interface FirmBudgetVerdict {
   ok: boolean;
   /** Set when a ceiling would be breached. Names the window, the ceiling and the figure. */
@@ -301,6 +343,17 @@ export async function checkFirmBudgets(
     const cap = centsToUsd(row.cap_cents);
     const spend = await firmSpend(env, firmScope, w === "MONTHLY" ? "THIS_MONTH" : "ALL_TIME", now);
     const wouldBe = spend.total_usd + wouldSpendUsd;
+    /*
+     * A CEILING THAT IS ONLY HEARD FROM WHEN IT STOPS THE WORK IS NOT A BUDGET, IT IS AN AMBUSH.
+     *
+     * The monthly cap is $50, which is the worst case the owner named. Her TARGET is $5. A single
+     * warning at 80% of the cap would first speak at $40 — eight times what she expects to spend,
+     * and far too late to be information. So the first threshold is her own number.
+     *
+     * Deduped per (window, month, threshold), so a busy month raises three alerts and not
+     * thousands. Written even when the run is allowed, because that is the entire point.
+     */
+    await raiseFirmBudgetWarning(env, firmScope, w, cap, wouldBe, now);
     if (wouldBe > cap) {
       return {
         ok: false,

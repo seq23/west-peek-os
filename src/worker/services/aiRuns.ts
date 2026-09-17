@@ -32,6 +32,8 @@ const runSchema = z.object({
       expected_output_tokens: z.number().int().positive().optional(),
       preferred_model: z.string().trim().min(1).optional(),
       provider_key: z.string().trim().min(1).optional(),
+      /** A caller who knows this particular call is machinery can say so and get the cheap tier. */
+      mechanical: z.boolean().optional(),
     })
     .optional(),
 });
@@ -60,15 +62,28 @@ export async function runAiForActor(
       inputs: body.inputs,
       sensitivity: body.sensitivity,
       capabilityRequirement: body.capability_requirement,
+      /*
+       * THE DOOR A PARTNER COMES THROUGH HERSELF, so it defaults to judgement.
+       *
+       * This is POST /api/ai/runs: whatever somebody typed, for whatever reason, and the answer
+       * comes back to the person who asked. There is no way to know from here whether a given call
+       * is machinery, and the cost of being wrong is asymmetric — a mechanical call marked
+       * judgement costs a fraction of a cent, a partner's question routed to the cheap tier comes
+       * back confidently wrong. A caller who knows better can still pass `mechanical` explicitly
+       * and it wins, because an explicit value overrides the default below.
+       */
       budgetContext: body.budget_context
         ? {
+            judgement: true,
             critical: body.budget_context.critical,
             expectedInputTokens: body.budget_context.expected_input_tokens,
             expectedOutputTokens: body.budget_context.expected_output_tokens,
             preferredModel: body.budget_context.preferred_model,
             providerKey: body.budget_context.provider_key,
+            // Explicit wins: a caller who declared machinery gets machinery.
+            ...(body.budget_context.mechanical ? { judgement: false, mechanical: true } : {}),
           }
-        : undefined,
+        : { judgement: true },
     },
     deps,
   );

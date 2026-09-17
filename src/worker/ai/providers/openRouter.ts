@@ -1,4 +1,5 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
+import { PROVIDER_TIMEOUT_MS } from "./timeout";
 
 /**
  * OpenRouter adapter (P16, GAP-03).
@@ -25,6 +26,8 @@ export interface OpenRouterOptions {
   referer?: string;
   title?: string;
   fetchImpl?: typeof fetch;
+  /** Overridable so a test can prove the timeout path in milliseconds rather than a minute. */
+  timeoutMs?: number;
 }
 
 export const OPENROUTER_PROVIDER_KEY = "openrouter";
@@ -47,6 +50,10 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
       const res = await doFetch(url, {
         method: "POST",
         headers,
+        // A DEADLINE, so that "the provider never answered" becomes a failure the router can fail
+        // over on instead of a run that sits RUNNING for ever. Without it, timeout was a failure
+        // mode this system could describe and could not actually produce.
+        signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
         body: JSON.stringify({
           model: req.model ?? options.model,
           messages: [

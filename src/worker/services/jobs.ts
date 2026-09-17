@@ -628,7 +628,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     sensitivity: (job.data_class as never) ?? "INTERNAL",
     capabilityRequirement: job.capability_key ?? undefined,
     aiEmployeeId: employeeId ?? undefined,
-    budgetContext: { expectedOutputTokens: 512 },
+    budgetContext: { judgement: true, expectedOutputTokens: 512 },
     routing: {
       taskClass: job.task_class ?? undefined,
       machineId: job.target_kind === "MACHINE" ? Number(job.target_id) : undefined,

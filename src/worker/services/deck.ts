@@ -512,7 +512,7 @@ export async function carryCurrentDeck(env: Env, actor: Actor, fundId: string, f
     inputs: [prompt],
     documents: [{ mediaType: "application/pdf", dataBase64: pdf.base64, label: `deck v${pdf.versionNo}` }],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 6_000 },
+    budgetContext: { judgement: true, expectedOutputTokens: 6_000 },
     routing: { category: "RESEARCH", taskClass: "deck_reading" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return null;

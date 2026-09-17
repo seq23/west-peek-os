@@ -61,7 +61,7 @@ export async function handleOpenEngagement(ctx: RouteContext): Promise<Response>
     inputs: [b.question],
     sensitivity: b.data_class,
     capabilityRequirement: b.provider_key === "harvey" ? "legal-research" : "compliance-review",
-    budgetContext: { providerKey: b.provider_key },
+    budgetContext: { judgement: true, confidential: true, providerKey: b.provider_key },
     routing: { taskClass: `specialist-${b.provider_key}`, category: b.provider_key === "harvey" ? "LEGAL" : "COMPLIANCE" },
   });
 

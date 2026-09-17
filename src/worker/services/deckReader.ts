@@ -89,7 +89,7 @@ export async function readDeck(
     // A deck a founder sent the firm is internal. It is not PUBLIC, and anything above INTERNAL is
     // refused by the boundary rather than sent — see the label gate in runAi.
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 900 },
+    budgetContext: { judgement: true, confidential: true, expectedOutputTokens: 900 },
     /*
      * PINNED, for the same reason University is. Without a taskClass, selection falls to the
      * cheapest priced capable model — and the cheapest models cannot read a PDF at all, so an
