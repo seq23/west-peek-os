@@ -421,3 +421,41 @@ export function translateLegacyCostMode(
 export function legacyCostModeFor(lever: SpendLever): "NORMAL" | "CHEAPO" {
   return lever === "FREE_ONLY" ? "CHEAPO" : "NORMAL";
 }
+
+/**
+ * THE LEVER A STORED POLICY ROW MEANS — including a row written before the lever existed.
+ *
+ * `budget_policy` is immutable by trigger, and rightly so: a versioned policy table whose history
+ * can be rewritten is not a history. So migration 0179 could not backfill `spend_lever` into older
+ * rows, and did not try. They carry NULL, and NULL means "this row predates the lever, read it the
+ * old way" — which is exactly what this does, through the same `translateLegacyCostMode` the API
+ * uses for a caller still sending `cost_mode`.
+ *
+ * ONE MAPPING, ONE PLACE. The alternative was a CASE expression in SQL backfilling the column and a
+ * copy of the same rules in TypeScript for old API callers — two copies of a mapping, which is the
+ * shape of every drift bug in this system.
+ */
+export function leverFromPolicy(policy: {
+  spend_lever?: string | null;
+  cost_mode?: string | null;
+  honours_pins?: number | null;
+  prefers_frontier?: number | null;
+}): SpendLever {
+  if (policy.spend_lever) return asSpendLever(policy.spend_lever);
+  return translateLegacyCostMode(
+    policy.cost_mode ?? "NORMAL",
+    Number(policy.honours_pins ?? 1) === 1,
+    Number(policy.prefers_frontier ?? 0) === 1,
+  ).lever;
+}
+
+/** Whether a stored policy defers non-critical work, reading a pre-0179 row the old way. */
+export function deferNonCriticalFromPolicy(policy: {
+  defer_non_critical?: number | null;
+  cost_mode?: string | null;
+}): boolean {
+  if (policy.defer_non_critical !== null && policy.defer_non_critical !== undefined) {
+    return Number(policy.defer_non_critical) === 1;
+  }
+  return policy.cost_mode === "CRITICAL_ONLY";
+}

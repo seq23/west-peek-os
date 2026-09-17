@@ -18,7 +18,8 @@ import {
 } from "./routing";
 import { checkFirmBudgets, currentSpendBehaviour, firmSpend } from "./spend";
 import {
-  asSpendLever,
+  deferNonCriticalFromPolicy,
+  leverFromPolicy,
   protectedFromSpendPressure,
   taskKindOf,
   type SpendBehaviour,
@@ -865,7 +866,7 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * The lever never moves the mode and the mode never moves the lever. They are two controls here
    * for that reason and must never be merged.
    */
-  const spendLever = asSpendLever((policy as unknown as { spend_lever?: string }).spend_lever);
+  const spendLever = leverFromPolicy(policy as unknown as Parameters<typeof leverFromPolicy>[0]);
   const behaviour: SpendBehaviour = await currentSpendBehaviour(env, firmScope, spendLever, now);
   const isProtected = protectedFromSpendPressure(input.budgetContext ?? {});
   const taskKind: TaskKind = taskKindOf(input.budgetContext ?? {});
@@ -1018,9 +1019,7 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * works: migration 0179 set this flag on every historical CRITICAL_ONLY row, and
    * `translateLegacyCostMode` sets it for any caller still sending that value.
    */
-  const deferNonCritical =
-    Number((policy as unknown as { defer_non_critical?: number }).defer_non_critical ?? 0) === 1 ||
-    effectiveCostMode === "CRITICAL_ONLY";
+  const deferNonCritical = deferNonCriticalFromPolicy(policy as unknown as Parameters<typeof deferNonCriticalFromPolicy>[0]);
   if (deferNonCritical && !isCriticalPurpose(input.purpose, input.budgetContext)) {
     return { run: await blocked("BLOCKED_DEFERRED", "defer_non_critical:non_critical_purpose") };
   }

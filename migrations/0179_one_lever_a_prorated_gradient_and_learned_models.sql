@@ -70,17 +70,31 @@
 -- capability-and-price rule it uses today rather than guessing from three data points.
 
 -- ── The lever ────────────────────────────────────────────────────────────────────────────────
--- Defaults to MODERATE, which is the position the owner asked to be live, and is also the position
--- every existing row should read as until the backfill below says otherwise.
-ALTER TABLE budget_policy ADD COLUMN spend_lever TEXT NOT NULL DEFAULT 'MODERATE';
+-- NULLABLE, WITH NO DEFAULT, AND THAT IS THE WHOLE DESIGN OF THIS COLUMN.
+--
+-- The obvious migration was `NOT NULL DEFAULT 'MODERATE'` plus an UPDATE backfilling each historic
+-- row with the lever it behaved as. `budget_policy` refused the UPDATE, correctly: it is immutable
+-- by trigger, because a versioned policy table whose history can be rewritten is not a history.
+--
+-- That refusal is right on more than a technicality. A default of 'MODERATE' would have written a
+-- claim into every historic row — including the CHEAPO/honours_pins=0 rows that were the "free
+-- only" posture — and the claim would have been FALSE for exactly the rows a person would go back
+-- and read. A column that lies about the past is worse than a column that is empty about it.
+--
+-- So the column is NULL for every row written before this migration, and NULL means "this row
+-- predates the lever; read it the old way". `leverFromPolicy()` in src/shared/ai/spendLever.ts does
+-- that translation, through the same `translateLegacyCostMode` the API uses for old callers — one
+-- tested function rather than a copy of the mapping in SQL that could drift from the copy in TS.
+ALTER TABLE budget_policy ADD COLUMN spend_lever TEXT;
 
--- "What work runs at all", extracted from the enum it never belonged in. 1 defers non-critical
--- purposes exactly as CRITICAL_ONLY did; it is orthogonal to the lever and composes with it.
-ALTER TABLE budget_policy ADD COLUMN defer_non_critical INTEGER NOT NULL DEFAULT 0;
+-- "What work runs at all", extracted from the enum it never belonged in. NULL on historic rows for
+-- the same reason, and read as `cost_mode = 'CRITICAL_ONLY'` when absent.
+ALTER TABLE budget_policy ADD COLUMN defer_non_critical INTEGER;
 
--- ── The migration of the old values ──────────────────────────────────────────────────────────
--- Every historical row gets the lever it BEHAVED as, not a default. The mapping is the one the
--- routing code actually implemented, read off runAi.ts rather than inferred from the value names:
+-- ── What the old values become ───────────────────────────────────────────────────────────────
+-- Not written here, because nothing may be written to a historic row. The mapping is applied on
+-- READ, and it is the one the routing code actually implemented — read off runAi.ts rather than
+-- inferred from the value names:
 --
 --   cost_mode        honours_pins  prefers_frontier  →  spend_lever  defer_non_critical
 --   ─────────────────────────────────────────────────────────────────────────────────────
@@ -92,18 +106,8 @@ ALTER TABLE budget_policy ADD COLUMN defer_non_critical INTEGER NOT NULL DEFAULT
 --   STRATEGIC_SURGE  –             –                 →  OPEN         0   (+ a bypass, below)
 --
 -- CHEAPO with honours_pins = 0 is the posture the UI called "Free only", and it is the only one
--- that was ever allowed to override a pin. It maps to FREE_ONLY, which is the same intent stated
+-- that was ever allowed to override a pin. It reads as FREE_ONLY, which is the same intent stated
 -- as a lever position rather than as two columns nobody could read together.
-UPDATE budget_policy SET spend_lever =
-  CASE
-    WHEN cost_mode = 'CHEAPO' AND COALESCE(honours_pins, 1) = 0 THEN 'FREE_ONLY'
-    WHEN cost_mode = 'CHEAPO'                                   THEN 'MODERATE'
-    WHEN cost_mode = 'STRATEGIC_SURGE'                          THEN 'OPEN'
-    WHEN COALESCE(prefers_frontier, 0) = 1                      THEN 'OPEN'
-    ELSE 'MODERATE'
-  END;
-
-UPDATE budget_policy SET defer_non_critical = 1 WHERE cost_mode = 'CRITICAL_ONLY';
 
 -- ── The live default ─────────────────────────────────────────────────────────────────────────
 -- A new policy row, because budget_policy is immutable by trigger and the latest row wins.
