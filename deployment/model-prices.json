@@ -136,6 +136,28 @@
       "source": "openrouter_feed",
       "sourced_at": "2026-09-17",
       "note": "Same model, read from the same OpenRouter feed entry, including the $0.005 per-search fee. The model id is NAMESPACED at Perplexity too: bare `sonar` returns HTTP 400 'model is not supported', so the registry row that said `sonar` would have failed; migration 0177 corrects it. Perplexity's own GET /v1/models returns pricing as usd_per_1m_tokens and is the preferred source now that a key exists - scripts/prices/refresh.mjs reads it when PERPLEXITY_API_KEY is in the environment."
+    },
+    {
+      "provider_id": "prov_openrouter_free",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "input_per_mtok_usd": 0.0,
+      "output_per_mtok_usd": 0.0,
+      "request_usd": 0.0,
+      "pricing_state": "SOURCED",
+      "source": "openrouter_feed",
+      "sourced_at": "2026-09-17",
+      "note": "prompt 0, completion 0 in the feed. 550B parameters, 1M context, reasoning-capable. Free is a price, and it was read. The lane is training-permitting and therefore PUBLIC-only - see migration 0178."
+    },
+    {
+      "provider_id": "prov_google_free",
+      "model": "gemini-2.5-flash",
+      "input_per_mtok_usd": 0.0,
+      "output_per_mtok_usd": 0.0,
+      "request_usd": 0.0,
+      "pricing_state": "SOURCED",
+      "source": "openrouter_feed",
+      "sourced_at": "2026-09-17",
+      "note": "Free on Google's unpaid quota. The PAID rate for the same model is $0.30/$2.50 per Mtok (read from the feed entry google/gemini-2.5-flash), which is what it costs once the quota is gone - and that exhaustion arrives as HTTP 429, which the router treats as an outage and falls through visibly. Training-permitting by Google's own terms, so PUBLIC-only."
     }
   ],
   "unpriced": [
