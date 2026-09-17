@@ -12,6 +12,7 @@ function isProductionsKind(kind: string | null | undefined): boolean {
   return kind === "PRODUCTIONS_CUSTOMERS" || kind === "PRODUCTIONS_PRESS" || kind === "PRODUCTIONS_MONTHLY" || kind === "PRODUCTIONS_HIRE_SEARCH";
 }
 import { replyToRequester } from "./requestReply";
+import { PRODUCTIONS_PARTNER } from "../../shared/registry/partners";
 
 /**
  * The sweep that works the cards employees own (14 Sep 2026).
@@ -159,7 +160,8 @@ export async function announceOutcome(
   if (card.kind === "BLOG_HELP" && outcome === "DONE") return { emailed: card.requested_by_email ?? null };
   if (isProductionsKind(card.kind)) {
     await notifyQuietly(env, {
-      firmUserId: "fu_scooter_taylor",
+      // Whose agency it is, asked of the registry rather than typed. See shared/registry/partners.ts.
+      firmUserId: PRODUCTIONS_PARTNER.firmUserId,
       kind: "MEETING",
       severity: outcome === "BLOCKED" ? "WARNING" : "INFO",
       title: outcome === "DONE" ? `${who} finished "${card.title.slice(0, 70)}" — check your email` : `${who} is blocked on "${card.title.slice(0, 70)}"`,

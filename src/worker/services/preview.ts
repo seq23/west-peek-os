@@ -210,16 +210,32 @@ export interface PreviewOutcome {
   costNotice: string;
 }
 
+export type PreviewRunner = (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+
+/**
+ * Injectable runners, the same seam `sweepOnce` already offers and for the same reason: a test must
+ * be able to prove THIS file's own behaviour — the redirect, the write block, what was suppressed —
+ * without a live model or a live search standing between it and the assertion.
+ */
+export interface PreviewRunners {
+  productionsHire?: PreviewRunner;
+  productions?: PreviewRunner;
+  roomPacket?: PreviewRunner;
+  blogHelp?: PreviewRunner;
+  deckRework?: PreviewRunner;
+}
+
 /** The runner for a card kind — the sweep's own dispatch, reached without importing the sweep. */
 async function runnerFor(
   kind: string | null,
+  runners: PreviewRunners = {},
 ): Promise<((env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>) | null> {
-  if (kind === "PRODUCTIONS_HIRE_SEARCH") return (await import("./productionsHire")).runHireSearchCard;
-  if (kind === "DECK_REWORK") return (await import("./deck")).runDeckRework;
-  if (kind === "ROOM_PACKET") return (await import("./roomPacket")).runRoomPacketCard;
-  if (kind === "BLOG_HELP") return (await import("./blogHelp")).runBlogHelpCard;
+  if (kind === "PRODUCTIONS_HIRE_SEARCH") return runners.productionsHire ?? (await import("./productionsHire")).runHireSearchCard;
+  if (kind === "DECK_REWORK") return runners.deckRework ?? (await import("./deck")).runDeckRework;
+  if (kind === "ROOM_PACKET") return runners.roomPacket ?? (await import("./roomPacket")).runRoomPacketCard;
+  if (kind === "BLOG_HELP") return runners.blogHelp ?? (await import("./blogHelp")).runBlogHelpCard;
   if (kind === "PRODUCTIONS_CUSTOMERS" || kind === "PRODUCTIONS_PRESS" || kind === "PRODUCTIONS_MONTHLY") {
-    return (await import("./productions")).runProductionsCard;
+    return runners.productions ?? (await import("./productions")).runProductionsCard;
   }
   return null;
 }
@@ -247,6 +263,7 @@ export async function runPreview(
   requester: { id: string; email: string },
   request: { kind: "JOB" | "CARD"; key: string },
   now = new Date(),
+  runners: PreviewRunners = {},
 ): Promise<PreviewOutcome> {
   if (!isPartnerFirmUserId(requester.id)) {
     // A 404 rather than a 403: previews are not a thing that exists for anyone else.
@@ -303,7 +320,7 @@ export async function runPreview(
     startedAt: now.toISOString(),
   };
 
-  const run = await runnerFor(card.kind);
+  const run = await runnerFor(card.kind, runners);
   if (!run) {
     throw new PreviewError(
       400,

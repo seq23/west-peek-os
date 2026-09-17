@@ -3,6 +3,7 @@ import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { json } from "../router";
+import { partnerByName } from "../../shared/registry/partners";
 import {
   BLOCK_ACTIONS,
   blockProblems,
@@ -185,7 +186,9 @@ async function notifyQuietlyOrPartners(
     firmScope: row.firm_scope,
   };
   if (row.block_who === "SCOOTER") {
-    await notifyQuietly(env, { ...input, firmUserId: "fu_scooter_taylor" });
+    // Asked of the registry, not typed. `block_who` names a partner by first name; the registry is
+    // what turns that into the `firm_user` the notice is addressed to.
+    await notifyQuietly(env, { ...input, firmUserId: partnerByName(row.block_who)!.firmUserId });
     return;
   }
   await notifyPartners(env, input);

@@ -47,16 +47,49 @@ const MIGRATION = path.join(ROOT, "migrations", "0004_ai_cost_privacy.sql");
 const BEGIN = "-- BEGIN GENERATED SEEDS (scripts/seed/generate-ai-employee-seed.mjs) — do not hand-edit";
 const END = "-- END GENERATED SEEDS";
 
-/** Load an import-free registry TS module by transpiling to CJS and evaluating it. */
-function loadRegistryModule(relPath) {
-  const source = readFileSync(path.join(ROOT, relPath), "utf8");
+/**
+ * Load a registry TS module by transpiling to CJS and evaluating it.
+ *
+ * RESOLVES RELATIVE IMPORTS SINCE 17 SEP 2026, and it has to. This used to require the module to be
+ * import-free, which held only while every registry was a standalone list of literals.
+ * `managingPartners.ts` is now a VIEW of `shared/registry/partners.ts` — the one place the firm says
+ * who the two partners are — so loading it means loading what it derives from.
+ *
+ * The alternative was to leave `managingPartners.ts` holding its own copy of the names so this
+ * script could keep its simplification, which is the tail wagging the dog: a seed generator's
+ * convenience is not a reason for the firm to state a fact twice.
+ *
+ * Relative specifiers only, and only within `src/`. Anything else throws rather than being resolved
+ * from node_modules — a registry that reaches for a dependency is not a registry, and the seed this
+ * produces is written into a migration.
+ */
+function loadRegistryModule(relPath, cache = new Map()) {
+  const key = path.normalize(relPath);
+  if (cache.has(key)) return cache.get(key);
+  const source = readFileSync(path.join(ROOT, key), "utf8");
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    fileName: relPath,
+    fileName: key,
   });
-  const sandbox = { exports: {}, module: { exports: {} } };
+  const sandbox = {
+    exports: {},
+    module: { exports: {} },
+    require: (specifier) => {
+      if (!specifier.startsWith(".")) {
+        throw new Error(`${key} imports "${specifier}"; a registry module may only import a sibling registry.`);
+      }
+      const resolved = path.join(path.dirname(key), `${specifier}.ts`);
+      if (!resolved.startsWith(`src${path.sep}`)) {
+        throw new Error(`${key} imports "${specifier}", which resolves outside src/.`);
+      }
+      return loadRegistryModule(resolved, cache);
+    },
+  };
   sandbox.module.exports = sandbox.exports;
-  vm.runInNewContext(outputText, sandbox, { filename: relPath });
+  cache.set(key, sandbox.module.exports);
+  vm.runInNewContext(outputText, sandbox, { filename: key });
+  // Re-seat: a module that reassigns `module.exports` (tsc does not, but be exact) must win.
+  cache.set(key, sandbox.module.exports);
   return sandbox.module.exports;
 }
 

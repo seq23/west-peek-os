@@ -577,7 +577,7 @@ export function hireSummary(
         bullets: [
           "Searched live public sources: LinkedIn results, agency team pages, speaker lists, portfolios, award lists.",
           "Asked every profile page for its status, then held each survivor to the archetype in a second judgement pass.",
-          `Checked them against past weeks: **${seenBefore.length}** were in an earlier note and are still on the table.`,
+          `Checked them against past weeks: **${seenBefore.length}** ${seenBefore.length === 1 ? "was" : "were"} in an earlier note and ${seenBefore.length === 1 ? "is" : "are"} still on the table.`,
         ],
       },
       {

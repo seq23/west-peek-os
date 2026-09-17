@@ -241,6 +241,38 @@ export async function executeExternalEffect(
   requestId: string,
   receiptId: string | undefined,
 ): Promise<EffectExecutionResult> {
+  /*
+   * A PREVIEW NEVER EXECUTES AN EXTERNAL EFFECT — the second of the two stops that make
+   * "no external effects, ever" structural rather than remembered (17 Sep 2026).
+   *
+   * The first is at the transports, where a preview's recipient list is REPLACED with Sequoia's
+   * address alone (see `applyPreviewBoundary`). This one is here because THIS is the path that can
+   * reach somebody outside the firm at all: a founder, an LP, a journalist, through an approval
+   * receipt a human decided. Redirecting that would still be wrong — a preview must not spend a
+   * partner's one-time approval, and an approval consumed by a rehearsal is an approval that no
+   * longer exists when the real send is made.
+   *
+   * REFUSED BEFORE THE REQUEST ROW IS EVEN READ, which is stronger than refusing before
+   * `authorize()`: there is no branch, no state and no id for which this function does anything
+   * else in a preview. The receipt is left unconsumed and unconsumable, and nothing about the
+   * refusal is recoverable by retrying inside the preview — which is the point.
+   */
+  if (isPreviewEnv(env)) {
+    await appendEvent(env, {
+      eventType: "effect.refused_in_preview",
+      actorType: actor.type === "HUMAN" ? "firm_user" : actor.type === "AI" ? "ai_employee" : "system",
+      actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+      objectType: "external_effect_request",
+      objectId: requestId,
+      payload: { external_effect_request_id: requestId, receipt_id: receiptId ?? null },
+    });
+    throw new EffectError(
+      403,
+      "preview_cannot_send",
+      "this is a preview: nothing reaches anybody outside the firm, and no approval is consumed",
+    );
+  }
+
   const request = await env.WP_OS_DB.prepare("SELECT * FROM external_effect_request WHERE id = ?1")
     .bind(requestId)
     .first<ExternalEffectRequestRow>();
@@ -253,37 +285,6 @@ export async function executeExternalEffect(
   }
   if (!isKnownEffectType(request.effect_type)) {
     throw new EffectError(409, "unknown_effect_type", request.effect_type);
-  }
-
-  /*
-   * A PREVIEW NEVER EXECUTES AN EXTERNAL EFFECT — the second of the two stops that make
-   * "no external effects, ever" structural rather than remembered (17 Sep 2026).
-   *
-   * The first is at the transports, where a preview's recipient list is REPLACED with Sequoia's
-   * address alone (see `applyPreviewBoundary`). This one is here because THIS is the path that can
-   * reach somebody outside the firm at all: a founder, an LP, a journalist, through an approval
-   * receipt a human decided. Redirecting that would still be wrong — a preview must not spend a
-   * partner's one-time approval, and an approval consumed by a rehearsal is an approval that no
-   * longer exists when the real send is made.
-   *
-   * REFUSED BEFORE `authorize()` ON PURPOSE, exactly like the AI-sender check above and for the same
-   * reason: the receipt must be left unconsumed and unconsumable. Nothing about this refusal is
-   * recoverable by retrying inside the preview, which is the point.
-   */
-  if (isPreviewEnv(env)) {
-    await appendEvent(env, {
-      eventType: "effect.refused_in_preview",
-      actorType: actor.type === "HUMAN" ? "firm_user" : actor.type === "AI" ? "ai_employee" : "system",
-      actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
-      objectType: "external_effect_request",
-      objectId: request.id,
-      payload: { effect_type: request.effect_type, destination: request.destination },
-    });
-    throw new EffectError(
-      403,
-      "preview_cannot_send",
-      "this is a preview: nothing reaches anybody outside the firm, and no approval is consumed",
-    );
   }
 
   /*
