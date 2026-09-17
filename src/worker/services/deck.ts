@@ -13,6 +13,7 @@ import { runAi } from "../ai/runAi";
 import { getDocument, getDocumentVersion } from "./documents";
 import { createWorkCardInternal } from "./workCards";
 import { blockCard } from "./blocks";
+import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import type { FirmUserIdentity } from "../auth";
 import {
   initialCapitalUsd, investableBase, reserveUsd, sleeveTargetUsd, usd,
@@ -490,10 +491,12 @@ async function currentDeckPdf(env: Env, fundId: string): Promise<{ base64: strin
  * Returns null when there is no current deck to pull from, or the reading fails — the caller then
  * builds from the template and says so, rather than shipping nothing.
  */
-export async function carryCurrentDeck(env: Env, actor: Actor, fundId: string, figures: DeckFigures): Promise<CarriedDeck | null> {
+export async function carryCurrentDeck(env: Env, actor: Actor, fundId: string, figures: DeckFigures, steer = ""): Promise<CarriedDeck | null> {
   const pdf = await currentDeckPdf(env, fundId);
   if (!pdf) return null;
   const prompt = [
+    // WHAT SHE SAID WHEN SHE SENT THE LAST ONE BACK, at the top, where it outranks the rest.
+    steer,
     "You are transcribing the firm's CURRENT limited-partner deck so it can be re-rendered in full with corrected figures.",
     "Go page by page, in order. For EVERY page output one object: {\"page\": n, \"headline\": \"...\", \"standfirst\": \"...\" or null, \"lines\": [...]}.",
     "Each line is either {\"text\": \"the sentence or bullet, verbatim\"} or, when the line states a figure the records hold,",
@@ -502,7 +505,7 @@ export async function carryCurrentDeck(env: Env, actor: Actor, fundId: string, f
     "Charts and images: describe them in one text line beginning 'Chart:' or 'Image:'.",
     "The records currently hold these figures (the bind keys): " + JSON.stringify(figures) + ".",
     "Return ONLY JSON: {\"pages\": [ ... ]}.",
-  ].join("\n");
+  ].filter((line) => line.length > 0).join("\n");
   const { run } = await runAi(env, {
     purpose: `Carry the current deck (v${pdf.versionNo}) into the rebuild`,
     actor,
@@ -649,7 +652,7 @@ export async function copyDeckWithTweaks(
 export async function runDeckRebuild(
   env: Env,
   actor: Actor,
-  input: { title?: string; pdfBase64?: string | null; brief?: string | null; launch?: Parameters<typeof buildDeckPdf>[2]; carry?: boolean } = {},
+  input: { title?: string; pdfBase64?: string | null; brief?: string | null; launch?: Parameters<typeof buildDeckPdf>[2]; carry?: boolean; steer?: string } = {},
 ): Promise<{ version: DeckVersionRow; changed: number; rendered: boolean; renderNote: string | null; carried: CarriedDeck | null }> {
   const fund = await theFund(env);
   // The PDF is built HERE unless the caller brought one (the Mac script does). A rebuild that
@@ -664,7 +667,7 @@ export async function runDeckRebuild(
     // Pull from the current deck first; fall back to the template only when there is none.
     if (input.carry !== false) {
       const figures = await figuresFromRecords(env, fund.id);
-      carried = await carryCurrentDeck(env, actor, fund.id, figures).catch(() => null);
+      carried = await carryCurrentDeck(env, actor, fund.id, figures, input.steer ?? "").catch(() => null);
     }
     if (carried) {
       // COPY, NEVER RE-TYPESET. The transcript is used only to know which figures to change and
@@ -837,17 +840,71 @@ export async function requestDeckRework(
  * browser cannot render, the version is still recorded and the card says so — a partner then knows
  * exactly what is missing rather than finding an empty proposal.
  */
+/**
+ * What a rework can actually do, for the interpretation pass.
+ *
+ * DELIBERATELY NARROW, because the chain is. The operator rejected a re-typeset deck three times;
+ * a rebuild therefore COPIES the current deck page for page and changes only the figures the
+ * records disagree with. So "the numbers are stale" is a steer this can honour, and "rewrite the
+ * team page" is not — and the correct answer to the second is to say so, not to produce a version
+ * identical to the last one with her complaint printed on the label.
+ */
+export const DECK_REWORK_STEPS: readonly string[] = [
+  "Read the current deck page by page, keeping every page, line and claim exactly as designed.",
+  "Change the figures the firm's records disagree with, in place, and list each change.",
+  "Record the result as a PROPOSED version on Fund strategy and tell both partners.",
+  "The deck is COPIED, never re-typeset: no page is rewritten, added, removed or reordered, no wording is changed, no image or chart is made, and no design is altered.",
+  "Nothing is sent to a limited partner — a person approves the version first.",
+];
+
 export async function runDeckRework(
   env: Env,
   card: { id: string; title: string; firm_scope: string },
   launch?: Parameters<typeof buildDeckPdf>[2],
+  interpret?: Interpreter,
 ): Promise<{ finished: boolean; blocked: boolean; detail: string }> {
   const row = await env.WP_OS_DB.prepare("SELECT description, prompt FROM work_card WHERE id = ?1")
     .bind(card.id)
     .first<{ description: string | null; prompt: string | null }>();
   const brief = row?.prompt ?? row?.description ?? null;
   const actor: Actor = { type: "SYSTEM", roles: [], firmScopes: [card.firm_scope] };
-  const out = await runDeckRebuild(env, actor, { brief, launch });
+
+  /*
+   * THE REASON SHE TYPED WHEN SHE SENT THE DECK BACK, READ BY A MODEL (16 Sep 2026).
+   *
+   * This runner DID read `work_card.prompt` — it is the rejection reason, put there by
+   * `decideDeckVersion` — and then used it as a STRING ON A LABEL: `changeSummary` gained the
+   * words "On request: <her reason>" and nothing else in the rebuild ever saw them. The rebuild is
+   * a deterministic copy of the current deck with corrected figures, so "send it back with what is
+   * still wrong" produced a new version whose content was identical to the one she rejected, with
+   * her complaint printed underneath it. Reading a column is not the same as reaching a model, and
+   * this is the clearest case of the difference in the repo.
+   *
+   * Now her reason is interpreted first. What the copy can honour becomes a steer on the
+   * transcription; what it cannot — a page rewritten, a chart made, a section added — blocks the
+   * card and says which part, rather than proposing the same deck again.
+   */
+  const steer = await steerFor(env, actor, {
+    cardId: card.id,
+    cardKind: "DECK_REWORK",
+    title: card.title,
+    employee: DECK_OWNER,
+    chain: "rebuilding the limited-partner deck after it was sent back",
+    steps: [...DECK_REWORK_STEPS],
+    firmScope: card.firm_scope,
+    extra: brief ? [{ source: "BLOCK_ANSWER", text: brief, who: null }] : [],
+  }, interpret);
+  if (steer.cannot.length > 0) {
+    const why = await blockCard(env, card, {
+      reason: steer.failure ? "the_brief_is_missing" : "asked_for_something_this_work_cannot_do",
+      trying: card.title,
+      employee: DECK_OWNER,
+      detail: steer.failure ? undefined : cannotDetail(DECK_OWNER, steer.cannot),
+    });
+    return { finished: false, blocked: true, detail: why };
+  }
+
+  const out = await runDeckRebuild(env, actor, { brief, launch, ...(steer.text ? { steer: steer.text } : {}) });
   const drift = (() => {
     try {
       return JSON.parse(out.version.changed_fields_json) as FigureDrift[];

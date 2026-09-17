@@ -6,6 +6,7 @@ import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { SEARCH_MODEL } from "./liveSearch";
 import { blockCard } from "./blocks";
+import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { urlStatus } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
@@ -572,6 +573,8 @@ export interface HireSearchDeps {
   judge?: ProductionsJudge;
   urlStatus?: UrlStatusCheck;
   now?: Date;
+  /** The pass that reads what he asked for. See services/instruction.ts, tests/helpers/interpret.ts. */
+  interpret?: Interpreter;
 }
 
 /**
@@ -579,6 +582,20 @@ export interface HireSearchDeps {
  * usable), check every page, judge, remember, file the deliverable, email Scooter once, DONE — or
  * BLOCKED with the reason on the card and nothing emailed.
  */
+/**
+ * What this search can actually do, for the interpretation pass. Shown to the model so it can tell
+ * a directive that changes one of these steps from one that asks for something none of them does —
+ * "set up interviews with the best two" is a CANNOT, and saying so is the correct answer.
+ */
+export const HIRE_SEARCH_STEPS: readonly string[] = [
+  "Run one live search for a senior experiential producer, freelance, who can bring in brand deals.",
+  "Check every profile and evidence page is live and readable without a login, dropping the rest.",
+  "Judge each candidate against what the agency needs and reject the rest with a reason.",
+  "Remember who has already been sent, across weeks, so nobody is sent twice.",
+  "File one deliverable on Scooter's Home and send him ONE email.",
+  "Nobody is contacted, no interview is arranged and no offer is made — the result is a shortlist he decides on.",
+];
+
 export async function runHireSearchCard(
   env: Env,
   card: SweepCard,
@@ -587,9 +604,40 @@ export async function runHireSearchCard(
   const now = deps.now ?? new Date();
   const week = isoWeekOf(now);
   const actor: Actor = { type: "AI", aiEmployeeId: "aie_walker", roles: [], firmScopes: [card.firm_scope] };
-  const search = deps.search ?? defaultSearch;
-  const judge = deps.judge ?? defaultJudge;
   const status = deps.urlStatus ?? defaultUrlStatus;
+
+  /*
+   * WHAT SCOOTER HAS ASKED FOR ON THIS PARTICULAR WEEK, READ BY A MODEL FIRST.
+   *
+   * A weekly scheduled card carries no human prose, so `steerFor` returns without calling a model
+   * and the ordinary week costs nothing extra. The week he types "stop sending me people in LA" is
+   * the week this matters: before this, that note went into a column this runner never read, the
+   * same search ran again, and he got the same people.
+   */
+  const steer = await steerFor(env, actor, {
+    cardId: card.id,
+    cardKind: "PRODUCTIONS_HIRE_SEARCH",
+    title: card.title,
+    employee: "Walker",
+    chain: "the weekly hire search for West Peek Productions",
+    steps: [...HIRE_SEARCH_STEPS],
+    firmScope: card.firm_scope,
+  }, deps.interpret);
+  if (steer.cannot.length > 0) {
+    const why2 = await blockCard(env, card, {
+      reason: steer.failure ? "the_brief_is_missing" : "asked_for_something_this_work_cannot_do",
+      trying: card.title,
+      employee: "Walker",
+      who: "SCOOTER",
+      detail: steer.failure ? undefined : cannotDetail("Walker", steer.cannot),
+    });
+    return { finished: false, blocked: true, detail: why2 };
+  }
+  const withSteer = (p: string): string => (steer.text ? `${steer.text}\n\n${p}` : p);
+  const rawSearch = deps.search ?? defaultSearch;
+  const search: ProductionsSearch = (e, a, p) => rawSearch(e, a, withSteer(p));
+  const rawJudge = deps.judge ?? defaultJudge;
+  const judge: ProductionsJudge = (e, a, p) => rawJudge(e, a, withSteer(p));
 
   let kept: HireCandidate[] = [];
   let dropped: { name: string; reason: string }[] = [];

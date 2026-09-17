@@ -1054,8 +1054,8 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     const rows = await env.WP_OS_DB.prepare(
       "SELECT provider_id, model FROM provider_model WHERE supports_reasoning = 1 AND status <> 'DEPRECATED'",
     ).all<{ provider_id: string; model: string }>();
-    const canReason = new Set((rows.results ?? []).map((r) => `${r.provider_id} ${r.model}`));
-    const filtered = judged.filter((c) => canReason.has(`${c.providerId} ${c.model}`));
+    const canReason = new Set((rows.results ?? []).map((r) => `${r.provider_id} ${r.model}`));
+    const filtered = judged.filter((c) => canReason.has(`${c.providerId} ${c.model}`));
     if (filtered.length > 0) {
       reasoningOnly = filtered;
       reasoningFilterApplied = filtered.length < judged.length;

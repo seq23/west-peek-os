@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { saidNothing } from "./helpers/interpret";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
@@ -188,7 +189,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
   it("OUTLINE: Wren works Sequoia's card — sources checked and judged, unchecked URLs stripped, deliverable filed, one email, DONE", async () => {
     const writes: string[] = [];
     const write: BlogModelCall = async (_e, _a, prompt) => { writes.push(prompt); return { ok: true, text: outlineJson, detail: "ok" }; };
-    const out = await sweepOnce(env, NOW, { blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write, urlCheck }) });
+    const out = await sweepOnce(env, NOW, { blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write, urlCheck, interpret: saidNothing }) });
     expect(out.outcome, out.summary).toBe("DONE");
     const card = (await cardsOwnedBy("aie_wren"))[0]!;
     expect(out.card?.id).toBe(card.id);
@@ -246,7 +247,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
   it("DRAFT: Walker writes Scooter's post to length — a short first draft is sent back once with the count — sources footnoted, unchecked URLs removed", async () => {
     const drafts: string[] = [];
     const write: BlogModelCall = async (_e, _a, prompt) => { drafts.push(prompt); return { ok: true, text: draftJson(drafts.length === 1 ? 400 : 1000), detail: "ok" }; };
-    const out = await sweepOnce(env, new Date(NOW.getTime() + 60_000), { blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write, urlCheck }) });
+    const out = await sweepOnce(env, new Date(NOW.getTime() + 60_000), { blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write, urlCheck, interpret: saidNothing }) });
     expect(out.outcome, out.summary).toBe("DONE");
     const card = (await cardsOwnedBy("aie_walker"))[0]!;
     expect(out.card?.id).toBe(card.id);
@@ -275,7 +276,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
 
   it("PHRASE: five candidates with reasoning and how each recurs, and one recommendation", async () => {
     const write: BlogModelCall = async () => ({ ok: true, text: phraseJson, detail: "ok" });
-    const out = await sweepOnce(env, new Date(NOW.getTime() + 120_000), { blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write, urlCheck }) });
+    const out = await sweepOnce(env, new Date(NOW.getTime() + 120_000), { blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write, urlCheck, interpret: saidNothing }) });
     expect(out.outcome, out.summary).toBe("DONE");
     const card = (await cardsOwnedBy("aie_walker"))[1]!;
     expect(out.card?.id).toBe(card.id);
@@ -295,7 +296,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
     await deliverMail("sequoia@westpeek.ventures", "Blog", "outline a blog post on the history of the West Peek mastermind please");
     const before = sent.length;
     const out = await sweepOnce(env, new Date(NOW.getTime() + 180_000), {
-      blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write: async () => ({ ok: true, text: outlineJson, detail: "ok" }), urlCheck: async () => false }),
+      blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write: async () => ({ ok: true, text: outlineJson, detail: "ok" }), urlCheck: async () => false, interpret: saidNothing }),
     });
     expect(out.outcome, out.summary).toBe("BLOCKED");
     // 0173: the block is a sentence she can read, and the specifics are in "what would clear it".
@@ -314,7 +315,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
   it("a BLOG_HELP card opened by hand with no email still knows whose it is, from the chief of staff's own role", async () => {
     await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, privacy_label, firm_scope, created_by, kind, request_json) VALUES ('wc_blog_hand', 'Blog phrases for Sequoia', 'x', 'AI', 'aie_wren', 'OPEN', 'NORMAL', 'INTERNAL', 'west-peek', 'test', 'BLOG_HELP', ?1)")
       .bind(JSON.stringify({ modes: ["PHRASE"], topic: "the blog", ask: "a phrase I can repeat" })).run();
-    const out = await runBlogHelpCard(env, { id: "wc_blog_hand", title: "Blog phrases for Sequoia", kind: "BLOG_HELP", owner_id: "aie_wren", state: "OPEN", work_attempts: 1, firm_scope: "west-peek", requested_by_email: null }, { search, judge, write: async () => ({ ok: true, text: phraseJson, detail: "ok" }), urlCheck });
+    const out = await runBlogHelpCard(env, { id: "wc_blog_hand", title: "Blog phrases for Sequoia", kind: "BLOG_HELP", owner_id: "aie_wren", state: "OPEN", work_attempts: 1, firm_scope: "west-peek", requested_by_email: null }, { search, judge, write: async () => ({ ok: true, text: phraseJson, detail: "ok" }), urlCheck, interpret: saidNothing });
     expect(out.finished, out.detail).toBe(true);
     const dlv = await env.WP_OS_DB.prepare("SELECT prepared_for FROM deliverable WHERE source_type = 'work_card' AND source_id = 'wc_blog_hand'").first<{ prepared_for: string }>();
     expect(dlv!.prepared_for).toBe("fu_sequoia_taylor");
