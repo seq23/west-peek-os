@@ -1,0 +1,179 @@
+{
+  "_README": [
+    "Every model price this firm routes on, and where the number came from.",
+    "",
+    "THIS FILE IS THE REGISTER, NOT THE RUNTIME. The prices the router actually uses live in",
+    "provider_pricing_snapshot in D1, written by a migration. This file records what was read, from",
+    "which source, on which date, so that `npm run validate:prices` can prove the two agree and",
+    "`npm run prices:refresh` can tell you when a vendor has changed a number underneath you.",
+    "",
+    "A ROW MOVES TO SOURCED ONLY WHEN A REAL VENDOR FIGURE WAS READ. A price nobody could obtain",
+    "stays ILLUSTRATIVE and is refused by the selection guard in runAi. Filling a gap with a",
+    "plausible number to make the table look complete is the exact failure this register exists to",
+    "prevent: migration 0158 priced perplexity/sonar at $1/$1 by guesswork, that row made it the",
+    "cheapest adequate model, and a search model was handed every judgement call in the firm.",
+    "",
+    "(The guess turned out to be right, which is worse, not better. It was right by luck and could",
+    "not be known to be right. It is now read from OpenRouter's feed and can be.)"
+  ],
+  "staleness_days": 45,
+  "_staleness_reason": [
+    "A SOURCED price older than this is reported STALE by `npm run validate:prices` and shown as",
+    "stale in the Cockpit. 45 days: long enough not to cry wolf between the owner's monthly",
+    "reviews, short enough that a vendor's list-price change is caught inside one billing cycle.",
+    "",
+    "STALE DOES NOT BLOCK A SELECTION, deliberately. A price that expires into a refusal is a time",
+    "bomb: the firm's AI would stop 45 days after the last person remembered to run a script. The",
+    "selection guard blocks prices that were NEVER read (ILLUSTRATIVE, UNKNOWN); staleness is made",
+    "loud instead of made fatal."
+  ],
+  "sources": {
+    "openrouter_feed": {
+      "url": "https://openrouter.ai/api/v1/models",
+      "note": "Public, no key required. Lists the per-token price OpenRouter actually charges for every model it routes, which for a first-party model is the vendor's own list price passed through. Machine-readable, so this is the source that can be re-read on demand."
+    },
+    "cloudflare_workers_ai": {
+      "url": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+      "note": "Cloudflare publishes BOTH the neuron rate and the per-million-token dollar figure for each model. The dollar figures below are quoted from that page, not derived by us \u2014 the neuron rates are recorded alongside so the arithmetic stays checkable."
+    }
+  },
+  "prices": [
+    {
+      "provider_id": "prov_openrouter",
+      "model": "anthropic/claude-sonnet-5",
+      "input_per_mtok_usd": 2.0,
+      "output_per_mtok_usd": 10.0,
+      "request_usd": 0.0,
+      "pricing_state": "SOURCED",
+      "source": "openrouter_feed",
+      "sourced_at": "2026-09-17",
+      "note": "Read from the OpenRouter model feed: prompt 0.000002, completion 0.00001 per token. The $2/$10 figure migration 0175 carried as ILLUSTRATIVE was correct; it is now read rather than assumed."
+    },
+    {
+      "provider_id": "prov_openrouter",
+      "model": "perplexity/sonar",
+      "input_per_mtok_usd": 1.0,
+      "output_per_mtok_usd": 1.0,
+      "request_usd": 0.005,
+      "pricing_state": "SOURCED",
+      "source": "openrouter_feed",
+      "sourced_at": "2026-09-17",
+      "note": "prompt 0.000001, completion 0.000001, AND web_search 0.005 PER REQUEST. The per-request search fee is the finding: at a typical thousand-token search call the fee is roughly five times the token cost, and this system priced it at zero. Eight services call this model. Migration 0158's guessed $1/$1 was right about tokens and silent about the part that dominates."
+    },
+    {
+      "provider_id": "prov_openrouter",
+      "model": "auto",
+      "input_per_mtok_usd": null,
+      "output_per_mtok_usd": null,
+      "request_usd": 0.0,
+      "pricing_state": "UNKNOWN",
+      "source": "openrouter_feed",
+      "sourced_at": "2026-09-17",
+      "note": "The feed returns prompt -1 and completion -1: auto-routing has no fixed price, because the price is whichever model it picks. The catalogue carried $1/$3 for it, which was never a price of anything. Recorded as UNKNOWN, which is what it is, and refused by the cost guard."
+    },
+    {
+      "provider_id": "prov_workers_ai",
+      "model": "@cf/ibm-granite/granite-4.0-h-micro",
+      "input_per_mtok_usd": 0.017,
+      "output_per_mtok_usd": 0.112,
+      "request_usd": 0.0,
+      "pricing_state": "SOURCED",
+      "source": "cloudflare_workers_ai",
+      "sourced_at": "2026-09-17",
+      "note": "Quoted by Cloudflare as $0.017 per M input tokens / $0.112 per M output tokens (1,542 and 10,158 neurons per Mtok). The figures migration 0081 derived were exact; they are no longer a derivation, they are the published number."
+    },
+    {
+      "provider_id": "prov_workers_ai",
+      "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+      "input_per_mtok_usd": 0.051,
+      "output_per_mtok_usd": 0.335,
+      "request_usd": 0.0,
+      "pricing_state": "SOURCED",
+      "source": "cloudflare_workers_ai",
+      "sourced_at": "2026-09-17",
+      "note": "Cloudflare publishes $0.051 / $0.335 per Mtok (4,625 and 30,475 neurons per Mtok)."
+    },
+    {
+      "provider_id": "prov_workers_ai",
+      "model": "@cf/meta/llama-3.2-11b-vision-instruct",
+      "input_per_mtok_usd": 0.049,
+      "output_per_mtok_usd": 0.676,
+      "request_usd": 0.0,
+      "pricing_state": "SOURCED",
+      "source": "cloudflare_workers_ai",
+      "sourced_at": "2026-09-17",
+      "note": "Cloudflare publishes $0.049 / $0.676 per Mtok (4,410 and 61,493 neurons per Mtok)."
+    },
+    {
+      "provider_id": "prov_openai",
+      "model": "gpt-4o",
+      "input_per_mtok_usd": 2.5,
+      "output_per_mtok_usd": 10.0,
+      "request_usd": 0.0,
+      "pricing_state": "SOURCED",
+      "source": "openrouter_feed",
+      "sourced_at": "2026-09-17",
+      "note": "openai/gpt-4o in the OpenRouter feed: 0.0000025 / 0.00001 per token \u2014 OpenAI's list price, passed through. The placeholder seeded at P4 happened to carry the same numbers; they are now read."
+    },
+    {
+      "provider_id": "prov_anthropic",
+      "model": "claude-sonnet-4",
+      "input_per_mtok_usd": 3.0,
+      "output_per_mtok_usd": 15.0,
+      "request_usd": 0.0,
+      "pricing_state": "SOURCED",
+      "source": "openrouter_feed",
+      "sourced_at": "2026-09-17",
+      "note": "anthropic/claude-sonnet-4 in the OpenRouter feed: 0.000003 / 0.000015 per token \u2014 Anthropic's list price, passed through."
+    },
+    {
+      "provider_id": "prov_perplexity",
+      "model": "perplexity/sonar",
+      "input_per_mtok_usd": 1.0,
+      "output_per_mtok_usd": 1.0,
+      "request_usd": 0.005,
+      "pricing_state": "SOURCED",
+      "source": "openrouter_feed",
+      "sourced_at": "2026-09-17",
+      "note": "Same model, read from the same OpenRouter feed entry, including the $0.005 per-search fee. The model id is NAMESPACED at Perplexity too: bare `sonar` returns HTTP 400 'model is not supported', so the registry row that said `sonar` would have failed; migration 0177 corrects it. Perplexity's own GET /v1/models returns pricing as usd_per_1m_tokens and is the preferred source now that a key exists - scripts/prices/refresh.mjs reads it when PERPLEXITY_API_KEY is in the environment."
+    }
+  ],
+  "unpriced": [
+    {
+      "provider_id": "prov_anthropic",
+      "model": "claude-3-5-haiku",
+      "pricing_state": "ILLUSTRATIVE",
+      "why": "Not listed in the OpenRouter feed and no machine-readable Anthropic price list exists. The catalogue's $0.80/$4.00 was seeded at P4 and has never been read from anybody. Left ILLUSTRATIVE and therefore refused by the cost guard, rather than filled in with a number that looks right."
+    },
+    {
+      "provider_id": "prov_google",
+      "model": "gemini-1.5-flash",
+      "pricing_state": "ILLUSTRATIVE",
+      "why": "Not listed in the OpenRouter feed \u2014 the 1.5 generation is retired. Pricing a model nobody can call would be worse than leaving the gap visible."
+    },
+    {
+      "provider_id": "prov_fireworks",
+      "model": "llama-v3p1-70b-instruct",
+      "pricing_state": "ILLUSTRATIVE",
+      "why": "Llama 3.1 70B is listed in the feed at $0.40/$0.40, but that is SOME host's price for the weights, not Fireworks'. Fireworks publishes no machine-readable price list and holds no key here. A price read off a different vendor for the same open weights is exactly the kind of near-enough number that caused 0158."
+    },
+    {
+      "provider_id": "prov_openai",
+      "model": "gpt-4o-mini",
+      "pricing_state": "ILLUSTRATIVE",
+      "why": "Left as seeded. The row is BENCH, unreachable by selection, and priced by nobody; sourcing a price for a model this firm has no lane to would be work that proves nothing."
+    },
+    {
+      "provider_id": "prov_harvey",
+      "model": "harvey-default",
+      "pricing_state": "UNKNOWN",
+      "why": "No vendor account, no contract, no published price. UNKNOWN is the accurate state and it was already recorded as such."
+    },
+    {
+      "provider_id": "prov_norm",
+      "model": "norm-default",
+      "pricing_state": "UNKNOWN",
+      "why": "As above."
+    }
+  ]
+}

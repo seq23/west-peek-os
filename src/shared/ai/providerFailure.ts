@@ -24,7 +24,11 @@
 
 /** HTTP statuses that mean "this vendor could not serve it", not "this request was wrong". */
 export function isOutageStatus(status: number): boolean {
-  if (status === 401 || status === 403) return true; // dead or wrong key
+  // 401 is a dead or wrong key. 403 is NOT the same thing and must not be reported as one: a
+  // vendor can authenticate you perfectly and still refuse the call. Perplexity answers 403
+  // "Sonar is now the Agent API" to a chat-completions request made with a VALID key. Both fail
+  // over; they are labelled differently so the Cockpit does not accuse a working key of being bad.
+  if (status === 401 || status === 403) return true;
   if (status === 408 || status === 409 || status === 425 || status === 429) return true; // timeout, conflict, retry
   /*
    * 404 IS AN OUTAGE, and this is the one that is not obvious.
@@ -67,7 +71,8 @@ export function outageKind(reason: string): string {
   const http = /^provider_http_(\d{3})$/.exec(reason);
   if (http) {
     const status = Number(http[1]);
-    if (status === 401 || status === 403) return "AUTH_REJECTED";
+    if (status === 401) return "AUTH_REJECTED";
+    if (status === 403) return "REFUSED_BY_VENDOR";
     if (status === 429) return "RATE_LIMITED";
     if (status === 404) return "MODEL_NOT_SERVED";
     if (status >= 500) return "VENDOR_ERROR";

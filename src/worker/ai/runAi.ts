@@ -17,6 +17,9 @@ import {
   type RoutingCandidate,
 } from "./routing";
 import { checkFirmBudgets, firmSpend } from "./spend";
+import { directVendorRouteFor } from "../../shared/ai/directVendorRoute";
+import { credentialConfigured } from "../../shared/ai/providerCredentials";
+import { isProviderOutage, outageKind } from "../../shared/ai/providerFailure";
 
 /**
  * runAi — THE governed AI boundary (P4). No other module may call a provider
@@ -413,6 +416,11 @@ interface PricingRow {
   model: string;
   input_per_mtok_usd: number;
   output_per_mtok_usd: number;
+  /** Per-request fee on top of tokens. Search-grounded models charge one; most models do not. */
+  request_usd: number;
+  /** SOURCED | STALE | ILLUSTRATIVE | UNKNOWN — the provenance of the two numbers above. */
+  pricing_state: string;
+  supports_reasoning: number;
 }
 
 interface ModelOption {
@@ -430,13 +438,33 @@ async function dataPolicyAllows(env: Env, providerId: string, label: string): Pr
   return row?.allowed === 1;
 }
 
+/**
+ * THE CATALOGUE DECIDES WHAT IS SELECTABLE. A PRICE ONLY ORDERS WHAT ALREADY IS.
+ *
+ * This query used to read `provider_pricing_snapshot` alone. `provider_model.status` — the column
+ * whose whole job is to say which models this firm has decided to use — was never consulted, so
+ * inserting a pricing row was sufficient to put a model in front of a partner. That is not a
+ * hypothetical: migration 0158 added one snapshot for `perplexity/sonar` and by that single row a
+ * search model became "cheapest adequate" for every unpinned call in the firm; migration 0088
+ * recorded that Workers AI's three BENCH models were being routed to for the same reason, and
+ * nothing acted on it.
+ *
+ * Joining `provider_model` and requiring ACTIVE closes it structurally. Becoming ACTIVE requires a
+ * recorded evaluation and an authorised human (`handlePromoteModel`) or a reviewed migration. A
+ * number can no longer elect anything; it can only order models somebody already approved. That is
+ * the doctrine this file already applies to interpretation — "a mispriced row can make this dearer
+ * or cheaper; it cannot make it stupid" — generalised to every selection.
+ */
 async function latestPricing(env: Env, providerIds: string[]): Promise<PricingRow[]> {
   if (providerIds.length === 0) return [];
   const placeholders = providerIds.map((_, i) => `?${i + 1}`).join(", ");
   const rows = await env.WP_OS_DB.prepare(
-    `SELECT p.provider_id, p.model, p.input_per_mtok_usd, p.output_per_mtok_usd
+    `SELECT p.provider_id, p.model, p.input_per_mtok_usd, p.output_per_mtok_usd, p.request_usd,
+            m.pricing_state, m.supports_reasoning
        FROM provider_pricing_snapshot p
+       JOIN provider_model m ON m.provider_id = p.provider_id AND m.model = p.model
       WHERE p.provider_id IN (${placeholders})
+        AND m.status = 'ACTIVE'
         AND p.captured_at = (
           SELECT MAX(p2.captured_at) FROM provider_pricing_snapshot p2
            WHERE p2.provider_id = p.provider_id AND p2.model = p.model
@@ -555,6 +583,22 @@ async function recordBlockedRun(env: Env, rec: RunRecordInput): Promise<AIRunRow
 }
 
 /**
+ * One candidate the run may fall back to, and what it engages on.
+ *
+ * "ANY" is the existing policy fallback: a routing policy that sets allow_fallback has said it
+ * wants the next candidate tried whatever went wrong. "OUTAGE" is the direct-vendor lane, and it
+ * engages ONLY when the failure was the provider's — see shared/ai/providerFailure.ts. The
+ * distinction is the difference between resilience and quietly asking a second vendor to repeat a
+ * mistake: a model that refused a PDF because it cannot read one will refuse it again, and a
+ * failover there would find a vendor willing to answer without having seen the file.
+ */
+export interface FallbackOption {
+  candidate: RoutingCandidate;
+  adapter: ProviderAdapter;
+  engageOn: "ANY" | "OUTAGE";
+}
+
+/**
  * Execute one or more candidate providers for a run already decided as executable.
  *
  * One `ai_run` row is written regardless of how many candidates are tried: a run is one unit of
@@ -566,7 +610,7 @@ async function executeRun(
   rec: RunRecordInput,
   adapter: ProviderAdapter,
   quarantine: boolean,
-  fallbacks: Array<{ candidate: RoutingCandidate; adapter: ProviderAdapter }> = [],
+  fallbacks: FallbackOption[] = [],
   attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
 ): Promise<AIRunRow> {
   const running = await insertRun(env, { ...rec, status: "RUNNING" });
@@ -580,7 +624,7 @@ async function executeAttempt(
   runId: string,
   adapter: ProviderAdapter,
   quarantine: boolean,
-  fallbacks: Array<{ candidate: RoutingCandidate; adapter: ProviderAdapter }> = [],
+  fallbacks: FallbackOption[] = [],
   attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
 ): Promise<AIRunRow> {
   const running = { id: runId };
@@ -651,7 +695,23 @@ async function executeAttempt(
     // Policy-authorized fallback: retry the NEXT candidate against the same run row, so one unit
     // of governed work stays one run. The failed attempt is preserved in the routing record —
     // a fallback never hides a provider failure.
-    const next = fallbacks[0];
+    /*
+     * WHICH FALLBACKS MAY ENGAGE FOR *THIS* FAILURE.
+     *
+     * A policy fallback engages on anything — that is what allow_fallback has always meant. The
+     * direct-vendor lane engages only on a provider outage, so a capability refusal
+     * (`provider_cannot_read_documents:…`) stops here with a visible reason instead of being
+     * passed to a second vendor that will answer it without the attachment.
+     */
+    const outage = isProviderOutage(reason);
+    const eligible = fallbacks.filter((f) => f.engageOn === "ANY" || outage);
+    const next = eligible[0];
+    if (next) {
+      // Say WHAT kind of failure caused the handover, on the attempt itself, so the routing record
+      // answers "did we fail over, and why" without anyone parsing an error string later.
+      attempts[attempts.length - 1]!.outcome = "FAILED_OVER";
+      attempts[attempts.length - 1]!.detail = `${outageKind(reason)}: ${reason}`;
+    }
     if (next) {
       await env.WP_OS_DB.prepare("UPDATE ai_run SET provider_id = ?2, model = ?3 WHERE id = ?1")
         .bind(running.id, next.candidate.providerId, next.candidate.model)
@@ -662,7 +722,7 @@ async function executeAttempt(
         running.id,
         next.adapter,
         quarantine,
-        fallbacks.slice(1),
+        eligible.slice(1),
         attempts,
       );
     }
@@ -1001,10 +1061,64 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     return provider ? [{ provider, pricing: price }] : [];
   });
   if (options.length === 0) {
-    return { run: await blocked("PREFLIGHT_BLOCKED", "no_priced_capable_model") };
+    return { run: await blocked("PREFLIGHT_BLOCKED", "no_active_priced_model") };
   }
 
+  /*
+   * A PRICE NOBODY READ MAY NOT DECIDE ANYTHING.
+   *
+   * `pricing_state` records where a number came from. SOURCED means somebody read it from the
+   * vendor and wrote down when. STALE means they did, a while ago. ILLUSTRATIVE and UNKNOWN mean
+   * nobody ever did — the P4 seed's own words are "placeholder pricing seeded at P4; no vendor
+   * price has been read".
+   *
+   * Every branch below ranks candidates BY PRICE, cheapest or dearest. Ranking on a number nobody
+   * read is how migration 0158 elected a search model for every judgement call in the firm. So a
+   * model whose price has never been read is removed from the ranking outright.
+   *
+   * WHY NOT "treat an unknown price as expensive", the obvious alternative. Because the dearest
+   * candidate WINS the 'best available' and judgement branches. Scoring an unread price high would
+   * hand exactly those branches — the ones that matter most — to the invented number. It is 0158
+   * again with the sign flipped.
+   *
+   * THIS IS NOT INERT. Every price in this catalogue was ILLUSTRATIVE until migration 0177 read the
+   * real ones from OpenRouter's public feed and Cloudflare's published list, so the guard has real
+   * teeth today: all five ACTIVE models pass it, `openrouter/auto` (whose price the feed reports as
+   * -1, i.e. there isn't one) does not. If a future row arrives priced by guesswork it is inert for
+   * selection, whatever the number says.
+   *
+   * DEGRADES ONLY WHERE REFUSING WOULD BE WORSE: when NOTHING has a read price the ranking falls
+   * back to the whole set and the run says so, because a firm whose catalogue is entirely
+   * placeholders should get its work done and an explanation an operator can act on, not a blocked
+   * run it cannot interpret.
+   */
+  const priceWasRead = (o: ModelOption): boolean =>
+    o.pricing.pricing_state === "SOURCED" || o.pricing.pricing_state === "STALE";
+  const READ_PRICE = new Set(options.filter(priceWasRead).map((o) => `${o.provider.id} ${o.pricing.model}`));
+  /*
+   * Narrow a list to the candidates a COST COMPARISON is allowed to decide between.
+   *
+   * Applied at each cheapest/dearest reduction and nowhere else, because that is precisely where
+   * price decides. A routing policy or a machine pin NAMES a model: that is somebody's decision and
+   * it stands whatever the provenance of the price beside it, so pins are ordered from the full
+   * ACTIVE set and never pass through here.
+   */
+  const costRanked = (list: RoutingCandidate[]): RoutingCandidate[] => {
+    const read = list.filter((c) => READ_PRICE.has(`${c.providerId} ${c.model}`));
+    return read.length > 0 ? read : list;
+  };
+  const anyReadPrice = READ_PRICE.size > 0;
+  const provenanceNote = anyReadPrice
+    ? READ_PRICE.size < options.length
+      ? " Models whose price has never been read from the vendor took no part in the cost comparison."
+      : ""
+    : " No candidate carries a price anybody has read from a vendor, so the cost ordering here rests on placeholder numbers and is not evidence of anything.";
+
+  // The per-request fee is part of the price. Search-grounded models charge one — perplexity/sonar
+  // is $0.005 a request, which on a short call is several times the token cost — and this system
+  // modelled it as zero until migration 0177 added the column.
   const estimateFor = (option: ModelOption): number =>
+    option.pricing.request_usd +
     (expectedInputTokens * option.pricing.input_per_mtok_usd + expectedOutputTokens * option.pricing.output_per_mtok_usd) / 1_000_000;
 
   // ── P16 routing ──
@@ -1121,7 +1235,7 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
      * the cheap tier once produced "the 30-year U.S. tax at 19 year high" and shipped it as fact.
      * Anyone reading a thin brief later can find this explanation on the run and know why.
      */
-    const cheapest = routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+    const cheapest = costRanked(routingCandidates).reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
     ordered = [cheapest];
     explanation =
       `spend posture is 'free only', which overrides routing policy '${routePolicy.task_class}' ` +
@@ -1148,8 +1262,9 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
      */
     // Judgement work reads as "best available" whatever the posture says — see `judgement` above.
     const prefersFrontier = (Number(policy.prefers_frontier ?? 0) === 1 && effectiveCostMode !== "CHEAPO") || isJudgement;
-    const cheapest = routingCandidates.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
-    const dearest = routingCandidates.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
+    const rankable = costRanked(routingCandidates);
+    const cheapest = rankable.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+    const dearest = rankable.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
     let head: RoutingCandidate;
     if ((effectiveCostMode !== "CHEAPO" || isJudgement) && preferred) {
       head = routingCandidates.find((c) => c.model === preferred) ?? (prefersFrontier ? dearest : cheapest);
@@ -1157,7 +1272,7 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
         head.model === preferred
           ? `no routing policy for this task; caller preferred ${preferred}`
           : `no routing policy for this task; preferred model ${preferred} unavailable, fell to ${prefersFrontier ? "the dearest available (spend posture 'best available')" : "cheapest adequate"}`;
-      explanation += judgementNote;
+      explanation += judgementNote + provenanceNote;
     } else if (prefersFrontier) {
       head = dearest;
       explanation =
@@ -1165,13 +1280,13 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
           ? `this call interprets or drafts, so it takes the dearest priced capable model rather than the cheapest: `
           : `spend posture is 'best available', so unpinned work takes the dearest priced capable model rather than the cheapest: `) +
         `${head.providerKey}/${head.model}. Price is the only quality signal ` +
-        `in the model registry, so this is a proxy for capability and not a benchmark result.${judgementNote}`;
+        `in the model registry, so this is a proxy for capability and not a benchmark result.${judgementNote}${provenanceNote}`;
     } else {
       head = cheapest;
       explanation =
         (effectiveCostMode === "CHEAPO"
           ? "CHEAPO cost mode: cheapest adequate priced model"
-          : "no routing policy for this task; cheapest adequate priced model") + judgementNote;
+          : "no routing policy for this task; cheapest adequate priced model") + judgementNote + provenanceNote;
     }
     // No policy → no fallback. Behaviour is exactly P4's.
     ordered = [head];
@@ -1188,7 +1303,7 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * "which model read my words" stays answerable and the stale pin is visible rather than silent.
    */
   if (ordered.length === 0 && isInterpretation && routingCandidates.length > 0) {
-    const fallback = routingCandidates.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
+    const fallback = costRanked(routingCandidates).reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
     ordered = [fallback];
     explanation =
       `${explanation}. That pin names no model the catalogue records as able to reason, and this call reads what a ` +
@@ -1344,9 +1459,71 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   //    Output is quarantined until a human accepts it.
   const { adapter } = adapterFor(env, head, deps.fetchImpl);
   const allowFallback = routePolicy?.allow_fallback === 1;
-  const fallbacks = allowFallback
-    ? ordered.slice(1).map((c) => ({ candidate: c, adapter: adapterFor(env, c, deps.fetchImpl).adapter }))
-    : [];
+  /*
+   * ── A FALLBACK THAT IS ACTUALLY THERE ─────────────────────────────────────────────────────
+   *
+   * Two kinds, and they engage on different things.
+   *
+   * POLICY FALLBACK (existing): the remaining candidates a routing policy named, used only when
+   * that policy sets allow_fallback. Opt-in per task class, engages on ANY failure, unchanged.
+   *
+   * OUTAGE FALLBACK (new): the same model at its own vendor, when the vendor is one this system
+   * holds a key for. Always present, engages ONLY on a provider outage — a dead key, a 403, a 429,
+   * a 5xx, a timeout, a model this host no longer serves. It exists because every ACTIVE model in
+   * this firm sits behind OpenRouter, so one company having a bad hour stopped the entire firm
+   * thinking. The owner already had the keys; nothing was wired to them.
+   *
+   * IT CANNOT DOWNGRADE QUALITY, by construction rather than by a rule somebody has to maintain.
+   * The peer is the IDENTICAL MODEL — `anthropic/claude-sonnet-5` at OpenRouter is
+   * `claude-sonnet-5` at Anthropic — so the capability bar, the reasoning filter and the price
+   * class are all satisfied automatically. There is no registered "equivalent" to age into
+   * something cheaper and weaker. If no direct lane exists for the model, or its vendor has no key,
+   * there is NO fallback and the run fails loudly: a worse answer nobody asked for is not a
+   * recovery.
+   *
+   * AND IT CANNOT LEAK DATA SIDEWAYS: the peer's own provider_data_policy must allow this run's
+   * sensitivity label, checked here, default-deny, exactly as the primary was.
+   */
+  const outageFallbacks: Array<{ candidate: RoutingCandidate; adapter: ProviderAdapter; engageOn: "OUTAGE" }> = [];
+  for (const source of ordered) {
+    const direct = directVendorRouteFor(source.model);
+    if (!direct) continue;
+    if (!credentialConfigured(env, direct.providerKey)) continue;
+    const peerProvider = await env.WP_OS_DB.prepare(
+      "SELECT id, provider_key, enabled, kill_switched, base_url FROM provider_registry WHERE provider_key = ?1",
+    )
+      .bind(direct.providerKey)
+      .first<{ id: string; provider_key: string; enabled: number; kill_switched: number; base_url: string | null }>();
+    if (!peerProvider || peerProvider.enabled !== 1 || peerProvider.kill_switched === 1) continue;
+    if (!(await dataPolicyAllows(env, peerProvider.id, input.sensitivity))) continue;
+    const candidate: RoutingCandidate = {
+      providerId: peerProvider.id,
+      providerKey: peerProvider.provider_key,
+      model: direct.model,
+      // The same model, so the same price. No second pricing row to be wrong, and the run's
+      // approved cost estimate stays the one the budget gates already passed.
+      estimatedCostUsd: source.estimatedCostUsd,
+      baseUrl: peerProvider.base_url,
+    };
+    outageFallbacks.push({ candidate, adapter: adapterFor(env, candidate, deps.fetchImpl).adapter, engageOn: "OUTAGE" });
+  }
+
+  const fallbacks: FallbackOption[] = [
+    ...(allowFallback
+      ? ordered.slice(1).map((c) => ({
+          candidate: c,
+          adapter: adapterFor(env, c, deps.fetchImpl).adapter,
+          engageOn: "ANY" as const,
+        }))
+      : []),
+    ...outageFallbacks,
+  ];
+  if (outageFallbacks.length > 0) {
+    explanation +=
+      ` Direct-vendor fallback is available for this call (${outageFallbacks
+        .map((f) => `${f.candidate.providerKey}/${f.candidate.model}`)
+        .join(", ")}) and engages only if the provider itself fails.`;
+  }
   const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [];
 
   const run = await executeRun(
@@ -1373,7 +1550,9 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     selectedProviderKey: attempts.find((a) => a.outcome === "COMPLETED")?.provider_key ?? selected.provider.provider_key,
     selectedModel: run.model,
     attempts,
-    fallbackUsed: attempts.filter((a) => a.outcome === "FAILED").length > 0 && run.status === "COMPLETED",
+    // FAILED_OVER is an attempt that handed the work on. Counting only "FAILED" missed every
+    // successful failover, which is precisely the event the Cockpit needs to be able to show.
+    fallbackUsed: attempts.some((a) => a.outcome === "FAILED_OVER"),
     explanation,
   });
   return { run };

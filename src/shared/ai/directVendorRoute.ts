@@ -39,6 +39,17 @@ const DIRECT_VENDOR_FOR_PREFIX: Readonly<Record<string, string>> = Object.freeze
   deepseek: "",
 });
 
+/**
+ * Vendors whose own model id is NOT the OpenRouter id with the prefix stripped.
+ *
+ * Perplexity is the one. `perplexity/sonar` at OpenRouter is ALSO `perplexity/sonar` at Perplexity
+ * — the namespace is part of the id there. Confirmed against the live key: bare `sonar`,
+ * `sonar-pro`, `sonar-reasoning`, `pplx-sonar` and `auto` all return HTTP 400 "model is not
+ * supported". The registry's own BENCH row said `sonar` and would have failed for this reason;
+ * migration 0177 corrects it.
+ */
+const KEEPS_FULL_ID = new Set(["perplexity"]);
+
 export interface DirectVendorRoute {
   /** provider_key in provider_registry. */
   providerKey: string;
@@ -61,5 +72,5 @@ export function directVendorRouteFor(openRouterModel: string): DirectVendorRoute
   if (!rest) return null;
   const providerKey = DIRECT_VENDOR_FOR_PREFIX[prefix];
   if (!providerKey) return null;
-  return { providerKey, model: rest };
+  return { providerKey, model: KEEPS_FULL_ID.has(providerKey) ? `${prefix}/${rest}` : rest };
 }

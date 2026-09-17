@@ -7,6 +7,7 @@ import { createFireworksAdapter } from "./providers/fireworks";
 import { createAnthropicAdapter } from "./providers/anthropic";
 import { createOpenAiChatAdapter } from "./providers/openAiChat";
 import { createGoogleAdapter } from "./providers/google";
+import { createPerplexityAdapter } from "./providers/perplexity";
 import { createSpecialistAdapter } from "./providers/specialist";
 import { credentialConfigured, credentialValueFor } from "../../shared/ai/providerCredentials";
 
@@ -132,9 +133,19 @@ export function adapterFor(
       credentialConfigured: configured,
     };
   }
-  if (candidate.providerKey === "openai" || candidate.providerKey === "perplexity") {
-    // One wire contract, two vendors — Perplexity serves the OpenAI chat-completions shape at the
-    // same path. The vendor key is carried so a missing credential names the right company.
+  if (candidate.providerKey === "perplexity") {
+    /*
+     * NOT the OpenAI shape, though it was until 17 Sep 2026 and every other integration guide still
+     * says so. Sonar has moved to the Responses API: `POST /chat/completions` answers HTTP 403
+     * `chat_completions_not_available` even with a perfectly valid key. See providers/perplexity.ts
+     * for the probe that established this.
+     */
+    return {
+      adapter: createPerplexityAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+      credentialConfigured: configured,
+    };
+  }
+  if (candidate.providerKey === "openai") {
     return {
       adapter: createOpenAiChatAdapter({
         providerKey: candidate.providerKey,
