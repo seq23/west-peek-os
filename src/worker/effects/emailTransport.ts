@@ -11,7 +11,17 @@
  */
 
 export interface EmailPayload {
-  to: string;
+  /**
+   * One address, or SEVERAL when one message is addressed to more than one person.
+   *
+   * Several, added 17 Sep 2026 for Parker's monthly packets. Operator: "One for Rooms, one for
+   * Workshops, each addressed to Sequoia and Scooter together… not one per person." Two separate
+   * messages are two conversations about one decision — a reply on one is invisible on the other,
+   * and the second partner cannot see that the first already answered. Both transports take a list
+   * natively (Cloudflare's `EmailDestinations.to`, Resend's `to`), so this is a widening of the
+   * type rather than a second send path.
+   */
+  to: string | readonly string[];
   subject: string;
   /** Plain text. Always present: the part every client renders and every log can read. */
   text: string;

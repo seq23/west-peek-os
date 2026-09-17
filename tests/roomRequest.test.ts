@@ -66,11 +66,19 @@ const researchJson = (org: string) => JSON.stringify({
   category: org.startsWith("Harvey") || org.startsWith("Clio") ? "LEGAL" : "BANKING",
 });
 
-const conceptsJson = JSON.stringify({
+/**
+ * THREE ANGLES ON ONE TOPIC: three names/formats/venues, every one of them on the SAME subject.
+ *
+ * The topic is read back out of the prompt the chain built, because that is what a real model
+ * would do — and because a fixture that hardcoded one subject would only ever exercise one month.
+ */
+const ROOM_TOPIC = "an event for top Black lawyers in our network";
+const conceptsJson = (topic: string = ROOM_TOPIC) => JSON.stringify({
+  topic,
   concepts: [
-    { title: "The Scaled Boardroom", format: "DINNER", premise: "an executive dinner and think tank", tone: "serious", value_to_sponsor: "six minutes at the head of the table", who_it_fits: "partners and GCs", cost_band: "$22–28K", signature_moment: "the one-page brief each guest writes for the room", venue_direction: "a Black-chef-led private dining room in Manhattan, because the room should say who it is for", chosen: true },
-    { title: "Prompt-to-Partner War Room", format: "WORKSHOP", premise: "live work with the sponsor's tool", tone: "electric", value_to_sponsor: "hands on the product", who_it_fits: "associates", cost_band: "$15–20K", signature_moment: "the live brief", venue_direction: "a moot courtroom" },
-    { title: "Founders & Advocates", format: "SALON", premise: "speed-venturing", tone: "brisk", value_to_sponsor: "…", who_it_fits: "founders", cost_band: "$10–14K", signature_moment: "…", venue_direction: "…" },
+    { title: "The Scaled Boardroom", angle_on: topic, angle_kind: "VENUE", format: "DINNER", premise: "an executive dinner and think tank", tone: "serious", value_to_sponsor: "six minutes at the head of the table", who_it_fits: "partners and GCs", cost_band: "$22–28K", signature_moment: "the one-page brief each guest writes for the room", venue_direction: "a Black-chef-led private dining room in Manhattan, because the room should say who it is for", chosen: true },
+    { title: "Prompt-to-Partner War Room", angle_on: topic, angle_kind: "FORMAT", format: "WORKSHOP", premise: "live work with the sponsor's tool", tone: "electric", value_to_sponsor: "hands on the product", who_it_fits: "associates", cost_band: "$15–20K", signature_moment: "the live brief", venue_direction: "a moot courtroom" },
+    { title: "Founders & Advocates", angle_on: topic, angle_kind: "NAME", format: "SALON", premise: "speed-venturing", tone: "brisk", value_to_sponsor: "…", who_it_fits: "founders", cost_band: "$10–14K", signature_moment: "…", venue_direction: "…" },
   ],
   choice_rationale: "A senior crowd wants a serious table, and the sponsor's executive gets a real moment.",
   pushback: "The firm's own list cannot fill forty seats of Black lawyers; widen to the founders who need them, or co-host with an association.",
@@ -129,7 +137,11 @@ function deps(over: Partial<ChainDeps> = {}): ChainDeps {
     },
     urlCheck: async (url) => (url === DEAD_URL ? 404 : url.includes("jpmorgan") ? 403 : 200),
     pageText: async (url) => (url === HARVEY_TEAM ? "<h3>Mali <b>Robertson</b></h3> Director of Brand Partnerships" : url === "https://www.harvey.ai/nobody" ? "<p>Team page</p>" : null),
-    synthesise: async (prompt) => ({ text: prompt.includes("THREE distinct concepts") ? conceptsJson : packetJson(), aiRunId: null }),
+    // The angles call is the one that states the topic; everything else is the packet.
+    synthesise: async (prompt) => {
+      const topic = /ALREADY DECIDED: "([^"]+)"/.exec(prompt)?.[1];
+      return { text: topic ? conceptsJson(topic) : packetJson(), aiRunId: null };
+    },
     render: async () => ({ pdfBase64: TINY_PDF, pageCount: 1 }),
     ...over,
   };
@@ -236,10 +248,14 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     expect(version.content_type).toBe("application/pdf");
     expect(await t.docs.head(version.r2_key)).not.toBeNull();
 
-    // Both partners were emailed once, with Parker's introduction and the PDF link in the body.
+    /*
+     * ONE EMAIL, ADDRESSED TO BOTH OF THEM (17 Sep 2026) — it used to be one message per person.
+     * Two messages are two conversations about one decision, and with a single-use reply code in
+     * the mail the second copy would carry a code the first reply had already spent.
+     */
     const mail = (await env.WP_OS_DB.prepare("SELECT event_type, payload_json FROM event_record WHERE object_type = 'room_packet' AND object_id = ?1 AND event_type LIKE 'deliverable.%' ORDER BY created_at").bind(p.id).all<{ event_type: string; payload_json: string }>()).results!;
-    expect(mail).toHaveLength(2);
-    expect(mail.map((m) => (JSON.parse(m.payload_json) as { to: string }).to).sort()).toEqual(["scooter@westpeek.ventures", "sequoia@westpeek.ventures"]);
+    expect(mail).toHaveLength(1);
+    expect((JSON.parse(mail[0]!.payload_json) as { to: string[] }).to.slice().sort()).toEqual(["scooter@westpeek.ventures", "sequoia@westpeek.ventures"]);
     expect((JSON.parse(mail[0]!.payload_json) as { subject: string }).subject).toBe("Parker: your October 2026 Room — The Scaled Boardroom (PDF inside)");
   });
 
@@ -265,7 +281,7 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     await runStage(env, await row(draft.id), failing); // DISCOVER
     await runStage(env, await row(draft.id), failing); // RESEARCH
     await runStage(env, await row(draft.id), failing); // RESEARCH
-    await expect(runStage(env, await row(draft.id), failing)).rejects.toThrow(/CONCEPTS: the concepts did not come back/);
+    await expect(runStage(env, await row(draft.id), failing)).rejects.toThrow(/CONCEPTS: the angles did not come back/);
     const stuck = await row(draft.id);
     expect(stuck.status).toBe("DRAFT");
     expect(stuck.build_stage).toBe("CONCEPTS");
@@ -340,7 +356,7 @@ describe("the Rooms job does one cheap thing", () => {
     expect((await row(third.packetId!)).kind).toBe("WORKSHOP");
     const fourth = await runMonthlyRoomProposal(env, actor(), "2026-11-16T12:30:00.000Z");
     expect(fourth.generated).toBe(false);
-    expect(fourth.detail).toMatch(/2026-12 already has a Room and a Workshop proposal; \d+ request\(s\) being built/);
+    expect(fourth.detail).toMatch(/2026-12 \(due 2026-11-01\) is covered — it already has a Room and a Workshop proposal; \d+ request\(s\) being built/);
   });
 
   it("'propose again with changes' links the new packet to the declined one", async () => {

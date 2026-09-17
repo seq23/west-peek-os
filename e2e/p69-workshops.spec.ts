@@ -66,8 +66,9 @@ test("the Workshops collection, the request switch, and a set month's locked tit
   await expect(page.getByTestId("room-audience")).not.toHaveAttribute("readonly", "");
 
   // Dismissed like a Room; the shelf says it was a Workshop.
-  page.once("dialog", (d) => d.accept("she will trigger September herself"));
   await page.getByTestId(`decline-${rows[0]!.id}`).click();
+  await page.getByTestId(`dismiss-note-${rows[0]!.id}`).fill("she will trigger September herself");
+  await page.getByTestId(`dismiss-confirm-${rows[0]!.id}`).click();
   await expect(page.getByTestId("workshops-empty")).toBeVisible();
   const shelf = page.getByTestId("declined-proposals");
   await shelf.locator("summary").click();

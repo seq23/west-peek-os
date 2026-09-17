@@ -182,6 +182,35 @@ export async function requiredApproverRolesFor(env: Env, actionKey: string): Pro
   return DEFAULT_REQUIRED_APPROVER_ROLES;
 }
 
+/**
+ * A HUMAN actor for a firm user, built from the database rather than from a session.
+ *
+ * Exported for the ONE path that has a person but no session: a partner replying to Parker's email
+ * (`services/packetReplyDecision.ts`). The receiving resolver authenticated the address, so who it
+ * is is known — but their roles and firm scopes are not on the message, and inventing an actor with
+ * no roles would silently fail every authority check for a partner who is entitled to decide.
+ *
+ * It grants NOTHING the UI does not: the roles and scopes are exactly the rows this user holds, and
+ * an unknown user returns null rather than a role-less actor that would be refused later with a
+ * confusing reason.
+ */
+export async function actorForFirmUser(env: Env, firmUserId: string): Promise<Actor | null> {
+  const user = await env.WP_OS_DB.prepare("SELECT id FROM firm_user WHERE id = ?1 AND status = 'ACTIVE'")
+    .bind(firmUserId)
+    .first<{ id: string }>();
+  if (!user) return null;
+  const scopes = await env.WP_OS_DB.prepare(
+    "SELECT scope_value FROM authority_scope WHERE firm_user_id = ?1 AND scope_key = 'firm_scope'",
+  ).bind(firmUserId).all<{ scope_value: string }>();
+  const firmScopes = (scopes.results ?? []).map((r) => r.scope_value);
+  return {
+    type: "HUMAN",
+    firmUserId,
+    roles: await rolesOfFirmUser(env, firmUserId),
+    firmScopes: firmScopes.length > 0 ? firmScopes : [HOME_FIRM_SCOPE],
+  };
+}
+
 /** Roles currently held by a firm user. */
 async function rolesOfFirmUser(env: Env, firmUserId: string): Promise<string[]> {
   const rows = await env.WP_OS_DB.prepare(

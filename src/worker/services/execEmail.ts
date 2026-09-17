@@ -53,7 +53,7 @@ export interface PartnerEmailOutcome {
   subject: string;
 }
 
-async function transport(env: Env, message: { to: string; subject: string; text: string; html: string }): Promise<EmailSendResult> {
+async function transport(env: Env, message: { to: string | readonly string[]; subject: string; text: string; html: string }): Promise<EmailSendResult> {
   const payload = { ...message, replyTo: INTAKE_MAILBOX };
   return isCloudflareEmailEnabled(env) ? await sendViaCloudflare(env, payload) : await sendViaResend(env, payload);
 }
@@ -107,6 +107,58 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
     to, subject: rendered.subject, detail: result.detail, provider_message_id: result.provider_message_id,
   });
   return { sent: result.sent, to, reason: result.detail, subject: rendered.subject };
+}
+
+/**
+ * ONE MESSAGE, ADDRESSED TO BOTH PARTNERS — the door for something they decide together.
+ *
+ * Operator, 17 Sep 2026: "One for Rooms, one for Workshops, each addressed to Sequoia and Scooter
+ * together. Not one per angle, not one per person."
+ *
+ * WHY THIS IS NOT `sendPartnerEmail` TWICE, which is what it used to be. Two messages are two
+ * conversations about one decision: a reply lands on one of them, and the other partner's copy
+ * shows no sign that anything was answered. With a per-packet reply token in the mail (item 7),
+ * that is worse than untidy — the second copy carries a code that has already been spent and
+ * nothing in front of the reader says so.
+ *
+ * EVERY GATE IS THE SAME ONE. Destination-restricted to the two assigning partner addresses, the
+ * employee switch, the format lint before any transport sees it, Reply-To, and one event per
+ * attempt. This adds a recipient list; it does not add a way to reach anybody new.
+ */
+export async function sendPartnersEmail(
+  env: Env,
+  input: Omit<PartnerEmailInput, "to"> & { to: readonly string[] },
+): Promise<PartnerEmailOutcome & { recipients: string[] }> {
+  const to = input.to.map((a) => a.trim().toLowerCase());
+  const rendered = renderExecEmail(input.email);
+  const events = input.events ?? { sent: "deliverable.emailed_to_partner", notSent: "deliverable.email_not_sent" };
+  const actor = { objectType: input.objectType, objectId: input.objectId, firmScope: input.firmScope, actorId: input.actorId ?? "work_sweep", actorType: "system" as const };
+  const joined = to.join(", ");
+
+  const stranger = to.find((a) => !ASSIGNING_PARTNERS.includes(a));
+  if (to.length === 0 || stranger) {
+    return { sent: false, to: joined, recipients: to, reason: `${stranger ?? "nobody"} is not one of the two partner addresses; an employee's email goes nowhere else`, subject: rendered.subject };
+  }
+  if (!aiOutboundSwitches(env).toPartners) {
+    return { sent: false, to: joined, recipients: to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off", subject: rendered.subject };
+  }
+  const violations = lintExecEmail(rendered.subject, rendered.text, input.email.employee);
+  if (violations.length > 0) {
+    const reason = `not sent — the email does not meet the format: ${violations.join("; ")}`;
+    await record(env, actor, events.notSent, { to, subject: rendered.subject, detail: reason, provider_message_id: null, violations });
+    return { sent: false, to: joined, recipients: to, reason, subject: rendered.subject };
+  }
+
+  let result: EmailSendResult;
+  try {
+    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html });
+  } catch (err) {
+    result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
+  }
+  await record(env, actor, result.sent ? events.sent : events.notSent, {
+    to, subject: rendered.subject, detail: result.detail, provider_message_id: result.provider_message_id,
+  });
+  return { sent: result.sent, to: joined, recipients: to, reason: result.detail, subject: rendered.subject };
 }
 
 /**

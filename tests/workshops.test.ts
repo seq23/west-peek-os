@@ -20,7 +20,8 @@ import {
   type ChainDeps,
   type PacketRow,
 } from "../src/worker/services/roomPacket";
-import { WORKSHOP_SERIES, WORKSHOP_WHERE, computeWorkshopEconomics, parseWorkshopConcepts, parseWorkshopPacket, verifyWorkshopPacket } from "../src/shared/events/workshopPacket";
+import { WORKSHOP_SERIES, WORKSHOP_WHERE, computeWorkshopEconomics, normaliseSponsorship, parseWorkshopConcepts, parseWorkshopPacket, verifyWorkshopPacket } from "../src/shared/events/workshopPacket";
+import { deliveryMonth, dueOn, planFor } from "../src/shared/events/monthlyPlan";
 import { renderWorkshopHtml } from "../src/shared/events/roomPacketPdf";
 import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
 import { skillsForMachines } from "../src/shared/skills/library";
@@ -59,15 +60,26 @@ const verdictsJson = JSON.stringify({ verdicts: [
   { url: GUEST_PAGE, keep: true, reason: "a practitioner's own page" },
 ] });
 
-const conceptsJson = (set: boolean) => JSON.stringify({
-  concepts: [
-    { title: set ? "Something the model invented" : "Price your service in 90 minutes", who_its_for: "solopreneurs billing by the hour", promise: "Leave with three admin tasks handed to an AI tool, set up and tested", mode: "DO", signature_exercise: "each person automates one real task live in a breakout", leave_with: "a filled-in automation checklist", facilitator: { name: "Sequoia Taylor", kind: "PARTNER", why: "runs a fund on these tools", evidence_url: null }, cost_band: "$0 — free by design", chosen: true },
-    { title: set ? "Another invented title" : "Hire your first contractor", who_its_for: "owners with a first hire coming", promise: "Leave with a one-page AI policy for a small team", mode: "TEACH", signature_exercise: "draft the policy", leave_with: "the policy template", facilitator: { name: "Scooter Taylor", kind: "PARTNER", why: "runs an agency", evidence_url: null }, cost_band: "$0" },
-    { title: set ? "A third" : "Community that sells", who_its_for: "community builders", promise: "Leave with a content calendar drafted by AI", mode: "SHOW", signature_exercise: "build the calendar", leave_with: "the calendar", facilitator: { name: "Guest Person", kind: "GUEST", why: "teaches this", evidence_url: GUEST_PAGE }, cost_band: "$500–1,500 guest fee" },
-  ],
-  choice_rationale: "Doing beats hearing; the admin task is the one every solopreneur has.",
-  pushback: "",
-});
+/**
+ * THREE ANGLES ON ONE TOPIC. Every angle echoes `angle_on` — a different value on any of them and
+ * the parse returns null, which is what the rejection tests below rely on.
+ */
+const SET_TOPIC = "How to use AI for small businesses / solopreneurs";
+const OPEN_TOPIC = "how to price a service business";
+const conceptsJson = (set: boolean, over: { angleOn?: string[]; topic?: string } = {}) => {
+  const topic = set ? SET_TOPIC : (over.topic ?? OPEN_TOPIC);
+  const on = over.angleOn ?? [topic, topic, topic];
+  return JSON.stringify({
+    topic,
+    concepts: [
+      { title: "The AI Back Office, in an hour", angle_on: on[0], angle_kind: "NAME", who_its_for: "solopreneurs billing by the hour", promise: "Leave with three admin tasks handed to an AI tool, set up and tested", mode: "DO", signature_exercise: "each person automates one real task live in a breakout", leave_with: "a filled-in automation checklist", facilitator: { name: "Scooter Taylor", kind: "PARTNER", why: "runs an agency on these tools", evidence_url: null }, co_host: { name: "Sequoia Taylor", kind: "PARTNER", why: "runs a fund on these tools", evidence_url: null }, cost_band: "$0 to attend — free by design", chosen: true },
+      { title: "Your Monday Morning, Automated", angle_on: on[1], angle_kind: "FRAMING", who_its_for: "owners with a first hire coming", promise: "Leave with a one-page AI policy for a small team", mode: "TEACH", signature_exercise: "draft the policy", leave_with: "the policy template", facilitator: { name: "Scooter Taylor", kind: "PARTNER", why: "runs an agency", evidence_url: null }, co_host: { name: "Sequoia Taylor", kind: "PARTNER", why: "runs a fund", evidence_url: null }, cost_band: "$0 to attend" },
+      { title: "Build Night: one tool, one task", angle_on: on[2], angle_kind: "FORMAT", who_its_for: "community builders", promise: "Leave with a content calendar drafted by AI", mode: "SHOW", signature_exercise: "build the calendar", leave_with: "the calendar", facilitator: { name: "Guest Person", kind: "GUEST", why: "teaches this", evidence_url: GUEST_PAGE }, co_host: null, cost_band: "$500–1,500 guest fee" },
+    ],
+    choice_rationale: "Doing beats hearing; the admin task is the one every solopreneur has.",
+    pushback: "",
+  });
+};
 
 const packetJson = (over: Record<string, unknown> = {}) => JSON.stringify({
   title: "A title the model chose",
@@ -76,19 +88,20 @@ const packetJson = (over: Record<string, unknown> = {}) => JSON.stringify({
   mode: "DO",
   target_min: 20, target_max: 60,
   run_of_show: [
-    { time: "12:00 PM", minutes: 10, what: "Welcome and the promise", who: "Sequoia (facilitator)", segment: "STAGE" },
-    { time: "12:10 PM", minutes: 15, what: "Teach: the three tasks worth automating first", who: "Sequoia", segment: "STAGE" },
-    { time: "12:25 PM", minutes: 25, what: "Exercise 1: pick your task, set it up", who: "breakout groups of 5", segment: "BREAKOUT" },
-    { time: "12:50 PM", minutes: 10, what: "Show: two groups demo", who: "volunteers", segment: "STAGE" },
-    { time: "1:00 PM", minutes: 20, what: "Exercise 2: test it on real input, fix it", who: "breakout groups of 5", segment: "BREAKOUT" },
-    { time: "1:20 PM", minutes: 10, what: "What to do Monday, and the checklist", who: "Sequoia", segment: "STAGE" },
+    { time: "12:00 PM", minutes: 5, what: "Welcome and the promise", who: "Scooter (host)", segment: "STAGE" },
+    { time: "12:05 PM", minutes: 10, what: "Teach: the three tasks worth automating first", who: "Scooter", segment: "STAGE" },
+    { time: "12:15 PM", minutes: 15, what: "Exercise 1: pick your task, set it up", who: "breakout groups of 5", segment: "BREAKOUT" },
+    { time: "12:30 PM", minutes: 5, what: "Show: two groups demo", who: "volunteers", segment: "STAGE" },
+    { time: "12:35 PM", minutes: 15, what: "Exercise 2: test it on real input, fix it", who: "breakout groups of 5", segment: "BREAKOUT" },
+    { time: "12:50 PM", minutes: 5, what: "What to do Monday, and the checklist", who: "Sequoia (co-host)", segment: "STAGE" },
   ],
   exercises: ["pick one admin task and set it up in a tool", "test it on a real input and fix it"],
   leave_with: ["the automation checklist, filled in for their business", "a list of the three tools tried"],
-  facilitator: { name: "Sequoia Taylor", kind: "PARTNER", why: "runs a fund on these tools", evidence_url: null },
+  facilitator: { name: "Scooter Taylor", kind: "PARTNER", why: "runs an agency on these tools", evidence_url: null },
+  co_host: { name: "Sequoia Taylor", kind: "PARTNER", why: "runs a fund on these tools", evidence_url: null },
   delivery: { platform_run_of_show: ["stage: welcome", "breakout: exercise 1", "stage: demos", "breakout: exercise 2", "stage: close"], on_screen: ["slides", "a shared checklist doc", "a timer"], join_flow: ["invite goes out with the date", "join code lands the morning of", "attendees join by code", "breakouts assigned by tool"], tech_check: "Thirty minutes before: Sequoia on stage, screen share tested, breakout assignment rehearsed." },
-  sponsorship: { free: true, note: "A community session; a sponsor would change what it is.", category_fit: null, ask_usd: null },
-  promo_one_liner: "Ninety minutes, three admin tasks gone: a working session for solopreneurs.",
+  sponsorship: { note: "Free to attend by design; a sponsor would cover the materials.", suggested: { category_fit: "a small-business accounting tool", ask_usd: 750, why: "they already sell to exactly this audience" } },
+  promo_one_liner: "An hour, three admin tasks gone: a working session for solopreneurs.",
   invitations: [
     { n: 1, send_when: "10 days before", subject: "Three admin tasks, gone", body: "Come and hand three tasks to an AI tool, live, with me.\nSee " + LIVE_1 + " for the thread that prompted it." },
     { n: 2, send_when: "3 days before", subject: "Bring one task", body: "Bring the task that eats your Tuesday." },
@@ -96,7 +109,7 @@ const packetJson = (over: Record<string, unknown> = {}) => JSON.stringify({
   ],
   budget_lines: [{ key: "facilitator_fee", low_usd: 0, high_usd: 0, basis: "partner-led" }, { key: "production_time", low_usd: 500, high_usd: 800, basis: "8 hours" }, { key: "materials", low_usd: 0, high_usd: 150, basis: "the checklist" }],
   risks: ["people arrive without a task in mind", "a tool's free tier changes"],
-  commitment_md: "A date on West Peek Live, Sequoia's afternoon, an invitation to the community.",
+  commitment_md: "A date on West Peek Live, Scooter's and Sequoia's afternoon, an invitation to the community.",
   pushback: "",
   ...over,
 });
@@ -108,7 +121,9 @@ function deps(set: boolean, over: Partial<ChainDeps> = {}): ChainDeps {
     research: async () => ({ ok: true, text: notesJson, citations: [], detail: "ok" }),
     judge: async () => ({ ok: true, text: verdictsJson, detail: "ok" }),
     urlCheck: async (url) => (url === DEAD ? 404 : 200),
-    synthesise: async (prompt) => ({ text: prompt.includes("Ideate THREE") ? conceptsJson(set) : packetJson(), aiRunId: null }),
+    // The packet prompt is the only one that says WRITE THE PACKET; everything else in the chain
+    // that reaches the reasoning model is the angles call.
+    synthesise: async (prompt) => ({ text: prompt.includes("WRITE THE PACKET") ? packetJson() : conceptsJson(set), aiRunId: null }),
     render: async () => ({ pdfBase64: TINY_PDF, pageCount: 1 }),
     // A venue search must never be reached by a Workshop; if it is, the test fails loudly.
     search: async () => { throw new Error("a Workshop searched for a venue"); },
@@ -150,49 +165,77 @@ afterAll(async () => {
 });
 
 describe("the series on the record", () => {
-  it("September and November are set in code; the method says one Room and one Workshop a month, virtual only", () => {
-    expect(WORKSHOP_SERIES["2026-09"]).toBe("How to use AI for small businesses / solopreneurs");
-    expect(WORKSHOP_SERIES["2026-11"]).toBe("How to build community");
+  it("is derived from MONTHLY_PLAN, and October is nobody's to build", () => {
+    expect(WORKSHOP_SERIES["2026-09"]).toBe(SET_TOPIC);
+    // The topic she gave, not the old title "How to build community" — a title is already an angle.
+    expect(WORKSHOP_SERIES["2026-11"]).toBe("Community");
+    // October is EXTERNAL, so it is not a title Parker builds to.
     expect(WORKSHOP_SERIES["2026-10"]).toBeUndefined();
+    expect(planFor("2026-10", "WORKSHOP")!.status).toBe("EXTERNAL");
+    expect(planFor("2026-10", "WORKSHOP")!.topic).toBe("Content creation");
+    expect(planFor("2026-09", "ROOM")!.status).toBe("NOT_RUNNING");
+    expect(planFor("2026-11", "ROOM")!.topic).toBe("Black lawyers");
+    expect(planFor("2026-12", "ROOM")!.status).toBe("PARKER_CHOOSES");
+  });
+
+  it("the firm's written method carries the one-topic-several-angles rule and the free-plus-sponsor rule", () => {
     const skills = skillsForMachines(["west_peek_live_events"]);
     expect(skills.find((s) => s.key === "propose_on_the_firm_rhythm")!.guidance.join(" ")).toMatch(/one Room and one Workshop/);
     const ws = skills.find((s) => s.key === "a_workshop_they_can_use_on_monday")!;
-    expect(ws.guidance.join(" ")).toMatch(/virtual only, on West Peek Live/);
-    expect(ws.guidance.join(" ")).toMatch(/Never research a venue/);
-    expect(ws.guidance.join(" ")).toMatch(/September 2026: 'How to use AI for small businesses \/ solopreneurs'/);
+    const text = ws.guidance.join(" ");
+    expect(text).toMatch(/virtual only, on West Peek Live/);
+    expect(text).toMatch(/Never research a venue/);
+    expect(text).toMatch(/ONE TOPIC A MONTH, SEVERAL ANGLES INSIDE IT/);
+    expect(text).toMatch(/Black lawyers is a topic\. Community is a topic\./);
+    expect(text).toMatch(/Attendance is FREE, always, by design — and always suggest a small sponsor anyway/);
+    expect(text).toMatch(/45–60 minutes/);
+    expect(text).toMatch(/Scooter Taylor/);
+    // The number that drifted, in the one place Parker actually reads.
+    expect(text).not.toMatch(/90 minutes/);
   });
 });
 
-describe("the monthly job proposes both kinds, once", () => {
-  it("queues the Room, then the Workshop, then nothing — each guarded by kind", async () => {
-    const first = await runMonthlyRoomProposal(env, actor(), NOW);
-    expect(first.generated).toBe(true);
-    expect(first.detail).toMatch(/queued Parker's own Room for 2026-10/);
-    const second = await runMonthlyRoomProposal(env, actor(), NOW);
-    expect(second.generated).toBe(true);
-    expect(second.detail).toMatch(/queued Parker's own Workshop for 2026-10/);
-    const ws = await row(second.packetId!);
-    expect(ws.kind).toBe("WORKSHOP");
-    expect(ws.title).toBe("Parker's Workshop for 2026-10");
-    expect(ws.work_card_id).not.toBeNull();
-    const third = await runMonthlyRoomProposal(env, actor(), NOW);
-    expect(third.generated).toBe(false);
-    expect(third.detail).toMatch(/2026-10 already has a Room and a Workshop proposal/);
-    const counts = (await env.WP_OS_DB.prepare("SELECT kind, COUNT(*) AS n FROM evt_room_packet WHERE proposed_for_month = '2026-10' GROUP BY kind ORDER BY kind").all<{ kind: string; n: number }>()).results;
-    expect(counts).toEqual([{ kind: "ROOM", n: 1 }, { kind: "WORKSHOP", n: 1 }]);
-    // Parked so the chain tests below claim their own cards.
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'ROOM_PACKET'").run();
-    await env.WP_OS_DB.prepare("UPDATE evt_room_packet SET status = 'DECLINED' WHERE proposed_for_month = '2026-10'").run();
+describe("the cadence: both streams deliver on the 1st of the month prior", () => {
+  it("a month that is not Parker's is NOT queued, and the job says whose it is", async () => {
+    // NOW is 16 Sep, so the delivery month is October: no Room runs, and the Workshop is hosted by
+    // a friend of Scooter's. Parker must build neither — and must say so rather than go quiet.
+    expect(deliveryMonth(NOW)).toBe("2026-10");
+    const out = await runMonthlyRoomProposal(env, actor(), NOW);
+    expect(out.generated).toBe(false);
+    expect(out.detail).toMatch(/due 2026-09-01/);
+    expect(out.detail).toMatch(/no Room runs in 2026-10/);
+    expect(out.detail).toMatch(/hosted by a friend of Scooter's \(Content creation\), so it is not Parker's to build/);
+    const counts = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM evt_room_packet WHERE proposed_for_month = '2026-10'").first<{ n: number }>();
+    expect(counts!.n).toBe(0);
   });
 
-  it("a series month queued by the job carries the partners' title", async () => {
-    const nov = await runMonthlyRoomProposal(env, actor(), "2026-10-05T12:00:00.000Z");
-    expect(nov.detail).toMatch(/Room for 2026-11/);
-    const ws = await runMonthlyRoomProposal(env, actor(), "2026-10-05T12:00:00.000Z");
-    expect(ws.detail).toMatch(/queued Parker's own Workshop for 2026-11 — title set by the partners: "How to build community"/);
-    expect((await row(ws.packetId!)).title).toBe("Workshop: How to build community");
+  it("November's Room and Workshop are minted on 1 October, each with the topic she set", async () => {
+    const onTheFirst = "2026-10-01T00:05:00.000Z";
+    expect(deliveryMonth(onTheFirst)).toBe("2026-11");
+    expect(dueOn("2026-11")).toBe("2026-10-01");
+
+    const nov = await runMonthlyRoomProposal(env, actor(), onTheFirst);
+    expect(nov.generated).toBe(true);
+    expect(nov.detail).toMatch(/queued Parker's own Room for 2026-11, due 2026-10-01 — topic set by the partners: "Black lawyers"/);
+    const ws = await runMonthlyRoomProposal(env, actor(), onTheFirst);
+    expect(ws.generated).toBe(true);
+    expect(ws.detail).toMatch(/queued Parker's own Workshop for 2026-11, due 2026-10-01 — topic set by the partners: "Community"/);
+    expect((await row(ws.packetId!)).title).toBe("Workshop: Community");
+
+    const third = await runMonthlyRoomProposal(env, actor(), onTheFirst);
+    expect(third.generated).toBe(false);
+    const counts = (await env.WP_OS_DB.prepare("SELECT kind, COUNT(*) AS n FROM evt_room_packet WHERE proposed_for_month = '2026-11' GROUP BY kind ORDER BY kind").all<{ kind: string; n: number }>()).results;
+    expect(counts).toEqual([{ kind: "ROOM", n: 1 }, { kind: "WORKSHOP", n: 1 }]);
+
+    // A LATE TICK STILL DELIVERS: the rule is a floor, not a single day. December is Parker's own
+    // in both streams, and a tick on the 4th queues it rather than skipping the month.
+    const late = await runMonthlyRoomProposal(env, actor(), "2026-11-04T09:00:00.000Z");
+    expect(late.generated).toBe(true);
+    expect(late.detail).toMatch(/for 2026-12, due 2026-11-01 — he picks the topic himself/);
+
+    // Parked so the chain tests below claim their own cards.
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'ROOM_PACKET'").run();
-    await env.WP_OS_DB.prepare("UPDATE evt_room_packet SET status = 'DECLINED' WHERE proposed_for_month = '2026-11'").run();
+    await env.WP_OS_DB.prepare("UPDATE evt_room_packet SET status = 'DECLINED' WHERE proposed_for_month IN ('2026-11','2026-12')").run();
   });
 });
 
@@ -203,10 +246,10 @@ describe("the request door", () => {
     const body = (await res.json()) as { packet: PacketRow; queued: boolean; cardId: string | null };
     expect(body.queued).toBe(true);
     expect(body.packet.kind).toBe("WORKSHOP");
-    expect(body.packet.title).toBe("Workshop: How to use AI for small businesses / solopreneurs");
+    expect(body.packet.title).toBe(`Workshop: ${SET_TOPIC}`);
     expect(body.packet.origin).toBe("PARTNER_BRIEF");
     const brief = JSON.parse(body.packet.brief_json!) as { audience: string; city: string | null; notes: string; kind: string };
-    expect(brief.audience).toBe("How to use AI for small businesses / solopreneurs");
+    expect(brief.audience).toBe(SET_TOPIC);
     expect(brief.city).toBeNull();
     expect(brief.kind).toBe("WORKSHOP");
     expect(brief.notes).toMatch(/Asked as: AI for tiny businesses \(my wording\) · keep it practical/);
@@ -246,11 +289,19 @@ describe("the chain, for a SET topic", () => {
     expect(p.status).toBe("PROPOSED");
     expect(p.kind).toBe("WORKSHOP");
     expect(p.format).toBe("WORKSHOP");
-    // THE TITLE IS THE PARTNERS'. The model offered "A title the model chose" and three invented concept titles.
-    expect(p.title).toBe("How to use AI for small businesses / solopreneurs");
-    const concepts = JSON.parse(p.concepts_json) as Array<{ title: string; chosen: boolean; promise: string; mode: string }>;
+    /*
+     * THE TOPIC IS THE PARTNERS'; THE TITLE IS THE ANGLE'S NAME. This is the change item 2 asked
+     * for: a name is one of the things an angle varies, so forcing every concept's title to the set
+     * title (which is what this used to assert) left the angles with nothing to differ in.
+     */
+    expect(p.theme).toBe(SET_TOPIC);
+    expect(p.title).toBe("A title the model chose");
+    const concepts = JSON.parse(p.concepts_json) as Array<{ title: string; chosen: boolean; promise: string; mode: string; angleOn: string; angleKind: string }>;
     expect(concepts).toHaveLength(3);
-    expect(concepts.every((c) => c.title === "How to use AI for small businesses / solopreneurs")).toBe(true);
+    // THREE ANGLES, ONE SUBJECT: three different names, every one of them on the partners' topic.
+    expect(new Set(concepts.map((c) => c.title)).size).toBe(3);
+    expect(concepts.every((c) => c.angleOn === SET_TOPIC)).toBe(true);
+    expect(concepts.map((c) => c.angleKind)).toEqual(["NAME", "FRAMING", "FORMAT"]);
     expect(concepts.filter((c) => c.chosen)).toHaveLength(1);
     expect(concepts[0]!.promise).toMatch(/three admin tasks/);
     expect(p.central_question).toMatch(/^Leave with three admin tasks/);
@@ -259,28 +310,54 @@ describe("the chain, for a SET topic", () => {
 
     const w = workshopViewOf(p)!;
     expect(w.topicSet).toBe(true);
+    expect(w.topic).toBe(SET_TOPIC);
+    expect(w.topicSetBy).toBe("PARTNERS");
+    // Scooter hosts, with a co-host. It defaulted to Sequoia and named no co-host at all.
+    expect(w.facilitator.name).toBe("Scooter Taylor");
+    expect(w.coHost!.name).toBe("Sequoia Taylor");
     expect(w.delivery.where).toBe(WORKSHOP_WHERE);
     expect(w.runOfShow.filter((l) => l.segment === "BREAKOUT")).toHaveLength(2);
     expect(w.leaveWith[0]).toMatch(/automation checklist/);
     expect(w.invitations).toHaveLength(3);
     expect(w.invitations[0]!.body).toContain(LIVE_1); // a judged URL survives
     expect(w.notes.map((n) => n.url).sort()).toEqual([LIVE_1, LIVE_2, GUEST_PAGE].sort());
-    expect(w.economics.free).toBe(true);
+    // FREE TO ATTEND IS AN INVARIANT, AND A SPONSOR IS SUGGESTED ANYWAY. Both, without contradiction.
+    expect(w.economics.attendanceFree).toBe(true);
+    expect(w.sponsorship.attendanceFree).toBe(true);
+    expect(w.sponsorship.suggested!.categoryFit).toBe("a small-business accounting tool");
+    expect(w.economics.suggestedSponsorshipUsd).toBe(750);
     expect(w.economics.lines.map((l) => l.key)).toEqual(["facilitator_fee", "production_time", "materials", "contingency"]);
     expect(w.economics.estimatedCostHighUsd).toBe(Math.round(950 * 1.1));
-    expect(p.sponsor_count).toBe(0);
-    expect(p.sponsor_total_usd).toBe(0);
+    expect(p.sponsor_count).toBe(1);
+    expect(p.sponsor_total_usd).toBe(750);
 
     // Both partners were emailed ONCE, in the busy-executive format, with the packet under the rule.
+    /*
+     * ONE EMAIL, ADDRESSED TO BOTH OF THEM — it used to be two, one per person. One event, one
+     * message, both addresses on it.
+     */
     const mail = (await env.WP_OS_DB.prepare("SELECT event_type, payload_json FROM event_record WHERE object_type = 'room_packet' AND object_id = ?1 AND event_type LIKE 'deliverable.%' ORDER BY created_at").bind(p.id).all<{ event_type: string; payload_json: string }>()).results!;
-    expect(mail).toHaveLength(2);
-    expect(mail.map((m) => (JSON.parse(m.payload_json) as { to: string }).to).sort()).toEqual(["scooter@westpeek.ventures", "sequoia@westpeek.ventures"]);
-    expect((JSON.parse(mail[0]!.payload_json) as { subject: string }).subject).toBe("Parker: your September 2026 Workshop — How to use AI for small busine…");
-    const summary = workshopSummary(p, w);
+    expect(mail).toHaveLength(1);
+    expect((JSON.parse(mail[0]!.payload_json) as { to: string[] }).to.slice().sort()).toEqual(["scooter@westpeek.ventures", "sequoia@westpeek.ventures"]);
+
+    // The reply code is minted once per packet and the email spells it out both ways.
+    const tok = (await env.WP_OS_DB.prepare("SELECT token, used_at, expires_at FROM evt_packet_decision_token WHERE packet_id = ?1").bind(p.id).first<{ token: string; used_at: string | null; expires_at: string }>())!;
+    expect(tok.used_at).toBeNull();
+    expect(tok.expires_at.slice(0, 7)).toBe("2026-10");
+
+    const summary = workshopSummary(p, w, tok.token);
     const rendered = renderExecEmail({ employee: "Parker", what: "x", tldr: summary.tldr, sections: summary.sections, details: renderWorkshopPacketText(p, w) });
     expect(lintExecEmail(rendered.subject, rendered.text, "Parker")).toEqual([]);
-    expect(rendered.text).toMatch(/\*\*TL;DR:\*\* A September 2026 Workshop proposed: \*\*How to use AI for small businesses \/ solopreneurs\*\*/);
-    expect(rendered.text).toMatch(/title set by the partners/);
+    // THE TLDR IS THE TOPIC AND THE ANGLES IN ONE GLANCE.
+    expect(rendered.text).toMatch(/\*\*TL;DR:\*\* \*\*September 2026 Workshop — topic: How to use AI for small businesses \/ solopreneurs\.\*\*/);
+    expect(rendered.text).toMatch(/I looked at \*\*3\*\* angles on it and chose \*\*The AI Back Office, in an hour\*\*/);
+    // PARKER INTRODUCES HIMSELF — Scooter may be reading one of these for the first time.
+    expect(rendered.text).toMatch(/I'm \*\*Parker\*\*, West Peek's Event Marketing Coordinator/);
+    // AND THE MAIL SAYS HOW TO ANSWER IT, with a worked example of each answer.
+    expect(rendered.text).toContain(`#wpkeep-${tok.token}`);
+    expect(rendered.text).toContain(`#wpno-${tok.token}`);
+    expect(rendered.text).toMatch(/works once, and stops working at the end of the month it is for/);
+    expect(rendered.text).toMatch(/Just hit Reply/);
 
     const card = (await env.WP_OS_DB.prepare("SELECT state, description FROM work_card WHERE id = ?1").bind(p.work_card_id).first<{ state: string; description: string }>())!;
     expect(card.state).toBe("DONE");
@@ -300,56 +377,118 @@ describe("the chain, for a SET topic", () => {
     const text = renderWorkshopPacketText(p, w);
     expect(text).toContain(`WHERE — ${WORKSHOP_WHERE}`);
     expect(text).not.toMatch(/VENUE SHORTLIST|room minimum|SPONSORS, RANKED|CAN OUR OWN LIST FILL IT/);
-    expect(text).toMatch(/RUN OF SHOW — 90 minutes/);
-    expect(text).toMatch(/12:25 PM \(25 min\) — BREAKOUT: Exercise 1/);
+    expect(text).toMatch(/RUN OF SHOW — 45–60 minutes/);
+    expect(text).toMatch(/12:15 PM \(15 min\) — BREAKOUT: Exercise 1/);
     expect(text).toMatch(/INVITATIONS — three emails, yours to send/);
-    expect(text).toMatch(/Free by design/);
+    expect(text).toMatch(/Free to attend — always, by design/);
+    expect(text).toMatch(/A small sponsor worth asking: a small-business accounting tool/);
 
     const view = { packetId: p.id, title: p.title, theme: p.theme, centralQuestion: p.central_question, month: p.proposed_for_month, format: p.format, targetMin: p.target_min, targetMax: p.target_max, audience: p.audience, origin: p.origin, brief: JSON.parse(p.brief_json!), pushback: p.pushback_md, concepts: JSON.parse(p.concepts_json), conceptChoiceMd: p.concept_choice_md, runOfShow: [], agendaMd: null, seedQuestions: [], guestIdeas: [], venues: [], sponsors: [], economics: null, sponsorThesis: null, risks: JSON.parse(p.risks_json), commitmentMd: p.commitment_md, pitchEmail: null, inviteCheck: null, alsoLookedAt: [], generatedAt: NOW };
     const html = renderWorkshopHtml(view, w);
     expect(html).toContain("Workshop packet · September 2026");
     expect(html).toContain(`Where — ${WORKSHOP_WHERE}`);
-    expect(html).toContain("Three ways to run it, compared");
+    expect(html).toContain("Three angles on the topic, compared");
     expect(html).toContain("The join-code invitation flow");
     expect(html).not.toMatch(/Where it could be held|Who pays for it — ranked|room minimum|unverified until called|Venue hire/);
     expect(html).toContain("no venue, no food and beverage, no room hire");
   });
 
-  it("verification strips a venue a model offers, an unjudged URL, and a guest without evidence; a set title is forced", () => {
-    const raw = packetJson({ title: "Ignored", venues: [{ name: "A room in Brooklyn", source_url: "https://venue.example" }], facilitator: { name: "Somebody Unproven", kind: "GUEST", why: "seems good", evidence_url: "https://unchecked.example/bio" }, promo_one_liner: "See https://unchecked.example/promo" });
-    const parsed = parseWorkshopPacket(raw, "How to build community")!;
-    expect(parsed.title).toBe("How to build community");
+  it("verification strips a venue, an unjudged URL and an unproven guest, and FORCES attendance-free", () => {
+    const raw = packetJson({ venues: [{ name: "A room in Brooklyn", source_url: "https://venue.example" }], facilitator: { name: "Somebody Unproven", kind: "GUEST", why: "seems good", evidence_url: "https://unchecked.example/bio" }, promo_one_liner: "See https://unchecked.example/promo" });
+    const parsed = parseWorkshopPacket(raw, "Community")!;
+    // The TOPIC is not the model's to change; the TITLE is the angle's name and is.
+    expect(parsed.topic).toBe("Community");
+    expect(parsed.title).toBe("A title the model chose");
     const { packet, flags } = verifyWorkshopPacket(parsed, [LIVE_1], raw);
     expect(flags.map((f) => f.code)).toEqual(expect.arrayContaining(["venue_removed", "unjudged_url_removed", "guest_without_evidence"]));
     expect(packet.facilitator.kind).toBe("PARTNER");
+    // Demoted to the DEFAULT HOST, who is Scooter — not Sequoia, which is what it used to be.
+    expect(packet.facilitator.name).toBe("Scooter Taylor");
     expect(packet.facilitator.why).toMatch(/Guest idea to verify: Somebody Unproven/);
     expect(packet.promoOneLiner).toContain("[link removed: not a checked source]");
     expect(packet.delivery.where).toBe(WORKSHOP_WHERE);
     expect(JSON.stringify(packet)).not.toContain("Brooklyn");
-    // Concepts for a set month: every title forced, one chosen.
-    const c = parseWorkshopConcepts(conceptsJson(true), "How to build community")!;
-    expect(c.concepts.every((x) => x.title === "How to build community")).toBe(true);
-    expect(c.concepts.filter((x) => x.chosen)).toHaveLength(1);
-    // Money: a sponsored one shows the keep; a free one shows zero sponsorship.
-    const sponsored = computeWorkshopEconomics({ budgetLines: parsed.budgetLines, sponsorship: { free: false, note: "a tools vendor fits", categoryFit: "small-business software", askUsd: 3000 } });
-    expect(sponsored.sponsorshipUsd).toBe(3000);
-    expect(sponsored.keepUsd).toBe(3000 - sponsored.estimatedCostHighUsd);
-    expect(computeWorkshopEconomics(parsed).sponsorshipUsd).toBe(0);
+    expect(packet.sponsorship.attendanceFree).toBe(true);
+  });
+
+  it("a packet with no co-host and no suggested sponsor is FLAGGED rather than accepted quietly", () => {
+    const raw = packetJson({ co_host: null, sponsorship: { note: "free" } });
+    const { flags } = verifyWorkshopPacket(parseWorkshopPacket(raw, "Community")!, [LIVE_1], raw);
+    expect(flags.map((f) => f.code)).toEqual(expect.arrayContaining(["no_co_host", "no_sponsor_suggested"]));
+  });
+
+  it("a run of show outside 45–60 minutes is flagged, and one inside it is not", () => {
+    const long = packetJson({ run_of_show: [{ time: "12:00 PM", minutes: 90, what: "the old length", who: "Scooter", segment: "STAGE" }] });
+    expect(verifyWorkshopPacket(parseWorkshopPacket(long, "Community")!, [LIVE_1], long).flags.map((f) => f.code)).toContain("length_off");
+    const ok = packetJson();
+    expect(verifyWorkshopPacket(parseWorkshopPacket(ok, "Community")!, [LIVE_1], ok).flags.map((f) => f.code)).not.toContain("length_off");
+  });
+
+  /**
+   * THE REJECTION, WHICH IS THE POINT OF ITEM 2. Not "discouraged by the prompt": the parse
+   * returns null, the stage fails, and nothing with three subjects in it is ever stored.
+   */
+  describe("three subjects cannot come back as a packet", () => {
+    it("rejects an answer whose angles each declare a different subject", () => {
+      const threeSubjects = conceptsJson(false, { topic: "Task triage", angleOn: ["Task triage", "An AI back office", "Content repurposing"] });
+      expect(parseWorkshopConcepts(threeSubjects, null)).toBeNull();
+    });
+
+    it("rejects an angle that replaces a topic the partners set", () => {
+      const drifted = conceptsJson(false, { topic: SET_TOPIC, angleOn: [SET_TOPIC, SET_TOPIC, "Something else entirely"] });
+      expect(parseWorkshopConcepts(drifted, SET_TOPIC)).toBeNull();
+      // And an answer that changes the subject wholesale, every angle agreeing with each other.
+      const replaced = conceptsJson(false, { topic: "A better idea", angleOn: ["A better idea", "A better idea", "A better idea"] });
+      expect(parseWorkshopConcepts(replaced, SET_TOPIC)).toBeNull();
+    });
+
+    it("rejects an answer with no `angle_on` at all — a missing guarantee is not a guarantee", () => {
+      const silent = JSON.stringify({ topic: "Community", concepts: [{ title: "One", promise: "a" }, { title: "Two", promise: "b" }] });
+      expect(parseWorkshopConcepts(silent, "Community")).toBeNull();
+    });
+
+    it("accepts three angles on one subject, keeps the three NAMES, and settles one topic", () => {
+      const c = parseWorkshopConcepts(conceptsJson(true), SET_TOPIC)!;
+      expect(c.topic).toBe(SET_TOPIC);
+      expect(new Set(c.concepts.map((x) => x.title)).size).toBe(3);
+      expect(c.concepts.every((x) => x.angleOn === SET_TOPIC)).toBe(true);
+      expect(c.concepts.filter((x) => x.chosen)).toHaveLength(1);
+    });
+
+    it("PARKER CHOOSES when nobody set a topic — the same answer shape, no human present", () => {
+      const own = conceptsJson(false, { topic: "Hiring your first contractor" });
+      const c = parseWorkshopConcepts(own, null)!;
+      expect(c.topic).toBe("Hiring your first contractor");
+      expect(c.concepts.every((x) => x.angleOn === "Hiring your first contractor")).toBe(true);
+    });
+  });
+
+  it("the money says free to attend and prices the SUGGESTION as cover, never as profit", () => {
+    const parsed = parseWorkshopPacket(packetJson(), "Community")!;
+    const eco = computeWorkshopEconomics(parsed);
+    expect(eco.attendanceFree).toBe(true);
+    expect(eco.suggestedSponsorshipUsd).toBe(750);
+    expect(eco.wouldCoverUsd).toBe(Math.min(750, eco.estimatedCostHighUsd));
+    const none = computeWorkshopEconomics({ budgetLines: parsed.budgetLines, sponsorship: normaliseSponsorship({}) });
+    expect(none.suggestedSponsorshipUsd).toBe(0);
+    expect(none.attendanceFree).toBe(true);
   });
 });
 
-describe("the chain, for an OPEN month", () => {
-  it("three different concepts, one chosen; the chosen title names the Workshop; the page's detail carries the Workshop half", async () => {
+describe("the chain, for a month whose topic was typed rather than set", () => {
+  it("three angles on the typed topic, one chosen; the page's detail carries the Workshop half", async () => {
     const draft = (await env.WP_OS_DB.prepare("SELECT * FROM evt_room_packet WHERE proposed_for_month = '2026-12' AND kind = 'WORKSHOP'").first<PacketRow>())!;
     await openPacketCard(env, draft);
     const { outcomes } = await buildToDone(await row(draft.id), deps(false));
     expect(outcomes[outcomes.length - 1]).toBe("DONE");
     const p = await row(draft.id);
     expect(p.title).toBe("A title the model chose");
-    const concepts = JSON.parse(p.concepts_json) as Array<{ title: string; chosen: boolean }>;
-    expect(concepts.map((c) => c.title)).toEqual(["Price your service in 90 minutes", "Hire your first contractor", "Community that sells"]);
+    expect(p.theme).toBe(OPEN_TOPIC);
+    const concepts = JSON.parse(p.concepts_json) as Array<{ title: string; chosen: boolean; angleOn: string }>;
+    expect(concepts.map((c) => c.title)).toEqual(["The AI Back Office, in an hour", "Your Monday Morning, Automated", "Build Night: one tool, one task"]);
+    expect(concepts.every((c) => c.angleOn === OPEN_TOPIC)).toBe(true);
     expect(concepts[0]!.chosen).toBe(true);
-    expect(workshopViewOf(p)!.topicSet).toBe(false);
+    expect(workshopViewOf(p)!.topic).toBe(OPEN_TOPIC);
 
     const detail = (await (await handleGetPacket(ctx("GET", undefined, { id: p.id }))).json()) as { packet: { kind: string }; venues: unknown[]; sponsors: unknown[]; workshop: { promise: string; delivery: { where: string } } | null; flags: unknown[] };
     expect(detail.packet.kind).toBe("WORKSHOP");

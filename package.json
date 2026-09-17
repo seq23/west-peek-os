@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "validate": "npm run typecheck && npm run test",
     "validate:ai-boundary": "node scripts/validate/no-direct-provider-calls.mjs && node scripts/validate/no-direct-provider-calls.mjs --self-test && node scripts/seed/generate-ai-employee-seed.mjs --check",
+    "validate:angles": "node scripts/validate/one-topic-several-angles.mjs && node scripts/validate/one-topic-several-angles.mjs --self-test",
     "validate:authority": "node scripts/validate/no-unauthorized-effects.mjs && node scripts/validate/no-unauthorized-effects.mjs --self-test && node scripts/seed/generate-machine-seed.mjs --check",
     "validate:blocks": "node scripts/validate/a-block-can-be-cleared.mjs && node scripts/validate/a-block-can-be-cleared.mjs --self-test",
     "validate:brand": "node scripts/validate/west-peek-brand-system.mjs && node scripts/validate/west-peek-brand-system.mjs --self-test",

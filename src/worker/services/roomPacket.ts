@@ -45,6 +45,7 @@ import {
 } from "../../shared/events/roomPacket";
 import { packetFilename, parkerIntroduction, renderPacketHtml, renderWorkshopHtml, type PacketView, type SponsorView, type VenueView } from "../../shared/events/roomPacketPdf";
 import {
+  WORKSHOP_LENGTH_RANGE,
   WORKSHOP_SERIES,
   WORKSHOP_WHERE,
   buildWorkshopConceptsPrompt,
@@ -62,15 +63,19 @@ import {
   setWorkshopTitle,
   verifyWorkshopPacket,
   workshopTopic,
+  normaliseSponsorship,
   type PacketKind,
   type WorkshopConcept,
   type WorkshopFlag,
   type WorkshopNote,
   type WorkshopView,
 } from "../../shared/events/workshopPacket";
+import { adjacencyWindow, deliveryMonth, dueOn, planFor, topicFor, type Stream } from "../../shared/events/monthlyPlan";
+import { howToAnswer } from "../../shared/events/packetDecisionToken";
+import { tokenForPacket } from "./packetReplyDecision";
 import { guidanceBlock } from "../../shared/skills/library";
 import { writtenGuidance } from "./firmSkills";
-import { sendPartnerEmail } from "./execEmail";
+import { sendPartnersEmail } from "./execEmail";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { notifyPartners } from "./notifications";
@@ -275,10 +280,22 @@ export interface BuildState {
   workshopDropped: string[];
   workshopRejected: Array<{ url: string; reason: string }>;
   workshopFlags: WorkshopFlag[];
+  /**
+   * THE MONTH'S ONE SUBJECT, settled at the angles stage and carried forward.
+   *
+   * It is on the state rather than re-derived at each stage because for a month nobody set, PARKER
+   * chose it — so it exists only in the answer he gave, and the packet stage must build on that one
+   * rather than ask again and get a different subject.
+   */
+  workshopTopic: string | null;
+  workshopTopicSetBy: "PARTNERS" | "PARKER" | null;
+  /** The topic for a ROOM, settled the same way and for the same reason. */
+  roomTopic: string | null;
+  roomTopicSetBy: "PARTNERS" | "PARKER" | null;
 }
 
 export function emptyState(): BuildState {
-  return { candidates: [], research: [], researched: [], inviteCheck: null, concepts: [], choiceRationale: null, pushback: null, venueHits: [], venueCitations: [], venueDetail: null, flags: [], pdfError: null, discoveryDetail: null, dropped: [], workshopNotes: [], workshopDropped: [], workshopRejected: [], workshopFlags: [] };
+  return { candidates: [], research: [], researched: [], inviteCheck: null, concepts: [], choiceRationale: null, pushback: null, venueHits: [], venueCitations: [], venueDetail: null, flags: [], pdfError: null, discoveryDetail: null, dropped: [], workshopNotes: [], workshopDropped: [], workshopRejected: [], workshopFlags: [], workshopTopic: null, workshopTopicSetBy: null, roomTopic: null, roomTopicSetBy: null };
 }
 
 export function parseState(raw: string | null): BuildState {
@@ -708,21 +725,33 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
 
     if (stage === "CONCEPTS") {
       const recent = await env.WP_OS_DB.prepare(
-        "SELECT theme FROM evt_room_packet WHERE firm_scope = ?1 AND id != ?2 AND status != 'DRAFT' ORDER BY created_at DESC LIMIT 8",
-      ).bind(firmScope, draft.id).all<{ theme: string }>();
+        "SELECT title FROM evt_room_packet WHERE firm_scope = ?1 AND id != ?2 AND status != 'DRAFT' ORDER BY created_at DESC LIMIT 8",
+      ).bind(firmScope, draft.id).all<{ title: string }>();
+      /*
+       * THE MONTH'S ONE TOPIC, settled before ideation: the partners' plan entry, then whatever a
+       * human typed into the request form, then nothing — and nothing means Parker picks it in this
+       * same call. He never waits and never asks which of the three he is in.
+       */
+      const { topic: roomTopic, setBy: roomSetBy, steer: roomSteer } = topicFor(draft.proposed_for_month, "ROOM", brief?.audience ?? null);
+      const ran = await whatActuallyRan(env, firmScope, draft.proposed_for_month, "ROOM");
       const prompt = buildConceptsPrompt({
-        month: draft.proposed_for_month, city, brief, recentThemes: (recent.results ?? []).map((r) => r.theme),
+        month: draft.proposed_for_month, city, topic: roomTopic, setBy: roomSetBy, steer: roomSteer, brief, ran,
+        recentThemes: (recent.results ?? []).map((r) => r.title),
         inviteCheck: state.inviteCheck, sponsors: state.research, guidance: await guidanceFor(env, firmScope),
       });
-      const { text } = await synth("Room packet: three concepts", prompt, 3000);
-      const parsed = parseConcepts(text);
-      if (!parsed) return await failStage("the concepts did not come back in a usable shape");
+      const { text } = await synth("Room packet: one topic, three angles", prompt, 3000);
+      // A three-subject answer is REJECTED, not flagged: the stage fails, the sweep retries it, and
+      // nothing with three subjects in it is ever stored.
+      const parsed = parseConcepts(text, roomSetBy === "PARTNERS" ? roomTopic : null);
+      if (!parsed) return await failStage("the angles did not come back in a usable shape — every angle must be on the ONE topic for the month, and each must say so in `angle_on`");
       state.concepts = parsed.concepts;
+      state.roomTopic = parsed.topic;
+      state.roomTopicSetBy = roomSetBy;
       state.choiceRationale = parsed.choiceRationale;
       state.pushback = parsed.pushback;
       await saveStage(env, draft.id, "VENUES", state);
       const chosen = parsed.concepts.find((c) => c.chosen)!;
-      return { stage, next: "VENUES", note: `chose "${chosen.title}" (${chosen.format}) over ${parsed.concepts.length - 1} other(s)${parsed.pushback ? `; pushback: ${parsed.pushback.slice(0, 120)}` : ""}` };
+      return { stage, next: "VENUES", note: `topic "${parsed.topic}" (${roomSetBy === "PARTNERS" ? "the partners'" : "Parker's own pick"}); chose the angle "${chosen.title}" (${chosen.format}) over ${parsed.concepts.length - 1} other angle(s) on the same topic${parsed.pushback ? `; pushback: ${parsed.pushback.slice(0, 120)}` : ""}` };
     }
 
     if (stage === "VENUES") {
@@ -811,6 +840,61 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
  * three ways to run it (or three topics, for an open month) and chooses one; PACKET writes the
  * delivery plan; PDF renders and emails, exactly as a Room does.
  */
+/**
+ * ADJACENCY MEASURES WHAT RAN, NOT WHAT WAS PROPOSED — and that distinction is the whole item.
+ *
+ * Operator: "adjacency is a light rule. for one month. and just make sure they are not too
+ * similar."
+ *
+ * The trap it had to be built around, in her own facts: October's Workshop is hosted by a friend of
+ * Scooter's and is about content creation. Parker's OWN October Workshop packet — an AI back-office
+ * idea — was declined. The old rule read `evt_room_packet.title` for the last eight packets
+ * regardless of whether any of them happened, so November would have avoided a dead idea and
+ * walked straight into the subject that is actually being run.
+ *
+ * So this reads two things and neither of them is a proposal:
+ *   · `evt_event` — what is on the calendar for the window, INCLUDING sessions the firm did not
+ *     build (migration 0176 puts October's on the record precisely so this can see it);
+ *   · packets a human KEPT (APPROVED or SCHEDULED) for the window, which is the same fact recorded
+ *     one step earlier.
+ *
+ * Declined and still-proposed packets are deliberately absent. `MONTHLY_PLAN` contributes its own
+ * half inside the prompt builder, so a month that is planned but not yet calendared still counts.
+ */
+async function whatActuallyRan(
+  env: Env,
+  firmScope: string,
+  month: string,
+  stream: Stream,
+): Promise<Array<{ month: string; topic: string; note: string }>> {
+  const window = adjacencyWindow(month);
+  const out: Array<{ month: string; topic: string; note: string }> = [];
+
+  const events = (await env.WP_OS_DB.prepare(
+    `SELECT title, theme, starts_at, packet_id FROM evt_event
+      WHERE firm_scope = ?1 AND COALESCE(kind,'ROOM') = ?2 AND status != 'CANCELLED'
+        AND substr(starts_at, 1, 7) IN (${window.map((_, i) => `?${i + 3}`).join(", ")})`,
+  ).bind(firmScope, stream, ...window).all<{ title: string; theme: string | null; starts_at: string; packet_id: string | null }>()).results ?? [];
+  for (const e of events) {
+    out.push({
+      month: e.starts_at.slice(0, 7),
+      topic: e.theme?.trim() || e.title,
+      note: e.packet_id ? "the firm ran it" : "somebody outside the firm ran it — it is still what ran",
+    });
+  }
+
+  const kept = (await env.WP_OS_DB.prepare(
+    `SELECT theme, title, proposed_for_month FROM evt_room_packet
+      WHERE firm_scope = ?1 AND COALESCE(kind,'ROOM') = ?2 AND status IN ('APPROVED','SCHEDULED')
+        AND proposed_for_month IN (${window.map((_, i) => `?${i + 3}`).join(", ")})`,
+  ).bind(firmScope, stream, ...window).all<{ theme: string | null; title: string; proposed_for_month: string }>()).results ?? [];
+  for (const k of kept) {
+    out.push({ month: k.proposed_for_month, topic: k.theme?.trim() || k.title, note: "the firm kept it" });
+  }
+
+  return out.filter((r, i, xs) => xs.findIndex((y) => y.topic.toLowerCase() === r.topic.toLowerCase()) === i);
+}
+
 async function runWorkshopStage(
   env: Env,
   draft: PacketRow,
@@ -820,8 +904,12 @@ async function runWorkshopStage(
 ): Promise<StageResult> {
   const firmScope = draft.firm_scope;
   const brief = parseBrief(draft.brief_json);
-  const { topic, set } = workshopTopic(draft.proposed_for_month, brief);
-  const setTitle = set ? topic : null;
+  /*
+   * THE MONTH'S ONE TOPIC, RESOLVED BEFORE ANY IDEATION. A partner's plan entry wins; then what a
+   * human typed into the request form; then nothing — and "nothing" means Parker chooses it in the
+   * concepts call. There is no branch in which he waits or asks which situation he is in.
+   */
+  const { topic, set, setBy, steer } = workshopTopic(draft.proposed_for_month, brief);
   const fail = (detail: string): never => { throw new Error(detail); };
 
   if (stage === "DISCOVER") {
@@ -851,7 +939,7 @@ async function runWorkshopStage(
        * judge that fell over is one of those cases, and it belongs with them rather than being the
        * one path that stops the work dead.
        */
-      const judged = await deps.judge(env, deps.actor, buildWorkshopJudgePrompt({ topic, notes: live }));
+      const judged = await deps.judge(env, deps.actor, buildWorkshopJudgePrompt({ topic: topic ?? "the subject Parker is about to choose for this month", notes: live }));
       if (!judged.ok) { why = `the judgement pass failed: ${judged.detail}`; continue; }
       const verdicts = parseWorkshopVerdicts(judged.text);
       if (verdicts.size === 0) { why = "the judge answered with no verdicts"; continue; }
@@ -882,35 +970,45 @@ async function runWorkshopStage(
   }
 
   if (stage === "CONCEPTS") {
-    const recent = await env.WP_OS_DB.prepare(
-      "SELECT title FROM evt_room_packet WHERE firm_scope = ?1 AND id != ?2 AND status != 'DRAFT' ORDER BY created_at DESC LIMIT 8",
-    ).bind(firmScope, draft.id).all<{ title: string }>();
-    const prompt = buildWorkshopConceptsPrompt({ month: draft.proposed_for_month, topic, set, brief, notes: state.workshopNotes, recentTitles: (recent.results ?? []).map((r) => r.title), guidance: await guidanceFor(env, firmScope) });
-    const { text } = await deps.synth("Workshop packet: three concepts", prompt, 3000);
-    const parsed = parseWorkshopConcepts(text, setTitle);
-    if (!parsed) return fail("the concepts did not come back in a usable shape");
+    const ran = await whatActuallyRan(env, firmScope, draft.proposed_for_month, "WORKSHOP");
+    const prompt = buildWorkshopConceptsPrompt({ month: draft.proposed_for_month, topic, set, setBy, steer, brief, notes: state.workshopNotes, ran, guidance: await guidanceFor(env, firmScope) });
+    const { text } = await deps.synth("Workshop packet: one topic, three angles", prompt, 3000);
+    /*
+     * A THREE-SUBJECT ANSWER IS REJECTED HERE, NOT ACCEPTED AND FLAGGED.
+     *
+     * `parseWorkshopConcepts` returns null when the angles are not all on one subject, and this
+     * line turns that into a stage failure: the sweep retries the stage with the reason on the
+     * card, and after the third attempt the card blocks and a human sees it. Nothing with three
+     * subjects in it is ever stored.
+     */
+    const parsed = parseWorkshopConcepts(text, set ? topic : null);
+    if (!parsed) return fail("the angles did not come back in a usable shape — every angle must be on the ONE topic for the month, and each must say so in `angle_on`");
     state.concepts = parsed.concepts;
+    state.workshopTopic = parsed.topic;
+    state.workshopTopicSetBy = setBy;
     state.choiceRationale = parsed.choiceRationale;
     state.pushback = parsed.pushback;
     await saveStage(env, draft.id, "PACKET", state);
-    const chosen = parsed.concepts.find((c) => c.chosen)!;
-    return { stage, next: "PACKET", note: `chose "${chosen.title}" (${(chosen as WorkshopConcept).mode.toLowerCase()}: ${(chosen as WorkshopConcept).promise.slice(0, 80)}) over ${parsed.concepts.length - 1} other(s)${set ? "; the title is the partners'" : ""}${parsed.pushback ? `; pushback: ${parsed.pushback.slice(0, 120)}` : ""}` };
+    const chosen = parsed.concepts.find((c) => c.chosen)! as WorkshopConcept;
+    return { stage, next: "PACKET", note: `topic "${parsed.topic}" (${setBy === "PARTNERS" ? "the partners'" : "Parker's own pick"}); chose the angle "${chosen.title}" (${chosen.angleKind.toLowerCase()}, ${chosen.mode.toLowerCase()}: ${chosen.promise.slice(0, 80)}) over ${parsed.concepts.length - 1} other angle(s) on the same topic${parsed.pushback ? `; pushback: ${parsed.pushback.slice(0, 120)}` : ""}` };
   }
 
   if (stage === "PACKET") {
+    const settled = state.workshopTopic ?? topic;
+    if (!settled) return fail("no topic was settled for this month; the angles stage must run first");
     const prompt = buildWorkshopPacketPrompt({
-      month: draft.proposed_for_month, topic, set, brief, notes: state.workshopNotes,
+      month: draft.proposed_for_month, topic: settled, set, brief, notes: state.workshopNotes,
       concepts: state.concepts as WorkshopConcept[], choiceRationale: state.choiceRationale, pushback: state.pushback,
       guidance: await guidanceFor(env, firmScope),
     });
     const { text, aiRunId } = await deps.synth("Workshop packet proposal", prompt, 6000);
-    const parsed = parseWorkshopPacket(text, setTitle);
+    const parsed = parseWorkshopPacket(text, settled);
     if (!parsed) return fail("the proposal did not come back as a usable Workshop packet");
     const verified = verifyWorkshopPacket(parsed, state.workshopNotes.map((n) => n.url), text);
     const economics = computeWorkshopEconomics(verified.packet);
     state.workshopFlags = verified.flags;
-    await storeWorkshopPacket(env, draft, verified.packet, economics, aiRunId, state, set);
-    return { stage, next: "PDF", note: `"${verified.packet.title}": ${verified.packet.runOfShow.length} run-of-show lines (${verified.packet.runOfShow.filter((l) => l.segment === "BREAKOUT").length} breakouts), ${verified.packet.leaveWith.length} artifact(s), ${verified.packet.invitations.length} invitation(s), ${verified.packet.sponsorship.free ? "free by design" : `sponsor ask $${(verified.packet.sponsorship.askUsd ?? 0).toLocaleString("en-US")}`}${verified.flags.length ? `; flags: ${verified.flags.map((f) => f.code).join(", ")}` : ""}` };
+    await storeWorkshopPacket(env, draft, verified.packet, economics, aiRunId, state, setBy);
+    return { stage, next: "PDF", note: `"${verified.packet.title}": ${verified.packet.runOfShow.length} run-of-show lines (${verified.packet.runOfShow.filter((l) => l.segment === "BREAKOUT").length} breakouts), ${verified.packet.leaveWith.length} artifact(s), ${verified.packet.invitations.length} invitation(s), free to attend${verified.packet.sponsorship.suggested ? `, suggested sponsor ${verified.packet.sponsorship.suggested.categoryFit} at $${(verified.packet.sponsorship.suggested.askUsd ?? 0).toLocaleString("en-US")}` : ", no sponsor suggested"}${verified.flags.length ? `; flags: ${verified.flags.map((f) => f.code).join(", ")}` : ""}` };
   }
 
   if (stage === "PDF") {
@@ -943,16 +1041,18 @@ async function runWorkshopStage(
 }
 
 /** The Workshop's rows: the packet row with `workshop_json`. NO venue rows and NO sponsor rows are written — ever. */
-async function storeWorkshopPacket(env: Env, draft: PacketRow, packet: WorkshopPacketShape, economics: ReturnType<typeof computeWorkshopEconomics>, aiRunId: string | null, state: BuildState, topicSet: boolean): Promise<void> {
+async function storeWorkshopPacket(env: Env, draft: PacketRow, packet: WorkshopPacketShape, economics: ReturnType<typeof computeWorkshopEconomics>, aiRunId: string | null, state: BuildState, topicSetBy: "PARTNERS" | "PARKER"): Promise<void> {
   const firmScope = draft.firm_scope;
   const clash = await env.WP_OS_DB.prepare(
     "SELECT id FROM evt_room_packet WHERE firm_scope = ?1 AND proposed_for_month = ?2 AND title = ?3 AND id != ?4",
   ).bind(firmScope, draft.proposed_for_month, packet.title, draft.id).first<{ id: string }>();
   const title = clash ? `${packet.title} (${draft.proposed_for_month})` : packet.title;
   const view: WorkshopView = {
+    topic: packet.topic, topicSetBy,
     whoItsFor: packet.whoItsFor, promise: packet.promise, mode: packet.mode, runOfShow: packet.runOfShow, exercises: packet.exercises,
-    leaveWith: packet.leaveWith, facilitator: packet.facilitator, delivery: packet.delivery, sponsorship: packet.sponsorship,
-    promoOneLiner: packet.promoOneLiner, invitations: packet.invitations, economics, notes: state.workshopNotes, flags: state.workshopFlags, topicSet,
+    leaveWith: packet.leaveWith, facilitator: packet.facilitator, coHost: packet.coHost, delivery: packet.delivery, sponsorship: packet.sponsorship,
+    promoOneLiner: packet.promoOneLiner, invitations: packet.invitations, economics, notes: state.workshopNotes, flags: state.workshopFlags,
+    topicSet: topicSetBy === "PARTNERS",
   };
   await env.WP_OS_DB.batch([
     env.WP_OS_DB.prepare(
@@ -969,8 +1069,8 @@ async function storeWorkshopPacket(env: Env, draft: PacketRow, packet: WorkshopP
     ).bind(
       draft.id, title, packet.topic, packet.promise,
       packet.targetMin, packet.targetMax, packet.whoItsFor, JSON.stringify(packet.exercises),
-      JSON.stringify(economics), packet.sponsorship.free ? null : packet.sponsorship.note, aiRunId,
-      packet.sponsorship.free ? 0 : 1, economics.sponsorshipUsd, JSON.stringify(packet.risks), packet.commitmentMd,
+      JSON.stringify(economics), packet.sponsorship.suggested ? packet.sponsorship.suggested.why : null, aiRunId,
+      packet.sponsorship.suggested ? 1 : 0, economics.suggestedSponsorshipUsd, JSON.stringify(packet.risks), packet.commitmentMd,
       JSON.stringify(state.concepts), packet.conceptChoiceMd ?? state.choiceRationale, JSON.stringify(packet.runOfShow),
       packet.pushback ?? state.pushback, JSON.stringify(state), JSON.stringify(view),
     ),
@@ -983,7 +1083,7 @@ async function storeWorkshopPacket(env: Env, draft: PacketRow, packet: WorkshopP
     actorType: "ai_employee",
     actorId: "aie_parker",
     objectType: "room_packet", objectId: draft.id, firmScope,
-    payload: { kind: "WORKSHOP", month: draft.proposed_for_month, origin: draft.origin, title_set: topicSet, free: packet.sponsorship.free, cost_high_usd: economics.estimatedCostHighUsd, concept: state.concepts.find((c) => c.chosen)?.title ?? null, flags: state.workshopFlags.map((f) => f.code) },
+    payload: { kind: "WORKSHOP", month: draft.proposed_for_month, origin: draft.origin, topic: packet.topic, topic_set_by: topicSetBy, attendance_free: true, suggested_sponsor: packet.sponsorship.suggested?.categoryFit ?? null, cost_high_usd: economics.estimatedCostHighUsd, concept: state.concepts.find((c) => c.chosen)?.title ?? null, flags: state.workshopFlags.map((f) => f.code) },
   });
 }
 
@@ -1321,7 +1421,7 @@ const tierWord = (t: string | null | undefined): string => (t === "PRESENTING" ?
  * The busy-executive summary above the packet (16 Sep 2026): the concept, the venue, the money,
  * and the one decision — keep it or dismiss it. The whole packet is the details under it.
  */
-export function packetSummary(packet: PacketRow, venues: VenueLine[], sponsors: SponsorLine[]): { tldr: string; sections: ExecEmailInput["sections"] } {
+export function packetSummary(packet: PacketRow, venues: VenueLine[], sponsors: SponsorLine[], token?: string): { tldr: string; sections: ExecEmailInput["sections"] } {
   const v = viewFromRows(packet, venues, sponsors);
   const eco = v.economics;
   const chosen = v.concepts.find((c) => c.chosen);
@@ -1330,9 +1430,16 @@ export function packetSummary(packet: PacketRow, venues: VenueLine[], sponsors: 
   const total = eco ? `${usdText(eco.estimatedCostLowUsd)}–${usdText(eco.estimatedCostHighUsd)}` : "not costed";
   const asked = v.brief ? `${v.brief.audience}${v.brief.city ? ` in ${v.brief.city}` : ""}` : `Parker's own Room for ${monthWord(v.month)}`;
   return {
-    tldr: `A ${monthWord(v.month)} Room proposed: **${v.title}**${chosen ? ` — ${chosen.format.replace(/_/g, " ").toLowerCase()}` : ""}, ${v.targetMin}–${v.targetMax} people, ${total}, **${v.sponsors.length}** sponsor(s) ranked. Keep it or dismiss it on Events & Rooms.`,
+    tldr: `**${monthWord(v.month)} Room — topic: ${packet.theme || v.title}.** I looked at ${v.concepts.length || 3} angles on it and chose **${chosen?.title ?? v.title}**${others.length ? ` over ${others.map((c) => c.title).join(" and ")}` : ""}. ${v.targetMin}–${v.targetMax} people, ${total}. Reply to keep it or say no.`,
     sections: [
-      { label: "What you asked", bullets: [asked] },
+      {
+        label: "Who I am",
+        bullets: [
+          "I'm **Parker**, West Peek's Event Marketing Coordinator. I plan the firm's monthly Rooms and Workshops.",
+          "Each month I pick one topic, work up three angles on it, choose one, and send you the packet.",
+          `What you asked for: ${asked}.`,
+        ],
+      },
       {
         label: "What I did",
         bullets: [
@@ -1352,10 +1459,13 @@ export function packetSummary(packet: PacketRow, venues: VenueLine[], sponsors: 
           ...(v.inviteCheck ? [`Our own list: **${v.inviteCheck.matchingCount}** of **${v.inviteCheck.totalContacts}** contacts fit — ${v.inviteCheck.verdict.replace(/_/g, " ").toLowerCase()}.`] : []),
         ],
       },
+      ...(token
+        ? [{ label: "How to answer this email", bullets: howToAnswer({ token, what: "Room" }) }]
+        : []),
       {
         label: "Your call",
         bullets: [
-          "Keep it or dismiss it: https://os.joinwestpeek.com/#/rooms",
+          "Reply here, or decide it on the page: https://os.joinwestpeek.com/#/rooms",
           ...(v.pushback ? [`Where I push back: ${v.pushback}`] : []),
           "Nothing is booked and nobody outside the firm has been contacted.",
         ],
@@ -1382,41 +1492,67 @@ export function renderWorkshopPacketText(packet: PacketRow, w: WorkshopView): st
 }
 
 /** The busy-executive summary above a Workshop packet: the promise, who runs it, what it costs, the one decision. */
-export function workshopSummary(packet: PacketRow, w: WorkshopView): { tldr: string; sections: ExecEmailInput["sections"] } {
+export function workshopSummary(packet: PacketRow, w: WorkshopView, token?: string): { tldr: string; sections: ExecEmailInput["sections"] } {
   const title = packet.title.replace(/^Workshop: /, "");
   const concepts = list<WorkshopConcept>(packet.concepts_json);
   const others = concepts.filter((c) => !c.chosen);
+  const chosen = concepts.find((c) => c.chosen);
   const eco = w.economics;
+  const sponsorship = normaliseSponsorship(w.sponsorship);
   const usd = (n: number): string => `$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
   return {
-    tldr: `A ${monthWord(packet.proposed_for_month)} Workshop proposed: **${title}** — ${w.promise.replace(/[.\s]+$/, "")}. ${WORKSHOP_WHERE}, ${packet.target_min}–${packet.target_max} people, ${eco.free ? "free by design" : `sponsor ask ${usd(eco.sponsorshipUsd)}`}, cost ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}. Keep it or dismiss it on Events & Rooms.`,
+    /*
+     * THE TL;DR IS THE TOPIC AND THE ANGLES IN ONE GLANCE — item 9. What a reader needs first is
+     * "what is this month about, and which way did he go", not a cost band.
+     */
+    tldr: `**${monthWord(packet.proposed_for_month)} Workshop — topic: ${w.topic ?? title}.** I looked at ${concepts.length || 3} angles on it and chose **${chosen?.title ?? title}**${others.length ? ` over ${others.map((c) => c.title).join(" and ")}` : ""}. ${WORKSHOP_LENGTH_RANGE}, ${WORKSHOP_WHERE}, free to attend. Reply to keep it or say no.`,
     sections: [
-      { label: "What you asked", bullets: [w.topicSet ? `The ${monthWord(packet.proposed_for_month)} Workshop, title set by the partners: **${title}**.` : parseBrief(packet.brief_json)?.audience && packet.origin === "PARTNER_BRIEF" ? `A Workshop on: ${parseBrief(packet.brief_json)!.audience}` : `Parker's own Workshop for ${monthWord(packet.proposed_for_month)} — three proposed, one chosen.`] },
       {
-        label: "What I did",
+        label: "Who I am",
         bullets: [
-          `Researched what the audience is asking this month: **${w.notes.length}** note(s) live-checked and judged.`,
-          `Compared **${concepts.length}** ways to run it and chose one; wrote the run of show with **${w.runOfShow.filter((l) => l.segment === "BREAKOUT").length}** breakout exercise(s), the delivery plan on West Peek Live, and **${w.invitations.length}** invitation emails.`,
-          packet.document_id ? `Filed the packet as a PDF: https://os.joinwestpeek.com/api/documents/${packet.document_id}/download` : "The PDF did not file; the packet is on Events & Rooms.",
+          "I'm **Parker**, West Peek's Event Marketing Coordinator. I plan the firm's monthly Rooms and Workshops.",
+          "Each month I pick one topic, work up three angles on it, choose one, and send you the packet.",
+          "Nothing is booked and nobody outside the firm has been contacted until one of you says yes.",
         ],
       },
       {
-        label: "What I found",
+        label: "The topic and the angles",
         bullets: [
-          `Promise: ${w.promise}`,
-          `For: ${w.whoItsFor} · mode: ${w.mode.toLowerCase()} · facilitator: **${w.facilitator.name}**${w.facilitator.kind === "GUEST" ? " (guest)" : ""}.`,
-          ...(w.leaveWith.length ? [`They leave with: ${w.leaveWith.slice(0, 3).join("; ")}.`] : []),
-          ...(others.length ? [`Beat: ${others.map((c) => `**${c.title === title ? c.promise.slice(0, 60) : c.title}**`).join(", ")}.`] : []),
-          eco.free ? `Money: ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}, carried by the firm as community work — no sponsor sought.` : `Money: cost ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}; a ${w.sponsorship.categoryFit ?? "sponsor"} at ${usd(eco.sponsorshipUsd)} leaves the firm ${usd(eco.keepUsd)}.`,
-          ...(w.flags.length ? [`Flags: ${w.flags.map((f) => f.detail).join("; ")}.`] : []),
+          `Topic: **${w.topic ?? title}** — ${w.topicSetBy === "PARKER" ? "my own pick; nobody had set one" : "set by you"}.`,
+          `Chosen angle: **${chosen?.title ?? title}** — ${w.promise}`,
+          ...others.slice(0, 2).map((c) => `Also considered: **${c.title}** — ${c.promise}`),
+          `For ${w.whoItsFor} · ${w.mode.toLowerCase()} · ${WORKSHOP_LENGTH_RANGE}.`,
         ],
       },
+      {
+        label: "Who runs it and what it costs",
+        bullets: [
+          `Host: **${w.facilitator.name}**${w.facilitator.kind === "GUEST" ? " (guest)" : ""}. Co-host: ${w.coHost ? `**${w.coHost.name}**${w.coHost.kind === "GUEST" ? " (guest)" : ""}` : "**nobody named yet** — usually there is one"}.`,
+          `**Free to attend**, always, by design. It costs the firm ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}.`,
+          sponsorship.suggested
+            ? `A small sponsor worth asking anyway: **${sponsorship.suggested.categoryFit}** at about ${usd(sponsorship.suggested.askUsd ?? 0)} — optional, and it would cover ${usd(eco.wouldCoverUsd)} of that.`
+            : "I did not suggest a sponsor and I should have — ask me again.",
+          ...(w.leaveWith.length ? [`They leave with: ${w.leaveWith.slice(0, 2).join("; ")}.`] : []),
+          ...(w.flags.length ? [`Worth knowing: ${w.flags.map((f) => f.detail).join("; ").slice(0, 300)}.`] : []),
+        ],
+      },
+      ...(token
+        ? [{
+            /*
+             * HOW TO ANSWER, SPELLED OUT IN THE MAIL ITSELF — item 9: "Nobody should have to
+             * remember the scheme." A worked example of BOTH answers, and the code belongs to this
+             * packet only, so there is nothing to look up and no ID to copy.
+             */
+            label: "How to answer this email",
+            bullets: howToAnswer({ token, what: "Workshop" }),
+          }]
+        : []),
       {
         label: "Your call",
         bullets: [
-          "Keep it or dismiss it: https://os.joinwestpeek.com/#/rooms",
+          "Reply here, or decide it on the page: https://os.joinwestpeek.com/#/rooms",
           ...(packet.pushback_md ? [`Where I push back: ${packet.pushback_md}`] : []),
-          "Virtual on West Peek Live; nothing is scheduled and nobody outside the firm has been contacted.",
+          ...(packet.document_id ? [`The full packet as a PDF: https://os.joinwestpeek.com/api/documents/${packet.document_id}/download`] : []),
         ],
       },
     ],
@@ -1516,17 +1652,28 @@ export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: 
   const workshop = workshopViewOf(packet);
   const text = workshop ? renderWorkshopPacketText(packet, workshop) : renderPacketText(packet, venueRows, sponsorRows);
   const monthName = monthWord(packet.proposed_for_month);
-  const summary = workshop ? workshopSummary(packet, workshop) : packetSummary(packet, venueRows, sponsorRows);
-  const sent: string[] = [];
-  const failed: string[] = [];
-  for (const to of ASSIGNING_PARTNERS) {
-    const out = await sendPartnerEmail(env, {
-      to,
-      email: { employee: "Parker", what: `your ${monthName} ${workshop ? "Workshop" : "Room"} — ${packet.title.replace(/^Workshop: /, "")}${packet.document_id ? " (PDF inside)" : ""}`, tldr: summary.tldr, sections: summary.sections, details: text },
-      objectType: "room_packet", objectId: packet.id, firmScope: packet.firm_scope, actorId: "aie_parker",
-    });
-    (out.sent ? sent : failed).push(to);
-  }
+  /*
+   * THE REPLY CODE IS MINTED BEFORE THE MESSAGE IS COMPOSED, because the message has to teach the
+   * reader how to use it (item 9) — the code, spelled out, with a worked example of keeping and of
+   * saying no. It is idempotent per packet: a re-sent email carries the code the first one carried,
+   * so a partner holding the older mail still has a code that works.
+   */
+  const minted = await tokenForPacket(env, packet);
+  const summary = workshop
+    ? workshopSummary(packet, workshop, minted.token)
+    : packetSummary(packet, venueRows, sponsorRows, minted.token);
+  /*
+   * ONE EMAIL, TO BOTH OF THEM. Two separate messages were two conversations about one decision —
+   * and with a single-use reply code in the mail, the second copy would carry a code the first
+   * reply had already spent, with nothing on the page to say so.
+   */
+  const out = await sendPartnersEmail(env, {
+    to: ASSIGNING_PARTNERS,
+    email: { employee: "Parker", what: `your ${monthName} ${workshop ? "Workshop" : "Room"} — ${packet.title.replace(/^Workshop: /, "")}${packet.document_id ? " (PDF inside)" : ""}`, tldr: summary.tldr, sections: summary.sections, details: text },
+    objectType: "room_packet", objectId: packet.id, firmScope: packet.firm_scope, actorId: "aie_parker",
+  });
+  const sent: string[] = out.sent ? [...out.recipients] : [];
+  const failed: string[] = out.sent ? [] : [...out.recipients];
   if (sent.length > 0) {
     await env.WP_OS_DB.prepare("UPDATE evt_room_packet SET emailed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1").bind(packet.id).run();
   }
@@ -1536,7 +1683,7 @@ export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: 
     severity: "INFO",
     title: `Parker proposed a ${workshop ? "Workshop" : "Room"} for ${monthName}: ${packet.title.replace(/^Workshop: /, "").slice(0, 70)}`,
     body: workshop
-      ? `${workshop.promise} · ${WORKSHOP_WHERE} · ${workshop.sponsorship.free ? "free by design" : `sponsor ask $${Math.round(workshop.economics.sponsorshipUsd).toLocaleString("en-US")}`}.${packet.document_id ? " PDF attached on Events & Rooms." : ""} Keep it or dismiss it there.`
+      ? `${workshop.promise} · ${WORKSHOP_WHERE} · free to attend${normaliseSponsorship(workshop.sponsorship).suggested ? `, suggested sponsor ${normaliseSponsorship(workshop.sponsorship).suggested!.categoryFit}` : ""}.${packet.document_id ? " PDF attached on Events & Rooms." : ""} Keep it or dismiss it there.`
       : `${packet.central_question ?? packet.theme} · ${packet.sponsor_count} sponsor slot(s), $${Math.round(packet.sponsor_total_usd).toLocaleString("en-US")} if all land.${packet.document_id ? " PDF attached on Events & Rooms." : ""} Keep it or dismiss it there.`,
     objectType: "room_packet",
     objectId: packet.id,
@@ -1702,26 +1849,65 @@ export async function runMonthlyRoomProposal(
     return { generated: true, detail: `opened Parker's card for the Room that was asked for: ${drafts[0].title} (card ${card.cardId})`, packetId: drafts[0].id };
   }
 
-  // ONE ROOM AND ONE WORKSHOP A MONTH (16 Sep 2026). Each kind is guarded on its own: a month with
-  // a Room and no Workshop gets the Workshop on this run. Still one cheap thing per run — the Room
-  // first, the Workshop on the next tick a quarter of an hour later.
-  const month = followingMonth(now);
+  /*
+   * ── THE CADENCE: BOTH STREAMS DELIVER ON THE 1st OF THE MONTH PRIOR ──────────────────────────
+   *
+   * Operator, 17 Sep 2026: "Both streams deliver on the 1st of the month prior. November's lands
+   * 1 October."
+   *
+   * THIS IS WHERE THE MONTHLY CARD IS MINTED, and it already landed on the 1st — by accident. The
+   * guard was "the following month has no packet", which becomes true the moment the month rolls
+   * over, so the first tick after midnight on the 1st queued it. True, and true for the wrong
+   * reason: nothing named the rule, nothing tested it, and anyone changing the guard would have
+   * moved the cadence without knowing there was one.
+   *
+   * `deliveryMonth` and `dueOn` name it. The check is a FLOOR rather than a window — a tick on the
+   * 3rd because the 1st was missed still delivers — because a cadence that only fires on one exact
+   * day silently skips a month the first time a cron is late, and work sitting unqueued is a
+   * failure this system has already had.
+   *
+   * ONE ROOM AND ONE WORKSHOP A MONTH, each guarded on its own, and still one cheap thing per run:
+   * the Room on this tick, the Workshop on the next a quarter of an hour later.
+   */
+  const month = deliveryMonth(now);
+  const skipped: string[] = [];
   for (const kind of ["ROOM", "WORKSHOP"] as const) {
+    /*
+     * A MONTH THAT IS NOT PARKER'S IS NOT QUEUED, and saying so is the point.
+     *
+     * October's Workshop is hosted by a friend of Scooter's; no Room runs in September or October.
+     * Without this the job would queue a packet for a session somebody else is running — Parker
+     * spending four model calls on work that is already somebody's, and a proposal on the shelf
+     * competing with the real thing.
+     */
+    const plan = planFor(month, kind);
+    if (plan?.status === "EXTERNAL") {
+      skipped.push(`${month}'s ${kind === "WORKSHOP" ? "Workshop" : "Room"} is hosted by ${plan.host ?? "somebody outside the firm"} (${plan.topic ?? "topic not recorded"}), so it is not Parker's to build`);
+      continue;
+    }
+    if (plan?.status === "NOT_RUNNING") {
+      skipped.push(`no ${kind === "WORKSHOP" ? "Workshop" : "Room"} runs in ${month}`);
+      continue;
+    }
     const existing = await env.WP_OS_DB.prepare(
       "SELECT COUNT(*) AS n FROM evt_room_packet WHERE firm_scope = ?1 AND proposed_for_month = ?2 AND COALESCE(kind, 'ROOM') = ?3",
     ).bind(firmScope, month, kind).first<{ n: number }>();
     if ((existing?.n ?? 0) > 0) continue;
     const draft = await queueDraft(env, actor, { month, origin: "PARKER", kind });
     const card = await openPacketCard(env, draft);
-    const set = kind === "WORKSHOP" ? setWorkshopTitle(month) : null;
-    return { generated: true, detail: `queued Parker's own ${kind === "WORKSHOP" ? "Workshop" : "Room"} for ${month}${set ? ` — title set by the partners: "${set}"` : ""} (card ${card.cardId}); the sweep builds it`, packetId: draft.id };
+    const topic = plan?.status === "SET" ? plan.topic : null;
+    return {
+      generated: true,
+      detail: `queued Parker's own ${kind === "WORKSHOP" ? "Workshop" : "Room"} for ${month}, due ${dueOn(month)}${topic ? ` — topic set by the partners: "${topic}"; he works up angles on it` : " — he picks the topic himself and works up angles on it"} (card ${card.cardId}); the sweep builds it`,
+      packetId: draft.id,
+    };
   }
   const building = await env.WP_OS_DB.prepare(
     "SELECT COUNT(*) AS n FROM evt_room_packet WHERE firm_scope = ?1 AND status = 'DRAFT'",
   ).bind(firmScope).first<{ n: number }>();
   return {
     generated: false,
-    detail: `${month} already has a Room and a Workshop proposal${(building?.n ?? 0) > 0 ? `; ${building!.n} request(s) being built by Parker in the sweep` : ""}`,
+    detail: `${month} (due ${dueOn(month)}) is covered${skipped.length ? `: ${skipped.join("; ")}` : " — it already has a Room and a Workshop proposal"}${(building?.n ?? 0) > 0 ? `; ${building!.n} request(s) being built by Parker in the sweep` : ""}`,
   };
 }
 

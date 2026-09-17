@@ -344,9 +344,17 @@ describe("the sponsor discovery and research stages", () => {
 });
 
 describe("ideate, compare, commit", () => {
-  it("asks for three concepts that differ in format, compared on tone, sponsor value, fit and cost, and one chosen with the reason", () => {
-    const prompt = buildConceptsPrompt({ month: "2026-10", city: "New York", brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, recentThemes: ["operator to founder"], inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: [], namedFromRecords: [], verdict: "STARTING_LIST", note: "a starting list" }, sponsors: [HARVEY] });
-    expect(prompt).toMatch(/THREE distinct concepts/);
+  it("asks for three ANGLES on the month's one topic, compared, and one chosen with the reason", () => {
+    const prompt = buildConceptsPrompt({ month: "2026-10", city: "New York", topic: "Black lawyers", setBy: "PARTNERS", steer: "several distinct name ideas, catchy", ran: [{ month: "2026-09", topic: "Content creation", note: "somebody outside the firm ran it" }], brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, recentThemes: ["operator to founder"], inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: [], namedFromRecords: [], verdict: "STARTING_LIST", note: "a starting list" }, sponsors: [HARVEY] });
+    // ONE TOPIC, SEVERAL ANGLES: her own words reach the model, and the topic is not up for grabs.
+    expect(prompt).toMatch(/THE TOPIC IS ONE SUBJECT AND IT IS ALREADY DECIDED: "Black lawyers"/);
+    expect(prompt).toMatch(/Black lawyers is a topic\. Community is a topic\./);
+    expect(prompt).toMatch(/A concept whose `angle_on` is anything/);
+    expect(prompt).toMatch(/several distinct name ideas, catchy/);
+    // ADJACENCY READS WHAT RAN, including a month somebody outside the firm hosted.
+    expect(prompt).toMatch(/WHAT ACTUALLY RAN LAST MONTH/);
+    expect(prompt).toMatch(/2026-09: Content creation \(somebody outside the firm ran it\)/);
+    expect(prompt).toMatch(/THREE ANGLES/);
     expect(prompt).toMatch(/war room/);
     expect(prompt).toMatch(/Dinner is ALLOWED/);
     expect(prompt).toMatch(/CHOOSE ONE/);
@@ -357,11 +365,13 @@ describe("ideate, compare, commit", () => {
   });
 
   it("parses the concepts with exactly one winner, and the venue direction the search runs for", () => {
-    const out = parseConcepts(JSON.stringify({ concepts: [
-      { title: "War Room", format: "WORKSHOP", premise: "…", tone: "electric", value_to_sponsor: "tool in hand", who_it_fits: "associates", cost_band: "$15–20K", signature_moment: "the live brief", venue_direction: "a law-school moot courtroom", chosen: true },
-      { title: "Boardroom", format: "DINNER", premise: "…", tone: "serious", value_to_sponsor: "six minutes", who_it_fits: "partners", cost_band: "$22–28K", signature_moment: "…", venue_direction: "a Black-chef-led private dining room in Manhattan", chosen: true },
-      { title: "Speed-venturing", format: "SALON", premise: "…", tone: "brisk", value_to_sponsor: "…", who_it_fits: "founders", cost_band: "$10–14K", signature_moment: "…", venue_direction: "…" },
-    ], choice_rationale: "the war room wins", pushback: "the list cannot fill it" }))!;
+    const out = parseConcepts(JSON.stringify({ topic: "Black lawyers", concepts: [
+      { title: "War Room", angle_on: "Black lawyers", angle_kind: "FORMAT", format: "WORKSHOP", premise: "…", tone: "electric", value_to_sponsor: "tool in hand", who_it_fits: "associates", cost_band: "$15–20K", signature_moment: "the live brief", venue_direction: "a law-school moot courtroom", chosen: true },
+      { title: "Boardroom", angle_on: "Black lawyers", angle_kind: "VENUE", format: "DINNER", premise: "…", tone: "serious", value_to_sponsor: "six minutes", who_it_fits: "partners", cost_band: "$22–28K", signature_moment: "…", venue_direction: "a Black-chef-led private dining room in Manhattan", chosen: true },
+      { title: "Speed-venturing", angle_on: "Black lawyers", angle_kind: "NAME", format: "SALON", premise: "…", tone: "brisk", value_to_sponsor: "…", who_it_fits: "founders", cost_band: "$10–14K", signature_moment: "…", venue_direction: "…" },
+    ], choice_rationale: "the war room wins", pushback: "the list cannot fill it" }), "Black lawyers")!;
+    expect(out.topic).toBe("Black lawyers");
+    expect(out.concepts.every((c) => c.angleOn === "Black lawyers")).toBe(true);
     expect(out.concepts.filter((c) => c.chosen).map((c) => c.title)).toEqual(["War Room"]);
     expect(out.choiceRationale).toBe("the war room wins");
     expect(venueSearchBrief(out.concepts[0]!, null, 40)).toContain("moot courtroom");
@@ -369,8 +379,32 @@ describe("ideate, compare, commit", () => {
   });
 
   it("returns null when no concept came back", () => {
-    expect(parseConcepts("nope")).toBeNull();
-    expect(parseConcepts(JSON.stringify({ concepts: [] }))).toBeNull();
+    expect(parseConcepts("nope", "Black lawyers")).toBeNull();
+    expect(parseConcepts(JSON.stringify({ concepts: [] }), "Black lawyers")).toBeNull();
+  });
+
+  /**
+   * THREE SUBJECTS ARE REJECTED, NOT FLAGGED. The stage fails and the sweep retries it; nothing
+   * carrying three subjects is ever stored, which is what item 2 asked for.
+   */
+  it("rejects an answer whose angles each declare a different subject", () => {
+    const threeSubjects = JSON.stringify({ topic: "Black lawyers", concepts: [
+      { title: "A", angle_on: "Black lawyers", format: "SALON", premise: "…" },
+      { title: "B", angle_on: "Women founders", format: "SALON", premise: "…" },
+      { title: "C", angle_on: "AI in the back office", format: "SALON", premise: "…" },
+    ] });
+    expect(parseConcepts(threeSubjects, null)).toBeNull();
+    expect(parseConcepts(threeSubjects, "Black lawyers")).toBeNull();
+  });
+
+  it("rejects an answer that replaces a topic the partners set, however unanimous it is", () => {
+    const replaced = JSON.stringify({ topic: "Something better", concepts: [
+      { title: "A", angle_on: "Something better", format: "SALON", premise: "…" },
+      { title: "B", angle_on: "Something better", format: "SALON", premise: "…" },
+    ] });
+    expect(parseConcepts(replaced, "Black lawyers")).toBeNull();
+    // The same answer for a month nobody set is fine: that is Parker choosing.
+    expect(parseConcepts(replaced, null)!.topic).toBe("Something better");
   });
 });
 
@@ -447,7 +481,7 @@ describe("the invite-list reality check", () => {
       expect(v.note).toMatch(/do not widen the audience, decline, or push back/);
       expect(v.note).not.toMatch(/cannot fill/i);
     }
-    const concepts = buildConceptsPrompt({ month: "2026-10", city: "New York", brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: [], notes: null }, recentThemes: [], inviteCheck: { totalContacts: 4712, matchingCount: 6, matchedOn: ["lawyers and legal roles"], archetypes: [], namedFromRecords: [], verdict: "STARTING_LIST", note: inviteVerdict(6, 40).note }, sponsors: [] });
+    const concepts = buildConceptsPrompt({ month: "2026-10", city: "New York", topic: "Black lawyers", setBy: "PARTNERS", steer: null, brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: [], notes: null }, recentThemes: [], inviteCheck: { totalContacts: 4712, matchingCount: 6, matchedOn: ["lawyers and legal roles"], archetypes: [], namedFromRecords: [], verdict: "STARTING_LIST", note: inviteVerdict(6, 40).note }, sponsors: [] });
     expect(concepts).toMatch(/NOT a constraint on the Room/);
     expect(concepts).toMatch(/Never cite this count as a reason to widen the audience/);
   });
@@ -615,7 +649,7 @@ describe("discovery, after the third production run", () => {
 
 describe("venue intent, after the third production run", () => {
   it("makes the first-choice venue carry the audience's identity, in both prompts", () => {
-    const concepts = buildConceptsPrompt({ month: "2026-10", city: "New York", brief: null, recentThemes: [], inviteCheck: null, sponsors: [] });
+    const concepts = buildConceptsPrompt({ month: "2026-10", city: "New York", topic: "Black lawyers", setBy: "PARTNERS", steer: null, brief: null, recentThemes: [], inviteCheck: null, sponsors: [] });
     expect(concepts).toMatch(/AUDIENCE IS DEFINED BY WHO THEY ARE/);
     expect(concepts).toMatch(/Schomburg Center/);
     const packet = buildPacketPrompt({ month: "2026-10", recentThemes: [], venueCandidates: [], city: "New York" });

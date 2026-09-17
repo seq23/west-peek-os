@@ -1,3 +1,4 @@
+import { ANGLE_KINDS, angleKindOf, angleRules, sameSubject, type AngleKind } from "./monthlyPlan";
 import { personaPrompt } from "../registry/aiEmployeePersonas";
 import { AI_EMPLOYEE_ROSTER } from "../registry/aiEmployees";
 /**
@@ -224,6 +225,7 @@ export interface RoomEconomics {
 
 /** One of the three concepts Parker ideates before committing to one. */
 export interface RoomConcept {
+  /** The angle's NAME. The month's SUBJECT lives on the packet, once — see `angleOn`. */
   title: string;
   format: RoomFormat;
   /** The idea in two or three sentences. */
@@ -237,6 +239,14 @@ export interface RoomConcept {
   /** What to search for: the kind of venue and why, so the venue search is run for THIS concept. */
   venueDirection: string;
   chosen: boolean;
+  /**
+   * THE MONTH'S TOPIC, copied by the model. Every concept's must be the same subject or the whole
+   * answer is discarded — see `parseConcepts`. Optional on the type only because rows stored before
+   * 17 Sep 2026 do not carry one and the page must still render them.
+   */
+  angleOn?: string;
+  /** What this angle varies: the name, the framing, the format, the venue, the experience. */
+  angleKind?: AngleKind;
 }
 
 /** One line of the run of show, to the minute, with the named role. */
@@ -674,7 +684,18 @@ export function pageCarriesName(pageText: string, name: string): boolean {
 export function buildConceptsPrompt(input: {
   month: string;
   city: string;
+  /** The month's ONE subject, or null when nobody set one and Parker picks it in this call. */
+  topic: string | null;
+  setBy: "PARTNERS" | "PARKER";
+  /** What the partners want out of the angles, in their words. */
+  steer: string | null;
   brief: RoomBrief | null;
+  /**
+   * What ACTUALLY ran in the adjacency window — not what was proposed. Optional because a caller
+   * with nothing to say about last month is a legitimate state (a fresh firm, a first month); the
+   * TOPIC is not optional, because a caller that forgets it would silently get "Parker chooses".
+   */
+  ran?: readonly { month: string; topic: string; note: string }[];
   recentThemes: readonly string[];
   inviteCheck: InviteCheck | null;
   sponsors: readonly SponsorResearch[];
@@ -703,17 +724,46 @@ export function buildConceptsPrompt(input: {
   const sponsors = input.sponsors.length
     ? input.sponsors.map((s) => `- ${s.orgName} (${s.category}${s.fromBrief ? ", named by the partner" : ""}): ${s.hasSponsorshipHistory ? `sponsorship history found (${s.evidence.length} cited)` : "NO sponsorship history found on any public page"}${s.contact ? `; partnerships contact ${s.contact.name}, ${s.contact.title}` : "; no named contact on a public page yet"}. ${s.summary.slice(0, 240)}`).join("\n")
     : "(no sponsor research is available; ideate on the audience alone)";
-  const avoid = input.recentThemes.length ? `\nRECENT THEMES — do not repeat:\n${input.recentThemes.map((t) => `- ${t}`).join("\n")}` : "";
+  /*
+   * ADJACENCY MEASURES WHAT RAN. `ran` is the caller's list of sessions that actually happened or
+   * were kept in the window — never a proposal, and never a declined one. `recentThemes` stays for
+   * callers that have not been updated, as a weaker hint, and is labelled as such.
+   */
+  const ran = input.ran ?? [];
+  const adjacency = ran.length
+    ? `\nWHAT ACTUALLY RAN LAST MONTH — a LIGHT rule, one month back: do not propose a topic that is nearly the same as one of these. Adjacent is fine; near-identical is not. This is what RAN, not what was proposed.\n${ran.map((r) => `- ${r.month}: ${r.topic} (${r.note})`).join("\n")}`
+    : "";
+  const avoid = input.recentThemes.length ? `\nTITLES ALREADY USED — do not reuse a title:\n${input.recentThemes.map((t) => `- ${t}`).join("\n")}` : "";
+  const topicRules = input.topic
+    ? angleRules({ topic: input.topic, stream: "ROOM", setBy: input.setBy })
+    : [
+        `NOBODY HAS SET A TOPIC FOR THE ${input.month} ROOM, SO YOU CHOOSE ONE. Do not ask and do not wait.`,
+        "Pick the ONE subject this community needs now — something NEW and fresh — name it in `topic`, and",
+        "then give THREE ANGLES ON THAT ONE SUBJECT.",
+        "",
+        "An angle varies the NAME, the FRAMING, the FORMAT, the VENUE or the EXPERIENCE. It NEVER varies",
+        "what the Room is about.",
+        "",
+        "The partner's own example, verbatim: \"Black lawyers is a topic. Community is a topic. but angles",
+        "are things like names / venues / type of event.\"",
+        "",
+        "EVERY concept MUST carry `angle_on` set to the topic you chose, copied EXACTLY, and `angle_kind`",
+        `from ${ANGLE_KINDS.join(" / ")}. Three different \`angle_on\` values is three subjects, and the whole`,
+        "answer is DISCARDED and asked for again.",
+      ].join("\n");
   return [
     parkerIdentity(),
-    `Ideate THREE distinct concepts for the ${input.month} Room in ${input.brief?.city ?? input.city}, compare them, and choose one.`,
+    `Work up THREE ANGLES on the ${input.month} Room's ONE topic, in ${input.brief?.city ?? input.city}, compare them, and choose one.`,
     methods,
+    topicRules,
+    input.steer ? `\nWHAT THE PARTNERS WANT OUT OF THE ANGLES, in their words:\n${input.steer}` : "",
     brief,
     "",
     invite,
     "",
     "SPONSORS ALREADY RESEARCHED (the money the concept has to make sense to):",
     sponsors,
+    adjacency,
     avoid,
     "",
     "A Room is a curated experience built around a single important question, for 25–45 people.",
@@ -722,7 +772,8 @@ export function buildConceptsPrompt(input: {
     "THE MANDATE, from a Managing Partner: \"i need this employee to get creative and think of unique",
     "experiences and rooms that could make people remember west peek ventures… unique venues and runs",
     "of show that make for memorable experiences that keep people talking for months and years.\"",
-    "- The three concepts must differ in FORMAT and in the memory a guest carries out — e.g. a live",
+    "- The three ANGLES must differ in NAME, FORMAT, VENUE and in the memory a guest carries out —",
+    "  and must NOT differ in subject. Each `title` is a catchy NAME for the same Room. E.g. a live",
     "  working session or 'war room' with the sponsor's tool in hand; an executive dinner and think",
     "  tank under Chatham House rules with one decision on the table; a speed-format that pairs",
     "  people who need each other (founders with the advocates who could represent them); a private",
@@ -750,19 +801,38 @@ export function buildConceptsPrompt(input: {
     'Return ONLY JSON:',
     JSON.stringify({
       concepts: [
-        { title: "…", format: "SALON", premise: "…", tone: "…", value_to_sponsor: "…", who_it_fits: "…", cost_band: "$18–24K all-in", signature_moment: "…", venue_direction: "what to search for and why", chosen: true },
+        { title: "the catchy NAME for this angle", angle_on: input.topic ?? "the one subject you chose", angle_kind: "NAME", format: "SALON", premise: "…", tone: "…", value_to_sponsor: "…", who_it_fits: "…", cost_band: "$18–24K all-in", signature_moment: "…", venue_direction: "what to search for and why", chosen: true },
       ],
-      choice_rationale: "why the chosen one wins, and what the other two lose on",
+      topic: input.topic ?? "the one subject you chose",
+      choice_rationale: "why the chosen angle wins, and what the other two lose on",
       pushback: "",
     }, null, 1),
   ].filter((l) => l !== "").join("\n");
 }
 
-export function parseConcepts(raw: string): { concepts: RoomConcept[]; choiceRationale: string | null; pushback: string | null } | null {
+/**
+ * THREE ANGLES ON ONE TOPIC, EXACTLY ONE CHOSEN — and a three-subject answer is REJECTED here.
+ *
+ * The Room half of the guarantee described at length in `workshopPacket.parseWorkshopConcepts`:
+ * the packet holds ONE topic, a concept's `title` is the angle's NAME and carries no subject of its
+ * own, and every concept must echo `angle_on`. Three different `angle_on` values — which is what a
+ * model listing three subjects actually produces — returns null, which fails the stage rather than
+ * storing anything.
+ *
+ * `setTopic` null means the month was open and Parker chose: the topic is read from the answer's
+ * own `topic` field, and the echo rule still applies.
+ */
+export function parseConcepts(raw: string, setTopic: string | null): { topic: string; concepts: RoomConcept[]; choiceRationale: string | null; pushback: string | null } | null {
   const p = jsonBody(raw);
   if (!p) return null;
+  const rows = Array.isArray(p.concepts) ? (p.concepts as Record<string, unknown>[]) : [];
+  if (rows.length === 0) return null;
+  const declared = rows.map((c) => str(c.angle_on));
+  const topic = setTopic ?? str(p.topic) ?? declared.find((d): d is string => Boolean(d)) ?? null;
+  if (!topic) return null;
+  if (declared.some((d) => !sameSubject(d, topic))) return null;
   const concepts: RoomConcept[] = [];
-  for (const c of Array.isArray(p.concepts) ? (p.concepts as Record<string, unknown>[]) : []) {
+  for (const c of rows) {
     const title = str(c.title);
     if (!title) continue;
     const rawFormat = str(c.format)?.toUpperCase() ?? "SALON";
@@ -777,13 +847,15 @@ export function parseConcepts(raw: string): { concepts: RoomConcept[]; choiceRat
       signatureMoment: str(c.signature_moment) ?? "",
       venueDirection: str(c.venue_direction) ?? "",
       chosen: c.chosen === true,
+      angleOn: topic,
+      angleKind: angleKindOf(c.angle_kind),
     });
   }
   if (concepts.length === 0) return null;
   // Exactly one winner. A model that ticked two, or none, gets the first ticked or the first.
   const firstChosen = concepts.findIndex((c) => c.chosen);
   concepts.forEach((c, i) => { c.chosen = i === (firstChosen === -1 ? 0 : firstChosen); });
-  return { concepts: concepts.slice(0, 3), choiceRationale: str(p.choice_rationale), pushback: str(p.pushback) };
+  return { topic, concepts: concepts.slice(0, 3), choiceRationale: str(p.choice_rationale), pushback: str(p.pushback) };
 }
 
 /** The venue search brief for the chosen concept: what to look for and why, in the search model's terms. */

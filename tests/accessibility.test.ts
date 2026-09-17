@@ -92,6 +92,18 @@ describe("every control can be announced", () => {
          * in htmlFor. Matching only double-quoted literals reported both as nameless and would have
          * pushed the fix toward an aria-label nobody can see, over a visible label already there.
          */
+        /*
+         * THE SIMPLE EXPRESSION FIRST, AND WITHOUT IT THE SCAN READ THE WRONG ATTRIBUTE.
+         *
+         * The pattern below allows ONE nested `}` so a template literal id matches — and being
+         * greedy, on `id={id} ref={box}` it swallowed the next attribute too and reported
+         * `id} ref={box` as the identifier. The dismiss-reason box on Rooms carries a visible
+         * `<label htmlFor={id}>` and was flagged as nameless, which is the guard failing to reach
+         * what it governs rather than the markup being wrong. A plain `id={name}` is matched on its
+         * own first; the template-literal form falls through to the pattern that always worked.
+         */
+        const simpleId = tag.match(/\bid=\{([A-Za-z_$][\w$.]*)\}/)?.[1];
+        if (simpleId && src.includes(`htmlFor={${simpleId}}`)) continue;
         const exprId = tag.match(/\bid=\{([^}]*\}?[^}]*)\}/)?.[1];
         if (exprId && src.includes(`htmlFor={${exprId}}`)) continue;
         nameless.push(`${f.split("/client/")[1]}: ${tag.replace(/\s+/g, " ").slice(0, 70)}`);
