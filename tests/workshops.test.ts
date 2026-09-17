@@ -22,6 +22,8 @@ import {
 } from "../src/worker/services/roomPacket";
 import { WORKSHOP_SERIES, WORKSHOP_WHERE, computeWorkshopEconomics, normaliseSponsorship, parseWorkshopConcepts, parseWorkshopPacket, verifyWorkshopPacket } from "../src/shared/events/workshopPacket";
 import { deliveryMonth, dueOn, planFor } from "../src/shared/events/monthlyPlan";
+import { EVENT_KIT_PROMPT_MARKER } from "../src/shared/events/eventKit";
+import { eventKitOf } from "../src/worker/services/eventKit";
 import { renderWorkshopHtml } from "../src/shared/events/roomPacketPdf";
 import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
 import { skillsForMachines } from "../src/shared/skills/library";
@@ -114,6 +116,40 @@ const packetJson = (over: Record<string, unknown> = {}) => JSON.stringify({
   ...over,
 });
 
+
+/**
+ * THE DRAFT PROPOSED EVENT KIT the kit stage asks for (0180). Answered whenever the prompt carries
+ * `EVENT_KIT_PROMPT_MARKER`, so the Workshop chain exercises the kit stage on every run through it.
+ */
+const kitJson = JSON.stringify({
+  event_title: "Three admin tasks, gone — live",
+  format: "Live working session (teach + do)",
+  description: {
+    title: "Three admin tasks, gone — live",
+    hook: "Bring the task that eats your Tuesday. Leave with it handed to a tool.",
+    parts: [{ label: "Part 1: The working session", minutes: 60, detail: "Three tasks, set up live." }],
+    who_its_for: "small-business owners and solopreneurs",
+    audience_tip: "Join from a desktop with the tool open in a second tab.",
+  },
+  run_of_show: [
+    { time: "5:45 PM ET", segment: "Greenroom check-in", description: "Audio and video test, screen share rehearsed.", on_screen: { shape: "BACKSTAGE", who: "Scooter Taylor + Sequoia Taylor" } },
+    { time: "6:00 PM ET", segment: "Welcome", description: "Sets the hour.", on_screen: { shape: "SOLO", who: "Scooter Taylor" } },
+    { time: "6:05 PM ET", segment: "Set one up, live", description: "Screen share through the first task.", on_screen: { shape: "SCREEN SHARE", who: "Scooter Taylor" } },
+    { time: "6:45 PM ET", segment: "Wrap", description: "What to do Monday.", on_screen: { shape: "3-UP", who: "Scooter Taylor + Sequoia Taylor + the room" } },
+  ],
+  discussion_guide: {
+    opening_script: "Welcome in. An hour, and you leave with three tasks handed over.",
+    questions: [
+      { n: 1, theme: "The first task", question: "Which task would you hand over first, and why that one?" },
+      { n: 2, theme: "The failure mode", question: "Where do these setups usually break in week two?" },
+    ],
+  },
+  social_posts: [
+    { kind: "ANNOUNCE", voice: "West Peek", body: "An hour. Three admin tasks, gone.", hashtags: ["#WestPeek"] },
+    { kind: "SPEAKER", voice: "Scooter Taylor", body: "I am going live to hand three admin tasks to a tool, with you.", hashtags: ["#WestPeek"] },
+  ],
+});
+
 const TINY_PDF = btoa("%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
 
 function deps(set: boolean, over: Partial<ChainDeps> = {}): ChainDeps {
@@ -123,7 +159,7 @@ function deps(set: boolean, over: Partial<ChainDeps> = {}): ChainDeps {
     urlCheck: async (url) => (url === DEAD ? 404 : 200),
     // The packet prompt is the only one that says WRITE THE PACKET; everything else in the chain
     // that reaches the reasoning model is the angles call.
-    synthesise: async (prompt) => ({ text: prompt.includes("WRITE THE PACKET") ? packetJson() : conceptsJson(set), aiRunId: null }),
+    synthesise: async (prompt) => ({ text: prompt.includes(EVENT_KIT_PROMPT_MARKER) ? kitJson : prompt.includes("WRITE THE PACKET") ? packetJson() : conceptsJson(set), aiRunId: null }),
     render: async () => ({ pdfBase64: TINY_PDF, pageCount: 1 }),
     // A venue search must never be reached by a Workshop; if it is, the test fails loudly.
     search: async () => { throw new Error("a Workshop searched for a venue"); },
@@ -282,8 +318,9 @@ describe("the chain, for a SET topic", () => {
     const draft = (await env.WP_OS_DB.prepare("SELECT * FROM evt_room_packet WHERE proposed_for_month = '2026-09' AND kind = 'WORKSHOP'").first<PacketRow>())!;
     expect(draft.status).toBe("DRAFT");
     const { outcomes, stages } = await buildToDone(draft, deps(true));
-    expect(outcomes).toEqual(["PROGRESSED", "PROGRESSED", "PROGRESSED", "DONE"]);
-    expect(stages).toEqual(["CONCEPTS", "PACKET", "PDF", "DONE"]);
+    expect(outcomes).toEqual(["PROGRESSED", "PROGRESSED", "PROGRESSED", "PROGRESSED", "DONE"]);
+    // CONCEPTS → PACKET → KIT (the draft proposed event kit, 0180) → PDF → done.
+    expect(stages).toEqual(["CONCEPTS", "PACKET", "KIT", "PDF", "DONE"]);
 
     const p = await row(draft.id);
     expect(p.status).toBe("PROPOSED");
@@ -358,6 +395,40 @@ describe("the chain, for a SET topic", () => {
     expect(rendered.text).toContain(`#wpno-${tok.token}`);
     expect(rendered.text).toMatch(/works once, and stops working at the end of the month it is for/);
     expect(rendered.text).toMatch(/Just hit Reply/);
+
+    /*
+     * THE DRAFT PROPOSED EVENT KIT, FILED AND LINKED (0180).
+     *
+     * The whole point of the kit is that the partner gets a LINK, not an attachment — a draft that
+     * can be corrected in place. So the assertions are: the kit is on the packet, it is FILED as a
+     * deliverable on a partner's Home, and the email carries the TL;DR and that link rather than
+     * the text. A kit stored but never filed, or filed but never linked, is the "exists but nothing
+     * invokes it" defect this repo keeps finding.
+     */
+    const kit = eventKitOf(p)!;
+    expect(kit, "the chain reached DONE without writing an event kit").toBeTruthy();
+    expect(kit.header.platform).toBe("West Peek Live");
+    expect(kit.header.slot.label).toBe("PROPOSED — Thursday 10 September 2026, 6:00 PM ET");
+    expect(kit.header.slot.greenroomEt).toBe("5:45 PM ET");
+    // Every row says who is on screen — the column nothing else in this system thinks about.
+    expect(kit.runOfShow.length).toBeGreaterThan(0);
+    expect(kit.runOfShow.every((r) => r.onScreen.shape.length > 0)).toBe(true);
+    expect(kit.runOfShow[0]!.segment).toMatch(/greenroom/i);
+    // A co-host IS named on this packet, so the only thing open is the link that does not exist yet.
+    expect(kit.open.map((o) => o.kind)).toEqual(["JOIN_LINK"]);
+    expect(JSON.stringify(kit)).not.toContain("[Insert");
+
+    expect(p.event_kit_deliverable_id).toMatch(/^dlv_/);
+    const filed = (await env.WP_OS_DB.prepare("SELECT kind, title, body, prepared_by, prepared_for, document_id FROM deliverable WHERE id = ?1").bind(p.event_kit_deliverable_id).first<{ kind: string; title: string; body: string; prepared_by: string; prepared_for: string; document_id: string | null }>())!;
+    expect(filed.kind).toBe("event_kit");
+    expect(filed.prepared_by).toBe("Parker");
+    expect(filed.body).toContain("## 3. Run of show");
+    expect(filed.body).toContain("| Time (ET) | Segment | Description & notes | On screen |");
+    expect(filed.body).toContain("PROPOSED — Thursday 10 September 2026, 6:00 PM ET");
+    // THE EMAIL CARRIES THE TL;DR AND THE LINK, NEVER THE KIT.
+    expect(rendered.text).toContain("Draft event kit —");
+    expect(rendered.text).toContain(`https://os.joinwestpeek.com/api/deliverables/${p.event_kit_deliverable_id}/download`);
+    expect(rendered.text).not.toContain("| Time (ET) | Segment |");
 
     const card = (await env.WP_OS_DB.prepare("SELECT state, description FROM work_card WHERE id = ?1").bind(p.work_card_id).first<{ state: string; description: string }>())!;
     expect(card.state).toBe("DONE");

@@ -820,6 +820,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       const built = await requirePacket(env, draft.id);
       const kit = await buildAndFileEventKit(env, actor, built, (prompt) => synth("Draft proposed event kit", prompt, 6000).then((r) => ({ text: r.text, aiRunId: r.aiRunId })))
         .catch((err) => { throw new RoomPacketError(502, "stage_failed", `KIT: ${err instanceof Error ? err.message : String(err)}`); });
+      await saveStage(env, draft.id, "PDF", state);
       return { stage, next: "PDF", note: `draft event kit "${kit.kit.header.eventTitle}" — ${kit.kit.header.slot.label}, ${kit.kit.runOfShow.length} run-of-show row(s) each with who is on screen, ${kit.kit.discussionGuide.questions.length} question(s), ${kit.kit.socialPosts.length} post(s); ${kit.kit.open.length} thing(s) left open${kit.link ? `; filed at ${kit.link}` : "; not filed"}${kit.kit.flags.length ? `; flags: ${kit.kit.flags.map((f) => f.code).join(", ")}` : ""}` };
     }
 
@@ -1041,6 +1042,7 @@ async function runWorkshopStage(
     const built = await requirePacket(env, draft.id);
     const kit = await buildAndFileEventKit(env, deps.actor, built, (prompt) => deps.synth("Draft proposed event kit", prompt, 6000).then((r) => ({ text: r.text, aiRunId: r.aiRunId })))
       .catch((err) => { throw new RoomPacketError(502, "stage_failed", `KIT: ${err instanceof Error ? err.message : String(err)}`); });
+    await saveStage(env, draft.id, "PDF", state);
     return { stage, next: "PDF", note: `draft event kit "${kit.kit.header.eventTitle}" — ${kit.kit.header.slot.label}, ${kit.kit.runOfShow.length} run-of-show row(s) each with who is on screen, ${kit.kit.discussionGuide.questions.length} question(s), ${kit.kit.socialPosts.length} post(s); ${kit.kit.open.length} thing(s) left open${kit.link ? `; filed at ${kit.link}` : "; not filed"}${kit.kit.flags.length ? `; flags: ${kit.kit.flags.map((f) => f.code).join(", ")}` : ""}` };
   }
 
@@ -1235,7 +1237,18 @@ export async function runRoomPacketCard(
     const why = await blockCard(env, card, { reason: "the_request_is_gone", trying: card.title, employee: "Parker" });
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
-  if (packet.status !== "DRAFT" && packet.build_stage !== "PDF") {
+  /*
+   * THE STAGES THAT STILL HAVE WORK AFTER THE PACKET IS PROPOSED.
+   *
+   * Storing the packet flips `status` to PROPOSED while the chain is still running — the kit and the
+   * PDF come after it. This used to be the single literal "PDF", and adding the kit stage in front
+   * of it silently closed the card one stage early: the packet was proposed, the guard saw a
+   * non-DRAFT row on a stage it did not recognise, and Parker's own card reported "already
+   * proposed" having never written a kit. Derived from the stage list, so a stage added after the
+   * packet cannot be left out of it again.
+   */
+  const stillBuilding: readonly BuildStage[] = BUILD_STAGES.slice(BUILD_STAGES.indexOf("KIT"), BUILD_STAGES.indexOf("DONE"));
+  if (packet.status !== "DRAFT" && !stillBuilding.includes(packet.build_stage)) {
     // Dismissed by a person, or already built: the card closes without noise.
     await closeCard(env, card.id, packet.status === "DECLINED" ? "The request was dismissed before the packet was built." : `The packet is ${packet.status.toLowerCase()}.`);
     return { finished: true, blocked: false, progressed: false, detail: packet.status === "DECLINED" ? "the request was dismissed; nothing more to build" : `already ${packet.status.toLowerCase()}` };
