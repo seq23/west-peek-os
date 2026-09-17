@@ -1,4 +1,4 @@
--- 0180 · A REPLY STEERS THE SEARCH (17 Sep 2026)
+-- 0182 · A REPLY STEERS THE SEARCH (17 Sep 2026)
 --
 -- Operator, on Walker's weekly hire note: "i really dont think we should give him extra work if he
 -- likes one he will reach out with the sample draft intro language walker creates." The two buttons
@@ -113,4 +113,4 @@ BEGIN
   SELECT RAISE(ABORT, 'a work_steer must carry what the partner actually wrote');
 END;
 
-INSERT OR IGNORE INTO schema_version (migration) VALUES ('0180_a_reply_steers_the_search');
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0182_a_reply_steers_the_search');
