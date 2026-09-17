@@ -4,6 +4,8 @@ import type { Env } from "../src/worker/env";
 import { applyReplyDecision, tokenForPacket } from "../src/worker/services/packetReplyDecision";
 import { expiryFor, howToAnswer, mintToken, newTextOf, readReply, tagFor, TOKEN_LENGTH } from "../src/shared/events/packetDecisionToken";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
+import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
+import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 
 /**
  * DECIDING A PACKET BY REPLYING — the threat model, proved.
@@ -301,5 +303,89 @@ describe("applying a reply — two independent facts are required, and neither i
       fromHeader: PARTNER_FROM, authenticationResults: PASSES, subject: "#wpdealflow Northwind", body: "Worth a look.",
     });
     expect(out).toEqual({ decided: false, packetId: null, decision: null, capture: null, attempted: false });
+  });
+});
+
+/**
+ * ─── THE WHOLE ROUND TRIP, THROUGH THE MAILBOX THAT IS ACTUALLY READ ───────────────────────────
+ *
+ * Item 8's real question, and it is not rhetorical: `WP_OS_EMAIL_FROM` is `os@westpeek.ventures`
+ * and `INTAKE_MAILBOX` is `os@joinwestpeek.com`. DIFFERENT DOMAINS — so without a Reply-To, hitting
+ * Reply on Parker's email reaches a mailbox nothing reads, and the entire scheme is decoration.
+ *
+ * Reply-To is set at the one door an employee's mail leaves through (`services/execEmail.ts`), and
+ * these tests CONFIRM the far end accepts it rather than assuming: a message addressed to
+ * `INTAKE_MAILBOX` is driven through `handleInboundEmail` — the real Email Worker entry point — and
+ * the packet is decided. Nothing here stubs the reply path.
+ */
+function deliver(headers: Record<string, string>, body: string): Promise<void> {
+  const bytes = new TextEncoder().encode(body);
+  return handleInboundEmail(
+    { from: headers.from ?? "someone@example.com", to: INTAKE_MAILBOX, headers: new Headers({ ...headers, to: INTAKE_MAILBOX }), raw: new Blob([bytes]).stream(), rawSize: bytes.byteLength },
+    env,
+  );
+}
+
+const porterCards = async (): Promise<Array<{ title: string; description: string }>> =>
+  (await env.WP_OS_DB.prepare("SELECT title, description FROM work_card ORDER BY created_at").all<{ title: string; description: string }>()).results ?? [];
+
+describe("a reply arriving at the mailbox the Reply-To points at", () => {
+  it("decides the packet, end to end, through the real inbound handler", async () => {
+    const id = await packet();
+    const { token } = await tokenForPacket(env, { id, proposed_for_month: "2026-11", firm_scope: "west-peek" });
+    await deliver(
+      { from: PARTNER_FROM, subject: "Re: Parker: your November 2026 Workshop", "authentication-results": PASSES },
+      [
+        `#wpkeep-${token} yes, and let's do the 12th`,
+        "",
+        "On Thu, 1 Oct 2026 at 08:00, Parker <os@westpeek.ventures> wrote:",
+        `> To say no: reply with #wpno-${token} and your reason.`,
+      ].join("\n"),
+    );
+    expect(await status(id)).toBe("APPROVED");
+    const note = await env.WP_OS_DB.prepare("SELECT decision_note FROM evt_room_packet WHERE id = ?1").bind(id).first<{ decision_note: string }>();
+    expect(note!.decision_note).toMatch(/yes, and let's do the 12th/);
+  });
+
+  it("A REPLY IT COULD NOT READ LANDS ON A PERSON'S DESK AND DECIDES NOTHING", async () => {
+    const id = await packet();
+    const { token } = await tokenForPacket(env, { id, proposed_for_month: "2026-11", firm_scope: "west-peek" });
+    const before = (await porterCards()).length;
+    await deliver(
+      { from: PARTNER_FROM, subject: "Re: your November Workshop", "authentication-results": PASSES },
+      `#wpkeep-${token} actually no, #wpno-${token}`,
+    );
+    expect(await status(id)).toBe("PROPOSED");
+    const cards = await porterCards();
+    expect(cards.length).toBe(before + 1);
+    const card = cards.find((c) => /A reply I could not act on/.test(c.title))!;
+    expect(card, "no capture card was opened for a reply that could not be read").toBeTruthy();
+    // It says what happened in plain words, and that nothing was decided.
+    expect(card.description).toMatch(/both keep and no/);
+    expect(card.description).toMatch(/Nothing was kept and nothing was dismissed/);
+  });
+
+  it("a reply from an unauthenticated sender holding a real code also reaches a person", async () => {
+    const id = await packet();
+    const { token } = await tokenForPacket(env, { id, proposed_for_month: "2026-11", firm_scope: "west-peek" });
+    await deliver(
+      { from: PARTNER_FROM, subject: "Re: the November Room packet", "authentication-results": FAILS },
+      `#wpno-${token} cancel it`,
+    );
+    expect(await status(id)).toBe("PROPOSED");
+    const cards = await porterCards();
+    expect(cards.some((c) => /not accepted as coming from a Managing Partner/.test(c.description)), JSON.stringify(cards.map((c) => c.description.slice(0, 120)))).toBe(true);
+  });
+
+  it("an ordinary tagged email still routes the way it always did", async () => {
+    // A decision reply must not swallow the rest of the inbound ladder.
+    await deliver(
+      { from: "founder@northwind.example", subject: "#wpdealflow Northwind Robotics", "authentication-results": FAILS },
+      "Seed round, happy to share the deck.",
+    );
+    const events = (await env.WP_OS_DB.prepare(
+      "SELECT payload_json FROM event_record WHERE event_type IN ('inbound_email.received','inbound_email.unrouted') ORDER BY created_at DESC LIMIT 1",
+    ).first<{ payload_json: string }>())!;
+    expect(JSON.parse(events.payload_json).triggers).toContain("#wpdealflow");
   });
 });
