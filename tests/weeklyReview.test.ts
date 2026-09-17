@@ -254,6 +254,14 @@ describe("a week with nothing in it", () => {
   beforeAll(async () => {
     quiet = await createTestDb();
     quietEnv = makeTestEnv(quiet.db);
+    /*
+     * A FRESH DATABASE IS NO LONGER EMPTY OF EVENTS, so the premise has to be made true rather than
+     * assumed. Migration 0176 seeds one real row: October 2026's Workshop, which a friend of
+     * Scooter's is hosting — it is on the record so the adjacency rule can measure against what
+     * actually RAN rather than against Parker's proposals. It is a genuine planned event, so the
+     * weekly review is right to raise it, and this suite is about the week with NOTHING in it.
+     */
+    await quietEnv.WP_OS_DB.prepare("DELETE FROM evt_event").run();
   });
 
   afterAll(async () => {
