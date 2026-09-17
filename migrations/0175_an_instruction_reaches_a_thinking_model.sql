@@ -151,4 +151,31 @@ SELECT
   'migration:0175', 'west-peek'
 WHERE NOT EXISTS (SELECT 1 FROM routing_policy WHERE task_class = 'instruction-interpretation');
 
+-- ── Parker's Workshop card, which is the card that started all of this ───────────────────────
+--
+-- She asked Parker for "a packet on workshops, much like he does for rooms". 0171 built the
+-- Workshop chain — the Room stages with a Workshop brief, virtual only — and 0173 reopened his
+-- card after it blocked with a reason written for an engineer. Both were right as far as they went.
+--
+-- What neither did is put HER SENTENCE anywhere the work would read it. The card's description is
+-- written by `openPacketCard` from the month, the packet id and a recital of the chain's own
+-- stages; `prompt` — the one column meant for "how the partner wants this done" — is empty, and
+-- until this migration nothing in the packet chain read it anyway.
+--
+-- So the words go on the card, in her terms, and from the next sweep tick they reach a model before
+-- the first stage runs. Written ONLY where `prompt` is empty: a card she has since typed on carries
+-- her more recent words, and those outrank anything written here.
+--
+-- Scoped to a Workshop packet card of Parker's that is not finished. If there is none — the packet
+-- was built and kept between this being written and applied — this updates nothing, which is the
+-- correct outcome and not a silent failure: there is no card left to steer.
+UPDATE work_card
+   SET prompt = 'A packet on workshops, in the same shape as the ones you produce for rooms.',
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+ WHERE kind = 'ROOM_PACKET'
+   AND owner_id = 'aie_parker'
+   AND state NOT IN ('DONE', 'CANCELLED')
+   AND IFNULL(length(trim(prompt)), 0) = 0
+   AND id IN (SELECT work_card_id FROM evt_room_packet WHERE kind = 'WORKSHOP' AND work_card_id IS NOT NULL);
+
 INSERT OR IGNORE INTO schema_version (migration) VALUES ('0175_an_instruction_reaches_a_thinking_model');
