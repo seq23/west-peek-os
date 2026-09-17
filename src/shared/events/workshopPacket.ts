@@ -916,15 +916,22 @@ export function computeWorkshopEconomics(packet: Pick<WorkshopPacket, "budgetLin
   lines.push({ key: "contingency", label: WORKSHOP_BUDGET_LABELS.contingency, lowUsd: Math.round(subLow * 0.1), highUsd: Math.round(subHigh * 0.1), basis: "10% of everything above" });
   const estimatedCostLowUsd = Math.round(subLow * 1.1);
   const estimatedCostHighUsd = Math.round(subHigh * 1.1);
-  const sponsorshipUsd = packet.sponsorship.free ? 0 : Math.max(0, packet.sponsorship.askUsd ?? 0);
+  /*
+   * THE SUGGESTED ASK IS NOT REVENUE AND IS NOT NAMED AS SUCH.
+   *
+   * Attendance is free whatever this number is, so the old `keepUsd = sponsorship − cost` read as
+   * profit on a session that is not sold. What a suggestion is actually worth is how much of the
+   * cost it WOULD cover if the firm chose to use it — which is the question a partner asks.
+   */
+  const suggestedSponsorshipUsd = Math.max(0, packet.sponsorship.suggested?.askUsd ?? 0);
   return {
     kind: "WORKSHOP",
     lines,
     estimatedCostLowUsd,
     estimatedCostHighUsd,
-    free: packet.sponsorship.free,
-    sponsorshipUsd,
-    keepUsd: sponsorshipUsd - estimatedCostHighUsd,
+    attendanceFree: true,
+    suggestedSponsorshipUsd,
+    wouldCoverUsd: Math.min(suggestedSponsorshipUsd, estimatedCostHighUsd),
   };
 }
 
@@ -934,8 +941,8 @@ const usd = (n: number | null | undefined): string => (n === null || n === undef
 
 export function parkerWorkshopIntroduction(): string[] {
   return [
-    "I'm Parker, West Peek's Event Marketing Coordinator. I build the firm's monthly Workshops end to end — what the audience is asking this month, three ways to run it compared, the run of show with its exercises, the delivery plan on West Peek Live, the invitations — and hand you a packet you can act on.",
-    "This is the Workshop of the month. It is virtual on West Peek Live; nothing is scheduled and nobody outside the firm has been contacted.",
+    "I'm Parker, West Peek's Event Marketing Coordinator. I plan the firm's monthly Rooms and Workshops end to end — what the audience is asking this month, one topic with three angles on it compared, the run of show with its exercises, the delivery plan on West Peek Live, the invitations — and hand you a packet you can act on.",
+    `This is the Workshop of the month: one topic, three angles, one chosen. It runs ${WORKSHOP_LENGTH_RANGE}, virtual on West Peek Live, free to attend. Nothing is scheduled and nobody outside the firm has been contacted.`,
   ];
 }
 
@@ -955,13 +962,15 @@ export function renderWorkshopText(input: { title: string; month: string; monthW
     input.pushback ? `WHERE I PUSH BACK\n${input.pushback}\n` : "",
     `WHO IT IS FOR\n${v.whoItsFor}`,
     "",
-    `THE PROMISE — what they can do after 90 minutes\n${v.promise}`,
+    `THE PROMISE — what they can do by the end\n${v.promise}`,
     "",
-    `THE CONCEPT — ${chosen?.title ?? input.title} (${v.mode.toLowerCase()})${input.conceptChoiceMd ? `\nWhy it won: ${input.conceptChoiceMd}` : ""}${others.length ? `\nAlso considered: ${others.map((c) => `${c.title} — ${c.promise}`).join("; ")}` : ""}`,
+    `THE TOPIC — ${v.topic}${v.topicSetBy === "PARTNERS" ? " (set by the partners)" : " (Parker's own pick; nobody had set one)"}`,
+    `THE ANGLE CHOSEN — ${chosen?.title ?? input.title}${chosen ? ` (${chosen.angleKind.toLowerCase()}; ${v.mode.toLowerCase()})` : ""}${input.conceptChoiceMd ? `\nWhy it won: ${input.conceptChoiceMd}` : ""}${others.length ? `\nThe other angles on the same topic: ${others.map((c) => `${c.title} — ${c.promise}`).join("; ")}` : ""}`,
     "",
-    `FACILITATOR\n${v.facilitator.name} (${v.facilitator.kind === "PARTNER" ? "partner" : "guest"}) — ${v.facilitator.why}${v.facilitator.evidenceUrl ? ` — ${v.facilitator.evidenceUrl}` : ""}`,
+    `HOSTS\n${v.facilitator.name} (host, ${v.facilitator.kind === "PARTNER" ? "partner" : "guest"}) — ${v.facilitator.why}${v.facilitator.evidenceUrl ? ` — ${v.facilitator.evidenceUrl}` : ""}`,
+    v.coHost ? `${v.coHost.name} (co-host, ${v.coHost.kind === "PARTNER" ? "partner" : "guest"}) — ${v.coHost.why}` : "No co-host named. A Workshop usually has one — decide who before you keep this.",
     "",
-    "RUN OF SHOW — 90 minutes",
+    `RUN OF SHOW — ${WORKSHOP_LENGTH_RANGE}`,
     ...(v.runOfShow.length ? v.runOfShow.map((l) => `${l.time}${l.minutes ? ` (${l.minutes} min)` : ""} — ${l.segment === "BREAKOUT" ? "BREAKOUT: " : ""}${l.what}${l.who ? ` — ${l.who}` : ""}`) : ["No run of show written."]),
     "",
     "EXERCISES",
@@ -983,12 +992,15 @@ export function renderWorkshopText(input: { title: string; month: string; monthW
     "",
     "INVITATIONS — three emails, yours to send",
     ...v.invitations.flatMap((i) => [`${i.n}. ${i.sendWhen} — Subject: ${i.subject}`, ...i.body.split("\n").map((b) => `   ${b}`), ""]),
-    "SPONSORSHIP",
-    v.sponsorship.free ? `Free by design. ${v.sponsorship.note}` : `A sponsor fits: ${v.sponsorship.categoryFit ?? "category not stated"}, ask ${usd(v.sponsorship.askUsd)}. ${v.sponsorship.note} (No prospect is named without evidence; sponsor research can follow.)`,
+    "COST TO ATTEND, AND THE SPONSOR SUGGESTION",
+    `Free to attend — always, by design. ${v.sponsorship.note}`,
+    v.sponsorship.suggested
+      ? `A small sponsor worth asking: ${v.sponsorship.suggested.categoryFit}, about ${usd(v.sponsorship.suggested.askUsd)} — ${v.sponsorship.suggested.why} It is a suggestion, not a commitment; the session runs either way. (No company is named without evidence; sponsor research can follow.)`
+      : "I did not suggest a sponsor this time, and I should have — it costs nothing to have one suggested. Ask me again.",
     "",
     "BUDGET",
     ...eco.lines.map((l) => `- ${l.label}: ${usd(l.lowUsd)}–${usd(l.highUsd)} — ${l.basis}`),
-    `Total ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}.${eco.free ? " Carried by the firm as community work." : ` Sponsorship ${usd(eco.sponsorshipUsd)}; the firm keeps ${usd(eco.keepUsd)} at the high case.`}`,
+    `Total ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}, carried by the firm as community work.${eco.suggestedSponsorshipUsd > 0 ? ` A sponsor at ${usd(eco.suggestedSponsorshipUsd)} would cover ${usd(eco.wouldCoverUsd)} of the high case, if you chose to use one.` : ""}`,
     "",
     v.notes.length ? `WHAT THE AUDIENCE IS ASKING (sources checked and judged)\n${v.notes.map((n) => `- ${n.fact} — ${n.url}`).join("\n")}` : "",
     "",

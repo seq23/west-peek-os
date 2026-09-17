@@ -1,5 +1,5 @@
 import type { InviteCheck, RoomBrief, RoomConcept, RoomEconomics, RunOfShowLine, SponsorTier } from "./roomPacket";
-import { WORKSHOP_WHERE, parkerWorkshopIntroduction, type WorkshopConcept, type WorkshopView } from "./workshopPacket";
+import { WORKSHOP_LENGTH_RANGE, WORKSHOP_WHERE, normaliseSponsorship, parkerWorkshopIntroduction, type WorkshopConcept, type WorkshopView } from "./workshopPacket";
 
 /**
  * The Room packet as a document — HTML a browser prints to PDF (15 Sep 2026).
@@ -355,23 +355,26 @@ export function renderWorkshopHtml(v: PacketView, w: WorkshopView): string {
   const chosen = concepts.find((c) => c.chosen) ?? null;
   const others = concepts.filter((c) => !c.chosen);
   const eco = w.economics;
+  // Stored JSON from before 17 Sep 2026 carries the old `{ free, categoryFit, askUsd }` shape.
+  const wsp = normaliseSponsorship(w.sponsorship);
   const dateWord = new Date(v.generatedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
   const head = (folio: string) => `<header><span class="wordmark">WEST&thinsp;PEEK VENTURES</span><span class="folio">${esc(folio)}</span></header>`;
 
   const cover = `<section class="page cover">
   ${head(`Workshop packet · ${monthWord(v.month)}`)}
-  <p class="kicker">The ${esc(monthWord(v.month))} Workshop${w.topicSet ? " · title set by the partners" : ""}</p>
+  <p class="kicker">The ${esc(monthWord(v.month))} Workshop · topic: ${esc(w.topic ?? title)}${w.topicSetBy === "PARKER" ? " (Parker's own pick)" : " (set by the partners)"}</p>
   <h1>${esc(title)}</h1>
   <p class="question">${esc(w.promise)}</p>
-  <p class="meta">${esc(WORKSHOP_WHERE)} · 90 minutes · ${v.targetMin}–${v.targetMax} people · ${esc(w.mode.toLowerCase())}</p>
+  <p class="meta">${esc(WORKSHOP_WHERE)} · ${esc(WORKSHOP_LENGTH_RANGE)} · ${v.targetMin}–${v.targetMax} people · ${esc(w.mode.toLowerCase())} · free to attend</p>
   <div class="intro">
     ${parkerWorkshopIntroduction().map((l) => `<p>${esc(l)}</p>`).join("")}
     <p class="sig">— Parker</p>
   </div>
   <div class="cover-facts">
-    <div><span class="label">Facilitator</span><span class="value">${esc(w.facilitator.name)}</span></div>
-    <div><span class="label">Cost</span><span class="value">${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}</span></div>
-    <div><span class="label">Sponsorship</span><span class="value">${eco.free ? "free by design" : usd(eco.sponsorshipUsd)}</span></div>
+    <div><span class="label">Host</span><span class="value">${esc(w.facilitator.name)}</span></div>
+    <div><span class="label">Co-host</span><span class="value">${esc(w.coHost?.name ?? "not named yet")}</span></div>
+    <div><span class="label">Cost to attend</span><span class="value">free, by design</span></div>
+    <div><span class="label">Suggested sponsor</span><span class="value">${wsp.suggested ? `${esc(wsp.suggested.categoryFit)} · ${usd(wsp.suggested.askUsd ?? 0)}` : "none suggested"}</span></div>
     <div><span class="label">Breakout exercises</span><span class="value">${w.runOfShow.filter((l) => l.segment === "BREAKOUT").length}</span></div>
   </div>
   <footer>Prepared ${esc(dateWord)} by Parker for Sequoia Taylor and Scooter Taylor · Private &amp; Confidential</footer>
@@ -380,11 +383,12 @@ export function renderWorkshopHtml(v: PacketView, w: WorkshopView): string {
   const brief = `<section class="page">
   ${head(title)}
   <h2>The brief, and Parker's read of it</h2>
-  ${w.topicSet ? `<h3>Set by the partners</h3><p>The ${esc(monthWord(v.month))} Workshop's title was decided: <strong>${esc(title)}</strong>. Parker built the packet from it and did not re-ideate the topic.</p>` : v.brief && v.origin === "PARTNER_BRIEF" ? `<h3>What was asked for</h3><p>${esc(v.brief.audience)}${v.brief.notes ? ` <span class="muted">— ${esc(v.brief.notes)}</span>` : ""}</p>` : `<h3>Parker's own idea for the month</h3><p>Nobody asked for a particular Workshop; Parker proposed three and chose this one.</p>`}
+  ${w.topicSetBy === "PARTNERS" ? `<h3>The topic was set by the partners</h3><p>The ${esc(monthWord(v.month))} Workshop's topic was decided: <strong>${esc(w.topic ?? title)}</strong>. Parker worked up three angles on it and chose one; he did not re-ideate the subject.</p>` : `<h3>Parker chose the topic</h3><p>Nobody had set one for ${esc(monthWord(v.month))}, so Parker picked <strong>${esc(w.topic ?? title)}</strong> and worked up three angles on it.</p>`}
   ${v.pushback ? `<div class="callout"><h3>Where I push back</h3>${paras(v.pushback)}</div>` : ""}
   <h3>Who it is for</h3><p>${esc(w.whoItsFor)}</p>
-  <h3>The promise — what they can do after 90 minutes</h3><p>${esc(w.promise)}</p>
-  <h3>Facilitator</h3><p><strong>${esc(w.facilitator.name)}</strong> (${w.facilitator.kind === "PARTNER" ? "partner" : "guest"}) — ${esc(w.facilitator.why)}${w.facilitator.evidenceUrl ? ` · ${link(w.facilitator.evidenceUrl)}` : ""}</p>
+  <h3>The promise — what they can do by the end</h3><p>${esc(w.promise)}</p>
+  <h3>Who runs it</h3><p><strong>${esc(w.facilitator.name)}</strong> (host, ${w.facilitator.kind === "PARTNER" ? "partner" : "guest"}) — ${esc(w.facilitator.why)}${w.facilitator.evidenceUrl ? ` · ${link(w.facilitator.evidenceUrl)}` : ""}</p>
+  ${w.coHost ? `<p><strong>${esc(w.coHost.name)}</strong> (co-host, ${w.coHost.kind === "PARTNER" ? "partner" : "guest"}) — ${esc(w.coHost.why)}</p>` : `<p class="muted">No co-host named. A Workshop usually has one — decide who before you keep this.</p>`}
   ${w.notes.length ? `<h3>What the audience is asking this month</h3><ul>${w.notes.map((n) => `<li>${esc(n.fact)} <span class="muted">— ${esc(n.source)}${n.date ? `, ${esc(n.date)}` : ""} · ${link(n.url)}</span></li>`).join("")}</ul>` : "<p class=\"muted\">No research note survived the live check and the judgement pass; the design is from the brief.</p>"}
 </section>`;
 
@@ -404,7 +408,7 @@ export function renderWorkshopHtml(v: PacketView, w: WorkshopView): string {
 
   const ros = `<section class="page">
   ${head(title)}
-  <h2>Run of show — 90 minutes</h2>
+  <h2>Run of show — ${esc(WORKSHOP_LENGTH_RANGE)}</h2>
   ${w.runOfShow.length
     ? `<table class="ros"><thead><tr><th>Time</th><th>Min</th><th>Where</th><th>What happens</th><th>Who</th></tr></thead><tbody>${w.runOfShow.map((l) => `<tr><td class="time">${esc(l.time)}</td><td class="num">${l.minutes || ""}</td><td class="muted">${l.segment === "BREAKOUT" ? "breakout" : "stage"}</td><td>${esc(l.what)}</td><td class="muted">${esc(l.who)}</td></tr>`).join("")}</tbody></table>`
     : "<p>No run of show was written.</p>"}
@@ -439,10 +443,11 @@ export function renderWorkshopHtml(v: PacketView, w: WorkshopView): string {
   ${eco.lines.map((l) => `<tr><th scope="row">${esc(l.label)}</th><td class="num">${usd(l.lowUsd)}</td><td class="num">${usd(l.highUsd)}</td><td class="muted">${esc(l.basis)}</td></tr>`).join("")}
   <tr class="total"><th scope="row">Total</th><td class="num">${usd(eco.estimatedCostLowUsd)}</td><td class="num">${usd(eco.estimatedCostHighUsd)}</td><td class="muted">no venue, no food and beverage, no room hire — a Workshop is virtual</td></tr>
   </tbody></table>
-  <h2>Sponsorship</h2>
-  ${eco.free
-    ? `<p><strong>Free by design.</strong> ${esc(w.sponsorship.note)} The firm carries ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)} as community work.</p>`
-    : `<p><strong>A sponsor fits:</strong> ${esc(w.sponsorship.categoryFit ?? "category not stated")}, ask ${usd(eco.sponsorshipUsd)} — ${esc(w.sponsorship.note)} At the high-case cost the firm keeps ${usd(eco.keepUsd)}. No prospect is named without evidence; sponsor research can follow on request.</p>`}
+  <h2>Cost to attend, and the sponsor suggestion</h2>
+  <p><strong>Free to attend — always, by design.</strong> ${esc(wsp.note)} The firm carries ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)} as community work.</p>
+  ${wsp.suggested
+    ? `<p><strong>A small sponsor worth asking:</strong> ${esc(wsp.suggested.categoryFit)}, about ${usd(wsp.suggested.askUsd ?? 0)} — ${esc(wsp.suggested.why)} It is a suggestion, not a commitment: the session runs either way and would still be free to attend. It would cover ${usd(eco.wouldCoverUsd)} of the high case. No company is named without evidence; sponsor research can follow on request.</p>`
+    : `<p class="muted">No sponsor was suggested. One always should be — it is free to have suggested one, and the firm may simply not use it. Ask Parker again.</p>`}
   <h2>What could go wrong</h2>
   ${v.risks.length ? `<ul>${v.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : "<p>No risks named. Assume there are some.</p>"}
   <h2>What keeping it commits the firm to</h2>

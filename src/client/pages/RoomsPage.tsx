@@ -3,7 +3,7 @@ import { api, getDevUser, useApi } from "../lib/api";
 import { EventsPage } from "./EventsPage";
 import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
 import { sameOrg } from "@shared/events/roomPacket";
-import { WORKSHOP_SERIES, WORKSHOP_WHERE, type WorkshopView } from "@shared/events/workshopPacket";
+import { WORKSHOP_LENGTH_RANGE, WORKSHOP_SERIES, WORKSHOP_WHERE, normaliseSponsorship, type WorkshopView } from "@shared/events/workshopPacket";
 import { HowThisWorks } from "./HowThisWorks";
 
 /**
@@ -472,7 +472,7 @@ export function RoomsPage(): JSX.Element {
           and September's and November's carry the titles the partners set. Virtual only. */}
       <h3 data-testid="workshops-heading">Workshops</h3>
       <p className="muted small">
-        One a month beside the Room: a 90-minute working session on {WORKSHOP_WHERE} for small-business
+        One a month beside the Room: a {WORKSHOP_LENGTH_RANGE} working session on {WORKSHOP_WHERE} for small-business
         owners, solopreneurs and community builders — a promise they can act on, breakout exercises, an
         artifact they leave with. {Object.keys(WORKSHOP_SERIES).sort().map((m) => `${monthWord(m)}: “${WORKSHOP_SERIES[m]}”`).join("; ")} are set by the partners; every other month Parker proposes three and chooses.
       </p>
@@ -993,7 +993,7 @@ function RoomProposal(props: {
   );
 }
 
-interface WorkshopConceptRow extends Concept { whoItsFor: string; promise: string; mode: string; leaveWith: string; facilitator: { name: string; kind: string; why: string; evidenceUrl: string | null } }
+interface WorkshopConceptRow extends Concept { whoItsFor: string; promise: string; mode: string; leaveWith: string; facilitator: { name: string; kind: string; why: string; evidenceUrl: string | null }; coHost?: { name: string; kind: string; why: string } | null; angleOn?: string; angleKind?: string }
 
 /**
  * A built Workshop, folded the way a Room is. No venues, no sponsor ranking, no pitch: the
@@ -1005,30 +1005,39 @@ function WorkshopBody(props: { packet: PacketRow; w: WorkshopView; concepts: Wor
   const title = p.title.replace(/^Workshop: /, "");
   const chosen = props.concepts.find((c) => c.chosen) ?? null;
   const eco = w.economics;
+  // Stored JSON written before 17 Sep 2026 carries the old `{ free, categoryFit, askUsd }` shape.
+  const wsp = normaliseSponsorship(w.sponsorship);
   const breakouts = w.runOfShow.filter((l) => l.segment === "BREAKOUT").length;
   return (
     <div data-testid={`workshop-body-${p.id}`}>
       <p className="small" data-testid={`workshop-promise-${p.id}`}>
-        <strong>The promise — what they can do after 90 minutes:</strong> {w.promise}
+        <strong>The promise — what they can do by the end:</strong> {w.promise}
+      </p>
+      <p className="small" data-testid={`workshop-topic-${p.id}`}>
+        <strong>Topic:</strong> {w.topic ?? title} {w.topicSetBy === "PARKER" ? "(Parker's own pick — nobody had set one)" : "(set by the partners)"} · <strong>the angle chosen:</strong> {chosen?.title ?? title}
       </p>
       <p className="small">
-        <strong>For:</strong> {w.whoItsFor} · <strong>Facilitator:</strong> {w.facilitator.name}{w.facilitator.kind === "GUEST" ? " (guest)" : ""} — {w.facilitator.why}
+        <strong>For:</strong> {w.whoItsFor} · <strong>Host:</strong> {w.facilitator.name}{w.facilitator.kind === "GUEST" ? " (guest)" : ""} — {w.facilitator.why}
         {w.facilitator.evidenceUrl && <> · <a href={w.facilitator.evidenceUrl} target="_blank" rel="noreferrer noopener">evidence</a></>}
+      </p>
+      <p className="small" data-testid={`workshop-co-host-${p.id}`}>
+        <strong>Co-host:</strong>{" "}
+        {w.coHost ? <>{w.coHost.name}{w.coHost.kind === "GUEST" ? " (guest)" : ""} — {w.coHost.why}</> : <span className="muted">not named yet. A Workshop usually has one — decide who before you keep it.</span>}
       </p>
       <p className="small" data-testid={`workshop-where-${p.id}`}><strong>Where:</strong> {WORKSHOP_WHERE} — virtual only; no venue.</p>
 
-      <Fold title="Three ways to run it, and the one chosen" fact={props.concepts.length === 0 ? "no concepts recorded" : `${chosen ? (chosen.title === title ? chosen.mode.toLowerCase() : chosen.title) : "chosen"} over ${props.concepts.length - 1} other${props.concepts.length === 2 ? "" : "s"}`} testId={`fold-concepts-${p.id}`}>
+      <Fold title={`Three angles on "${w.topic ?? title}", and the one chosen`} fact={props.concepts.length === 0 ? "no angles recorded" : `${chosen ? (chosen.title === title ? chosen.mode.toLowerCase() : chosen.title) : "chosen"} over ${props.concepts.length - 1} other${props.concepts.length === 2 ? "" : "s"}`} testId={`fold-concepts-${p.id}`}>
         {props.concepts.length === 0 ? (
-          <p className="state-empty">No concepts were recorded for this one.</p>
+          <p className="state-empty">No angles were recorded for this one.</p>
         ) : (
           <>
             <table data-testid={`packet-concepts-${p.id}`}>
-              <thead><tr><th>Concept</th><th>Who it is for</th><th>Signature exercise</th><th>They leave with</th><th>Facilitator</th><th>Cost band</th></tr></thead>
+              <thead><tr><th>Angle</th><th>What it varies</th><th>Who it is for</th><th>Signature exercise</th><th>They leave with</th><th>Hosts</th></tr></thead>
               <tbody>
                 {props.concepts.map((c, i) => (
                   <tr key={`${c.title}-${i}`}>
                     <th scope="row">{c.title === title ? c.promise : c.title}{c.chosen && <span className="help-tag help-tag-good"> chosen</span>}<div className="muted small">{c.mode?.toLowerCase()}</div></th>
-                    <td className="small">{c.whoItsFor}</td><td className="small">{c.signatureMoment}</td><td className="small">{c.leaveWith}</td><td className="small">{c.facilitator?.name}</td><td className="small">{c.costBand}</td>
+                    <td className="small">{(c.angleKind ?? "framing").toLowerCase().replace(/_/g, " ")}</td><td className="small">{c.whoItsFor}</td><td className="small">{c.signatureMoment}</td><td className="small">{c.leaveWith}</td><td className="small">{c.facilitator?.name}{c.coHost ? ` with ${c.coHost.name}` : ""}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1038,7 +1047,7 @@ function WorkshopBody(props: { packet: PacketRow; w: WorkshopView; concepts: Wor
         )}
       </Fold>
 
-      <Fold title="Run of show — 90 minutes" fact={w.runOfShow.length ? `${w.runOfShow.length} lines, ${breakouts} breakout exercise${breakouts === 1 ? "" : "s"}` : "no run of show written"} testId={`fold-agenda-${p.id}`}>
+      <Fold title={`Run of show — ${WORKSHOP_LENGTH_RANGE}`} fact={w.runOfShow.length ? `${w.runOfShow.length} lines, ${breakouts} breakout exercise${breakouts === 1 ? "" : "s"}` : "no run of show written"} testId={`fold-agenda-${p.id}`}>
         {w.runOfShow.length ? (
           <table data-testid={`packet-ros-${p.id}`}>
             <thead><tr><th>Time</th><th>Min</th><th>Where</th><th>What happens</th><th>Who</th></tr></thead>
@@ -1082,7 +1091,7 @@ function WorkshopBody(props: { packet: PacketRow; w: WorkshopView; concepts: Wor
         <p className="muted small">Nothing has been sent. Copy, edit, send from your own account.</p>
       </Fold>
 
-      <Fold title="What it costs, and sponsorship" fact={`${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}; ${eco.free ? "free by design" : `sponsor ask ${usd(eco.sponsorshipUsd)}`}`} testId={`fold-budget-${p.id}`}>
+      <Fold title="What it costs, and the sponsor suggestion" fact={`free to attend; costs the firm ${usd(eco.estimatedCostLowUsd)}–${usd(eco.estimatedCostHighUsd)}${wsp.suggested ? `; suggested sponsor ${wsp.suggested.categoryFit}` : "; no sponsor suggested"}`} testId={`fold-budget-${p.id}`}>
         <table data-testid={`workshop-budget-${p.id}`}>
           <thead><tr><th>Line</th><th>Low</th><th>High</th><th>Basis</th></tr></thead>
           <tbody>
@@ -1090,10 +1099,13 @@ function WorkshopBody(props: { packet: PacketRow; w: WorkshopView; concepts: Wor
             <tr><th scope="row">Total</th><td>{usd(eco.estimatedCostLowUsd)}</td><td>{usd(eco.estimatedCostHighUsd)}</td><td className="muted small">no venue, no food and beverage, no room hire</td></tr>
           </tbody>
         </table>
+        <p className="small" data-testid={`workshop-sponsorship-${p.id}`}>
+          <strong>Free to attend — always, by design.</strong> {wsp.note}
+        </p>
         <p className="small">
-          {eco.free
-            ? <><strong>Free by design.</strong> {w.sponsorship.note}</>
-            : <><strong>A sponsor fits:</strong> {w.sponsorship.categoryFit ?? "category not stated"}, ask {usd(eco.sponsorshipUsd)} — the firm keeps {usd(eco.keepUsd)} at the high case. {w.sponsorship.note} No prospect is named without evidence; sponsor research can follow.</>}
+          {wsp.suggested
+            ? <><strong>A small sponsor worth asking:</strong> {wsp.suggested.categoryFit}, about {usd(wsp.suggested.askUsd ?? 0)} — {wsp.suggested.why} It is a suggestion, not a commitment: it costs nothing to have one, the session runs either way, and it would cover {usd(eco.wouldCoverUsd)} of the high case. No company is named without evidence; sponsor research can follow.</>
+            : <span className="muted">Parker suggested no sponsor. He always should — it is free to have one suggested and you may simply not use it. Ask him again.</span>}
         </p>
       </Fold>
 
@@ -1192,7 +1204,7 @@ function RequestRoom(props: {
         </label>
         <span className="muted small">
           {kind === "WORKSHOP"
-            ? `A Workshop is 90 minutes, virtual only, on ${WORKSHOP_WHERE}: a promise they can act on, breakout exercises, an artifact they leave with. No venue.`
+            ? `A Workshop is ${WORKSHOP_LENGTH_RANGE}, virtual only, on ${WORKSHOP_WHERE}: a promise they can act on, breakout exercises, an artifact they leave with. Free to attend. No venue.`
             : "A Room is one evening built around one real question, for 25–35 people, with a venue and sponsors."}
         </span>
       </div>

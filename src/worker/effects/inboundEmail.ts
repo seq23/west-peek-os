@@ -7,6 +7,7 @@ import { ASSIGNING_PARTNERS, EMAILED_TASK_LIMITS, addressIn, mailAuthority } fro
 import { pdfAttachments } from "./mimeAttachments";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
+import { applyReplyDecision } from "../services/packetReplyDecision";
 
 /**
  * Mail arriving at the firm's machine inbox.
@@ -385,6 +386,78 @@ export async function handleInboundEmail(
   const trueSubject = origin?.subject ?? subject;
 
   const summary = classifyInbound({ to: message.to, from: trueSender, subject: trueSubject, body: raw });
+
+  /*
+   * ── A REPLY THAT DECIDES A PACKET, READ BEFORE ANYTHING ELSE ─────────────────────────────────
+   *
+   * Operator, 17 Sep 2026: "you can have Parker give us a special #hashtag to use and anything
+   * after that is the reason?"
+   *
+   * FIRST, because a decision reply is the one shape here that is ALREADY addressed: the partner is
+   * answering a specific packet, and there is nothing for the ladder below to work out. Running it
+   * after the triggers would let a reply whose quoted original mentions a company open a funnel
+   * entry for it.
+   *
+   * THE OUTER `From:` AND THE OUTER HEADERS, not `trueSender` — the same distinction the assignment
+   * check makes eighty lines below, and for the same reason. `trueSender` is the FORWARDED origin,
+   * which is right for filing a founder and catastrophic for authority: reading it here would mean
+   * anyone whose email a partner forwards inherits the ability to cancel a month's plan.
+   *
+   * IT DOES NOT SWALLOW THE MESSAGE. A reply that decided something returns and nothing else runs,
+   * because there is nothing else to do with it. A reply that carried a tag but could NOT be read —
+   * a wrong code, an expired one, two answers, an unauthenticated sender — falls through to the
+   * routing card with the reason on it, which is the "unsure means Porter, never a guess" rule
+   * landing on the door Porter already owns. An ordinary email is untouched: `attempted` is false
+   * and nothing above has happened.
+   */
+  const replyDecision = await applyReplyDecision(env, {
+    fromHeader: message.headers.get("from"),
+    authenticationResults: message.headers.get("authentication-results"),
+    subject,
+    body: raw,
+  });
+  if (replyDecision.decided) {
+    await appendEvent(env, {
+      eventType: "inbound_email.received",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: {
+        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
+        packet_decision: replyDecision.decision, packet_id: replyDecision.packetId,
+      },
+    });
+    return;
+  }
+  if (replyDecision.capture) {
+    const unsureCard = await openRoutingCard(env, {
+      headline: "A reply I could not act on",
+      subject,
+      from: sender,
+      raw,
+      triggers: [],
+      why:
+        `This looks like an answer to one of Parker's packets, and I did not act on it: ${replyDecision.capture}. ` +
+        "Nothing was kept and nothing was dismissed. Open the packet on Events & Rooms and decide it there, " +
+        "or ask the sender to reply again using the code in the email exactly as it is written.",
+    });
+    await appendEvent(env, {
+      eventType: "inbound_email.unrouted",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: {
+        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
+        owner: NO_TRIGGER_ROUTE.owner, routing_card_id: unsureCard,
+        packet_decision: "NOT_READ", packet_decision_detail: replyDecision.capture,
+      },
+    });
+    return;
+  }
 
   /*
    * A COMPANY GOES TO THE FUNNEL. A message nobody could place goes to Capture.

@@ -70,8 +70,10 @@ export async function sendViaResend(
   const blocked = emailSendBlockedReason(env);
   if (blocked) return { sent: false, provider: "resend", provider_message_id: null, detail: blocked };
 
-  if (!isDeliverableAddress(payload.to)) {
-    throw new Error(`refusing to send: "${payload.to}" is not a valid email address`);
+  const recipients = [payload.to].flat();
+  const bad = recipients.find((a) => !isDeliverableAddress(a));
+  if (recipients.length === 0 || bad !== undefined) {
+    throw new Error(`refusing to send: "${bad ?? ""}" is not a valid email address`);
   }
 
   const from = payload.from ?? env.WP_OS_EMAIL_FROM;
@@ -95,7 +97,7 @@ export async function sendViaResend(
       },
       body: JSON.stringify({
         from,
-        to: [payload.to],
+        to: recipients,
         subject,
         text,
         ...(html ? { html } : {}),
@@ -122,7 +124,7 @@ export async function sendViaResend(
       provider_message_id: messageId,
       // The FROM is on the receipt deliberately. Once a partner can send under their own name, the
       // question an audit asks is not only whether a message went out but whose name was on it.
-      detail: `Delivered to ${payload.to} as ${from} via Resend`,
+      detail: `Delivered to ${recipients.join(", ")} as ${from} via Resend`,
     };
   } finally {
     clearTimeout(timer);
