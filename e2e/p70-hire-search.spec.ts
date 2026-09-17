@@ -8,16 +8,28 @@ import { kindDef } from "../src/shared/deliverables/deliverable";
  *
  * The runner itself is unit-proven (tests/productionsHire.test.ts; the local server has no search
  * model). This is the rendering and the answer: a `productions_hire_search` deliverable with two
- * candidate rows behind it is on Scooter's Home under Walker's name; opening it shows the
- * candidates with Contacted / Pass; pressing Contacted writes the status the next week's search
- * reads. Sequoia's Home does not carry it (it is prepared for Scooter) and the candidate list
- * answers only to him.
+ * candidate rows behind it is on Scooter's Home under Walker's name, and opening it shows the
+ * candidates with their pages. Sequoia's Home does not carry it (it is prepared for Scooter) and
+ * the candidate list answers only to him.
+ *
+ * ─── WHAT THIS JOURNEY USED TO PROVE, AND WHY IT NOW PROVES THE OPPOSITE (17 Sep 2026) ────────
+ *
+ * It used to press Contacted and assert the status stuck. Operator: "i really dont think we should
+ * give him extra work if he likes one he will reach out with the sample draft intro language walker
+ * creates." The two buttons and the route behind them are gone — removed rather than hidden,
+ * because an endpoint that still wrote a status no reader reports would silently change what next
+ * week's search returns.
+ *
+ * So the assertions are inverted and WIDENED rather than deleted. It is not enough that the buttons
+ * are absent from this panel: nothing anywhere on the page may offer a way to mark a candidate, the
+ * route must 404 in the browser's own session, and the row must be unchanged afterwards. A journey
+ * that merely stopped clicking would pass against a UI that still had the buttons one screen over.
  */
 
 const SCOOTER = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
 const SEQUOIA = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
 
-test("the hire-search note renders on Scooter's Home with its candidates, and Contacted sticks", async ({ page, request }) => {
+test("the hire-search note renders on Scooter's Home with its candidates, and there is nothing for him to mark", async ({ page, request }) => {
   const marker = `e2e-p70-${Date.now()}`;
   const cardId = `wc_${marker}`;
   const dlvId = `dlv_${marker}`;
@@ -45,18 +57,33 @@ test("the hire-search note renders on Scooter's Home with its candidates, and Co
   await row.getByTestId(`deliverable-open-${dlvId}`).click();
   await expect(row.locator(".deliverable-body")).toContainText("Jordan Example");
 
-  // The candidates behind the note, with the two verbs.
+  // The candidates behind the note — as information, with nothing to maintain.
   const panel = page.getByTestId(`hire-candidates-${dlvId}`);
   await expect(panel).toBeVisible();
-  await expect(page.getByTestId(`hire-candidate-status-pcd_${marker}_a`)).toHaveText("new this week");
-  await expect(page.getByTestId(`hire-candidate-status-pcd_${marker}_b`)).toHaveText("seen before");
-  await page.getByTestId(`hire-candidate-contacted-pcd_${marker}_a`).click();
-  await expect(page.getByTestId("hire-candidates-message")).toContainText("Jordan Example marked contacted");
-  await expect(page.getByTestId(`hire-candidate-status-pcd_${marker}_a`)).toHaveText("contacted");
-  await expect(page.getByTestId(`hire-candidate-undo-pcd_${marker}_a`)).toBeVisible();
+  await expect(panel.getByTestId(`hire-candidate-pcd_${marker}_a`)).toContainText("Jordan Example");
+  await expect(panel.getByTestId(`hire-candidate-pcd_${marker}_b`)).toContainText("Sam Sample");
+  await expect(panel.getByTestId("hire-candidates-no-upkeep")).toContainText("Nothing to mark here");
+  await expect(panel.getByTestId("hire-candidates-no-upkeep")).toContainText("reply to Walker");
+  // What he is shown instead of a status: when the name first appeared, which needs no upkeep.
+  await expect(panel.getByTestId(`hire-candidate-first-seen-pcd_${marker}_a`)).toContainText("first seen");
 
-  const stored = queryLocalD1<{ status: string; status_changed_by: string }>(`SELECT status, status_changed_by FROM productions_candidate WHERE id = 'pcd_${marker}_a'`);
-  expect(stored[0]).toEqual({ status: "CONTACTED", status_changed_by: "fu_scooter_taylor" });
+  // NOT ANYWHERE ON THE PAGE, not merely not in this panel.
+  for (const gone of ["Contacted", "Pass", "Passed", "Put back"]) {
+    await expect(page.getByRole("button", { name: gone, exact: true }), `"${gone}" is not a button any more`).toHaveCount(0);
+  }
+  await expect(page.getByTestId(`hire-candidate-contacted-pcd_${marker}_a`)).toHaveCount(0);
+  await expect(page.getByTestId(`hire-candidate-passed-pcd_${marker}_a`)).toHaveCount(0);
+  await expect(page.getByTestId(`hire-candidate-status-pcd_${marker}_a`)).toHaveCount(0);
+
+  /*
+   * And the route behind them is gone — asked AS SCOOTER, the one person it ever answered, so a 404
+   * here means the route does not exist rather than that the caller was refused. (Asked without
+   * credentials it would 401, which proves nothing about whether the route is still there.)
+   */
+  const marked = await request.post(`/api/productions/candidates/pcd_${marker}_a/status`, { headers: SCOOTER, data: { status: "CONTACTED" } });
+  expect(marked.status(), "the marking route must not exist").toBe(404);
+  const stored = queryLocalD1<{ status: string; status_changed_by: string | null }>(`SELECT status, status_changed_by FROM productions_candidate WHERE id = 'pcd_${marker}_a'`);
+  expect(stored[0], "nothing changed the row").toEqual({ status: "NEW", status_changed_by: null });
 
   // The list is his: Sequoia gets a 404, and her own Home (mine=1) does not carry the note.
   expect((await request.get(`/api/productions/candidates?deliverable=${dlvId}`, { headers: SEQUOIA })).status()).toBe(404);
