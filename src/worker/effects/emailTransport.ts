@@ -1,3 +1,5 @@
+import { PREVIEW_RECIPIENT, previewHeader, previewHeaderHtml, previewSubject } from "../../shared/work/preview";
+
 /**
  * What every outbound email transport agrees on.
  *
@@ -34,6 +36,16 @@ export interface EmailPayload {
   from?: string;
   /** Where a reply should go when it is not the sender — the intake mailbox, for an employee's mail. */
   replyTo?: string;
+  /**
+   * Extra RFC headers. Today this carries exactly one thing: the `References` / `In-Reply-To` pair
+   * that lets a reply be matched to the conversation it answers — see `shared/email/thread.ts` for
+   * why the match cannot be made on `provider_message_id`, and why a subject code was refused.
+   *
+   * BOTH TRANSPORTS ALLOW THESE TWO AND REFUSE `Message-ID`. Cloudflare answers
+   * `E_HEADER_NOT_ALLOWED` for a platform-controlled header; Resend's send goes through SES, which
+   * overrides any Message-ID a caller supplies. Anything a transport refuses must not be put here.
+   */
+  headers?: Readonly<Record<string, string>>;
 }
 
 export interface EmailSendResult {
@@ -92,4 +104,95 @@ export function defuseTriggers(text: string): string {
 export function wouldLoop(text: string): boolean {
   TRIGGER_WORDS.lastIndex = 0;
   return TRIGGER_WORDS.test(text);
+}
+
+// ── THE SEND BOUNDARY IN PREVIEW MODE ─────────────────────────────────────────────────────────
+
+/**
+ * THE ONE PLACE A PREVIEW IS STOPPED FROM REACHING ANYBODY (17 Sep 2026).
+ *
+ * Operator: "NO EXTERNAL EFFECTS, EVER. A preview of something that would email an outside person
+ * emails nobody. Enforce at the send boundary, not by remembering per feature — that is the
+ * difference between a guard and a convention."
+ *
+ * ─── WHY HERE AND NOWHERE ELSE ─────────────────────────────────────────────────────────────────
+ *
+ * There are exactly two things in this system that put a message on a wire: `sendViaResend` (a
+ * fetch) and `sendViaCloudflare` (a binding). Both call this first, before the key is read, before
+ * the binding is touched, before any network or platform call exists. Every composer, every
+ * employee, every service and every future feature reaches a recipient THROUGH one of those two, so
+ * a rule enforced here cannot be forgotten by a feature that has not been written yet.
+ *
+ * The alternative — each caller checking "am I in preview?" before it sends — is the convention
+ * this repo has already been bitten by: it holds until the day somebody adds a third caller.
+ *
+ * ─── WHAT IT DOES ──────────────────────────────────────────────────────────────────────────────
+ *
+ * REPLACES the recipient list. Not filters it, not validates it: replaces it, with exactly one
+ * address, unconditionally. There is no input — no destination, no misconfiguration, no crafted
+ * payload — for which this returns a recipient list containing anybody but Sequoia. A preview of
+ * something addressed to a founder, a journalist or an LP therefore reaches that person never; it
+ * reaches her, with the header saying who it was for.
+ *
+ * It also stamps the subject and prepends the header, so a preview in a mailbox can never be
+ * mistaken for the live note.
+ *
+ * THE OTHER HALF OF THE GUARANTEE is in `executeExternalEffect`, which refuses a preview outright.
+ * That is the path an approved receipt can use to reach an outsider, and refusing it early means a
+ * preview never consumes a receipt either. Two independent stops, in the two places an email can
+ * begin.
+ */
+export function applyPreviewBoundary(env: unknown, payload: EmailPayload): EmailPayload {
+  const preview = previewContextOf(env);
+  if (!preview) return payload;
+  const normallyTo = [payload.to].flat().map((a) => a.trim().toLowerCase());
+  const header = previewHeader({
+    normallyTo,
+    what: preview.what,
+    requestedByEmail: preview.requestedByEmail,
+  });
+  return {
+    ...payload,
+    // Replaced, never filtered. This is the whole boundary.
+    to: [PREVIEW_RECIPIENT],
+    subject: previewSubject(payload.subject),
+    text: `${header}${payload.text}`,
+    ...(payload.html
+      ? {
+          html: `${previewHeaderHtml({ normallyTo, what: preview.what, requestedByEmail: preview.requestedByEmail })}${payload.html}`,
+        }
+      : {}),
+  };
+}
+
+/**
+ * The preview marker on the environment, read without importing the worker service.
+ *
+ * ON THE ENV RATHER THAN IN A MODULE VARIABLE. A Worker isolate serves many requests, and a module
+ * global would leak one request's preview mode into another's live send — the worst possible
+ * direction for this particular bug. `Env` is already threaded through every function that can
+ * send, so it is the channel that exists; a preview run is given a shallow copy of it carrying this
+ * field and nothing else can set it.
+ */
+export const PREVIEW_ENV_KEY = "__wpPreview";
+
+export interface PreviewEnvMarker {
+  id: string;
+  what: string;
+  requestedByEmail: string;
+}
+
+export function previewContextOf(env: unknown): PreviewEnvMarker | null {
+  if (!env || typeof env !== "object") return null;
+  const marker = (env as Record<string, unknown>)[PREVIEW_ENV_KEY];
+  if (!marker || typeof marker !== "object") return null;
+  const m = marker as Partial<PreviewEnvMarker>;
+  return typeof m.id === "string" && typeof m.what === "string" && typeof m.requestedByEmail === "string"
+    ? { id: m.id, what: m.what, requestedByEmail: m.requestedByEmail }
+    : null;
+}
+
+/** True when this environment is a preview run. The question every boundary asks. */
+export function isPreviewEnv(env: unknown): boolean {
+  return previewContextOf(env) !== null;
 }

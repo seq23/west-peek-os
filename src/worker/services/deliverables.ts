@@ -118,13 +118,41 @@ export async function deliver(env: Env, actor: Actor, input: DeliverInput): Prom
     )
     .run();
 
-  const row = (await env.WP_OS_DB.prepare(
+  const stored = await env.WP_OS_DB.prepare(
     input.sourceType && input.sourceId
       ? "SELECT * FROM deliverable WHERE source_type = ?1 AND source_id = ?2"
       : "SELECT * FROM deliverable WHERE id = ?1",
   )
     .bind(...(input.sourceType && input.sourceId ? [input.sourceType, input.sourceId] : [id]))
-    .first<DeliverableRow>())!;
+    .first<DeliverableRow>();
+
+  /*
+   * THE READ-BACK USED TO BE A `!`, AND THAT WAS A LATENT CRASH RATHER THAN AN ASSERTION.
+   *
+   * It reads whatever the INSERT above wrote. A handle that performed no write answers nothing —
+   * which is exactly what a PREVIEW run does deliberately (see `services/preview.ts`) — and the `!`
+   * turned that into a TypeError three lines later, inside a chain whose callers wrap `deliver()`
+   * precisely so a filing failure cannot take the work down with it.
+   *
+   * The deliverable object is the real rendered artifact either way: the title, the body and who it
+   * is for are the caller's own values, not the database's. So the row is built from them when the
+   * table did not answer, and the caller gets what it always got — a deliverable it can link to and
+   * render. Nothing is invented: `document_id` stays null, because no document was filed.
+   */
+  const row: DeliverableRow = stored ?? {
+    id,
+    kind: input.kind,
+    title: input.title,
+    body: input.body,
+    prepared_by: input.preparedBy,
+    prepared_for: input.preparedFor,
+    source_type: input.sourceType ?? null,
+    source_id: input.sourceId ?? null,
+    privacy_label: privacy,
+    firm_scope: firmScope,
+    document_id: null,
+    created_at: new Date().toISOString(),
+  } as DeliverableRow;
 
   /*
    * NOT EVERYTHING IS WORTH FILING. A morning brief is read once, on the morning it is about, and

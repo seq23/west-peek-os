@@ -179,6 +179,7 @@ import {
   handleListDeliverables,
 } from "./services/deliverables";
 import { handleListHireCandidates, handleSetHireCandidateStatus } from "./services/productionsHire";
+import { handleRunPreview } from "./services/preview";
 import { handleRunMeetingPrep } from "./services/meetingPrep";
 import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/deck";
 import { handleAddReviewItem, handleDeleteReviewItem,
@@ -693,6 +694,9 @@ const router = new Router()
   .post("/api/workforce/:id/unretire", handleUnretireEmployee)
   .post("/api/workforce/:id/unretire-advice", handleUnretireAdvice)
   .patch("/api/workforce/:id/role", handleRetitleEmployee)
+  // Preview: run any scheduled job or work card for real and send the result to Sequoia alone.
+  // Partner-only; a 404 for anyone else. See services/preview.ts and shared/work/preview.ts.
+  .post("/api/preview", handleRunPreview)
   // Walker's weekly hire search for West Peek Productions: Scooter marks a candidate from Home.
   .get("/api/productions/candidates", handleListHireCandidates)
   .post("/api/productions/candidates/:id/status", handleSetHireCandidateStatus)
