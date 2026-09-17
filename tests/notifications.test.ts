@@ -56,6 +56,21 @@ describe("quiet-hours arithmetic", () => {
     expect(inQuietHours({ start: 21, end: 7 }, new Date("2026-08-12T12:00:00.000Z"))).toBe(false);
     expect(inQuietHours({ start: 9, end: 17 }, new Date("2026-08-12T12:00:00.000Z"))).toBe(true);
     expect(inQuietHours({}, new Date())).toBe(false);
+    /*
+     * `end` IS EXCLUSIVE, so 0–23 is not the whole clock and 23:xx falls outside it.
+     *
+     * Ported from `fix/quiet-hours-test-covers-hour-23`, whose integration half is already on main
+     * (the fixture below is clock-relative now). The unit half was not, and it is the durable
+     * guard: the branch existed because the suite failed on main every night in the 23:00 hour
+     * (15 Sep 2026, run 35034066666) against a fixture whose comment called `{ start: 0, end: 23 }`
+     * "a window covering the whole clock". A full-clock window cannot be expressed at all —
+     * `start === end` means off — and stating that here is what stops somebody "fixing" it back.
+     */
+    expect(inQuietHours({ start: 0, end: 23 }, new Date("2026-09-15T23:15:00.000Z"))).toBe(false);
+    expect(inQuietHours({ start: 22, end: 1 }, new Date("2026-09-15T23:15:00.000Z"))).toBe(true);
+    expect(inQuietHours({ start: 23, end: 2 }, new Date("2026-09-15T00:15:00.000Z"))).toBe(true);
+    // `start === end` is "no quiet hours", not "always".
+    expect(inQuietHours({ start: 9, end: 9 }, new Date("2026-09-15T09:30:00.000Z"))).toBe(false);
   });
 });
 

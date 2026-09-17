@@ -88,6 +88,7 @@ export const BLOCK_REASONS = [
   "nothing_new_since_last_time",
   "the_brief_is_missing",
   "the_file_would_not_build",
+  "asked_for_something_this_work_cannot_do",
 ] as const;
 export type BlockReason = (typeof BLOCK_REASONS)[number];
 
@@ -182,6 +183,29 @@ const CATALOGUE: Record<BlockReason, (f: BlockFacts) => Omit<Block, "reason" | "
     needed: f.detail?.trim() || "Say in your own words what you wanted, and who it is for.",
     who: f.who ?? "SEQUOIA",
     actions: [ANSWER("Answer it", `Type what you wanted. ${f.employee} treats that as the brief and starts.`), CHANGE, DROP],
+  }),
+
+  /*
+   * SHE ASKED FOR SOMETHING THESE STEPS DO NOT DO, AND SAYING SO IS THE CORRECT ANSWER.
+   *
+   * The tenth reason, and the one the whole instruction-interpretation pass exists to produce.
+   * Before it, a chain that could not honour part of what she typed did the default and reported
+   * success — the "runs but inert" failure with a completed card on top of it. A stage whose input
+   * includes prose it cannot carry now stops and hands it back, with the part it cannot do named.
+   *
+   * ANSWER and CHANGE are both offered because both are real: she may tell the employee how to
+   * handle that part, or rewrite the job without it. DROP is there because deciding it is not
+   * worth doing is also an answer.
+   */
+  asked_for_something_this_work_cannot_do: (f) => ({
+    stopped: `${f.employee} can do most of what you asked for here, but not all of it.`,
+    needed: f.detail?.trim() || `Say how you want the rest handled, or rewrite the job without it.`,
+    who: f.who ?? "SEQUOIA",
+    actions: [
+      ANSWER("Answer it", `Say how you want that part handled. ${f.employee} starts again with your answer in front of them.`),
+      CHANGE,
+      DROP,
+    ],
   }),
 
   the_file_would_not_build: (f) => ({

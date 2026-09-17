@@ -2443,6 +2443,37 @@ details h3 {
 
 .card-block-form textarea { width: 100%; }
 
+/* ── The receipt: what she typed, and what it turned into (0175) ───────────────
+ * Two columns so the comparison is the layout rather than something the reader has
+ * to hold in their head — her words on the left, the model's reading on the right.
+ * Stacks below the breakpoint, where side by side becomes two unreadable columns.
+ */
+.work-card-receipt {
+  margin: var(--space-md) 0;
+  padding: var(--space-md);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface-2);
+}
+
+.work-card-receipt-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+  padding-top: var(--space-sm);
+}
+
+.work-card-receipt-row + .work-card-receipt-row {
+  margin-top: var(--space-sm);
+  border-top: 1px solid var(--wp-line);
+}
+
+.work-card-receipt-row p { margin: 0 0 var(--space-xs); }
+
+@media (max-width: 720px) {
+  .work-card-receipt-row { grid-template-columns: 1fr; }
+}
+
 /* ── Disclosures that have to LOOK like buttons ────────────────────────────────
  * A <details><summary> is the right control for "reveal a form I rarely need" —
  * native, keyboard-operable, no state to manage. Its default rendering is the

@@ -4,6 +4,7 @@ import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { SEARCH_MODEL } from "./liveSearch";
 import { blockCard } from "./blocks";
+import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
@@ -819,18 +820,66 @@ const defaultSearch: ProductionsSearch = async (env, actor, prompt) => {
  * Work one Productions card to a conclusion: search, verify, email Scooter, DONE — or BLOCKED with
  * the reason on the card when the search returned nothing usable.
  */
+/**
+ * What this duty can actually do, for the interpretation pass. The model is shown this list and
+ * asked which of his directives change one of these steps and which ask for something none of them
+ * does — without it, "also pitch them a budget" would come back as an honourable steer.
+ */
+export const PRODUCTIONS_STEPS: readonly string[] = [
+  "Run one live search for the month, against the agency's own customer list and exclusions.",
+  "Check every cited page is live, and drop anything whose page is dead.",
+  "Judge what came back and keep only what is genuinely usable, rejecting the rest with a reason.",
+  "Send Scooter ONE email in the busy-executive format with what was found.",
+  "Nobody outside the firm is contacted, nothing is pitched, nothing is booked and no money is committed.",
+];
+
 export async function runProductionsCard(
   env: Env,
   card: SweepCard,
-  deps: { search?: ProductionsSearch; judge?: ProductionsJudge; urlCheck?: UrlCheck; pageText?: PageText; now?: Date } = {},
+  deps: { search?: ProductionsSearch; judge?: ProductionsJudge; urlCheck?: UrlCheck; pageText?: PageText; now?: Date; interpret?: Interpreter } = {},
 ): Promise<{ finished: boolean; blocked: boolean; detail: string }> {
   const now = deps.now ?? new Date();
   const month = monthOf(now);
   const actor: Actor = { type: "AI", aiEmployeeId: "aie_walker", roles: [], firmScopes: [card.firm_scope] };
-  const search = deps.search ?? defaultSearch;
-  const check = deps.urlCheck ?? defaultUrlCheck;
-  const judge = deps.judge ?? defaultJudge;
   const kind = card.kind as ProductionsKind;
+  const check = deps.urlCheck ?? defaultUrlCheck;
+
+  /*
+   * WHAT SCOOTER HAS ASKED FOR ON THIS PARTICULAR MONTH, READ BY A MODEL FIRST.
+   *
+   * This is a SCHEDULED duty, so the usual card carries no human prose at all and `steerFor`
+   * returns without calling a model — a monthly note costs nothing extra. What it could not see
+   * before was the exceptional month: a steering note left while the search was running, an
+   * instruction typed onto the card, or the answer given to clear a block. Those went into columns
+   * this runner never read, so "try the UK this time" changed nothing and the same search ran again.
+   *
+   * The block is Scooter's to clear, not Sequoia's: this is his agency's work and a notice about it
+   * on her desk would be the wrong desk (see announceOutcome in workSweep.ts).
+   */
+  const steer = await steerFor(env, actor, {
+    cardId: card.id,
+    cardKind: kind,
+    title: card.title,
+    employee: "Walker",
+    chain: "a monthly duty for West Peek Productions",
+    steps: [...PRODUCTIONS_STEPS],
+    firmScope: card.firm_scope,
+  }, deps.interpret);
+  if (steer.cannot.length > 0) {
+    const why = await blockCard(env, card, {
+      reason: steer.failure ? "the_brief_is_missing" : "asked_for_something_this_work_cannot_do",
+      trying: card.title,
+      employee: "Walker",
+      who: "SCOOTER",
+      detail: steer.failure ? undefined : cannotDetail("Walker", steer.cannot),
+    });
+    return { finished: false, blocked: true, detail: why };
+  }
+  const withSteer = (prompt: string): string => (steer.text ? `${steer.text}\n\n${prompt}` : prompt);
+  const rawSearch = deps.search ?? defaultSearch;
+  const search: ProductionsSearch = (e, a, prompt) => rawSearch(e, a, withSteer(prompt));
+  const rawJudge = deps.judge ?? defaultJudge;
+  const judge: ProductionsJudge = (e, a, prompt) => rawJudge(e, a, withSteer(prompt));
 
   /** One search, and one more with the miss named if nothing usable came back. `why` is for the card. */
   type Judged<T> = { kept: T[]; dropped: string[]; rejected: { name: string; reason: string }[]; failed: string | null };

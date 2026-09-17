@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { saidNothing } from "./helpers/interpret";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { recordDeckVersion, requestDeckRework, runDeckRework, runDeckRebuild, type DeckVersionRow } from "../src/worker/services/deck";
 import type { Env } from "../src/worker/env";
@@ -104,7 +105,7 @@ describe("the card becomes the next version, with a PDF", () => {
     const before = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deck_version WHERE fund_id = ?1 AND state = 'PROPOSED'").bind(FUND).first<{ n: number }>())!.n;
     expect(before).toBeGreaterThan(0);
 
-    const out = await runDeckRework(env, card!, fakeLaunch);
+    const out = await runDeckRework(env, card!, fakeLaunch, saidNothing);
     expect(out.finished).toBe(true);
     expect(out.detail).toMatch(/is proposed on Fund strategy/);
     expect(out.detail).toMatch(/3 pages/);
@@ -127,7 +128,7 @@ describe("the card becomes the next version, with a PDF", () => {
   it("with no browser the version is still recorded but the card says so and goes BLOCKED, never a silent empty proposal", async () => {
     const v = await recordDeckVersion(env, ACTOR, { fundId: FUND, title: "x", origin: "BUILT", createdBy: "Preston", createdByType: "AI" });
     const card = await requestDeckRework(env, v, "still wrong", "Sequoia Taylor");
-    const out = await runDeckRework(env, { id: card!.id, title: "Rebuild", firm_scope: "west-peek" }, async () => { throw new Error("no browser in this test"); });
+    const out = await runDeckRework(env, { id: card!.id, title: "Rebuild", firm_scope: "west-peek" }, async () => { throw new Error("no browser in this test"); }, saidNothing);
     expect(out.finished).toBe(false);
     expect(out.blocked).toBe(true);
     expect(out.detail).toMatch(/NO PDF could be rendered/);

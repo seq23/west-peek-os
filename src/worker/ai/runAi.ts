@@ -112,6 +112,31 @@ export interface RunAiBudgetContext {
    * Mechanical steps leave it off and stay cheap. That is the whole distinction.
    */
   judgement?: boolean;
+  /**
+   * THIS CALL IS READING WHAT THE OWNER ASKED FOR (16 Sep 2026). Stricter than `judgement`, and
+   * the difference is worth stating because `judgement` was not enough.
+   *
+   * `judgement` says "do not send this to the search model, and do not let a cost posture make it
+   * worse". Both of those are true here. What `judgement` still allows is the thing that actually
+   * went wrong once already: when nothing is pinned it picks the DEAREST PRICED candidate, and
+   * price is the only quality signal the model registry holds. Migration 0158 gave
+   * `perplexity/sonar` a price of $1/$1 and by that single row it became "cheapest adequate" for
+   * every unpinned call in the firm. A pricing row is configuration. Configuration must not be
+   * able to decide which model reads a partner's instruction.
+   *
+   * So interpretation asks the catalogue a question about CAPABILITY rather than price: the model
+   * must be one `provider_model` records as `supports_reasoning = 1`, and it must not be
+   * search-grounded. Only among models that pass BOTH is price used to order them. A mispriced row
+   * can then make an interpretation dearer or cheaper; it cannot make it stupid.
+   *
+   * IT ALSO OVERRIDES A ROUTING POLICY THAT NAMES NO SUCH MODEL. A pin is somebody's quality
+   * decision and normally stands — but a pin that would hand this call a model the catalogue says
+   * cannot reason is a quality decision made before this rule existed, and the explanation on the
+   * run says so rather than silently obeying it.
+   *
+   * Implies `judgement`; callers need not set both.
+   */
+  interpretation?: boolean;
   /** Pin a specific provider by provider_key. */
   providerKey?: string;
 }
@@ -1000,15 +1025,56 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * nothing: a firm with only a search model registered should get a worse answer and an
    * explanation on the run, not a refusal it cannot act on.
    */
-  const isJudgement = input.budgetContext?.judgement === true;
+  const isInterpretation = input.budgetContext?.interpretation === true;
+  const isJudgement = isInterpretation || input.budgetContext?.judgement === true;
   const notSearch = allCandidates.filter((c) => !isSearchGrounded(c.model));
-  const routingCandidates: RoutingCandidate[] = isJudgement && notSearch.length > 0 ? notSearch : allCandidates;
+  const judged: RoutingCandidate[] = isJudgement && notSearch.length > 0 ? notSearch : allCandidates;
   const searchExcluded = isJudgement && notSearch.length > 0 && notSearch.length < allCandidates.length;
-  const judgementNote = searchExcluded
-    ? " This call interprets or drafts, so the search-grounded models were not candidates."
-    : isJudgement && notSearch.length === 0
-      ? " This call interprets or drafts, but every available model is search-grounded, so one was used anyway."
-      : "";
+
+  /*
+   * READING AN OWNER'S INSTRUCTION ASKS THE CATALOGUE ABOUT CAPABILITY, NOT PRICE.
+   *
+   * `judgement` below orders unpinned candidates by cost and takes the dearest, because price is
+   * the only quality signal `provider_model` holds. That proxy was good enough until a single
+   * pricing row (0158, `perplexity/sonar` at $1/$1) re-elected an unsuitable model for every
+   * unpinned call in the firm. Price is configuration; which model reads what a partner meant must
+   * not be decided by configuration.
+   *
+   * `supports_reasoning` is a recorded property of the model rather than of its price, so this
+   * filter cannot be moved by a pricing snapshot. Among the models that pass it, price still
+   * orders them — a mispriced row can make this dearer, never weaker.
+   *
+   * DEGRADES RATHER THAN REFUSES, and says so on the run. A firm whose catalogue records no
+   * reasoning model at all should get the best it has and an explanation an operator can act on,
+   * not a blocked run it cannot interpret.
+   */
+  let reasoningOnly: RoutingCandidate[] = judged;
+  let reasoningFilterApplied = false;
+  if (isInterpretation) {
+    const rows = await env.WP_OS_DB.prepare(
+      "SELECT provider_id, model FROM provider_model WHERE supports_reasoning = 1 AND status <> 'DEPRECATED'",
+    ).all<{ provider_id: string; model: string }>();
+    const canReason = new Set((rows.results ?? []).map((r) => `${r.provider_id} ${r.model}`));
+    const filtered = judged.filter((c) => canReason.has(`${c.providerId} ${c.model}`));
+    if (filtered.length > 0) {
+      reasoningOnly = filtered;
+      reasoningFilterApplied = filtered.length < judged.length;
+    }
+  }
+  const routingCandidates: RoutingCandidate[] = reasoningOnly;
+  const interpretationNote = !isInterpretation
+    ? ""
+    : reasoningFilterApplied
+      ? " This call reads what a partner asked for, so only models the catalogue records as able to reason were candidates; price ordered those, it did not choose them."
+      : reasoningOnly === judged && judged.length > 0
+        ? " This call reads what a partner asked for. The catalogue records no model that can reason and is not search-grounded, so the best available was used and this run is weaker than it should be."
+        : " This call reads what a partner asked for, and every available model is recorded as able to reason.";
+  const judgementNote =
+    (searchExcluded
+      ? " This call interprets or drafts, so the search-grounded models were not candidates."
+      : isJudgement && notSearch.length === 0
+        ? " This call interprets or drafts, but every available model is search-grounded, so one was used anyway."
+        : "") + interpretationNote;
 
   const machinePolicy = input.routing?.machineId
     ? await env.WP_OS_DB.prepare("SELECT * FROM machine_model_policy WHERE machine_id = ?1")
@@ -1109,6 +1175,24 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     }
     // No policy → no fallback. Behaviour is exactly P4's.
     ordered = [head];
+  }
+
+  /*
+   * A PIN MADE BEFORE THIS RULE EXISTED DOES NOT GET TO HAND AN INSTRUCTION TO A WEAK MODEL.
+   *
+   * Every branch above orders `routingCandidates`, which for an interpretation already holds only
+   * the models the catalogue says can reason. So a machine pin or a routing policy naming nothing
+   * in that set lands here with an empty list — and refusing the run would be the wrong answer: a
+   * stale pin is not a reason to stop reading what a partner asked for. It falls to the dearest
+   * reasoning-capable model instead, and the run records that the pin was not honoured and why, so
+   * "which model read my words" stays answerable and the stale pin is visible rather than silent.
+   */
+  if (ordered.length === 0 && isInterpretation && routingCandidates.length > 0) {
+    const fallback = routingCandidates.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
+    ordered = [fallback];
+    explanation =
+      `${explanation}. That pin names no model the catalogue records as able to reason, and this call reads what a ` +
+      `partner asked for, so it was not honoured: ${fallback.providerKey}/${fallback.model} was used instead.`;
   }
 
   if (ordered.length === 0) {

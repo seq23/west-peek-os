@@ -82,6 +82,7 @@ import {
 } from "./services/approvals";
 import { handleDraftCard, handleWorkCard, handleWriteBrief } from "./services/employeeWork";
 import { handleUnblockWorkCard } from "./services/blocks";
+import { handleWorkCardInstructions } from "./services/instruction";
 import {
   handleGoogleCallback,
   handleGoogleConnectStart,
@@ -704,6 +705,9 @@ const router = new Router()
   .post("/api/deliverables/:id/feedback", handleDeliverableFeedback)
   // Steering work in flight: a partner says something, the employee answers it on its next step.
   .get("/api/work-cards/:id/notes", handleListWorkCardNotes)
+  // 0175 — the receipt: what she typed, and what the model turned it into, side by side. Her
+  // question was "tell me what my instructions turned into", asked of an agent, about a database.
+  .get("/api/work-cards/:id/instructions", handleWorkCardInstructions)
   .post("/api/work-cards/:id/notes", handleAddWorkCardNote)
   .get("/api/work-cards/by-owner", handleWorkByOwner)
   .get("/api/work-cards", handleListWorkCards)

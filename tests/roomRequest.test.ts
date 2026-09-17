@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { saidNothing } from "./helpers/interpret";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { actorFromIdentity } from "../src/worker/services/authorize";
@@ -118,6 +119,9 @@ const TINY_PDF = btoa("%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endob
 function deps(over: Partial<ChainDeps> = {}): ChainDeps {
   return {
     search,
+    // A partner's brief IS human prose, so the interpretation pass in front of the chain runs for
+    // real here. See tests/helpers/interpret.ts for why a chain test must supply one.
+    interpret: saidNothing,
     research: async (_env, _actor, prompt) => {
       if (prompt.includes("PAY TO BE IN FRONT OF")) return { ok: true, text: discoveryJson, citations: [], detail: "ok" };
       const org = /Research (.+?) as a sponsor/.exec(prompt)?.[1] ?? "?";

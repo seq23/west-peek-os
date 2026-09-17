@@ -109,6 +109,11 @@ jobs:
       - name: A block is something she can clear herself
         run: npm run validate:blocks
 
+      # Nothing a partner types may reach no model. Every branch of the sweep's dispatch is read out
+      # of the source, so the chain nobody remembers to wire is the one this fails on.
+      - name: Everything she says reaches a thinking model
+        run: npm run validate:instructions
+
       - name: Build client
         run: npm run build
 

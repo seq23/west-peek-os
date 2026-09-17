@@ -19,7 +19,12 @@ import {
 const V5_OUTPUT = [
   "executive_summary", "top_headlines", "markets_macro", "capital_markets", "venture_private",
   "government_legal", "ai_technology", "watchlist", "investor_insight", "key_events", "watch",
-].map((k) => `===SECTION ${k}\nA substantial paragraph about ${k}, with the figure in **bold** and a citation [1].`
+].map((k) => `===SECTION ${k}\n`
+  + (k === "top_headlines"
+    // Five headlines, each carrying its Investor Importance score — a brief without them is
+    // refused (docs/EXECUTIVE_BRIEF_SPECIFICATION.md §2). This fixture stands for a good brief.
+    ? Array.from({ length: 5 }, (_, i) => `**${i + 1}. A headline as a full claim** [1] — the figure in **bold**.\n\n**Investor Importance: ${i + 2}/10**`).join("\n\n")
+    : `A substantial paragraph about ${k}, with the figure in **bold** and a citation [1].`)
   + (k === "capital_markets" ? " An acquisition was announced in the payments stack [2]." : "") + "\n===END").join("\n");
 
 const fakeModel: Synthesise = async () => ({

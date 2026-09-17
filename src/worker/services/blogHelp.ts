@@ -14,6 +14,7 @@ import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { describeModes, readBlogAsk, type BlogAsk, type BlogMode } from "../../shared/intake/blogHelp";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
+import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 
 /**
  * Blog help, worked by a partner's chief of staff (16 Sep 2026).
@@ -541,11 +542,29 @@ export function renderPhraseMd(p: PhrasePiece): string {
 
 // ── The runner the sweep calls ───────────────────────────────────────────────
 
+/**
+ * What this runner can actually do, for the interpretation pass.
+ *
+ * The model is shown this list and asked which of her directives change one of these steps and
+ * which ask for something none of them does. Without the list it has no way to know the runner
+ * cannot publish the post, commission a photograph, or email anybody but the partner who asked —
+ * so every instruction would come back honourable and "it can be steered" would be untested.
+ */
+export const BLOG_STEPS: readonly string[] = [
+  "Research the topic through the search model, and check that every source URL is live.",
+  "Judge what the search found and keep only what is worth using, dropping the rest with a reason.",
+  "Write the outline, the draft or the repeatable phrase — whichever was asked for — in the partner's own voice, grounded in the kept sources.",
+  "File the result as a deliverable on the partner's Home.",
+  "Send the partner ONE email in the busy-executive format. Nobody outside the firm is contacted and nothing is published.",
+];
+
 export interface BlogHelpDeps {
   search?: BlogModelCall;
   judge?: BlogModelCall;
   write?: BlogModelCall;
   urlCheck?: UrlCheck;
+  /** The pass that reads what she asked for. See services/instruction.ts and tests/helpers/interpret.ts. */
+  interpret?: Interpreter;
 }
 
 async function partnerProfile(env: Env, firmUserId: string): Promise<{ sectors: string[]; themes: string[] } | null> {
@@ -636,9 +655,42 @@ export async function runBlogHelpCard(
 
   const employee = partner.employee;
   const actor: Actor = { type: "AI", aiEmployeeId: employee.id, roles: [], firmScopes: [card.firm_scope] };
-  const search = deps.search ?? defaultSearch;
-  const judge = deps.judge ?? defaultJudge;
-  const write = deps.write ?? defaultWrite;
+
+  /*
+   * ANYTHING SHE HAS TYPED ON THE CARD ITSELF, READ BY A MODEL BEFORE THE PIECE IS WRITTEN.
+   *
+   * The emailed request already reaches a model verbatim (`ask.ask` is carried into every prompt
+   * below), which is why this path was less broken than the packet chain. What it could not see was
+   * everything typed AFTERWARDS: a steering note left while the research was running, and the
+   * answer she gave to clear a block — which on this chain is the whole of "write it again, but
+   * shorter and without the second section". Rework after a rejection reached nothing.
+   */
+  const steer = await steerFor(env, actor, {
+    cardId: card.id,
+    cardKind: "BLOG_HELP",
+    title: card.title,
+    employee: employee.name,
+    chain: `blog help for ${partner.fullName}: ${describeModes(ask.modes)}`,
+    steps: [...BLOG_STEPS],
+    firmScope: card.firm_scope,
+    extra: [{ source: "BRIEF", text: ask.ask, who: partner.fullName }],
+  }, deps.interpret);
+  if (steer.cannot.length > 0) {
+    const why = await blockCard(env, card, {
+      reason: steer.failure ? "the_brief_is_missing" : "asked_for_something_this_work_cannot_do",
+      trying: card.title,
+      employee: employee.name,
+      detail: steer.failure ? undefined : cannotDetail(employee.name, steer.cannot),
+    });
+    return { finished: false, blocked: true, detail: why };
+  }
+  // Prefixed once, here, so every prompt this runner builds carries it — the search, the judgement
+  // and the writing. A steer each step has to remember is a steer one step will forget.
+  const steered = (call: BlogModelCall): BlogModelCall =>
+    steer.text ? (e, a, prompt) => call(e, a, `${steer.text}\n\n${prompt}`) : call;
+  const search = steered(deps.search ?? defaultSearch);
+  const judge = steered(deps.judge ?? defaultJudge);
+  const write = steered(deps.write ?? defaultWrite);
   const urlCheck = deps.urlCheck ?? ((u: string) => urlIsLive(u));
 
   // 1 · Research, judged.
