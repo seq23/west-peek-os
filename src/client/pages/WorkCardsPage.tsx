@@ -564,7 +564,9 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         not by reading eight owner lines. */}
                     <span className="work-card-foot">
                       <OwnerChip name={c.owner_type === "UNASSIGNED" ? null : c.owner_name ?? null} />
-                      {c.next_action && <span className="muted small work-card-next">{c.next_action}</span>}
+                      {/* A blocked card's next action IS the block sentence, and the panel below
+                          says it properly with its buttons. Twice is noise. */}
+                      {c.next_action && !c.block && <span className="muted small work-card-next">{c.next_action}</span>}
                     </span>
                   </button>
 
@@ -665,14 +667,14 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                   {isOpen && (
                     <>
               <div className="work-card-body">
-                {c.next_action ? (
+                {c.next_action && !c.block ? (
                   <div>
                     <p className="lbl">Next</p>
                     {/* Usually one line. When an employee blocks, its whole question lands here,
                         which is a paragraph — so this is bounded like the findings are. */}
                     <div className="work-card-longtext">{c.next_action}</div>
                   </div>
-                ) : (
+                ) : c.block ? null : (
                   <p className="muted small">No next action — nobody knows what to do with this yet.</p>
                 )}
                 {/* WHAT IS IN THE DESCRIPTION, and why it needed a box of its own.
