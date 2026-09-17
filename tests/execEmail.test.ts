@@ -82,10 +82,11 @@ function everyKind(): Array<{ name: string; input: ExecEmailInput }> {
           { name: "Sam Sample", title: "Executive Producer", company: "Freelance", city: "Los Angeles, CA", profileUrl: "https://samsample.example", evidenceUrl: null, why: "Portfolio shows brand partnerships sold and produced.", openingLine: "Loved the Coachella activation.", fit: 7, profileCheck: "live" },
         ];
         const seen = [{ ...fresh[1]!, firstSeen: "2026-09-14T14:00:00.000Z" }];
-        const acted = [{ name: "Old Name", status: "CONTACTED" as const }];
+        // No "acted on" list any more: the two statuses Scooter used to set are retired, so the
+        // note has nothing of that shape to render. See services/productionsHire.ts.
         const dropped = [{ name: "Dead Link", reason: "the profile page did not answer (404)" }];
         const rejected = [{ name: "Not Senior", reason: "three years, not eight" }];
-        return { employee: "Walker", ...hireSummary("2026-W38", fresh, seen, acted, dropped, rejected), details: renderHireNote("2026-W38", fresh, seen, acted, dropped, rejected) };
+        return { employee: "Walker", ...hireSummary("2026-W38", fresh, seen, dropped, rejected), details: renderHireNote("2026-W38", fresh, seen, dropped, rejected) };
       })(),
     },
     { name: "Walker: introduction", input: { employee: "Walker", what: "your chief of staff — about that first email, and how to reach me", tldr: "I'm Walker, your chief of staff. The first note was below standard and is fixed.", sections: [{ label: "What was wrong", bullets: ["The list wandered.", "No addresses."] }, { label: "Your call", bullets: ["Nothing now."] }], details: intro.text } },

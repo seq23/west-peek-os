@@ -221,7 +221,14 @@ describe("what Walker is told", () => {
     expect(text).toMatch(/WEEKLY HIRE SEARCH/);
     expect(text).toMatch(/senior experiential producer, freelance/);
     expect(text).toMatch(/sold, scoped or closed sponsorships/);
-    expect(text).toMatch(/Contacted or Passed/);
+    // STRICTER THAN THE ASSERTION IT REPLACES (17 Sep 2026). The method used to promise Scooter
+    // would mark each candidate Contacted or Passed. That mechanism is gone, so the method must
+    // BOTH stop saying it (a document that describes a retired control is worse than one that says
+    // nothing) AND name what replaced it — a reply in prose, read before the next search.
+    expect(text, "no marking anywhere in the method").not.toMatch(/Contacted|Passed/);
+    expect(text).toMatch(/maintains NO list and marks nothing/);
+    expect(text).toMatch(/replying to the email in plain prose/);
+    expect(text).toMatch(/read by a reasoning model before the next search runs/);
     expect(text).toMatch(/The OS never contacts a candidate/);
   });
 
@@ -286,13 +293,26 @@ describe("the weekly card on Walker's desk", () => {
     expect(dlv!.body).toMatch(/Opening line for you: "Loved the Coachella activation\."/);
     expect(dlv!.body).toMatch(/Left out because the page did not answer when checked: .*Dead Link/);
     expect(dlv!.body).toMatch(/Left out on judgement .*Not Senior — three years, not eight/);
-    expect(dlv!.body).toMatch(/HOW TO MARK THEM: on your Home page/);
+    /*
+     * THE NOTE ASKS FOR NOTHING (17 Sep 2026). This used to assert the presence of a paragraph
+     * headed "HOW TO MARK THEM: on your Home page…". The operator removed the chore, so the
+     * assertion is inverted AND widened: it is not enough that one paragraph went — nothing in the
+     * note may ask the recipient to mark, press, tick or maintain anything, and the invitation that
+     * replaced it must actually be there, in Walker's voice, with the reply path named.
+     */
+    expect(dlv!.body, "no marking verbs anywhere in the note").not.toMatch(/HOW TO MARK|\bmark (?:each|them|it)\b|press Contacted|Contacted or Passed/i);
+    // No section 2 in the first week — nobody has been reported before. The heading it would carry
+    // is pinned in the dedupe test below; what matters here is that the OLD heading and its
+    // "not yet marked" framing cannot appear at all.
+    expect(dlv!.body).not.toMatch(/SEEN BEFORE, STILL OPEN|not yet marked/);
+    expect(dlv!.body).toMatch(/Just hit reply if you want to steer me/);
+    expect(dlv!.body).toMatch(/If you would rather not\s*reply at all, do nothing/);
     expect(dlv!.body).toMatch(/nothing is sent to a candidate from here/);
 
     // The summary above the note renders clean through the formatter and names the top pick.
     const { hireSummary } = await import("../src/worker/services/productionsHire");
     const rows = (await env.WP_OS_DB.prepare("SELECT name, title, company, city, url AS profileUrl, evidence_url AS evidenceUrl, why, opening_line AS openingLine, fit_score AS fit FROM productions_candidate WHERE last_card_id = ?1 ORDER BY fit_score DESC").bind(cardId).all<{ name: string; title: string; company: string; city: string; profileUrl: string; evidenceUrl: string | null; why: string; openingLine: string; fit: number }>()).results!;
-    const summary = hireSummary("2026-W39", rows, [], [], [], []);
+    const summary = hireSummary("2026-W39", rows, [], [], []);
     const rendered = renderExecEmail({ employee: "Walker", ...summary, details: dlv!.body });
     expect(lintExecEmail(rendered.subject, rendered.text, "Walker")).toEqual([]);
     expect(rendered.text).toMatch(/\*\*TL;DR:\*\* \*\*2\*\* new candidate\(s\) .* top pick \*\*Jordan Example\*\*/);
@@ -341,12 +361,17 @@ describe("the weekly card on Walker's desk", () => {
     expect(fetched.filter((u) => !u.includes("api.resend.com"))).toEqual([]);
   });
 
-  it("DEDUPE ACROSS WEEKS: a candidate Scooter marked CONTACTED never returns; one he left is 'seen before'; a new one is new", async () => {
-    // Scooter marks Jordan CONTACTED from Home (the API the panel calls).
-    const jordan = await env.WP_OS_DB.prepare("SELECT id FROM productions_candidate WHERE url = 'https://linkedin.com/in/jordan-example'").first<{ id: string }>();
-    const marked = await handleRequest(req(`/api/productions/candidates/${jordan!.id}/status`, SCOOTER, "POST", { status: "CONTACTED" }), env);
-    expect(marked.status).toBe(200);
-    expect(((await marked.json()) as { candidate: { status: string; status_changed_by: string } }).candidate).toMatchObject({ status: "CONTACTED", status_changed_by: "fu_scooter_taylor" });
+  it("DEDUPE ACROSS WEEKS: a historical CONTACTED row never returns and is never mentioned; one already reported is 'still on the table'; a new one is new", async () => {
+    /*
+     * A ROW WRITTEN BY THE RETIRED BUTTONS, set directly (17 Sep 2026). The route that used to
+     * write this is gone — see the test below, which proves it is gone rather than merely unused —
+     * so the fixture writes what history holds. The contract being pinned is BOTH halves: such a
+     * name stays out of the note for ever, AND the note never talks about "acting on" anybody,
+     * because that vocabulary described a control Scooter no longer has.
+     */
+    await env.WP_OS_DB.prepare(
+      "UPDATE productions_candidate SET status = 'CONTACTED', status_changed_at = '2026-10-13T00:00:00.000Z', status_changed_by = 'fu_scooter_taylor' WHERE url = 'https://linkedin.com/in/jordan-example'",
+    ).run();
 
     // The next week's search finds the same two plus a new one.
     const nextWeek = JSON.stringify({ results: [
@@ -365,8 +390,13 @@ describe("the weekly card on Walker's desk", () => {
     expect(dlv!.body).toMatch(/1\. New Person/);
     expect(dlv!.body).not.toMatch(/\d\. Jordan Example/);
     expect(dlv!.body).not.toMatch(/\d\. Sam Sample/);
-    expect(dlv!.body).toMatch(/SEEN BEFORE, STILL OPEN[\s\S]*- Sam Sample — Executive Producer · first seen 2026-10-12/);
-    expect(dlv!.body).toMatch(/Left out because you already acted on them: Jordan Example \(contacted\)/);
+    expect(dlv!.body).toMatch(/STILL ON THE TABLE[\s\S]*- Sam Sample — Executive Producer · first seen 2026-10-12/);
+    expect(dlv!.body, "no upkeep is implied by the section that lists them").toMatch(/Nothing to do with these/);
+    // The retired name is left out SILENTLY. Naming him would report a status nothing can set.
+    expect(dlv!.body).not.toMatch(/Jordan Example/);
+    // "Nobody has been contacted from here" is Walker stating the boundary and stays. What must be
+    // gone is the vocabulary of a status Scooter set: acted on, marked contacted, marked passed.
+    expect(dlv!.body).not.toMatch(/already acted on|\(contacted\)|\(passed\)|marked Contacted|marked Passed/i);
     const rows = (await env.WP_OS_DB.prepare("SELECT name, status, week FROM productions_candidate ORDER BY name").all<{ name: string; status: string; week: string }>()).results!;
     expect(rows).toEqual([
       { name: "Jordan Example", status: "CONTACTED", week: "2026-W42" },
@@ -384,7 +414,8 @@ describe("the weekly card on Walker's desk", () => {
     expect(again.outcome).toBe("BLOCKED");
     expect(again.summary).toMatch(/Everything Walker found this time you have already seen/);
     const row = await env.WP_OS_DB.prepare("SELECT next_action, block_who FROM work_card WHERE id = ?1").bind(third.cardId).first<{ next_action: string; block_who: string }>();
-    expect(row!.next_action).toMatch(/2 name\(s\) were in an earlier note and 1 you have already contacted or passed/);
+    expect(row!.next_action).toMatch(/every name this week was already in an earlier note \(2 of them\)/i);
+    expect(row!.next_action, "even the block asks for nothing but a reply").toMatch(/[Rr]eply to last week's note in plain words/);
     expect(row!.block_who, "Walker's Productions work is Scooter's desk").toBe("SCOOTER");
     const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(third.cardId).first<{ n: number }>();
     expect(mails!.n).toBe(0);
@@ -412,8 +443,8 @@ describe("the weekly card on Walker's desk", () => {
   });
 });
 
-describe("Scooter marks a candidate from Home", () => {
-  it("lists the candidates behind a note for Scooter, 404s for Sequoia, and refuses a status that is not a status", async () => {
+describe("the candidates behind a note are information, not a queue", () => {
+  it("lists them for Scooter, 404s for Sequoia — and the route that used to set a status is GONE, not merely unused", async () => {
     const dlv = await env.WP_OS_DB.prepare("SELECT id FROM deliverable WHERE kind = 'productions_hire_search' ORDER BY created_at DESC LIMIT 1").first<{ id: string }>();
     const mine = await handleRequest(req(`/api/productions/candidates?deliverable=${dlv!.id}`, SCOOTER), env);
     expect(mine.status).toBe(200);
@@ -423,18 +454,25 @@ describe("Scooter marks a candidate from Home", () => {
     const hers = await handleRequest(req(`/api/productions/candidates?deliverable=${dlv!.id}`, SEQUOIA), env);
     expect(hers.status, "the list is Scooter's; for anyone else it does not exist").toBe(404);
 
-    const sam = list.candidates.find((c) => c.name === "Sam Sample")!;
+    /*
+     * THE MARKING ROUTE IS REMOVED, AND THIS IS THE ASSERTION THAT SAYS SO (17 Sep 2026).
+     *
+     * Deleting a UI button is not deleting a control: an endpoint that still accepts a status would
+     * let a partner — or anything holding a session — silently change what next week's search
+     * returns, with nothing on any surface saying it had happened. The old test asserted the route
+     * worked; this one asserts it does not exist, for BOTH partners, for every value it used to
+     * take, and that nothing wrote the event it used to write.
+     */
     const id = (await env.WP_OS_DB.prepare("SELECT id FROM productions_candidate WHERE name = 'Sam Sample'").first<{ id: string }>())!.id;
-    expect(sam.status).toBe("SEEN");
-    const bad = await handleRequest(req(`/api/productions/candidates/${id}/status`, SCOOTER, "POST", { status: "HIRED" }), env);
-    expect(bad.status).toBe(400);
-    const hersToo = await handleRequest(req(`/api/productions/candidates/${id}/status`, SEQUOIA, "POST", { status: "PASSED" }), env);
-    expect(hersToo.status).toBe(404);
-    const passed = await handleRequest(req(`/api/productions/candidates/${id}/status`, SCOOTER, "POST", { status: "PASSED" }), env);
-    expect(passed.status).toBe(200);
-    const back = await handleRequest(req(`/api/productions/candidates/${id}/status`, SCOOTER, "POST", { status: "NEW" }), env);
-    expect(((await back.json()) as { candidate: { status: string } }).candidate.status).toBe("NEW");
-    const events = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'productions.candidate_marked' AND object_id = ?1").bind(id).first<{ n: number }>();
-    expect(events!.n).toBe(2);
+    for (const who of [SCOOTER, SEQUOIA]) {
+      for (const status of ["CONTACTED", "PASSED", "NEW", "HIRED"]) {
+        const res = await handleRequest(req(`/api/productions/candidates/${id}/status`, who, "POST", { status }), env);
+        expect(res.status, `POST …/status {${status}} must not be a route any more`).toBe(404);
+      }
+    }
+    const after = await env.WP_OS_DB.prepare("SELECT status FROM productions_candidate WHERE id = ?1").bind(id).first<{ status: string }>();
+    expect(after!.status, "nothing changed it").toBe("SEEN");
+    const events = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'productions.candidate_marked'").first<{ n: number }>();
+    expect(events!.n, "no candidate can be marked at all any more").toBe(0);
   });
 });

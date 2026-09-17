@@ -178,7 +178,7 @@ import {
   handleListDeliverableFeedback,
   handleListDeliverables,
 } from "./services/deliverables";
-import { handleListHireCandidates, handleSetHireCandidateStatus } from "./services/productionsHire";
+import { handleListHireCandidates } from "./services/productionsHire";
 import { handleRunPreview } from "./services/preview";
 import { handleRunMeetingPrep } from "./services/meetingPrep";
 import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/deck";
@@ -697,9 +697,10 @@ const router = new Router()
   // Preview: run any scheduled job or work card for real and send the result to Sequoia alone.
   // Partner-only; a 404 for anyone else. See services/preview.ts and shared/work/preview.ts.
   .post("/api/preview", handleRunPreview)
-  // Walker's weekly hire search for West Peek Productions: Scooter marks a candidate from Home.
+  // Walker's weekly hire search for West Peek Productions: the candidates behind one week's note.
+  // Read-only and Scooter's alone. There is no status to set — see the note at the end of
+  // services/productionsHire.ts for why the marking route was removed rather than hidden.
   .get("/api/productions/candidates", handleListHireCandidates)
-  .post("/api/productions/candidates/:id/status", handleSetHireCandidateStatus)
   .get("/api/deliverables", handleListDeliverables)
   .get("/api/deliverables/:id/download", handleDownloadDeliverable)
   .post("/api/deliverables/:id/email", handleEmailDeliverable)
