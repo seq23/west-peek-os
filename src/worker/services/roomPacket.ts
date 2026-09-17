@@ -725,21 +725,33 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
 
     if (stage === "CONCEPTS") {
       const recent = await env.WP_OS_DB.prepare(
-        "SELECT theme FROM evt_room_packet WHERE firm_scope = ?1 AND id != ?2 AND status != 'DRAFT' ORDER BY created_at DESC LIMIT 8",
-      ).bind(firmScope, draft.id).all<{ theme: string }>();
+        "SELECT title FROM evt_room_packet WHERE firm_scope = ?1 AND id != ?2 AND status != 'DRAFT' ORDER BY created_at DESC LIMIT 8",
+      ).bind(firmScope, draft.id).all<{ title: string }>();
+      /*
+       * THE MONTH'S ONE TOPIC, settled before ideation: the partners' plan entry, then whatever a
+       * human typed into the request form, then nothing — and nothing means Parker picks it in this
+       * same call. He never waits and never asks which of the three he is in.
+       */
+      const { topic: roomTopic, setBy: roomSetBy, steer: roomSteer } = topicFor(draft.proposed_for_month, "ROOM", brief?.audience ?? null);
+      const ran = await whatActuallyRan(env, firmScope, draft.proposed_for_month, "ROOM");
       const prompt = buildConceptsPrompt({
-        month: draft.proposed_for_month, city, brief, recentThemes: (recent.results ?? []).map((r) => r.theme),
+        month: draft.proposed_for_month, city, topic: roomTopic, setBy: roomSetBy, steer: roomSteer, brief, ran,
+        recentThemes: (recent.results ?? []).map((r) => r.title),
         inviteCheck: state.inviteCheck, sponsors: state.research, guidance: await guidanceFor(env, firmScope),
       });
-      const { text } = await synth("Room packet: three concepts", prompt, 3000);
-      const parsed = parseConcepts(text);
-      if (!parsed) return await failStage("the concepts did not come back in a usable shape");
+      const { text } = await synth("Room packet: one topic, three angles", prompt, 3000);
+      // A three-subject answer is REJECTED, not flagged: the stage fails, the sweep retries it, and
+      // nothing with three subjects in it is ever stored.
+      const parsed = parseConcepts(text, roomSetBy === "PARTNERS" ? roomTopic : null);
+      if (!parsed) return await failStage("the angles did not come back in a usable shape — every angle must be on the ONE topic for the month, and each must say so in `angle_on`");
       state.concepts = parsed.concepts;
+      state.roomTopic = parsed.topic;
+      state.roomTopicSetBy = roomSetBy;
       state.choiceRationale = parsed.choiceRationale;
       state.pushback = parsed.pushback;
       await saveStage(env, draft.id, "VENUES", state);
       const chosen = parsed.concepts.find((c) => c.chosen)!;
-      return { stage, next: "VENUES", note: `chose "${chosen.title}" (${chosen.format}) over ${parsed.concepts.length - 1} other(s)${parsed.pushback ? `; pushback: ${parsed.pushback.slice(0, 120)}` : ""}` };
+      return { stage, next: "VENUES", note: `topic "${parsed.topic}" (${roomSetBy === "PARTNERS" ? "the partners'" : "Parker's own pick"}); chose the angle "${chosen.title}" (${chosen.format}) over ${parsed.concepts.length - 1} other angle(s) on the same topic${parsed.pushback ? `; pushback: ${parsed.pushback.slice(0, 120)}` : ""}` };
     }
 
     if (stage === "VENUES") {
@@ -1837,26 +1849,65 @@ export async function runMonthlyRoomProposal(
     return { generated: true, detail: `opened Parker's card for the Room that was asked for: ${drafts[0].title} (card ${card.cardId})`, packetId: drafts[0].id };
   }
 
-  // ONE ROOM AND ONE WORKSHOP A MONTH (16 Sep 2026). Each kind is guarded on its own: a month with
-  // a Room and no Workshop gets the Workshop on this run. Still one cheap thing per run — the Room
-  // first, the Workshop on the next tick a quarter of an hour later.
-  const month = followingMonth(now);
+  /*
+   * ── THE CADENCE: BOTH STREAMS DELIVER ON THE 1st OF THE MONTH PRIOR ──────────────────────────
+   *
+   * Operator, 17 Sep 2026: "Both streams deliver on the 1st of the month prior. November's lands
+   * 1 October."
+   *
+   * THIS IS WHERE THE MONTHLY CARD IS MINTED, and it already landed on the 1st — by accident. The
+   * guard was "the following month has no packet", which becomes true the moment the month rolls
+   * over, so the first tick after midnight on the 1st queued it. True, and true for the wrong
+   * reason: nothing named the rule, nothing tested it, and anyone changing the guard would have
+   * moved the cadence without knowing there was one.
+   *
+   * `deliveryMonth` and `dueOn` name it. The check is a FLOOR rather than a window — a tick on the
+   * 3rd because the 1st was missed still delivers — because a cadence that only fires on one exact
+   * day silently skips a month the first time a cron is late, and work sitting unqueued is a
+   * failure this system has already had.
+   *
+   * ONE ROOM AND ONE WORKSHOP A MONTH, each guarded on its own, and still one cheap thing per run:
+   * the Room on this tick, the Workshop on the next a quarter of an hour later.
+   */
+  const month = deliveryMonth(now);
+  const skipped: string[] = [];
   for (const kind of ["ROOM", "WORKSHOP"] as const) {
+    /*
+     * A MONTH THAT IS NOT PARKER'S IS NOT QUEUED, and saying so is the point.
+     *
+     * October's Workshop is hosted by a friend of Scooter's; no Room runs in September or October.
+     * Without this the job would queue a packet for a session somebody else is running — Parker
+     * spending four model calls on work that is already somebody's, and a proposal on the shelf
+     * competing with the real thing.
+     */
+    const plan = planFor(month, kind);
+    if (plan?.status === "EXTERNAL") {
+      skipped.push(`${month}'s ${kind === "WORKSHOP" ? "Workshop" : "Room"} is hosted by ${plan.host ?? "somebody outside the firm"} (${plan.topic ?? "topic not recorded"}), so it is not Parker's to build`);
+      continue;
+    }
+    if (plan?.status === "NOT_RUNNING") {
+      skipped.push(`no ${kind === "WORKSHOP" ? "Workshop" : "Room"} runs in ${month}`);
+      continue;
+    }
     const existing = await env.WP_OS_DB.prepare(
       "SELECT COUNT(*) AS n FROM evt_room_packet WHERE firm_scope = ?1 AND proposed_for_month = ?2 AND COALESCE(kind, 'ROOM') = ?3",
     ).bind(firmScope, month, kind).first<{ n: number }>();
     if ((existing?.n ?? 0) > 0) continue;
     const draft = await queueDraft(env, actor, { month, origin: "PARKER", kind });
     const card = await openPacketCard(env, draft);
-    const set = kind === "WORKSHOP" ? setWorkshopTitle(month) : null;
-    return { generated: true, detail: `queued Parker's own ${kind === "WORKSHOP" ? "Workshop" : "Room"} for ${month}${set ? ` — title set by the partners: "${set}"` : ""} (card ${card.cardId}); the sweep builds it`, packetId: draft.id };
+    const topic = plan?.status === "SET" ? plan.topic : null;
+    return {
+      generated: true,
+      detail: `queued Parker's own ${kind === "WORKSHOP" ? "Workshop" : "Room"} for ${month}, due ${dueOn(month)}${topic ? ` — topic set by the partners: "${topic}"; he works up angles on it` : " — he picks the topic himself and works up angles on it"} (card ${card.cardId}); the sweep builds it`,
+      packetId: draft.id,
+    };
   }
   const building = await env.WP_OS_DB.prepare(
     "SELECT COUNT(*) AS n FROM evt_room_packet WHERE firm_scope = ?1 AND status = 'DRAFT'",
   ).bind(firmScope).first<{ n: number }>();
   return {
     generated: false,
-    detail: `${month} already has a Room and a Workshop proposal${(building?.n ?? 0) > 0 ? `; ${building!.n} request(s) being built by Parker in the sweep` : ""}`,
+    detail: `${month} (due ${dueOn(month)}) is covered${skipped.length ? `: ${skipped.join("; ")}` : " — it already has a Room and a Workshop proposal"}${(building?.n ?? 0) > 0 ? `; ${building!.n} request(s) being built by Parker in the sweep` : ""}`,
   };
 }
 

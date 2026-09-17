@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, getDevUser, useApi } from "../lib/api";
 import { EventsPage } from "./EventsPage";
 import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
@@ -368,16 +368,29 @@ export function RoomsPage(): JSX.Element {
     return false;
   }
 
-  async function decide(id: string, decision: "APPROVED" | "DECLINED"): Promise<void> {
+  /*
+   * DISMISSING OPENS A CONTROL ON THE CARD — it used to open `window.prompt` (17 Sep 2026).
+   *
+   * Three things were wrong with the native dialog and none of them is cosmetic. On a phone it is a
+   * cramped single-line box over the packet you are deciding about, with the packet hidden behind
+   * it. It BLOCKS THE WHOLE PAGE synchronously, so anything automated — a Playwright journey, a
+   * screenshot, an accessibility pass — freezes on it rather than failing. And it cannot be styled,
+   * labelled or described, so the one sentence explaining what the reason is FOR has to live inside
+   * a prompt string nobody can read at a glance.
+   *
+   * WHAT IS KEPT, DELIBERATELY: a reason is still captured and still optional (a dismissal with no
+   * words is a real answer and forcing prose would produce "no"), and a declined proposal still
+   * goes to the greyed shelf below with the reason attached rather than vanishing.
+   */
+  const [dismissing, setDismissing] = useState<string | null>(null);
+
+  async function decide(id: string, decision: "APPROVED" | "DECLINED", note?: string): Promise<void> {
     const body: Record<string, unknown> = { decision };
-    if (decision === "DECLINED") {
-      // The note is what makes the shelf useful: "rooms we turned down need more info".
-      const note = window.prompt("Why not? One line — it is shown on the shelf and given to Parker if you ask again.");
-      if (note === null) return;
-      if (note.trim()) body.note = note.trim();
-    }
+    // The note is what makes the shelf useful: "rooms we turned down need more info".
+    if (decision === "DECLINED" && note && note.trim()) body.note = note.trim();
     const res = await api(`/api/rooms/packets/${id}/decide`, { method: "POST", body });
     if (res.status !== 200) setMessage(`Could not record that decision (${res.status}).`);
+    setDismissing(null);
     packets.reload();
   }
 
@@ -433,7 +446,7 @@ export function RoomsPage(): JSX.Element {
 
       <div data-testid="rooms-waiting">
         {waiting.map((p) => (
-          <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} startCollapsed={false} />
+          <RoomProposal key={p.id} packet={p} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => packets.reload()} startCollapsed={false} />
         ))}
       </div>
 
@@ -463,7 +476,7 @@ export function RoomsPage(): JSX.Element {
           <p className="state-empty" data-testid="rooms-approved-empty">No Room has been kept yet. Keeping one above puts it here.</p>
         )}
         {kept.map((p) => (
-          <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} startCollapsed={true} />
+          <RoomProposal key={p.id} packet={p} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => packets.reload()} startCollapsed={true} />
         ))}
       </div>
 
@@ -483,7 +496,7 @@ export function RoomsPage(): JSX.Element {
           </p>
         )}
         {workshopsWaiting.map((p) => (
-          <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} startCollapsed={false} />
+          <RoomProposal key={p.id} packet={p} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => packets.reload()} startCollapsed={false} />
         ))}
       </div>
       <h4>Approved Workshops</h4>
@@ -492,7 +505,7 @@ export function RoomsPage(): JSX.Element {
           <p className="state-empty" data-testid="workshops-approved-empty">No Workshop has been kept yet. Keeping one above puts it here.</p>
         )}
         {workshopsKept.map((p) => (
-          <RoomProposal key={p.id} packet={p} onDecide={decide} onChanged={() => packets.reload()} startCollapsed={true} />
+          <RoomProposal key={p.id} packet={p} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => packets.reload()} startCollapsed={true} />
         ))}
       </div>
 
@@ -637,7 +650,11 @@ export function RoomsPage(): JSX.Element {
  */
 function RoomProposal(props: {
   packet: PacketRow;
-  onDecide: (id: string, decision: "APPROVED" | "DECLINED") => Promise<void>;
+  onDecide: (id: string, decision: "APPROVED" | "DECLINED", note?: string) => Promise<void>;
+  /** True while this card's dismiss form is open. Held by the page so only one is ever open. */
+  dismissing: boolean;
+  onDismissOpen: () => void;
+  onDismissCancel: () => void;
   onChanged: () => void;
   /** How the card starts the first time this browser sees it: kept Rooms closed, live ones open. */
   startCollapsed: boolean;
@@ -725,10 +742,11 @@ function RoomProposal(props: {
           <p className="state-empty">Parker is building this {kindWord(p)}. Every stage he finishes is kept, so a retried tick picks up where he left off. It lands here, and in both partners' inboxes with the PDF, when the chain is done.</p>
         )}
         <div className="form-row">
-          <button type="button" onClick={() => props.onDecide(p.id, "DECLINED")} data-testid={`decline-${p.id}`}>
+          <button type="button" onClick={props.onDismissOpen} data-testid={`decline-${p.id}`}>
             Dismiss the request
           </button>
         </div>
+        <DismissForm packet={p} open={props.dismissing} onCancel={props.onDismissCancel} onDismiss={(note) => props.onDecide(p.id, "DECLINED", note)} />
       </article>
     );
   }
@@ -973,11 +991,14 @@ function RoomProposal(props: {
           <button type="button" className="btn-strong" onClick={() => props.onDecide(p.id, "APPROVED")} data-testid={`approve-${p.id}`}>
             Keep this {kindWord(p)}
           </button>
-          <button type="button" onClick={() => props.onDecide(p.id, "DECLINED")} data-testid={`decline-${p.id}`}>
+          <button type="button" onClick={props.onDismissOpen} data-testid={`decline-${p.id}`}>
             Dismiss it
           </button>
           <span className="muted small">It is just a packet with a suggestion. Dismissing keeps it, greyed, further down this page.</span>
         </div>
+      )}
+      {p.status === "PROPOSED" && (
+        <DismissForm packet={p} open={props.dismissing} onCancel={props.onDismissCancel} onDismiss={(note) => props.onDecide(p.id, "DECLINED", note)} />
       )}
       {p.status === "APPROVED" && (
         <p className="muted small">
@@ -990,6 +1011,58 @@ function RoomProposal(props: {
         <p className="muted small">On the calendar. It appears in the record of gatherings below.</p>
       )}
     </article>
+  );
+}
+
+/**
+ * The reason box, in the page rather than in a browser dialog.
+ *
+ * Opened by the Dismiss button, focused when it opens so a keyboard or screen-reader user lands in
+ * it, dismissable with Escape, and labelled — all four of which a `window.prompt` cannot do. The
+ * reason is OPTIONAL: "Dismiss it" is enabled with the box empty, because a partner who has nothing
+ * to add should not be made to type "no", and a forced field produces exactly that.
+ */
+function DismissForm(props: { packet: PacketRow; open: boolean; onCancel: () => void; onDismiss: (note: string) => Promise<void> }): JSX.Element | null {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const box = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    if (props.open) box.current?.focus();
+    else setNote("");
+  }, [props.open]);
+  if (!props.open) return null;
+  const id = `dismiss-why-${props.packet.id}`;
+  return (
+    <div className="card" data-testid={`dismiss-form-${props.packet.id}`} role="group" aria-label={`Dismiss ${props.packet.title}`}>
+      <label className="small" htmlFor={id}><strong>Why not?</strong></label>
+      <p className="muted small" id={`${id}-help`}>
+        One line. It is shown on the shelf below beside this proposal, and Parker is given it if you ask
+        for something on this topic again. You can leave it empty.
+      </p>
+      <textarea
+        id={id}
+        ref={box}
+        rows={2}
+        value={note}
+        aria-describedby={`${id}-help`}
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Escape") props.onCancel(); }}
+        data-testid={`dismiss-note-${props.packet.id}`}
+      />
+      <div className="form-row">
+        <button
+          type="button"
+          disabled={busy}
+          data-testid={`dismiss-confirm-${props.packet.id}`}
+          onClick={async () => { setBusy(true); await props.onDismiss(note); setBusy(false); }}
+        >
+          {busy ? "Dismissing…" : "Dismiss it"}
+        </button>
+        <button type="button" onClick={props.onCancel} disabled={busy} data-testid={`dismiss-cancel-${props.packet.id}`}>
+          Keep deciding
+        </button>
+      </div>
+    </div>
   );
 }
 
