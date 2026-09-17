@@ -5,6 +5,7 @@ import type { PrivacyLabel } from "../../shared/privacy";
 import { isSearchGrounded } from "../../shared/ai/models";
 import { createMockLocalAdapter, MOCK_LOCAL_MODEL } from "./providers/mockLocal";
 import type { ProviderAdapter } from "./providers/types";
+import { firmNoticesBlock } from "./firmNotices";
 import { redactInputs, scrubInputs } from "./scrub";
 import {
   adapterFor,
@@ -825,16 +826,35 @@ export function workersAiConfigured(env: Env): boolean {
   return Boolean((env as unknown as { AI?: unknown }).AI);
 }
 
-export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): Promise<AIRunResult> {
-  if (!input.purpose || input.purpose.trim().length === 0) {
+export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}): Promise<AIRunResult> {
+  if (!runInput.purpose || runInput.purpose.trim().length === 0) {
     throw new RunAiError(400, "invalid_input", "purpose is required");
   }
-  if (!Array.isArray(input.inputs) || input.inputs.length === 0) {
+  if (!Array.isArray(runInput.inputs) || runInput.inputs.length === 0) {
     throw new RunAiError(400, "invalid_input", "at least one input is required");
   }
 
   const now = deps.now ?? new Date();
-  const firmScope = input.actor.firmScopes[0] ?? "west-peek";
+  const firmScope = runInput.actor.firmScopes[0] ?? "west-peek";
+
+  /*
+   * ── FIRMWIDE NOTICES ────────────────────────────────────────────────────────────────────────
+   *
+   * THE ONE PLACE the firm's notices enter an employee prompt. Here, and not at the seventeen call
+   * sites that name an employee, because a rule that each caller has to remember is a rule that a
+   * new caller silently skips — which is precisely how `internal_memo` came to hold zero rows and
+   * reach nothing. An employee run is a run that names an `aiEmployeeId`; a run with no employee
+   * behind it (a mechanical extraction, a transcription) is not somebody the firm is instructing,
+   * and is left exactly as it was.
+   *
+   * Prepended, so it is read before the task, and inside the boundary, so the scrubber, the budget
+   * estimate and the input hash all see the text that is actually sent.
+   *
+   * Guarded by tests/firmNotices.test.ts.
+   */
+  const noticesBlock = runInput.aiEmployeeId ? await firmNoticesBlock(env, firmScope) : "";
+  const input: RunAiInput = noticesBlock === "" ? runInput : { ...runInput, inputs: [noticesBlock, ...runInput.inputs] };
+
   const policy = await getLatestBudgetPolicy(env, firmScope);
 
   /*
