@@ -4,6 +4,7 @@ import { appendEvent } from "../events";
 import { deliver } from "./deliverables";
 import { recordSwallowed } from "./swallowed";
 import type { RoomConcept, RunOfShowLine } from "../../shared/events/roomPacket";
+import { PREVIEW_PARTNER } from "../../shared/registry/partners";
 import type { WorkshopView } from "../../shared/events/workshopPacket";
 import { packetKindOf } from "../../shared/events/workshopPacket";
 import {
@@ -80,7 +81,7 @@ export interface KitPacketRow {
 }
 
 /** Her Home by default; whoever asked for it, when a partner asked. Both partners see either. */
-export const DEFAULT_KIT_RECIPIENT = "fu_sequoia_taylor";
+export const DEFAULT_KIT_RECIPIENT = PREVIEW_PARTNER.firmUserId;
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
