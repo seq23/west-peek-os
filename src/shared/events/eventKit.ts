@@ -573,9 +573,11 @@ export function verifyEventKit(kit: EventKit, src: EventKitSource): EventKit {
     const seat = item.kind === "CO_HOST" ? /co-?host/i : /guest/i;
     out.runOfShow = out.runOfShow.map((r) => {
       if (!seat.test(r.onScreen.who)) return r;
+      // A person's name, with any "(co-host)" or "(guest)" note beside it taken off first — the
+      // note is what identifies the seat, and the name is what must not be there.
       const invented = r.onScreen.who
         .split(/[,+]/)
-        .map((w) => w.trim())
+        .map((w) => w.replace(/\([^)]*\)/g, "").trim())
         .find((w) => /^[A-Z][a-z]+(\s+[A-Z][a-z]+)+$/.test(w) && !names.has(w.toLowerCase()));
       if (!invented) return r;
       flags.push({ code: "invented_person_removed", detail: `"${invented}" was put in frame as the ${item.kind === "CO_HOST" ? "co-host" : "guest"}; nobody has been asked, so the seat stays open` });
