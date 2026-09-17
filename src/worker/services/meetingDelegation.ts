@@ -273,7 +273,7 @@ export async function runCloseout(env: Env, actor: Actor, meetingId: string): Pr
       // The meeting's own label, never lowered — same rule as Live Help. A CONFIDENTIAL meeting
       // must be refused by provider policy rather than quietly downgraded to reach a cheaper lane.
       sensitivity: meeting.privacy_label as never,
-      budgetContext: { expectedOutputTokens: 900 },
+      budgetContext: { judgement: true, expectedOutputTokens: 900 },
       routing: { category: "INTELLIGENCE" },
     });
     aiRunId = run.id;

@@ -254,7 +254,7 @@ export async function runRoomCloseout(
         // understood to be private. Live search runs at PUBLIC; this must not.
         sensitivity: "INTERNAL" as never,
         routing: { category: "INTELLIGENCE" },
-        budgetContext: { expectedOutputTokens: 1500, providerKey: "openrouter" },
+        budgetContext: { judgement: true, expectedOutputTokens: 1500, providerKey: "openrouter" },
       });
       if (run.status !== "COMPLETED" || !run.output_text) {
         throw new CloseoutError(502, "synthesis_failed", run.failure_reason ?? `run ${run.status}`);

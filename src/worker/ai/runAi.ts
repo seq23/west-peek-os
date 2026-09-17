@@ -140,6 +140,55 @@ export interface RunAiBudgetContext {
    * Implies `judgement`; callers need not set both.
    */
   interpretation?: boolean;
+  /**
+   * THIS CALL HAS TO REACH THE LIVE WEB (17 Sep 2026).
+   *
+   * The third kind of call, and it exists because the other two get it exactly wrong.
+   *
+   * `judgement` REMOVES search-grounded models from the candidates — correctly, because a search
+   * model once refused its own judgement and blocked Parker's packet three times. But the eight
+   * calls that exist TO SEARCH pinned `preferredModel: SEARCH_MODEL` and marked nothing, and under
+   * CHEAPO a `preferredModel` is simply ignored. So switching the firm to CHEAPO would have sent
+   * every live search to the cheapest model in the catalogue — a 3-billion-parameter local model
+   * with no web access at all — which would have answered fluently, from memory, about the market
+   * this morning. Marking them `judgement` instead would have been worse: that removes the search
+   * model on purpose.
+   *
+   * So this flag says the opposite thing to `judgement`, and says it to the router rather than
+   * leaving it to whoever remembered a pin:
+   *   1. A SEARCH-GROUNDED MODEL IS REQUIRED, not excluded.
+   *   2. A COST POSTURE CANNOT DOWNGRADE IT, exactly as judgement cannot be downgraded.
+   *   3. IF THE CATALOGUE HAS NO SEARCH MODEL AVAILABLE, THE RUN FAILS LOUDLY. There is no honest
+   *      cheap version of "what happened in the market today", and a confident answer from memory
+   *      is worse than no answer, because it gets believed.
+   */
+  requiresSearch?: boolean;
+  /**
+   * THIS CALL IS MACHINERY, and saying so is the point (17 Sep 2026).
+   *
+   * A URL check, a format pass, a dedupe, an extraction whose output another stage consumes. It is
+   * cheap and should stay cheap. Setting it changes NOTHING about how the call is routed — it is a
+   * declaration, not a lever.
+   *
+   * It exists so that an UNMARKED call site is impossible. Before this, the 33 calls nobody had
+   * classified were indistinguishable from the ones somebody had thought about and decided were
+   * mechanical, and the default was "cheapest". `scripts/validate/every-call-is-classified.mjs`
+   * fails on a `runAi` call carrying none of the four markers, so a new call site is a decision
+   * somebody made rather than a default nobody noticed.
+   */
+  mechanical?: boolean;
+  /**
+   * THIS CALL CARRIES LP NAMES OR DEAL TERMS (17 Sep 2026).
+   *
+   * The owner's line, in her words: "yes LP names and deal terms are confidential." A free model
+   * route is generally free because the provider may train on what it is sent, so confidential
+   * content must never reach one however good the model is — and that has to be enforced at the
+   * router, before a request is formed, not remembered by a caller.
+   *
+   * Setting it forbids every training-permitting lane for this run, in every cost posture,
+   * including CHEAPO. See `trainingPermitted` in shared/ai/freeLanes.ts.
+   */
+  confidential?: boolean;
   /** Pin a specific provider by provider_key. */
   providerKey?: string;
 }
@@ -409,6 +458,8 @@ interface ProviderRow {
   capabilities_json: string;
   cost_metadata_json: string;
   base_url: string | null;
+  /** 1 when this lane's terms permit the vendor to train on what it is sent. See migration 0178. */
+  training_permitted?: number;
 }
 
 interface PricingRow {
@@ -596,6 +647,14 @@ export interface FallbackOption {
   candidate: RoutingCandidate;
   adapter: ProviderAdapter;
   engageOn: "ANY" | "OUTAGE";
+  /**
+   * THE RATES THIS CANDIDATE IS PRICED AT, so a run that falls over is billed at what it actually
+   * used. The comment in `executeAttempt` admitted the old behaviour as "a knowable inaccuracy":
+   * a run that fell back priced its tokens at the PLANNED model's rate. That was tolerable when a
+   * fallback was the same price class; it is not tolerable now that a free lane can hand work to a
+   * paid one, where the difference between the two rates is the entire point.
+   */
+  estimate?: CostEstimate;
 }
 
 /**
@@ -718,7 +777,13 @@ async function executeAttempt(
         .run();
       return executeAttempt(
         env,
-        { ...rec, providerId: next.candidate.providerId, providerKey: next.candidate.providerKey, model: next.candidate.model },
+        {
+          ...rec,
+          providerId: next.candidate.providerId,
+          providerKey: next.candidate.providerKey,
+          model: next.candidate.model,
+          estimate: next.estimate ?? rec.estimate,
+        },
         running.id,
         next.adapter,
         quarantine,
@@ -1017,6 +1082,36 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     }
   }
 
+  /*
+   * 4b. NOTHING CONFIDENTIAL GOES ANYWHERE THAT MAY TRAIN ON IT.
+   *
+   * The owner's line, in her words: "yes LP names and deal terms are confidential." A free route is
+   * generally free BECAUSE the provider may use what you send it to improve their models — Google
+   * says so in terms, verbatim: "Do not submit sensitive, confidential, or personal information to
+   * the Unpaid Services."
+   *
+   * Two independent things stop it, because one would be enough right up until it wasn't:
+   *   · the data class. Every training-permitting lane allows PUBLIC and nothing else, so anything
+   *     labelled INTERNAL or above is refused by the egress gate below without this line existing.
+   *   · this line. A caller marks the CALL confidential, which is a fact about the words rather
+   *     than about the label — a PUBLIC-labelled summary of a deal still contains the terms.
+   *
+   * Refused HERE, before a request is formed, and not checked by the caller afterwards. That is the
+   * sonar lesson: callers used to say "must not be the search model" in an if-statement after the
+   * run, which is not a rule, it is a hope.
+   */
+  if (input.budgetContext?.confidential === true) {
+    candidates = candidates.filter((p) => Number((p as unknown as { training_permitted?: number }).training_permitted ?? 0) !== 1);
+    if (candidates.length === 0) {
+      return {
+        run: await blocked(
+          "EGRESS_BLOCKED",
+          "confidential_call_has_no_lane_that_does_not_train:LP names and deal terms may not reach a route whose terms permit training",
+        ),
+      };
+    }
+  }
+
   // 5. Egress check (D9 default-deny): the sensitivity label must be explicitly
   //    allowed for the provider. Restricted labels can never leave.
   const egressAllowed: ProviderRow[] = [];
@@ -1125,7 +1220,23 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   // Precedence, most specific first: machine model policy → task routing policy →
   // explicit preferred model → cheapest adequate. Every step is recorded in the
   // explanation, so "why this model?" is answerable from stored fact.
-  const allCandidates: RoutingCandidate[] = options.map((o) => ({
+  /*
+   * A FREE LANE NEVER WINS AN ORDINARY SELECTION, and it took a test suite going quiet to notice
+   * why that matters.
+   *
+   * A free model's price is $0, so the moment the lanes existed they became the cheapest thing in
+   * the catalogue and started taking every PUBLIC-labelled call in the firm — including mechanical
+   * work that had been going to a paid or platform lane. That is a widening nobody asked for: it
+   * moves the DEFAULT destination for public content onto routes whose terms permit training,
+   * silently, on the strength of a zero.
+   *
+   * Free capacity is opt-in, for quality-critical public-facing work, through the free-first path
+   * at step 8a — where it is chosen deliberately and said out loud on the run. Everything else
+   * keeps going where it went, and mechanical work stays on Workers AI, which is nearly free AND
+   * carries no training rights at all.
+   */
+  const paidOptions = options.filter((o) => Number(o.provider.training_permitted ?? 0) !== 1);
+  const allCandidates: RoutingCandidate[] = paidOptions.map((o) => ({
     providerId: o.provider.id,
     providerKey: o.provider.provider_key,
     model: o.pricing.model,
@@ -1141,9 +1252,41 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    */
   const isInterpretation = input.budgetContext?.interpretation === true;
   const isJudgement = isInterpretation || input.budgetContext?.judgement === true;
+  /*
+   * A CALL THAT EXISTS TO SEARCH MUST REACH A MODEL THAT CAN SEARCH — the mirror image of the rule
+   * below it, and the reason it exists is CHEAPO.
+   *
+   * Eight call sites pin `preferredModel: SEARCH_MODEL` and marked nothing else. CHEAPO ignores a
+   * `preferredModel` outright, so switching the firm to CHEAPO would have routed every live search
+   * to the cheapest model in the catalogue — a small local model with no web access — which would
+   * have answered fluently, from memory, about this morning's market. Marking them `judgement`
+   * would have been worse: judgement REMOVES search models on purpose.
+   *
+   * REFUSES RATHER THAN DEGRADES, and this is the one place in this function that does. Everywhere
+   * else a missing capability produces the best available plus an explanation, because a worse
+   * answer is still an answer. There is no worse-but-honest version of "what happened today": a
+   * model answering from memory produces something indistinguishable from research, and it gets
+   * believed.
+   */
+  const requiresSearch = input.budgetContext?.requiresSearch === true;
+  if (requiresSearch) {
+    const searchCapable = allCandidates.filter((c) => isSearchGrounded(c.model));
+    if (searchCapable.length === 0) {
+      return {
+        run: await blocked(
+          "PREFLIGHT_BLOCKED",
+          "no_search_grounded_model_available:this call has to reach the live web and no model that can is available; a confident answer from memory would be worse than none",
+        ),
+      };
+    }
+  }
   const notSearch = allCandidates.filter((c) => !isSearchGrounded(c.model));
-  const judged: RoutingCandidate[] = isJudgement && notSearch.length > 0 ? notSearch : allCandidates;
-  const searchExcluded = isJudgement && notSearch.length > 0 && notSearch.length < allCandidates.length;
+  const judged: RoutingCandidate[] = requiresSearch
+    ? allCandidates.filter((c) => isSearchGrounded(c.model))
+    : isJudgement && notSearch.length > 0
+      ? notSearch
+      : allCandidates;
+  const searchExcluded = !requiresSearch && isJudgement && notSearch.length > 0 && notSearch.length < allCandidates.length;
 
   /*
    * READING AN OWNER'S INSTRUCTION ASKS THE CATALOGUE ABOUT CAPABILITY, NOT PRICE.
@@ -1216,7 +1359,7 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
       ordered.length > 0
         ? `routing policy '${routePolicy.task_class}' v${routePolicy.version_no}: ${ordered.map((c) => `${c.providerKey}/${c.model}`).join(" → ")}${routePolicy.allow_fallback ? " (fallback allowed)" : " (no fallback)"}`
         : `routing policy '${routePolicy.task_class}' v${routePolicy.version_no} names no available candidate`;
-  } else if (routePolicy && isJudgement) {
+  } else if (routePolicy && (isJudgement || requiresSearch)) {
     // THE ONE POSTURE THAT OVERRIDES A PIN DOES NOT OVERRIDE JUDGEMENT. "Free only" is a lever for
     // volume; the pin on work that decides what a partner meant is a quality decision and stands.
     ordered = orderByPolicy(routePolicy, routingCandidates);
@@ -1266,7 +1409,10 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     const cheapest = rankable.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
     const dearest = rankable.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
     let head: RoutingCandidate;
-    if ((effectiveCostMode !== "CHEAPO" || isJudgement) && preferred) {
+    // `requiresSearch` joins `isJudgement` here: CHEAPO is a lever for volume, and neither the model
+    // that reads a partner's instruction nor the one that has to reach the web is downgradeable by
+    // a cost posture.
+    if ((effectiveCostMode !== "CHEAPO" || isJudgement || requiresSearch) && preferred) {
       head = routingCandidates.find((c) => c.model === preferred) ?? (prefersFrontier ? dearest : cheapest);
       explanation =
         head.model === preferred
@@ -1457,6 +1603,103 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   //    HTTPS shape). No live credentials exist in any current environment, so a real call
   //    fails closed with `credential_missing:<provider>` — UNPROVEN, CREDENTIAL GATE.
   //    Output is quarantined until a human accepts it.
+  /*
+   * ── 8a. FREE FRONTIER CAPACITY FIRST, WHERE IT IS SAFE AND ADEQUATE ────────────────────────
+   *
+   * "i want to be cheapo for everything except the important stuff and with the important stuff u
+   * should find a way to use my freemium aspect of the models."
+   *
+   * The important stuff splits two ways and they pull opposite. Important-because-public-facing —
+   * a workshop angle, a room packet, blog help, market research — wants the best model available
+   * and is delighted if that model is free. Important-because-confidential — LP names, deal terms —
+   * must not go near a free tier at any quality, because free is usually free in exchange for
+   * training rights.
+   *
+   * So the free lanes are tried FIRST for quality-critical work, and the confidentiality filter at
+   * step 4b has already removed them from `candidates` when the call is marked confidential. They
+   * also carry a PUBLIC-only data policy, so an INTERNAL-labelled run never got here either. Two
+   * independent gates, both upstream of this line.
+   *
+   * WHY THIS IS SAFE ON COST AS WELL. The budget checks above all ran against the PAID head, not
+   * against the free lane — "could the firm afford this if the free tier fails?" is the question
+   * worth asking, and it is asked before a free run that might have to be repaid is started.
+   *
+   * WHY QUOTA EXHAUSTION IS VISIBLE RATHER THAN SILENT. A free tier that has run out answers HTTP
+   * 429. That is an outage, the paid head is the outage fallback, and every such handover lands in
+   * `ai_run_routing` with `fallback_used = 1` and a RATE_LIMITED label, which the Cockpit reads
+   * back as `recent_fallbacks`. "We started paying at 11am on the 9th" is a query, not a guess.
+   *
+   * MECHANICAL WORK DOES NOT COME HERE, and that is deliberate: it is already going to Workers AI
+   * at $0.017 per Mtok, which is free capacity that is ALSO safe for INTERNAL content. Sending it
+   * through a training-permitting lane to save a fraction of a cent would trade confidentiality
+   * for nothing.
+   */
+  const freeFirstEligible =
+    isJudgement &&
+    // A free lane cannot reach the web, so a search call is not a candidate for one.
+    !requiresSearch &&
+    input.budgetContext?.confidential !== true &&
+    // Nor can one be trusted with a picture or a deck: the vision and document gates above verified
+    // the model the RUN was planned on, and a free substitute has not passed them.
+    !input.images?.length &&
+    !input.documents?.length;
+
+  const freeLanes: FallbackOption[] = [];
+  if (freeFirstEligible) {
+    const freeOptions = options
+      .filter((o) => Number(o.provider.training_permitted ?? 0) === 1)
+      .filter((o) => credentialConfigured(env, o.provider.provider_key))
+      // A free lane must clear the SAME bar the paid head cleared. `judged`/`routingCandidates`
+      // already encode "not search-grounded" and, for an interpretation, "records supports_reasoning".
+      // Reusing that set is what makes "never silently downgrade" structural rather than a promise.
+      /*
+       * THE SAME BAR THE PAID HEAD CLEARED, stated explicitly because the free lanes are no longer
+       * in `routingCandidates` — they are excluded from ordinary ranking so a zero cannot win a
+       * selection. Inheriting the bar is what makes "never silently downgrade" structural: a free
+       * model that cannot reason does not get to read a partner's instruction just because it costs
+       * nothing, and a search-grounded one does not get to judge.
+       */
+      .filter((o) => !isSearchGrounded(o.pricing.model))
+      .filter((o) => !isInterpretation || o.pricing.supports_reasoning === 1);
+    /*
+     * A DETERMINISTIC ORDER, because both lanes cost $0 and price therefore cannot choose between
+     * them — and "whatever the database returned first" is not an order, it is a coin toss that
+     * looks stable until it isn't.
+     *
+     * OpenRouter's :free tier first: it is already connected, needs no second credential, and the
+     * model behind it is 550B with a million-token window. Gemini's unpaid quota second. Anything
+     * else after, in catalogue order.
+     */
+    const FREE_LANE_ORDER = ["openrouter_free", "google_free"];
+    freeOptions.sort((a, b) => {
+      const ai = FREE_LANE_ORDER.indexOf(a.provider.provider_key);
+      const bi = FREE_LANE_ORDER.indexOf(b.provider.provider_key);
+      return (ai < 0 ? FREE_LANE_ORDER.length : ai) - (bi < 0 ? FREE_LANE_ORDER.length : bi);
+    });
+    for (const o of freeOptions) {
+      const candidate: RoutingCandidate = {
+        providerId: o.provider.id,
+        providerKey: o.provider.provider_key,
+        model: o.pricing.model,
+        estimatedCostUsd: 0,
+        baseUrl: o.provider.base_url,
+      };
+      freeLanes.push({
+        candidate,
+        adapter: adapterFor(env, candidate, deps.fetchImpl).adapter,
+        engageOn: "OUTAGE",
+        estimate: {
+          ...estimate,
+          estimated_cost_usd: 0,
+          provider_key: candidate.providerKey,
+          model: candidate.model,
+          input_per_mtok_usd: o.pricing.input_per_mtok_usd,
+          output_per_mtok_usd: o.pricing.output_per_mtok_usd,
+        },
+      });
+    }
+  }
+
   const { adapter } = adapterFor(env, head, deps.fetchImpl);
   const allowFallback = routePolicy?.allow_fallback === 1;
   /*
@@ -1484,7 +1727,7 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * AND IT CANNOT LEAK DATA SIDEWAYS: the peer's own provider_data_policy must allow this run's
    * sensitivity label, checked here, default-deny, exactly as the primary was.
    */
-  const outageFallbacks: Array<{ candidate: RoutingCandidate; adapter: ProviderAdapter; engageOn: "OUTAGE" }> = [];
+  const outageFallbacks: FallbackOption[] = [];
   for (const source of ordered) {
     const direct = directVendorRouteFor(source.model);
     if (!direct) continue;
@@ -1505,19 +1748,40 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
       estimatedCostUsd: source.estimatedCostUsd,
       baseUrl: peerProvider.base_url,
     };
-    outageFallbacks.push({ candidate, adapter: adapterFor(env, candidate, deps.fetchImpl).adapter, engageOn: "OUTAGE" });
+    outageFallbacks.push({
+      candidate,
+      adapter: adapterFor(env, candidate, deps.fetchImpl).adapter,
+      engageOn: "OUTAGE",
+      // The same model, so the same rates. Only the provider key differs.
+      estimate: { ...estimate, provider_key: candidate.providerKey, model: candidate.model },
+    });
   }
 
+  const policyFallbacks: FallbackOption[] = allowFallback
+    ? ordered.slice(1).map((c) => ({
+        candidate: c,
+        adapter: adapterFor(env, c, deps.fetchImpl).adapter,
+        engageOn: "ANY" as const,
+      }))
+    : [];
+
+  /*
+   * THE PAID HEAD IS THE LAST RESORT WHEN A FREE LANE LEADS, and it is an OUTAGE fallback: a free
+   * model that refuses the request on its merits does not get quietly repaid for at frontier
+   * prices, while a free tier that has run out (429) does.
+   */
+  const paidHeadAsFallback: FallbackOption[] =
+    freeLanes.length > 0 ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }] : [];
+
   const fallbacks: FallbackOption[] = [
-    ...(allowFallback
-      ? ordered.slice(1).map((c) => ({
-          candidate: c,
-          adapter: adapterFor(env, c, deps.fetchImpl).adapter,
-          engageOn: "ANY" as const,
-        }))
-      : []),
+    ...freeLanes.slice(1),
+    ...paidHeadAsFallback,
+    ...policyFallbacks,
     ...outageFallbacks,
   ];
+
+  /** What actually runs first: a free lane where one is eligible, the chosen model otherwise. */
+  const lead = freeLanes[0];
   if (outageFallbacks.length > 0) {
     explanation +=
       ` Direct-vendor fallback is available for this call (${outageFallbacks
@@ -1526,17 +1790,24 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   }
   const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [];
 
+  if (lead) {
+    explanation +=
+      ` Free frontier capacity is tried first for this call (${lead.candidate.providerKey}/${lead.candidate.model}); ` +
+      `it carries no LP names or deal terms and is labelled ${input.sensitivity}, so a lane whose terms permit training is allowed to serve it. ` +
+      `If the free quota is exhausted the run falls through to ${head.providerKey}/${head.model} and the handover is recorded.`;
+  }
+
   const run = await executeRun(
     env,
     {
       ...baseRec,
-      providerId: selected.provider.id,
-      providerKey: selected.provider.provider_key,
-      model: selected.pricing.model,
+      providerId: lead ? lead.candidate.providerId : selected.provider.id,
+      providerKey: lead ? lead.candidate.providerKey : selected.provider.provider_key,
+      model: lead ? lead.candidate.model : selected.pricing.model,
       status: "RUNNING",
-      estimate,
+      estimate: lead?.estimate ?? estimate,
     },
-    adapter,
+    lead ? lead.adapter : adapter,
     true,
     fallbacks,
     attempts,

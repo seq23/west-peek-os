@@ -1064,7 +1064,7 @@ export async function handleUnretireAdvice(ctx: RouteContext): Promise<Response>
     ],
     // The roster and what the firm needs are internal facts about this firm.
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 500 },
+    budgetContext: { judgement: true, expectedOutputTokens: 500 },
     routing: { category: "OPERATIONS", taskClass: "employee-work" },
   });
 

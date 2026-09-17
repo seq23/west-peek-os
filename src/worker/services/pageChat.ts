@@ -183,7 +183,7 @@ export async function handlePageReply(ctx: RouteContext): Promise<Response> {
         .join("\n"),
     ],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 500 },
+    budgetContext: { judgement: true, expectedOutputTokens: 500 },
     // OPERATIONS, not a category invented to fit. `ai_run_attribution.category` has a CHECK
     // constraint (PROACTIVE/RESEARCH/LEGAL/COMPLIANCE/OPERATIONS/INTELLIGENCE/OTHER) and
     // routing.ts writes that row with INSERT OR IGNORE — so a category outside the list is not

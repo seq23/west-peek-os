@@ -254,7 +254,7 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
     // v3 asks for a report several times longer than v2's, so the estimate has to say so. This
     // number is what the affordability check and the cost centre reason about; leaving it at the
     // old 2000 would have understated every brief by a factor of four.
-    budgetContext: { expectedOutputTokens: 8000 },
+    budgetContext: { judgement: true, expectedOutputTokens: 8000 },
     /*
      * THE BRIEF IS BUILT FROM OTHER PEOPLE'S WORDS, so a credential-shaped span in it is somebody
      * else's URL slug, not a mistake this firm can correct. On 19 August one such span blocked the

@@ -799,7 +799,7 @@ export async function handleReviewNotes(ctx: RouteContext): Promise<Response> {
     actor,
     inputs: [buildNotesPrompt(parsed.data.notes, week)],
     sensitivity: parsed.data.sensitivity as never,
-    budgetContext: { expectedOutputTokens: 1500 },
+    budgetContext: { judgement: true, expectedOutputTokens: 1500 },
     routing: { category: "OPERATIONS", taskClass: "employee-work" },
   });
 

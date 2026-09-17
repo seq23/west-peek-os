@@ -27,6 +27,14 @@
  */
 export const PROVIDER_CREDENTIAL_NAME: Readonly<Record<string, string>> = Object.freeze({
   openrouter: "OPENROUTER_API_KEY",
+  /*
+   * THE FREE LANES SHARE A CREDENTIAL WITH THEIR PAID TWIN, and are separate providers anyway.
+   * The thing that differs is the TERMS — a free route is generally free because the provider may
+   * train on what it is sent — and terms are a property of the lane, not of the key. So the key is
+   * the same one and `provider_data_policy` is what keeps them apart. See migration 0178.
+   */
+  openrouter_free: "OPENROUTER_API_KEY",
+  google_free: "GEMINI_API_KEY",
   openai: "OPENAI_API_KEY",
   /*
    * WP_-PREFIXED ON PURPOSE. DO NOT "TIDY" THIS TO `ANTHROPIC_API_KEY`.

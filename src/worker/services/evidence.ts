@@ -512,6 +512,19 @@ export async function extractClaimsFromDocument(
       actor,
       inputs: [text],
       sensitivity: doc.privacy_label as PrivacyLabel,
+      /*
+       * MECHANICAL, AND CONFIDENTIAL — the only call site in this system that is both, and the pair
+       * is the point of having two words instead of one.
+       *
+       * MECHANICAL: this extracts claims into structured rows that a later stage verifies against
+       * the source. Nobody reads its prose; the extraction is checked, not trusted. It is exactly
+       * the kind of work the cheap tier exists for.
+       *
+       * CONFIDENTIAL: the document is a deal document. Deal terms may not reach a lane whose terms
+       * permit training, whatever it costs, and `sensitivity` alone would not have said so — a
+       * document labelled PUBLIC can still name a counterparty and a price.
+       */
+      budgetContext: { mechanical: true, confidential: true },
     },
     deps,
   );

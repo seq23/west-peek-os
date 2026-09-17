@@ -241,10 +241,20 @@ describe("spend has exactly one definition", () => {
 // ── 3. The firmwide ceiling: persists, and binds ──
 
 describe("the firm can set what it will spend, and the number stops work", () => {
-  it("starts with no ceiling and says so rather than inventing one", async () => {
-    const res = await call<{ firm_budgets: Array<{ budget_window: string; cap_usd: number | null }> }>("/api/ai/cost", MP);
+  it("ships with the monthly ceiling migration 0178 set, and invents nothing beyond it", async () => {
+    const res = await call<{ firm_budgets: Array<{ budget_window: string; cap_usd: number | null; reason: string | null }> }>("/api/ai/cost", MP);
     expect(res.body.firm_budgets.map((b) => b.budget_window).sort()).toEqual(["ALL_TIME", "MONTHLY"]);
-    for (const b of res.body.firm_budgets) expect(b.cap_usd).toBeNull();
+    /*
+     * MONTHLY WAS NULL UNTIL 17 SEP 2026, and that was the defect rather than the feature. This
+     * table was empty: there was no monthly ceiling at all, only a daily cap, and 31 x $2.50 of
+     * daily cap is $77.50 — past the $50 the owner named as her worst case. A budget table with no
+     * rows in it reads as protection and provides none.
+     */
+    const monthly = res.body.firm_budgets.find((b) => b.budget_window === "MONTHLY")!;
+    expect(monthly.cap_usd).toBe(50);
+    expect(monthly.reason).toContain("the table was empty");
+    // ALL_TIME is still null, and stays null: nothing is invented for a window nobody set.
+    expect(res.body.firm_budgets.find((b) => b.budget_window === "ALL_TIME")!.cap_usd).toBeNull();
   });
 
   it("saves a ceiling, reads it back, and versions a change instead of overwriting it", async () => {
@@ -261,15 +271,16 @@ describe("the firm can set what it will spend, and the number stops work", () =>
       cap_cents: 9000,
       reason: "raised for the month",
     });
-    expect(second.body.budget.version_no).toBe(2);
+    // 3, not 2: migration 0178 wrote version 1 when it gave this firm its first monthly ceiling.
+    expect(second.body.budget.version_no).toBe(3);
 
     const read = await call<{ firm_budgets: Array<{ budget_window: string; cap_usd: number | null; version_no: number | null }> }>("/api/ai/cost", MP);
     const monthly = read.body.firm_budgets.find((b) => b.budget_window === "MONTHLY")!;
     expect(monthly.cap_usd).toBe(90);
-    expect(monthly.version_no).toBe(2);
+    expect(monthly.version_no).toBe(3);
     // The earlier version is still on the record — a budget is a versioned policy, not a field.
     const versions = await t.db.prepare("SELECT COUNT(*) AS n FROM firm_spend_budget WHERE budget_window = 'MONTHLY'").first<{ n: number }>();
-    expect(versions!.n).toBe(2);
+    expect(versions!.n).toBe(3);
   });
 
   it("refuses a ceiling below what has already been spent, and says both figures", async () => {

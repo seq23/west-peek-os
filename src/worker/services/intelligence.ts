@@ -796,6 +796,7 @@ export async function synthesizeItem(env: Env, identity: FirmUserIdentity, itemI
     actor,
     inputs: [`Headline: ${item.title}`, `Body: ${item.body}`, `Category: ${item.category}`, `Heuristic ranking: ${item.relevance_reason}`],
     sensitivity: (item.privacy_label as never) ?? "INTERNAL",
+    budgetContext: { judgement: true },
     capabilityRequirement: "text-completion",
   });
 

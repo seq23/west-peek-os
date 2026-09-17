@@ -663,7 +663,7 @@ export async function handleProposeQuestions(ctx: RouteContext): Promise<Respons
         .join("\n"),
     ],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 600 },
+    budgetContext: { judgement: true, expectedOutputTokens: 600 },
     routing: { category: "RESEARCH", taskClass: "research_scoping" },
   });
 
@@ -804,7 +804,7 @@ export async function handleResearchReply(ctx: RouteContext): Promise<Response> 
       ].join("\n"),
     ],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 700 },
+    budgetContext: { judgement: true, expectedOutputTokens: 700 },
     routing: { category: "RESEARCH", taskClass: "research_conversation" },
   });
 

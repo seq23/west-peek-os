@@ -914,7 +914,7 @@ export async function handleWriteBrief(ctx: RouteContext): Promise<Response> {
     // The question can name a company, a partner, a deal.
     sensitivity: "INTERNAL" as never,
     // A brief with a partner's name on it.
-    budgetContext: { expectedOutputTokens: 1_800, judgement: true },
+    budgetContext: { judgement: true, expectedOutputTokens: 1_800 },
     aiEmployeeId: author.id,
     routing: {
       category: "RESEARCH",

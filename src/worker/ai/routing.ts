@@ -98,7 +98,7 @@ export function adapterFor(
   const key = credentialValueFor(env, candidate.providerKey);
   const configured = credentialConfigured(env, candidate.providerKey);
 
-  if (candidate.providerKey === "openrouter") {
+  if (candidate.providerKey === "openrouter" || candidate.providerKey === "openrouter_free") {
     return {
       adapter: createOpenRouterAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
       credentialConfigured: configured,
@@ -157,7 +157,7 @@ export function adapterFor(
       credentialConfigured: configured,
     };
   }
-  if (candidate.providerKey === "google") {
+  if (candidate.providerKey === "google" || candidate.providerKey === "google_free") {
     return {
       adapter: createGoogleAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
       credentialConfigured: configured,

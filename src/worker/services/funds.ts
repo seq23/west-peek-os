@@ -291,7 +291,7 @@ export async function handleWriteThesisStatement(ctx: RouteContext): Promise<Res
     ],
     // The mandate is firm-internal: it names sectors and cheque sizes the firm has not published.
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 300 },
+    budgetContext: { judgement: true, expectedOutputTokens: 300 },
     routing: { category: "OPERATIONS", taskClass: "employee-work" },
   });
 

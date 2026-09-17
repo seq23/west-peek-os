@@ -107,7 +107,7 @@ export async function findCompanies(
       inputs: [prompt],
       // PUBLIC and never raised: the query leaves this system for a search engine.
       sensitivity: "PUBLIC" as never,
-      budgetContext: { expectedOutputTokens: 1200, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
+      budgetContext: { requiresSearch: true, expectedOutputTokens: 1200, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
       routing: { category: "INTELLIGENCE" },
     });
 
@@ -145,7 +145,7 @@ export async function searchQuestion(
         "If current sources do not answer part of it, say which part — that is more useful than a guess.",
       ].join("\n")],
       sensitivity: "PUBLIC" as never,
-      budgetContext: { expectedOutputTokens: 1500, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
+      budgetContext: { requiresSearch: true, expectedOutputTokens: 1500, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
       routing: { category: "INTELLIGENCE" },
     });
     if (run.status !== "COMPLETED" || !run.output_text) {
@@ -202,7 +202,7 @@ export async function findVenues(
       actor,
       inputs: [prompt],
       sensitivity: "PUBLIC" as never,
-      budgetContext: { expectedOutputTokens: 1200, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
+      budgetContext: { requiresSearch: true, expectedOutputTokens: 1200, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
       routing: { category: "INTELLIGENCE" },
     });
     if (run.status !== "COMPLETED" || !run.output_text) {
@@ -332,7 +332,7 @@ export async function readMarket(env: Env, actor: Actor, watchlist: readonly str
       inputs: [prompt],
       // PUBLIC and never raised: the query leaves this system for a search engine.
       sensitivity: "PUBLIC" as never,
-      budgetContext: { expectedOutputTokens: 900, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
+      budgetContext: { requiresSearch: true, expectedOutputTokens: 900, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
       routing: { category: "INTELLIGENCE" },
     });
 
