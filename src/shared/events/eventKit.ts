@@ -600,6 +600,12 @@ export function verifyEventKit(kit: EventKit, src: EventKitSource): EventKit {
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
+/** "November 2026" — a month a person reads, not "2026-11". */
+export function kitMonthWord(yyyyMm: string): string {
+  const m = Number(yyyyMm.slice(5, 7));
+  return `${MONTHS[m - 1] ?? yyyyMm} ${yyyyMm.slice(0, 4)}`;
+}
+
 const heading = (key: EventKitSectionKey): string => {
   const i = EVENT_KIT_SECTIONS.findIndex((s) => s.key === key);
   return `## ${i + 1}. ${EVENT_KIT_SECTIONS[i]!.label}`;
@@ -617,7 +623,7 @@ export function renderEventKitMarkdown(kit: EventKit): string {
   const lines: string[] = [
     `# DRAFT PROPOSED EVENT KIT — ${kit.header.eventTitle}`,
     "",
-    `**A draft, and one angle only.** This is the ${kit.stream === "WORKSHOP" ? "Workshop" : "Room"} I would run for ${kit.month}, written up so the only thing left is to say yes. Nothing is booked and nobody outside the firm has been contacted.`,
+    `**A draft, and one angle only.** This is the ${kit.stream === "WORKSHOP" ? "Workshop" : "Room"} I would run for ${kitMonthWord(kit.month)}, written up so the only thing left is to say yes. Nothing is booked and nobody outside the firm has been contacted.`,
     "",
     heading("header"),
     "",
@@ -672,7 +678,14 @@ export function renderEventKitMarkdown(kit: EventKit): string {
     "",
     `— Parker, via West Peek OS. Every West Peek virtual event runs on ${kit.header.platform}.`,
   ];
-  return lines.filter((l) => l !== "").join("\n").replace(/\n{3,}/g, "\n\n");
+  /*
+   * A BLANK LINE IS STRUCTURE IN MARKDOWN, NOT WHITESPACE. The packet's own renderer strips empty
+   * lines because it produces plain text for an email body; this produces MARKDOWN for a page, and
+   * stripping them runs a heading into its paragraph and a table into the sentence above it. So
+   * only the runs are collapsed, and the conditional lines that came back empty leave a blank line
+   * behind rather than nothing.
+   */
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
