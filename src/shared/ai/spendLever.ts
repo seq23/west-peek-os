@@ -335,6 +335,8 @@ export function protectedFromSpendPressure(markers: {
   judgement?: boolean;
   interpretation?: boolean;
   requiresSearch?: boolean;
+  /** Accepted and ignored: declaring a call mechanical is precisely declaring it unprotected. */
+  mechanical?: boolean;
 }): boolean {
   return markers.interpretation === true || markers.judgement === true || markers.requiresSearch === true;
 }

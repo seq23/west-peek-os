@@ -19,6 +19,7 @@ import {
 import { checkFirmBudgets, currentSpendBehaviour, firmSpend } from "./spend";
 import {
   deferNonCriticalFromPolicy,
+  legacyCostModeFor,
   leverFromPolicy,
   protectedFromSpendPressure,
   taskKindOf,
@@ -71,7 +72,16 @@ export const AI_RUN_STATUSES = [
 export type AIRunStatus = (typeof AI_RUN_STATUSES)[number];
 
 export type PrivacyMode = "LOCAL" | "FRONTIER" | "LOCKDOWN";
-export type CostMode = "NORMAL" | "CHEAPO" | "CRITICAL_ONLY" | "STRATEGIC_SURGE";
+/**
+ * THE RETIRED ENUM, narrowed to the two values anything still WRITES.
+ *
+ * `budget_policy.cost_mode` is NOT NULL and historical rows carry all four values, so the column
+ * cannot go; what can go is the pretence that it is a control. It is now derived from the lever by
+ * `legacyCostModeFor`, which emits only these two, and nothing about routing reads it.
+ * CRITICAL_ONLY and STRATEGIC_SURGE are absent from the type because nothing writes them any more —
+ * they are read, where they appear in history, through `translateLegacyCostMode`.
+ */
+export type CostMode = "NORMAL" | "CHEAPO";
 
 export interface AIRunRow {
   id: string;
@@ -407,50 +417,30 @@ export async function getLatestBudgetPolicy(env: Env, firmScope: string): Promis
   };
 }
 
-export interface StrategicSurge {
-  purpose: string;
-  owner: string;
-  budget: number;
-  scope?: string;
-  start?: string;
-  end?: string;
-  success_metric?: string;
-  kill_condition?: string;
-}
 
 /**
- * Resolve the effective cost mode. A STRATEGIC_SURGE policy applies only while an
- * unexpired, fully-specified surge record exists (purpose + owner + budget + end);
- * an expired or malformed surge is treated as NORMAL (fail closed).
+ * ── STRATEGIC_SURGE IS RETIRED, AND THIS IS WHAT REPLACED IT ────────────────────────────────
+ *
+ * It was a LEVER POSITION meaning "lift the caps for a while", which is the wrong shape for that
+ * idea in three ways, and all three bit:
+ *
+ *   · it sat in the same enum as NORMAL and CHEAPO, so "spend more temporarily" and "spend less"
+ *     were mutually exclusive settings of one control, and choosing either was choosing both;
+ *   · it was a STATE somebody could leave the firm in by forgetting about it, since a lever stays
+ *     where it was put;
+ *   · its expiry, owner and budget lived in a JSON blob that had to be re-validated on every single
+ *     call, with a malformed one silently degrading to NORMAL — a safety feature whose failure mode
+ *     was indistinguishable from its success.
+ *
+ * A bypass is now a `spend_bypass` ROW: a decision taken at a moment, for a reason, by a named
+ * person, until a time. It lapses on its own, it is consulted only on the path where a ceiling
+ * would actually bite (see `checkFirmBudgets`), and it cannot be confused with how much the firm
+ * wants to spend in general, which is what the lever is for.
+ *
+ * `resolveEffectiveCostMode` and the `StrategicSurge` interface are gone with it. A policy row
+ * still carrying `strategic_surge_json` is simply not read: the column stays for the history, and
+ * `scripts/validate/one-lever-not-four.mjs` fails the build if any routing decision reads it again.
  */
-export function resolveEffectiveCostMode(
-  policy: BudgetPolicyRow,
-  now: Date,
-): { mode: CostMode; surge: StrategicSurge | null } {
-  if (policy.cost_mode !== "STRATEGIC_SURGE" || !policy.strategic_surge_json) {
-    return { mode: policy.cost_mode, surge: null };
-  }
-  let surge: Partial<StrategicSurge>;
-  try {
-    surge = JSON.parse(policy.strategic_surge_json) as Partial<StrategicSurge>;
-  } catch {
-    return { mode: "NORMAL", surge: null };
-  }
-  const end = surge.end ? new Date(surge.end) : null;
-  const complete =
-    typeof surge.purpose === "string" &&
-    surge.purpose.length > 0 &&
-    typeof surge.owner === "string" &&
-    surge.owner.length > 0 &&
-    typeof surge.budget === "number" &&
-    surge.budget > 0 &&
-    end !== null &&
-    !Number.isNaN(end.getTime());
-  if (!complete || !end || end.getTime() <= now.getTime()) {
-    return { mode: "NORMAL", surge: null };
-  }
-  return { mode: "STRATEGIC_SURGE", surge: surge as StrategicSurge };
-}
 
 const CRITICAL_PURPOSE = /critical|risk|deadline|\blp\b|\bic\b|deal|compliance/i;
 
@@ -846,7 +836,6 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
   const now = deps.now ?? new Date();
   const firmScope = input.actor.firmScopes[0] ?? "west-peek";
   const policy = await getLatestBudgetPolicy(env, firmScope);
-  const { mode: effectiveCostMode, surge } = resolveEffectiveCostMode(policy, now);
 
   /*
    * ── WHERE THE FIRM IS, AND WHAT KIND OF CALL THIS IS ────────────────────────────────────────
@@ -892,7 +881,13 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     model: null,
     input_per_mtok_usd: null,
     output_per_mtok_usd: null,
-    surge_applied: surge !== null,
+    /*
+     * Always false now. The field stays because `cost_estimate_json` is written on every historical
+     * run and a reader of the archive must still find the key it expects; a surge is no longer a
+     * thing a run can be inside. Cap lifting is a `spend_bypass` row, checked against the firmwide
+     * ceiling rather than folded into a per-run estimate.
+     */
+    surge_applied: false,
   };
 
   /*
@@ -906,7 +901,10 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     input,
     firmScope,
     privacyMode: policy.privacy_mode,
-    costMode: effectiveCostMode,
+    // DERIVED FROM THE LEVER, never consulted by it. `ai_run.cost_mode` is NOT NULL and every
+    // archived run carries it, so it keeps being written — as a description of the lever position,
+    // which is the only honest thing it can now say.
+    costMode: legacyCostModeFor(spendLever),
     taskKind,
     inputHash,
     traceId,
@@ -1716,10 +1714,17 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
     }
   }
 
-  // 7. Cost preflight: per-run and daily caps. A valid unexpired surge lifts both
-  //    caps to the surge budget.
-  const perRunCap = surge ? surge.budget : policy.per_run_cap_usd;
-  const dailyCap = surge ? surge.budget : policy.daily_cap_usd;
+  /*
+   * 7. Cost preflight: per-run and daily caps, as the owner set them — $0.75 and $2.50.
+   *
+   * NOTHING LIFTS THESE ANY MORE, and that is a deliberate narrowing. A surge used to raise both to
+   * its own budget, which meant one JSON blob could quietly turn a $0.75 per-run cap into a $200
+   * one for every call in the firm. These are operational throttles on a SINGLE run and a SINGLE
+   * day; the thing a person actually wants to lift when a quarter needs closing is the monthly
+   * ceiling, and that is what a `spend_bypass` lifts — one number, named, with an expiry.
+   */
+  const perRunCap = policy.per_run_cap_usd;
+  const dailyCap = policy.daily_cap_usd;
   if (estimate.estimated_cost_usd > perRunCap) {
     return {
       run: await blocked(
@@ -1751,10 +1756,10 @@ export async function runAi(env: Env, input: RunAiInput, deps: RunAiDeps = {}): 
    * — item 23. So the ceiling is read here, before the money moves, from the same function that
    * draws it on the page. No ceiling set means no ceiling applied; nothing is invented.
    *
-   * A surge does NOT lift these. `daily_cap_usd` is an operational throttle and a surge is exactly
-   * the argument for raising it for a fortnight; the all-time ceiling is the firm saying how much
-   * of its money may ever go to this, and a lever that quietly stepped over it would make it
-   * decorative.
+   * THIS is where a bypass applies, and the only place one does. `checkFirmBudgets` consults
+   * `spend_bypass` on the failing path: an unexpired, unrevoked row naming a higher ceiling and the
+   * person who granted it lets the run through, and the refusal names the bypass when even that is
+   * exceeded. The $75 stop is automatic; stepping over it is a decision with a name on it.
    */
   const firmCeiling = await checkFirmBudgets(env, firmScope, estimate.estimated_cost_usd, now);
   if (!firmCeiling.ok) {
