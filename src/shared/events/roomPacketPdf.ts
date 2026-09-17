@@ -394,14 +394,14 @@ export function renderWorkshopHtml(v: PacketView, w: WorkshopView): string {
 
   const conceptRow = (c: WorkshopConcept) => `<tr class="${c.chosen ? "chosen" : ""}">
     <th scope="row">${esc(c.title === title ? c.promise : c.title)}${c.chosen ? ' <span class="tag">chosen</span>' : ""}<br><span class="muted">${esc(c.mode.toLowerCase())}</span></th>
-    <td>${esc(c.whoItsFor)}</td><td>${esc(c.signatureMoment)}</td><td>${esc(c.leaveWith)}</td><td>${esc(c.facilitator.name)}</td><td>${esc(c.costBand)}</td>
+    <td>${esc(c.whoItsFor)}</td><td>${esc(c.signatureMoment)}</td><td>${esc(c.leaveWith)}</td><td>${esc(c.facilitator.name)}${c.coHost ? ` with ${esc(c.coHost.name)}` : ""}</td><td>${esc((c.angleKind ?? "FRAMING").toLowerCase().replace(/_/g, " "))}</td>
   </tr>`;
   const conceptsPage = concepts.length
     ? `<section class="page">
   ${head(title)}
-  <h2>Three ways to run it, compared — and the one I chose</h2>
+  <h2>Three angles on the topic, compared — and the one I chose</h2>
   ${concepts.map((c) => `<div class="concept${c.chosen ? " chosen" : ""}"><h3>${esc(c.title === title ? c.promise : c.title)}${c.chosen ? ' <span class="tag">chosen</span>' : ""}</h3><p>${esc(c.title === title ? `${c.mode.toLowerCase()} — ${c.signatureMoment}` : c.promise)}</p><p class="muted"><strong>They leave with:</strong> ${esc(c.leaveWith)}</p></div>`).join("")}
-  <table class="compare"><thead><tr><th>Concept</th><th>Who it is for</th><th>Signature exercise</th><th>They leave with</th><th>Facilitator</th><th>Cost band</th></tr></thead><tbody>${concepts.map(conceptRow).join("")}</tbody></table>
+  <table class="compare"><thead><tr><th>Angle</th><th>Who it is for</th><th>Signature exercise</th><th>They leave with</th><th>Hosts</th><th>What it varies</th></tr></thead><tbody>${concepts.map(conceptRow).join("")}</tbody></table>
   ${v.conceptChoiceMd ? `<div class="callout"><h3>Why ${esc(chosen ? (chosen.title === title ? "this way" : chosen.title) : "this one")} wins</h3>${paras(v.conceptChoiceMd)}</div>` : ""}
 </section>`
     : "";
