@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { saidNothing } from "./helpers/interpret";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { actorFromIdentity } from "../src/worker/services/authorize";
@@ -111,6 +112,9 @@ function deps(set: boolean, over: Partial<ChainDeps> = {}): ChainDeps {
     render: async () => ({ pdfBase64: TINY_PDF, pageCount: 1 }),
     // A venue search must never be reached by a Workshop; if it is, the test fails loudly.
     search: async () => { throw new Error("a Workshop searched for a venue"); },
+    // The interpretation pass in front of the chain. Supplied because these packets carry a
+    // partner's brief, so her words DO reach a model — see tests/helpers/interpret.ts.
+    interpret: saidNothing,
     ...over,
   };
 }

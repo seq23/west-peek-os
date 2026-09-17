@@ -77,6 +77,8 @@ import { notifyPartners } from "./notifications";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
 import { uploadDocument } from "./documents";
+import { cannotDetail, steerFor, type Interpreter } from "./instruction";
+import type { InstructionPiece } from "../../shared/work/instruction";
 
 /**
  * Room proposals — Parker's job, run as a CHAIN (P51, docs/COMMUNITY.md; rebuilt 15 Sep 2026).
@@ -223,6 +225,28 @@ export function stageLabelFor(kind: PacketKind, stage: BuildStage): string {
   return kind === "WORKSHOP" ? WORKSHOP_STAGE_LABELS[stage] : BUILD_STAGE_LABELS[stage];
 }
 
+/**
+ * The steps this chain has, in the words a person would use, for the interpretation pass.
+ *
+ * NAMED FOR THE MODEL, NOT FOR THE CODE. `services/instruction.ts` shows the model this list and
+ * asks it to say which of her directives change one of these steps (a STEER) and which ask for
+ * something none of them does (a CANNOT). Without the list every instruction comes back honourable
+ * — the model has no way to know the chain cannot book a venue or invite anybody — and "it can be
+ * steered" would be a claim nothing tested. Derived from the stage labels so a stage added to the
+ * chain cannot be left out of the list the interpreter reads.
+ */
+export const STAGE_STEPS: Readonly<Record<PacketKind, string[]>> = {
+  ROOM: [
+    ...BUILD_STAGES.filter((s) => s !== "QUEUED" && s !== "DONE").map((s) => BUILD_STAGE_LABELS[s]),
+    "Nothing is booked, nobody outside the firm is contacted, and no money is committed — the result is a proposal a partner decides on.",
+  ],
+  WORKSHOP: [
+    ...BUILD_STAGES.filter((s) => s !== "QUEUED" && s !== "DONE" && s !== "RESEARCH" && s !== "VENUES").map((s) => WORKSHOP_STAGE_LABELS[s]),
+    `A Workshop is virtual only (${WORKSHOP_WHERE}); no venue is researched and no sponsor is required.`,
+    "Nothing is scheduled, nobody outside the firm is contacted, and the result is a proposal a partner decides on.",
+  ],
+};
+
 /** How many sponsors get the full research treatment, and how many per tick. */
 export const MAX_RESEARCHED = 6;
 export const RESEARCH_PER_TICK = 2;
@@ -307,6 +331,23 @@ export interface ChainDeps {
   pageText?: PageText;
   render?: RenderPdf;
   now?: Date;
+  /**
+   * WHAT THE PARTNER ASKED FOR ON THIS PARTICULAR PACKET, already read by a model.
+   *
+   * Set by `runRoomPacketCard` from `services/instruction.ts` before the first stage runs, and
+   * prefixed to EVERY prompt this chain builds — the discovery search, the judgement pass and each
+   * synthesis. Prefixed in one place rather than threaded through eight call sites, because a
+   * steer that has to be remembered at each stage is a steer that will be forgotten at one of
+   * them; that is exactly how `work_card.prompt` came to be read by nothing at all.
+   */
+  steer?: string;
+  /**
+   * The model call that reads what she asked for. Injectable for the same reason every other model
+   * call in this chain is: a test proves the steering, not the provider. A test that forgets to
+   * supply one gets a BLOCKED card rather than a silently unsteered packet, which is the right way
+   * round — the whole defect being closed is work that carried on without her words.
+   */
+  interpret?: Interpreter;
 }
 
 function extractUrls(text: string): string[] {
@@ -564,10 +605,21 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
   const brief = parseBrief(draft.brief_json);
   const city = brief?.city ?? "New York";
   const state = parseState(draft.build_state_json);
-  const research = deps.research ?? defaultResearch;
+  /*
+   * EVERY PROMPT THIS CHAIN BUILDS CARRIES WHAT SHE ASKED FOR, and it is done HERE rather than at
+   * each of the eight places a prompt is built. A steer that each stage has to remember to include
+   * is a steer one stage will forget, which is the shape of the defect this closes: her words were
+   * on the card the whole time and not one stage read them.
+   */
+  const withSteer = (prompt: string): string => (deps.steer ? `${deps.steer}\n\n${prompt}` : prompt);
+  const rawResearch = deps.research ?? defaultResearch;
+  const research: ResearchSearch = (e, a, prompt) => rawResearch(e, a, withSteer(prompt));
   const check = deps.urlCheck ?? ((u: string) => urlStatus(u));
   const pageText = deps.pageText ?? ((u: string) => pageTextOf(u));
-  const synth = (purpose: string, prompt: string, tokens: number) => (deps.synthesise ? deps.synthesise(prompt) : defaultSynthesise(env, actor, purpose, prompt, tokens));
+  const synth = (purpose: string, prompt: string, tokens: number) =>
+    deps.synthesise ? deps.synthesise(withSteer(prompt)) : defaultSynthesise(env, actor, purpose, withSteer(prompt), tokens);
+  const rawJudge = deps.judge ?? defaultJudge;
+  const judge: Judge = (e, a, prompt) => rawJudge(e, a, withSteer(prompt));
   const stage: BuildStage = draft.build_stage === "QUEUED" ? "DISCOVER" : draft.build_stage;
 
   const failStage = async (detail: string): Promise<never> => {
@@ -578,7 +630,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
   // A WORKSHOP TAKES THE SAME STAGES WITH A DIFFERENT BRIEF — and no sponsors, no venue.
   if (packetKindOf(draft.kind) === "WORKSHOP") {
     try {
-      return await runWorkshopStage(env, draft, stage, state, { research, judge: deps.judge ?? defaultJudge, synth, check, render: deps.render ?? ((html: string) => defaultRender(env, html)), actor });
+      return await runWorkshopStage(env, draft, stage, state, { research, judge, synth, check, render: deps.render ?? ((html: string) => defaultRender(env, html)), actor });
     } catch (err) {
       if (err instanceof RoomPacketError) throw err;
       return await failStage(err instanceof Error ? err.message : String(err));
@@ -1055,7 +1107,44 @@ export async function runRoomPacketCard(
     await closeCard(env, card.id, packet.status === "DECLINED" ? "The request was dismissed before the packet was built." : `The packet is ${packet.status.toLowerCase()}.`);
     return { finished: true, blocked: false, progressed: false, detail: packet.status === "DECLINED" ? "the request was dismissed; nothing more to build" : `already ${packet.status.toLowerCase()}` };
   }
-  const out = await runStage(env, packet, deps);
+
+  /*
+   * WHAT SHE ASKED FOR, READ BY A MODEL, BEFORE ANY STAGE RUNS (16 Sep 2026).
+   *
+   * This chain read the packet row, the month and the roster, and NOTHING ELSE. Not
+   * `work_card.prompt`, not a steering note left while the build was running, not the answer she
+   * typed to clear a block. She asked Parker for "a packet on workshops, much like he does for
+   * rooms" and that sentence reached no model: it was stored on the card and read by nothing, so
+   * he built the default and then stopped.
+   *
+   * `steerFor` is the fix, and it is checked BEFORE `runStage` rather than inside it so that a
+   * chain which cannot honour her words never starts. The brief is passed in as well: it is a
+   * human's prose that lives on the packet row rather than on the card, and leaving it out would
+   * mean the words she typed into the request form were the one kind this pass could not see.
+   */
+  const steer = await steerFor(env, PARKER_ACTOR(card.firm_scope), {
+    cardId: card.id,
+    cardKind: "ROOM_PACKET",
+    title: card.title,
+    employee: "Parker",
+    chain: packetKindOf(packet.kind) === "WORKSHOP" ? "a monthly Workshop packet" : "a monthly Room packet",
+    steps: STAGE_STEPS[packetKindOf(packet.kind)],
+    firmScope: card.firm_scope,
+    extra: briefAsInstruction(packet),
+  }, deps.interpret);
+  if (steer.cannot.length > 0) {
+    // A STAGE WHOSE INPUT INCLUDES PROSE IT CANNOT HONOUR SAYS SO. Doing the default and reporting
+    // a finished packet would be the exact failure that produced the wrong thing the first time.
+    const why = await blockCard(env, card, {
+      reason: steer.failure ? "the_brief_is_missing" : "asked_for_something_this_work_cannot_do",
+      trying: card.title,
+      employee: "Parker",
+      detail: steer.failure ? undefined : cannotDetail("Parker", steer.cannot),
+    });
+    return { finished: false, blocked: true, progressed: false, detail: why };
+  }
+
+  const out = await runStage(env, packet, { ...deps, ...(steer.text ? { steer: steer.text } : {}) });
   const fresh = await requirePacket(env, packet.id);
   await env.WP_OS_DB.prepare(
     "UPDATE work_card SET next_action = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
@@ -1070,6 +1159,30 @@ export async function runRoomPacketCard(
     return { finished: true, blocked: false, progressed: false, detail: `${fresh.title} — packet built${fresh.document_id ? " with PDF" : ""} and emailed` };
   }
   return { finished: false, blocked: false, progressed: true, detail: `${out.stage} done: ${out.note}` };
+}
+
+/**
+ * The human's prose that lives on the PACKET rather than on the card.
+ *
+ * A partner asking for a Room types an audience and some notes into the request form, and those go
+ * into `brief_json`, not into `work_card.prompt`. Leaving them out of the interpretation pass would
+ * mean the one place she actually types a brief was the one place this could not see — which is
+ * the defect with a new name. Parker's own monthly proposal has no human words and contributes
+ * nothing, which is why a scheduled packet costs no interpretation call at all.
+ */
+function briefAsInstruction(packet: PacketRow): InstructionPiece[] {
+  if (packet.origin !== "PARTNER_BRIEF") return [];
+  const brief = parseBrief(packet.brief_json);
+  if (!brief) return [];
+  const words = [
+    brief.audience?.trim() && !/^Parker's own/i.test(brief.audience) ? brief.audience.trim() : null,
+    brief.city ? `In ${brief.city}.` : null,
+    brief.sponsorProspects.length ? `Sponsors she named: ${brief.sponsorProspects.join(", ")}.` : null,
+    brief.notes?.trim() || null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return words ? [{ source: "BRIEF", text: words, who: packet.requested_by }] : [];
 }
 
 async function closeCard(env: Env, cardId: string, finding: string): Promise<void> {

@@ -203,5 +203,7 @@ export interface InstructionReceipt {
   aiRunId: string | null;
   /** Which model actually read her words. The whole point of the exercise. */
   model: string | null;
+  /** Present only when there is no interpretation, saying why. A receipt is never silently empty. */
+  failure?: string;
   at: string;
 }
