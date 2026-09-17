@@ -89,6 +89,20 @@ function OwnerChip({ name }: { name: string | null }): JSX.Element {
   );
 }
 
+/**
+ * WHAT SHE TYPED, AND WHAT IT TURNED INTO (0175).
+ *
+ * Her question was "tell me what my instructions turned into", asked of an agent, about a database.
+ * The answer belongs on the card, so she never has to ask it that way again.
+ */
+interface InstructionReceipt {
+  said: Array<{ source: string; text: string; who: string | null }>;
+  interpretation: { understood: string; steer: string[]; cannot: string[] } | null;
+  failure?: string;
+  model: string | null;
+  at: string;
+}
+
 interface WorkCardNote {
   id: string;
   body: string;
@@ -118,6 +132,7 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   const [steering, setSteering] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
   const [notes, setNotes] = useState<Record<string, WorkCardNote[]>>({});
+  const [receipts, setReceipts] = useState<Record<string, InstructionReceipt[]>>({});
   /**
    * WHICH CARDS ARE OPEN, by id. Collapsed is the default and that is the whole point: a board with
    * twenty cards on it, each carrying a next action, an origin line, an owner line, an assignment
@@ -322,8 +337,15 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
     if (steering === id) { setSteering(null); return; }
     setSteering(id);
     setNoteText("");
-    const res = await api<{ notes: WorkCardNote[] }>(`/api/work-cards/${id}/notes`);
+    // BOTH HALVES OF THE CONVERSATION, in one open. The notes are what she said; the receipts are
+    // what a model made of everything she has said on this card. Fetched together because reading
+    // one without the other is how "he ignored me" and "he misread me" look identical.
+    const [res, rec] = await Promise.all([
+      api<{ notes: WorkCardNote[] }>(`/api/work-cards/${id}/notes`),
+      api<{ receipts: InstructionReceipt[] }>(`/api/work-cards/${id}/instructions`),
+    ]);
     setNotes((n) => ({ ...n, [id]: res.data?.notes ?? [] }));
+    setReceipts((r) => ({ ...r, [id]: rec.data?.receipts ?? [] }));
   }
 
   async function sendNote(id: string) {
@@ -826,6 +848,58 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                           never a bare tick: the table's CHECK makes seen-and-answered one event, so
                           an employee cannot dismiss a partner's instruction without saying what it
                           changed about the work. Showing the answer is what makes that visible. */}
+                      {/*
+                        THE RECEIPT. Her words on the left, exactly as she typed them; what the
+                        model understood on the right, with the model named.
+
+                        WHY THE MODEL'S NAME IS ON IT. The instruction was "make sure everything I
+                        say reaches a thinking model" — a claim she has no way to check unless the
+                        page says which model read her words. A receipt that asserts it was read
+                        without saying by what is the same assurance the old system gave.
+                      */}
+                      {(receipts[c.id] ?? []).length > 0 && (
+                        <div className="work-card-receipt" data-testid={`work-card-receipt-${c.id}`}>
+                          <p className="lbl">What you asked for, and what it turned into</p>
+                          {(receipts[c.id] ?? []).slice(0, 3).map((r) => (
+                            <div key={r.at} className="work-card-receipt-row">
+                              <div>
+                                <p className="muted small">You said</p>
+                                {r.said.map((said, i) => (
+                                  <p key={i} className="work-card-longtext">“{said.text}”</p>
+                                ))}
+                              </div>
+                              <div>
+                                <p className="muted small">
+                                  {c.owner_name ?? "They"} understood
+                                  {r.model ? ` — read by ${r.model}` : ""}
+                                </p>
+                                {r.interpretation ? (
+                                  <>
+                                    <p><strong>{r.interpretation.understood}</strong></p>
+                                    {r.interpretation.steer.length > 0 && (
+                                      <ul className="work-legend">
+                                        {r.interpretation.steer.map((line, i) => <li key={i}>{line}</li>)}
+                                      </ul>
+                                    )}
+                                    {/* NOT A DETAIL. This is the part she is owed: the bit of what
+                                        she asked for that this work has no step for, said out loud
+                                        rather than quietly dropped. */}
+                                    {r.interpretation.cannot.length > 0 && (
+                                      <p className="notice small" data-testid={`work-card-receipt-cannot-${c.id}`}>
+                                        Could not do: {r.interpretation.cannot.join("; ")}
+                                      </p>
+                                    )}
+                                  </>
+                                ) : (
+                                  <p className="notice small">
+                                    Nothing read this yet: {r.failure ?? "the reading did not happen"}. It is tried again on the next run.
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {(notes[c.id] ?? []).length > 0 && (
                         <ul className="card-list small" data-testid={`work-card-notes-${c.id}`}>
                           {(notes[c.id] ?? []).map((n) => (
