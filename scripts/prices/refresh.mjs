@@ -35,7 +35,6 @@ import path from "node:path";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const REGISTER = path.join(ROOT, "deployment", "model-prices.json");
-const MIGRATION = path.join(ROOT, "migrations", "0177_real_prices_and_a_real_fallback.sql");
 
 /** Which register row is read from which upstream id. */
 const SOURCE_ID = {
