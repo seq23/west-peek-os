@@ -82,6 +82,7 @@ import { notifyPartners } from "./notifications";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
 import { uploadDocument } from "./documents";
+import { buildAndFileEventKit, eventKitEmailBullets, eventKitOf } from "./eventKit";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import type { InstructionPiece } from "../../shared/work/instruction";
 
@@ -165,6 +166,10 @@ export interface PacketRow {
   kind?: PacketKind | null;
   /** What only a Workshop has — see shared/events/workshopPacket.ts `WorkshopView`. */
   workshop_json?: string | null;
+  /** The draft proposed event kit (0180) — see shared/events/eventKit.ts `EventKit`. */
+  event_kit_json?: string | null;
+  /** Where the kit is filed, so the email can link to it rather than carry it (0180). */
+  event_kit_deliverable_id?: string | null;
 }
 
 /** The brief as stored. A malformed one is null, never a crash on the page. */
@@ -193,7 +198,7 @@ async function requirePacket(env: Env, id: string): Promise<PacketRow> {
 
 // ── The stages ───────────────────────────────────────────────────────────────
 
-export const BUILD_STAGES = ["QUEUED", "DISCOVER", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "PDF", "DONE"] as const;
+export const BUILD_STAGES = ["QUEUED", "DISCOVER", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "KIT", "PDF", "DONE"] as const;
 export type BuildStage = (typeof BUILD_STAGES)[number];
 
 /** What the page says while Parker is on each stage. */
@@ -204,6 +209,7 @@ export const BUILD_STAGE_LABELS: Readonly<Record<BuildStage, string>> = {
   CONCEPTS: "ideating three concepts and choosing one",
   VENUES: "searching venues for the chosen concept",
   PACKET: "writing the packet — run of show, budget, structure, the pitch",
+  KIT: "drafting the proposed event kit for the angle he would run — the run of show with who is on screen, the questions, the posts",
   PDF: "rendering the PDF and emailing both partners",
   DONE: "done",
 };
@@ -222,6 +228,7 @@ export const WORKSHOP_STAGE_LABELS: Readonly<Record<BuildStage, string>> = {
   CONCEPTS: "ideating three ways to run it and choosing one",
   VENUES: "(no venue — a Workshop is virtual on West Peek Live)",
   PACKET: "writing the packet — the run of show with exercises, the delivery plan, the invitations",
+  KIT: "drafting the proposed event kit for the angle he would run — the run of show with who is on screen, the questions, the posts",
   PDF: "rendering the PDF and emailing both partners",
   DONE: "done",
 };
@@ -797,7 +804,24 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       });
       if (!economics.reachesKeep) state.flags.push({ code: "structure_short_of_keep", detail: `All slots sold bring $${economics.sponsorTargetHighUsd.toLocaleString("en-US")} against $${economics.requiredUsd.toLocaleString("en-US")} needed for cost plus the firm's keep.` });
       await storePacket(env, draft, packet, economics, aiRunId, state, actor);
-      return { stage, next: "PDF", note: `"${packet.title}": ${packet.venues.length} venue(s), ${packet.sponsorProspects.length} sponsor(s) ranked, ${packet.runOfShow.length} run-of-show lines, ${economics.scenarios.length} slot(s) — the firm keeps $${economics.netHighUsd.toLocaleString("en-US")} if all land` };
+      return { stage, next: "KIT", note: `"${packet.title}": ${packet.venues.length} venue(s), ${packet.sponsorProspects.length} sponsor(s) ranked, ${packet.runOfShow.length} run-of-show lines, ${economics.scenarios.length} slot(s) — the firm keeps $${economics.netHighUsd.toLocaleString("en-US")} if all land` };
+    }
+
+
+    /*
+     * THE KIT — one draft proposed event kit for the angle he would run, both streams.
+     *
+     * It is here, between the packet and the PDF, because it READS the packet (the chosen angle,
+     * the run of show, the hosts) and because the PDF stage sends the email that has to carry its
+     * link. See services/eventKit.ts for why it is a stage and not a paragraph in the packet
+     * prompt, and why the email carries a link instead of the kit.
+     */
+    if (stage === "KIT") {
+      const built = await requirePacket(env, draft.id);
+      const kit = await buildAndFileEventKit(env, actor, built, (prompt) => synth("Draft proposed event kit", prompt, 6000).then((r) => ({ text: r.text, aiRunId: r.aiRunId })))
+        .catch((err) => { throw new RoomPacketError(502, "stage_failed", `KIT: ${err instanceof Error ? err.message : String(err)}`); });
+      await saveStage(env, draft.id, "PDF", state);
+      return { stage, next: "PDF", note: `draft event kit "${kit.kit.header.eventTitle}" — ${kit.kit.header.slot.label}, ${kit.kit.runOfShow.length} run-of-show row(s) each with who is on screen, ${kit.kit.discussionGuide.questions.length} question(s), ${kit.kit.socialPosts.length} post(s); ${kit.kit.open.length} thing(s) left open${kit.link ? `; filed at ${kit.link}` : "; not filed"}${kit.kit.flags.length ? `; flags: ${kit.kit.flags.map((f) => f.code).join(", ")}` : ""}` };
     }
 
     if (stage === "PDF") {
@@ -1008,7 +1032,18 @@ async function runWorkshopStage(
     const economics = computeWorkshopEconomics(verified.packet);
     state.workshopFlags = verified.flags;
     await storeWorkshopPacket(env, draft, verified.packet, economics, aiRunId, state, setBy);
-    return { stage, next: "PDF", note: `"${verified.packet.title}": ${verified.packet.runOfShow.length} run-of-show lines (${verified.packet.runOfShow.filter((l) => l.segment === "BREAKOUT").length} breakouts), ${verified.packet.leaveWith.length} artifact(s), ${verified.packet.invitations.length} invitation(s), free to attend${verified.packet.sponsorship.suggested ? `, suggested sponsor ${verified.packet.sponsorship.suggested.categoryFit} at $${(verified.packet.sponsorship.suggested.askUsd ?? 0).toLocaleString("en-US")}` : ", no sponsor suggested"}${verified.flags.length ? `; flags: ${verified.flags.map((f) => f.code).join(", ")}` : ""}` };
+    return { stage, next: "KIT", note: `"${verified.packet.title}": ${verified.packet.runOfShow.length} run-of-show lines (${verified.packet.runOfShow.filter((l) => l.segment === "BREAKOUT").length} breakouts), ${verified.packet.leaveWith.length} artifact(s), ${verified.packet.invitations.length} invitation(s), free to attend${verified.packet.sponsorship.suggested ? `, suggested sponsor ${verified.packet.sponsorship.suggested.categoryFit} at $${(verified.packet.sponsorship.suggested.askUsd ?? 0).toLocaleString("en-US")}` : ", no sponsor suggested"}${verified.flags.length ? `; flags: ${verified.flags.map((f) => f.code).join(", ")}` : ""}` };
+  }
+
+  // THE SAME KIT STAGE, THE SAME CODE. A Workshop kit and a Room kit differ only in the source
+  // read off the packet — see services/eventKit.ts `eventKitSourceFor`. Two implementations would
+  // be the "two components each keeping their own list" defect, one stream deep.
+  if (stage === "KIT") {
+    const built = await requirePacket(env, draft.id);
+    const kit = await buildAndFileEventKit(env, deps.actor, built, (prompt) => deps.synth("Draft proposed event kit", prompt, 6000).then((r) => ({ text: r.text, aiRunId: r.aiRunId })))
+      .catch((err) => { throw new RoomPacketError(502, "stage_failed", `KIT: ${err instanceof Error ? err.message : String(err)}`); });
+    await saveStage(env, draft.id, "PDF", state);
+    return { stage, next: "PDF", note: `draft event kit "${kit.kit.header.eventTitle}" — ${kit.kit.header.slot.label}, ${kit.kit.runOfShow.length} run-of-show row(s) each with who is on screen, ${kit.kit.discussionGuide.questions.length} question(s), ${kit.kit.socialPosts.length} post(s); ${kit.kit.open.length} thing(s) left open${kit.link ? `; filed at ${kit.link}` : "; not filed"}${kit.kit.flags.length ? `; flags: ${kit.kit.flags.map((f) => f.code).join(", ")}` : ""}` };
   }
 
   if (stage === "PDF") {
@@ -1062,7 +1097,7 @@ async function storeWorkshopPacket(env: Env, draft: PacketRow, packet: WorkshopP
               guest_ideas_json = '[]', economics_json = ?9, sponsor_thesis = ?10, ai_run_id = ?11,
               sponsor_count = ?12, sponsor_total_usd = ?13, risks_json = ?14, commitment_md = ?15,
               concepts_json = ?16, concept_choice_md = ?17, run_of_show_json = ?18, pitch_email_json = NULL,
-              invite_check_json = NULL, pushback_md = ?19, build_stage = 'PDF', build_state_json = ?20,
+              invite_check_json = NULL, pushback_md = ?19, build_stage = 'KIT', build_state_json = ?20,
               workshop_json = ?21, live_url = 'https://westpeek.live',
               build_error = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ?1`,
@@ -1120,7 +1155,7 @@ async function storePacket(env: Env, draft: PacketRow, packet: RoomPacket, econo
               guest_ideas_json = ?11, economics_json = ?12, sponsor_thesis = ?13, ai_run_id = ?14,
               sponsor_count = ?15, sponsor_total_usd = ?16, risks_json = ?17, commitment_md = ?18,
               concepts_json = ?19, concept_choice_md = ?20, run_of_show_json = ?21, pitch_email_json = ?22,
-              invite_check_json = ?23, pushback_md = ?24, build_stage = 'PDF', build_state_json = ?25,
+              invite_check_json = ?23, pushback_md = ?24, build_stage = 'KIT', build_state_json = ?25,
               build_error = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ?1`,
     ).bind(
@@ -1202,7 +1237,18 @@ export async function runRoomPacketCard(
     const why = await blockCard(env, card, { reason: "the_request_is_gone", trying: card.title, employee: "Parker" });
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
-  if (packet.status !== "DRAFT" && packet.build_stage !== "PDF") {
+  /*
+   * THE STAGES THAT STILL HAVE WORK AFTER THE PACKET IS PROPOSED.
+   *
+   * Storing the packet flips `status` to PROPOSED while the chain is still running — the kit and the
+   * PDF come after it. This used to be the single literal "PDF", and adding the kit stage in front
+   * of it silently closed the card one stage early: the packet was proposed, the guard saw a
+   * non-DRAFT row on a stage it did not recognise, and Parker's own card reported "already
+   * proposed" having never written a kit. Derived from the stage list, so a stage added after the
+   * packet cannot be left out of it again.
+   */
+  const stillBuilding: readonly BuildStage[] = BUILD_STAGES.slice(BUILD_STAGES.indexOf("KIT"), BUILD_STAGES.indexOf("DONE"));
+  if (packet.status !== "DRAFT" && !stillBuilding.includes(packet.build_stage)) {
     // Dismissed by a person, or already built: the card closes without noise.
     await closeCard(env, card.id, packet.status === "DECLINED" ? "The request was dismissed before the packet was built." : `The packet is ${packet.status.toLowerCase()}.`);
     return { finished: true, blocked: false, progressed: false, detail: packet.status === "DECLINED" ? "the request was dismissed; nothing more to build" : `already ${packet.status.toLowerCase()}` };
@@ -1418,6 +1464,23 @@ const usdText = (n: number | null | undefined): string => (n === null || n === u
 const tierWord = (t: string | null | undefined): string => (t === "PRESENTING" ? "title" : t === "IN_KIND" ? "in kind" : "supporting");
 
 /**
+ * THE KIT IN THE EMAIL: THE TL;DR AND THE LINK, NEVER THE TEXT.
+ *
+ * Item settled by the owner's own product — West Peek Live's instruction pages say "The email never
+ * carries the text, so correcting a page corrects it for everyone who already has the link." A kit
+ * is a draft: the date is proposed, a co-host may still be open, the questions get edited. So the
+ * mail carries the proposed title, the proposed date and time, the duration shape and the one line
+ * on why this angle — enough to react to without clicking — and then the link.
+ *
+ * ONE SECTION, BOTH STREAMS. A Room's kit and a Workshop's kit are the same object.
+ */
+function kitSection(packet: PacketRow): ExecEmailInput["sections"] {
+  const kit = eventKitOf(packet);
+  if (!kit) return [];
+  return [{ label: "The draft event kit", bullets: eventKitEmailBullets(kit, packet.event_kit_deliverable_id ?? null) }];
+}
+
+/**
  * The busy-executive summary above the packet (16 Sep 2026): the concept, the venue, the money,
  * and the one decision — keep it or dismiss it. The whole packet is the details under it.
  */
@@ -1462,6 +1525,7 @@ export function packetSummary(packet: PacketRow, venues: VenueLine[], sponsors: 
       ...(token
         ? [{ label: "How to answer this email", bullets: howToAnswer({ token, what: "Room" }) }]
         : []),
+      ...kitSection(packet),
       {
         label: "Your call",
         bullets: [
@@ -1547,6 +1611,7 @@ export function workshopSummary(packet: PacketRow, w: WorkshopView, token?: stri
             bullets: howToAnswer({ token, what: "Workshop" }),
           }]
         : []),
+      ...kitSection(packet),
       {
         label: "Your call",
         bullets: [

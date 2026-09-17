@@ -96,7 +96,7 @@ const kindOf = (p: Pick<PacketRow, "kind">): "ROOM" | "WORKSHOP" => (p.kind === 
 const kindWord = (p: Pick<PacketRow, "kind">): string => (kindOf(p) === "WORKSHOP" ? "Workshop" : "Room");
 
 /** What the page says while Parker is on each stage; mirrors BUILD_STAGE_LABELS on the worker. */
-const BUILD_STAGES = ["DISCOVER", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "PDF"] as const;
+const BUILD_STAGES = ["DISCOVER", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "KIT", "PDF"] as const;
 const STAGE_LABELS: Record<string, string> = {
   QUEUED: "waiting for Parker to pick it up",
   DISCOVER: "reading the firm's list and finding who pays to be in front of this audience",
@@ -104,6 +104,7 @@ const STAGE_LABELS: Record<string, string> = {
   CONCEPTS: "ideating three concepts and choosing one",
   VENUES: "searching venues for the chosen concept",
   PACKET: "writing the packet — run of show, budget, structure, the pitch",
+  KIT: "drafting the proposed event kit for the angle he would run — the run of show with who is on screen, the questions, the posts",
   PDF: "rendering the PDF and emailing both partners",
   DONE: "done",
 };
@@ -115,6 +116,7 @@ const WORKSHOP_STAGE_LABELS: Record<string, string> = {
   CONCEPTS: "ideating three ways to run it and choosing one",
   VENUES: `(no venue — a Workshop is virtual on ${WORKSHOP_WHERE})`,
   PACKET: "writing the packet — the run of show with exercises, the delivery plan, the invitations",
+  KIT: "drafting the proposed event kit for the angle he would run — the run of show with who is on screen, the questions, the posts",
   PDF: "rendering the PDF and emailing both partners",
   DONE: "done",
 };

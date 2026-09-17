@@ -20,6 +20,7 @@ import {
   type PacketRow,
 } from "../src/worker/services/roomPacket";
 import type { SearchResult } from "../src/worker/services/liveSearch";
+import { EVENT_KIT_PROMPT_MARKER } from "../src/shared/events/eventKit";
 
 /**
  * Parker runs the whole chain (15 Sep 2026).
@@ -121,6 +122,41 @@ function packetJson(over: Record<string, unknown> = {}): string {
   });
 }
 
+
+/**
+ * THE DRAFT PROPOSED EVENT KIT the kit stage asks for (0180). Answered whenever the prompt carries
+ * `EVENT_KIT_PROMPT_MARKER`, so the chain's kit stage is exercised by every run through it rather
+ * than by a test of its own — a stage nothing in the chain test reaches is a stage that can rot.
+ */
+const kitJson = JSON.stringify({
+  event_title: "The Scaled Boardroom, live",
+  format: "Live broadcast (conversation)",
+  description: {
+    title: "The Scaled Boardroom, live",
+    hook: "One question, one table, and the people who have had to answer it.",
+    parts: [{ label: "Part 1: The conversation", minutes: 60, detail: "The one question, put to the room." }],
+    who_its_for: "senior associates, new partners and the founders who hire them",
+    audience_tip: "Join from a desktop so you can put a question in the chat.",
+  },
+  run_of_show: [
+    { time: "6:15 PM ET", segment: "Greenroom check-in", description: "Audio and video test, lower thirds.", on_screen: { shape: "BACKSTAGE", who: "Host and speakers" } },
+    { time: "6:30 PM ET", segment: "Welcome", description: "Sets the evening.", on_screen: { shape: "SOLO", who: "Sequoia Taylor" } },
+    { time: "6:35 PM ET", segment: "The conversation", description: "The one question.", on_screen: { shape: "2-UP", who: "Sequoia Taylor + the guest" } },
+    { time: "7:35 PM ET", segment: "Wrap", description: "Where it goes next.", on_screen: { shape: "3-UP", who: "Sequoia Taylor + speakers" } },
+  ],
+  discussion_guide: {
+    opening_script: "Welcome in. One question tonight, and everyone at this table has had to answer it.",
+    questions: [
+      { n: 1, theme: "The mistake", question: "What is the single biggest operational mistake you see early-stage founders make?" },
+      { n: 2, theme: "Calm under scrutiny", question: "How does somebody who is firefighting daily start building systems that run without them?" },
+    ],
+  },
+  social_posts: [
+    { kind: "ANNOUNCE", voice: "West Peek", body: "One evening, one real question.", hashtags: ["#WestPeek"] },
+    { kind: "SPEAKER", voice: "Sequoia Taylor", body: "I am hosting a room on the one question I get asked most.", hashtags: ["#WestPeek"] },
+  ],
+});
+
 /** A one-page PDF, enough for the document store and the page count. */
 const TINY_PDF = btoa("%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
 
@@ -139,6 +175,7 @@ function deps(over: Partial<ChainDeps> = {}): ChainDeps {
     pageText: async (url) => (url === HARVEY_TEAM ? "<h3>Mali <b>Robertson</b></h3> Director of Brand Partnerships" : url === "https://www.harvey.ai/nobody" ? "<p>Team page</p>" : null),
     // The angles call is the one that states the topic; everything else is the packet.
     synthesise: async (prompt) => {
+      if (prompt.includes(EVENT_KIT_PROMPT_MARKER)) return { text: kitJson, aiRunId: null };
       const topic = /ALREADY DECIDED: "([^"]+)"/.exec(prompt)?.[1];
       return { text: topic ? conceptsJson(topic) : packetJson(), aiRunId: null };
     },
@@ -191,12 +228,13 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
       stages.push((await row(draft.id)).build_stage);
       if (out.outcome === "DONE" || out.outcome === "NOTHING_WAITING") break;
     }
-    // DISCOVER → RESEARCH (two ticks: Harvey + Clio, then J.P. Morgan) → CONCEPTS → VENUES → PACKET → PDF → done.
-    expect(outcomes).toEqual(["PROGRESSED", "PROGRESSED", "PROGRESSED", "PROGRESSED", "PROGRESSED", "PROGRESSED", "DONE"]);
-    expect(stages).toEqual(["RESEARCH", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "PDF", "DONE"]);
+    // DISCOVER → RESEARCH (two ticks: Harvey + Clio, then J.P. Morgan) → CONCEPTS → VENUES → PACKET
+    // → KIT (the draft proposed event kit, 0180) → PDF → done.
+    expect(outcomes).toEqual(["PROGRESSED", "PROGRESSED", "PROGRESSED", "PROGRESSED", "PROGRESSED", "PROGRESSED", "PROGRESSED", "DONE"]);
+    expect(stages).toEqual(["RESEARCH", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "KIT", "PDF", "DONE"]);
     const card = (await env.WP_OS_DB.prepare("SELECT state, work_attempts, description FROM work_card WHERE id = ?1").bind(draft.work_card_id).first<{ state: string; work_attempts: number; description: string }>())!;
     expect(card.state).toBe("DONE");
-    // Six progressed ticks gave their attempt back; only the finishing tick's stands.
+    // Seven progressed ticks gave their attempt back; only the finishing tick's stands.
     expect(card.work_attempts).toBe(1);
     expect(card.description).toMatch(/PDF: https:\/\/os\.joinwestpeek\.com\/api\/documents\/doc_/);
 
@@ -307,7 +345,7 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     const out = await generatePacket(env, actor(), { month: "2027-01", brief: { ...BRIEF, month: "2027-01", sponsorProspects: [] } }, deps());
     expect(out.packet.status).toBe("PROPOSED");
     expect(out.packet.build_stage).toBe("DONE");
-    expect(out.stages.map((s) => s.stage)).toEqual(["DISCOVER", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "PDF"]);
+    expect(out.stages.map((s) => s.stage)).toEqual(["DISCOVER", "RESEARCH", "CONCEPTS", "VENUES", "PACKET", "KIT", "PDF"]);
     expect(out.venuesKept).toBe(1);
     expect(BUILD_STAGES).toContain(out.packet.build_stage);
   });

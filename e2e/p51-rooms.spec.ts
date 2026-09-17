@@ -74,7 +74,8 @@ test("asking Parker for a Room records the brief and opens his card before anyth
   await expect(card).toContainText("Room requested: top Black lawyers on the rise");
   await expect(card.getByTestId("packet-brief")).toContainText("Harvey AI (harvey.ai)");
   await expect(card.getByTestId("packet-brief")).toContainText("one legal sponsor at most");
-  await expect(card.locator('[data-testid^="build-stage-"]')).toContainText(/Stage 1 of 6/);
+  // Seven since 0180: the draft proposed event kit sits between the packet and the PDF.
+  await expect(card.locator('[data-testid^="build-stage-"]')).toContainText(/Stage 1 of 7/);
   await expect(card.locator('[data-testid^="build-stage-"]')).toContainText("on Parker's desk");
 
   // The card is on Parker's desk, of the kind the sweep knows how to run.
