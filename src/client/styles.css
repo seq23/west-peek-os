@@ -3868,6 +3868,33 @@ tbody tr.is-selected > td {
 .posture-tradeoff { border-top: 1px solid var(--wp-line); padding-top: var(--space-xs); margin-top: var(--space-3xs); }
 .spend-lever { margin-bottom: var(--space-lg); }
 
+/*
+ * WHERE THE MONTH IS, and the $50 notification above it.
+ *
+ * Two cards, deliberately distinct from each other. The gradient card is READING — she should be
+ * able to skim it and move on — so it is a plain card with a left rule that carries the only colour.
+ * The notification card is a DECISION with a deadline behind it, so it takes the tint that every
+ * other notice in this system uses for the same job. Neither invents a colour: both use the one
+ * accent, which is the whole of the brand system's argument about emphasis.
+ */
+.spend-gradient {
+  margin-bottom: var(--space-lg);
+  border-left: 3px solid var(--wp-orange);
+}
+.spend-gradient [data-testid="gradient-why"] { margin-bottom: var(--space-xs); }
+/* The guarantee sits apart from the arithmetic above it: it is the thing that does NOT change as
+   the numbers move, and running it into the same block would read as one more variable figure. */
+.spend-gradient [data-testid="gradient-guarantee"] {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--wp-tint-line);
+}
+.spend-notify {
+  margin-bottom: var(--space-lg);
+  background: var(--wp-tint);
+  border: 1px solid var(--wp-tint-line);
+}
+
 /* ── Touch targets ─────────────────────────────────────────────────────────
    `.link-button` is the most-used interactive element in the product — sixty-four
    of them — and it carried `min-height: auto` with 2px/4px padding, so on a phone
