@@ -3,7 +3,7 @@ import { appendEvent } from "../events";
 import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { expiryFor, mintToken, readReply, tagFor } from "../../shared/events/packetDecisionToken";
 import { decidePacket, RoomPacketError, type PacketRow } from "./roomPacket";
-import type { Actor } from "./authorize";
+import { actorForFirmUser } from "./authorize";
 
 /**
  * A PARTNER DECIDES A PACKET BY HITTING REPLY — and the decision lands exactly where the button
@@ -162,7 +162,10 @@ export async function applyReplyDecision(
    * same button through a different surface. It is constructed here rather than passed in because
    * the only address that carries authority is the one on the envelope this Worker accepted.
    */
-  const actor: Actor = { type: "HUMAN", firmUserId: partner.id, roles: [], firmScopes: [row.firm_scope] };
+  const actor = await actorForFirmUser(env, partner.id);
+  if (!actor) {
+    return await refuse(`the code and the sender both checked out, but ${authority.partnerAddress} is not an active person in the OS`, read.token);
+  }
   const note = read.reason
     ? `${read.reason} — decided by email from ${authority.partnerAddress}.`
     : `Decided by email from ${authority.partnerAddress}; no reason given.`;

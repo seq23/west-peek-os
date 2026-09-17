@@ -690,8 +690,12 @@ export function buildConceptsPrompt(input: {
   /** What the partners want out of the angles, in their words. */
   steer: string | null;
   brief: RoomBrief | null;
-  /** What ACTUALLY ran in the adjacency window — not what was proposed. */
-  ran: readonly { month: string; topic: string; note: string }[];
+  /**
+   * What ACTUALLY ran in the adjacency window — not what was proposed. Optional because a caller
+   * with nothing to say about last month is a legitimate state (a fresh firm, a first month); the
+   * TOPIC is not optional, because a caller that forgets it would silently get "Parker chooses".
+   */
+  ran?: readonly { month: string; topic: string; note: string }[];
   recentThemes: readonly string[];
   inviteCheck: InviteCheck | null;
   sponsors: readonly SponsorResearch[];
@@ -725,8 +729,9 @@ export function buildConceptsPrompt(input: {
    * were kept in the window — never a proposal, and never a declined one. `recentThemes` stays for
    * callers that have not been updated, as a weaker hint, and is labelled as such.
    */
-  const adjacency = input.ran.length
-    ? `\nWHAT ACTUALLY RAN LAST MONTH — a LIGHT rule, one month back: do not propose a topic that is nearly the same as one of these. Adjacent is fine; near-identical is not. This is what RAN, not what was proposed.\n${input.ran.map((r) => `- ${r.month}: ${r.topic} (${r.note})`).join("\n")}`
+  const ran = input.ran ?? [];
+  const adjacency = ran.length
+    ? `\nWHAT ACTUALLY RAN LAST MONTH — a LIGHT rule, one month back: do not propose a topic that is nearly the same as one of these. Adjacent is fine; near-identical is not. This is what RAN, not what was proposed.\n${ran.map((r) => `- ${r.month}: ${r.topic} (${r.note})`).join("\n")}`
     : "";
   const avoid = input.recentThemes.length ? `\nTITLES ALREADY USED — do not reuse a title:\n${input.recentThemes.map((t) => `- ${t}`).join("\n")}` : "";
   const topicRules = input.topic
