@@ -3,6 +3,7 @@ import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { SEARCH_MODEL } from "./liveSearch";
+import { blockCard } from "./blocks";
 import { urlIsLive } from "../effects/urlLiveness";
 import { deliver, recentFeedbackFor } from "./deliverables";
 import { notifyQuietly } from "./notifications";
@@ -125,7 +126,7 @@ const defaultJudge: BlogModelCall = async (env, actor, prompt) => {
     actor,
     inputs: [prompt],
     sensitivity: "PUBLIC" as never,
-    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter" },
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
@@ -140,7 +141,8 @@ const defaultWrite: BlogModelCall = async (env, actor, prompt) => {
     inputs: [prompt],
     // The partner's ask and the firm's positioning; nothing about a company, a deal or an LP.
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 3500, providerKey: "openrouter" },
+    // Written in a partner's voice and sent under her name.
+    budgetContext: { expectedOutputTokens: 3500, providerKey: "openrouter", judgement: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
@@ -613,14 +615,22 @@ export async function runBlogHelpCard(
   const request = card.request_json ?? (await env.WP_OS_DB.prepare("SELECT request_json FROM work_card WHERE id = ?1").bind(card.id).first<{ request_json: string | null }>())?.request_json ?? null;
   const ask = readBlogAsk(request);
   if (!ask) {
-    const why = "This card is marked BLOG_HELP but carries no parsed request (modes and topic). Reopen it from the email, or write the ask on the card and reassign.";
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, why).run();
+    const why = await blockCard(env, card, {
+      reason: "the_brief_is_missing",
+      trying: card.title,
+      employee: "Your chief of staff",
+      detail: "Say what you wanted written, on what, and roughly how long.",
+    });
     return { finished: false, blocked: true, detail: why };
   }
   const partner = await partnerFor(env, card);
   if (!partner) {
-    const why = "Could not tell which partner asked: the card has no authenticated requester and its owner is not a partner's chief of staff.";
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, why).run();
+    const why = await blockCard(env, card, {
+      reason: "the_brief_is_missing",
+      trying: card.title,
+      employee: "Your chief of staff",
+      detail: "Say who this is for — whose voice it should be written in and who it goes to.",
+    });
     return { finished: false, blocked: true, detail: why };
   }
 
@@ -635,8 +645,12 @@ export async function runBlogHelpCard(
   const research = await researchTopic(env, actor, employee, partner.fullName, ask, { search, judge, urlCheck });
   const needsSources = ask.modes.includes("OUTLINE") || ask.modes.includes("DRAFT");
   if (research.notes.length === 0 && needsSources) {
-    const why = `No source survived the live check and the judgement pass (${research.why}). Not sending ${describeModes(ask.modes)} that leans on nothing. Run it again, or reply with a source or two to start from.`;
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, why).run();
+    const why = await blockCard(env, card, {
+      reason: "nothing_good_enough_to_send",
+      trying: card.title,
+      employee: employee.name,
+      detail: `Send a source or two to start from, or say what would count — nothing solid enough turned up to write ${describeModes(ask.modes)} on.`,
+    });
     return { finished: false, blocked: true, detail: why };
   }
   const allowed = new Set(research.notes.map((n) => n.url.toLowerCase()));

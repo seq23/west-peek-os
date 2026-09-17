@@ -1,0 +1,419 @@
+import type { Env } from "../env";
+import type { RouteContext } from "../router";
+import { appendEvent } from "../events";
+import { notifyPartners, notifyQuietly } from "./notifications";
+import { json } from "../router";
+import {
+  BLOCK_ACTIONS,
+  blockProblems,
+  blockSentence,
+  describeBlock,
+  type Block,
+  type BlockActionKey,
+  type BlockFacts,
+  type BlockReason,
+} from "../../shared/work/blocks";
+
+/**
+ * The one way a card becomes blocked, and the four ways it stops being one (16 Sep 2026).
+ *
+ * WHY A SINGLE FUNNEL. Thirteen places in this repo wrote `UPDATE work_card SET state = 'BLOCKED',
+ * next_action = <whatever the failing function happened to be holding>`, and every one of them
+ * produced a different quality of sentence. A rewrite of thirteen strings would have been true for
+ * a week. `blockCard` is the only path that writes the state, so the fourteenth place has to come
+ * through the catalogue too, and `scripts/validate/a-block-can-be-cleared.mjs` fails the build for
+ * any service that goes round it.
+ *
+ * THE ANSWER HAS TO REACH THE NEXT RUN, or the button is theatre. `answerBlock` does three things
+ * and needs all three: it writes the answer onto the card where every runner reads it, it leaves a
+ * steering note so the general employee loop puts it ABOVE the original brief (employeeLoop.ts),
+ * and it puts the card back to OPEN with its attempts reset so the sweep actually picks it up. A
+ * blocked card is invisible to `claimNextCard`; recording an answer without reopening would be the
+ * failure the operator described, with an extra text box.
+ */
+
+/** How long a block waits for somebody before it rings again. */
+export const BLOCK_NAG_HOURS = 24;
+/** Nagging does not escalate for ever; after this many it says so and asks for an engineer. */
+export const BLOCK_NAGS_BEFORE_ESCALATING = 3;
+
+export interface BlockCardInput extends BlockFacts {
+  reason: BlockReason;
+  /** Scooter's office gets the notice instead of both partners. */
+  tellOnly?: string;
+}
+
+export interface BlockedCard {
+  id: string;
+  title: string;
+  firm_scope: string;
+  /** Only used to name the employee in a notice; a card whose caller does not carry it still blocks. */
+  owner_id?: string | null;
+}
+
+/**
+ * Put a card down with a reason a partner can read and act on.
+ *
+ * Returns the sentence written onto the card, which is what every caller already returned as its
+ * `detail` — so a service swapping its UPDATE for this call keeps its own contract.
+ */
+export async function blockCard(env: Env, card: BlockedCard, input: BlockCardInput, now: Date = new Date()): Promise<string> {
+  const block = describeBlock(input.reason, input);
+  // A block that fails its own standard is a bug in the catalogue, not a thing to ship quietly.
+  // Thrown rather than logged: the trigger in 0173 would refuse the row anyway, and a service
+  // discovering that at the database is a worse place to find out.
+  const problems = blockProblems(block);
+  if (problems.length > 0) {
+    throw new Error(`block reason "${input.reason}" is not fit for a partner to read: ${problems.join("; ")}`);
+  }
+
+  const sentence = blockSentence(block);
+  await env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET state = 'BLOCKED',
+            next_action = ?2,
+            block_reason = ?3, block_trying = ?4, block_stopped = ?5, block_needed = ?6,
+            block_who = ?7, block_actions_json = ?8,
+            blocked_at = ?9, block_nag_at = ?10, block_nags = 0,
+            block_answer = NULL, block_answered_by = NULL, block_answered_at = NULL,
+            lease_until = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?1`,
+  )
+    .bind(
+      card.id, sentence.slice(0, 900),
+      block.reason, block.trying.slice(0, 400), block.stopped, block.needed.slice(0, 900),
+      block.who, JSON.stringify(block.actions),
+      now.toISOString(), nagAt(now),
+    )
+    .run();
+
+  await appendEvent(env, {
+    eventType: "work_card.blocked",
+    actorType: "system",
+    actorId: "work_sweep",
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { reason: block.reason, who: block.who, actions: block.actions.map((a) => a.key) },
+  });
+  return sentence;
+}
+
+function nagAt(now: Date): string {
+  return new Date(now.getTime() + BLOCK_NAG_HOURS * 3_600_000).toISOString();
+}
+
+/** The block as stored, for the page and for the resurfacing sweep. */
+export interface StoredBlock {
+  id: string;
+  title: string;
+  firm_scope: string;
+  owner_id: string | null;
+  block_reason: string | null;
+  block_trying: string | null;
+  block_stopped: string | null;
+  block_needed: string | null;
+  block_who: string | null;
+  block_actions_json: string | null;
+  blocked_at: string | null;
+  block_nag_at: string | null;
+  block_nags: number;
+}
+
+export const BLOCK_COLUMNS =
+  "id, title, firm_scope, owner_id, block_reason, block_trying, block_stopped, block_needed, " +
+  "block_who, block_actions_json, blocked_at, block_nag_at, COALESCE(block_nags, 0) AS block_nags";
+
+/**
+ * NOTHING STAYS STUCK SILENTLY.
+ *
+ * A block nobody has acted on rings again a day later, and keeps ringing. This is the same rule
+ * the roster already holds for employees — they cannot drop work they own — applied to the system
+ * itself, which could previously let a block age into the bottom of a list. After three unanswered
+ * rings the notice says plainly that it has been asked three times, because at that point the
+ * problem is not that she missed it.
+ */
+export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredBlock[]> {
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT ${BLOCK_COLUMNS} FROM work_card
+        WHERE state = 'BLOCKED' AND block_answered_at IS NULL
+          AND block_nag_at IS NOT NULL AND block_nag_at < ?1
+        ORDER BY blocked_at ASC LIMIT 5`,
+    )
+      .bind(now.toISOString())
+      .all<StoredBlock>()
+  ).results ?? [];
+
+  for (const row of rows) {
+    const nags = (row.block_nags ?? 0) + 1;
+    const days = row.blocked_at ? Math.max(1, Math.round((now.getTime() - Date.parse(row.blocked_at)) / 86_400_000)) : 1;
+    const who = await employeeName(env, row.owner_id);
+    const body = [
+      row.block_stopped ?? "",
+      `What would clear it: ${row.block_needed ?? "—"}`,
+      nags >= BLOCK_NAGS_BEFORE_ESCALATING
+        ? `This is the ${nags}th time of asking. If it is not yours to answer, send it to an engineer from the Work page.`
+        : "Answer it, change it or drop it on the Work page.",
+    ].join(" ");
+    await notifyQuietlyOrPartners(env, row, {
+      title: `Still waiting on you: ${who} on "${row.title.slice(0, 60)}" (${days} day${days === 1 ? "" : "s"})`,
+      body,
+      dedupeKey: `work_card:${row.id}:block_nag:${nags}`,
+    });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET block_nags = ?2, block_nag_at = ?3 WHERE id = ?1")
+      .bind(row.id, nags, nagAt(now))
+      .run();
+  }
+  return rows;
+}
+
+async function notifyQuietlyOrPartners(
+  env: Env,
+  row: Pick<StoredBlock, "id" | "firm_scope" | "block_who">,
+  n: { title: string; body: string; dedupeKey: string },
+): Promise<void> {
+  const input = {
+    kind: "MEETING" as const,
+    severity: "WARNING" as const,
+    title: n.title,
+    body: n.body.slice(0, 600),
+    objectType: "work_card",
+    objectId: row.id,
+    dedupeKey: n.dedupeKey,
+    firmScope: row.firm_scope,
+  };
+  if (row.block_who === "SCOOTER") {
+    await notifyQuietly(env, { ...input, firmUserId: "fu_scooter_taylor" });
+    return;
+  }
+  await notifyPartners(env, input);
+}
+
+async function employeeName(env: Env, id: string | null): Promise<string> {
+  if (!id) return "An employee";
+  const row = await env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1").bind(id).first<{ name: string }>();
+  return row?.name ?? id;
+}
+
+// ── The four doors ────────────────────────────────────────────────────────────────────────────
+
+export interface UnblockInput {
+  action: BlockActionKey;
+  /** What she typed, or the key of a fixed choice. */
+  text?: string;
+  choice?: string;
+}
+
+export interface UnblockResult {
+  ok: boolean;
+  state: string;
+  /** What to tell her happened, in her own terms. */
+  said: string;
+}
+
+/**
+ * ANSWER — the door that has to work.
+ *
+ * Three writes, and the card is genuinely back in the queue:
+ *
+ *   1. `block_answer` on the card, which is where a specialised runner (the packet chain, the
+ *      monthly note) reads it — those do not run the general loop and would never see a note;
+ *   2. a `work_card_note`, which the general employee loop re-reads on EVERY step and places above
+ *      the original brief, and which it must acknowledge in words before it can carry on;
+ *   3. state OPEN with `work_attempts` and `work_steps` back to zero, because the sweep claims
+ *      OPEN and IN_PROGRESS cards and a blocked one is invisible to it.
+ *
+ * `allow_page` is the one choice that also DOES something: a block asking permission to open a
+ * page is answered by granting it, not by describing the grant in prose the loop has to interpret.
+ */
+export async function answerBlock(
+  env: Env,
+  cardId: string,
+  identityId: string,
+  input: UnblockInput,
+): Promise<UnblockResult> {
+  const card = await env.WP_OS_DB.prepare(
+    `SELECT id, title, state, firm_scope, owner_id, block_reason, block_who, description FROM work_card WHERE id = ?1`,
+  )
+    .bind(cardId)
+    .first<{ id: string; title: string; state: string; firm_scope: string; owner_id: string | null; block_reason: string | null; block_who: string | null; description: string | null }>();
+  if (!card) return { ok: false, state: "", said: "That card is not here." };
+  if (card.state !== "BLOCKED") {
+    return { ok: false, state: card.state, said: "This work is not blocked, so there is nothing to clear." };
+  }
+
+  const who = await employeeName(env, card.owner_id);
+  const typed = (input.text ?? "").trim();
+
+  if (input.action === "DROP") {
+    if (typed.length < 2) return { ok: false, state: card.state, said: "Say in a few words why you are dropping it, so the record makes sense later." };
+    await env.WP_OS_DB.prepare(
+      `UPDATE work_card
+          SET state = 'CANCELLED', next_action = NULL,
+              description = substr(COALESCE(description, '') || char(10) || '• Dropped by you: ' || ?2, 1, 16000),
+              block_answer = ?2, block_answered_by = ?3, block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1`,
+    )
+      .bind(card.id, typed.slice(0, 1000), identityId)
+      .run();
+    await record(env, card, identityId, "DROP", typed);
+    return { ok: true, state: "CANCELLED", said: `Dropped. ${who} stops asking, and your reason is on the record.` };
+  }
+
+  if (input.action === "ESCALATE") {
+    // STILL BLOCKED, DELIBERATELY. Escalating is not clearing: the work has not moved and saying it
+    // has would be the "runs but inert" failure in a nicer jacket. What changes is who it is
+    // addressed to and that somebody outside this office now knows.
+    await env.WP_OS_DB.prepare(
+      `UPDATE work_card
+          SET block_who = 'ENGINEER',
+              block_needed = ?2,
+              block_answer = ?3, block_answered_by = ?4, block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              block_nag_at = ?5, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1`,
+    )
+      .bind(
+        card.id,
+        "An engineer has to look at this one — it is not something you can answer.",
+        typed.slice(0, 1000) || "Sent to an engineer.",
+        identityId,
+        nagAt(new Date()),
+      )
+      .run();
+    await notifyPartners(env, {
+      kind: "MEETING",
+      severity: "WARNING",
+      title: `Sent to an engineer: ${who} on "${card.title.slice(0, 60)}"`,
+      body: `${typed || "No extra detail was given."} They will need the card and what it was asked to do. It stays blocked until they have fixed it.`,
+      objectType: "work_card",
+      objectId: card.id,
+      dedupeKey: `work_card:${card.id}:escalated`,
+      firmScope: card.firm_scope,
+    });
+    await record(env, card, identityId, "ESCALATE", typed);
+    return { ok: true, state: "BLOCKED", said: "Sent to an engineer. It stays on this list until they have fixed it, so it cannot go quiet." };
+  }
+
+  // ANSWER and CHANGE both put the work back in the queue; they differ in what the employee reads.
+  if (input.action === "CHANGE") {
+    if (typed.length < 5) return { ok: false, state: card.state, said: "Write the job again in your own words — that is what they will work from." };
+    await env.WP_OS_DB.prepare(
+      `UPDATE work_card
+          SET state = 'OPEN', title = ?1, next_action = ?2, work_attempts = 0, work_steps = 0, lease_until = NULL,
+              block_answer = ?3, block_answered_by = ?4, block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?5`,
+    )
+      .bind(card.title, typed.slice(0, 900), typed.slice(0, 1000), identityId, card.id)
+      .run();
+    await leaveNote(env, card.id, identityId, `What you asked for has changed. This is the job now: ${typed}`);
+    await record(env, card, identityId, "CHANGE", typed);
+    return { ok: true, state: "OPEN", said: `${who} picks this up again within a few minutes, working from your new words.` };
+  }
+
+  // ANSWER.
+  const choice = (input.choice ?? "").trim();
+  const answer = typed || choiceLabel(choice);
+  if (!answer) return { ok: false, state: card.state, said: "Type your answer, or pick one of the options." };
+
+  const grantsPage = choice === "allow_page";
+  await env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL,
+            allows_browser = CASE WHEN ?2 = 1 THEN 1 ELSE allows_browser END,
+            next_action = ?3,
+            block_answer = ?4, block_answered_by = ?5, block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?1`,
+  )
+    .bind(card.id, grantsPage ? 1 : 0, `You answered: ${answer}`.slice(0, 900), answer.slice(0, 1000), identityId)
+    .run();
+
+  // The steering note is what the general loop reads. Written as her answer to a question, not as a
+  // new instruction, so the employee resumes rather than restarting.
+  await leaveNote(env, card.id, identityId, `You asked what to do. The answer is: ${answer}`);
+  await record(env, card, identityId, "ANSWER", answer);
+  return {
+    ok: true,
+    state: "OPEN",
+    said: grantsPage
+      ? `${who} can open that page now and picks the work up again within a few minutes.`
+      : `${who} picks this up again within a few minutes, with your answer in front of them.`,
+  };
+}
+
+function choiceLabel(choice: string): string {
+  if (choice === "allow_page") return "Yes — open it.";
+  if (choice === "deny_page") return "No — carry on without opening it.";
+  return "";
+}
+
+/**
+ * A note the employee must acknowledge, written by the partner who answered.
+ *
+ * Written directly rather than through `handleAddWorkCardNote`: that handler refuses a card it
+ * thinks nobody will read, and by the time this runs the card is already back to OPEN.
+ */
+async function leaveNote(env: Env, cardId: string, authorId: string, body: string): Promise<void> {
+  await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body) VALUES (?1, ?2, ?3, ?4)")
+    .bind(`wcn_${crypto.randomUUID()}`, cardId, authorId, body.slice(0, 4000))
+    .run();
+}
+
+async function record(env: Env, card: { id: string; firm_scope: string }, actorId: string, action: string, text: string): Promise<void> {
+  await appendEvent(env, {
+    eventType: "work_card.unblocked",
+    actorType: "firm_user",
+    actorId,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { action, said: text.slice(0, 300) },
+  });
+}
+
+// ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
+
+/** POST /api/work-cards/:id/unblock — the button on the card. */
+export async function handleUnblockWorkCard(ctx: RouteContext): Promise<Response> {
+  const cardId = ctx.params.id;
+  if (!cardId) return json({ error: "invalid_input" }, { status: 400 });
+  const body = (await ctx.request.json().catch(() => null)) as { action?: unknown; text?: unknown; choice?: unknown } | null;
+  const action = String(body?.action ?? "") as BlockActionKey;
+  if (!BLOCK_ACTIONS.includes(action)) {
+    return json({ error: "invalid_input", detail: "Say whether you are answering it, changing it, dropping it, or sending it to an engineer." }, { status: 400 });
+  }
+  // A PERSON CLEARS A BLOCK. An employee answering the question it asked would be the loop talking
+  // to itself, which is the failure work_card_note's author_id column already refuses.
+  if (!ctx.identity) return json({ error: "human_required" }, { status: 403 });
+
+  const out = await answerBlock(ctx.env, cardId, ctx.identity.id, {
+    action,
+    text: typeof body?.text === "string" ? body.text : undefined,
+    choice: typeof body?.choice === "string" ? body.choice : undefined,
+  });
+  return json(out, { status: out.ok ? 200 : 409 });
+}
+
+/** The stored block, read back for a page. Null for a card that is not blocked. */
+export function blockOf(row: Partial<StoredBlock> & { state?: string }): (Block & { blockedAt: string | null }) | null {
+  if (row.state !== "BLOCKED" || !row.block_stopped) return null;
+  let actions: Block["actions"] = [];
+  try {
+    actions = JSON.parse(row.block_actions_json ?? "[]") as Block["actions"];
+  } catch {
+    actions = [];
+  }
+  return {
+    reason: (row.block_reason ?? "a_question_for_you") as BlockReason,
+    trying: row.block_trying ?? "",
+    stopped: row.block_stopped,
+    needed: row.block_needed ?? "",
+    who: (row.block_who ?? "SEQUOIA") as Block["who"],
+    actions,
+    blockedAt: row.blocked_at ?? null,
+  };
+}

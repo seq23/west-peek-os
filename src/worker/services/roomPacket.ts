@@ -6,6 +6,7 @@ import type { RouteContext } from "../router";
 import { runAi } from "../ai/runAi";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { findVenues, SEARCH_MODEL } from "./liveSearch";
+import { blockCard } from "./blocks";
 import { pageTextOf, urlStatus } from "../effects/urlLiveness";
 import {
   SPONSORSHIP_TARGET,
@@ -335,7 +336,9 @@ const defaultJudge: Judge = async (env, actor, prompt) => {
     actor,
     inputs: [prompt],
     sensitivity: "PUBLIC" as never,
-    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter" },
+    // JUDGEMENT, so the router keeps the search model out — this pass exists to hold what the
+    // searcher wrote to the brief, and the searcher grading itself was Parker's block.
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
@@ -351,7 +354,8 @@ async function defaultSynthesise(env: Env, actor: Actor, purpose: string, prompt
     // The prompt carries public research, a city, a theme and counts from the firm's own list —
     // no member identities beyond names already in its own records.
     sensitivity: "PUBLIC" as never,
-    budgetContext: { expectedOutputTokens, providerKey: "openrouter" },
+    // The packet Sequoia forwards to Scooter. Not the place a cost posture economises.
+    budgetContext: { expectedOutputTokens, providerKey: "openrouter", judgement: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) {
@@ -784,10 +788,21 @@ async function runWorkshopStage(
         nudge = `Your previous answer was discarded: ${why}. Every entry MUST carry the url of a live page that states it.`;
         continue;
       }
+      /*
+       * A JUDGE THAT COULD NOT ANSWER IS EMPTY RESEARCH, NOT A DEAD STAGE.
+       *
+       * These two lines used to `fail(...)`, which threw out of the retry loop, out of the stage
+       * and out of the card — three ticks of that and the sweep blocked Parker's October Workshop
+       * with "DISCOVER: the judgement pass failed: the judgement was routed to the search model".
+       * Every other failure in this stage already degrades, and the comment eight lines below says
+       * why it can: a Workshop CAN be designed from what the firm knows this audience needs. A
+       * judge that fell over is one of those cases, and it belongs with them rather than being the
+       * one path that stops the work dead.
+       */
       const judged = await deps.judge(env, deps.actor, buildWorkshopJudgePrompt({ topic, notes: live }));
-      if (!judged.ok) return fail(`the judgement pass failed: ${judged.detail}`);
+      if (!judged.ok) { why = `the judgement pass failed: ${judged.detail}`; continue; }
       const verdicts = parseWorkshopVerdicts(judged.text);
-      if (verdicts.size === 0) return fail("the judge answered with no verdicts");
+      if (verdicts.size === 0) { why = "the judge answered with no verdicts"; continue; }
       state.workshopRejected = [];
       for (const n of live) {
         const v = verdicts.get(n.url.toLowerCase());
@@ -1032,8 +1047,7 @@ export async function runRoomPacketCard(
 ): Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }> {
   const packet = await env.WP_OS_DB.prepare("SELECT * FROM evt_room_packet WHERE work_card_id = ?1").bind(card.id).first<PacketRow>();
   if (!packet) {
-    const why = "This card has no Room packet behind it — the request it was opened for is gone.";
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, why).run();
+    const why = await blockCard(env, card, { reason: "the_request_is_gone", trying: card.title, employee: "Parker" });
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
   if (packet.status !== "DRAFT" && packet.build_stage !== "PDF") {

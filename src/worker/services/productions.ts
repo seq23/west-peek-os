@@ -3,6 +3,7 @@ import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { SEARCH_MODEL } from "./liveSearch";
+import { blockCard } from "./blocks";
 import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
@@ -787,7 +788,7 @@ const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
     // Judging public research; nothing of the firm's leaves.
     sensitivity: "PUBLIC" as never,
     // No preferred model: the router's default (a Claude model) reads and reasons; it must not search.
-    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter" },
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
@@ -896,8 +897,13 @@ export async function runProductionsCard(
       pitchesLive.kept.length === 0 ? `no press pitch survived (${pitchesLive.why})` : null,
     ].filter((m): m is string => m !== null);
     if (missing.length) {
-      const why = `Not sending a half note — ${missing.join("; ")}. Nothing was emailed. Run it again, or tell Walker where to look.`;
-      await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, why).run();
+      const why = await blockCard(env, card, {
+        reason: "nothing_good_enough_to_send",
+        trying: card.title,
+        employee: "Walker",
+        who: "SCOOTER",
+        detail: `Tell Walker where to look, or leave it this month — ${missing.join("; ")}, and he will not send half a note.`,
+      });
       return { finished: false, blocked: true, detail: why };
     }
     const hunted: PressPitch[] = [];
@@ -937,8 +943,13 @@ export async function runProductionsCard(
   }
 
   if (count === 0) {
-    const why = `The search returned nothing with a live citation (${dropped.length} cited page(s) did not answer). Nothing was emailed. Run it again, or tell Walker where to look.`;
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1").bind(card.id, why).run();
+    const why = await blockCard(env, card, {
+      reason: "nothing_good_enough_to_send",
+      trying: card.title,
+      employee: "Walker",
+      who: "SCOOTER",
+      detail: `Tell Walker where to look, or leave it this round — every page he found led nowhere (${dropped.length} checked) and nothing was emailed.`,
+    });
     return { finished: false, blocked: true, detail: why };
   }
 

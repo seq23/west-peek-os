@@ -298,11 +298,15 @@ describe("the runner: research judged, the piece written, filed, one email", () 
       blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write: async () => ({ ok: true, text: outlineJson, detail: "ok" }), urlCheck: async () => false }),
     });
     expect(out.outcome, out.summary).toBe("BLOCKED");
-    expect(out.summary).toMatch(/No source survived the live check and the judgement pass/);
+    // 0173: the block is a sentence she can read, and the specifics are in "what would clear it".
+    expect(out.summary).toMatch(/looked and found nothing solid enough to put in front of you/);
+    const blocked = await env.WP_OS_DB.prepare("SELECT next_action, block_who FROM work_card WHERE id = ?1").bind(out.card!.id).first<{ next_action: string; block_who: string }>();
+    expect(blocked!.next_action).toMatch(/Send a source or two to start from/);
+    expect(blocked!.block_who).toBe("SEQUOIA");
     // The only email is the sweep's BLOCKED reply — a question back to her — never a piece.
     expect(sent).toHaveLength(before + 1);
     expect(sent[sent.length - 1]!.subject).toMatch(/^Wren: blocked — /);
-    expect(sent[sent.length - 1]!.text).toMatch(/No source survived/);
+    expect(sent[sent.length - 1]!.text).toMatch(/nothing solid enough to put in front of you/);
     const dlv = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deliverable WHERE source_type = 'work_card' AND source_id = ?1").bind(out.card!.id).first<{ n: number }>();
     expect(dlv!.n).toBe(0);
   });

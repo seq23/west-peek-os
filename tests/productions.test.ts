@@ -381,7 +381,9 @@ describe("the monthly card on Walker's desk", () => {
     expect(mails.length, "a half note must not be sent").toBe(0);
     const row = (await env.WP_OS_DB.prepare("SELECT state, next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; next_action: string }>())!;
     expect(row.state).toBe("BLOCKED");
-    expect(row.next_action).toMatch(/Not sending a half note — no customer lead survived \(the search answered with no usable entry/);
+    expect(row.next_action).toMatch(/Walker looked and found nothing solid enough to put in front of you/);
+    expect(row.next_action).toMatch(/no customer lead survived \(the search answered with no usable entry/);
+    expect(row.next_action).toMatch(/Scooter can settle this/);
   });
   it("THE JUDGEMENT PASS: what the searcher found is held to the brief by a second model; failures are dropped and the reason is on the note", async () => {
     // 16 Sep 2026: the searcher, told "United States, no government", returned VK, the Space Force

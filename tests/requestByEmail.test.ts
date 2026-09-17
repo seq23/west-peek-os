@@ -5,6 +5,7 @@ import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import { assignCard, workCard } from "../src/worker/services/employeeWork";
 import { sweepOnce } from "../src/worker/services/workSweep";
+import { blockCard } from "../src/worker/services/blocks";
 import { replyToRequester } from "../src/worker/services/requestReply";
 import { buildStepPrompt, parseDecision } from "../src/shared/work/employeeLoop";
 import type { Env } from "../src/worker/env";
@@ -162,7 +163,14 @@ describe("Sequoia emails a request", () => {
     expect(card.success).toBe(true);
     await sweepOnce(env, new Date(NOW.getTime() + 10 * 60_000), {
       general: async (e, _ctx, cardId) => {
-        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = 'Which quarter do you mean?' WHERE id = ?1").bind(cardId).run();
+        // 0173: blocks go through the catalogue, so the question reaches the inbox as "what would
+        // clear it" rather than as whatever the loop was holding.
+        await blockCard(e, { id: cardId, title: "Find the LP letter", firm_scope: "west-peek", owner_id: "aie_wesley" }, {
+          reason: "a_question_for_you",
+          trying: "Find the LP letter",
+          employee: "Wesley",
+          detail: "Which quarter do you mean?",
+        });
         return { finished: false, blocked: true, detail: "Which quarter do you mean?", steps: [{ action: "blocked", detail: "Which quarter do you mean?" }] };
       },
     });
@@ -170,7 +178,8 @@ describe("Sequoia emails a request", () => {
     expect(last.to).toBe("scooter@westpeek.ventures");
     expect(last.subject).toBe("Wesley: blocked — Find the LP letter");
     expect(last.text).toMatch(/^\*\*TL;DR:\*\* Blocked on what you asked for/);
-    expect(last.text).toMatch(/\*\*Where I am stuck\*\*\n• Which quarter do you mean\?/);
+    expect(last.text).toMatch(/\*\*Where I am stuck\*\*\n• Wesley needs something from you/);
+    expect(last.text).toMatch(/Which quarter do you mean\?/);
   });
 });
 

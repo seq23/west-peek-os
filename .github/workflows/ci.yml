@@ -103,6 +103,12 @@ jobs:
       - name: Every partner email takes the one door
         run: npm run validate:partner-email
 
+      # A block is a question addressed to the owner. Every one has to say what was being done, what
+      # stopped it in a sentence with no machinery in it, what would clear it and who can clear it —
+      # and offer a button. A service that blocks a card its own way fails here.
+      - name: A block is something she can clear herself
+        run: npm run validate:blocks
+
       - name: Build client
         run: npm run build
 

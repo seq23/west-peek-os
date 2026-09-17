@@ -81,6 +81,7 @@ import {
   handleReopenApproval,
 } from "./services/approvals";
 import { handleDraftCard, handleWorkCard, handleWriteBrief } from "./services/employeeWork";
+import { handleUnblockWorkCard } from "./services/blocks";
 import {
   handleGoogleCallback,
   handleGoogleConnectStart,
@@ -994,6 +995,9 @@ const router = new Router()
   .post("/api/work-cards/:id/work", handleWorkCard)
   // P53 — Ask drafts a card. It writes nothing; the partner reads it and presses Add.
   .post("/api/intent/draft", handleDraftCard)
+  // 0173 — the four doors on a blocked card: answer it, change it, drop it, send it to an engineer.
+  // An answer reopens the card and reaches the employee's next run; it is not a comment box.
+  .post("/api/work-cards/:id/unblock", handleUnblockWorkCard)
   .post("/api/work-cards/:id/look", handleCardLook)
   .post("/api/work-cards/:id/browser-permission", handleSetCardBrowserPermission)
   .post("/api/browser-tasks/:id/approve", handleApproveBrowserTask)

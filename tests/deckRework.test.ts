@@ -131,9 +131,12 @@ describe("the card becomes the next version, with a PDF", () => {
     expect(out.finished).toBe(false);
     expect(out.blocked).toBe(true);
     expect(out.detail).toMatch(/NO PDF could be rendered/);
-    const c = await env.WP_OS_DB.prepare("SELECT state, next_action FROM work_card WHERE id = ?1").bind(card!.id).first<{ state: string; next_action: string }>();
+    const c = await env.WP_OS_DB.prepare("SELECT state, next_action, block_who FROM work_card WHERE id = ?1").bind(card!.id).first<{ state: string; next_action: string; block_who: string }>();
     expect(c!.state).toBe("BLOCKED");
-    expect(c!.next_action).toMatch(/could not be rendered/);
+    // 0173: a render fault is not hers to fix, and the block says so in plain words rather than
+    // handing her the renderer's complaint.
+    expect(c!.next_action).toMatch(/the document would not come out as a file/);
+    expect(c!.block_who).toBe("ENGINEER");
   });
 
   it("runDeckRebuild itself renders the PDF, so the on-request job no longer produces an empty version", async () => {

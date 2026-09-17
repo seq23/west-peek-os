@@ -12,6 +12,7 @@ import { guidanceBlock } from "../../shared/skills/library";
 import { writtenGuidance } from "./firmSkills";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { createWorkCardInternal } from "./workCards";
+import { blockCard } from "./blocks";
 import { seatId } from "../../shared/intake/emailTriggers";
 import { buildDesignReviewPrompt } from "../../shared/design/reviewRubric";
 import { z } from "zod";
@@ -399,7 +400,8 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
       // The card and its findings are firm-internal. Never raised: a higher label would let this
       // loop carry confidential material to a provider without anybody deciding that.
       sensitivity: "INTERNAL" as never,
-      budgetContext: { expectedOutputTokens: 400 },
+      // The employee CHOOSING ITS NEXT MOVE is the thinking step; it is never downgraded.
+      budgetContext: { expectedOutputTokens: 400, judgement: true },
       // Named, so the run lands on this employee's line in the cost centre and this machine's line
       // on the Machines page. Every run before this was attributed to nobody.
       aiEmployeeId: employee.id,
@@ -515,10 +517,14 @@ async function applyDecision(
     }
 
     // MID-TASK APPROVAL. The card goes BLOCKED with the question on it and the run stops cleanly;
-    // approving and running again resumes with the full history.
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
-      .bind(card.id, `Waiting on your approval to open ${d.start_url}`)
-      .run();
+    // saying yes on the card grants the permission AND puts the work back in the queue, so it
+    // resumes with the full history rather than needing a second press somewhere else.
+    await blockCard(env, card, {
+      reason: "permission_to_open_a_page",
+      trying: card.title,
+      employee: employeeName,
+      url: d.start_url!,
+    });
     return { step, action: "waiting", detail: `Needs your approval to open ${d.start_url}` };
   }
 
@@ -548,9 +554,12 @@ async function applyDecision(
     }
 
     if (task.status !== "APPROVED") {
-      await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
-        .bind(card.id, `Waiting on your approval to look at ${d.start_url}`)
-        .run();
+      await blockCard(env, card, {
+        reason: "permission_to_open_a_page",
+        trying: card.title,
+        employee: employeeName,
+        url: d.start_url!,
+      });
       return { step, action: "waiting", detail: `Needs your approval to look at ${d.start_url}` };
     }
 
@@ -589,7 +598,8 @@ async function applyDecision(
       // A public web page is public. This is what lets the images through the boundary at all —
       // anything the firm holds privately would be labelled higher and refused, by design.
       sensitivity: "PUBLIC" as never,
-      budgetContext: { expectedOutputTokens: 1_200 },
+      // Judging how a page LOOKS is a design opinion, not a lookup.
+      budgetContext: { expectedOutputTokens: 1_200, judgement: true },
       aiEmployeeId: employeeId,
       routing: {
         category: "OPERATIONS",
@@ -625,11 +635,15 @@ async function applyDecision(
   }
 
   if (d.action === "blocked") {
-    await env.WP_OS_DB.prepare(
-      "UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1",
-    )
-      .bind(card.id, d.needs!)
-      .run();
+    // THE EMPLOYEE'S OWN WORDS GO IN `needed`, NOT IN THE EXPLANATION. A question phrased for a
+    // person is exactly what belongs under "what would clear it"; the sentence that says the work
+    // has stopped is written by the catalogue so it can be held to a standard a model cannot be.
+    await blockCard(env, card, {
+      reason: "a_question_for_you",
+      trying: card.title,
+      employee: employeeName,
+      detail: d.needs!,
+    });
     return { step, action: "blocked", detail: d.needs! };
   }
 
@@ -700,7 +714,8 @@ export async function handleDraftCard(ctx: RouteContext): Promise<Response> {
     ],
     // The request is firm-internal — it can name a company, a partner, a deal.
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 900 },
+    // Reading what the partner meant and writing the card is the interpretation step itself.
+    budgetContext: { expectedOutputTokens: 900, judgement: true },
     routing: { category: "OPERATIONS", taskClass: "employee-work" },
   });
 
@@ -898,7 +913,8 @@ export async function handleWriteBrief(ctx: RouteContext): Promise<Response> {
     ],
     // The question can name a company, a partner, a deal.
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 1_800 },
+    // A brief with a partner's name on it.
+    budgetContext: { expectedOutputTokens: 1_800, judgement: true },
     aiEmployeeId: author.id,
     routing: {
       category: "RESEARCH",
