@@ -280,10 +280,31 @@ test("a spending ceiling is a partner's decision, it persists, and a cost mode a
   await gotoSurface(page, "Cockpit");
   const before = page.getByTestId("firm-budget-MONTHLY");
   await expect(before).toBeVisible();
+
+  /*
+   * THE FIRM HAS A MONTHLY CEILING NOW, AND IT DID NOT WHEN THIS WAS WRITTEN.
+   *
+   * `firm_spend_budget` was empty: there was no monthly ceiling at all, only a daily cap, and 31 x
+   * $2.50 of daily cap is $77.50 — past the $50 the owner named as her worst case. Migration 0178
+   * gave the firm its first one, so the MONTHLY window legitimately no longer renders "No limit
+   * set".
+   *
+   * THE PROPERTY THIS LINE WAS DEFENDING IS NOT DROPPED. "With no limit set the page says so rather
+   * than drawing a bar against nothing" is still true and still worth holding, so it is asserted
+   * against ALL_TIME, which genuinely has no ceiling and is meant to keep not having one — nothing
+   * is invented for a window nobody set. And the MONTHLY side is now pinned too: the shipped
+   * ceiling has to be drawn, with its figure. Both states of the component are covered where one
+   * was.
+   */
   await expect(
-    page.getByTestId("firm-budget-none-MONTHLY"),
+    page.getByTestId("firm-budget-none-ALL_TIME"),
     "with no limit set the page says so rather than drawing a bar against nothing",
   ).toContainText("No limit set");
+  await expect(
+    page.getByTestId("firm-budget-cap-MONTHLY"),
+    "the monthly ceiling migration 0178 set must be drawn, with its figure, rather than left implicit",
+  ).toContainText("50.00");
+  await expect(page.getByTestId("firm-budget-none-MONTHLY")).toHaveCount(0);
 
   await page.getByTestId("firm-budget-input-MONTHLY").fill("250");
   await page.getByTestId("firm-budget-save-MONTHLY").click();

@@ -40,7 +40,23 @@ test("the model catalogue prints pricing provenance beside the price", async ({ 
   const row = page.getByTestId("model-row-gpt-4o-mini");
   await expect(row).toContainText("ILLUSTRATIVE");
   await expect(page.getByTestId("model-row-llama-v3p1-70b-instruct")).toBeVisible();
-  await expect(page.locator("body")).toContainText("ILLUSTRATIVE means placeholder configuration, not a vendor price");
+  /*
+   * THE NOTE SAYS MORE THAN IT DID, and that is the change rather than a rewording.
+   *
+   * It used to say only that ILLUSTRATIVE means placeholder configuration. Since migration 0177 the
+   * catalogue also holds prices that WERE read from a vendor, on a recorded date, so the page has to
+   * distinguish the two — and it has to state the consequence, which is the part that protects
+   * anybody: a price nobody read takes no part in any cost comparison the router makes. That is the
+   * rule that would have stopped 0158, where one invented $1/$1 row made a search model "cheapest
+   * adequate" for every unpinned call in the firm.
+   *
+   * Three assertions where there was one, so the page cannot drop either half of the distinction or
+   * the consequence and still pass.
+   */
+  const notes = page.locator("body");
+  await expect(notes).toContainText("ILLUSTRATIVE means nobody ever read one");
+  await expect(notes).toContainText("takes no part in any cost comparison the router makes");
+  await expect(notes).toContainText("SOURCED means a vendor figure was read on the date recorded");
 });
 
 test("a Managing Partner sets a scoped budget and the cost centre shows its definitions", async ({ page }) => {
