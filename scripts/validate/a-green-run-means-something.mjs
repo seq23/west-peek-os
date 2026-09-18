@@ -61,6 +61,7 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const E2E_DIR = path.join(ROOT, "e2e");
 const CONFIG = path.join(ROOT, "playwright.config.ts");
 const WORKFLOW = path.join(ROOT, ".github", "workflows", "ci.yml");
+const CLIENT_DIR = path.join(ROOT, "src", "client");
 
 /**
  * THE SLEEP INVENTORY — file → how many `page.waitForTimeout` calls it is allowed.
@@ -169,6 +170,52 @@ function withoutComments(source) {
     .split("\n")
     .filter((line) => !/^\s*#/.test(line))
     .join("\n");
+}
+
+/**
+ * Rule 8 — A LIST MAY NOT RENDER NOTHING WHILE IT LOADS.
+ *
+ * `{!x.loading && rows.length === 0 && <li className="state-empty">…}` draws the empty row only
+ * once the fetch is done, so for the width of that fetch the list is a blank with no explanation —
+ * the exact thing WEST_PEEK_DESIGN_SYSTEM.md §7 forbids ("loading and empty share one slot, told
+ * apart by tone, never a blank"), and a live flake source: `d1-design-states` sweeps every surface
+ * for unexplained blanks and caught two of these 1 run in 8 on 18 Sep 2026. The sweep now waits any
+ * blank out, so a new one of these would not fail loudly — it would just quietly go back to being
+ * an ambiguous blank for a reader on a slow connection. This is what fails instead.
+ *
+ * The partner must be within a few lines, which is where the reviewer will look for it.
+ */
+export function checkLoadingBlanks(rel, source) {
+  const bad = [];
+  let examined = 0;
+  const lines = source.split("\n");
+  lines.forEach((line, i) => {
+    const m = /!\s*([A-Za-z_$][\w$]*)\.loading/.exec(line);
+    if (!m || !/state-empty/.test(line)) return;
+    examined += 1;
+    const near = lines.slice(Math.max(0, i - 3), i).join("\n");
+    const partner = new RegExp(`\\b${m[1]}\\.loading\\s*&&\\s*<li className="state-empty"`);
+    if (!partner.test(near)) {
+      bad.push(
+        `${rel}:${i + 1}: this empty row is drawn only once \`${m[1]}\` has loaded, so the list is a ` +
+          "blank with nothing in it until then. Put a loading row in the same slot — " +
+          `\`{${m[1]}.loading && <li className="state-empty">Reading …</li>}\` — within the three ` +
+          "lines above it",
+      );
+    }
+  });
+  return { bad, examined };
+}
+
+/** Every `.ts`/`.tsx` under `src/client/`. */
+function clientFiles(dir = CLIENT_DIR, prefix = "") {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...clientFiles(path.join(dir, entry.name), rel));
+    else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) out.push({ rel, abs: path.join(dir, entry.name) });
+  }
+  return out;
 }
 
 /** Rules 3 and 4 — what the workflow is allowed to do with a red run. */
@@ -283,13 +330,23 @@ function selfTest() {
   expectCaught("a sleep the inventory no longer needs", checkFile("d1-design-states.spec.ts", "expect(a).toBe(b);"));
   expectClean("a file spending exactly its inventoried sleep", checkFile("d1-design-states.spec.ts", "expect(a).toBe(b);\nawait page.waitForTimeout(200);"));
 
+  const LOADING_BAD = '        {!rooms.loading && rows.length === 0 && <li className="state-empty">No rooms.</li>}';
+  const LOADING_GOOD =
+    '        {rooms.loading && <li className="state-empty">Reading the rooms\u2026</li>}\n' + LOADING_BAD;
+  expectCaught("an empty row drawn only after loading, with no loading row", checkLoadingBlanks("X.tsx", LOADING_BAD).bad);
+  expectClean("the same row with its loading partner above it", checkLoadingBlanks("X.tsx", LOADING_GOOD).bad);
+  expectCaught(
+    "a loading partner for a DIFFERENT list",
+    checkLoadingBlanks("X.tsx", '        {jobs.loading && <li className="state-empty">Reading\u2026</li>}\n' + LOADING_BAD).bad,
+  );
+
   if (failures.length > 0) {
     console.error("A-GREEN-RUN-MEANS-SOMETHING SELF-TEST FAILED — this checker cannot see what it claims to see:");
     for (const f of failures) console.error(`  ✗ ${f}`);
     process.exit(1);
   }
   console.log(
-    "A-GREEN-RUN-MEANS-SOMETHING SELF-TEST PASSED: 21 case(s), including the real `npm run e2e || retry` " +
+    "A-GREEN-RUN-MEANS-SOMETHING SELF-TEST PASSED: 24 case(s), including the real `npm run e2e || retry` " +
       "line as it stood on origin/main, every one caught or cleared as intended.",
   );
 }
@@ -332,6 +389,20 @@ function main() {
     }
   }
 
+  let loadingRowsExamined = 0;
+  for (const f of clientFiles()) {
+    const r = checkLoadingBlanks(f.rel, readFileSync(f.abs, "utf8"));
+    loadingRowsExamined += r.examined;
+    bad.push(...r.bad);
+  }
+  if (loadingRowsExamined === 0) {
+    console.error(
+      "A-GREEN-RUN-MEANS-SOMETHING SCAN FAILED — found no `!x.loading` empty rows anywhere in src/client. " +
+        "Either the client stopped drawing empty states or this scan lost its target; both are failures. Rule 0.",
+    );
+    process.exit(1);
+  }
+
   if (!existsSync(WORKFLOW)) {
     console.error("A-GREEN-RUN-MEANS-SOMETHING SCAN FAILED — no .github/workflows/ci.yml to check. Rule 0.");
     process.exit(1);
@@ -354,7 +425,9 @@ function main() {
   console.log(
     `A-GREEN-RUN-MEANS-SOMETHING SCAN PASSED: ${specs.length} spec file(s) and ${files.length - specs.length} ` +
       `support file(s) under e2e/, ${expectations} assertion(s), 0 excused; retries 0 and workers 1; ` +
-      `${sleeps} inventoried sleep(s) and no new ones; the CI job runs the whole suite twice and needs both.`,
+      `${sleeps} inventoried sleep(s) and no new ones; ${loadingRowsExamined} list(s) that draw an empty ` +
+      "row after loading, every one with a loading row in the same slot; the CI job runs the whole suite " +
+      "twice and needs both.",
   );
 }
 
