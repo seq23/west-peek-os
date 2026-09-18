@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { RouteContext } from "../router";
 import { json } from "../router";
-import { CLAUDE_CODE_AGENT_EMAIL } from "../auth";
+import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import {
   HEARTBEAT_FRESH_MS,
   HEARTBEAT_INTERVAL_S,
@@ -41,7 +41,7 @@ const MANAGING_PARTNER_ROLE = "MANAGING_PARTNER";
 function mayClaim(ctx: RouteContext): boolean {
   const identity = ctx.identity;
   if (!identity) return false;
-  if (identity.email.toLowerCase() === CLAUDE_CODE_AGENT_EMAIL) return true;
+  if (identity.email.toLowerCase() === SUBSCRIPTION_CLAIMER_EMAIL) return true;
   return identity.roles.includes(MANAGING_PARTNER_ROLE);
 }
 

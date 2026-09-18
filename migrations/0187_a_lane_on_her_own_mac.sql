@@ -175,15 +175,31 @@ VALUES
    '{"note":"Claude Code running under the owner''s Claude Max subscription on her own machine. NOT an API vendor: the Worker cannot dial it. A run assigned here is parked in claude_code_run and a launchd claimer takes it. Cost is $0 because the subscription is a flat fee already paid — the figure is plan-equivalent usage, not a bill. Absence is the normal state: when the Mac is asleep or away the heartbeat goes stale and the router skips this lane with zero delay."}',
    NULL, 0, 1, 'west-peek');
 
--- ── THE EGRESS DECISION, MADE EXPLICITLY ─────────────────────────────────────────────────────
+-- ── THE EGRESS DECISION, MADE EXPLICITLY AND NARROWLY ────────────────────────────────────────
 -- `provider_data_policy` is default-deny, so a row is required before ANYTHING may be sent here.
--- CONFIDENTIAL and INTERNAL are allowed and PUBLIC follows from them; the justification is the same
--- one 0184 applied to `claude-haiku-4.5`, and it is stronger here because the material never leaves
--- her own machine's Claude session — there is no third party in the path at all.
+-- PUBLIC and INTERNAL, and DELIBERATELY NOT CONFIDENTIAL — nor RESTRICTED, LP_PRIVATE,
+-- MNPI_SENSITIVE or BANKING_RESTRICTED, which have no lane in this firm and must keep having none.
+--
+-- THE TEMPTATION HERE IS REAL AND IS BEING REFUSED. This lane is genuinely the safest destination
+-- in the catalogue: the material never leaves her own machine's session and there is no third party
+-- in the path at all. It would be easy to argue it should carry the strict labels too.
+--
+-- IT MUST NOT, BECAUSE THAT IS A DIFFERENT DECISION THAN THE ONE ASKED FOR. `tests/ai.test.ts`
+-- asserts that a CONFIDENTIAL-labelled run is EGRESS_BLOCKED with ZERO provider calls, in every
+-- privacy mode. That guarantee predates this work, nobody asked for it to be revisited, and a new
+-- lane quietly becoming the first thing ever allowed to see MNPI is exactly the kind of widening
+-- that should require its own argument rather than arriving as a side effect of a cost change.
+--
+-- AND NOTHING IS LOST BY THE NARROWNESS, which is the part worth checking rather than assuming.
+-- The private slice this lane exists for does NOT arrive labelled CONFIDENTIAL. Migration 0184
+-- established that the label is the RECIPIENT axis and `model_access` is the CONTENT axis: a work
+-- card marked PRIVATE_MODEL_ONLY reaches the boundary as `sensitivity: "INTERNAL"` with
+-- `confidential: true` in its budget context, and it is the latter that this lane is selected on.
+-- So the whole of the intended traffic is covered by the INTERNAL row, and the strict labels stay
+-- exactly as blocked as they were yesterday.
 INSERT OR IGNORE INTO provider_data_policy (id, provider_id, privacy_label, allowed) VALUES
   ('pdp_claude_code_public', 'prov_claude_code', 'PUBLIC', 1),
-  ('pdp_claude_code_internal', 'prov_claude_code', 'INTERNAL', 1),
-  ('pdp_claude_code_confidential', 'prov_claude_code', 'CONFIDENTIAL', 1);
+  ('pdp_claude_code_internal', 'prov_claude_code', 'INTERNAL', 1);
 
 -- ── THE MODEL ROW ────────────────────────────────────────────────────────────────────────────
 -- ACTIVE rather than BENCH, and the distinction from 0184's benched Haiku row is real: that lane
@@ -200,7 +216,7 @@ INSERT OR IGNORE INTO provider_model
    pricing_state, pricing_source_note, pricing_sourced_at, status, registered_by, firm_scope)
 VALUES
   ('pm_claude_code_local', 'prov_claude_code', 'claude-code-local', 'Claude Code on her Mac',
-   '["text-completion"]', 200000, 8192, 1, 1, 'UNKNOWN', 'CONFIDENTIAL',
+   '["text-completion"]', 200000, 8192, 1, 1, 'UNKNOWN', 'INTERNAL',
    'SOURCED',
    'Zero, and the zero is real rather than a placeholder: the work runs inside a Claude Max subscription that is a flat monthly fee already paid, so a run here moves no money. Recorded as plan-equivalent usage, not as a bill. Anthropic Commercial Terms of Service §B — "Anthropic may not train models on Customer Content from Services" — is a contractual prohibition rather than an account setting, which is why this lane may carry PRIVATE_MODEL_ONLY work where every free reasoning lane may not. The capacity it draws on is the same capacity the owner uses interactively, which is why it is confined to the private slice rather than given the whole firm.',
    '2026-09-17', 'ACTIVE', 'migration:0187', 'west-peek');
@@ -229,7 +245,7 @@ VALUES
 -- the request reaches this Worker. No new auth mechanism, no shared secret in the repo, and the
 -- existing rule that A HUMAN IDENTITY ALWAYS WINS is preserved — see src/worker/auth.ts.
 INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES
-  ('fu_claude_code_agent', 'claude-code-agent@joinwestpeek.com', 'Claude Code claimer (her Mac)', 'ACTIVE');
+  ('fu_subscription_claimer', 'subscription-claimer@joinwestpeek.com', 'Subscription seat claimer (her Mac)', 'ACTIVE');
 
 -- ═════════════════════════════════════════════════════════════════════════════════════════════
 -- AND THE FIRM IS TOLD, because a lane nobody knows about is a lane nobody trusts when it appears

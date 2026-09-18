@@ -75,7 +75,7 @@ export interface Env {
    * simply does not exist and the lane can never be claimed, which is a safe default rather than a
    * broken one: the chain answers every run on the lanes it always used.
    */
-  WP_CLAUDE_CODE_CLIENT_ID?: string;
+  WP_OS_CLAIMER_CLIENT_ID?: string;
   RESEND_API_KEY?: string;
   /** Runware image generation. Absent means the capability is simply off, not broken. */
   RUNWARE_API_KEY?: string;

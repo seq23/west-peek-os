@@ -64,7 +64,7 @@ const BROWSER_AGENT_EMAIL = "browser-agent@westpeek.ventures";
  * claimer is the FIRM's agent and takes whatever the firm parked. There is deliberately no partner
  * identity anywhere in this path.
  */
-export const CLAUDE_CODE_AGENT_EMAIL = "claude-code-agent@joinwestpeek.com";
+export const SUBSCRIPTION_CLAIMER_EMAIL = "subscription-claimer@joinwestpeek.com";
 
 /**
  * The service token's client id, read out of the Access assertion.
@@ -147,9 +147,9 @@ function identityEmail(request: Request, env: Env): string | null {
    * client id is configured — no token, no agent — and checked after the browser agent so the two
    * can never collide on a shared value.
    */
-  const claimerId = env.WP_CLAUDE_CODE_CLIENT_ID;
+  const claimerId = env.WP_OS_CLAIMER_CLIENT_ID;
   if (typeof claimerId === "string" && claimerId.length > 0) {
-    if (presented && presented === claimerId) return CLAUDE_CODE_AGENT_EMAIL;
+    if (presented && presented === claimerId) return SUBSCRIPTION_CLAIMER_EMAIL;
   }
   return null;
 }
