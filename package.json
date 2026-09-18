@@ -31,6 +31,7 @@
     "validate:deck-decision": "node scripts/validate/deck-current-requires-a-decision.mjs && node scripts/validate/deck-current-requires-a-decision.mjs --self-test",
     "validate:design-tokens": "node scripts/validate/design-tokens.mjs && node scripts/validate/design-tokens.mjs --self-test",
     "validate:employee-sender": "node scripts/validate/employee-sender-domain.mjs && node scripts/validate/employee-sender-domain.mjs --self-test",
+    "validate:employee-lane": "node scripts/validate/every-employee-takes-the-lane.mjs && node scripts/validate/every-employee-takes-the-lane.mjs --self-test",
     "validate:env-vars": "node scripts/validate/env-vars-are-registered.mjs && node scripts/validate/env-vars-are-registered.mjs --self-test",
     "validate:free-lanes": "node scripts/validate/free-lanes-cannot-see-confidential.mjs && node scripts/validate/free-lanes-cannot-see-confidential.mjs --self-test",
     "validate:instructions": "node scripts/validate/an-instruction-reaches-a-model.mjs && node scripts/validate/an-instruction-reaches-a-model.mjs --self-test",
