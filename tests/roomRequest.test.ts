@@ -369,7 +369,16 @@ describe("the Rooms job does one cheap thing", () => {
     for (let i = 0; i < 3 && !opened.includes(orphan.id); i++) {
       const out = await runMonthlyRoomProposal(env, actor(), NOW);
       expect(out.generated).toBe(true);
-      expect(out.detail).toMatch(/opened Parker's card/);
+      /*
+       * STRICTER SINCE 0194, AND THIS IS THE CONTRACT CHANGE. These drafts were made with
+       * `queueDraft` and never had a card opened, which in production means the request path
+       * failed — asking for a Room opens Parker's card in the same breath. So the net catching one
+       * is a DEFECT and must be reported as one. The old assertion accepted any wording containing
+       * "opened Parker's card", which a silent backstop would also satisfy.
+       */
+      expect(out.backstopCaught).toBe(true);
+      expect(out.detail).toMatch(/^DEFECT — the backstop opened a card the request path should have opened/);
+      expect(out.detail).toMatch(/Partners notified\./);
       opened.push(out.packetId!);
     }
     expect(opened).toContain(orphan.id);

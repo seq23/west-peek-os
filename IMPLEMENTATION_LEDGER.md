@@ -5561,3 +5561,54 @@ Counts: vitest **2236/2236** (was 2227; +9), `tsc --noEmit` green, and `validate
 `validate:css-classes`, `validate:css-variables`, `validate:brand`, `validate:design-tokens`,
 `validate:instructions`, `validate:ai-boundary`, `validate:authority`, `validate:one-lever`,
 `validate:blocks` all PASSED with their self-tests.
+
+## 18 Sep 2026 — A one-off is built now; a steer waits for its month
+
+Operator: *"if i make an ask of Parker for next month's proposal or ask for a one-off that is 2 diff
+things: a one off should be delivered and acted upon immediately; asking for a specific topic or
+angle to next months propoals should come when the month's proposal comes"*.
+
+**The defect, reproduced before anything was written.** Both asks were the same ask. An ask on
+18 September naming `2026-11` — "Black lawyers, several distinct name ideas this time", which is a
+steer in her words and in `MONTHLY_PLAN` — returned `201 queued:true` with a `work_card` in state
+`OPEN` titled *"Parker: build the November 2026 Room packet"*. The sweep would have built and emailed
+November's packet that afternoon, six weeks early, with no way for her to know except the email.
+
+**How the two are told apart: declared, never guessed.** No regex and no model reads her prose to
+decide what she meant — that approach failed in the sibling system, and being wrong here silently
+delivers November's topic today. The ask carries an `intent` of `NOW` or `STEER`. Where none is
+given, `classifyAsk` applies ONE calendar comparison: an ask for a month at or before the one being
+delivered has nothing to wait for and is built now; an ask for a later month is **ambiguous and the
+door refuses**, returning both readings. A click beats a confident guess.
+
+| | |
+|---|---|
+| `migrations/0194_a_steer_waits_for_its_month.sql` | `evt_month_steer` — her words, keyed by the month they are FOR, append-only, withdrawn by a column rather than a delete. And the Rooms job: `INTERVAL 15 → 60`, `daily_at_tz = 'America/Chicago'`. Guarded by a `CHECK (matched = 1)` so a no-op migration is an error rather than a silent success. |
+| `src/shared/events/monthlyPlan.ts` | `deliveryMonth(now, tz?)` — "the 1st of the month prior" is a LOCAL-TIME boundary; read in UTC it minted November's packets on 30 September by her clock. `classifyAsk` and `steerLines`. |
+| `src/worker/services/monthSteer.ts` | The runtime half of `MONTHLY_PLAN`: record, withdraw, read-for-the-packet, mark-delivered, and the board. |
+| `src/worker/services/roomPacket.ts` | The door forks BEFORE `queueDraft`, so a steer never becomes a thing Parker builds. Both streams read `steerForMonth` at the one moment their topic settles. The hourly tick is a BACKSTOP: a draft whose card was never opened is a defect in the request path, notified to the partners and named in the summary. |
+| `src/worker/services/jobs.ts` | Hands the job row's own zone in, and reports a backstop catch as `FAILED` — the card is opened either way, but a run that quietly repairs a defect is how the defect survives a month of green graphs. |
+| `src/client/pages/RoomsPage.tsx` | The choice, asked only where the calendar is ambiguous, with both radios unselected and submit disabled. And "What Parker has been told, for months he has not built yet" — her words, the month, when she said them, and *Take it back* beside each. |
+
+**Two steers for one month both survive**, oldest first, with the conflict rule stated. Replacing the
+first would discard an instruction she gave with no trace and no way to notice.
+
+**Proof — the words, not the column.** `tests/aSteerWaitsForItsMonth.test.ts`, 14 tests. The concepts
+prompt is captured and her sentence is read back out of it on 1 October; the plan's standing steer is
+in there beside it. The cadence is pinned across the November clock change in both directions
+(`2026-11-01T04:30Z` is 31 October on her clock and must still deliver November).
+
+**Negative proof, run on the real files rather than described.** Five broken states restored one at a
+time, each returning its named failure and each restored: the 15-minute poll with no zone; the
+concepts prompt fed from the plan's steer alone; a quiet backstop; a regex over her prose inside
+`classifyAsk`; the door queueing before it forks. And on the test: the pre-fix door restored turns 3
+of 14 red, including the reproduction of the original defect.
+
+**Tests my change made false were rewritten stricter, and their siblings looked for.** Three asks in
+`tests/workshops.test.ts` named a month beyond the delivery month with no intent; each now declares
+`NOW` **and** pins that the undeclared form is refused and creates nothing. `tests/roomRequest.test.ts`
+accepted any wording containing "opened Parker's card" — which a silent backstop would also satisfy —
+and now requires the DEFECT report and the partner notification.
+
+Counts: vitest **2447/2447** (was 2433; +14), `tsc --noEmit` green, and all **35** `validate:*`
+scripts PASSED with their self-tests, including the new `validate:steer-waits` (18 fixtures).

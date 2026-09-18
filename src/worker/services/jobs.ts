@@ -494,19 +494,34 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     return { status: out.status, summary: out.summary, artifacts };
   }
 
-  // Parker's Rooms. The job does ONE CHEAP THING per run — opens Parker's card for a Room a
-  // partner asked for, or queues his own Room for the following month — and the employee sweep
-  // runs the chain (sponsor discovery and research, three concepts, venues, the packet, the PDF)
-  // a stage per tick. No model runs in this tick. schedule_kind has no MONTHLY value and adding
-  // one would mean rebuilding scheduled_job's CHECK; a month check in SQL costs one query.
+  /*
+   * Parker's Rooms. ONE CHEAP THING per run, and since 0194 that run is HOURLY: it mints the
+   * month's packets on the 1st of the month prior, and catches a draft the request path failed to
+   * open a card for. The employee sweep runs the chain a stage per tick; no model runs here.
+   *
+   * THE JOB'S OWN ZONE GOES IN. "The 1st of the month prior" is a local-time boundary, and
+   * `scheduled_job.daily_at_tz` — the column 0193 added for the deck lane — is where this job
+   * records the clock it is written against. Read from the row rather than hardcoded, so moving
+   * the firm's clock is an UPDATE rather than a deploy. Null keeps the UTC reading exactly.
+   *
+   * schedule_kind has no MONTHLY value and adding one would mean rebuilding scheduled_job's CHECK;
+   * a month check in SQL costs one query.
+   */
   if (job.job_key === "monthly_room_proposal") {
     const { runMonthlyRoomProposal } = await import("./roomPacket");
-    const out = await runMonthlyRoomProposal(env, actor, now.toISOString());
+    const out = await runMonthlyRoomProposal(env, actor, now.toISOString(), job.daily_at_tz);
     if (out.packetId) {
       artifacts.push({ kind: "ROOM_PACKET", ref_type: "room_packet", ref_id: out.packetId });
     }
     return {
-      status: "SUCCEEDED",
+      // A BACKSTOP CATCH IS A FAILED RUN, and that is the point of it.
+      //
+      // The card gets opened either way — the work is never held hostage to the reporting. But a
+      // run that says SUCCEEDED while quietly repairing a defect in the request path is how a
+      // broken door stays broken for a month: the summary scrolls past, the graph stays green, and
+      // nobody learns that asking for a Room stopped opening a card. Rule 0 in reverse — a stage
+      // that had to clean up after another stage may not report the clean-up as its own success.
+      status: out.backstopCaught ? "FAILED" : "SUCCEEDED",
       // A skipped month is a success, not a no-op worth alerting on — the shelf is already stocked.
       summary: out.generated ? `Rooms: ${out.detail}` : out.detail,
       artifacts,
