@@ -62,7 +62,7 @@ const PRIVATE_CALL = {
   sensitivity: "INTERNAL" as never,
   actor: MP_ACTOR,
   budgetContext: { expectedOutputTokens: 200, judgement: true, confidential: true },
-  routing: { category: "OPERATIONS", taskClass: "employee-work" },
+  routing: { category: "OPERATIONS" as const, taskClass: "employee-work" },
 };
 
 const openRouterAnswers = (model: string, text: string) => () =>
