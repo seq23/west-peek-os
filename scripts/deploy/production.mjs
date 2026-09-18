@@ -22,6 +22,29 @@ const run = (cmd, opts = {}) => execSync(cmd, { stdio: "pipe", encoding: "utf8",
 const say = (s) => process.stdout.write(`${s}\n`);
 const die = (s) => { process.stderr.write(`\n✗ ${s}\n`); process.exit(1); };
 
+/**
+ * The 7403 trap, and why this is defaulted rather than demanded.
+ *
+ * Without `CLOUDFLARE_ACCOUNT_ID`, the very first wrangler call fails with "The given account is
+ * not valid or is not authorized to access this service [code: 7403]" — which reads like a revoked
+ * token and is nothing of the kind. Boss OS's identical script has carried this guard for weeks;
+ * this one never did, so the failure only appeared in shells that happen not to export it: a
+ * background job, a fresh login, CI, launchd. It cost a deploy on 18 Sep 2026 — `main` was green,
+ * the merge was done, and production silently stayed on the previous build while the owner was
+ * looking at it.
+ *
+ * A different account id is SAID, never corrected. Deploying West Peek OS somewhere else is a
+ * decision; it should not happen by accident, and it should not be silently undone either.
+ */
+const ACCOUNT = "8d147e242033699dd37c6f5a451f48d2";
+if (!process.env.CLOUDFLARE_ACCOUNT_ID) {
+  process.env.CLOUDFLARE_ACCOUNT_ID = ACCOUNT;
+  say(`0/4  CLOUDFLARE_ACCOUNT_ID was not set; using ${ACCOUNT}.`);
+  say("     Without it wrangler returns a 7403 that reads like a permissions error and is not one.");
+} else if (process.env.CLOUDFLARE_ACCOUNT_ID !== ACCOUNT) {
+  say(`0/4  CLOUDFLARE_ACCOUNT_ID is set to ${process.env.CLOUDFLARE_ACCOUNT_ID}, which is not West Peek OS's usual account.`);
+}
+
 say("1/4  applying migrations…");
 try {
   const out = run("npx wrangler d1 migrations apply WP_OS_DB --env production --remote");

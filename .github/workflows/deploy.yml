@@ -1,0 +1,82 @@
+# West Peek OS — production deploy, on green `main`, without a person in the loop.
+#
+# WHY THIS EXISTS, AND WHY IT REVERSES A DELIBERATE DECISION.
+#
+# `ci.yml` records the August 2026 decision NOT to deploy from CI: Workers Builds
+# was connected on 14 Aug and switched off on 18 Aug because auto-deploy-on-push
+# cannot run the safe migrate-then-deploy sequence without a long-lived Cloudflare
+# API token with D1 write access living in the CI environment. That reasoning was
+# sound and the token's blast radius is real.
+#
+# The owner overrode it on 18 Sep 2026, in those words, after four PRs were merged
+# and none were deployed and she opened the app to find a redesign that had been on
+# `main` for an hour and was not in production. She supplied the token herself and
+# said the trade was hers to make. It is.
+#
+# WHAT MAKES THIS SAFE ENOUGH TO BE WORTH IT:
+#   · It runs ONLY after `CI` has completed successfully, and ONLY on `main`. A red
+#     merge commit — which has happened here, boss-os PR #16 passed on its head and
+#     went red on the merge — deploys nothing.
+#   · It runs `npm run deploy:production`, which applies migrations, verifies none
+#     are pending, builds, deploys, and probes the worker. Never a bare
+#     `wrangler deploy`: that ships a stale client and the LOCAL DEV bindings, and
+#     on 17 Sep it tried to push `WP_OS_ENV "local"` and a dev passcode to prod.
+#   · `concurrency` with no cancel-in-progress: two merges in quick succession
+#     deploy in order rather than racing, and a half-applied migration set is never
+#     interrupted by the next run.
+#
+# `land` (in ~/bin) remains the operator path and does the same checks from a
+# laptop. This workflow is the belt; `land` is the braces.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to production
+    # A `workflow_run` fires on failure too. Deploying a red main is the exact
+    # accident this is meant to prevent, so the gate is explicit.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout the exact commit CI proved
+        uses: actions/checkout@v4
+        with:
+          # Deploy what was validated, not whatever `main` has drifted to since.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (reproducible, from package-lock)
+        run: npm ci
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Without this, wrangler returns a 7403 that reads like a revoked token
+          # and is not one. It cost a deploy on 18 Sep 2026.
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy:production
+
+      - name: Say what shipped
+        run: |
+          echo "Deployed ${{ github.event.workflow_run.head_sha || github.sha }} to production." >> "$GITHUB_STEP_SUMMARY"
