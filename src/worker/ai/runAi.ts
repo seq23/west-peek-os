@@ -10,6 +10,8 @@ import { redactInputs, scrubInputs } from "./scrub";
 import {
   adapterFor,
   checkScopedBudgets,
+  LANE_NOT_STOOD_DOWN_SQL,
+  laneIsStoodDown,
   latestRoutingPolicy,
   orderByPolicy,
   raiseCostAlert,
@@ -462,6 +464,8 @@ interface ProviderRow {
   base_url: string | null;
   /** 1 when this lane's terms permit the vendor to train on what it is sent. See migration 0178. */
   training_permitted?: number;
+  /** Set when the owner stood this lane down from a blocked work card. See migration 0185. */
+  paused_until?: string | null;
 }
 
 interface PricingRow {
@@ -1134,7 +1138,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     const pinned = await env.WP_OS_DB.prepare("SELECT * FROM provider_registry WHERE provider_key = ?1")
       .bind(pinnedKey)
       .first<ProviderRow>();
-    if (!pinned || pinned.enabled !== 1) {
+    if (!pinned || pinned.enabled !== 1 || laneIsStoodDown(pinned, now)) {
       return { run: await blocked("PROVIDER_DISABLED", `provider_disabled:${pinnedKey}`) };
     }
     if (pinned.kill_switched === 1) {
@@ -1142,7 +1146,10 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     }
     candidates = [pinned];
   } else {
-    const enabled = await env.WP_OS_DB.prepare("SELECT * FROM provider_registry WHERE enabled = 1").all<ProviderRow>();
+    // A lane the owner stood down from a work card is out for everything, not just that card.
+    const enabled = await env.WP_OS_DB.prepare(
+      `SELECT * FROM provider_registry WHERE enabled = 1 AND ${LANE_NOT_STOOD_DOWN_SQL}`,
+    ).all<ProviderRow>();
     const all = enabled.results ?? [];
     candidates = all.filter((p) => p.kill_switched !== 1);
     if (candidates.length === 0) {
@@ -1955,7 +1962,10 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     if (!direct) continue;
     if (!credentialConfigured(env, direct.providerKey)) continue;
     const peerProvider = await env.WP_OS_DB.prepare(
-      "SELECT id, provider_key, enabled, kill_switched, base_url FROM provider_registry WHERE provider_key = ?1",
+      // THE DIRECT-VENDOR LANE IS THE ONE THAT REFUSED PARKER'S CARD on 17 Sep, so this is the
+      // query that most needs to honour a stand-down: without it, "stop using this one" would still
+      // let the failover hand the work straight back to the lane she had just switched off.
+      `SELECT id, provider_key, enabled, kill_switched, base_url, paused_until FROM provider_registry WHERE provider_key = ?1 AND ${LANE_NOT_STOOD_DOWN_SQL}`,
     )
       .bind(direct.providerKey)
       .first<{ id: string; provider_key: string; enabled: number; kill_switched: number; base_url: string | null }>();

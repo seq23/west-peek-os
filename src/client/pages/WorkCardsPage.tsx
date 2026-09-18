@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { readableDate, shortDate } from "../lib/dates";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
+import { isTechnicalBlock } from "@shared/work/blocks";
 import type { Block, BlockActionKey } from "@shared/work/blocks";
 import { portraitFor } from "../lib/employeePortraits";
 
@@ -51,8 +52,14 @@ interface WorkCardRow {
   allows_browser?: number;
   kind?: string | null;
   work_attempts?: number;
+  /**
+   * 0185 — WHAT WENT WRONG ON THE LAST ATTEMPT, while the card is still retrying and not yet
+   * blocked. This is the field that stops a failing card reading as a waiting one.
+   */
+  work_last_failure?: string | null;
+  work_last_failure_at?: string | null;
   /** 0173 — present only while the card is blocked: the four sentences and the doors. */
-  block?: (Block & { blockedAt: string | null }) | null;
+  block?: (Block & { blockedAt: string | null; lane?: string | null; laneName?: string | null; raw?: string | null }) | null;
   looks?: Array<{
     id: string; objective: string; start_url: string; status: string;
     result_text: string | null; refusal_reason: string | null;
@@ -532,8 +539,22 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
             {group.cards.map((c) => {
               const meaning = stateMeaning(c.state);
               const isOpen = openCards.has(c.id);
+              /*
+                A CARD THAT IS STUMBLING IS NOT A CARD THAT IS WAITING, and on 17 Sep 2026 they
+                looked identical. Parker's event-kit card burned three attempts in fourteen minutes
+                against a lane that had run out of credit, and every time the owner looked it said
+                "Open · queued — picked up within 5 min". `work_attempts` was counting the whole
+                time and nothing on this page read it out.
+
+                So a card with a failure behind it says so — in the badge row, in its own colour,
+                before anything is expanded — and the reassuring "queued" line is suppressed,
+                because it is not true of this card.
+              */
+              const failing = Boolean(c.work_last_failure) && c.state !== "BLOCKED" && c.state !== "DONE" && c.state !== "CANCELLED";
+              const technical = isTechnicalBlock(c.block?.reason);
+              const rowClass = ["card", "work-card-row", isOpen ? "is-open" : "", failing ? "work-card-failing" : ""].filter(Boolean).join(" ");
               return (
-                <li key={c.id} className={isOpen ? "card work-card-row is-open" : "card work-card-row"} data-testid={`work-card-${c.id}`}>
+                <li key={c.id} className={rowClass} data-testid={`work-card-${c.id}`} data-failing={failing ? "yes" : "no"}>
                   {/*
                     THE CARD AT REST IS THREE LINES, not one and not fifteen.
 
@@ -559,10 +580,18 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                       </span>
                       {/* HOW FAR ALONG. An employee gets three attempts; the count is what tells you
                           "in progress" is a run that happened rather than a label that stuck. */}
+                      {failing && (
+                        <span className="badge badge-bad" data-testid={`work-card-failing-${c.id}`}>
+                          last try failed
+                        </span>
+                      )}
                       {c.owner_type === "AI" && c.state === "IN_PROGRESS" && (
                         <span className="muted small">attempt {Math.max(1, c.work_attempts ?? 1)} of 3</span>
                       )}
-                      {c.owner_type === "AI" && c.state === "OPEN" && (
+                      {/* NOT SAID OF A CARD THAT HAS ALREADY FAILED. "Queued — picked up within
+                          5 min" is a reassurance, and repeating it over a card that has been
+                          refused twice is the exact lie the owner was reading all evening. */}
+                      {c.owner_type === "AI" && c.state === "OPEN" && !failing && (
                         <span className="muted small">queued — picked up within 5 min</span>
                       )}
                       {c.priority !== "NORMAL" && <span className="badge badge-gate">{c.priority.toLowerCase()}</span>}
@@ -599,12 +628,47 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                     anything. Four sentences in the order a person asks them — what was this, what
                     stopped, what would fix it, who can — and then the doors.
                   */}
+                  {/*
+                    THE FAILURE, BEFORE IT BECOMES A BLOCK. One line, outside the fold, in the same
+                    place a block would be — because a card that has already been refused once is a
+                    card she may want to touch now rather than in ten minutes' time.
+                  */}
+                  {failing && (
+                    <p className="card-failing-line small" data-testid={`work-card-failure-${c.id}`}>
+                      {c.work_last_failure} It is being tried again; if it fails again it stops and asks you.
+                    </p>
+                  )}
+
                   {c.block && (
-                    <div className="card-block" data-testid={`work-card-block-${c.id}`}>
-                      <p className="lbl">Blocked — waiting on {c.block.who === "ENGINEER" ? "an engineer" : c.block.who === "SCOOTER" ? "Scooter" : "you"}</p>
+                    <div className={technical ? "card-block card-block-fault" : "card-block"} data-testid={`work-card-block-${c.id}`}>
+                      {/*
+                        A FAULT IS NOT A QUESTION, and the heading says which it is. "Blocked —
+                        waiting on you" over a lane that has run out of credit reads as though she
+                        has been slow to answer something; what actually happened is that the work
+                        hit a wall and nothing is being tried until she moves it.
+                      */}
+                      <p className="lbl">
+                        {technical
+                          ? `Stopped${c.block.laneName ? ` — ${c.block.laneName} refused it` : ""} · nothing is being tried`
+                          : `Blocked — waiting on ${c.block.who === "ENGINEER" ? "an engineer" : c.block.who === "SCOOTER" ? "Scooter" : "you"}`}
+                      </p>
                       <p data-testid={`work-card-block-stopped-${c.id}`}><strong>{c.block.stopped}</strong></p>
                       <p className="small">What was asked for: {c.block.trying}</p>
                       <p className="small" data-testid={`work-card-block-needed-${c.id}`}>What would clear it: {c.block.needed}</p>
+                      {/*
+                        WHAT THE VENDOR ACTUALLY SAID — on demand, never by default.
+
+                        "provider_failure:provider_http_400" was the ONLY account of the 17 Sep
+                        failure that existed anywhere, and it lived in a database. It is genuinely
+                        useful to whoever ends up fixing the lane, and it is not an explanation, so
+                        it lives behind a disclosure with the sentence above it doing the work.
+                      */}
+                      {c.block.raw && (
+                        <details className="block-raw" data-testid={`work-card-block-raw-${c.id}`}>
+                          <summary className="muted small">Show me exactly what it said</summary>
+                          <pre className="block-raw-text">{c.block.raw}</pre>
+                        </details>
+                      )}
                       {c.block.who === "ENGINEER" && (
                         <p className="notice small">
                           This one is not yours to answer. Sending it on tells whoever maintains the system
@@ -637,7 +701,57 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                           </p>
                           {/* A YES-OR-NO ANSWER IS TWO BUTTONS, not a box to type "yes" into. The
                               choice also DOES the thing — saying yes to a page grants it. */}
-                          {clearing.action === "ANSWER" && (c.block.actions.find((a) => a.key === "ANSWER")?.choices ?? []).length > 0 ? (
+                          {/*
+                            A FAULT DOOR NEEDS NO PROSE. "Try it again" and "stand that one down"
+                            are not questions she is answering — asking her to type something into
+                            a box first would be a form standing between her and the fix, which is
+                            the shape of the problem this whole change exists to remove.
+                          */}
+                          {clearing.action === "RETRY" || clearing.action === "ANOTHER_LANE" || clearing.action === "PAUSE_LANE" ? (
+                            <div className="notification-actions">
+                              <button
+                                type="button"
+                                className="btn-strong"
+                                disabled={busy}
+                                data-testid={`work-card-block-do-${clearing.action.toLowerCase()}-${c.id}`}
+                                onClick={() => void clearBlock(c.id, clearing.action)}
+                              >
+                                {clearing.action === "RETRY"
+                                  ? "Try it again now"
+                                  : clearing.action === "ANOTHER_LANE"
+                                    ? `Send it elsewhere${c.block?.laneName ? ` and stand ${c.block.laneName} down for six hours` : ""}`
+                                    : `Stop using ${c.block?.laneName ?? "it"} for a week`}
+                              </button>
+                            </div>
+                          ) : clearing.action === "HAND_ON" ? (
+                            <div className="notification-actions">
+                              {/* The roster, not a guess: the server refuses anybody who is not employed. */}
+                              <select
+                                aria-label={`Who should take ${c.title}`}
+                                data-testid={`work-card-block-handon-who-${c.id}`}
+                                value={clearText}
+                                onChange={(e) => setClearText(e.target.value)}
+                              >
+                                <option value="">Who should take it?</option>
+                                {(board.data?.assignable.employees ?? [])
+                                  .filter((emp) => emp.id !== c.owner_id)
+                                  .map((emp) => (
+                                    <option key={emp.id} value={emp.id}>
+                                      {emp.name} — {emp.role}
+                                    </option>
+                                  ))}
+                              </select>
+                              <button
+                                type="button"
+                                className="btn-strong"
+                                disabled={busy || !clearText}
+                                data-testid={`work-card-block-handon-${c.id}`}
+                                onClick={() => void clearBlock(c.id, "HAND_ON", clearText)}
+                              >
+                                Give it to them
+                              </button>
+                            </div>
+                          ) : clearing.action === "ANSWER" && (c.block.actions.find((a) => a.key === "ANSWER")?.choices ?? []).length > 0 ? (
                             <div className="notification-actions">
                               {c.block.actions.find((a) => a.key === "ANSWER")!.choices!.map((ch) => (
                                 <button

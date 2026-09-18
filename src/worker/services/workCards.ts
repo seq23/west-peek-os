@@ -565,6 +565,13 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- guess what a partner can do about it.
             wc.block_reason, wc.block_trying, wc.block_stopped, wc.block_needed, wc.block_who,
             wc.block_actions_json, wc.blocked_at, wc.block_answered_at,
+            -- 0185: which lane refused, and its verbatim words. The doors act on the first; the
+            -- second is what "show me what it actually said" opens.
+            wc.block_lane, wc.block_lane_name, wc.block_raw,
+            -- A CARD THAT IS STILL RETRYING. Written on every failed attempt, so the page can tell
+            -- a card that is stumbling from a card that is merely queued — which it could not do on
+            -- 17 Sep, when three failures in fourteen minutes all read "Open · queued".
+            wc.work_last_failure, wc.work_last_failure_at,
             COALESCE(e.name, u.full_name) AS owner_name,
             e.role AS owner_role
        FROM work_card wc
