@@ -34,6 +34,11 @@ const F = {
   boundary: "src/worker/ai/runAi.ts",
   lease: "src/worker/services/dailyIntelligence.ts",
 };
+/**
+ * How far past a caller's own worst observed run its deadline may sit before it stops being
+ * headroom and starts being a rope. The widest ratio in the current sample is 3.2x.
+ */
+const ROPE_MULTIPLE = 6;
 const ADAPTER_DIR = "src/worker/ai/providers";
 /**
  * WHAT COUNTS AS A MODEL LANE, decided by a property of the file rather than by a list of names.
@@ -75,12 +80,16 @@ export function check(files) {
   const MIN_USEFUL_ATTEMPT_MS = num(budgetSrc, "MIN_USEFUL_ATTEMPT_MS");
   const MAX_ATTEMPT_MS = num(budgetSrc, "MAX_ATTEMPT_MS");
   const ATTEMPT_BASE_MS = num(budgetSrc, "ATTEMPT_BASE_MS");
-  const MS_PER_OUTPUT_TOKEN = num(budgetSrc, "MS_PER_OUTPUT_TOKEN");
+  const MIN_TOKENS_PER_SEC = num(budgetSrc, "MIN_TOKENS_PER_SEC");
+  const OVERSHOOT_MULTIPLE = num(budgetSrc, "OVERSHOOT_MULTIPLE");
+  const TRUNCATION_FLOOR_TOKENS = num(budgetSrc, "TRUNCATION_FLOOR_TOKENS");
+  const TIMING_FLOOR_TOKENS = num(budgetSrc, "TIMING_FLOOR_TOKENS");
   const CALLER_RESERVE_MS = num(budgetSrc, "CALLER_RESERVE_MS");
   const PROVIDER_MAX_OUTPUT_TOKENS = num(ceilingSrc, "PROVIDER_MAX_OUTPUT_TOKENS");
   for (const [name, v] of Object.entries({
-    CHAIN_BUDGET_MS, MIN_USEFUL_ATTEMPT_MS, MAX_ATTEMPT_MS, ATTEMPT_BASE_MS, MS_PER_OUTPUT_TOKEN,
-    CALLER_RESERVE_MS, PROVIDER_MAX_OUTPUT_TOKENS,
+    CHAIN_BUDGET_MS, MIN_USEFUL_ATTEMPT_MS, MAX_ATTEMPT_MS, ATTEMPT_BASE_MS, MIN_TOKENS_PER_SEC,
+    OVERSHOOT_MULTIPLE, TRUNCATION_FLOOR_TOKENS, TIMING_FLOOR_TOKENS, CALLER_RESERVE_MS,
+    PROVIDER_MAX_OUTPUT_TOKENS,
   })) {
     examined += 1;
     if (v === null || !Number.isFinite(v) || v <= 0) problems.push(`${name} could not be read as a positive number`);
@@ -113,42 +122,81 @@ export function check(files) {
     return { problems, examined };
   }
 
-  // The least-squares fit the comments claim, recomputed rather than trusted.
-  const n = sample.length;
-  const sx = sample.reduce((a, [, x]) => a + x, 0);
-  const sy = sample.reduce((a, [, , y]) => a + y, 0);
-  const sxy = sample.reduce((a, [, x, y]) => a + x * y, 0);
-  const sxx = sample.reduce((a, [, x]) => a + x * x, 0);
-  const slopeMsPerToken = ((n * sxy - sx * sy) / (n * sxx - sx * sx)) * 1000;
-  const interceptMs = ((sy - (slopeMsPerToken / 1000) * sx) / n) * 1000;
+  // The rates and durations the constants claim, recomputed from the sample rather than trusted.
+  /*
+   * RATE IS ONLY MEANINGFUL ON A RUN BIG ENOUGH FOR GENERATION TO DOMINATE IT.
+   *
+   * A 262-token reply that takes 6.8s is not writing at 38 tok/s; it is spending most of that time
+   * connecting and queueing, which `ATTEMPT_BASE_MS` already accounts for separately. Including
+   * such rows would double-count the fixed cost and drag the floor down to a number no constant
+   * could satisfy. So the floor is measured over replies above 5,000 tokens, which is how the
+   * 83.7 tok/s figure in chainBudget.ts was derived from production in the first place.
+   */
+  const RATE_MEANINGFUL_ABOVE_TOKENS = 5_000;
+  const rates = sample.filter(([, produced]) => produced > RATE_MEANINGFUL_ABOVE_TOKENS).map(([, produced, secs]) => produced / secs);
+  if (rates.length < 5) {
+    problems.push(
+      `only ${rates.length} sample row(s) are large enough for a generation rate to be meaningful; ` +
+        `MIN_TOKENS_PER_SEC has nothing solid behind it`,
+    );
+    return { problems, examined };
+  }
+  const slowestRate = Math.min(...rates);
   const slowestObservedMs = Math.max(...sample.map(([, , y]) => y)) * 1000;
+  const largestProduced = Math.max(...sample.map(([, produced]) => produced));
 
-  // 0a. The per-token allowance must be clear of measured speed, not equal to it.
+  // 0a. The assumed floor rate must sit BELOW the slowest rate ever measured, not at or above it.
   examined += 1;
-  if (MS_PER_OUTPUT_TOKEN < slopeMsPerToken * 1.5) {
+  if (MIN_TOKENS_PER_SEC >= slowestRate) {
     problems.push(
-      `MS_PER_OUTPUT_TOKEN is ${MS_PER_OUTPUT_TOKEN}ms against a measured ${slopeMsPerToken.toFixed(1)}ms/token. ` +
-        `A deadline set near observed speed fails every call slower than average — which is half of them.`,
+      `MIN_TOKENS_PER_SEC is ${MIN_TOKENS_PER_SEC} tok/s but the slowest rate in the sample is ` +
+        `${slowestRate.toFixed(1)} tok/s. A floor at or above measured speed means every call slower than the slowest ` +
+        `one ever seen is killed — which is the 180s mistake with a different unit.`,
     );
   }
-  // 0b. The fixed cost must be clear of the measured intercept.
+  // 0b. The fixed cost must leave room for a queued or cold lane, which a fit over successes cannot see.
   examined += 1;
-  if (ATTEMPT_BASE_MS < interceptMs * 1.5) {
+  if (ATTEMPT_BASE_MS < 10_000) {
+    problems.push(`ATTEMPT_BASE_MS is ${ATTEMPT_BASE_MS}ms, too little for connection, queueing and time-to-first-token on a cold lane`);
+  }
+  // 0c. THE CAP MUST COVER THE CEILING AT THE SLOWEST MEASURED RATE.
+  //     This is the check that makes the cap honest rather than arbitrary: if a model may emit
+  //     PROVIDER_MAX_OUTPUT_TOKENS and the slowest thing we have measured writes at `slowestRate`,
+  //     an attempt allowed less than that could be killed while still legitimately writing.
+  examined += 1;
+  const largestAtSlowestMs = ATTEMPT_BASE_MS + (largestProduced / slowestRate) * 1000;
+  if (MAX_ATTEMPT_MS < largestAtSlowestMs) {
     problems.push(
-      `ATTEMPT_BASE_MS is ${ATTEMPT_BASE_MS}ms against a measured intercept of ${interceptMs.toFixed(0)}ms, with no room ` +
-        `for a queued or cold lane — and a fit over SUCCESSFUL calls cannot see an unhealthy one.`,
+      `MAX_ATTEMPT_MS is ${Math.round(MAX_ATTEMPT_MS / 1000)}s, but the largest reply this system has ever written ` +
+        `(${largestProduced} tokens) at the slowest rate ever measured (${slowestRate.toFixed(1)} tok/s) needs ` +
+        `${Math.round(largestAtSlowestMs / 1000)}s. The cap would kill a lane that is still writing.`,
     );
   }
-  // 0c. The hard per-attempt ceiling must sit well past the slowest thing ever seen to complete.
+  /*
+   * DELIBERATELY NOT `PROVIDER_MAX_OUTPUT_TOKENS / slowestRate`. That multiplies a worst-case size
+   * by a worst-case rate and yields 519s — longer than the stage lease can hold once a retry and the
+   * caller's own work are in it. A bar nothing can satisfy is not a bar. The ceiling's job is to
+   * stop a runaway; what the deadline must cover is what the system actually writes.
+   */
+  // 0d. And it must sit well past the slowest thing this system has ever finished.
   examined += 1;
-  if (MAX_ATTEMPT_MS < slowestObservedMs * 1.5) {
+  if (MAX_ATTEMPT_MS < slowestObservedMs * 1.4) {
     problems.push(
-      `MAX_ATTEMPT_MS is ${Math.round(MAX_ATTEMPT_MS / 1000)}s but the slowest completion in the sample took ` +
-        `${Math.round(slowestObservedMs / 1000)}s. A ceiling that close to a known-good run kills it on a slow day — ` +
-        `which is precisely what 180s would have done to the four 250s runs of 18 Sep.`,
+      `MAX_ATTEMPT_MS is ${Math.round(MAX_ATTEMPT_MS / 1000)}s against a slowest completion of ` +
+        `${Math.round(slowestObservedMs / 1000)}s — under 40% headroom. 300s failed this against a 281.2s run, and ` +
+        `180s failed it against the same run before that.`,
     );
   }
-  // 0d. A second lane must always be reachable after the first has taken everything it may.
+  // 0e. THE SHARED CEILING MAY NOT BE BELOW WHAT THE FIRM HAS ALREADY WRITTEN.
+  examined += 1;
+  if (PROVIDER_MAX_OUTPUT_TOKENS < largestProduced) {
+    problems.push(
+      `PROVIDER_MAX_OUTPUT_TOKENS is ${PROVIDER_MAX_OUTPUT_TOKENS} but a completion of ${largestProduced} tokens is in ` +
+        `the sample — the shared ceiling would truncate the firm's largest recurring job, which is the 256-token ` +
+        `defect one order of magnitude up`,
+    );
+  }
+  // 0f. A second lane must always be reachable after the first has taken everything it may.
   examined += 1;
   if (MAX_ATTEMPT_MS + MIN_USEFUL_ATTEMPT_MS > CHAIN_BUDGET_MS) {
     problems.push(
@@ -174,11 +222,48 @@ export function check(files) {
         "given a full deadline the run cannot pay for, and the chain overruns by up to one attempt per lane",
     );
   }
-  const wireCeiling = (ask) => Math.min(PROVIDER_MAX_OUTPUT_TOKENS, Math.max(8_192, Math.max(0, ask) * 2));
+  const wireCeiling = (ask) =>
+    Math.min(PROVIDER_MAX_OUTPUT_TOKENS, Math.max(TRUNCATION_FLOOR_TOKENS, Math.max(0, ask) * OVERSHOOT_MULTIPLE));
+  const timingTokens = (ask) =>
+    Math.min(PROVIDER_MAX_OUTPUT_TOKENS, Math.max(TIMING_FLOOR_TOKENS, Math.max(0, ask) * OVERSHOOT_MULTIPLE));
   const deadlineFor = (ask, remaining) => {
-    const sized = Math.min(MAX_ATTEMPT_MS, Math.max(MIN_USEFUL_ATTEMPT_MS, ATTEMPT_BASE_MS + wireCeiling(ask) * MS_PER_OUTPUT_TOKEN));
+    const sized = Math.min(
+      MAX_ATTEMPT_MS,
+      Math.max(MIN_USEFUL_ATTEMPT_MS, ATTEMPT_BASE_MS + (timingTokens(ask) / MIN_TOKENS_PER_SEC) * 1000),
+    );
     return Math.max(0, clampsToRemaining ? Math.min(sized, remaining) : sized);
   };
+  /*
+   * A DEADLINE MUST CLEAR THE WORST RUN ITS OWN CALLER HAS ACTUALLY HAD. Checked per declared ask
+   * against the sample, so a floor tuned down to shorten the search rope cannot quietly start
+   * killing the calls it was meant to speed up.
+   */
+  for (const [ask, , secs] of sample) {
+    examined += 1;
+    if (deadlineFor(ask, CHAIN_BUDGET_MS) < secs * 1000 * 1.25) {
+      problems.push(
+        `a caller declaring ${ask} tokens has taken ${secs}s in production, but its deadline would be ` +
+          `${Math.round(deadlineFor(ask, CHAIN_BUDGET_MS) / 1000)}s — under 25% headroom over a run that really happened`,
+      );
+    }
+    /*
+     * AND THE OTHER SIDE OF IT: A ROPE IS AS MUCH A DEFECT AS A WALL.
+     *
+     * The brief's market call answers in 6.5s at the median and 45.2s at its worst. Give it the
+     * deadline the brief's WRITE needs and a dead search lane holds the run for seven minutes
+     * before anybody learns anything — the owner's "nothing is happening", arriving by the
+     * opposite route from the one this file was written to close. A deadline is allowed generous
+     * headroom over what its caller has actually needed; it is not allowed to be unrelated to it.
+     */
+    examined += 1;
+    if (deadlineFor(ask, CHAIN_BUDGET_MS) > secs * 1000 * ROPE_MULTIPLE) {
+      problems.push(
+        `a caller declaring ${ask} tokens has never taken more than ${secs}s, but a dead lane would hold it for ` +
+          `${Math.round(deadlineFor(ask, CHAIN_BUDGET_MS) / 1000)}s — over ${ROPE_MULTIPLE}x its worst real run. ` +
+          `That is a rope, and a run spends it learning nothing.`,
+      );
+    }
+  }
   const worstCase = (ask, lanes) => {
     let spent = 0;
     let tried = 0;
@@ -190,7 +275,7 @@ export function check(files) {
     }
     return { spent, tried };
   };
-  for (const ask of [50, 400, 900, 1200, 3000, 8000, PROVIDER_MAX_OUTPUT_TOKENS]) {
+  for (const ask of [50, 400, 900, 1200, 3000, 8000, 24_000]) {
     const { spent, tried } = worstCase(ask, 12);
     if (spent > CHAIN_BUDGET_MS) {
       problems.push(
@@ -201,6 +286,22 @@ export function check(files) {
     if (tried < 2) {
       problems.push(`a run asking for ${ask} output tokens can only ever try ${tried} lane(s) inside its budget`);
     }
+  }
+
+  /*
+   * A DEADLINE MUST BE A WHOLE NUMBER OF MILLISECONDS.
+   *
+   * `AbortSignal.timeout` throws on a float, and dividing tokens by a rate produces one —
+   * 4096 / 65 * 1000 is 63015.38. The TypeError surfaces as `provider_failure:…`, so every lane in
+   * the chain "fails" instantly and the run defers with a reason that blames the vendor. Forty-four
+   * tests caught it once; this is so they do not have to twice.
+   */
+  examined += 1;
+  if (!/return Math\.(floor|round)\(Math\.max\(0, Math\.min\(sized, remainingMs\)\)\)/.test(budgetSrc)) {
+    problems.push(
+      "attemptDeadlineMs does not return a whole number of milliseconds; AbortSignal.timeout throws on a float and the " +
+        "resulting TypeError is recorded as a provider failure, blaming the lane for our own arithmetic",
+    );
   }
 
   // 2. INSIDE THE STAGE LEASE, read out of the brief's own source.
@@ -220,7 +321,7 @@ export function check(files) {
 
   // 3. THE WIRE CEILING MAY NEVER TRUNCATE SOMETHING THIS FIRM HAS ALREADY WRITTEN.
   examined += 1;
-  if (!/Math\.max\(8_192,/.test(budgetSrc)) {
+  if (!/Math\.max\(TRUNCATION_FLOOR_TOKENS,/.test(budgetSrc)) {
     problems.push("wireOutputCeiling no longer floors the per-call ceiling; a caller that under-declares would be truncated");
   }
   for (const [ask, produced] of sample) {
@@ -341,22 +442,53 @@ function selfTest() {
     process.exit(1);
   }
 
-  // 3 — a deadline set at measured speed rather than clear of it: the 180s mistake, in miniature.
-  const atTheWall = check({ ...good, [F.budget]: bend(good[F.budget], "MS_PER_OUTPUT_TOKEN", 12) });
-  if (!atTheWall.problems.some((p) => p.includes("near observed speed"))) {
-    console.error("self-test: a per-token allowance set at measured speed did not fail", atTheWall.problems);
+  // 3 — a floor rate set at or above measured speed: the 180s mistake in a different unit.
+  const atTheWall = check({ ...good, [F.budget]: bend(good[F.budget], "MIN_TOKENS_PER_SEC", 120) });
+  if (!atTheWall.problems.some((p) => p.includes("at or above measured speed"))) {
+    console.error("self-test: a floor rate above measured speed did not fail", atTheWall.problems);
     process.exit(1);
   }
 
-  // 3b — a per-attempt ceiling near the slowest known-good run. This is exactly 180s vs the 250s
-  //      runs of 18 Sep, and it must go red.
-  const tooTight = check({ ...good, [F.budget]: bend(good[F.budget], "MAX_ATTEMPT_MS", 180_000) });
-  if (!tooTight.problems.some((p) => p.includes("close to a known-good run"))) {
-    console.error("self-test: a 180s per-attempt ceiling did not fail against the measured sample", tooTight.problems);
+  // 3b — the 300s cap of the previous pass, against a 281.2s run. It must go red.
+  const tooTight = check({ ...good, [F.budget]: bend(good[F.budget], "MAX_ATTEMPT_MS", 300_000) });
+  if (!tooTight.problems.some((p) => p.includes("still writing") || p.includes("headroom"))) {
+    console.error("self-test: a 300s per-attempt cap did not fail against the measured sample", tooTight.problems);
     process.exit(1);
   }
 
-  // 3c — the measurement itself removed. A constant with no sample behind it is the defect.
+  // 3c — the shared ceiling back at 16384, below what the brief writes.
+  const lowCeiling = check({ ...good, [F.ceiling]: bend(good[F.ceiling], "PROVIDER_MAX_OUTPUT_TOKENS", 16_384) });
+  if (!lowCeiling.problems.some((p) => p.includes("one order of magnitude up"))) {
+    console.error("self-test: a 16384 shared ceiling did not fail against a 27,536-token completion", lowCeiling.problems);
+    process.exit(1);
+  }
+
+  // 3d — the truncation floor lowered back under a real small-ask overshoot.
+  const lowFloor = check({ ...good, [F.budget]: bend(good[F.budget], "TRUNCATION_FLOOR_TOKENS", 8_192) });
+  if (!lowFloor.problems.some((p) => p.includes("from the other side"))) {
+    console.error("self-test: an 8192 truncation floor did not fail against a 10,352-token reply", lowFloor.problems);
+    process.exit(1);
+  }
+
+  // 3e — the timing floor raised to the truncation floor: the 300-second rope for a 6-second call.
+  //      Caught as a chain that can no longer reach a second lane for ordinary work.
+  const rope = check({ ...good, [F.budget]: bend(good[F.budget], "TIMING_FLOOR_TOKENS", 32_768) });
+  if (rope.problems.length === 0) {
+    console.error("self-test: giving every small call the full ceiling's deadline did not fail");
+    process.exit(1);
+  }
+
+  // 3f — a fractional deadline. AbortSignal.timeout throws, and the lane gets the blame.
+  const fractional = check({
+    ...good,
+    [F.budget]: good[F.budget].replace("return Math.floor(Math.max(0, Math.min(sized, remainingMs)));", "return Math.max(0, Math.min(sized, remainingMs));"),
+  });
+  if (!fractional.problems.some((p) => p.includes("whole number of milliseconds"))) {
+    console.error("self-test: a fractional deadline did not fail", fractional.problems);
+    process.exit(1);
+  }
+
+  // 3g — the measurement itself removed. A constant with no sample behind it is the defect.
   const noSample = check({
     ...good,
     [F.budget]: good[F.budget].replace(/export const OBSERVED_COMPLETIONS[\s\S]*?\]\);/, "export const OBSERVED_COMPLETIONS = Object.freeze([]);"),
@@ -401,7 +533,7 @@ function selfTest() {
     process.exit(1);
   }
 
-  console.log("a-run-may-not-spend-the-morning-looking --self-test: OK — clean tree passes; 9 broken states each fail.");
+  console.log("a-run-may-not-spend-the-morning-looking --self-test: OK — clean tree passes; 13 broken states each fail.");
 }
 
 if (process.argv.includes("--self-test")) selfTest();

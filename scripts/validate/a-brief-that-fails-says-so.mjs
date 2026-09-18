@@ -64,6 +64,8 @@ const ADAPTER_DIR = path.join(ROOT, "src", "worker", "ai", "providers");
 const SERVICES_DIR = path.join(ROOT, "src", "worker", "services");
 const CEILING_FILE = path.join(ADAPTER_DIR, "outputCeiling.ts");
 const TIMEOUT_FILE = path.join(ADAPTER_DIR, "timeout.ts");
+/** Where the deadline a call ACTUALLY gets is derived. */
+const BUDGET_FILE = path.join(ROOT, "src", "worker", "ai", "chainBudget.ts");
 const BRIEF_SERVICE = path.join(SERVICES_DIR, "dailyIntelligence.ts");
 const PANEL = path.join(ROOT, "src", "client", "pages", "DailyBriefPanel.tsx");
 const COLLAPSE = path.join(ROOT, "src", "client", "lib", "briefCollapse.ts");
@@ -74,11 +76,17 @@ const SCHEMA = path.join(ROOT, "migrations", "0035_daily_intelligence_pipeline.s
  * The slowest a frontier model may be assumed to write, in output tokens per second.
  *
  * Deliberately pessimistic. This is not a performance target, it is the floor the DEADLINE has to
- * respect: if the system asks for N tokens it must be willing to wait N / this for them. On
+ * respect: if the system may write N tokens it must be willing to wait N / this for them. On
  * 18 Sep the deadline implied a required rate of 133 tok/s for the brief to survive, which no
  * model here sustains, so the brief could never have completed on any lane.
+ *
+ * 65 rather than 50, and matched to `MIN_TOKENS_PER_SEC` in `chainBudget.ts` so the two cannot
+ * disagree. The slowest rate ever measured here, over 70 replies above 5,000 tokens, is 83.7 tok/s.
+ * 50 was 40% below that, and combined with the 32,768-token ceiling it demanded 655s — longer than
+ * the stage lease that has to contain the attempt, a retry and the caller's own work. A bar nothing
+ * can satisfy is not a bar.
  */
-const TOKENS_PER_SECOND_FLOOR = 50;
+const TOKENS_PER_SECOND_FLOOR = 65;
 
 function read(file) {
   return readFileSync(file, "utf8");
@@ -193,18 +201,81 @@ export function declaredStageLeaseMinutes(src) {
   return m ? Number(m[1].replace(/_/g, "")) : null;
 }
 
-export function checkDeadlineFitsTheWork({ timeoutMs, largestAskTokens, stageLeaseMinutes }) {
+/**
+ * The deadline that ACTUALLY governs a call, read out of `chainBudget.ts`.
+ *
+ * ── WHY THIS IS NO LONGER `PROVIDER_TIMEOUT_MS` (18 Sep 2026, second pass) ────────────────────
+ *
+ * This check derived its own floor from `largestAsk / 50 tok/s` and compared it against the flat
+ * constant. Two independent derivations of the same quantity, and they were one honest bug-fix away
+ * from contradicting each other: correcting the brief's declared ask — which is wrong by 3x, it
+ * declares 8,000 and writes up to 27,536 — would have raised this floor to 480s and turned CI red
+ * against a cap set from a different set of measurements in a different file.
+ *
+ * Two numbers for one thing is the defect this repo keeps finding. So the floor is now derived from
+ * the SAME function the router actually uses, by reading its constants out of `chainBudget.ts`, and
+ * `PROVIDER_TIMEOUT_MS` is checked only for what it still is: the fallback for a call that declares
+ * nothing at all.
+ *
+ * It also no longer depends on the ask being honest. `attemptDeadlineMs` is derived from what a
+ * model may actually EMIT, not from what the caller claims it will, which is the property that
+ * makes the two checks agree whatever the declaration says.
+ */
+/** The largest reply in chainBudget.ts's production sample, or null when it cannot be read. */
+function largestObservedReply(budgetSrc) {
+  const rows = [...budgetSrc.matchAll(/\[\s*\d+\s*,\s*(\d+)\s*,\s*[\d.]+\s*\]/g)].map((m) => Number(m[1]));
+  return rows.length > 0 ? Math.max(...rows) : null;
+}
+
+function effectiveDeadlineMs(budgetSrc, ceilingSrc, askTokens) {
+  const num = (src, name) => {
+    const m = new RegExp(`export const ${name}\\s*=\\s*([0-9_]+)`).exec(src);
+    return m ? Number(m[1].replace(/_/g, "")) : null;
+  };
+  const base = num(budgetSrc, "ATTEMPT_BASE_MS");
+  const rate = num(budgetSrc, "MIN_TOKENS_PER_SEC");
+  const maxA = num(budgetSrc, "MAX_ATTEMPT_MS");
+  const minA = num(budgetSrc, "MIN_USEFUL_ATTEMPT_MS");
+  const mult = num(budgetSrc, "OVERSHOOT_MULTIPLE");
+  const floor = num(budgetSrc, "TIMING_FLOOR_TOKENS");
+  const cap = num(ceilingSrc, "PROVIDER_MAX_OUTPUT_TOKENS");
+  if ([base, rate, maxA, minA, mult, floor, cap].some((v) => v === null)) return null;
+  const tokens = Math.min(cap, Math.max(floor, Math.max(0, askTokens) * mult));
+  return Math.min(maxA, Math.max(minA, base + (tokens / rate) * 1000));
+}
+
+export function checkDeadlineFitsTheWork({ timeoutMs, largestAskTokens, stageLeaseMinutes, budgetSrc, ceilingSrc }) {
   const violations = [];
   if (timeoutMs === null) return { violations: ["PROVIDER_TIMEOUT_MS could not be read"], examined: 0 };
   if (stageLeaseMinutes === null) return { violations: ["STAGE_LEASE_MINUTES could not be read"], examined: 0 };
 
-  const neededMs = Math.ceil((largestAskTokens / TOKENS_PER_SECOND_FLOOR) * 1000);
-  if (timeoutMs < neededMs) {
+  /*
+   * WHAT THE DEADLINE HAS TO COVER, and it is no longer the ASK.
+   *
+   * The brief declares 8,000 output tokens and writes up to 27,536 — wrong by 3.4x. A bar derived
+   * from the declaration therefore moves when somebody corrects the declaration, which would have
+   * turned this check red against a cap set from an entirely different measurement in another file.
+   * A bar derived from what the system has ACTUALLY WRITTEN does not move when a comment is fixed,
+   * and it is the honest quantity anyway.
+   *
+   * Falls back to the ask when the sample cannot be read, so this can never silently measure
+   * nothing.
+   */
+  const largestWritten = budgetSrc ? largestObservedReply(budgetSrc) : null;
+  const mustCoverTokens = largestWritten ?? largestAskTokens;
+  const neededMs = Math.ceil((mustCoverTokens / TOKENS_PER_SECOND_FLOOR) * 1000);
+  const effectiveMs = budgetSrc && ceilingSrc ? effectiveDeadlineMs(budgetSrc, ceilingSrc, largestAskTokens) : null;
+  if (effectiveMs === null) {
     violations.push(
-      `PROVIDER_TIMEOUT_MS is ${timeoutMs}ms, but the largest reply this repo asks for is ` +
-        `${largestAskTokens} tokens, which needs at least ${neededMs}ms at ${TOKENS_PER_SECOND_FLOOR} tok/s. ` +
-        "Every attempt at that call aborts, and the router fails over to whatever is cheap and fast — " +
-        "which on 18 Sep 2026 meant a lane that truncated both partners' briefs at 256 tokens.",
+      "the deadline that actually governs a call could not be read out of chainBudget.ts, so this check has nothing " +
+        "to measure — PROVIDER_TIMEOUT_MS is only the fallback for a call that declares nothing",
+    );
+  } else if (effectiveMs < neededMs) {
+    violations.push(
+      `the deadline a call declaring ${largestAskTokens} tokens actually gets is ${Math.round(effectiveMs)}ms, but that ` +
+        `reply needs at least ${neededMs}ms at ${TOKENS_PER_SECOND_FLOOR} tok/s. Every attempt at that call aborts, and ` +
+        "the router fails over to whatever is cheap and fast — which on 18 Sep 2026 meant a lane that truncated both " +
+        "partners' briefs at 256 tokens.",
     );
   }
   const leaseMs = stageLeaseMinutes * 60_000;
@@ -412,14 +483,50 @@ async function selfTest() {
   // A ceiling below the largest ask must fail.
   say(declaredCeiling("export const PROVIDER_MAX_OUTPUT_TOKENS = 4_096;") === 4096, "the ceiling constant could not be read");
 
-  // 2 · deadline. The REAL 18 Sep numbers: 60s against an 8000-token ask.
-  const wasBroken = checkDeadlineFitsTheWork({ timeoutMs: 60_000, largestAskTokens: 8000, stageLeaseMinutes: 10 });
+  // 2 · deadline. Now measured on the deadline a call ACTUALLY gets, not on the flat fallback.
+  const budgetFixture = (overrides = {}) => {
+    const v = {
+      ATTEMPT_BASE_MS: 15_000, MIN_TOKENS_PER_SEC: 65, MAX_ATTEMPT_MS: 450_000,
+      MIN_USEFUL_ATTEMPT_MS: 30_000, OVERSHOOT_MULTIPLE: 4, TIMING_FLOOR_TOKENS: 4_096, ...overrides,
+    };
+    return Object.entries(v).map(([k, n]) => `export const ${k} = ${n};`).join("\n") + "\n[8000, 27536, 276.0],";
+  };
+  const ceilingFixture = (n = 32_768) => `export const PROVIDER_MAX_OUTPUT_TOKENS = ${n};`;
+
+  // THE REAL 18 SEP FAILURE, expressed as what it was: a 60s cap on every attempt.
+  const wasBroken = checkDeadlineFitsTheWork({
+    timeoutMs: 60_000, largestAskTokens: 8000, stageLeaseMinutes: 10,
+    budgetSrc: budgetFixture({ MAX_ATTEMPT_MS: 60_000 }), ceilingSrc: ceilingFixture(),
+  });
   say(wasBroken.violations.length > 0, "the real 18 Sep deadline — 60s for an 8000-token brief — passed");
-  const nowFine = checkDeadlineFitsTheWork({ timeoutMs: 180_000, largestAskTokens: 8000, stageLeaseMinutes: 10 });
+
+  // AND THE 180s THAT REPLACED IT, against the honest ask. It is still too short, which is the
+  // finding the owner made before anyone measured: 8000 declared, up to 27,536 actually written.
+  const stillShort = checkDeadlineFitsTheWork({
+    timeoutMs: 180_000, largestAskTokens: 24_000, stageLeaseMinutes: 10,
+    budgetSrc: budgetFixture({ MAX_ATTEMPT_MS: 180_000 }), ceilingSrc: ceilingFixture(),
+  });
+  say(stillShort.violations.length > 0, "a 180s cap against the brief's real output passed");
+
+  const nowFine = checkDeadlineFitsTheWork({
+    timeoutMs: 180_000, largestAskTokens: 8000, stageLeaseMinutes: 10,
+    budgetSrc: budgetFixture(), ceilingSrc: ceilingFixture(),
+  });
   say(nowFine.violations.length === 0, `the shipped deadline was rejected: ${nowFine.violations.join("; ")}`);
-  // And it may not outgrow the lease that contains it.
-  const tooLong = checkDeadlineFitsTheWork({ timeoutMs: 900_000, largestAskTokens: 8000, stageLeaseMinutes: 10 });
+
+  // And the fallback may not outgrow the lease that contains it.
+  const tooLong = checkDeadlineFitsTheWork({
+    timeoutMs: 900_000, largestAskTokens: 8000, stageLeaseMinutes: 10,
+    budgetSrc: budgetFixture(), ceilingSrc: ceilingFixture(),
+  });
   say(tooLong.violations.length > 0, "a deadline longer than its own stage lease passed");
+
+  // A budget module it cannot read must fail rather than fall back to the flat constant.
+  const unreadable = checkDeadlineFitsTheWork({
+    timeoutMs: 180_000, largestAskTokens: 8000, stageLeaseMinutes: 10,
+    budgetSrc: "// nothing here", ceilingSrc: ceilingFixture(),
+  });
+  say(unreadable.violations.length > 0, "an unreadable chainBudget.ts passed as though the deadline were fine");
 
   // 3 · a brief that did not arrive says so
   const statuses = statusesFromSchema(read(SCHEMA));
@@ -473,6 +580,11 @@ if (process.argv.includes("--self-test")) {
     timeoutMs: declaredTimeoutMs(read(TIMEOUT_FILE)),
     largestAskTokens: asks.largest,
     stageLeaseMinutes: declaredStageLeaseMinutes(read(BRIEF_SERVICE)),
+    // DERIVED FROM THE SAME PLACE THE ROUTER DERIVES IT, rather than independently. Two derivations
+    // of one quantity is how correcting the brief's declared ask would have turned CI red against a
+    // cap set from a different sample in a different file.
+    budgetSrc: read(BUDGET_FILE),
+    ceilingSrc: read(CEILING_FILE),
   });
   const statuses = statusesFromSchema(read(SCHEMA));
   const { briefArrival } = await import(pathToFileUrl(STATE_MODULE));
