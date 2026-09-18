@@ -70,7 +70,8 @@ import {
   type WorkshopNote,
   type WorkshopView,
 } from "../../shared/events/workshopPacket";
-import { adjacencyWindow, deliveryMonth, dueOn, planFor, topicFor, type Stream } from "../../shared/events/monthlyPlan";
+import { adjacencyWindow, classifyAsk, deliveryMonth, dueOn, planFor, topicFor, type Stream } from "../../shared/events/monthlyPlan";
+import { markDelivered, recordSteer, steerForMonth, withdrawSteer, steerBoard, MonthSteerError } from "./monthSteer";
 import { howToAnswer } from "../../shared/events/packetDecisionToken";
 import { tokenForPacket } from "./packetReplyDecision";
 import { guidanceBlock } from "../../shared/skills/library";
@@ -741,13 +742,26 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
        * human typed into the request form, then nothing — and nothing means Parker picks it in this
        * same call. He never waits and never asks which of the three he is in.
        */
-      const { topic: roomTopic, setBy: roomSetBy, steer: roomSteer } = topicFor(draft.proposed_for_month, "ROOM", brief?.audience ?? null);
+      const { topic: roomTopic, setBy: roomSetBy, steer: planSteer } = topicFor(draft.proposed_for_month, "ROOM", brief?.audience ?? null);
+      /*
+       * AND EVERYTHING SHE HAS SAID SINCE, FOR THIS MONTH. `steerForMonth` merges the plan's
+       * standing steer with the steers she recorded against this month from the page — the ones
+       * that were deliberately NOT built when she gave them. This is the single place the Room
+       * stream reads them, because "a steer that has to be remembered at each stage is a steer that
+       * will be forgotten at one of them", and it is here rather than at queue time because a steer
+       * given AFTER the draft was minted must still reach the packet.
+       */
+      const roomSteerRows = await steerForMonth(env, firmScope, draft.proposed_for_month, "ROOM", planSteer);
+      const roomSteer = roomSteerRows.text;
       const ran = await whatActuallyRan(env, firmScope, draft.proposed_for_month, "ROOM");
       const prompt = buildConceptsPrompt({
         month: draft.proposed_for_month, city, topic: roomTopic, setBy: roomSetBy, steer: roomSteer, brief, ran,
         recentThemes: (recent.results ?? []).map((r) => r.title),
         inviteCheck: state.inviteCheck, sponsors: state.research, guidance: await guidanceFor(env, firmScope),
       });
+      // Marked at the moment the words are IN the prompt, which is the moment it is true. A steer
+      // marked delivered by a build that then failed would be a steer silently dropped.
+      if (roomSteer) await markDelivered(env, roomSteerRows.rows, draft.id);
       const { text } = await synth("Room packet: one topic, three angles", prompt, 3000);
       // A three-subject answer is REJECTED, not flagged: the stage fails, the sweep retries it, and
       // nothing with three subjects in it is ever stored.
@@ -935,7 +949,7 @@ async function runWorkshopStage(
    * human typed into the request form; then nothing — and "nothing" means Parker chooses it in the
    * concepts call. There is no branch in which he waits or asks which situation he is in.
    */
-  const { topic, set, setBy, steer } = workshopTopic(draft.proposed_for_month, brief);
+  const { topic, set, setBy, steer: planSteer } = workshopTopic(draft.proposed_for_month, brief);
   const fail = (detail: string): never => { throw new Error(detail); };
 
   if (stage === "DISCOVER") {
@@ -997,7 +1011,16 @@ async function runWorkshopStage(
 
   if (stage === "CONCEPTS") {
     const ran = await whatActuallyRan(env, firmScope, draft.proposed_for_month, "WORKSHOP");
+    /*
+     * THE SAME ONE PLACE, FOR THE OTHER STREAM. The Workshop's steers are read here and nowhere
+     * else in the chain; `validate:steer-waits` fails if either stream's concepts prompt is built
+     * from a bare plan steer again, because two streams each remembering their own half is the
+     * "two components each keeping their own list with no link" defect this repo names.
+     */
+    const steerRows = await steerForMonth(env, firmScope, draft.proposed_for_month, "WORKSHOP", planSteer);
+    const steer = steerRows.text;
     const prompt = buildWorkshopConceptsPrompt({ month: draft.proposed_for_month, topic, set, setBy, steer, brief, notes: state.workshopNotes, ran, guidance: await guidanceFor(env, firmScope) });
+    if (steer) await markDelivered(env, steerRows.rows, draft.id);
     const { text } = await deps.synth("Workshop packet: one topic, three angles", prompt, 3000);
     /*
      * A THREE-SUBJECT ANSWER IS REJECTED HERE, NOT ACCEPTED AND FLAGGED.
@@ -1977,12 +2000,31 @@ export async function verifyVenue(
 // ── The job ──────────────────────────────────────────────────────────────────
 
 /**
- * The Rooms job (job_key `monthly_room_proposal`), every quarter hour, ONE cheap thing per run:
+ * The Rooms job (job_key `monthly_room_proposal`), ONCE AN HOUR, ONE cheap thing per run:
  *
- *   1. a DRAFT with no live card (a request whose card was never opened, or whose card was
- *      cancelled) — open Parker's card for it; the sweep builds it; else
- *   2. the FOLLOWING month has no packet — queue Parker's own Room for it and open its card; else
+ *   1. a DRAFT with no live card — open Parker's card. THIS IS A BACKSTOP, NOT THE PATH; else
+ *   2. the month being delivered has no packet — queue Parker's own Room for it and open its card;
+ *      else
  *   3. nothing, and say so.
+ *
+ * ─── ACT ON THE EVENT, POLL AS A BACKSTOP (18 Sep 2026) ────────────────────────────────────────
+ *
+ * Step 1 used to be the path a one-off took: she asked, and up to fifteen minutes later a tick
+ * noticed. It is not any more — `handleGeneratePacket` opens Parker's card IN THE REQUEST PATH, so
+ * a one-off is on his desk the moment she presses the button, which is zero wait rather than a
+ * shorter one.
+ *
+ * That makes this step a safety net for something that should not occur, and ninety-six ticks a day
+ * to catch it is the runaway shape migration 0193 removed from the deck lane. So 0194 drops it to
+ * hourly — AND MAKES IT LOUD. A draft whose `work_card_id` was never set means the request path
+ * failed to open a card: that is a DEFECT, it notifies the partners and says so in the summary,
+ * rather than looking like a poll quietly doing its job. A CANCELLED card is different — that is a
+ * human cancelling work and the net legitimately picking it back up — and the two are told apart
+ * rather than both being called "opened Parker's card".
+ *
+ * `tz` is the job's own zone (`scheduled_job.daily_at_tz`, the mechanism from 0193). "The 1st of the
+ * month prior" is a local-time boundary and reading it in UTC mints November's packets on the
+ * evening of 30 September by her calendar. Omitted, it reads UTC exactly as before.
  *
  * No model runs here. The chain runs in the sweep, a stage per tick.
  */
@@ -1990,7 +2032,8 @@ export async function runMonthlyRoomProposal(
   env: Env,
   actor: Actor,
   now: string,
-): Promise<{ generated: boolean; detail: string; packetId?: string }> {
+  tz?: string | null,
+): Promise<{ generated: boolean; detail: string; packetId?: string; backstopCaught?: boolean }> {
   const firmScope = actor.firmScopes[0] ?? "west-peek";
 
   const drafts = (await env.WP_OS_DB.prepare(
@@ -2001,8 +2044,38 @@ export async function runMonthlyRoomProposal(
       ORDER BY p.created_at ASC LIMIT 1`,
   ).bind(firmScope, MAX_BUILD_ATTEMPTS).all<PacketRow>()).results ?? [];
   if (drafts[0]) {
+    const neverOpened = drafts[0].work_card_id === null;
     const card = await openPacketCard(env, drafts[0]);
-    return { generated: true, detail: `opened Parker's card for the Room that was asked for: ${drafts[0].title} (card ${card.cardId})`, packetId: drafts[0].id };
+    if (neverOpened) {
+      /*
+       * THE BACKSTOP CAUGHT SOMETHING, WHICH MEANS THE EVENT PATH MISSED. Said out loud, to the
+       * partners, because the cost of it being quiet is a one-off that waited an hour and nobody
+       * ever learning the request path is broken. Deduped on the packet so a defect reports once.
+       */
+      await notifyPartners(env, {
+        kind: "EMPLOYEE_EXCEPTION",
+        severity: "WARNING",
+        title: "The Rooms backstop had to open a card the request path should have opened",
+        body:
+          `"${drafts[0].title}" was queued as a draft with no card on Parker's desk. Asking for a Room opens his ` +
+          `card in the same breath, so a draft reaching the hourly backstop means that failed. The work is running ` +
+          `now (card ${card.cardId}) — this notice is about the miss, not the Room.`,
+        objectType: "room_packet",
+        objectId: drafts[0].id,
+        dedupeKey: `rooms-backstop-miss:${drafts[0].id}`,
+        firmScope,
+      });
+      return {
+        generated: true,
+        backstopCaught: true,
+        detail:
+          `DEFECT — the backstop opened a card the request path should have opened: ${drafts[0].title} ` +
+          `(card ${card.cardId}). Asking for a Room opens Parker's card immediately; a draft that reached this ` +
+          `hourly net means that did not happen. Partners notified.`,
+        packetId: drafts[0].id,
+      };
+    }
+    return { generated: true, detail: `re-opened Parker's card after the last one was cancelled: ${drafts[0].title} (card ${card.cardId})`, packetId: drafts[0].id };
   }
 
   /*
@@ -2023,9 +2096,10 @@ export async function runMonthlyRoomProposal(
    * failure this system has already had.
    *
    * ONE ROOM AND ONE WORKSHOP A MONTH, each guarded on its own, and still one cheap thing per run:
-   * the Room on this tick, the Workshop on the next a quarter of an hour later.
+   * the Room on this tick, the Workshop on the next. Since 0194 that is an hour later rather than a
+   * quarter of an hour, and both still land on the 1st — the floor is the rule, not the minute.
    */
-  const month = deliveryMonth(now);
+  const month = deliveryMonth(now, tz);
   const skipped: string[] = [];
   for (const kind of ["ROOM", "WORKSHOP"] as const) {
     /*
@@ -2071,6 +2145,9 @@ export async function runMonthlyRoomProposal(
 
 function fail(err: unknown): Response {
   if (err instanceof RoomPacketError) return json({ error: err.code, detail: err.message }, { status: err.status });
+  // A steer is asked for through the same doors, so its errors have to come back through the same
+  // hole. Without this a 403 on the steer path escapes as a 500 and reads as an outage.
+  if (err instanceof MonthSteerError) return json({ error: err.code, detail: err.message }, { status: err.status });
   throw err;
 }
 
@@ -2083,15 +2160,38 @@ const briefSchema = z.object({
   notes: z.string().trim().max(1500).optional(),
   /** A declined packet this one is a rework of. */
   again_from: z.string().max(80).optional(),
+  /**
+   * WHICH OF THE TWO ASKS THIS IS, declared rather than inferred. NOW builds it; STEER records it
+   * against the month and gives it to Parker when he builds that month's packet. Omitted, the door
+   * decides only where the calendar makes it unambiguous and otherwise asks — see `classifyAsk`.
+   */
+  intent: z.enum(["NOW", "STEER"]).optional(),
 });
 
 /**
- * POST /api/rooms/packets — the two doors.
+ * POST /api/rooms/packets — the two doors, and now the two KINDS of ask.
  *
  * An empty body is "Parker, think of one" (his own idea for the FOLLOWING month, or the month
  * given). A body with `audience` is her brief, and the packet records that it came from her.
- * Either way the draft is on the record and Parker's card is open before the route returns; the
- * build runs in the sweep, a stage every few minutes, and the page shows which stage he is on.
+ *
+ * ─── A ONE-OFF AND A STEER ARE NOT THE SAME ASK (18 Sep 2026) ─────────────────────────────────
+ *
+ * Operator: "a one off should be delivered and acted upon immediately; asking for a specific topic
+ * or angle to next months propoals should come when the month's proposal comes".
+ *
+ * Until today this route could not tell them apart and did the first thing to both: an ask on
+ * 18 September naming November opened a card titled "Parker: build the November 2026 Room packet"
+ * in state OPEN, and the sweep would have built and emailed November's packet that afternoon.
+ * Reproduced before this was written, not inferred from reading it.
+ *
+ *   intent NOW    — Parker's card opens HERE, in the request path, before this route returns. Zero
+ *                   wait; the sweep runs a stage every few minutes and the page shows which.
+ *   intent STEER  — NOTHING is built. Her words are recorded against the month they are FOR, shown
+ *                   on the page until then, and handed to Parker when he builds that month.
+ *
+ * NO INTENT, NO GUESS. `classifyAsk` settles it where the calendar is unambiguous and REFUSES where
+ * it is not, returning both readings for her to pick from. A 400 costs a click; silently building
+ * November's Room in September cost the thing this route exists to protect.
  */
 export async function handleGeneratePacket(ctx: RouteContext): Promise<Response> {
   const body = ((await ctx.request.json().catch(() => ({}))) ?? {}) as Record<string, unknown>;
@@ -2109,11 +2209,55 @@ export async function handleGeneratePacket(ctx: RouteContext): Promise<Response>
         sponsorProspects: (b.sponsor_prospects ?? []).filter((x) => x.length > 0),
         notes: b.notes && b.notes.length > 0 ? b.notes : null,
       };
+      /*
+       * THE FORK. It happens before `queueDraft` because a steer must never become a draft: a draft
+       * is a thing Parker builds, and the whole requirement is that this one is not built yet.
+       */
+      const ask = classifyAsk({ month: b.month, declared: b.intent ?? null, nowIso: new Date().toISOString() });
+      if (ask.intent === null) {
+        return json(
+          {
+            error: "intent_required",
+            detail: `Say which of these you mean. ${ask.why}.`,
+            readings: ask.readings,
+            // The two values the client must send back, named so a caller does not have to guess.
+            intents: [
+              { intent: "NOW", means: ask.readings[0] },
+              { intent: "STEER", means: ask.readings[1] },
+            ],
+          },
+          { status: 400 },
+        );
+      }
+      if (ask.intent === "STEER") {
+        const steer = await recordSteer(ctx.env, actor, {
+          month: b.month,
+          stream: (b.kind ?? "ROOM") === "WORKSHOP" ? "WORKSHOP" : "ROOM",
+          // Her words, unedited — the audience line is what she typed, and the notes with it.
+          words: [b.audience, b.notes].filter((x) => x && x.trim()).join(" — "),
+        });
+        return json(
+          {
+            steer,
+            queued: false,
+            // What she is owed and when, in the reply, so the page never has to re-derive it.
+            deliversWith: b.month,
+            dueOn: dueOn(b.month),
+            why: ask.why,
+          },
+          { status: 201 },
+        );
+      }
       draft = await queueDraft(ctx.env, actor, { month: b.month, brief, origin: "PARTNER_BRIEF", parentPacketId: b.again_from ?? null, kind: b.kind ?? "ROOM" });
     } else {
       const month = typeof body.month === "string" && /^\d{4}-\d{2}$/.test(body.month) ? body.month : followingMonth(new Date().toISOString());
       const city = typeof body.city === "string" && body.city.trim() ? body.city.trim().slice(0, 80) : null;
       const kind: PacketKind = packetKindOf(body.kind);
+      /*
+       * NO `intent` FORK ON THIS BRANCH, DELIBERATELY. "Parker, think of one" carries no words to
+       * steer WITH — a steer with nothing in it is not a steer, it is an empty row she would then
+       * see on the page and have to withdraw. An empty-bodied ask is a one-off by construction.
+       */
       draft = await queueDraft(ctx.env, actor, { month, origin: "PARKER", kind, brief: city && kind === "ROOM" ? { audience: "Parker's own Room", month, city, sponsorProspects: [], notes: null } : null });
     }
     const card = draft.status === "DRAFT" ? await openPacketCard(ctx.env, draft) : null;
@@ -2132,7 +2276,40 @@ export async function handleListPackets(ctx: RouteContext): Promise<Response> {
             build_stage, work_card_id, document_id, pushback_md, kind
      FROM evt_room_packet ORDER BY proposed_for_month DESC, created_at DESC LIMIT 60`,
   ).all();
-  return json({ packets: rows.results ?? [], stageLabels: BUILD_STAGE_LABELS, workshopStageLabels: WORKSHOP_STAGE_LABELS, stages: BUILD_STAGES, keepTargetUsd: SPONSORSHIP_TARGET.keepUsd, workshopSeries: WORKSHOP_SERIES_FOR_PAGE });
+  /*
+   * THE STEERS RIDE ALONG WITH THE PACKETS, in the call the page already makes.
+   *
+   * An instruction she gave in September that is invisible until October is an instruction she
+   * cannot correct, and correcting it is the whole reason for showing it. A second endpoint and a
+   * second hook would have been a second thing to remember to load — and the page that forgot it
+   * would look exactly like a page with no steers on it.
+   */
+  const firmScope = actorFromIdentity(ctx.identity!).firmScopes[0] ?? "west-peek";
+  return json({
+    packets: rows.results ?? [],
+    steers: await steerBoard(ctx.env, firmScope),
+    stageLabels: BUILD_STAGE_LABELS,
+    workshopStageLabels: WORKSHOP_STAGE_LABELS,
+    stages: BUILD_STAGES,
+    keepTargetUsd: SPONSORSHIP_TARGET.keepUsd,
+    workshopSeries: WORKSHOP_SERIES_FOR_PAGE,
+  });
+}
+
+/**
+ * POST /api/rooms/steers/:id/withdraw — she changed her mind before the month came round.
+ *
+ * Visible and correctable are one requirement, not two: showing her an instruction she cannot take
+ * back is showing her a fait accompli. The row is marked withdrawn rather than deleted, because
+ * what she told Parker in September is part of why November looks the way it does.
+ */
+export async function handleWithdrawSteer(ctx: RouteContext): Promise<Response> {
+  if (!ctx.params.id) return json({ error: "invalid_input" }, { status: 400 });
+  try {
+    return json({ steer: await withdrawSteer(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id) });
+  } catch (err) {
+    return fail(err);
+  }
 }
 
 export async function handleGetPacket(ctx: RouteContext): Promise<Response> {

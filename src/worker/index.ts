@@ -142,7 +142,7 @@ import {
   handleDecidePacket, handleGeneratePacket,
   handleGetPacket as handleGetRoomPacket,
   handleListPackets as handleListRoomPackets,
-  handleScheduleRoom, handleVerifyVenue,
+  handleScheduleRoom, handleVerifyVenue, handleWithdrawSteer,
 } from "./services/roomPacket";
 import {
   handleAdvanceSponsor, handleCreateSponsor, handleListSponsors, handleSponsorAttendeeExport,
@@ -975,6 +975,8 @@ const router = new Router()
   .post("/api/rooms/packets/:id/decide", handleDecidePacket)
   .post("/api/rooms/packets/:id/schedule", handleScheduleRoom)
   .post("/api/rooms/venues/:id/verify", handleVerifyVenue)
+  // A steer she gave for a month Parker has not built yet, taken back before he does.
+  .post("/api/rooms/steers/:id/withdraw", handleWithdrawSteer)
   .get("/api/sponsors", handleListSponsors)
   .post("/api/sponsors", handleCreateSponsor)
   .post("/api/sponsors/:id/stage", handleAdvanceSponsor)

@@ -55,13 +55,17 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
   },
   monthly_room_proposal: {
     what:
-      "Rooms. The quarter-hour tick is for Rooms you ask for: it opens Parker's card for a Room a partner " +
-      "requested on Events & Rooms. Parker's OWN Room is proposed once a month — only when the FOLLOWING " +
-      "month has no packet yet — inside the same tick. The employee sweep then runs the chain a stage at a time: who pays to be in front of this " +
-      "audience (with evidence and the named person who runs partnerships), three concepts compared and one " +
-      "chosen, venues with a reason, the run of show to the minute, the budget with its basis, a sponsorship " +
-      "structure priced to cost plus the firm's keep, the pitch email, and a PDF emailed to both partners.",
-    why: "So a Room is proposed with time to sell its sponsors, and a Room you asked for is built without a second prompt from you.",
+      "Rooms. A Room you ask for does NOT wait for this job at all — asking opens Parker's card in the same " +
+      "breath, and the sweep starts on it straight away. What the hourly tick does is mint the month's own " +
+      "proposals on the 1st of the month prior (November's on 1 October, on your clock, not Greenwich's), and " +
+      "catch anything the asking path failed to open a card for — if it ever has to, it says so and tells you, " +
+      "because that is a fault and not a save. A topic or angle you give for a LATER month is not built now: it " +
+      "is held against that month and handed to Parker with that month's packet. The employee sweep then runs " +
+      "the chain a stage at a time: who pays to be in front of this audience (with evidence and the named person " +
+      "who runs partnerships), three concepts compared and one chosen, venues with a reason, the run of show to " +
+      "the minute, the budget with its basis, a sponsorship structure priced to cost plus the firm's keep, the " +
+      "pitch email, and a PDF emailed to both partners.",
+    why: "So a Room is proposed with time to sell its sponsors, a Room you asked for starts the moment you ask, and a steer for November arrives with November.",
     deliveredBy: ["Parker"],
   },
   // EVERY JOB SAYS WHAT IT IS. Until 14 Sep 2026 five of these read "No description has been

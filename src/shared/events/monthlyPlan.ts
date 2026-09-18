@@ -39,6 +39,8 @@
  *                  reads identically to "nobody has written it down yet".
  */
 
+import { wallClockIn } from "../time/zonedClock";
+
 export const STREAMS = ["ROOM", "WORKSHOP"] as const;
 export type Stream = (typeof STREAMS)[number];
 
@@ -274,12 +276,110 @@ export function plannedSubjectsNear(month: string, stream: Stream): Array<{ mont
  */
 export const DELIVERY_DAY_OF_MONTH = 1;
 
-/** The month both streams are delivering for, as of `now`: the month after this one. */
-export function deliveryMonth(nowIso: string): string {
-  const d = new Date(nowIso);
-  const y = d.getUTCFullYear();
-  const m = d.getUTCMonth() + 2; // +1 for 1-based, +1 for "the following month"
-  return m > 12 ? `${y + 1}-01` : `${y}-${String(m).padStart(2, "0")}`;
+/**
+ * The month both streams are delivering for, as of `now`: the month after this one.
+ *
+ * ── THE MONTH ROLLS OVER ON HER CLOCK, NOT ON GREENWICH'S (18 Sep 2026) ────────────────────────
+ *
+ * "The 1st of the month prior" is a LOCAL-TIME BOUNDARY, and this function used to read it in UTC.
+ * At 2026-10-01T00:30Z the clock in Chicago reads 30 September, 19:30 — so a UTC read mints
+ * November's packets on the evening of the 30th by her calendar, a day before the cadence she
+ * stated. The same arithmetic is a day late for a zone east of Greenwich.
+ *
+ * `tz` is the same mechanism migration 0193 introduced for the deck lane: the zone is STORED on the
+ * job row (`scheduled_job.daily_at_tz`) rather than a UTC hour being guessed, and the offset is
+ * taken from the platform's timezone database at the instant in question — so a clock change is not
+ * an event this code has to know about. Omitting `tz` keeps the UTC reading EXACTLY, which is what
+ * every caller written before today wants and what the API door falls back to.
+ */
+export function deliveryMonth(nowIso: string, tz?: string | null): string {
+  const at = new Date(nowIso);
+  const local = tz ? wallClockIn(tz, at) : { year: at.getUTCFullYear(), month: at.getUTCMonth() + 1 };
+  const m = local.month + 1; // the FOLLOWING month
+  return m > 12 ? `${local.year + 1}-01` : `${local.year}-${String(m).padStart(2, "0")}`;
+}
+
+// ── The two kinds of ask ───────────────────────────────────────────────────────────────────────
+
+/**
+ * ONE-OFF OR STEER, AND THE SYSTEM IS TOLD WHICH RATHER THAN GUESSING (18 Sep 2026).
+ *
+ * Operator: "if i make an ask of Parker for next month's proposal or ask for a one-off that is 2
+ * diff things: a one off should be delivered and acted upon immediately; asking for a specific
+ * topic or angle to next months propoals should come when the month's proposal comes".
+ *
+ *   NOW    — a one-off. Parker's card opens in the request path and the sweep builds it. Zero wait.
+ *   STEER  — words FOR a month that is not being delivered yet. Nothing is built. They are recorded
+ *            against that month and carried into its packet when it is minted.
+ *
+ * ─── WHY THERE IS NO CLASSIFIER OVER HER PROSE ────────────────────────────────────────────────
+ *
+ * A regex or a model reading "next month, try Black lawyers" and deciding what she meant was tried
+ * in the sibling system and failed the way those things fail: it is right until it is confidently
+ * wrong, and a wrong guess here DELIVERS NOVEMBER'S TOPIC TODAY — the exact defect this replaces,
+ * wearing a confidence score. So the intent is DECLARED at the door, it is one of two values, and
+ * the only inference in this file is a calendar comparison anybody can check by reading it.
+ *
+ * THE FALLBACK IS A QUESTION, NOT A DEFAULT. Where the ask names a month at or before the one
+ * currently being delivered there is nothing to defer TO, so an absent intent is unambiguously NOW.
+ * Where it names a later month, both readings are live and the door REFUSES and says so. Asking is
+ * cheap; silently building November's Room in September is not.
+ */
+export const ASK_INTENTS = ["NOW", "STEER"] as const;
+export type AskIntent = (typeof ASK_INTENTS)[number];
+
+export type AskClassification =
+  | { intent: AskIntent; why: string }
+  | { intent: null; why: string; readings: [string, string] };
+
+export function classifyAsk(input: {
+  month: string;
+  declared?: string | null;
+  nowIso: string;
+  tz?: string | null;
+}): AskClassification {
+  const declared = typeof input.declared === "string" ? input.declared.trim().toUpperCase() : "";
+  if (declared === "NOW") return { intent: "NOW", why: "you asked for it to be built now" };
+  if (declared === "STEER") {
+    return { intent: "STEER", why: `you asked for this to steer the ${input.month} packet rather than be built now` };
+  }
+  const delivering = deliveryMonth(input.nowIso, input.tz);
+  if (input.month <= delivering) {
+    return {
+      intent: "NOW",
+      why: `${input.month} is at or before the month being delivered now (${delivering}), so there is nothing to hold it for`,
+    };
+  }
+  return {
+    intent: null,
+    why: `${input.month} is beyond the month being delivered now (${delivering}), so this could be either kind and guessing would be wrong`,
+    readings: [
+      `Build it now as a one-off Room for ${input.month}.`,
+      `Hold it as a steer, and give it to Parker with the ${input.month} packet when he builds it (due ${dueOn(input.month)}).`,
+    ],
+  };
+}
+
+/**
+ * WHAT PARKER IS ACTUALLY TOLD ABOUT THE ANGLES, from the plan and from everything she has said
+ * since, in ONE string — because "a steer that has to be remembered at each stage is a steer that
+ * will be forgotten at one of them".
+ *
+ * TWO STEERS FOR THE SAME MONTH BOTH SURVIVE, oldest first. Replacing the first with the second
+ * would discard an instruction she gave with no trace and no way for her to notice it happened;
+ * appending keeps both on the page where she can withdraw the one she has changed her mind about.
+ * Conflict is not left to chance either: the interpretation prompt already states that a later
+ * instruction outranks an earlier one, and the order here is what makes that sentence mean
+ * something.
+ */
+export function steerLines(planSteer: string | null, recorded: readonly string[]): string | null {
+  const parts = [planSteer, ...recorded].map((s) => (s ?? "").trim()).filter((s) => s.length > 0);
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0]!;
+  return parts
+    .map((s, i) => `${i + 1}. ${s}`)
+    .concat(["(Where two of these conflict, the LAST one is what she wants — it is the one she said most recently.)"])
+    .join("\n");
 }
 
 /**

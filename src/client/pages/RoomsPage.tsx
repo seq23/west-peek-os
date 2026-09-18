@@ -5,6 +5,7 @@ import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/pr
 import { sameOrg } from "@shared/events/roomPacket";
 import { WORKSHOP_LENGTH_RANGE, WORKSHOP_SERIES, WORKSHOP_WHERE, normaliseSponsorship, type WorkshopView } from "@shared/events/workshopPacket";
 import { HowThisWorks } from "./HowThisWorks";
+import { classifyAsk, deliveryMonth, dueOn, type AskIntent } from "@shared/events/monthlyPlan";
 
 /**
  * Events & Rooms — the gathering side of the firm, on one page.
@@ -333,8 +334,21 @@ const tierLabel = (key: string): string =>
 /** DEEP_WORK is a format, not a shout. */
 const formatLabel = (key: string): string => key.replace(/_/g, " ").toLowerCase();
 
+/** One instruction she gave for a month Parker has not built yet. Shape of `evt_month_steer`. */
+interface SteerRow {
+  id: string;
+  for_month: string;
+  stream: "ROOM" | "WORKSHOP";
+  words: string;
+  given_by: string | null;
+  given_at: string;
+  withdrawn_at: string | null;
+  delivered_packet_id: string | null;
+  delivered_at: string | null;
+}
+
 export function RoomsPage(): JSX.Element {
-  const packets = useApi<{ packets: PacketRow[] }>("/api/rooms/packets");
+  const packets = useApi<{ packets: PacketRow[]; steers?: SteerRow[] }>("/api/rooms/packets");
   const sponsors = useApi<{ sponsors: SponsorRow[]; committedUsd: number }>("/api/sponsors");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -351,12 +365,37 @@ export function RoomsPage(): JSX.Element {
   async function propose(body: Record<string, unknown>): Promise<boolean> {
     setBusy(true);
     setMessage(null);
-    const res = await api<{ packet: PacketRow; queued: boolean; error?: string; detail?: string }>(
-      "/api/rooms/packets", { method: "POST", body },
-    );
+    const res = await api<{
+      packet?: PacketRow;
+      queued: boolean;
+      error?: string;
+      detail?: string;
+      readings?: string[];
+      steer?: SteerRow;
+      deliversWith?: string;
+      dueOn?: string;
+    }>("/api/rooms/packets", { method: "POST", body });
     setBusy(false);
     packets.reload();
-    if (res.status === 201 && res.data) {
+    /*
+     * A STEER IS A 201 THAT BUILT NOTHING, and the message has to say so in those words. "On
+     * Parker's desk" for something deliberately not on Parker's desk would be the same defect as
+     * building it: she would believe the wrong thing about what the firm is doing.
+     */
+    if (res.status === 201 && res.data?.steer) {
+      setMessage(
+        `Held for ${monthWord(res.data.deliversWith ?? res.data.steer.for_month)}. Nothing is being built now — Parker gets these ` +
+        `words when he builds that packet, due ${res.data.dueOn ?? ""}. It is listed under "What Parker has been told" below ` +
+        `until then, and you can take it back or add to it.`,
+      );
+      return true;
+    }
+    // The door refuses rather than guessing which of the two kinds this was. Say both readings.
+    if (res.status === 400 && res.data?.error === "intent_required") {
+      setMessage(`${res.data.detail ?? "Say which kind of ask this is."} ${(res.data.readings ?? []).join(" Or: ")}`);
+      return false;
+    }
+    if (res.status === 201 && res.data?.packet) {
       setMessage(
         res.data.queued
           ? kindOf(res.data.packet) === "WORKSHOP"
@@ -466,6 +505,15 @@ export function RoomsPage(): JSX.Element {
           const ok = await propose(body);
           if (ok) setAgain(null);
           return ok;
+        }}
+      />
+
+      <SteerBoard
+        steers={packets.data?.steers ?? []}
+        onWithdraw={async (id) => {
+          const res = await api(`/api/rooms/steers/${id}/withdraw`, { method: "POST" });
+          if (res.status !== 200) setMessage(`Could not take that back (${res.status}).`);
+          packets.reload();
         }}
       />
 
@@ -1211,6 +1259,62 @@ function BriefBlock({ brief }: { brief: Brief }): JSX.Element {
 }
 
 /**
+ * WHAT PARKER HAS BEEN TOLD, FOR MONTHS HE HAS NOT BUILT YET (18 Sep 2026).
+ *
+ * The third thing a steer has to do, and the one that is easiest to leave out. A topic she gave in
+ * September for November is, until this board existed, invisible for six weeks: she cannot check it
+ * is still what she wants, cannot see that she has given two, and finds out what Parker was told
+ * when the packet arrives — which is the moment it is too late to say anything.
+ *
+ * So each one shows the month it is FOR, the stream, HER WORDS UNEDITED, and when she said them.
+ * Delivered ones stay on the board with the packet they went into rather than disappearing, because
+ * "did he get it?" is the question this board is here to answer and a row that vanishes answers it
+ * ambiguously.
+ *
+ * WITHDRAW IS BESIDE EACH ONE. Visible and correctable are one requirement, not two: showing her an
+ * instruction she cannot take back is showing her a fait accompli.
+ */
+function SteerBoard(props: { steers: SteerRow[]; onWithdraw: (id: string) => Promise<void> }): JSX.Element | null {
+  const live = props.steers.filter((s) => !s.withdrawn_at);
+  if (live.length === 0) return null;
+  return (
+    <div className="card" data-testid="steer-board">
+      <h4>What Parker has been told, for months he has not built yet</h4>
+      <p className="muted small">
+        Nothing here is being built now — that is the point. Each one reaches Parker when he builds that month&apos;s
+        packet, on the 1st of the month before it. Change your mind and take it back while it is still waiting.
+      </p>
+      <ul className="plain">
+        {live.map((s) => (
+          <li key={s.id} data-testid={`steer-${s.id}`}>
+            <p>
+              <strong>
+                {monthWord(s.for_month)} {s.stream === "WORKSHOP" ? "Workshop" : "Room"}
+              </strong>{" "}
+              <span className="muted small">
+                {s.delivered_packet_id
+                  ? `— Parker has this; it went into ${s.delivered_packet_id}`
+                  : `— waiting; he builds it ${dueOn(s.for_month)}`}
+              </span>
+            </p>
+            {/* Her words, exactly as typed. Never summarised on the way to the page. */}
+            <p className="small">&ldquo;{s.words}&rdquo;</p>
+            <p className="muted small">
+              said {s.given_at.slice(0, 10)}
+              {s.given_by ? ` by ${s.given_by}` : ""}
+              {"  "}
+              <button type="button" onClick={() => void props.onWithdraw(s.id)} data-testid={`steer-withdraw-${s.id}`}>
+                Take it back
+              </button>
+            </p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * The request door.
  *
  * Operator: "i can input what im thinking and he use my initial suggestions". The fields are her
@@ -1235,6 +1339,22 @@ function RequestRoom(props: {
   const [kind, setKind] = useState<"ROOM" | "WORKSHOP">("ROOM");
   const setTitle = kind === "WORKSHOP" ? (WORKSHOP_SERIES[month] ?? null) : null;
 
+  /*
+   * ONE-OFF OR STEER — ASKED, NOT GUESSED (18 Sep 2026).
+   *
+   * Operator: "a one off should be delivered and acted upon immediately; asking for a specific topic
+   * or angle to next months propoals should come when the month's proposal comes".
+   *
+   * The same `classifyAsk` the API uses, so the page cannot disagree with the door. Where it comes
+   * back with an intent the question is not asked at all — a month already being delivered has
+   * nothing to hold words for, and a choice with one real answer is a chore, not a decision. Where
+   * it comes back null, BOTH radios start unselected and the submit button stays disabled: the one
+   * outcome worth ruling out is a default that quietly builds November's Room in September.
+   */
+  const [intent, setIntent] = useState<AskIntent | null>(null);
+  const ask = classifyAsk({ month, declared: intent, nowIso: new Date().toISOString() });
+  const mustChoose = classifyAsk({ month, declared: null, nowIso: new Date().toISOString() }).intent === null;
+
   // Prefill from the declined packet once per "propose again" click, not on every render.
   if (props.again && seededFrom !== props.again.id) {
     const b = briefOf(props.again);
@@ -1258,12 +1378,15 @@ function RequestRoom(props: {
       sponsor_prospects: sponsors.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean),
       notes: notes.trim() || undefined,
       again_from: props.again?.id,
+      // Sent whenever it has been chosen. The API applies exactly the same rule if it is absent.
+      intent: intent ?? undefined,
     });
     if (ok) {
       setAudience("");
       setSponsors("");
       setNotes("");
       setSeededFrom(null);
+      setIntent(null);
     }
   }
 
@@ -1312,6 +1435,41 @@ function RequestRoom(props: {
           </label>
         )}
       </div>
+      {mustChoose && (
+        <div className="notice" data-testid="request-intent" role="radiogroup" aria-label="Build this now, or hold it for the month">
+          <p className="small">
+            <strong>{monthWord(month)} is not the month Parker is delivering right now</strong> — he is on{" "}
+            {monthWord(deliveryMonth(new Date().toISOString()))}, and {monthWord(month)}&apos;s packet is due{" "}
+            {dueOn(month)}. So this could be two different things and guessing would be wrong. Which is it?
+          </p>
+          <label className="form-row">
+            <input
+              type="radio"
+              name="request-intent"
+              checked={intent === "NOW"}
+              onChange={() => setIntent("NOW")}
+              data-testid="request-intent-now"
+            />{" "}
+            <span>
+              <strong>Build it now.</strong> A one-off. Parker starts the moment you press the button and it arrives on
+              its own, ahead of {monthWord(month)}&apos;s packet.
+            </span>
+          </label>
+          <label className="form-row">
+            <input
+              type="radio"
+              name="request-intent"
+              checked={intent === "STEER"}
+              onChange={() => setIntent("STEER")}
+              data-testid="request-intent-steer"
+            />{" "}
+            <span>
+              <strong>Hold it for {monthWord(month)}.</strong> Nothing is built now. Parker gets these words when he
+              builds {monthWord(month)}&apos;s packet on {dueOn(month)}, and you can see and change them until then.
+            </span>
+          </label>
+        </div>
+      )}
       {setTitle && (
         <p className="notice small" id="request-set-title" data-testid="request-set-title">
           The {monthWord(month)} Workshop's title is set by the partners — Parker builds its packet from “{setTitle}” and does not re-ideate the topic. Notes still reach him.
@@ -1338,10 +1496,16 @@ function RequestRoom(props: {
           type="button"
           className="btn-strong"
           onClick={submit}
-          disabled={props.busy || (setTitle ?? audience).trim().length < 3 || !/^\d{4}-\d{2}$/.test(month)}
+          disabled={props.busy || (setTitle ?? audience).trim().length < 3 || !/^\d{4}-\d{2}$/.test(month) || ask.intent === null}
           data-testid="request-room-submit"
         >
-          {props.busy ? "Parker is working…" : props.again ? "Ask Parker to propose it again" : `Ask Parker for this ${kind === "WORKSHOP" ? "Workshop" : "Room"}`}
+          {props.busy
+            ? "Parker is working…"
+            : props.again
+              ? "Ask Parker to propose it again"
+              : intent === "STEER"
+                ? `Hold this for ${monthWord(month)}`
+                : `Ask Parker for this ${kind === "WORKSHOP" ? "Workshop" : "Room"}`}
         </button>
         {props.again ? (
           <button type="button" onClick={() => { props.onClearAgain(); setSeededFrom(null); setAudience(""); setSponsors(""); setNotes(""); }}>
