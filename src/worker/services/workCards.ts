@@ -44,6 +44,27 @@ export interface WorkCardRow {
   next_action: string | null;
   due_at: string | null;
   created_by: string;
+  /**
+   * THE TWO FIELDS ON EVERY WORK CARD, and the person behind the second of them (0183, 0190).
+   *
+   *     Who is this for?     [ Scooter          ]     → result_recipient
+   *     Show me first?       [✓]                      → preview_first
+   *
+   * 0183 added the first two columns and NOTHING EVER WROTE EITHER. The preview lane has therefore
+   * never run: `preview_approval` holds zero rows. These three are the reachable half.
+   *
+   * `preview_first` is a CHECKBOX WITH A SMART DEFAULT, never a rule derived from the recipient.
+   * NULL is "nobody said" and the default rule decides from the address; 1 and 0 are a person
+   * saying. `previewStartsTicked` in shared/work/previewLane.ts is only where the box STARTS.
+   *
+   * `preview_owner_id` is who ticked it, and therefore whose preview the result becomes. See
+   * `previewOwnerFor`: Scooter's previews are Scooter's to answer.
+   */
+  preview_first: number | null;
+  result_recipient: string | null;
+  preview_owner_id: string | null;
+  /** The authenticated address this work was asked for from, when it was asked for by email (0160). */
+  requested_by_email: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -131,6 +152,16 @@ const createWorkCardSchema = z.object({
   audience: z.enum(["INTERNAL", "EXTERNAL"]).default("INTERNAL"),
   next_action: z.string().optional(),
   due_at: z.string().trim().min(1).optional(),
+  /*
+   * HER TWO FIELDS. Present on every card, always.
+   *
+   * `result_recipient` blank means IT IS FOR HER: it lands on Home, there is nothing to send and
+   * nothing to preview. `preview_first` omitted is "nobody said" (NULL), which leaves the default
+   * rule to decide from the address — that is what a machine-created card carries. The UI always
+   * sends a boolean, because the box is always on the form and always hers to change.
+   */
+  result_recipient: z.string().trim().max(200).nullable().optional(),
+  preview_first: z.boolean().nullable().optional(),
 });
 
 const updateWorkCardSchema = z
@@ -144,6 +175,13 @@ const updateWorkCardSchema = z
     next_action: z.string().nullable().optional(),
     prompt: z.string().max(4000).nullable().optional(),
     due_at: z.string().trim().min(1).nullable().optional(),
+    /*
+     * ALWAYS HERS TO CHANGE, INCLUDING AFTER THE CARD EXISTS. Her rule is that the box is always
+     * present and always hers; a form that could only be answered at creation would make "actually,
+     * show me this one first" a new card rather than a tick.
+     */
+    result_recipient: z.string().trim().max(200).nullable().optional(),
+    preview_first: z.boolean().nullable().optional(),
   })
   .strict();
 
@@ -185,6 +223,17 @@ export interface CreateWorkCardInput {
   due_at?: string;
   /** Optional instruction for whoever works it — how to do it, not what it is. */
   prompt?: string;
+  /**
+   * "Who is this for?" — the address the finished result goes to. BLANK MEANS IT IS FOR HER: it
+   * lands on Home, there is nothing to send and nothing to preview.
+   */
+  result_recipient?: string | null;
+  /**
+   * "Show me first?" — the checkbox. `undefined`/`null` is "nobody said", and the default rule in
+   * `previewFirstFor` decides from the recipient. A machine-created card says nothing; a card a
+   * person filled in always says something, because the box is always on the form.
+   */
+  preview_first?: boolean | null;
 }
 
 /** Shared creation path (HTTP handler and capture routing). Authorizes internally. */
@@ -397,8 +446,9 @@ export async function createWorkCardInternal(
     `INSERT INTO work_card
        (id, capture_id, title, description, domain_id, machine_id, owner_type, owner_id,
         state, priority, privacy_label, firm_scope, next_action, due_at, created_by, prompt,
-        model_access, audience)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'OPEN', ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)`,
+        model_access, audience, result_recipient, preview_first, preview_owner_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'OPEN', ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+             ?18, ?19, ?20)`,
   )
     .bind(
       id,
@@ -419,6 +469,21 @@ export async function createWorkCardInternal(
       input.prompt ?? null,
       input.model_access ?? "PUBLIC_MODEL_APPROVED",
       input.audience ?? "INTERNAL",
+      (input.result_recipient ?? "").trim().toLowerCase() || null,
+      /*
+       * THREE VALUES, NOT TWO, AND THE THIRD IS THE POINT. NULL is "nobody said" and leaves the
+       * default rule in charge; 1 and 0 are a person answering. Collapsing null into 0 would turn
+       * every machine-created card into "she said do not preview this", which is the opposite of
+       * what silence means here.
+       */
+      input.preview_first === true ? 1 : input.preview_first === false ? 0 : null,
+      /*
+       * WHOSE PREVIEW THIS BECOMES. Recorded only when the box was actually ticked, and only when
+       * the person who ticked it is a partner in the registry — `previewOwnerFor` does that lookup
+       * at send time and falls back the same way, so this column can never widen who may answer a
+       * preview. It only says which of the two partners asked to see this one.
+       */
+      input.preview_first === true ? (partnerByFirmUserId(identity.id)?.firmUserId ?? null) : null,
     )
     .run();
 
@@ -533,7 +598,7 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
 
   const sets: string[] = [];
   const binds: unknown[] = [];
-  for (const field of ["title", "description", "owner_type", "owner_id", "priority", "next_action", "due_at", "state"] as const) {
+  for (const field of ["title", "description", "owner_type", "owner_id", "priority", "next_action", "due_at", "state", "result_recipient", "preview_first"] as const) {
     if (input[field] !== undefined) {
       binds.push(input[field]);
       sets.push(`${field} = ?${binds.length + 1}`);
