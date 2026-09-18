@@ -59,14 +59,16 @@ export function createOpenAiChatAdapter(options: OpenAiChatOptions): ProviderAda
       const res = await doFetch(`${options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${options.apiKey}` },
-        signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
+        // An explicit adapter override wins, so a test can still prove the timeout path in
+        // milliseconds; production never sets one, so the per-call deadline governs there.
+        signal: AbortSignal.timeout(options.timeoutMs ?? req.deadlineMs ?? PROVIDER_TIMEOUT_MS),
         body: JSON.stringify({
           model,
           // AN EXPLICIT CEILING, never the provider's own default. Leaving it unset is what
           // truncated every Workers AI run at 256 tokens and failed both partners' briefs on
           // 18 Sep 2026; a default that happens to be generous today is still a number this repo
           // does not control. See `outputCeiling.ts`.
-          max_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
+          max_tokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS),
           messages: [
             { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
             { role: "user", content },

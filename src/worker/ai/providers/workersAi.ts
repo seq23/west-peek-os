@@ -138,7 +138,7 @@ export function createWorkersAiAdapter(options: WorkersAiOptions): ProviderAdapt
          * and both partners' morning brief was an empty card. The gate was right, the model was
          * adequate, and the 3% of the reply that fitted was the whole bug.
          */
-        max_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
+        max_tokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS),
         messages: [
           { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
           {

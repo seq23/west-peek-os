@@ -21,6 +21,14 @@ import {
 } from "./routing";
 import { checkFirmBudgets, currentSpendBehaviour, firmSpend } from "./spend";
 import {
+  CHAIN_BUDGET_MS,
+  attemptDeadlineMs,
+  canTryAnotherLane,
+  chainBudgetExhaustedReason,
+  remainingBudgetMs,
+  wireOutputCeiling,
+} from "./chainBudget";
+import {
   deferNonCriticalFromPolicy,
   legacyCostModeFor,
   leverFromPolicy,
@@ -724,7 +732,22 @@ async function executeRun(
   attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
 ): Promise<AIRunRow> {
   const running = await insertRun(env, { ...rec, status: "RUNNING" });
-  return executeAttempt(env, rec, running.id, adapter, quarantine, fallbacks, attempts);
+  /*
+   * THE CLOCK ON THE WHOLE SEARCH STARTS HERE, not on each attempt. A run gets one budget for
+   * finding a lane that answers, however many lanes that takes — see `chainBudget.ts` for why a
+   * per-attempt deadline alone is not enough, and for the five and a half minutes on 18 Sep that
+   * made the case.
+   */
+  return executeAttempt(env, rec, running.id, adapter, quarantine, fallbacks, attempts, {
+    startedAtMs: Date.now(),
+    budgetMs: CHAIN_BUDGET_MS,
+  });
+}
+
+/** The whole-run allowance for finding a lane that answers, and when it started being spent. */
+interface ChainClock {
+  startedAtMs: number;
+  budgetMs: number;
 }
 
 /** One provider attempt against an ai_run row that already exists. */
@@ -736,8 +759,18 @@ async function executeAttempt(
   quarantine: boolean,
   fallbacks: FallbackOption[] = [],
   attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
+  chain: ChainClock = { startedAtMs: Date.now(), budgetMs: CHAIN_BUDGET_MS },
 ): Promise<AIRunRow> {
   const running = { id: runId };
+  /*
+   * WHAT THIS ATTEMPT IS ALLOWED, in time: derived from measured generation speed for the output
+   * this call may actually emit, and shortened to whatever is left of the run's budget. Ordinary
+   * work waits ~165s for a lane; the 8000-token brief waits the full 300s; and the last attempt in
+   * a chain gets the time that genuinely remains rather than a deadline the budget cannot honour.
+   * See `chainBudget.ts` for the production sample every one of those numbers comes from.
+   */
+  const remaining = remainingBudgetMs(chain.startedAtMs, Date.now(), chain.budgetMs);
+  const deadlineMs = attemptDeadlineMs(rec.estimate.output_tokens, remaining);
   try {
     const response = await adapter.complete({
       purpose: rec.input.purpose,
@@ -746,6 +779,19 @@ async function executeAttempt(
       ...(rec.input.documents?.length ? { documents: rec.input.documents } : {}),
       model: rec.model,
       capabilityRequirement: rec.input.capabilityRequirement,
+      /*
+       * THE CALLER'S OWN ASK REACHES THE WIRE AT LAST — widened, never sent bare.
+       *
+       * `expectedOutputTokens` has priced every run in this system since P4 and reached no adapter,
+       * so a 400-token classification and an 8000-token brief looked identical to the provider and
+       * to the clock. It is sent through `wireOutputCeiling` rather than raw because callers
+       * under-declare and production proves it: a step declaring 400 produced 4,570 tokens, and the
+       * compliant brief of 17 Sep declared 8,000 and needed 13,396. Sending the bare ask would
+       * truncate exactly that brief — PR #100's 256-token defect, reintroduced from the other side.
+       * `PROVIDER_MAX_OUTPUT_TOKENS` still caps it inside every adapter.
+       */
+      maxOutputTokens: wireOutputCeiling(rec.estimate.output_tokens),
+      deadlineMs,
     });
     // WHAT THE RUN ACTUALLY COST, priced locally when the provider will not say.
     //
@@ -853,7 +899,51 @@ async function executeAttempt(
     const engaging = fallbacks.filter((f) => f.engageOn === "ANY" || outage);
     const warm = engaging.filter(notCooling);
     const eligible = warm.length > 0 ? warm : engaging;
-    const next = eligible[0];
+    /*
+     * ── AND STOP WHEN THE SEARCH HAS COST MORE THAN THE ANSWER IS WORTH ────────────────────────
+     *
+     * Every guard above asks "is there another lane". None asked "is there any time left", and on
+     * 18 Sep that was the whole problem: six lanes, each aborting on its own deadline, five and a
+     * half minutes before a brief appeared. PR #100 raised that deadline to 180s for a very good
+     * reason, which turns the same chain into eighteen minutes. A run that takes eighteen minutes
+     * to fail is one the owner experiences as nothing happening.
+     *
+     * So the chain stops on TIME rather than on exhausting the list, and it says so in a reason
+     * that carries the arithmetic. A chain of quick refusals still walks every lane; a chain of
+     * slow ones stops early and leaves the remaining lanes named on the record.
+     *
+     * It can only ever shorten the search. A lane that is answering is never interrupted — the
+     * budget is spent by failures, and this is checked between attempts, never during one.
+     */
+    const leftForNextLane = remainingBudgetMs(chain.startedAtMs, Date.now(), chain.budgetMs);
+    const outOfTime = eligible.length > 0 && !canTryAnotherLane(leftForNextLane);
+    const next = outOfTime ? undefined : eligible[0];
+    if (outOfTime) {
+      const spent = chain.budgetMs - leftForNextLane;
+      await env.WP_OS_DB.prepare(
+        "UPDATE ai_run SET status = 'BLOCKED_DEFERRED', failure_reason = ?2, completed_at = ?3 WHERE id = ?1",
+      )
+        .bind(running.id, chainBudgetExhaustedReason(attempts.length, spent, eligible.length), new Date().toISOString())
+        .run();
+      await appendEvent(env, {
+        eventType: "ai_run.blocked",
+        actorType: actorTypeForEvent(rec.input.actor),
+        actorId: actorIdOf(rec.input.actor),
+        objectType: "ai_run",
+        objectId: running.id,
+        firmScope: rec.firmScope,
+        payload: {
+          status: "BLOCKED_DEFERRED",
+          reason: chainBudgetExhaustedReason(attempts.length, spent, eligible.length),
+          trace_id: rec.traceId,
+          purpose: rec.input.purpose,
+          lanes_tried: attempts.length,
+          lanes_not_tried: eligible.length,
+          spent_ms: spent,
+        },
+      });
+      return (await env.WP_OS_DB.prepare("SELECT * FROM ai_run WHERE id = ?1").bind(running.id).first<AIRunRow>())!;
+    }
     if (next) {
       // Say WHAT kind of failure caused the handover, on the attempt itself, so the routing record
       // answers "did we fail over, and why" without anyone parsing an error string later.
@@ -878,6 +968,7 @@ async function executeAttempt(
         quarantine,
         eligible.slice(1),
         attempts,
+        chain,
       );
     }
 

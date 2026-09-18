@@ -5,6 +5,8 @@ import type { FirmUserIdentity } from "../auth";
 import { canAccessPrivacyLabel, privacyVisibilityClause } from "./authorize";
 import { latestPreference } from "./intelligence";
 import { dailySpendUsd, getLatestBudgetPolicy } from "../ai/runAi";
+import { currentSpendBehaviour, stoppedRuns } from "../ai/spend";
+import { leverFromPolicy } from "../../shared/ai/spendLever";
 
 /**
  * MP Home / Executive Command Center aggregation (P14, GAP-04 + GAP-23).
@@ -316,27 +318,72 @@ async function healthModule(env: Env): Promise<HomeModule> {
 
 async function aiSpendModule(env: Env, identity: FirmUserIdentity): Promise<HomeModule> {
   const firmScope = identity.authorityScopes.find((s) => s.scopeKey === "firm_scope")?.scopeValue ?? "west-peek";
+  const now = new Date();
   const policy = await getLatestBudgetPolicy(env, firmScope);
   const spent = await dailySpendUsd(env, firmScope);
-  const blocked = await env.WP_OS_DB.prepare(
-    `SELECT COUNT(*) AS n FROM ai_run WHERE date(created_at) = date('now') AND status IN ('BUDGET_BLOCKED','KILL_SWITCHED','PROVIDER_DISABLED','EGRESS_BLOCKED','BLOCKED_DEFERRED')`,
-  ).first<{ n: number }>();
+
+  /*
+   * ── THE POSTURE THE ROUTER IS ACTUALLY IN, NOT TWO COLUMNS THAT USED TO DECIDE IT ───────────
+   *
+   * "NORMAL/FRONTIER" — what the owner read here on the morning of 18 Sep 2026, and she read it, as
+   * anyone would, as "the router is still reaching for the dearest thing". Both halves were wrong
+   * in different ways:
+   *
+   *   · `cost_mode` has not decided anything since the spend lever landed. `runAi` derives it FROM
+   *     the lever to satisfy a NOT NULL column and never reads it back (see runAi.ts, "DERIVED FROM
+   *     THE LEVER, never consulted by it"). Printing it as the firm's posture is printing an
+   *     artefact of a write.
+   *   · `privacy_mode` is a statement about PRIVACY — may an external model be used at all — and
+   *     FRONTIER is its ordinary, correct value. On a card headed "what the workforce cost today"
+   *     it reads as a spend setting, which it has never been.
+   *
+   * At that moment the firm was at MODERATE on the lever and CAUTIOUS on the gradient: $9.57 spent
+   * against a pro-rated $10 line of $5.87, free-first already switched on, and the daily brief
+   * already running at $0 on a free lane. The page said NORMAL.
+   *
+   * So this reads the SAME function the Cockpit and the router read — one call, no second
+   * derivation — and prints the lever and the gradient position. Privacy keeps its own field and
+   * its own word, so nothing is lost and nothing is conflated.
+   */
+  const lever = leverFromPolicy(policy as unknown as Parameters<typeof leverFromPolicy>[0]);
+  const behaviour = await currentSpendBehaviour(env, firmScope, lever, now);
+
+  /*
+   * AND WHAT STOPPED, WITH ITS CAUSE AND ITS CLOCK. This was `COUNT(*)` over five hand-typed
+   * statuses, unscoped to the firm, printed as a bare "2 blocked run(s)". It omitted
+   * PREFLIGHT_BLOCKED — every named stop the spend lever raises — and FAILED, so the two screens
+   * counted different populations; and the two runs she was looking at had stopped at 01:03 and
+   * been fixed by a deploy at 03:06, which the card had no way to say. `stoppedRuns` is the one
+   * definition, derived from the schema rather than typed out.
+   */
+  const stopped = await stoppedRuns(env, firmScope, "TODAY", now);
+
   return {
     key: "ai_spend",
     title: "AI spend today",
     answers: "What is costing money?",
     link: "cockpit",
-    count: blocked?.n ?? 0,
+    count: stopped.count,
     items: [
       {
         spent_usd: Math.round(spent * 10_000) / 10_000,
         daily_cap_usd: policy.daily_cap_usd,
-        cost_mode: policy.cost_mode,
+        /** The lever she set and where the month has put it. The posture that actually routes. */
+        spend_lever: behaviour.lever,
+        gradient_position: behaviour.position,
+        gradient_applies: behaviour.gradientApplies,
+        /** Its own field and its own word: privacy, not spend. */
         privacy_mode: policy.privacy_mode,
-        blocked_runs_today: blocked?.n ?? 0,
+        blocked_runs_today: stopped.count,
+        blocked_reason: stopped.reason,
+        blocked_last_at: stopped.last_at,
+        blocked_is_hers_to_fix: stopped.she_can_fix,
       },
     ],
-    note: "Spend is committed cost: actual where a provider reported it, estimate otherwise.",
+    note:
+      "Spend is committed cost: actual where a provider reported it, estimate otherwise, and only for this firm's own runs — " +
+      "a vendor invoice may also carry spend from outside this system. " +
+      behaviour.why,
   };
 }
 

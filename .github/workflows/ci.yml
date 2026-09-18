@@ -242,6 +242,26 @@ jobs:
       - name: A kind the code can produce is a kind the database accepts
         run: npm run validate:deliverable-kinds
 
+      # Migration 0192. The one line the owner reads first said "NORMAL/FRONTIER · 2 blocked run(s)"
+      # on a morning the router was in fact economising. `cost_mode` is DERIVED from the spend lever
+      # by runAi and never read back, and `privacy_mode` is about privacy — neither is a posture.
+      # And the blocked count was a hand-typed list of five statuses that omitted PREFLIGHT_BLOCKED,
+      # which is the status of every named stop the spend lever raises: a run her own lever had
+      # stopped was invisible on the page she reads first, while the Cockpit counted it. Two screens,
+      # one word, two populations. This reads the CHECK constraint out of the migration.
+      - name: What stopped is counted once, and the posture on screen is the one that routes
+        run: npm run validate:stopped-runs
+
+      # Migration 0192. Two provider deadlines in two days were chosen by matching a sentence —
+      # 60s as "comfortably above a long frontier completion", then 180s to match a comment reading
+      # "~3 min" — and both were too short. The owner named the flaw before anyone measured: a
+      # deadline set equal to the expected duration fails half the calls by construction. The
+      # production sample now lives in chainBudget.ts as data, every constant is checked against it,
+      # and the whole chain is bounded so that generous per-rung deadlines cannot add up to a
+      # morning of apparent silence.
+      - name: A run may not spend the morning discovering that nothing answered
+        run: npm run validate:chain-budget
+
       - name: Build client
         run: npm run build
 

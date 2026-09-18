@@ -58,13 +58,15 @@ export function createAnthropicAdapter(options: AnthropicOptions): ProviderAdapt
           "anthropic-version": ANTHROPIC_VERSION,
         },
         // A request that never answers must become a failure the router can act on, not a hang.
-        signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
+        // An explicit adapter override wins, so a test can still prove the timeout path in
+        // milliseconds; production never sets one, so the per-call deadline governs there.
+        signal: AbortSignal.timeout(options.timeoutMs ?? req.deadlineMs ?? PROVIDER_TIMEOUT_MS),
         body: JSON.stringify({
           model,
           // THE SHARED CEILING, not a number of this adapter's own. 4096 stood here and is below what
           // the daily brief asks for (8000); a reply cut off at a ceiling nobody linked to the
           // callers looks like a bad model rather than a truncation. See `outputCeiling.ts`.
-          max_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
+          max_tokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS),
           system: `West Peek OS governed task: ${req.purpose}`,
           messages: [{ role: "user", content }],
         }),
