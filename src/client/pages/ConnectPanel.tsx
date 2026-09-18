@@ -228,12 +228,16 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
     /* The placeholder MIRRORS the real strip rather than guessing at its height: same box, same
        badge, same one line of muted text. A hand-written `min-height: 38px` got within 3px at
        1280 and would have drifted again the first time the strip wrapped to two lines on a phone.
-       `visibility: hidden` keeps the box and paints nothing. */
+       `visibility: hidden` keeps the box and paints nothing — and it is a <details> with a
+       <summary>, not a div, so the 44px touch floor on `.connect-strip > summary` applies to the
+       placeholder too. It did not when this was a div, and the page still dropped 21px. */
     return (
-      <div className="card connect-strip connect-strip-reserve" data-testid="connect-panel-loading" aria-hidden="true">
-        <span className="badge badge-gate">setup</span>
-        <span className="muted small">checking what is connected</span>
-      </div>
+      <details className="card connect-strip connect-strip-reserve" data-testid="connect-panel-loading" aria-hidden="true">
+        <summary>
+          <span className="badge badge-gate">setup</span>
+          <span className="muted small">checking what is connected</span>
+        </summary>
+      </details>
     );
   }
 

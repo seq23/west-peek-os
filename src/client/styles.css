@@ -2941,12 +2941,7 @@ details.card > summary,
    It carries `.connect-strip` itself and the same two children the real summary has, so the box is
    the same box at every width including the one where it wraps. Hidden rather than sized: a
    hand-written height got within 3px at 1280 and would have drifted at the first reflow. */
-.connect-strip-reserve {
-  visibility: hidden;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
+.connect-strip-reserve { visibility: hidden; }
 
 .connect-strip > summary {
   display: flex;
