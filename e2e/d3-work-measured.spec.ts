@@ -41,15 +41,16 @@ const MP = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
 const NEEDLE = "Kirx Diaz retrospective — the needle in the record";
 
 /**
- * A token unique to this run.
+ * A token unique to each CALL of `seedRecord`, not to the module.
  *
- * Every spec in this suite drives ONE local D1, so a fixed title accumulates runs across tests and
- * the collapse count stops being this test's to predict — it read "ran 6×" because another test in
- * the same file had already finished three of the same card, which is the collapse working, not
- * failing. The token makes the three identical runs unambiguously these three.
+ * Every spec in this suite drives ONE local D1, and `seedRecord` runs twice in this file, so the
+ * collapse count stops being any one test's to predict — the first version read "ran 6×" against a
+ * module-level token, which is the collapse working correctly over six identical cards and the
+ * assertion being wrong about how many there were. A per-call token makes these three unambiguously
+ * these three, and still proves the collapse over rows the SERVER grouped.
  */
-const RUN = `r${Date.now().toString(36)}`;
-const PACKET = `Parker: build the October 2026 Room packet (${RUN})`;
+let seeds = 0;
+const packetTitle = (token: string) => `Parker: build the October 2026 Room packet (${token})`;
 
 async function signIn(page: Page): Promise<void> {
   await page.goto("/");
@@ -83,7 +84,8 @@ async function openWork(page: Page): Promise<void> {
  * classification defaults every card gets. `runs` identical copies of one title prove the collapse
  * on rows the server grouped rather than on a fixture the test wrote.
  */
-async function seedRecord(request: APIRequestContext): Promise<number> {
+async function seedRecord(request: APIRequestContext): Promise<{ made: number; token: string }> {
+  const token = `r${Date.now().toString(36)}s${(seeds += 1)}`;
   let made = 0;
   const finish = async (title: string, description: string) => {
     const res = await request.post("/api/work-cards", {
@@ -105,9 +107,9 @@ async function seedRecord(request: APIRequestContext): Promise<number> {
   }
   // Three identical runs of one job. Before the change these rendered as three achievements.
   for (let i = 0; i < 3; i += 1) {
-    await finish(PACKET, "• Room requested: an event for Black lawyers in our network");
+    await finish(packetTitle(token), "• Room requested: an event for Black lawyers in our network");
   }
-  return made;
+  return { made, token };
 }
 
 /**
@@ -214,7 +216,7 @@ test("Work holds its measured numbers at day-200 volume: contrast, tap targets, 
   test.slow();
   await signIn(page);
 
-  const seeded = await seedRecord(request);
+  const { made: seeded } = await seedRecord(request);
   expect(seeded, "Rule 0 — seeded 0 finished cards; a volume test with no volume is not a test").toBeGreaterThan(60);
 
   const report: string[] = [];
@@ -375,7 +377,7 @@ test("the desk stays short while the record grows, and the oldest row is still f
   );
   expect(emptyDesk, "Rule 0 — the desk measured 0px, so nothing was rendered").toBeGreaterThan(100);
 
-  const seeded = await seedRecord(request);
+  const { made: seeded, token } = await seedRecord(request);
   expect(seeded).toBeGreaterThan(60);
 
   await page.reload();
@@ -407,8 +409,8 @@ test("the desk stays short while the record grows, and the oldest row is still f
   await expect(page.getByText(NEEDLE, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
 
   // ── DUPLICATES COLLAPSE ───────────────────────────────────────────────────────────────────────
-  await page.getByTestId("work-record-search").fill(PACKET);
-  const packets = page.locator('[data-testid^="work-record-row-"]').filter({ hasText: RUN });
+  await page.getByTestId("work-record-search").fill(packetTitle(token));
+  const packets = page.locator('[data-testid^="work-record-row-"]').filter({ hasText: token });
   await expect(packets, "three identical runs of one job are one row, not three achievements").toHaveCount(1, {
     timeout: 10_000,
   });
