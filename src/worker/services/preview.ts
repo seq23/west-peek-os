@@ -275,7 +275,7 @@ export async function runPreview(
 
   if (request.kind === "CARD") {
     const row = await env.WP_OS_DB.prepare(
-      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email
+      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email, preview_first
          FROM work_card WHERE id = ?1`,
     )
       .bind(request.key)
@@ -308,6 +308,7 @@ export async function runPreview(
       work_attempts: 1,
       firm_scope: "west-peek",
       requested_by_email: null,
+      preview_first: null,
     };
   }
 

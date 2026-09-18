@@ -20,6 +20,7 @@ export const DELIVERABLE_KINDS = [
   "daily_brief", "weekly_review", "research_packet", "ask_brief", "meeting_prep", "discrepancy_list", "blog_help",
   "productions_hire_search",
   "event_kit",
+  "approval_preview",
 ] as const;
 
 export type DeliverableKind = (typeof DELIVERABLE_KINDS)[number];
@@ -162,6 +163,24 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     page: "rooms",
     docType: "BRIEF",
     file: true,
+  },
+  /*
+   * SOMETHING WAITING FOR HER YES (17 Sep 2026). An employee finished a note addressed to somebody
+   * outside the firm; by her default rule it goes to her first. This is that draft, on her Home,
+   * naming the recipient, with Send it / Send it back / Dismiss.
+   *
+   * NOT FILED IN DOCUMENTS. A pending draft is not an artifact the firm refers back to — it is a
+   * question, and it stops existing the moment she answers it. What IS worth keeping is the sent
+   * message and the decision, and those are on `preview_approval` and the event spine. Filing every
+   * unanswered draft would fill the archive with things that were never sent.
+   */
+  approval_preview: {
+    key: "approval_preview",
+    label: "Waiting for your yes",
+    blurb: "A finished note addressed to someone outside the firm. It goes nowhere until you say so.",
+    page: "home",
+    docType: "BRIEF",
+    file: false,
   },
 };
 
