@@ -191,6 +191,17 @@ jobs:
       - name: Nobody outside the firm is emailed without an approved preview
         run: npm run validate:preview-lane
 
+      # AND THE CALLER-SIDE HALF OF THE SAME RULE. The boundary scan above guards the TRANSPORT and
+      # says nothing about who reaches it. On 18 Sep 2026 `sendOrPreview` was called from exactly one
+      # file: blogHelp, productions, requestReply and Parker's packets all went straight to
+      # `sendPartnerEmail`. Every one of those addresses a partner, so the boundary was happy, every
+      # validator was green, and `work_card.preview_first` — her "Show me first?" tick — did nothing
+      # at all on four of the five employees. This fails the build if a send path is added that can
+      # reach a transport without passing the lane, if an exemption goes stale, or if a caller
+      # quietly stops passing her tick.
+      - name: Every employee's finished work takes the lane
+        run: npm run validate:employee-lane
+
       # The firm answers "is this one of the two partners?" in exactly one place. It answered in
       # four until 17 Sep 2026, and the cost was not drift — it was that a new feature needing the
       # join between an address and a firm_user id could ask none of them.

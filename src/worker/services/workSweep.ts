@@ -5,6 +5,7 @@ import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
 import { blockCard, resurfaceStaleBlocks } from "./blocks";
+import { resurfaceStalePreviews } from "./previewApproval";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 import { attemptsAllowedFor, isLaneFailure, readLaneFailure, type LaneFailure } from "../../shared/ai/laneFailure";
 
@@ -76,6 +77,17 @@ export interface SweepCard {
    * `shared/work/previewLane.ts`; the sweep only carries it, it does not interpret it.
    */
   preview_first?: number | null;
+  /**
+   * "Who is this for?" — the address the finished result is addressed to (0183, first written by
+   * anything on 18 Sep 2026). Blank means it is for the partner: it lands on Home and there is
+   * nothing to send.
+   */
+  result_recipient?: string | null;
+  /**
+   * WHO TICKED "Show me first?" (0190). The preview becomes that partner's to answer — not
+   * always hers. The sweep only carries it; `previewOwnerFor` resolves it against the registry.
+   */
+  preview_owner_id?: string | null;
 }
 
 /** Who the sweep is when it works a card: the firm, acting on its own assignment. */
@@ -106,7 +118,8 @@ function sweepContext(env: Env, firmScope: string): RouteContext {
 export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | null> {
   const nowIso = now.toISOString();
   const candidate = await env.WP_OS_DB.prepare(
-    `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email, preview_first
+    `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope,
+            requested_by_email, preview_first, result_recipient, preview_owner_id
        FROM work_card
       WHERE owner_type = 'AI' AND owner_id IS NOT NULL
         AND state IN ('OPEN', 'IN_PROGRESS')
@@ -349,6 +362,13 @@ export async function sweepOnce(
   await settleAbandonedCards(env, now);
   // NOTHING STAYS STUCK SILENTLY: a block nobody has acted on rings again rather than ageing out.
   await resurfaceStaleBlocks(env, now);
+  /*
+   * AND NEITHER DOES A PREVIEW (18 Sep 2026). A preview holds finished work and an unspent
+   * credential, and until now it nagged nobody: at 72 hours it simply vanished off its owner's
+   * Home with nothing said. Same cadence as a blocked card, same delivery, same reason — see
+   * `resurfaceStalePreviews`.
+   */
+  await resurfaceStalePreviews(env, now);
   const card = await claimNextCard(env, now);
   if (!card) {
     return { status: "SUCCEEDED", summary: "nothing waiting: every card an employee owns is done, blocked, or being worked", card: null, outcome: "NOTHING_WAITING" };

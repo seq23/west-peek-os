@@ -7,7 +7,7 @@ import { blockCard } from "./blocks";
 import { urlIsLive } from "../effects/urlLiveness";
 import { deliver, recentFeedbackFor } from "./deliverables";
 import { notifyQuietly } from "./notifications";
-import { sendPartnerEmail } from "./execEmail";
+import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
 import { guidanceBlock } from "../../shared/skills/library";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
@@ -777,11 +777,29 @@ export async function runBlogHelpCard(
   });
 
   const email = blogHelpEmail({ employee: employee.name, ask, outline, draft, phrases, research, strippedUrls, failures, body, deliverableId: delivered.id });
-  const mail = await sendPartnerEmail(env, {
+  /*
+   * THROUGH THE LANE, LIKE EVERYTHING ELSE AN EMPLOYEE FINISHES (18 Sep 2026).
+   *
+   * `sendOrPreview` was called from exactly ONE file — Walker's hire search — and every other
+   * employee reached the transport another way. A rule one caller remembers is the defect this
+   * repo keeps producing, and the cost here is specific: her "Show me first?" tick on a card
+   * worked by anybody but Walker did nothing at all. Routing through the lane changes nothing
+   * about a note to a partner with the box unticked — `previewFirstFor` sends those straight out,
+   * exactly as before — and makes the tick mean something everywhere.
+   *
+   * `scripts/validate/every-employee-takes-the-lane.mjs` fails the build if a new send path is
+   * added that reaches a transport without passing through here.
+   */
+  const mail = await sendOrPreview(env, {
     to: partner.email,
     email,
     objectType: "work_card",
     objectId: card.id,
+    workCardId: card.id,
+    cardKind: card.kind ?? null,
+    cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
+    tickedByFirmUserId: card.preview_owner_id ?? null,
+    requestedByEmail: card.requested_by_email ?? null,
     firmScope: card.firm_scope,
     actorId: employee.id,
   });
@@ -800,7 +818,11 @@ export async function runBlogHelpCard(
 
   const finding = [
     `• ${title} — ${describeModes(ask.modes)}; ${research.notes.length} source(s) survived the live check and the judgement pass.`,
-    mail.sent ? `• Emailed to ${partner.email} ("${mail.subject}").` : `• NOT emailed to ${partner.email}: ${mail.reason}. The deliverable is on Home and in Documents.`,
+    mail.sent
+      ? `• Emailed to ${partner.email} ("${mail.subject}").`
+      : mail.previewed
+        ? `• NOT emailed to ${partner.email} — it is preview-first: ${mail.reason}`
+        : `• NOT emailed to ${partner.email}: ${mail.reason}. The deliverable is on Home and in Documents.`,
     `• Deliverable ${delivered.id}${delivered.document_id ? `, filed as document ${delivered.document_id}` : " (not filed)"}.`,
   ].join("\n");
   await env.WP_OS_DB.prepare(

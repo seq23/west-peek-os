@@ -1,4 +1,11 @@
-import { PARTNER_EMAILS, PREVIEW_PARTNER, isPartnerEmail, partnerByEmail } from "../registry/partners";
+import {
+  PARTNER_EMAILS,
+  PREVIEW_PARTNER,
+  isPartnerEmail,
+  partnerByEmail,
+  partnerByFirmUserId,
+  type Partner,
+} from "../registry/partners";
 
 /**
  * THE PREVIEW LANE — "yes, send that" (17 Sep 2026).
@@ -260,4 +267,102 @@ export function previewIntendedFor(input: {
 }): string {
   const who = input.setBy === "PARTNER" ? "you set the recipient" : `${input.employee} addressed this`;
   return `If you send it, it goes to ${input.recipient} — ${who}. You can change the address before sending.`;
+}
+
+// ── WHOSE PREVIEW IS IT ───────────────────────────────────────────────────────────────────────
+
+/**
+ * THE PREVIEW GOES TO WHOEVER TICKED THE BOX (18 Sep 2026).
+ *
+ * Operator: not always her. Scooter's previews are Scooter's to answer.
+ *
+ * Until this function existed the owner was the constant `PREVIEW_PARTNER`, and the constant was
+ * doing two jobs at once: naming the person, and GUARANTEEING that the person was a partner in the
+ * registry. Making the owner dynamic keeps the first job and must not lose the second — a preview
+ * holds an unsent draft, a single-use credential that sends mail on the firm's behalf, and the
+ * address it is filed to is the address that credential is mailed to. An arbitrary string there is
+ * a way to mail an approval link to somebody who is not in the firm.
+ *
+ * So this function cannot return anything but a `Partner` OBJECT out of `registry/partners.ts`.
+ * Every input is a lookup, never a value that passes through:
+ *
+ *   1. WHOEVER TICKED IT. The authenticated partner who marked the card "Show me first?".
+ *   2. WHOEVER ASKED FOR THE WORK. A scheduled job has nobody who ticked anything, so the card's
+ *      `requested_by_email` — the DKIM/DMARC-checked address from migration 0160 — answers instead.
+ *   3. HER. System-created work belongs to nobody in particular, and that is today's behaviour.
+ *
+ * A value that matches no partner does not pass through and does not throw: it falls to the next
+ * rule. Falling back is right for this decision — the cost of the wrong partner seeing a preview
+ * is that the wrong partner sees it, and the cost of throwing is that a finished piece of work has
+ * nowhere to go and dies unsent.
+ */
+export function previewOwnerFor(input: {
+  /** The partner who ticked "Show me first?", by firm_user id. */
+  tickedByFirmUserId?: string | null;
+  /** The authenticated address the work was asked for from, when it was asked for by email. */
+  requestedByEmail?: string | null;
+}): Partner {
+  return (
+    partnerByFirmUserId(input.tickedByFirmUserId) ??
+    partnerByEmail(input.requestedByEmail) ??
+    PREVIEW_PARTNER
+  );
+}
+
+/**
+ * WHERE THE CHECKBOX STARTS. Not what it means — where it starts.
+ *
+ * Her rule, stated twice and emphatically the second time: the tick box is ALWAYS present and
+ * ALWAYS hers to change. The recipient sets its STARTING POSITION and nothing else. An earlier
+ * design derived preview-first FROM the recipient, and her objection to it was exact — it made her
+ * real case, "something for Scooter that I want to see first", look impossible.
+ *
+ * So this is a DEFAULT, consulted once when a card form is opened, and `previewFirstFor` — which
+ * decides what actually happens — never calls it. The two are deliberately unconnected: a default
+ * that fed the decision would be the derived rule wearing a checkbox.
+ */
+export function previewStartsTicked(recipient: string | null | undefined): boolean {
+  return !isPartnerEmail((recipient ?? "").trim().toLowerCase());
+}
+
+// ── NOTHING EXPIRES INTO SILENCE ──────────────────────────────────────────────────────────────
+
+/**
+ * How long a preview waits before it asks again, in hours.
+ *
+ * THE BLOCKED-CARD CADENCE, DELIBERATELY THE SAME NUMBER. A blocked card nags the partner who can
+ * clear it after 48 hours; an unanswered preview is the same shape of thing — a piece of finished
+ * work standing still because one person has not answered — and giving it its own interval would
+ * be a second cadence to keep in step with the first. Quiet hours are not applied here: the
+ * notification layer already honours them, and a second implementation of "not at 3am" is how the
+ * two drift.
+ */
+export const PREVIEW_NAG_AFTER_HOURS = 48;
+
+/** True when an unanswered preview is old enough to ask again, and has not been asked recently. */
+export function previewNagDue(input: {
+  createdAt: string;
+  lastNaggedAt?: string | null;
+  now?: Date;
+}): boolean {
+  const now = (input.now ?? new Date()).getTime();
+  const since = Date.parse(input.lastNaggedAt ?? input.createdAt);
+  if (!Number.isFinite(since)) return false;
+  return now - since >= PREVIEW_NAG_AFTER_HOURS * 3600_000;
+}
+
+/**
+ * What a lapsed preview says for itself.
+ *
+ * IT SURFACES RATHER THAN VANISHING, which is the bug. `handleListPreviewApprovals` filtered
+ * `expires_at > now`, so at 72 hours an unanswered preview left her Home with nobody told: the
+ * work was gone and the only trace was a row in a table she does not read. A preview she never
+ * answered is not a preview she decided against.
+ */
+export function previewLapsedNote(input: { employee: string; expiresAt: string; what: string }): string {
+  return (
+    `This lapsed on ${new Date(input.expiresAt).toLocaleString("en-GB")} without an answer, so the link in ` +
+    `your email no longer works and nothing was sent. Nothing is lost: send it back to ${input.employee} ` +
+    `with a word and he will redo "${input.what}" and put a fresh one in front of you.`
+  );
 }

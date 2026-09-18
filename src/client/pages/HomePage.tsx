@@ -5,6 +5,7 @@ import { attentionSignature } from "@shared/setup/attentionKey";
 import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
 import { answerLine as answerLineFor, secondLine as secondLineFor } from "@shared/home/answerLine";
 import { DeliverableList } from "./DeliverableList";
+import { PreviewApprovals, usePreviewApprovals } from "./PreviewApprovals";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { DailyBriefPanel } from "./DailyBriefPanel";
 import { readBriefCollapsed, writeBriefCollapsed } from "../lib/briefCollapse";
@@ -405,6 +406,15 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
   const [showQuiet, setShowQuiet] = useState(false);
   const [questionsOpen, setQuestionsOpen] = useState(false);
   const home = useApi<HomeResponse>("/api/mp-home");
+  /*
+   * WHAT IS WAITING ON *YOU* TO SAY YES (18 Sep 2026).
+   *
+   * Fetched HERE rather than inside the panel because the "Waiting on you" band does not render
+   * when it is empty, and a preview drawn inside a band that never rendered is the exact
+   * disappearance this change exists to end. Endpoint added 17 Sep; until today no client file
+   * called it, so the lane had never run once.
+   */
+  const previews = usePreviewApprovals();
   // §8 — the four operator questions Home's modules do not answer: what is blocked, is scheduled
   // work healthy, is AI failing, is setup incomplete. Derived from live endpoints only.
   const jobs = useApi<{ jobs: JobHealth[] }>("/api/jobs");
@@ -494,7 +504,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
    * themselves are in `@shared/home/answerLine` so the grammar is testable.
    */
   const freshCount = freshDeliveries.length + (waiting && hasNew(waiting) ? 1 : 0);
-  const needsHer = waitingItems.length + visibleAttention.length;
+  const needsHer = waitingItems.length + visibleAttention.length + previews.previews.length;
   const counts = {
     decisions: waitingItems.length,
     blockers: visibleAttention.length,
@@ -574,19 +584,30 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           IT DOES NOT RENDER WHEN IT IS EMPTY. A full section that exists to say "nothing" is the
           single worst use of the top of this page; the answer line above has already said so, in
           the one slot she actually reads. */}
-      {(waitingItems.length > 0 || visibleAttention.length > 0 || silencedCount > 0) && (
+      {(waitingItems.length > 0 ||
+        visibleAttention.length > 0 ||
+        silencedCount > 0 ||
+        previews.previews.length > 0) && (
         <section className="home-band" data-testid="home-waiting">
           <div className="home-band-head">
             <h3>Waiting on you</h3>
             {needsHer > 0 && <span className="count-pill">{needsHer}</span>}
             <span className="home-band-when">
-              {waitingItems.length === 0
-                ? "no decision is blocked on your signature"
-                : waitingItems.length === 1
-                  ? "one decision is blocked on your signature"
-                  : `${waitingItems.length} decisions are blocked on your signature`}
+              {(() => {
+                const n = waitingItems.length + previews.previews.length;
+                return n === 0
+                  ? "no decision is blocked on your signature"
+                  : n === 1
+                    ? "one decision is blocked on your signature"
+                    : `${n} decisions are blocked on your signature`;
+              })()}
             </span>
           </div>
+
+          {/* FIRST IN THE BAND, ABOVE EVERY OTHER APPROVAL. A preview holds finished work an
+              employee cannot deliver and an unspent credential that expires — it is the only
+              thing on this page that DECAYS if she does not answer it. */}
+          <PreviewApprovals previews={previews.previews} onDecided={previews.reload} />
 
           {waitingItems.length > 0 && (
             <ul className="card-list waiting-list">

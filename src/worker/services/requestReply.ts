@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { bulletsFrom } from "../../shared/email/execEmail";
-import { sendPartnerEmail } from "./execEmail";
+import { sendOrPreview } from "./previewApproval";
 
 /**
  * A request that came in by email is answered by email.
@@ -31,7 +31,14 @@ import { sendPartnerEmail } from "./execEmail";
  */
 export async function replyToRequester(
   env: Env,
-  card: { id: string; title: string; requested_by_email?: string | null; firm_scope: string },
+  card: {
+    id: string;
+    title: string;
+    requested_by_email?: string | null;
+    firm_scope: string;
+    preview_first?: number | null;
+    preview_owner_id?: string | null;
+  },
   outcome: "DONE" | "BLOCKED",
   who: string,
   detail: string,
@@ -46,7 +53,20 @@ export async function replyToRequester(
   const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
   const finding = bulletsFrom(detail);
   const cardLink = `https://os.joinwestpeek.com/#/work (card ${card.id})`;
-  const out = await sendPartnerEmail(env, {
+  /*
+   * THROUGH THE LANE, LIKE EVERYTHING ELSE AN EMPLOYEE FINISHES (18 Sep 2026).
+   *
+   * `sendOrPreview` was called from exactly ONE file — Walker's hire search — and every other
+   * employee reached the transport another way. A rule one caller remembers is the defect this
+   * repo keeps producing, and the cost here is specific: her "Show me first?" tick on a card
+   * worked by anybody but Walker did nothing at all. Routing through the lane changes nothing
+   * about a note to a partner with the box unticked — `previewFirstFor` sends those straight out,
+   * exactly as before — and makes the tick mean something everywhere.
+   *
+   * `scripts/validate/every-employee-takes-the-lane.mjs` fails the build if a new send path is
+   * added that reaches a transport without passing through here.
+   */
+  const out = await sendOrPreview(env, {
     to,
     email: {
       employee: who,
@@ -72,6 +92,10 @@ export async function replyToRequester(
     },
     objectType: "work_card",
     objectId: card.id,
+    workCardId: card.id,
+    cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
+    tickedByFirmUserId: card.preview_owner_id ?? null,
+    requestedByEmail: card.requested_by_email ?? null,
     firmScope: card.firm_scope,
     actorId: "work_sweep",
     events: { sent: "work_card.replied_by_email", notSent: "work_card.reply_not_sent" },

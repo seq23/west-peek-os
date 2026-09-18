@@ -21,7 +21,7 @@ import {
   previewFirstFor,
   readApprovalToken,
 } from "../src/shared/work/previewLane";
-import { PARTNER_EMAILS } from "../src/shared/registry/partners";
+import { PARTNERS, PARTNER_EMAILS, PREVIEW_PARTNER, partnerByFirmUserId } from "../src/shared/registry/partners";
 import { SCOOTER_EMAIL } from "../src/worker/services/productions";
 
 /**
@@ -199,6 +199,8 @@ describe("send it", () => {
       bodyText: "Jordan — your Nike House of Innovation build is the kind of thing we want more of.\n\n— Walker",
       recipient: "jordan@producer.example",
       laneReason: "DEFAULT_OUTSIDE_FIRM",
+      // NAMED, NOT ASSUMED (0190). This used to be an implicit constant inside filePreview.
+      owner: PREVIEW_PARTNER,
     });
     return { row: filed.approval, sent };
   }
@@ -312,11 +314,11 @@ describe("the doors", () => {
     await t.db
       .prepare(
         `INSERT INTO preview_approval (id, employee, what, subject, body_text, recipient, proposed_recipient,
-           lane_reason, token_sha256, expires_at)
+           lane_reason, owner_firm_user_id, token_sha256, expires_at)
          VALUES (?1,'Walker','a note','Walker: a note','the body','jordan@producer.example','jordan@producer.example',
-           'DEFAULT_OUTSIDE_FIRM', ?2, ?3)`,
+           'DEFAULT_OUTSIDE_FIRM', ?4, ?2, ?3)`,
       )
-      .bind(id, await hashApprovalToken(token), new Date(Date.now() + 3600_000).toISOString())
+      .bind(id, await hashApprovalToken(token), new Date(Date.now() + 3600_000).toISOString(), PREVIEW_PARTNER.firmUserId)
       .run();
 
     // NO SESSION AT ALL — the token is the credential.
@@ -362,7 +364,7 @@ describe("the doors", () => {
     }
   });
 
-  it("answers on Home for a partner and refuses anybody else", async () => {
+  it("answers on Home for THIS partner, and refuses the other one", async () => {
     const sent: Sent[] = [];
     captureFetch(sent);
     const filed = await filePreview(env, {
@@ -372,6 +374,8 @@ describe("the doors", () => {
       bodyText: "the body",
       recipient: "jordan@producer.example",
       laneReason: "DEFAULT_OUTSIDE_FIRM",
+      // NAMED, NOT ASSUMED (0190). This used to be an implicit constant inside filePreview.
+      owner: PREVIEW_PARTNER,
     });
 
     const listed = await handleRequest(
@@ -395,8 +399,16 @@ describe("the doors", () => {
     );
     expect(browser.status).toBe(403);
 
+    /*
+     * AND THE OTHER MANAGING PARTNER CANNOT EITHER (0190).
+     *
+     * This assertion previously expected 200: Scooter dismissing HER preview was the shipped
+     * behaviour, because both routes asked "are you A partner?" and the list had no owner filter
+     * at all. It is rewritten rather than relaxed, and it is stricter in three ways — he cannot
+     * decide it, he cannot SEE it, and the refusal names nothing about what it is.
+     */
     sent.length = 0;
-    const ok = await handleRequest(
+    const notHis = await handleRequest(
       new Request(`https://os.joinwestpeek.com/api/preview-approvals/${filed.approval.id}/decide`, {
         method: "POST",
         headers: { ...SCOOTER, "content-type": "application/json" },
@@ -404,8 +416,78 @@ describe("the doors", () => {
       }),
       env,
     );
+    expect(notHis.status, "Scooter cannot dismiss Sequoia's preview").toBe(403);
+    const refusal = (await notHis.json()) as { error: string; reason: string };
+    expect(refusal.error).toBe("not_your_preview");
+    // It tells him nothing about the draft, the recipient, or the employee.
+    expect(refusal.reason).not.toContain("jordan@producer.example");
+    expect(refusal.reason).not.toContain("Walker");
+
+    const hisList = await handleRequest(
+      new Request("https://os.joinwestpeek.com/api/preview-approvals", { headers: SCOOTER }),
+      env,
+    );
+    const his = (await hisList.json()) as { previews: Array<{ id: string }> };
+    expect(his.previews.map((p) => p.id), "her preview is not on his Home").not.toContain(filed.approval.id);
+
+    // And hers is hers: the same request from her own session works.
+    const ok = await handleRequest(
+      new Request(`https://os.joinwestpeek.com/api/preview-approvals/${filed.approval.id}/decide`, {
+        method: "POST",
+        headers: { ...SEQUOIA, "content-type": "application/json" },
+        body: JSON.stringify({ action: "DISMISS" }),
+      }),
+      env,
+    );
     expect(ok.status).toBe(200);
     expect(sent).toHaveLength(0);
+  });
+
+  /*
+   * THE MIRROR. A guard that only runs one way is half a guard, and the half that goes untested is
+   * the half somebody writes as `if (me === SEQUOIA) return 403`.
+   */
+  it("refuses HER on HIS preview, and puts his on his own Home", async () => {
+    const sent: Sent[] = [];
+    captureFetch(sent);
+    const scooter = partnerByFirmUserId("fu_scooter_taylor")!;
+    const filed = await filePreview(env, {
+      employee: "Parker",
+      what: "his note to the venue",
+      subject: "Parker: about the room in March",
+      bodyText: "Hello — I am asking about your space for a small evening in March.\n\n— Parker",
+      recipient: "bookings@venue.example",
+      laneReason: "DEFAULT_OUTSIDE_FIRM",
+      owner: scooter,
+    });
+    // The approval link went to HIS address, because the link is what sends the mail.
+    expect(sent.map((s) => s.to).flat()).toEqual([scooter.email]);
+
+    const hers = await handleRequest(
+      new Request("https://os.joinwestpeek.com/api/preview-approvals", { headers: SEQUOIA }),
+      env,
+    );
+    const herList = (await hers.json()) as { owner: string; previews: Array<{ id: string }> };
+    expect(herList.owner).toBe("fu_sequoia_taylor");
+    expect(herList.previews.map((p) => p.id)).not.toContain(filed.approval.id);
+
+    const his = await handleRequest(
+      new Request("https://os.joinwestpeek.com/api/preview-approvals", { headers: SCOOTER }),
+      env,
+    );
+    const hisList = (await his.json()) as { previews: Array<{ id: string }> };
+    expect(hisList.previews.map((p) => p.id)).toContain(filed.approval.id);
+
+    const refused = await handleRequest(
+      new Request(`https://os.joinwestpeek.com/api/preview-approvals/${filed.approval.id}/decide`, {
+        method: "POST",
+        headers: { ...SEQUOIA, "content-type": "application/json" },
+        body: JSON.stringify({ action: "SEND" }),
+      }),
+      env,
+    );
+    expect(refused.status, "she cannot send Scooter's preview").toBe(403);
+    expect(sent.filter((m) => m.to.includes("bookings@venue.example"))).toHaveLength(0);
   });
 });
 

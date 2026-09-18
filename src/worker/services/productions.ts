@@ -8,7 +8,7 @@ import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
-import { sendPartnerEmail } from "./execEmail";
+import { sendOrPreview } from "./previewApproval";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { guidanceBlock } from "../../shared/skills/library";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
@@ -1014,11 +1014,20 @@ export async function runProductionsCard(
     return { finished: false, blocked: true, detail: why };
   }
 
-  const mail = await sendPartnerEmail(env, {
+  /*
+   * THROUGH THE LANE — see the note in services/blogHelp.ts. Scooter is a Managing Partner, so an
+   * unticked card goes straight to his inbox exactly as before; the tick is what this makes real.
+   */
+  const mail = await sendOrPreview(env, {
     to: SCOOTER_EMAIL,
     email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: summary.sections, details: text },
     objectType: "work_card",
     objectId: card.id,
+    workCardId: card.id,
+    cardKind: card.kind ?? null,
+    cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
+    tickedByFirmUserId: card.preview_owner_id ?? null,
+    requestedByEmail: card.requested_by_email ?? null,
     firmScope: card.firm_scope,
     actorId: "aie_walker",
   });
@@ -1026,7 +1035,11 @@ export async function runProductionsCard(
 
   const finding = [
     `• ${subject}`,
-    mail.sent ? `• Emailed to ${SCOOTER_EMAIL}.` : `• NOT emailed to ${SCOOTER_EMAIL}: ${mail.reason}. The deliverable is below.`,
+    mail.sent
+      ? `• Emailed to ${SCOOTER_EMAIL}.`
+      : mail.previewed
+        ? `• NOT emailed to ${SCOOTER_EMAIL} — it is preview-first: ${mail.reason}`
+        : `• NOT emailed to ${SCOOTER_EMAIL}: ${mail.reason}. The deliverable is below.`,
     "",
     text,
   ].join("\n");
@@ -1087,7 +1100,7 @@ export async function runIntroNote(env: Env): Promise<{ status: "SUCCEEDED" | "F
     return { status: "SUCCEEDED", summary: "already sent; the job paused itself" };
   }
   const note = renderIntroNote();
-  const mail = await sendPartnerEmail(env, {
+  const mail = await sendOrPreview(env, {
     to: SCOOTER_EMAIL,
     email: {
       employee: "Walker",
@@ -1102,6 +1115,13 @@ export async function runIntroNote(env: Env): Promise<{ status: "SUCCEEDED" | "F
     },
     objectType: "scheduled_job",
     objectId: "sjb_productions_intro_note",
+    /*
+     * A SCHEDULED JOB TICKED NOTHING AND ASKED NOBODY, so the lane's default rule decides alone:
+     * Scooter is a Managing Partner and this goes to his inbox with nobody's hand in between. It
+     * is routed through the lane anyway so that this file has no second way out to a transport —
+     * which is what `every-employee-takes-the-lane.mjs` checks.
+     */
+    cardAsked: null,
     firmScope: "west-peek",
     actorId: "aie_walker",
   });

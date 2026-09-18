@@ -808,6 +808,10 @@ export async function runHireSearchCard(
     cardKind: HIRE_CARD_KIND,
     workCardId: card.id,
     cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
+    // WHOSE PREVIEW IT BECOMES, if it becomes one: whoever ticked the box, else whoever asked for
+    // the work by email, else her. A weekly scheduled card ticks nothing and asks nobody.
+    tickedByFirmUserId: card.preview_owner_id ?? null,
+    requestedByEmail: card.requested_by_email ?? null,
     firmScope: card.firm_scope,
     actorId: "aie_walker",
     what: summary.what,
