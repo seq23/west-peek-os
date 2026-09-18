@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { readableDate, shortDate } from "../lib/dates";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
 import { isTechnicalBlock } from "@shared/work/blocks";
 import type { Block, BlockActionKey } from "@shared/work/blocks";
+import { deskAnswer, deskSubline } from "@shared/work/deskAnswer";
 import { portraitFor } from "../lib/employeePortraits";
+import { WorkRecordView } from "./WorkRecordView";
 
 /**
  * Work cards — what the firm is actually doing, who owns it, and what happens next.
@@ -128,7 +130,37 @@ interface WorkCardNote {
   author: string | null;
 }
 
-export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; onChanged: () => void; onNavigate: (k: string) => void }) {
+/**
+ * THE THREE ADDRESSES, and why they are addresses rather than sections.
+ *
+ * Four kinds of thing were rendering at nearly one weight on one scroll: what needs her, what is
+ * happening now, what the firm has done, and what runs on a clock. Two of those are a DESK — she
+ * reads them every time she opens the page. The other two are a REFERENCE and a DASHBOARD: she
+ * wants them occasionally and specifically.
+ *
+ * Collapsing the reference material would have kept it in the desk's scroll, which is the actual
+ * cost — on the 199 days out of 200 when she is not looking anything up, a collapsed section is
+ * still something she scrolls past and something her eye has to rule out. Giving them their own
+ * address means the desk is the whole page by default, and the record is a place she goes.
+ */
+const WORK_VIEWS = ["desk", "record", "machinery"] as const;
+type WorkView = (typeof WORK_VIEWS)[number];
+
+export function WorkCardsPage({
+  me,
+  onChanged,
+  onNavigate,
+  machinery,
+}: {
+  me: MeResponse;
+  onChanged: () => void;
+  onNavigate: (k: string) => void;
+  /**
+   * The scheduled machinery, handed in by the shell rather than imported, so this page owns where
+   * the machinery lives without owning what it is. It renders only on its own tab.
+   */
+  machinery?: ReactNode;
+}) {
   const board = useApi<{
     cards: WorkCardRow[];
     recent_runs: RecentRun[];
@@ -206,8 +238,36 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
 
   const all = board.data?.cards ?? [];
   const live = useMemo(() => triage(all), [all]);
-  const finished = all.filter((c) => c.state === "DONE" || c.state === "CANCELLED");
   const runs = board.data?.recent_runs ?? [];
+
+  /** Which of the three addresses is on screen. A reading position, so it is not persisted. */
+  const [view, setView] = useState<WorkView>("desk");
+  /**
+   * Bumped whenever a card changes state, so the record re-reads itself after a Reopen without the
+   * whole board being remounted. `board.reload()` cannot do this: the record is a different query.
+   */
+  const [recordNonce, setRecordNonce] = useState(0);
+
+  /**
+   * THE MACHINERY'S HEALTH, read here so the desk can say in one line whether it needs looking at.
+   * It is the only thing about the machinery that belongs on the desk: "nothing needs you" is what
+   * lets her not open the tab.
+   */
+  const jobs = useApi<{ jobs: Array<{ job_key: string; name: string; status: string; recent_runs: Array<{ status: string }> }> }>("/api/jobs");
+  const machineryHealth = useMemo(() => {
+    const list = jobs.data?.jobs ?? [];
+    let green = 0;
+    let trouble = 0;
+    let never = 0;
+    for (const j of list) {
+      const last = j.recent_runs?.[0] ?? null;
+      if (j.status === "PAUSED") trouble += 1;
+      else if (!last) never += 1;
+      else if (last.status === "SUCCEEDED") green += 1;
+      else trouble += 1;
+    }
+    return { total: list.length, green, trouble, never };
+  }, [jobs.data]);
 
   /**
    * FOUR BANDS, not one section per person.
@@ -228,24 +288,53 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
    * question you open this page with. The question is: what needs ME, what is being handled, and
    * what got done. Three bands, in that order.
    */
+  /*
+   * TWO BANDS ON THE DESK, AT TWO DENSITIES — and the density is the separation.
+   *
+   * Three bands at one weight is what the page had, and it is why a card being quietly worked by an
+   * employee read as loudly as a card that had stopped dead. Waiting work is the only thing she can
+   * act on, so it gets the full card: the block sentences, the recovery doors, the labels. Work in
+   * flight is something she reads and leaves alone, so it gets one line each — she needs to know it
+   * is moving, not what it says.
+   *
+   * THE PARTNER'S WORK IS IN FLIGHT, NOT A THIRD BAND. Its own heading answered "who has it", which
+   * is not the question this page is opened with; somebody is on it either way, and the owner's
+   * face on the row says which somebody.
+   */
   const bands = useMemo(() => {
     const waiting: WorkCardRow[] = [];
-    const working: WorkCardRow[] = [];
-    const partner: WorkCardRow[] = [];
+    const flight: WorkCardRow[] = [];
     for (const c of live) {
       const mine = c.owner_type === "HUMAN" && c.owner_id === me.id;
       const nobody = c.owner_type === "UNASSIGNED" || !c.owner_id;
       if (c.state === "BLOCKED" || nobody || mine) waiting.push(c);
-      else if (c.owner_type === "AI") working.push(c);
-      else partner.push(c);
+      else flight.push(c);
     }
-    const partnerName = partner[0]?.owner_name ?? "Your partner";
     return [
-      { key: "waiting", name: "Waiting on you", note: "blocked, unowned, or yours — nothing moves until you act", cards: waiting },
-      { key: "working", name: "Being worked by your employees", note: "the sweep picks each one up within five minutes and it ends Done or Blocked", cards: working },
-      { key: "partner", name: `${partnerName} is carrying`, note: "your partner's", cards: partner },
+      {
+        key: "waiting",
+        density: "card" as const,
+        name: "Waiting on you",
+        note: "blocked, unowned, or yours — nothing moves until you act",
+        cards: waiting,
+      },
+      {
+        key: "flight",
+        density: "row" as const,
+        name: "In flight",
+        note: "being worked right now — the sweep picks each one up within five minutes and it ends Done or Blocked. A blocked one moves up to Waiting on you.",
+        cards: flight,
+      },
     ].filter((b) => b.cards.length > 0);
   }, [live, me.id]);
+
+  const failingCount = useMemo(
+    () =>
+      live.filter(
+        (c) => Boolean(c.work_last_failure) && c.state !== "BLOCKED" && c.state !== "DONE" && c.state !== "CANCELLED",
+      ).length,
+    [live],
+  );
 
   // DECKS WAITING ON A DECISION ARE WORK WAITING ON YOU. "i dont see any indication of v12 deck
   // anywhere" — it was on Fund strategy, under the proposals, and nowhere on the page called Work.
@@ -363,6 +452,9 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
     });
     if (res.status !== 200) setMessage(`Could not move it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
     board.reload();
+    // The record is a different query over the same rows, so reloading the board does not touch it.
+    // Without this, reopening something leaves it showing in the record it has just left.
+    setRecordNonce((n) => n + 1);
     onChanged();
   }
 
@@ -399,78 +491,66 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
     setMessage("Passed on. They will pick it up on their next step and say what they changed.");
   }
 
+  const waitingCards = bands.find((b) => b.key === "waiting")?.cards.length ?? 0;
+  const inFlight = bands.find((b) => b.key === "flight")?.cards.length ?? 0;
+  const answer = deskAnswer({ waiting: waitingCards, decks: decksWaiting.length, inFlight, failing: failingCount });
+  const subline = deskSubline({ waiting: waitingCards, decks: decksWaiting.length, inFlight, failing: failingCount });
+
   return (
-    <section data-testid="work-cards-page">
-      <div className="home-section-head">
-        <h3>
-          {bands[0]?.key === "waiting" || decksWaiting.length > 0
-            ? `${(bands.find((b) => b.key === "waiting")?.cards.length ?? 0) + decksWaiting.length} waiting on you`
-            : live.length === 0
-              ? "Nothing open"
-              : `${live.length} open, none waiting on you`}
-        </h3>
+    <section data-testid="work-cards-page" className="work-surface">
+      {/*
+        RANK 0 IS THE ANSWER, NOT A COUNT.
+
+        This header used to read "2 waiting on you" in an `h3` that measured 18px/700 — the same
+        size and weight as both band headings under it, because `.home-section-head h3` and
+        `.home-section-head h4` resolve to one rule. Three ranks of meaning, one rank of type. The
+        sentence is the fix for the first half; `.work-masthead h2` at --text-2xl over
+        `.work-band-head h3` at --text-xl is the fix for the second, and `validate:heading-scale`
+        holds both selectors to tags this page actually emits.
+      */}
+      <header className="work-masthead">
+        <div className="work-masthead-said">
+          <p className="work-eyebrow">The firm's work</p>
+          <h2 data-testid="work-answer" className={answer.clear ? "is-clear" : undefined}>
+            {answer.line}
+          </h2>
+          {subline && <p className="work-subline muted">{subline}</p>}
+        </div>
         <button type="button" className="btn-strong" data-testid="work-card-add-toggle" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a card"}
         </button>
-      </div>
+      </header>
 
-      {/* THE THING WAITING ON YOU COMES FIRST. The header said "1 waiting on you" and the deck it
-          meant sat under the legend, the add form and the empty-state explainer — "i have 1 waiting
-          for me item ... and i have no idea what the item is" (14 Sep). What the count counts is
-          the next thing on the page. */}
-      {decksWaiting.length > 0 && (
-        <section data-testid="work-decks-waiting">
-          <div className="home-section-head">
-            <h4>
-              A deck is waiting on your decision <span className="count-pill">{decksWaiting.length}</span>
-            </h4>
-            <span className="muted small">look at it, then approve it or send it back — sending it back opens the next card for Preston</span>
-          </div>
-          <ul className="card-list">
-            {decksWaiting.map((v) => (
-              <li key={v.id} className="card" data-testid={`work-deck-${v.id}`}>
-                <strong>v{v.version_no} — {v.title}</strong>{" "}
-                <span className="muted small">by {v.created_by}, {new Date(v.created_at).toLocaleString()}</span>
-                {v.change_summary && <p className="small">{v.change_summary}</p>}
-                <div className="notification-actions">
-                  {v.document_id && (
-                    <button type="button" className="link-button" onClick={() => {
-                      try { window.sessionStorage.setItem("wpos.documents.focus", v.document_id!); } catch { /* fine */ }
-                      onNavigate("documents");
-                    }}>
-                      View v{v.version_no}
-                    </button>
-                  )}
-                  <button type="button" className="btn-strong" onClick={() => onNavigate("fund-strategy")}>
-                    Decide on Fund strategy
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {/* THE LEGEND BELONGS BEFORE THE THING IT EXPLAINS — it used to sit at the very bottom, under
-          every card, so the words telling you what "Blocked" means were below the blocked card you
-          were reading. But five rows of definitions expanded at the top pushed the cards themselves
-          off the screen, which is the opposite failure. So: before the cards, and closed, because a
-          legend is something you consult once and then never again. */}
-      <details className="work-legend-wrap" data-testid="work-state-legend">
-        <summary className="muted small">What the states mean</summary>
-        <ul className="work-legend">
-          {STATE_MEANINGS.map((m) => (
-            <li key={m.key}>
-              <span className={m.key === "BLOCKED" ? "badge badge-bad" : m.key === "DONE" ? "badge badge-ok" : "badge"}>
-                {m.label}
-              </span>
-              <span className="muted small">{m.means}</span>
-            </li>
-          ))}
-        </ul>
-      </details>
+      {/*
+        THE FOUR KINDS, SEPARATED BY ADDRESS. Desk holds the two she reads every time — what needs
+        her and what is happening now. The record and the machinery are places she goes.
+      */}
+      <div className="work-views" role="tablist" aria-label="Work">
+        {WORK_VIEWS.map((v) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            id={`work-tab-${v}`}
+            aria-selected={view === v}
+            aria-controls={`work-panel-${v}`}
+            className={`work-view-tab${view === v ? " is-on" : ""}`}
+            data-testid={`work-view-${v}`}
+            onClick={() => setView(v)}
+          >
+            {v === "desk" ? "Desk" : v === "record" ? "The record" : "The machinery"}
+            {v === "desk" && answer.count > 0 && <span className="work-view-dot" aria-hidden="true" />}
+            {v === "machinery" && machineryHealth.total > 0 && (
+              <span className="work-view-n">{machineryHealth.total}</span>
+            )}
+          </button>
+        ))}
+      </div>
 
       {message && <p className="notice" data-testid="work-cards-message">{message}</p>}
 
+      {/* THE FORM LIVES WITH ITS BUTTON, not inside a panel — "Add a card" is in the masthead and
+          is pressed from any of the three addresses. */}
       {adding && (
         <form className="card" data-testid="work-card-form" onSubmit={create}>
           <div className="form-row">
@@ -558,6 +638,83 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </form>
       )}
 
+      {view === "record" && (
+        <div role="tabpanel" id="work-panel-record" aria-labelledby="work-tab-record" className="work-panel">
+          <WorkRecordView onMove={move} onNavigate={onNavigate} refreshNonce={recordNonce} />
+        </div>
+      )}
+
+      {view === "machinery" && (
+        <div role="tabpanel" id="work-panel-machinery" aria-labelledby="work-tab-machinery" className="work-panel">
+          <div className="work-band-head">
+            <h3>The machinery</h3>
+            <p className="work-band-note">
+              Work that runs on a clock whether anyone looks. You read this to check it is healthy, not to do
+              anything — and a job is not a card, because a card is work somebody owns and a job is machinery.
+              What a job produces can become a card.
+            </p>
+          </div>
+          {machinery}
+        </div>
+      )}
+
+      {view === "desk" && (
+      <div role="tabpanel" id="work-panel-desk" aria-labelledby="work-tab-desk" className="work-panel">
+      {/* THE THING WAITING ON YOU COMES FIRST. The header said "1 waiting on you" and the deck it
+          meant sat under the legend, the add form and the empty-state explainer — "i have 1 waiting
+          for me item ... and i have no idea what the item is" (14 Sep). What the count counts is
+          the next thing on the page. */}
+      {decksWaiting.length > 0 && (
+        <section data-testid="work-decks-waiting" className="work-region">
+          <div className="work-band-head">
+            <h3>
+              A deck is waiting on your decision <span className="count-pill">{decksWaiting.length}</span>
+            </h3>
+            <p className="work-band-note">look at it, then approve it or send it back — sending it back opens the next card for Preston</p>
+          </div>
+          <ul className="card-list">
+            {decksWaiting.map((v) => (
+              <li key={v.id} className="card" data-testid={`work-deck-${v.id}`}>
+                <strong>v{v.version_no} — {v.title}</strong>{" "}
+                <span className="muted small">by {v.created_by}, {new Date(v.created_at).toLocaleString()}</span>
+                {v.change_summary && <p className="small">{v.change_summary}</p>}
+                <div className="notification-actions">
+                  {v.document_id && (
+                    <button type="button" className="link-button" onClick={() => {
+                      try { window.sessionStorage.setItem("wpos.documents.focus", v.document_id!); } catch { /* fine */ }
+                      onNavigate("documents");
+                    }}>
+                      View v{v.version_no}
+                    </button>
+                  )}
+                  <button type="button" className="btn-strong" onClick={() => onNavigate("fund-strategy")}>
+                    Decide on Fund strategy
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {/* THE LEGEND BELONGS BEFORE THE THING IT EXPLAINS — it used to sit at the very bottom, under
+          every card, so the words telling you what "Blocked" means were below the blocked card you
+          were reading. But five rows of definitions expanded at the top pushed the cards themselves
+          off the screen, which is the opposite failure. So: before the cards, and closed, because a
+          legend is something you consult once and then never again. */}
+      <details className="work-legend-wrap" data-testid="work-state-legend">
+        <summary className="muted small">What the states mean</summary>
+        <ul className="work-legend">
+          {STATE_MEANINGS.map((m) => (
+            <li key={m.key}>
+              <span className={m.key === "BLOCKED" ? "badge badge-bad" : m.key === "DONE" ? "badge badge-ok" : "badge"}>
+                {m.label}
+              </span>
+              <span className="muted small">{m.means}</span>
+            </li>
+          ))}
+        </ul>
+      </details>
+
       {live.length === 0 && decksWaiting.length === 0 && !adding && (
         <div className="card" data-testid="work-cards-empty">
           <h4>Nothing is open</h4>
@@ -590,15 +747,18 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
       )}
 
       {bands.map((group) => (
-        <section key={group.key} data-testid={`work-owner-${group.key}`}>
-          <div className="home-section-head">
-            <h4>
+        <section key={group.key} data-testid={`work-owner-${group.key}`} className="work-region">
+          <div className="work-band-head">
+            <h3>
               {group.name} <span className="count-pill">{group.cards.length}</span>
-            </h4>
-            <span className="muted small">{group.note}</span>
+            </h3>
+            <p className="work-band-note">{group.note}</p>
           </div>
 
-          <ul className="work-card-grid" data-testid={`work-card-list-${group.key}`}>
+          <ul
+            className={group.density === "row" ? "work-card-list work-card-rows" : "work-card-grid"}
+            data-testid={`work-card-list-${group.key}`}
+          >
             {group.cards.map((c) => {
               const meaning = stateMeaning(c.state);
               const isOpen = openCards.has(c.id);
@@ -615,7 +775,17 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
               */
               const failing = Boolean(c.work_last_failure) && c.state !== "BLOCKED" && c.state !== "DONE" && c.state !== "CANCELLED";
               const technical = isTechnicalBlock(c.block?.reason);
-              const rowClass = ["card", "work-card-row", isOpen ? "is-open" : "", failing ? "work-card-failing" : ""].filter(Boolean).join(" ");
+              const rowClass = [
+                "card",
+                "work-card-row",
+                // THE DENSITY IS THE SEPARATION. A card she must act on is a card; a card being
+                // worked is one line, because she reads it and leaves it alone.
+                group.density === "row" ? "work-card-lean" : "",
+                isOpen ? "is-open" : "",
+                failing ? "work-card-failing" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
               return (
                 <li key={c.id} className={rowClass} data-testid={`work-card-${c.id}`} data-failing={failing ? "yes" : "no"}>
                   {/*
@@ -1230,53 +1400,65 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         </details>
       )}
 
-      {finished.length > 0 && (
-        <details className="card" data-testid="work-cards-finished" open>
-          <summary>
-            <strong>Finished</strong> <span className="count-pill">{finished.filter((c) => c.state === "DONE").length}</span>
-            <span className="muted small"> · what each one produced, so you can check it</span>
-          </summary>
-          <ul className="card-list small">
-            {finished.slice(0, 50).map((c) => {
-              // THE LAST FINDING IS THE RESULT. An employee writes what it found onto the card as
-              // "• ..." lines; the last one is the verdict, and a finished card that does not show
-              // it is a card you have to open to learn anything from.
-              const lines = (c.description ?? "").split("\n").filter((l) => l.startsWith("• "));
-              const result = lines.length > 0 ? lines[lines.length - 1]!.slice(2) : null;
-              return (
-              <li key={c.id}>
-                <span className="badge">{stateMeaning(c.state)?.label ?? c.state}</span> <strong>{c.title}</strong>
-                {c.owner_name ? <span className="muted small"> · {c.owner_name}</span> : null}
-                {result && <p className="small" style={{ margin: "4px 0 0" }}>{result.slice(0, 400)}</p>}
-                {c.kind === "DECK_REWORK" && c.state === "DONE" && (
-                  <button type="button" className="link-button" onClick={() => onNavigate("fund-strategy")}>Decide on Fund strategy</button>
-                )}
-                {/* CHANGING YOUR MIND HAS TO BE POSSIBLE. A dropped or finished card is kept
-                    rather than deleted precisely because the decision might be revisited. Reopens
-                    as OPEN, not to whatever it was before: what it was is history, what it is now
-                    is undecided.
-
-                    This button existed for dropped cards and did nothing — the server's transition
-                    table allowed no move at all out of CANCELLED, so every press returned a 409 the
-                    page reported as a small notice most of the way up. Finished cards were never
-                    offered it at all, though reopening one was always legal. */}
-                <button
-                  type="button"
-                  className="link-button"
-                  data-testid={`work-card-undrop-${c.id}`}
-                  onClick={() => void move(c.id, "OPEN")}
-                >
-                  {c.state === "CANCELLED" ? "Put it back" : "Reopen"}
-                </button>
-              </li>
-              );
-            })}
-          </ul>
-        </details>
+      {/*
+        WHEN THE DESK IS CLEAR. This is the state on most days and it is designed rather than left
+        blank — a page that empties out reads as broken, and "nothing is waiting" is the single most
+        valuable thing this surface can tell her. It says what would have to happen for something to
+        arrive here, so she can believe the silence.
+      */}
+      {answer.clear && bands.length === 0 && decksWaiting.length === 0 && (
+        <div className="work-clear" data-testid="work-desk-clear">
+          <p className="work-clear-line">Nothing is waiting on you.</p>
+          <p className="muted small">
+            Something arrives here when an employee finishes work that needs your signature, or stops on a
+            question only you can answer. The count beside <strong>Desk</strong> above turns orange the moment
+            it does.
+          </p>
+        </div>
       )}
 
+      {/*
+        THE OTHER TWO KINDS, NAMED AND LEFT ALONE.
 
-
+        The record and the machinery are not on the desk, so the desk has to say where they went and
+        say enough about each that she does not have to go and look. "Nothing needs you" about the
+        machinery is the whole reason the machinery is not on this screen.
+      */}
+      <section className="work-region" data-testid="work-elsewhere">
+        <div className="work-band-head">
+          <h3>Everything else</h3>
+        </div>
+        <div className="work-elsewhere-tiles">
+          <div className="card work-tile">
+            <p className="work-tile-name">The record</p>
+            <p className="small">
+              Everything the firm has finished, searchable and grouped by month, with identical runs collapsed.
+              It is a record, not a to-do, which is why it is not on this screen.
+            </p>
+            <button type="button" data-testid="work-goto-record" onClick={() => setView("record")}>
+              Search the record
+            </button>
+          </div>
+          <div className="card work-tile">
+            <p className="work-tile-name">The machinery</p>
+            <p className="small" data-testid="work-machinery-health">
+              {machineryHealth.total === 0
+                ? "No scheduled jobs yet."
+                : `${machineryHealth.total} job${machineryHealth.total === 1 ? "" : "s"} on a clock · ` +
+                  `${machineryHealth.green} green` +
+                  (machineryHealth.never > 0 ? ` · ${machineryHealth.never} never run` : "") +
+                  (machineryHealth.trouble > 0
+                    ? ` · ${machineryHealth.trouble} needs a look`
+                    : " · nothing needs you.")}
+            </p>
+            <button type="button" data-testid="work-goto-machinery" onClick={() => setView("machinery")}>
+              Check the machinery
+            </button>
+          </div>
+        </div>
+      </section>
+      </div>
+      )}
     </section>
   );
 }

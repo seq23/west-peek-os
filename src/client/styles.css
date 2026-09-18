@@ -3195,22 +3195,10 @@ details.card > summary,
   gap: var(--space-xs);
 }
 
-/* Marks where the scheduled half of the page begins. */
-.work-scheduled-head {
-  margin-top: var(--space-2xl);
-  padding-top: var(--space-lg);
-  border-top: 2px solid var(--wp-line-strong);
-}
-
-.work-scheduled-head .chev {
-  display: inline-block;
-  width: 0.5rem;
-  height: 0.5rem;
-  margin-right: var(--space-xs);
-  border-right: 2px solid var(--wp-muted);
-  border-bottom: 2px solid var(--wp-muted);
-  transform: rotate(45deg) translateY(-2px);
-}
+/* `.work-scheduled-head` and its chevron were deleted with the markup they styled. The machinery
+   no longer stacks under the board behind a heading — it has its own address. A rule left pointing
+   at markup that no longer exists is the same defect as markup pointing at a rule that does not,
+   and only one of the two directions is scanned. */
 
 /* Looking at a page, asked for from the card that needs it. */
 .work-card-look {
@@ -4931,4 +4919,341 @@ body {
 }
 .deck-home .deck-waiting-head {
   margin-top: var(--space-lg);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════
+ * WORK — THE THREE ADDRESSES (18 Sep 2026 redesign)
+ *
+ * WHAT WAS MEASURED, on the live page, against a database holding a realistic 200 days of output:
+ *
+ *   · the page ran to 5,101px on a laptop and 7,104px on a phone
+ *   · every `h3` and every `h4` inside it computed to 18px/700 — the page head, both band heads and
+ *     the deck head were one size, because `.home-section-head h2, h3, h4` is a single rule. Three
+ *     ranks of meaning, one rank of type. That is the operator's "the headings have no visual
+ *     weight", said about a second surface a day after Home was fixed.
+ *   · 496 finished cards competed with two that had stopped, in one scroll
+ *
+ * The heading scale below is therefore the point rather than decoration, and `.work-masthead h2` /
+ * `.work-band-head h3` are aimed at the tags this page actually emits — `validate:heading-scale`
+ * fails the build if either ever stops reaching one.
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════ */
+
+.work-surface { display: block; }
+
+/* ── RANK 0 · THE ANSWER ─────────────────────────────────────────────────────────────────────── */
+.work-masthead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
+  margin: 0 0 var(--space-lg);
+}
+
+.work-masthead-said {
+  /* A sentence, so it is measured rather than allowed to run the width of a laptop. */
+  min-width: 0;
+  flex: 1 1 22rem;
+  max-width: var(--measure, 72ch);
+}
+
+.work-masthead h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  overflow-wrap: anywhere;
+}
+
+/* The clear day is said in the good tone rather than in the alarm one. It is the answer she wants. */
+.work-masthead h2.is-clear { color: var(--wp-good); }
+
+.work-eyebrow {
+  margin: 0 0 var(--space-2xs);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--wp-muted);
+}
+
+.work-subline {
+  margin: var(--space-xs) 0 0;
+  font-size: var(--text-sm);
+}
+
+.work-masthead > .btn-strong { margin-left: auto; flex: 0 0 auto; }
+
+/* ── THE THREE ADDRESSES ─────────────────────────────────────────────────────────────────────── */
+.work-views {
+  display: flex;
+  gap: var(--space-2xs);
+  margin: 0 0 var(--space-xl);
+  /* The strip's own baseline, drawn as a shadow rather than a border, so the selected tab's 2px
+     underline sits ON it instead of below it. A negative margin would have done the same and is
+     off the 4pt scale, which `validate:design-tokens` is right to refuse. */
+  box-shadow: inset 0 -1px 0 var(--wp-line);
+  /* Three tabs never need to scroll, but a long label in a future fourth must not push the page
+     sideways — the overflow is the tab strip's, not the document's. */
+  overflow-x: auto;
+}
+
+/* TWO CLASSES DELIBERATELY. `.surface-body button` is (0,1,1) and outranks a lone
+   `.work-view-tab` (0,1,0), which is why these first rendered as the shell's boxed buttons rather
+   than as tabs. Specificity, not `!important`. */
+.work-views .work-view-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: var(--space-sm) var(--space-md);
+  /* Above the 44px thumb floor at every width; the tab strip is the one control on this page a
+     phone reader touches on every visit. */
+  min-height: var(--touch-min, 44px);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--wp-ink-2);
+}
+
+.work-views .work-view-tab:hover { color: var(--wp-ink); background: var(--wp-surface-2); }
+.work-views .work-view-tab.is-on { color: var(--wp-ink); border-bottom-color: var(--wp-orange); }
+
+/* Orange, once, on the tab that has something on it. The page's one accent belongs to the thing
+   that stops her. */
+.work-view-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wp-orange);
+  flex: 0 0 auto;
+}
+
+.work-view-n {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--wp-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.work-panel { display: block; }
+.work-region { margin: 0 0 var(--space-2xl); }
+
+/* ── RANK 1 · THE BANDS ──────────────────────────────────────────────────────────────────────── */
+/* The note STACKS under the heading rather than sitting beside it. Beside it, a 90-character
+   explanation competed with the two words that name the band, and on a phone it wrapped under the
+   count and read as part of the next thing. */
+.work-band-head {
+  margin: 0 0 var(--space-md);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px solid var(--wp-line);
+}
+
+.work-band-head h3,
+.work-band-head h4 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+}
+
+.work-band-note {
+  margin: var(--space-2xs) 0 0;
+  font-size: var(--text-sm);
+  color: var(--wp-muted);
+  max-width: var(--measure, 72ch);
+}
+
+/* ── IN FLIGHT · ONE LINE EACH ───────────────────────────────────────────────────────────────── */
+.work-card-list {
+  list-style: none;
+  margin: 0 0 var(--space-xl);
+  padding: 0;
+}
+
+/* A lean card keeps every control the full card has — it is the same component — and simply stops
+   spending a card's worth of height on work she is not being asked to touch. */
+.work-card-rows > li {
+  border: 0;
+  border-bottom: 1px solid var(--wp-line);
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.work-card-rows > li:last-child { border-bottom: 0; }
+
+.work-card-lean .work-card-summary { padding: var(--space-sm) 0; gap: var(--space-2xs); }
+.work-card-lean .work-card-title { font-weight: 600; }
+.work-card-lean.is-open { background: var(--wp-surface-2); }
+
+/* A lean card that has stopped is not lean any more: it has been promoted out of this band, and if
+   it is still here because the board has not reloaded yet, it still reads as stopped. */
+.work-card-rows > li:has(.badge-bad) {
+  border-left: 3px solid var(--wp-danger);
+  padding-left: var(--space-sm);
+}
+
+/* ── THE CLEAR DESK ──────────────────────────────────────────────────────────────────────────── */
+.work-clear {
+  margin: 0 0 var(--space-2xl);
+  padding: var(--space-xl);
+  border: 1px solid var(--wp-good-line);
+  border-radius: var(--radius-md);
+  background: var(--wp-good-tint);
+}
+
+.work-clear-line {
+  margin: 0 0 var(--space-xs);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--wp-good);
+}
+
+/* ── EVERYTHING ELSE ─────────────────────────────────────────────────────────────────────────── */
+.work-elsewhere-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
+  gap: var(--space-md);
+}
+
+.work-tile { display: flex; flex-direction: column; gap: var(--space-sm); align-items: flex-start; }
+.work-tile-name { margin: 0; font-weight: 700; font-size: var(--text-md); }
+.work-tile p.small { margin: 0; color: var(--wp-ink-2); }
+
+/* ── THE RECORD ──────────────────────────────────────────────────────────────────────────────── */
+.record-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-md);
+  margin: 0 0 var(--space-md);
+}
+
+.record-field { display: flex; flex-direction: column; gap: var(--space-2xs); min-width: 0; }
+.record-field-grow { flex: 1 1 18rem; }
+.record-field input,
+.record-field select {
+  min-height: var(--touch-min, 44px);
+  max-width: 100%;
+}
+
+.record-states { display: flex; gap: var(--space-2xs); flex-wrap: wrap; }
+
+.record-state {
+  min-height: var(--touch-min, 44px);
+  padding: 0 var(--space-md);
+  border: 1px solid var(--wp-line-control);
+  border-radius: var(--radius-pill);
+  background: var(--wp-surface);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.record-state:hover { background: var(--wp-surface-2); }
+.record-state.is-on { background: var(--wp-tint); border-color: var(--wp-orange); color: var(--wp-ink); }
+
+/* The denominator, stated on every view. The old page printed "Finished 496" over fifty rows. */
+.record-summary { margin: 0 0 var(--space-lg); }
+
+.record-band { margin: 0 0 var(--space-xl); }
+
+/* The spine. A month is a heading a reader aims at, not a row in the list. */
+.record-band-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+  margin: 0 0 var(--space-2xs);
+  background: var(--wp-paper);
+  border-bottom: 1px solid var(--wp-line-strong);
+}
+
+.record-band-head h4 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+}
+
+.record-rows { list-style: none; margin: 0; padding: 0; }
+
+.record-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--wp-line);
+  min-width: 0;
+}
+
+.record-when {
+  flex: 0 0 4.5rem;
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+  font-variant-numeric: tabular-nums;
+  padding-top: var(--space-3xs);
+}
+
+.record-what { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2xs); }
+.record-title { font-size: var(--text-base); font-weight: 600; overflow-wrap: anywhere; }
+
+.record-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-sm);
+  min-width: 0;
+}
+
+.record-result { overflow-wrap: anywhere; }
+
+/* THREE IDENTICAL ROWS READ AS THREE ACHIEVEMENTS. One row and a count reads as what happened. */
+.record-runs {
+  align-self: flex-start;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--wp-warn);
+  background: var(--wp-warn-tint);
+  border: 1px solid var(--wp-warn-line);
+  border-radius: var(--radius-pill);
+  padding: var(--space-3xs) var(--space-sm);
+}
+
+.record-doors { flex: 0 0 auto; display: flex; gap: var(--space-xs); flex-wrap: wrap; }
+.record-doors button { min-height: var(--touch-min, 44px); }
+
+.record-more {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  padding: var(--space-md) 0;
+}
+
+.record-more button { min-height: var(--touch-min, 44px); }
+
+/* ── PHONE ───────────────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 40rem) {
+  .work-masthead > .btn-strong { margin-left: 0; }
+  /* The date column would take a quarter of a 320px screen and the title is what she is scanning. */
+  .record-row { flex-wrap: wrap; }
+  .record-when { flex: 0 0 auto; order: 2; }
+  .record-what { flex: 1 1 100%; order: 1; }
+  .record-doors { order: 3; margin-left: auto; }
+  .record-field-grow { flex: 1 1 100%; }
+  .record-field select { width: 100%; }
 }
