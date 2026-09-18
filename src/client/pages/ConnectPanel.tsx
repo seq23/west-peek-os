@@ -224,7 +224,18 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
    * aria-hidden and empty: it reserves height and says nothing, because announcing "loading" for a
    * status strip nobody asked for is noise in a screen reader.
    */
-  if (!d) return <div className="connect-strip-reserve" data-testid="connect-panel-loading" aria-hidden="true" />;
+  if (!d) {
+    /* The placeholder MIRRORS the real strip rather than guessing at its height: same box, same
+       badge, same one line of muted text. A hand-written `min-height: 38px` got within 3px at
+       1280 and would have drifted again the first time the strip wrapped to two lines on a phone.
+       `visibility: hidden` keeps the box and paints nothing. */
+    return (
+      <div className="card connect-strip connect-strip-reserve" data-testid="connect-panel-loading" aria-hidden="true">
+        <span className="badge badge-gate">setup</span>
+        <span className="muted small">checking what is connected</span>
+      </div>
+    );
+  }
 
   const connected = d.connections.filter((c) => c.status === "CONNECTED");
   const broken = d.connections.filter((c) => c.status === "EXPIRED" || c.status === "FAILED" || c.status === "REVOKED");

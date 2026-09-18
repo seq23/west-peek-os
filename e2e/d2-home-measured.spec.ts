@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { gotoSurface } from "./support/nav";
 
 /**
  * HOME, MEASURED RATHER THAN ASSERTED.
@@ -33,7 +34,9 @@ async function signIn(page: Page): Promise<void> {
 }
 
 async function openHome(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Home", exact: true }).click();
+  /* Below 900px the rail is a sheet behind the top bar; `gotoSurface` walks the same path an
+     operator does at whatever width the test is holding. */
+  await gotoSurface(page, "Home");
   await expect(page.getByTestId("home-page")).toBeVisible();
   // The one late insert on this page. Waiting for it is what makes the CLS assertion meaningful.
   await page.waitForTimeout(1500);
@@ -115,6 +118,7 @@ test("Home holds its measured numbers: contrast, tap targets, overflow, unwrappe
     const overflow = await page.evaluate(
       (w) => {
         const root = document.querySelector('[data-testid="home-page"]');
+        if (!root) return ["home-page did not render"];
         return [...root.querySelectorAll("*")]
           .filter((el) => {
             const r = el.getBoundingClientRect();
@@ -171,7 +175,7 @@ test("Home holds its measured numbers: contrast, tap targets, overflow, unwrappe
 test("Home does not move under the reader when the setup strip arrives", async ({ page }) => {
   await signIn(page);
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await gotoSurface(page, "Home");
   await expect(page.getByTestId("home-page")).toBeVisible();
 
   const answer = page.getByTestId("home-answer");

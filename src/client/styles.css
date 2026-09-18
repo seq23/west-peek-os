@@ -2901,18 +2901,19 @@ details h3 {
   margin-bottom: var(--space-lg);
   background: var(--wp-neutral-tint);
   border: 1px solid var(--wp-line);
-  /* RESERVED, so its late arrival cannot move the page. See the comment in ConnectPanel.tsx: this
-     panel is Home's first child and `/api/me/connections` answers at ~2.5s, which made the whole
-     surface jump down one strip's height while it was being read. 38px is this strip's own closed
-     height (one line of --text-xs plus its padding and border), measured, not guessed. */
-  min-height: 38px;
-  box-sizing: border-box;
 }
-/* The empty stand-in that holds that ground until the call lands. Same box, no paint. */
+/* THE STAND-IN THAT HOLDS THE GROUND until `/api/me/connections` answers at ~2.5s. This panel is
+   Home's first child, so returning nothing until then dropped the whole page by one strip's height
+   at the moment a partner had started reading — Home's one measurable layout shift.
+
+   It carries `.connect-strip` itself and the same two children the real summary has, so the box is
+   the same box at every width including the one where it wraps. Hidden rather than sized: a
+   hand-written height got within 3px at 1280 and would have drifted at the first reflow. */
 .connect-strip-reserve {
-  min-height: 38px;
-  margin-bottom: var(--space-lg);
-  box-sizing: border-box;
+  visibility: hidden;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
 }
 
 .connect-strip > summary {
