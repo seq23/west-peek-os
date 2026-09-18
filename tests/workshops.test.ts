@@ -296,10 +296,33 @@ describe("the request door", () => {
   });
 
   it("a Workshop request for an OPEN month is built to the topic typed; 'let Parker think of one' works for a Workshop too", async () => {
-    const res = await handleGeneratePacket(ctx("POST", { kind: "WORKSHOP", audience: "how to price a service business", month: "2026-12" }));
+    /*
+     * `intent: "NOW"` IS NOW REQUIRED HERE, AND THAT IS THE POINT (0194, 18 Sep 2026).
+     *
+     * 2026-12 is beyond the month being delivered, so this ask is genuinely two different asks —
+     * "build a Workshop about pricing now" and "when you do December, make it about pricing" — and
+     * the door refuses to pick. This test says the first one, which is what it always meant; the
+     * assertion immediately below pins that saying NEITHER is refused rather than defaulted, which
+     * is the behaviour the old version of this test was silently relying on.
+     */
+    const countDecember = async (): Promise<number> =>
+      (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM evt_room_packet WHERE proposed_for_month = '2026-12'").first<{ n: number }>())?.n ?? -1;
+    const before = await countDecember();
+    const undeclared = await handleGeneratePacket(ctx("POST", { kind: "WORKSHOP", audience: "how to price a service business", month: "2026-12" }));
+    expect(undeclared.status).toBe(400);
+    expect(((await undeclared.json()) as { error: string }).error).toBe("intent_required");
+    // A REFUSAL CREATES NOTHING. The whole point is that the ambiguous ask does not quietly build.
+    expect(await countDecember()).toBe(before);
+
+    const res = await handleGeneratePacket(ctx("POST", { kind: "WORKSHOP", audience: "how to price a service business", month: "2026-12", intent: "NOW" }));
     const body = (await res.json()) as { packet: PacketRow };
     expect(body.packet.title).toBe("Workshop requested: how to price a service business");
     expect(body.packet.kind).toBe("WORKSHOP");
+    /*
+     * NO INTENT NEEDED ON THIS ONE, DELIBERATELY. "Parker, think of one" carries no words to steer
+     * WITH, so there is nothing that could have been held for the month — an empty-bodied ask is a
+     * one-off by construction, and the door must not start asking a question with one answer.
+     */
     const own = await handleGeneratePacket(ctx("POST", { kind: "WORKSHOP", month: "2027-02" }));
     const ownBody = (await own.json()) as { packet: PacketRow };
     expect(ownBody.packet.title).toBe("Parker's Workshop for 2027-02");

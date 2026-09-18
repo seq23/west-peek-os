@@ -1284,7 +1284,7 @@ function SteerBoard(props: { steers: SteerRow[]; onWithdraw: (id: string) => Pro
         Nothing here is being built now — that is the point. Each one reaches Parker when he builds that month&apos;s
         packet, on the 1st of the month before it. Change your mind and take it back while it is still waiting.
       </p>
-      <ul className="plain">
+      <ul>
         {live.map((s) => (
           <li key={s.id} data-testid={`steer-${s.id}`}>
             <p>
