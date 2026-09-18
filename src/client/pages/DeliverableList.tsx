@@ -3,6 +3,7 @@ import { api, useApi } from "../lib/api";
 import { kindDef } from "@shared/deliverables/deliverable";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { HireCandidatePanel } from "./HireCandidatePanel";
+import { DeliverableDocument } from "./DeliverableDocument";
 
 /**
  * Things the firm has handed you.
@@ -199,7 +200,7 @@ export function DeliverableList({
               </button>
               {!isOpen && <p className="muted small">{def?.blurb}</p>}
 
-              {isOpen && <pre className="deliverable-body">{d.body}</pre>}
+              {isOpen && <DeliverableDocument body={d.body} testId={`deliverable-doc-${d.id}`} />}
               {/* Walker's hire search carries the candidates behind it, each with Contacted / Pass,
                   so Scooter answers the note where he reads it and next week's leaves them out. */}
               {isOpen && d.kind === "productions_hire_search" && <HireCandidatePanel deliverableId={d.id} />}
