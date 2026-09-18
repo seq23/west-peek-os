@@ -11,6 +11,7 @@ import { evaluateCompanyAlerts } from "./portfolio";
 import { runAi } from "../ai/runAi";
 import { privacyLabelSchema } from "../../shared/privacy";
 import { fetchFeed } from "../effects/feedClient";
+import { nextInZone, supportsTimeZone } from "../../shared/time/zonedClock";
 
 /**
  * Governed orchestration + scheduled AI employees (P19; GAP-21, GAP-22).
@@ -61,6 +62,15 @@ export interface ScheduledJobRow {
   schedule_kind: "INTERVAL" | "DAILY_AT" | "WEEKLY" | "MONTHLY" | "ON_REQUEST";
   interval_minutes: number | null;
   daily_at_utc: string | null;
+  /**
+   * The zone `daily_at_utc` is a wall clock IN, when it is not UTC (0193).
+   *
+   * NULL keeps the original meaning exactly — the hour is UTC — so every job written before this
+   * column existed is untouched. Set it, and the hour becomes the operator's own clock and survives
+   * the clocks changing, which a fixed UTC hour cannot: America/Chicago is UTC-5 for eight months of
+   * the year and UTC-6 for four, so one hour written for summer is an hour wrong all winter.
+   */
+  daily_at_tz: string | null;
   /** WEEKLY only (0172). 0 = Sunday … 6 = Saturday, matching `Date.getUTCDay()`. */
   day_of_week: number | null;
   day_of_month: number | null;
@@ -88,7 +98,11 @@ export interface ScheduledJobRow {
  * excludes ON_REQUEST explicitly, because NULL otherwise reads as "due now" (see runDueJobs).
  */
 export function computeNextRun(
-  job: Pick<ScheduledJobRow, "schedule_kind" | "interval_minutes" | "daily_at_utc"> & { day_of_month?: number | null; day_of_week?: number | null },
+  job: Pick<ScheduledJobRow, "schedule_kind" | "interval_minutes" | "daily_at_utc"> & {
+    day_of_month?: number | null;
+    day_of_week?: number | null;
+    daily_at_tz?: string | null;
+  },
   from: Date,
 ): string | null {
   if (job.schedule_kind === "ON_REQUEST") return null;
@@ -97,6 +111,30 @@ export function computeNextRun(
     return new Date(from.getTime() + minutes * 60_000).toISOString();
   }
   const [hh, mm] = (job.daily_at_utc ?? "06:00").split(":").map((n) => Number(n));
+  /*
+   * A JOB PINNED TO A PERSON'S CLOCK IS COMPUTED ON THAT CLOCK (0193).
+   *
+   * The operator asked for the deck lane "once per day … maybe like after 11am". Her 11am is 16:00Z
+   * from March to November and 17:00Z from November to March, so a job written as a UTC hour honours
+   * her sentence for part of the year and silently drifts an hour off it for the rest. With a zone
+   * stored, the offset is taken from the platform's timezone database at the instant in question and
+   * the clocks changing is not an event this scheduler has to know about.
+   *
+   * A ZONE THE RUNTIME CANNOT RESOLVE FALLS BACK TO UTC RATHER THAN THROWING: one bad zone must not
+   * take the whole tick down with it. `validate:deck-cadence` is what keeps a real row from being
+   * written against a zone the runtime cannot read — a wrong hour discovered at build time instead
+   * of an unread deck discovered by a partner.
+   */
+  const tz = job.daily_at_tz ?? null;
+  if (tz && supportsTimeZone(tz)) {
+    const shape =
+      job.schedule_kind === "WEEKLY"
+        ? ({ kind: "WEEKLY", dayOfWeek: job.day_of_week ?? 1 } as const)
+        : job.schedule_kind === "MONTHLY"
+          ? ({ kind: "MONTHLY", dayOfMonth: job.day_of_month ?? 1 } as const)
+          : ({ kind: "DAILY" } as const);
+    return nextInZone(tz, shape, hh ?? 6, mm ?? 0, from).toISOString();
+  }
   if (job.schedule_kind === "WEEKLY") {
     // The next day_of_week at hh:mm — today if it is that day and the time has not passed. Not an
     // INTERVAL of 10080: an interval counts from whenever it last ran (a manual run would move
@@ -445,7 +483,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
             // A deck waiting on a company nobody has opened yet is SAID. Reporting "no decks
             // waiting" while decks wait is a status line that is true of the query and false about
             // the firm.
-            : `${out.read} read${out.failed ? ` · ${out.failed} could not be read` : ""}${out.skipped ? ` · ${out.skipped} waiting for a company to be opened` : ""}`,
+            : `${out.read} read${out.failed ? ` · ${out.failed} could not be read` : ""}${out.skipped ? ` · ${out.skipped} waiting for a company to be opened` : ""}${out.deferred ? ` · ${out.deferred} left for the next run` : ""}`,
       artifacts,
     };
   }
@@ -1151,6 +1189,13 @@ const jobSchema = z.object({
   schedule_kind: z.enum(["INTERVAL", "DAILY_AT", "WEEKLY", "MONTHLY", "ON_REQUEST"]),
   interval_minutes: z.number().int().positive().optional(),
   daily_at_utc: z.string().trim().regex(/^\d{2}:\d{2}$/).optional(),
+  /*
+   * The zone that hour is read in (0193). Omitted means UTC, which is what every job written before
+   * 0193 meant. Validated against the runtime's own timezone database rather than a regex: a zone
+   * the platform cannot resolve would be accepted, stored, and then silently scheduled in UTC — the
+   * drift this column exists to remove, reintroduced by the door that writes it.
+   */
+  daily_at_tz: z.string().trim().min(1).refine(supportsTimeZone, "not a timezone this runtime knows").optional(),
   day_of_week: z.number().int().min(0).max(6).optional(),
   day_of_month: z.number().int().min(1).max(28).optional(),
   target_kind: z.enum(["SYSTEM", "MACHINE", "EMPLOYEE"]),
@@ -1201,8 +1246,8 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
     await ctx.env.WP_OS_DB.prepare(
       `INSERT INTO scheduled_job
          (id, job_key, name, kind, schedule_kind, interval_minutes, daily_at_utc, day_of_week, day_of_month, target_kind, target_id,
-          capability_key, task_class, budget_usd, data_class, payload_json, max_attempts, status, pause_reason, next_run_at, created_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?19, ?18, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'PAUSED', ?16, NULL, ?17)`,
+          capability_key, task_class, budget_usd, data_class, payload_json, max_attempts, status, pause_reason, next_run_at, created_by, daily_at_tz)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?19, ?18, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'PAUSED', ?16, NULL, ?17, ?20)`,
     )
       .bind(
         id,
@@ -1224,6 +1269,7 @@ export async function handleCreateJob(ctx: RouteContext): Promise<Response> {
         ctx.identity!.id,
         b.day_of_month ?? null,
         b.day_of_week ?? null,
+        b.daily_at_tz ?? null,
       )
       .run();
   } catch (err) {
