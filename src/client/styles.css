@@ -3416,10 +3416,10 @@ details.card > summary,
    2.5.8 floor and well under a thumb. A disclosure is a control; it gets a control's target. */
 .work-legend-wrap > summary {
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--touch-min);
-  padding: var(--space-2xs) 0;
+  /* PADDING RATHER THAN A FLEX BOX. `display: inline-flex` reached 44px and silently removed the
+     disclosure triangle — `summary` is `display: list-item` by default and the marker goes with it.
+     A control that no longer looks like one is a worse bug than the one being fixed. */
+  padding: var(--space-lg) 0;
 }
 .work-legend-wrap > .work-legend { margin-top: var(--space-sm); }
 

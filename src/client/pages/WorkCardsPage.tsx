@@ -715,7 +715,24 @@ export function WorkCardsPage({
         </ul>
       </details>
 
-      {live.length === 0 && decksWaiting.length === 0 && !adding && (
+      {/*
+        WHEN THE DESK IS CLEAR. This is the state on most days and it is designed rather than left
+        blank — a page that empties out reads as broken, and "nothing is waiting" is the single most
+        valuable thing this surface can tell her. It says what would have to happen for something to
+        arrive here, so she can believe the silence.
+      */}
+      {answer.clear && bands.length === 0 && decksWaiting.length === 0 && (
+        <div className="work-clear" data-testid="work-desk-clear">
+          <p className="work-clear-line">Nothing is waiting on you.</p>
+          <p className="muted small">
+            Something arrives here when an employee finishes work that needs your signature, or stops on a
+            question only you can answer. The count beside <strong>Desk</strong> above turns orange the moment
+            it does.
+          </p>
+        </div>
+      )}
+
+      {live.length === 0 && decksWaiting.length === 0 && runs.length === 0 && !adding && (
         <div className="card" data-testid="work-cards-empty">
           <h4>Nothing is open</h4>
           <p className="small">
@@ -1398,23 +1415,6 @@ export function WorkCardsPage({
             ))}
           </ul>
         </details>
-      )}
-
-      {/*
-        WHEN THE DESK IS CLEAR. This is the state on most days and it is designed rather than left
-        blank — a page that empties out reads as broken, and "nothing is waiting" is the single most
-        valuable thing this surface can tell her. It says what would have to happen for something to
-        arrive here, so she can believe the silence.
-      */}
-      {answer.clear && bands.length === 0 && decksWaiting.length === 0 && (
-        <div className="work-clear" data-testid="work-desk-clear">
-          <p className="work-clear-line">Nothing is waiting on you.</p>
-          <p className="muted small">
-            Something arrives here when an employee finishes work that needs your signature, or stops on a
-            question only you can answer. The count beside <strong>Desk</strong> above turns orange the moment
-            it does.
-          </p>
-        </div>
       )}
 
       {/*
