@@ -634,6 +634,44 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
     looksByCard.get(key)!.push(l);
   }
 
+  /*
+   * ── THE TRAIL: WHAT THE CLASSIFICATION ACTUALLY CAUSED ────────────────────────────────────────
+   *
+   * "they should include sensitivity public or private and audience: internal or external ON THE
+   * CARD so we can have a trail of how it's working" — the owner, 17 Sep 2026.
+   *
+   * A label on its own answers "how was this classified". The question worth answering is "DID IT
+   * GO WHERE I EXPECTED", and that needs the label and the lane side by side — otherwise she is
+   * correlating the Work page against the cost centre by hand, which is how nobody checks.
+   *
+   * READ FROM `ai_run`, WHICH IS IMMUTABLE. That is what makes this a trail rather than a caption:
+   * recategorising a card tomorrow changes where its NEXT run goes and cannot touch the record of
+   * where the last one went. A label that could rewrite history would be worse than no label.
+   */
+  const laneByCard = await ctx.env.WP_OS_DB.prepare(
+    `SELECT a.work_card_id, p.provider_key, r.model, r.status, r.actual_usage_json, r.created_at
+       FROM ai_run_attribution a
+       JOIN ai_run r ON r.id = a.ai_run_id
+       LEFT JOIN provider_registry p ON p.id = r.provider_id
+      WHERE a.work_card_id IS NOT NULL
+        AND r.created_at = (
+          SELECT MAX(r2.created_at) FROM ai_run r2
+            JOIN ai_run_attribution a2 ON a2.ai_run_id = r2.id
+           WHERE a2.work_card_id = a.work_card_id
+        )`,
+  ).all<{ work_card_id: string; provider_key: string | null; model: string | null; status: string; actual_usage_json: string | null; created_at: string }>();
+
+  const lastRunByCard = new Map<string, { provider_key: string | null; model: string | null; status: string; cost_usd: number | null; at: string }>();
+  for (const r of laneByCard.results ?? []) {
+    let cost: number | null = null;
+    try {
+      cost = r.actual_usage_json ? ((JSON.parse(r.actual_usage_json) as { cost_usd?: number }).cost_usd ?? null) : null;
+    } catch {
+      cost = null;
+    }
+    lastRunByCard.set(r.work_card_id, { provider_key: r.provider_key, model: r.model, status: r.status, cost_usd: cost, at: r.created_at });
+  }
+
   const employed = await ctx.env.WP_OS_DB.prepare(
     "SELECT id, name, role FROM ai_employee WHERE status = 'ACTIVE' ORDER BY name",
   ).all<{ id: string; name: string; role: string }>();
@@ -646,6 +684,8 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
     cards: (cards.results ?? []).map((c) => ({
       ...c,
       looks: looksByCard.get(String(c.id)) ?? [],
+      /** Where the card's most recent run actually went. Immutable; a relabel cannot rewrite it. */
+      last_run: lastRunByCard.get(String(c.id)) ?? null,
       block: blockOf(c as never),
     })),
     recent_runs: runs.results ?? [],

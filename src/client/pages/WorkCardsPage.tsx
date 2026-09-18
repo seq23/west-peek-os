@@ -53,6 +53,11 @@ interface WorkCardRow {
   model_access?: string | null;
   /** INTERNAL | EXTERNAL — whether it previews before it leaves. Not a model decision. */
   audience?: string | null;
+  /**
+   * WHERE THE LAST RUN ACTUALLY WENT. Read from `ai_run`, which is immutable, so recategorising a
+   * card changes where its NEXT run goes and cannot touch the record of where the last one went.
+   */
+  last_run?: { provider_key: string | null; model: string | null; status: string; cost_usd: number | null; at: string } | null;
   kind?: string | null;
   work_attempts?: number;
   /** 0173 — present only while the card is blocked: the four sentences and the doors. */
@@ -624,26 +629,54 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         <span className="muted small">queued — picked up within 5 min</span>
                       )}
                       {c.priority !== "NORMAL" && <span className="badge badge-gate">{c.priority.toLowerCase()}</span>}
-                      {/* THE LABEL IS VISIBLE OR IT CANNOT BE CORRECTED. Only the two EXCEPTIONS are
-                          badged: the normal card is Internal and Public model approved, and a badge
-                          on every card for the normal case is wallpaper nobody reads. What shows is
-                          the card that is different, which is the one worth a second look. */}
-                      {c.model_access === "PRIVATE_MODEL_ONLY" && (
+                      {/*
+                          BOTH LABELS, ALWAYS, AND THE LANE BESIDE THEM.
+
+                          "they should include sensitivity public or private and audience: internal
+                          or external ON THE CARD so we can have a trail of how it's working."
+
+                          Badging only the exceptions was the cheaper design and it answers the
+                          wrong question. A trail has to be readable on the ordinary card too —
+                          otherwise "did this go where I expected?" is unanswerable for exactly the
+                          cards that make up the bill. So both labels show on every card, and the
+                          model that actually ran shows next to them.
+                      */}
+                      <span
+                        className={c.model_access === "PRIVATE_MODEL_ONLY" ? "badge badge-gate" : "badge"}
+                        data-testid={`work-card-model-access-${c.id}`}
+                        title={
+                          c.model_access === "PRIVATE_MODEL_ONLY"
+                            ? "LP names, deal terms, fund figures or diligence material — this stays on a model whose terms forbid training on it"
+                            : "No LP names or deal terms, so a free reasoning model may do it. This is the normal case."
+                        }
+                      >
+                        {c.model_access === "PRIVATE_MODEL_ONLY" ? "private model only" : "public model approved"}
+                      </span>
+                      <span
+                        className="badge"
+                        data-testid={`work-card-audience-${c.id}`}
+                        title={
+                          c.audience === "EXTERNAL"
+                            ? "Goes to somebody other than Sequoia or Scooter, so it previews to Sequoia before it leaves. This says nothing about which model runs it."
+                            : "Goes to Sequoia or Scooter. This says nothing about which model runs it."
+                        }
+                      >
+                        {c.audience === "EXTERNAL" ? "external" : "internal"}
+                      </span>
+                      {/* WHAT THE LABEL ACTUALLY CAUSED. A free lane is named as free, in words,
+                          because ":free" on the end of a model id is not something anybody should
+                          have to know to read their own cost. */}
+                      {c.last_run?.model && (
                         <span
-                          className="badge badge-gate"
-                          data-testid={`work-card-private-model-${c.id}`}
-                          title="LP names, deal terms, fund figures or diligence material — this stays on a model whose terms forbid training on it"
+                          className="muted small"
+                          data-testid={`work-card-lane-${c.id}`}
+                          title={`Last run ${new Date(c.last_run.at).toLocaleString()} on ${c.last_run.provider_key ?? "an unnamed provider"}/${c.last_run.model}`}
                         >
-                          private model only
-                        </span>
-                      )}
-                      {c.audience === "EXTERNAL" && (
-                        <span
-                          className="badge"
-                          data-testid={`work-card-external-${c.id}`}
-                          title="Goes to somebody other than Sequoia or Scooter, so it previews to Sequoia before it leaves. This says nothing about which model runs it."
-                        >
-                          external
+                          ran on{" "}
+                          {c.last_run.model.includes(":free") || c.last_run.provider_key?.endsWith("_free")
+                            ? "a free model"
+                            : c.last_run.model}
+                          {typeof c.last_run.cost_usd === "number" && (c.last_run.cost_usd === 0 ? " — $0" : ` — $${c.last_run.cost_usd.toFixed(4)}`)}
                         </span>
                       )}
                       {/* Two facts survive the collapse because they change what you do next. */}
