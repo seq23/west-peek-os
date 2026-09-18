@@ -338,58 +338,151 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
   });
 
   /*
-   * ── THE DECK LANE, AND WHETHER ANYTHING IS COMING DOWN IT ──
+   * ── THE DECK LANE: CAN IT RECEIVE A DECK, NOT HAS IT RECENTLY ──
    *
-   * Operator, 9 Sep 2026: "i noticed i had to tell Wyatt to 'start' inputting the decks that came in
-   * — this should be automatic not something he asks me if he can do."
+   * Operator, 18 Sep 2026, reading her own Home: "decks arriving is not broken. we just dont get
+   * decks every day. he should not check every 15 min."
    *
-   * WHAT WAS ACTUALLY WRONG, which is not what it looked like. Wyatt does not ask. `deck_reading` is
-   * ACTIVE, fires every fifteen minutes, needs no approval and has no gate — and in the seven days
-   * to 9 Sep it succeeded 310 times, every single run reporting "no decks waiting". Two decks have
-   * ever been enqueued and both were read on 23 August. The lane has had NO ARRIVALS IN SIXTEEN
-   * DAYS and 310 green ticks said so in a way nobody could hear.
+   * WHAT THIS CHECK USED TO ASSERT, AND WHY IT WAS WRONG. It measured the age of the last arrival
+   * and went DEGRADED past seven days. On 18 Sep that rendered as "Decks arriving · Needs a look ·
+   * nothing has arrived for 25 days", beside a check that was genuinely failing. Both wore the same
+   * amber. The quiet was TRUE and it was not a fault: this firm is sent a deck a few times a month,
+   * so the check fired on the ordinary condition of the business it was watching.
    *
-   * That is Rule 0 exactly: a stage exiting 0 having done nothing, with no named stop. And it is why
-   * a human became the trigger — not because the employee waits for permission, but because an
-   * empty lane and a working lane were indistinguishable, so the only way to discover it was for a
-   * partner to go and ask.
+   * A check that fires on normal is worse than no check. It does not merely fail to inform; it
+   * spends the reader's attention on nothing and teaches her that this board can be skimmed — and
+   * the next light she skims is the one that meant something. The earlier note in this file argued
+   * DEGRADED-not-DOWN on exactly that logic and then made the same mistake one rung down.
    *
-   * SO THE QUIET IS REPORTED. An empty queue right after a read is health; an empty queue that has
-   * been empty for a fortnight is a lane to look at. DEGRADED rather than DOWN: nothing is broken,
-   * decks may genuinely not have been sent, and a red light for a quiet inbox would train two
-   * partners to ignore red lights. It carries the real reading so the judgement stays with them.
+   * RAISING THE THRESHOLD WOULD BE THE SAME BUG WITH A LATER FUSE. Sixty days instead of twenty-five
+   * still asserts that silence is evidence, and silence is evidence of nothing: a quiet quarter and
+   * a mailbox that stopped delivering look identical from the arrivals table, which is precisely why
+   * counting days cannot tell them apart.
+   *
+   * SO IT ASKS THE ANSWERABLE QUESTION: WOULD A DECK ARRIVING TODAY BE READ? Five things have to be
+   * true, and each is a fact about the machinery rather than about the founders who did or did not
+   * send anything — somewhere to put the bytes, a job that exists, a job that is switched on, a job
+   * that is actually running to its own schedule, and nothing sitting unread past that schedule.
+   * Reaching the lane and finding it empty is the lane WORKING, and it reads as working.
+   *
+   * THE QUIET IS STILL REPORTED, in the reading, where it belongs — "nothing to read since 23 Aug"
+   * is worth knowing and is not worth a light. `daysQuiet` below is deliberately kept out of every
+   * state expression, and `npm run validate:quiet-is-not-a-fault` fails the build if it, or anything
+   * else measuring a silence, ever appears in one again.
    */
-  const decks = await one<{ waiting: number; last_arrival: string | null; ever: number }>(
+  const decks = await one<{ waiting: number; waiting_for_company: number; oldest_readable: string | null; last_arrival: string | null; ever: number }>(
     "pending_deck",
-    `SELECT SUM(state = 'PENDING') AS waiting, MAX(created_at) AS last_arrival, COUNT(*) AS ever
+    `SELECT SUM(state = 'PENDING') AS waiting,
+            SUM(state = 'PENDING' AND company_id IS NULL) AS waiting_for_company,
+            MIN(CASE WHEN state = 'PENDING' AND company_id IS NOT NULL THEN created_at END) AS oldest_readable,
+            MAX(created_at) AS last_arrival,
+            COUNT(*) AS ever
        FROM pending_deck`,
   );
-  const QUIET_AFTER_DAYS = 7;
-  const waiting = decks?.waiting ?? 0;
+  const deckJob = await one<{
+    status: string; schedule_kind: string; interval_minutes: number | null; daily_at_utc: string | null;
+    daily_at_tz: string | null; next_run_at: string | null; last_run_at: string | null; last_status: string | null;
+  }>(
+    "scheduled_job",
+    `SELECT j.status, j.schedule_kind, j.interval_minutes, j.daily_at_utc, j.daily_at_tz, j.next_run_at, j.last_run_at,
+            (SELECT status FROM job_run r WHERE r.job_id = j.id ORDER BY started_at DESC LIMIT 1) AS last_status
+       FROM scheduled_job j WHERE j.job_key = 'deck_reading'`,
+  );
+
+  /*
+   * THE LANE'S OWN CADENCE, READ OFF THE ROW RATHER THAN TYPED HERE. A constant would have gone
+   * stale the moment 0193 moved this job from fifteen minutes to once a day — the board and the
+   * schedule disagreeing about what "late" means is how a check ends up measuring its own memory.
+   */
+  const cadenceMinutes =
+    !deckJob ? null
+    : deckJob.schedule_kind === "INTERVAL" ? (deckJob.interval_minutes ?? 60)
+    : deckJob.schedule_kind === "DAILY_AT" ? 1440
+    : deckJob.schedule_kind === "WEEKLY" ? 10_080
+    : deckJob.schedule_kind === "MONTHLY" ? 43_200
+    : null;
+  // One missed run is late; a quarter of a cycle of slack keeps a tick that fired a few minutes
+  // after its minute from reading as a fault.
+  const graceMs = cadenceMinutes === null ? null : (cadenceMinutes + Math.max(60, cadenceMinutes * 0.25)) * 60_000;
+  const sinceLastRunMs = deckJob?.last_run_at ? Date.now() - new Date(deckJob.last_run_at).getTime() : null;
+  const overdueMs = deckJob?.next_run_at ? Date.now() - new Date(deckJob.next_run_at).getTime() : null;
+
+  const cadenceWords =
+    !deckJob ? "no schedule"
+    : deckJob.schedule_kind === "DAILY_AT"
+      ? `once a day at ${deckJob.daily_at_utc}${deckJob.daily_at_tz ? ` ${deckJob.daily_at_tz}` : " UTC"}`
+    : deckJob.schedule_kind === "INTERVAL" ? `every ${deckJob.interval_minutes} minutes`
+    : deckJob.schedule_kind === "ON_REQUEST" ? "only when asked"
+    : deckJob.schedule_kind.toLowerCase();
+
+  const noStore = !env.WP_OS_DOCUMENTS;
+  const jobMissing = !deckJob;
+  const jobOff = deckJob !== null && deckJob.status !== "ACTIVE";
+  const lastRunBroke = deckJob?.last_status === "FAILED" || deckJob?.last_status === "DEAD_LETTER";
+  // Never run AND already past its own deadline: scheduled, due, and not happening.
+  const neverRanAndOverdue = !deckJob?.last_run_at && overdueMs !== null && graceMs !== null && overdueMs > graceMs;
+  const notRunning = sinceLastRunMs !== null && graceMs !== null && sinceLastRunMs > graceMs;
+  /*
+   * A DECK THAT ARRIVED AND WAS NOT READ IS THE REAL VERSION OF THIS ALARM. It has a company to
+   * fill, so nothing is waiting on a person, and it has sat there longer than the lane's own
+   * cadence. That is the failure the old check was pretending to look for by counting quiet days,
+   * and unlike a quiet week it cannot happen while the pipeline is healthy.
+   */
+  const unreadMs = decks?.oldest_readable ? Date.now() - new Date(decks.oldest_readable).getTime() : null;
+  const stuckDeck = unreadMs !== null && graceMs !== null && unreadMs > graceMs;
+  // Waiting on a PERSON, not on the machinery: the analyst has to open the company first. A real
+  // thing to do, so amber — never a fault, and never confused with a lane that cannot run.
+  const awaitingAnalyst = (decks?.waiting_for_company ?? 0) > 0;
+
   const daysQuiet = decks?.last_arrival
     ? Math.floor((Date.now() - new Date(decks.last_arrival).getTime()) / 86_400_000)
     : null;
+  const quietWords =
+    decks?.last_arrival
+      ? daysQuiet === 0
+        ? "a deck arrived today"
+        : `nothing to read for ${daysQuiet} day${daysQuiet === 1 ? "" : "s"} — last on ${decks.last_arrival.slice(0, 10)}, which is normal for this firm`
+      : "no deck has arrived yet";
+
+  const deckFault =
+    noStore ? "no document store is bound, so a deck arriving today could not be read"
+    : jobMissing ? "nothing is scheduled to read decks at all"
+    : jobOff ? `the reader is ${deckJob!.status.toLowerCase()}, so nothing will read a deck that arrives`
+    : lastRunBroke ? `the last run ${deckJob!.last_status === "DEAD_LETTER" ? "gave up after retrying" : "failed"}`
+    : neverRanAndOverdue ? `it was due ${ago(deckJob!.next_run_at)} and has never run`
+    : notRunning ? `it last ran ${ago(deckJob!.last_run_at)}, and it is set to run ${cadenceWords}`
+    : stuckDeck ? `a deck arrived ${ago(decks!.oldest_readable)} and has not been read`
+    : null;
+
   checks.push({
     key: "deck_intake",
     label: "Decks arriving",
-    state:
-      waiting > 0 ? "OK"
-      : daysQuiet === null ? "DEGRADED"
-      : daysQuiet >= QUIET_AFTER_DAYS ? "DEGRADED"
-      : "OK",
-    reading:
-      waiting > 0
-        ? `${waiting} waiting to be read · one is read every tick`
-        : daysQuiet === null
-          ? "no deck has ever arrived"
-          : `nothing has arrived for ${daysQuiet} day${daysQuiet === 1 ? "" : "s"} · last on ${decks!.last_arrival!.slice(0, 10)}`,
-    remedy:
-      waiting > 0 || (daysQuiet !== null && daysQuiet < QUIET_AFTER_DAYS)
-        ? undefined
-        : "Wyatt reads a deck every fifteen minutes and needs no permission to; there has been nothing to read. " +
-          "Decks reach this queue as attachments on mail to the firm, so a long silence is either a quiet fortnight " +
-          "or nothing reaching the inbox. Anything you have by hand can be put in from Capture.",
-    page: "capture",
+    /*
+     * NOT ONE TERM OF THIS EXPRESSION IS AN AGE SINCE THE LAST ARRIVAL. That is the whole fix, and
+     * it is a rule a validator reads rather than a promise this comment makes.
+     */
+    state: deckFault ? "DOWN" : awaitingAnalyst ? "DEGRADED" : "OK",
+    reading: deckFault
+      ? `${deckFault} · ${quietWords}`
+      : `${cadenceWords} · ${
+          deckJob!.last_run_at ? `last checked ${ago(deckJob!.last_run_at)}` : "not run yet"
+        } · ${
+          (decks?.waiting ?? 0) > 0
+            ? `${decks!.waiting} waiting${awaitingAnalyst ? `, ${decks!.waiting_for_company} of them for a company to be opened` : ""}`
+            : "nothing waiting"
+        } · ${quietWords}`,
+    remedy: deckFault
+      ? noStore
+        ? "Bind the documents bucket. Until it is, decks are being kept and none can be read."
+        : jobMissing || jobOff
+          ? "Switch the deck reader back on from Work. Decks are still being kept; nothing is reading them."
+          : stuckDeck
+            ? "A deck has been sitting unread past the reader's own schedule. Run it from Work and read why it stopped."
+            : "The reader is not running to its schedule. Run it from Work and read the last run's reason."
+      : awaitingAnalyst
+        ? `${decks!.waiting_for_company} deck${decks!.waiting_for_company === 1 ? " is" : "s are"} waiting for somebody to open the company ${decks!.waiting_for_company === 1 ? "it belongs" : "they belong"} to. Nothing is broken — that step is a person's.`
+        : undefined,
+    page: deckFault && !noStore ? "work" : "capture",
   });
 
   // ── Outbound email and image generation: configured or not, stated plainly ──

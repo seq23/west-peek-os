@@ -44,23 +44,32 @@ const DEAL_INTAKE_EMPLOYEE_ID = seatId(DEAL_INTAKE_EMPLOYEE);
  */
 
 /**
- * How many decks one tick reads. ONE.
+ * How many decks one run reads. EIGHT, and it was one until the lane moved to a daily clock.
  *
- * NOT A GUESS — production evidence. Three `ai_run` rows there died with "abandoned: the invocation
- * ended before this call returned", including Scooter's daily brief on 21 Aug: the Worker was torn
- * down while a model call was still in flight. Stacking three of them into a single scheduled
- * invocation is precisely that failure mode, and the symptom would have been a deck marked FAILED
- * with a reason that reads like the PDF was bad.
+ * RAISED FROM ONE TO EIGHT ON 18 Sep 2026, BECAUSE THE TICK BECAME A DAY.
  *
- * One per tick is four an hour. A night's arrivals are on the record before the morning brief, which
- * is the only deadline this has, and a slower queue that finishes beats a faster one that is
- * abandoned halfway.
+ * One per tick was four an hour, and every deck that arrived overnight was on the record before the
+ * morning brief. That arithmetic died with the fifteen-minute cadence: the operator moved this lane
+ * to once a day ("he should not check every 15 min ... once per day"), and one per run would have
+ * meant three decks arriving on a Tuesday being read on Tuesday, Wednesday and Thursday. Keeping the
+ * old cap while changing the clock is how a cadence fix quietly becomes a throughput bug.
  *
- * The AI budget is the second reason to cap it at all: `deck_reading` carries $0.50 and, unlike the
- * diagnostics sweep, is deliberately allowed to be stopped by a spend ceiling. An uncapped loop
- * could spend the day's allowance on one bad night's mail before the partners are awake.
+ * WHY ONE WAS RIGHT BEFORE, AND WHY IT IS NOT THE SAME CONSTRAINT NOW. Three `ai_run` rows died with
+ * "abandoned: the invocation ended before this call returned" — a Worker torn down with a model call
+ * in flight, on the Free plan's CPU budget. That budget is gone: the account has been on the Paid
+ * Workers plan since 16 Sep 2026, where a cron invocation gets minutes of CPU rather than ten
+ * milliseconds, and a deck read is nearly all waiting on a provider rather than burning CPU.
  */
-const PER_RUN = 1;
+const DECKS_PER_RUN = 8;
+
+/*
+ * AND A WALL CLOCK, BECAUSE A CAP ON COUNT IS NOT A CAP ON TIME. Eight slow reads are still eight
+ * chances to be torn down mid-call. No NEW deck is started once the run has been going this long;
+ * the one in flight finishes and the rest stay PENDING. A backlog left behind is not silent — the
+ * `deck_intake` health check reports a deck that has waited past the lane's own cadence as DOWN,
+ * which is the difference between deferring work and losing it.
+ */
+const RUN_BUDGET_MS = 120_000;
 
 const FILLABLE = ["sector", "one_liner", "website"] as const;
 
@@ -150,10 +159,10 @@ async function handOffToAnalyst(env: Env, deck: { id: string; work_card_id: stri
 /** The hand-off, reachable for a test that has no model to read a deck with. */
 export const __handOffToAnalystForTests = handOffToAnalyst;
 
-export async function runDeckReading(env: Env): Promise<{ read: number; failed: number; skipped: number }> {
+export async function runDeckReading(env: Env): Promise<{ read: number; failed: number; skipped: number; deferred: number }> {
   // No bucket means nothing can be read, and saying "no decks waiting" would be a lie about a
   // configuration problem rather than about the queue.
-  if (!env.WP_OS_DOCUMENTS) return { read: 0, failed: 0, skipped: -1 };
+  if (!env.WP_OS_DOCUMENTS) return { read: 0, failed: 0, skipped: -1, deferred: 0 };
 
   /*
    * ONLY DECKS THAT HAVE A COMPANY TO FILL. A deck can arrive before its company exists — the EMAIL
@@ -182,12 +191,20 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
        FROM pending_deck WHERE state = 'PENDING'
         ORDER BY company_id IS NULL, created_at ASC LIMIT ?1`,
   )
-    .bind(PER_RUN)
+    .bind(DECKS_PER_RUN)
     .all<{ id: string; company_id: string | null; filename: string; object_key: string; work_card_id: string | null }>();
 
 
   let read = 0;
   let failed = 0;
+  const startedAt = Date.now();
+  /*
+   * Decks the run chose not to start, because it ran out of wall clock rather than out of work.
+   * Counted and returned so the run log says "four read, two left for tomorrow" instead of "four
+   * read" — a summary that is true of the loop and false about the queue is the defect this file's
+   * own history is made of.
+   */
+  let deferred = 0;
 
   /*
    * DECKS THAT CANNOT BE READ YET ARE COUNTED AND SAID, not silently skipped.
@@ -203,6 +220,10 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
   const skipped = waiting?.n ?? 0;
 
   for (const deck of pending.results ?? []) {
+    if (Date.now() - startedAt > RUN_BUDGET_MS) {
+      deferred += 1;
+      continue;
+    }
     const fail = async (detail: string) => {
       failed += 1;
       /*
@@ -495,5 +516,5 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
     read += 1;
   }
 
-  return { read, failed, skipped };
+  return { read, failed, skipped, deferred };
 }
