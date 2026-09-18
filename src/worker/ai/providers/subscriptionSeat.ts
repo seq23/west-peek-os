@@ -3,21 +3,22 @@ import type { Env } from "../../env";
 import {
   CLAIM_POLL_MS,
   CLAIM_WAIT_MS,
-  CLAUDE_CODE_MODEL,
-  CLAUDE_CODE_UNAVAILABLE,
+  SEAT_REGISTRY,
+  SEAT_UNAVAILABLE,
   abandonRun,
   describeAge,
   laneAvailability,
   parkRun,
   readRun,
-} from "../claudeCodeLane";
+  type Seat,
+} from "../subscriptionSeats";
 
 /**
- * THE ONE ADAPTER IN THIS DIRECTORY THAT MAKES NO NETWORK CALL.
+ * THE ONE ADAPTER IN THIS DIRECTORY THAT MAKES NO NETWORK CALL — one instance per seat.
  *
  * Every other file here dials a vendor. This one parks a row and waits for a machine to pick it up,
- * because the thing on the other end is Claude Code on the owner's Mac and a Cloudflare Worker
- * cannot reach into a laptop. The shape is borrowed from the sister system's `agent_executed`
+ * because the thing on the other end is a coding agent on the owner's Mac — Claude Code or Codex —
+ * and a Cloudflare Worker cannot reach into a laptop. The shape is borrowed from the sister system's `agent_executed`
  * backend — the Worker does not call the Mac; the run waits to be claimed — and nothing is imported
  * from it.
  *
@@ -43,8 +44,9 @@ import {
  * an evicted isolate, a dropped request, a deploy mid-wait. Both paths are real and they are
  * deliberately not the same path.
  */
-export interface ClaudeCodeAdapterOptions {
+export interface SubscriptionSeatAdapterOptions {
   env: Env;
+  seat: Seat;
   modelAccess: string;
   aiRunId?: string | null;
   workCardId?: string | null;
@@ -61,8 +63,9 @@ export interface ClaudeCodeAdapterOptions {
 
 const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions): ProviderAdapter {
+export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptions): ProviderAdapter {
   const env = opts.env;
+  const seat = opts.seat;
   const waitMs = opts.waitMs ?? CLAIM_WAIT_MS;
   const pollMs = Math.max(1, opts.pollMs ?? CLAIM_POLL_MS);
   const sleep = opts.sleep ?? realSleep;
@@ -77,18 +80,19 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions): Provide
        * exact failure `types.ts` forbids in as many words. Refused as a CAPABILITY failure, which
        * `isProviderOutage` deliberately does NOT chain: the run already chose a lane that can see.
        */
-      if (req.images?.length) throw new Error("provider_cannot_see_images:claude_code");
-      if (req.documents?.length) throw new Error("provider_cannot_read_documents:claude_code");
+      if (req.images?.length) throw new Error(`provider_cannot_see_images:${seat}`);
+      if (req.documents?.length) throw new Error(`provider_cannot_read_documents:${seat}`);
 
       // 1. IS THE MACHINE THERE? One read. A stale answer costs the run nothing at all.
-      const availability = await laneAvailability(env, now());
+      const availability = await laneAvailability(env, seat, now());
       if (!availability.available) {
-        throw new Error(`${CLAUDE_CODE_UNAVAILABLE}:${availability.reason}`);
+        throw new Error(`${SEAT_UNAVAILABLE}:${availability.reason}`);
       }
 
       // 2. PARK IT. Everything upstream — budget, egress, content class, the two labels — has
       //    already run; this row is a leg of a governed `ai_run`, never work of its own.
       const queueId = await parkRun(env, {
+        seat,
         purpose: req.purpose,
         prompt: req.inputs.join("\n\n"),
         modelAccess: opts.modelAccess,
@@ -108,7 +112,7 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions): Provide
         if (row && row.status === "REPORTED" && row.output_text) {
           return {
             text: row.output_text,
-            model: CLAUDE_CODE_MODEL,
+            model: SEAT_REGISTRY[seat].model,
             /*
              * ZERO, AND THE ZERO IS TRUE. The subscription is a flat fee already paid, so this run
              * moved no money. It is still recorded as a run with usage, because "what did the firm
@@ -119,11 +123,11 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions): Provide
           };
         }
         if (row && row.status === "FAILED") {
-          throw new Error(`claude_code_failed:${row.error ?? "the claimer reported a failure with no reason"}`);
+          throw new Error(`subscription_seat_failed:${SEAT_REGISTRY[seat].displayName}: ${row.error ?? "the claimer reported a failure with no reason"}`);
         }
         if (row && row.status === "ABANDONED") {
           // The reaper closed it underneath us. Chain on rather than wait out the deadline.
-          throw new Error(`${CLAUDE_CODE_UNAVAILABLE}:${row.resolution ?? "this run was closed while it was waiting"}`);
+          throw new Error(`${SEAT_UNAVAILABLE}:${row.resolution ?? "this run was closed while it was waiting"}`);
         }
         const remaining = deadline - now().getTime();
         if (remaining <= 0) break;
@@ -147,7 +151,7 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions): Provide
       );
       const settled = closed ? "" : " Its answer arrived at the same moment and was kept.";
       throw new Error(
-        `${CLAUDE_CODE_UNAVAILABLE}:the machine was awake but returned nothing within ${describeAge(waitMs)}, ` +
+        `${SEAT_UNAVAILABLE}:the ${SEAT_REGISTRY[seat].displayName} seat was awake but returned nothing within ${describeAge(waitMs)}, ` +
           `so the run moved on to a lane that answers over the network.${settled}`,
       );
     },

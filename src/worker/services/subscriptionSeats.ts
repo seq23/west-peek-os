@@ -5,18 +5,26 @@ import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import {
   HEARTBEAT_FRESH_MS,
   HEARTBEAT_INTERVAL_S,
+  SEATS,
+  allSeatAvailability,
   claimRun,
-  laneAvailability,
+  isSeat,
   recordHeartbeat,
   reportRun,
-} from "../ai/claudeCodeLane";
+  type Seat,
+} from "../ai/subscriptionSeats";
 
 /**
  * THE THREE ROUTES THE CLAIMER ON HER MAC SPEAKS, AND NOTHING ELSE.
  *
- *   POST /api/claude-code/heartbeat   "I am awake."            → availability
- *   POST /api/claude-code/claim       "Give me one."           → a parked run, or nothing
- *   POST /api/claude-code/report      "Here is the answer."    → terminal
+ *   POST /api/subscription-seats/heartbeat   "These seats are awake."  → availability
+ *   POST /api/subscription-seats/claim       "Give me one."            → a parked run, or nothing
+ *   POST /api/subscription-seats/report      "Here is the answer."     → terminal
+ *   GET  /api/subscription-seats/status      "Why did this cost money?"
+ *
+ * SEAT-SCOPED THROUGHOUT. One claimer process may serve `claude_code`, `codex`, or both, and it
+ * says which on every call. A machine that only has one of them installed never sees the other's
+ * work, and a seat that dies takes only itself down.
  *
  * WHAT IS DELIBERATELY ABSENT: any route that CREATES work. The claimer cannot ask the firm to
  * think about something; it can only take work the router already parked, which was authorised,
@@ -50,14 +58,25 @@ const forbidden = (): Response =>
     {
       error: "forbidden",
       detail:
-        "These routes belong to the Claude Code claimer on the firm's own machine. They are reachable by that " +
-        "agent's Access service token, or by a Managing Partner.",
+        "These routes belong to the subscription-seat claimer on the firm's own machine. They are reachable " +
+        "by that agent's Access service token, or by a Managing Partner.",
     },
     { status: 403 },
   );
 
+const seatSchema = z
+  .string()
+  .trim()
+  .refine(isSeat, { message: `seat must be one of: ${SEATS.join(", ")}` });
+
 const heartbeatSchema = z.object({
   device_id: z.string().trim().min(1).max(200),
+  /*
+   * A LIST, because one process serves both seats and pinging twice would be two round trips to
+   * say one thing. An empty list is refused rather than treated as "all": a claimer that forgot to
+   * say what it can run must not silently be offered work it cannot do.
+   */
+  seats: z.array(seatSchema).min(1).max(SEATS.length),
   hostname: z.string().trim().max(200).optional(),
   agent_version: z.string().trim().max(60).optional(),
   capabilities: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
@@ -71,26 +90,34 @@ const heartbeatSchema = z.object({
  * two-minute window would be permanently invisible and nothing would say why. Read from the same
  * constants the router reads.
  */
-export async function handleClaudeCodeHeartbeat(ctx: RouteContext): Promise<Response> {
+export async function handleSubscriptionSeatHeartbeat(ctx: RouteContext): Promise<Response> {
   if (!mayClaim(ctx)) return forbidden();
   const parsed = heartbeatSchema.safeParse(await ctx.request.json().catch(() => null));
   if (!parsed.success) return json({ error: "invalid_input", detail: parsed.error.issues[0]?.message }, { status: 400 });
 
-  await recordHeartbeat(ctx.env, {
-    deviceId: parsed.data.device_id,
-    hostname: parsed.data.hostname ?? null,
-    agentVersion: parsed.data.agent_version ?? null,
-    ...(parsed.data.capabilities ? { capabilities: parsed.data.capabilities } : {}),
-  });
+  for (const seat of parsed.data.seats as Seat[]) {
+    await recordHeartbeat(ctx.env, {
+      seat,
+      deviceId: parsed.data.device_id,
+      hostname: parsed.data.hostname ?? null,
+      agentVersion: parsed.data.agent_version ?? null,
+      ...(parsed.data.capabilities ? { capabilities: parsed.data.capabilities } : {}),
+    });
+  }
 
   return json({
     ok: true,
+    seats: parsed.data.seats,
     heartbeat_interval_seconds: HEARTBEAT_INTERVAL_S,
     freshness_window_seconds: Math.round(HEARTBEAT_FRESH_MS / 1000),
   });
 }
 
-const claimSchema = z.object({ device_id: z.string().trim().min(1).max(200) });
+const claimSchema = z.object({
+  device_id: z.string().trim().min(1).max(200),
+  /** Only the seats this machine can actually run. See `claimRun`. */
+  seats: z.array(seatSchema).min(1).max(SEATS.length),
+});
 
 /**
  * "GIVE ME ONE." Returns a run or an explicit nothing — never an error for an empty queue.
@@ -103,18 +130,20 @@ const claimSchema = z.object({ device_id: z.string().trim().min(1).max(200) });
  * relying on the separate ping alone would mean a device that polls every second could still read
  * as stale if one heartbeat request were dropped.
  */
-export async function handleClaudeCodeClaim(ctx: RouteContext): Promise<Response> {
+export async function handleSubscriptionSeatClaim(ctx: RouteContext): Promise<Response> {
   if (!mayClaim(ctx)) return forbidden();
   const parsed = claimSchema.safeParse(await ctx.request.json().catch(() => null));
   if (!parsed.success) return json({ error: "invalid_input", detail: parsed.error.issues[0]?.message }, { status: 400 });
 
-  await recordHeartbeat(ctx.env, { deviceId: parsed.data.device_id });
-  const run = await claimRun(ctx.env, parsed.data.device_id);
+  const seats = parsed.data.seats as Seat[];
+  for (const seat of seats) await recordHeartbeat(ctx.env, { seat, deviceId: parsed.data.device_id });
+  const run = await claimRun(ctx.env, parsed.data.device_id, seats);
   if (!run) return json({ run: null, detail: "nothing parked" });
 
   return json({
     run: {
       id: run.id,
+      seat: run.seat,
       purpose: run.purpose,
       prompt: run.prompt,
       model_access: run.model_access,
@@ -127,7 +156,7 @@ export async function handleClaudeCodeClaim(ctx: RouteContext): Promise<Response
        * location, or handed to another tool.
        */
       handling:
-        "Private model only. Answer this with Claude Code on this machine and report the answer back. " +
+        "Private model only. Answer this on this machine with the seat named above and report the answer back. " +
         "Do not send it anywhere else, do not write it to disk outside the run, and do not paste it into another tool.",
     },
   });
@@ -156,12 +185,11 @@ const reportSchema = z
  * coming back from sleep to find its run was returned to the pool and answered elsewhere, which is
  * the system working correctly and something the claimer should log calmly rather than retry.
  */
-export async function handleClaudeCodeReport(ctx: RouteContext): Promise<Response> {
+export async function handleSubscriptionSeatReport(ctx: RouteContext): Promise<Response> {
   if (!mayClaim(ctx)) return forbidden();
   const parsed = reportSchema.safeParse(await ctx.request.json().catch(() => null));
   if (!parsed.success) return json({ error: "invalid_input", detail: parsed.error.issues[0]?.message }, { status: 400 });
 
-  await recordHeartbeat(ctx.env, { deviceId: parsed.data.device_id });
   const result = await reportRun(ctx.env, {
     runId: parsed.data.run_id,
     deviceId: parsed.data.device_id,
@@ -179,19 +207,27 @@ export async function handleClaudeCodeReport(ctx: RouteContext): Promise<Respons
  * the honest answer is usually "your laptop was shut". A page that can say so beats reading run
  * explanations one at a time.
  */
-export async function handleClaudeCodeStatus(ctx: RouteContext): Promise<Response> {
+export async function handleSubscriptionSeatStatus(ctx: RouteContext): Promise<Response> {
   if (!mayClaim(ctx)) return forbidden();
-  const availability = await laneAvailability(ctx.env);
+  const availability = await allSeatAvailability(ctx.env);
   const queued = await ctx.env.WP_OS_DB.prepare(
-    `SELECT status, COUNT(*) AS n FROM claude_code_run GROUP BY status`,
-  ).all<{ status: string; n: number }>();
+    `SELECT seat, status, COUNT(*) AS n FROM subscription_seat_run GROUP BY seat, status`,
+  ).all<{ seat: string; status: string; n: number }>();
   return json({
-    available: availability.available,
-    reason: availability.reason,
-    device_id: availability.deviceId,
-    last_seen_at: availability.lastSeenAt,
     heartbeat_interval_seconds: HEARTBEAT_INTERVAL_S,
     freshness_window_seconds: Math.round(HEARTBEAT_FRESH_MS / 1000),
-    queue: Object.fromEntries((queued.results ?? []).map((r) => [r.status, r.n])),
+    /*
+     * ANY seat awake means the firm has free frontier capacity right now. Reported as its own field
+     * because that — not "are both up" — is the question the ladder actually asks.
+     */
+    any_seat_available: availability.some((a) => a.available),
+    seats: availability.map((a) => ({
+      seat: a.seat,
+      available: a.available,
+      reason: a.reason,
+      device_id: a.deviceId,
+      last_seen_at: a.lastSeenAt,
+      queue: Object.fromEntries((queued.results ?? []).filter((r) => r.seat === a.seat).map((r) => [r.status, r.n])),
+    })),
   });
 }

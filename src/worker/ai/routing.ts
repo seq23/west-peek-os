@@ -124,23 +124,23 @@ export function adapterFor(
   /*
    * A CLAIMABLE LANE HAS NO WIRE, AND MUST NOT BE HANDED THE GENERIC ONE.
    *
-   * `prov_claude_code` has a NULL base URL on purpose — there is nothing to dial — so the fall
+   * `prov_claude_code` and `prov_codex` have a NULL base URL on purpose — there is nothing to dial — so the fall
    * through at the bottom of this function would build an `httpExternal` adapter pointed at the
    * empty string and POST a partner's instruction to a relative path. That is a nonsense request
    * rather than a leak, but it would be reported as a provider failure with an unreadable reason,
    * and the lane's real behaviour lives in `providers/claudeCode.ts` where the queue is.
    *
-   * The Claude Code lane is assembled directly in `runAi` because it needs run context this
+   * The subscription seats are assembled directly in `runAi` because it needs run context this
    * function does not see — the work card, the employee, the firm scope. This branch exists so
    * that a future caller reaching it by another path gets a NAMED refusal rather than a wire call,
    * and so the fall-through below can never quietly acquire a claimable lane.
    */
-  if (candidate.providerKey === "claude_code") {
+  if (candidate.providerKey === "claude_code" || candidate.providerKey === "codex") {
     return {
       adapter: {
         complete: async () => {
           throw new Error(
-            "claude_code_unavailable:this lane is served by a claimer on the owner's Mac and cannot be dialled. " +
+            "subscription_seat_unavailable:this seat is served by a claimer on the owner's Mac and cannot be dialled. " +
               "It is assembled in runAi with the run's own context; reaching it through adapterFor is a wiring mistake.",
           );
         },

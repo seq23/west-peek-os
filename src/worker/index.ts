@@ -116,11 +116,11 @@ import {
   handleRunAi,
 } from "./services/aiRuns";
 import {
-  handleClaudeCodeClaim,
-  handleClaudeCodeHeartbeat,
-  handleClaudeCodeReport,
-  handleClaudeCodeStatus,
-} from "./services/claudeCode";
+  handleSubscriptionSeatClaim,
+  handleSubscriptionSeatHeartbeat,
+  handleSubscriptionSeatReport,
+  handleSubscriptionSeatStatus,
+} from "./services/subscriptionSeats";
 import {
   handleAskLiveHelp,
   handleGetLiveHelp,
@@ -1271,14 +1271,14 @@ const router = new Router()
   .post("/api/jobs", handleCreateJob)
   .post("/api/jobs/tick", handleRunDueJobs)
   /*
-   * P16 / migration 0187 — the Claude Code lane on the owner's Mac. Three routes for the claimer
-   * and one for a person asking why a card cost money. None of them can create work: the claimer
-   * only ever takes a run the router already parked, authorised and classified.
+   * P16 / migration 0187 — the two subscription seats on the owner's Mac. Three routes for the
+   * claimer and one for a person asking why a card cost money. None of them can create work: the
+   * claimer only ever takes a run the router already parked, authorised and classified.
    */
-  .post("/api/claude-code/heartbeat", handleClaudeCodeHeartbeat)
-  .post("/api/claude-code/claim", handleClaudeCodeClaim)
-  .post("/api/claude-code/report", handleClaudeCodeReport)
-  .get("/api/claude-code/status", handleClaudeCodeStatus)
+  .post("/api/subscription-seats/heartbeat", handleSubscriptionSeatHeartbeat)
+  .post("/api/subscription-seats/claim", handleSubscriptionSeatClaim)
+  .post("/api/subscription-seats/report", handleSubscriptionSeatReport)
+  .get("/api/subscription-seats/status", handleSubscriptionSeatStatus)
   .get("/api/jobs/runs/:id", handleGetJobRun)
   .post("/api/jobs/runs/:id/cancel", handleCancelJobRun)
   .post("/api/jobs/:key/run", handleRunJob)

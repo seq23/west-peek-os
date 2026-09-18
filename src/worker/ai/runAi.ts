@@ -41,8 +41,8 @@ import {
   recordLaneOutage,
   type LaneHealthRow,
 } from "./laneHealth";
-import { CLAIM_WAIT_MS, CLAUDE_CODE_PROVIDER_KEY, laneAvailability } from "./claudeCodeLane";
-import { createClaudeCodeAdapter } from "./providers/claudeCode";
+import { CLAIM_WAIT_MS, allSeatAvailability } from "./subscriptionSeats";
+import { createSubscriptionSeatAdapter } from "./providers/subscriptionSeat";
 
 /**
  * runAi — THE governed AI boundary (P4). No other module may call a provider
@@ -2105,7 +2105,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * costs this run one indexed read and the paid head leads exactly as it did yesterday. Prove it
    * by deleting every device row: the firm's work is unchanged.
    */
-  const claudeCodeEligible =
+  const seatsEligible =
     isJudgement &&
     // The volume decision, as an expression. Public work already has a free lane; it does not come
     // here, and `contentClass` — not the caller's say-so — is what decides which this run is.
@@ -2119,49 +2119,76 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     // web must not be quietly answered from memory.
     !requiresSearch;
 
-  const claudeCodeLanes: FallbackOption[] = [];
-  let claudeCodeNote = "";
-  if (claudeCodeEligible) {
-    const option = options.find((o) => Number(o.provider.claimable ?? 0) === 1 && o.provider.provider_key === CLAUDE_CODE_PROVIDER_KEY);
-    if (option) {
+  const seatLanes: FallbackOption[] = [];
+  let seatNote = "";
+  if (seatsEligible) {
+    /*
+     * ONE READ FOR BOTH SEATS, asked BEFORE anything is parked and before any wait exists. That is
+     * the entire difference between a heartbeat and a timeout: absence is answered by a single
+     * indexed lookup rather than by ninety seconds of a partner's time, however many seats are away.
+     */
+    const availability = await allSeatAvailability(env, now);
+    const awake: string[] = [];
+    const away: string[] = [];
+    for (const seatState of availability) {
       /*
-       * THE ONE READ. Asked BEFORE anything is parked and before any wait exists, which is the
-       * entire difference between a heartbeat and a timeout: absence is answered by a single
-       * indexed lookup rather than by ninety seconds of a partner's time.
+       * EACH SEAT IS JUDGED ON ITS OWN ROW. Claude Code being asleep must not suppress Codex: they
+       * are different subscriptions and different processes, and the day one hangs is exactly the
+       * day the other has to carry the work.
        */
-      const availability = await laneAvailability(env, now);
-      if (availability.available) {
-        const candidate: RoutingCandidate = {
-          providerId: option.provider.id,
-          providerKey: option.provider.provider_key,
-          model: option.pricing.model,
-          estimatedCostUsd: 0,
-          baseUrl: option.provider.base_url,
-        };
-        claudeCodeLanes.push({
-          candidate,
-          adapter: createClaudeCodeAdapter({
-            env,
-            modelAccess: "PRIVATE_MODEL_ONLY",
-            workCardId: input.routing?.workCardId ?? null,
-            aiEmployeeId: input.aiEmployeeId ?? null,
-            taskClass: input.routing?.taskClass ?? null,
-            firmScope,
-          }),
-          /*
-           * ENGAGES ON ANYTHING WHEN IT LEADS — it is the head, so this field only governs whether
-           * it may be RE-ENTERED later in a chain, and it may not: a lane that has just failed to
-           * produce an answer must not be offered the same work twice in one run.
-           */
-          engageOn: "OUTAGE",
-          estimate: { ...estimate, estimated_cost_usd: 0, provider_key: candidate.providerKey, model: candidate.model, input_per_mtok_usd: 0, output_per_mtok_usd: 0 },
-        });
-        claudeCodeNote = ` ${availability.reason}. This call may not use a training-permitting lane, and her subscription's terms forbid training, so it leads here at no cost.`;
-      } else {
-        // Said out loud even though it changed nothing — a silent skip is indistinguishable from a
-        // lane that was never wired up, which is how "runs but inert" hides.
-        claudeCodeNote = ` The Claude Code lane was not offered this run: ${availability.reason}. Nothing waited on it.`;
+      const option = options.find(
+        (o) => Number(o.provider.claimable ?? 0) === 1 && o.provider.provider_key === seatState.seat,
+      );
+      if (!option) continue;
+      if (!seatState.available) {
+        away.push(seatState.reason);
+        continue;
       }
+      const candidate: RoutingCandidate = {
+        providerId: option.provider.id,
+        providerKey: option.provider.provider_key,
+        model: option.pricing.model,
+        estimatedCostUsd: 0,
+        baseUrl: option.provider.base_url,
+      };
+      seatLanes.push({
+        candidate,
+        adapter: createSubscriptionSeatAdapter({
+          env,
+          seat: seatState.seat,
+          modelAccess: "PRIVATE_MODEL_ONLY",
+          workCardId: input.routing?.workCardId ?? null,
+          aiEmployeeId: input.aiEmployeeId ?? null,
+          taskClass: input.routing?.taskClass ?? null,
+          firmScope,
+        }),
+        /*
+         * ENGAGES ON AN OUTAGE ONLY. The first awake seat leads, and the SECOND one is a genuine
+         * fallback behind it — a seat that failed to produce an answer hands on to the other seat
+         * before any money is spent, which is the whole reason there are two.
+         */
+        engageOn: "OUTAGE",
+        estimate: {
+          ...estimate,
+          estimated_cost_usd: 0,
+          provider_key: candidate.providerKey,
+          model: candidate.model,
+          input_per_mtok_usd: 0,
+          output_per_mtok_usd: 0,
+        },
+      });
+      awake.push(seatState.reason);
+    }
+    if (awake.length > 0) {
+      seatNote =
+        ` This call may not use a training-permitting lane, and the subscription seats do not train on what they are ` +
+        `sent, so it leads on a seat she already pays for at no cost: ${awake.join("; ")}.`;
+      // Said even when it changed nothing, so "why did this cost money" is answerable from the run.
+      if (away.length > 0) seatNote += ` The other seat took no part: ${away.join("; ")}.`;
+    } else {
+      // A silent skip is indistinguishable from a lane that was never wired up — which is how
+      // "runs but inert" hides. Named on every run, including the ordinary ones where both sleep.
+      seatNote = ` No subscription seat was available, so nothing waited on one: ${away.join("; ")}.`;
     }
   }
 
@@ -2380,7 +2407,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * prices, while a free tier that has run out (429) does.
    */
   const paidHeadAsFallback: FallbackOption[] =
-    freeLanes.length > 0 || claudeCodeLanes.length > 0 ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }] : [];
+    freeLanes.length > 0 || seatLanes.length > 0 ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }] : [];
 
   /*
    * THE ORDER OF LAST RESORT, and each step is a smaller concession than the one after it:
@@ -2390,7 +2417,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    */
   /*
    * HER MACHINE LEADS WHERE IT IS AWAKE AND ELIGIBLE, AND EVERYTHING ELSE STANDS BEHIND IT
-   * UNCHANGED. `claudeCodeLanes` is empty whenever the lane is asleep, absent, or not entitled to
+   * UNCHANGED. `seatLanes` is empty whenever the lane is asleep, absent, or not entitled to
    * this run, in which case this array is byte-for-byte the chain that landed in 0184 — which is
    * the property that makes the lane a member rather than a dependency.
    *
@@ -2403,7 +2430,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * spreads, so the head can never also appear as its own fallback — which is what a hand-written
    * `slice(1)` on the wrong list quietly does.
    */
-  const zeroCostLead: FallbackOption[] = [...claudeCodeLanes, ...freeLanes];
+  const zeroCostLead: FallbackOption[] = [...seatLanes, ...freeLanes];
 
   const fallbacks: FallbackOption[] = [
     ...zeroCostLead.slice(1),
@@ -2434,11 +2461,13 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * the mornings it happens to be awake reads as an intermittent bug rather than as a design, and
    * "why did this cost money today" becomes unanswerable on exactly the days it matters.
    */
-  explanation += claudeCodeNote;
-  if (claudeCodeLanes.length > 0 && lead === claudeCodeLanes[0]) {
+  explanation += seatNote;
+  if (seatLanes.length > 0 && lead === seatLanes[0]) {
+    const behind = seatLanes.length > 1 ? `the other seat, then ` : "";
     explanation +=
-      ` If her machine does not answer within ${Math.round(CLAIM_WAIT_MS / 1000)} seconds, or reports a failure, the run ` +
-      `moves on to ${head.providerKey}/${head.model} inside this same run and the handover is recorded. Nothing waits on the Mac twice.`;
+      ` If that seat does not answer within ${Math.round(CLAIM_WAIT_MS / 1000)} seconds, or reports a failure, the run ` +
+      `moves on to ${behind}${head.providerKey}/${head.model} inside this same run and the handover is recorded. ` +
+      `No seat is asked for the same work twice.`;
   } else if (lead) {
     explanation +=
       ` Free frontier capacity is tried first for this call (${lead.candidate.providerKey}/${lead.candidate.model}); ` +

@@ -1,7 +1,17 @@
 import type { Env } from "../env";
 
 /**
- * THE LANE ON HER OWN MAC — availability, the claimable queue, and the reaper that empties it.
+ * THE TWO SUBSCRIPTION SEATS — availability, the claimable queue, and the reaper that empties it.
+ *
+ * A SEAT is a coding agent running on the owner's own machine against a subscription she already
+ * pays for: `claude_code` on her Claude Max plan, `codex` on her ChatGPT Plus plan. The two names
+ * match `provider_registry.provider_key` exactly, so a seat has ONE name across the registry, the
+ * queue, the heartbeat and the sentence on a partner's run.
+ *
+ * THEY ARE INDEPENDENT IN EVERY DIRECTION, and that is load-bearing rather than tidy. Each has its
+ * own heartbeat rows, so one seat asleep says nothing about the other; each is offered work on its
+ * own; and a claimer may serve one, the other, or both. The first time Claude Code hangs, Codex
+ * must still answer.
  *
  * Migration 0187 carries the full reasoning. The short version, because the two halves of this
  * module answer different questions and are easy to conflate:
@@ -91,10 +101,27 @@ export const QUEUE_TTL_MS = 10 * 60_000;
  */
 export const MAX_CLAIM_ATTEMPTS = 2;
 
-/** The provider row and model id this lane is registered under. See migration 0187. */
-export const CLAUDE_CODE_PROVIDER_ID = "prov_claude_code";
-export const CLAUDE_CODE_PROVIDER_KEY = "claude_code";
-export const CLAUDE_CODE_MODEL = "claude-code-local";
+/**
+ * The seats, in the order the router offers them. See migration 0187.
+ *
+ * CLAUDE CODE FIRST, and the reason is the no-training basis rather than a preference between the
+ * models. Anthropic's Commercial Terms §B is an unconditional contractual prohibition; OpenAI's
+ * consumer terms exclude Codex-shaped traffic by DEFAULT, which is a setting rather than a bar. For
+ * work that may not be trained on, the stronger guarantee goes first. `model_job_outcome` may
+ * reorder them later on measured results; nothing here claims one is the better model.
+ */
+export const SEATS = ["claude_code", "codex"] as const;
+export type Seat = (typeof SEATS)[number];
+
+/** The provider row, and the model id, each seat is registered under. */
+export const SEAT_REGISTRY: Record<Seat, { providerId: string; model: string; displayName: string }> = {
+  claude_code: { providerId: "prov_claude_code", model: "claude-code-local", displayName: "Claude Code" },
+  codex: { providerId: "prov_codex", model: "codex-local", displayName: "Codex CLI" },
+};
+
+export function isSeat(value: string): value is Seat {
+  return (SEATS as readonly string[]).includes(value);
+}
 
 /**
  * The reason string a stale or unclaimed lane throws.
@@ -104,9 +131,10 @@ export const CLAUDE_CODE_MODEL = "claude-code-local";
  * arm a cooldown that would outlive her opening the laptop. Both rules live in
  * src/shared/ai/providerFailure.ts, next to every other failure classification in the system.
  */
-export const CLAUDE_CODE_UNAVAILABLE = "claude_code_unavailable";
+export const SEAT_UNAVAILABLE = "subscription_seat_unavailable";
 
 export interface DeviceRow {
+  seat: string;
   device_id: string;
   hostname: string | null;
   agent_version: string | null;
@@ -114,6 +142,7 @@ export interface DeviceRow {
 }
 
 export interface LaneAvailability {
+  seat: Seat;
   available: boolean;
   /** A sentence, always. It lands on the run's explanation, so it is written for a person. */
   reason: string;
@@ -144,16 +173,20 @@ export function isFresh(lastSeenAt: string | null | undefined, now: Date): boole
  * must not stop the firm thinking, and the safe direction here is unambiguous: absent means the
  * work goes to a lane that is definitely reachable.
  */
-export async function laneAvailability(env: Env, now: Date = new Date()): Promise<LaneAvailability> {
+export async function laneAvailability(env: Env, seat: Seat, now: Date = new Date()): Promise<LaneAvailability> {
+  const name = SEAT_REGISTRY[seat].displayName;
   let row: DeviceRow | null = null;
   try {
     row = await env.WP_OS_DB.prepare(
-      "SELECT device_id, hostname, agent_version, last_seen_at FROM claude_code_device ORDER BY last_seen_at DESC LIMIT 1",
-    ).first<DeviceRow>();
+      "SELECT seat, device_id, hostname, agent_version, last_seen_at FROM subscription_seat_device WHERE seat = ?1 ORDER BY last_seen_at DESC LIMIT 1",
+    )
+      .bind(seat)
+      .first<DeviceRow>();
   } catch {
     return {
+      seat,
       available: false,
-      reason: "the Claude Code lane could not be read, so it was skipped and the work went to a lane that answers over the network",
+      reason: `the ${name} seat could not be read, so it was skipped and the work went to a lane that answers over the network`,
       deviceId: null,
       lastSeenAt: null,
       ageMs: null,
@@ -161,8 +194,9 @@ export async function laneAvailability(env: Env, now: Date = new Date()): Promis
   }
   if (!row) {
     return {
+      seat,
       available: false,
-      reason: "no machine has ever checked in as a Claude Code claimer, so this lane took no part in the run",
+      reason: `no machine has ever checked in on the ${name} seat, so it took no part in the run`,
       deviceId: null,
       lastSeenAt: null,
       ageMs: null,
@@ -171,22 +205,86 @@ export async function laneAvailability(env: Env, now: Date = new Date()): Promis
   const ageMs = now.getTime() - Date.parse(row.last_seen_at);
   if (!isFresh(row.last_seen_at, now)) {
     return {
+      seat,
       available: false,
       reason:
-        `${row.hostname ?? row.device_id} last checked in ${describeAge(ageMs)} ago, which is outside the ` +
-        `${Math.round(HEARTBEAT_FRESH_MS / 1000)}-second freshness window, so the Claude Code lane was skipped with no delay`,
+        `the ${name} seat on ${row.hostname ?? row.device_id} last checked in ${describeAge(ageMs)} ago, which is ` +
+        `outside the ${Math.round(HEARTBEAT_FRESH_MS / 1000)}-second freshness window, so it was skipped with no delay`,
       deviceId: row.device_id,
       lastSeenAt: row.last_seen_at,
       ageMs,
     };
   }
   return {
+    seat,
     available: true,
-    reason: `${row.hostname ?? row.device_id} checked in ${describeAge(ageMs)} ago, so the Claude Code lane is awake and was offered this run first`,
+    reason: `the ${name} seat on ${row.hostname ?? row.device_id} checked in ${describeAge(ageMs)} ago, so it is awake and was offered this run`,
     deviceId: row.device_id,
     lastSeenAt: row.last_seen_at,
     ageMs,
   };
+}
+
+/**
+ * EVERY SEAT'S ANSWER, in offer order, from ONE query.
+ *
+ * One read rather than one per seat: this runs inside the AI boundary on every private call, and a
+ * per-seat lookup is how a cheap gate becomes the reason the firm's work is slow. It is the same
+ * argument `laneHealth` makes for the same reason, and the table is two rows.
+ *
+ * NEVER THROWS. An unreadable device table reads as "no seat is available", which sends the work to
+ * a lane that answers over the network — the safe direction, and the one the firm used yesterday.
+ */
+export async function allSeatAvailability(env: Env, now: Date = new Date()): Promise<LaneAvailability[]> {
+  let rows: DeviceRow[] = [];
+  try {
+    rows =
+      (
+        await env.WP_OS_DB.prepare(
+          "SELECT seat, device_id, hostname, agent_version, last_seen_at FROM subscription_seat_device ORDER BY last_seen_at DESC",
+        ).all<DeviceRow>()
+      ).results ?? [];
+  } catch {
+    rows = [];
+  }
+  const newest = new Map<string, DeviceRow>();
+  for (const r of rows) if (!newest.has(r.seat)) newest.set(r.seat, r);
+
+  return SEATS.map((seat) => {
+    const name = SEAT_REGISTRY[seat].displayName;
+    const row = newest.get(seat);
+    if (!row) {
+      return {
+        seat,
+        available: false,
+        reason: `no machine has ever checked in on the ${name} seat, so it took no part in the run`,
+        deviceId: null,
+        lastSeenAt: null,
+        ageMs: null,
+      };
+    }
+    const ageMs = now.getTime() - Date.parse(row.last_seen_at);
+    if (!isFresh(row.last_seen_at, now)) {
+      return {
+        seat,
+        available: false,
+        reason:
+          `the ${name} seat on ${row.hostname ?? row.device_id} last checked in ${describeAge(ageMs)} ago, which is ` +
+          `outside the ${Math.round(HEARTBEAT_FRESH_MS / 1000)}-second freshness window, so it was skipped with no delay`,
+        deviceId: row.device_id,
+        lastSeenAt: row.last_seen_at,
+        ageMs,
+      };
+    }
+    return {
+      seat,
+      available: true,
+      reason: `the ${name} seat on ${row.hostname ?? row.device_id} checked in ${describeAge(ageMs)} ago, so it is awake and was offered this run`,
+      deviceId: row.device_id,
+      lastSeenAt: row.last_seen_at,
+      ageMs,
+    };
+  });
 }
 
 /** Human-readable age, because "14400000ms" on a partner's run explanation helps nobody. */
@@ -203,13 +301,13 @@ export function describeAge(ms: number): string {
 /** The claimer said hello. Upsert: the row IS the availability signal, so there is nothing else to keep. */
 export async function recordHeartbeat(
   env: Env,
-  input: { deviceId: string; hostname?: string | null; agentVersion?: string | null; capabilities?: string[] },
+  input: { seat: Seat; deviceId: string; hostname?: string | null; agentVersion?: string | null; capabilities?: string[] },
   now: Date = new Date(),
 ): Promise<void> {
   await env.WP_OS_DB.prepare(
-    `INSERT INTO claude_code_device (device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?4)
-     ON CONFLICT (device_id) DO UPDATE SET
+    `INSERT INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
+     VALUES (?6, ?1, ?2, ?3, ?4, ?5, ?4)
+     ON CONFLICT (seat, device_id) DO UPDATE SET
        hostname          = excluded.hostname,
        agent_version     = excluded.agent_version,
        last_seen_at      = excluded.last_seen_at,
@@ -221,12 +319,14 @@ export async function recordHeartbeat(
       input.agentVersion ?? null,
       now.toISOString(),
       JSON.stringify(input.capabilities ?? []),
+      input.seat,
     )
     .run();
 }
 
-export interface ClaudeCodeRunRow {
+export interface SeatRunRow {
   id: string;
+  seat: string;
   ai_run_id: string | null;
   purpose: string;
   prompt: string;
@@ -250,6 +350,7 @@ export interface ClaudeCodeRunRow {
 export async function parkRun(
   env: Env,
   input: {
+    seat: Seat;
     purpose: string;
     prompt: string;
     modelAccess: string;
@@ -263,9 +364,9 @@ export async function parkRun(
 ): Promise<string> {
   const id = `ccr_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
-    `INSERT INTO claude_code_run
-       (id, ai_run_id, purpose, prompt, model_access, work_card_id, ai_employee_id, task_class, firm_scope, status, max_seconds)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'QUEUED', ?10)`,
+    `INSERT INTO subscription_seat_run
+       (id, seat, ai_run_id, purpose, prompt, model_access, work_card_id, ai_employee_id, task_class, firm_scope, status, max_seconds)
+     VALUES (?1, ?11, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'QUEUED', ?10)`,
   )
     .bind(
       id,
@@ -278,6 +379,7 @@ export async function parkRun(
       input.taskClass ?? null,
       input.firmScope ?? "west-peek",
       Math.max(30, Math.round(input.maxSeconds ?? CLAIM_TTL_MS / 1000)),
+      input.seat,
     )
     .run();
   return id;
@@ -290,14 +392,24 @@ export async function parkRun(
  * second must not both get the same row, and `WHERE status = 'QUEUED'` inside the UPDATE is what
  * makes that true without a transaction — the loser updates zero rows and takes the next one.
  */
-export async function claimRun(env: Env, deviceId: string, now: Date = new Date()): Promise<ClaudeCodeRunRow | null> {
+export async function claimRun(env: Env, deviceId: string, seats: Seat[], now: Date = new Date()): Promise<SeatRunRow | null> {
+  /*
+   * ONLY THE SEATS THIS MACHINE CAN ACTUALLY SERVE. A laptop with Claude Code installed and Codex
+   * not must never be handed a Codex run: it would take it, fail, and the reaper would spend two
+   * attempts discovering what the claimer already knew. The claimer declares its seats; the queue
+   * believes it, because being wrong here costs a failed run rather than any authority.
+   */
+  if (seats.length === 0) return null;
+  const placeholders = seats.map((_, i) => `?${i + 1}`).join(", ");
   for (let attempt = 0; attempt < 5; attempt++) {
     const next = await env.WP_OS_DB.prepare(
-      "SELECT id FROM claude_code_run WHERE status = 'QUEUED' ORDER BY created_at ASC LIMIT 1",
-    ).first<{ id: string }>();
+      `SELECT id FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) ORDER BY created_at ASC LIMIT 1`,
+    )
+      .bind(...seats)
+      .first<{ id: string }>();
     if (!next) return null;
     const res = await env.WP_OS_DB.prepare(
-      `UPDATE claude_code_run
+      `UPDATE subscription_seat_run
           SET status = 'CLAIMED', claimed_by = ?2, claimed_at = ?3,
               attempt_count = attempt_count + 1, updated_at = ?3
         WHERE id = ?1 AND status = 'QUEUED'`,
@@ -305,7 +417,7 @@ export async function claimRun(env: Env, deviceId: string, now: Date = new Date(
       .bind(next.id, deviceId, now.toISOString())
       .run();
     if ((res.meta?.changes ?? 0) > 0) {
-      return env.WP_OS_DB.prepare("SELECT * FROM claude_code_run WHERE id = ?1").bind(next.id).first<ClaudeCodeRunRow>();
+      return env.WP_OS_DB.prepare("SELECT * FROM subscription_seat_run WHERE id = ?1").bind(next.id).first<SeatRunRow>();
     }
     // Somebody else took it between the read and the write. Try the next one.
   }
@@ -326,7 +438,7 @@ export async function reportRun(
 ): Promise<{ accepted: boolean; detail: string }> {
   const ok = typeof input.outputText === "string" && input.outputText.length > 0;
   const res = await env.WP_OS_DB.prepare(
-    `UPDATE claude_code_run
+    `UPDATE subscription_seat_run
         SET status = ?2, output_text = ?3, error = ?4, reported_at = ?5, updated_at = ?5,
             resolution = ?6
       WHERE id = ?1 AND status = 'CLAIMED' AND claimed_by = ?7`,
@@ -364,7 +476,7 @@ export async function reportRun(
  */
 export async function abandonRun(env: Env, runId: string, resolution: string, now: Date = new Date()): Promise<boolean> {
   const res = await env.WP_OS_DB.prepare(
-    `UPDATE claude_code_run SET status = 'ABANDONED', resolution = ?2, updated_at = ?3
+    `UPDATE subscription_seat_run SET status = 'ABANDONED', resolution = ?2, updated_at = ?3
       WHERE id = ?1 AND status IN ('QUEUED', 'CLAIMED')`,
   )
     .bind(runId, resolution, now.toISOString())
@@ -373,8 +485,8 @@ export async function abandonRun(env: Env, runId: string, resolution: string, no
 }
 
 /** Read one queue row. Used by the router's wait and by the report route's checks. */
-export async function readRun(env: Env, runId: string): Promise<ClaudeCodeRunRow | null> {
-  return env.WP_OS_DB.prepare("SELECT * FROM claude_code_run WHERE id = ?1").bind(runId).first<ClaudeCodeRunRow>();
+export async function readRun(env: Env, runId: string): Promise<SeatRunRow | null> {
+  return env.WP_OS_DB.prepare("SELECT * FROM subscription_seat_run WHERE id = ?1").bind(runId).first<SeatRunRow>();
 }
 
 export interface ReapResult {
@@ -404,15 +516,15 @@ export interface ReapResult {
  * Runs on the every-minute tick beside the other sweeps. NEVER THROWS: housekeeping that can break
  * the tick is worse than housekeeping that skips a minute.
  */
-export async function reapClaudeCodeRuns(env: Env, now: Date = new Date()): Promise<ReapResult> {
+export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<ReapResult> {
   const out: ReapResult = { examined: 0, returnedToPool: [], abandoned: [] };
-  let rows: ClaudeCodeRunRow[] = [];
+  let rows: SeatRunRow[] = [];
   try {
     rows =
       (
         await env.WP_OS_DB.prepare(
-          "SELECT * FROM claude_code_run WHERE status IN ('QUEUED', 'CLAIMED') ORDER BY created_at ASC LIMIT 200",
-        ).all<ClaudeCodeRunRow>()
+          "SELECT * FROM subscription_seat_run WHERE status IN ('QUEUED', 'CLAIMED') ORDER BY created_at ASC LIMIT 200",
+        ).all<SeatRunRow>()
       ).results ?? [];
   } catch {
     return out;
@@ -438,7 +550,7 @@ export async function reapClaudeCodeRuns(env: Env, now: Date = new Date()): Prom
         continue;
       }
       const res = await env.WP_OS_DB.prepare(
-        `UPDATE claude_code_run
+        `UPDATE subscription_seat_run
             SET status = 'QUEUED', claimed_by = NULL, claimed_at = NULL, updated_at = ?2,
                 resolution = ?3
           WHERE id = ?1 AND status = 'CLAIMED'`,

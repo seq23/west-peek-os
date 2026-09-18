@@ -1,13 +1,42 @@
--- A LANE ON HER OWN MAC — $0, FRONTIER, AND ABSENT MOST OF THE TIME BY DESIGN.
+-- TWO SEATS SHE ALREADY PAYS FOR — $0, FRONTIER, AND ABSENT MOST OF THE TIME BY DESIGN.
 --
 -- The owner pays for a Claude Max subscription. The sister system already draws on it: `boss-os`
 -- registers `bk_claude_code` as an `agent_executed` backend, parks a run awaiting a claim, and a
 -- launchd agent on her Mac takes it. West Peek OS had no such lane, so the equivalent work ran on
 -- paid API models. The stack she asked both systems to share:
 --
---     1. Claude Code on her Mac     $0, frontier   — when it is available
---     2. Free reasoning lanes       $0             — nemotron-3-ultra-550b, gemini-flash-latest
---     3. Sonnet via OpenRouter      paid           — last resort
+--     rung 0a. Claude Code on her Claude Max seat      $0, frontier, PRIVATE-CAPABLE
+--     rung 0b. Codex CLI on her ChatGPT Plus seat      $0, frontier, PRIVATE-CAPABLE
+--     rungs 1-6. OpenRouter :free reasoning lanes      $0, PUBLIC-ONLY (all training-permitting)
+--     rungs 7-13. Paid, cheapest first                 all private-capable
+--
+-- This migration builds rung 0 — both seats — and the machinery underneath them. The paid and free
+-- rungs are migration 0188.
+--
+-- ═════════════════════════════════════════════════════════════════════════════════════════════
+-- WHY TWO SEATS AND NOT ONE, which is a real design question rather than "because we have two".
+--
+-- They fail independently and they fail often. A subscription seat is a laptop process: it dies
+-- with a lid, with a reboot, with an `npm -g` upgrade, with a token that needs re-authenticating.
+-- One seat awake is worth having; two seats awake is not twice as good, but two seats where either
+-- can be down is very much better than one seat that must be up.
+--
+-- They are also independently PRIVATE-CAPABLE, which is the scarce property in this firm. Before
+-- this migration, `anthropic/claude-sonnet-5` was the ONLY lane in the catalogue allowed to see LP
+-- names and deal terms, so an OpenRouter outage meant confidential work could not run at all. Each
+-- seat added here is one more lane that can.
+--
+-- WHAT WAS CONFIRMED ABOUT THE CODEX SEAT, rather than assumed, on 17 Sep 2026:
+--   · `/opt/homebrew/bin/codex` → `@openai/codex`, installed.
+--   · `~/.codex/auth.json` carries `auth_mode = "chatgpt"` and a NULL `OPENAI_API_KEY`, so the CLI
+--     runs on the ChatGPT subscription rather than on metered API billing. This is the whole basis
+--     for pricing the lane at $0, and it is a fact about the machine's configuration — which is why
+--     the claimer re-checks it at startup rather than trusting this comment for ever.
+--   · A real generation completed headlessly:
+--       codex exec --sandbox read-only --skip-git-repo-check "Reply with exactly: lane is alive"
+--     returned `lane is alive`. Two traps were found and are encoded in the claimer rather than
+--     written down: without `--skip-git-repo-check` it refuses and resets the working directory,
+--     and without stdin redirected to /dev/null it blocks for ever waiting to be typed at.
 --
 -- COPIED IN SHAPE, NOT IN CODE. `boss-os` and this repo are separate properties and the standing
 -- rule is copy and diverge. Nothing here imports from there; the two claimers are separate scripts
@@ -67,17 +96,25 @@
 -- ═════════════════════════════════════════════════════════════════════════════════════════════
 
 -- ── THE HEARTBEAT ────────────────────────────────────────────────────────────────────────────
--- One row per device. The claimer pings every 30 seconds; the router treats a ping inside 120
--- seconds as fresh. Four missed pings before the lane is declared away: one miss is a nap or a
+-- One row per (seat, device). The claimer pings every 30 seconds; the router treats a ping inside
+-- 120 seconds as fresh. Four missed pings before a seat is declared away: one miss is a nap or a
 -- network blip, four consecutive misses over two minutes is a machine that is genuinely gone.
 --
--- The window is SHORT because the cost of being wrong is asymmetric. Declaring the lane away while
--- it is actually present costs a fraction of a cent on the paid lane. Declaring it present while it
--- is gone costs the card a parked run and up to ninety seconds of waiting before the chain rescues
--- it. So the check errs towards away, which is also the direction that keeps the firm's work moving
--- when the Mac is shut — the ordinary case.
-CREATE TABLE IF NOT EXISTS claude_code_device (
-  device_id     TEXT PRIMARY KEY,
+-- The window is SHORT because the cost of being wrong is asymmetric. Declaring a seat away while it
+-- is present costs a fraction of a cent on the lane that would have run anyway. Declaring it
+-- present while it is gone costs the card a parked run and up to ninety seconds of waiting before
+-- the chain rescues it. So the check errs towards away, which is also the direction that keeps the
+-- firm's work moving on the ordinary day when the laptop is shut.
+--
+-- SEAT IS PART OF THE KEY, AND THAT IS THE WHOLE OF THE INDEPENDENCE GUARANTEE. Claude Code being
+-- asleep says nothing about Codex: they are different subscriptions, different processes, and
+-- either can die on its own. One shared "is the Mac awake" row would couple them, and the first
+-- time Claude Code hung we would lose a seat that was working perfectly.
+CREATE TABLE IF NOT EXISTS subscription_seat_device (
+  -- 'claude_code' | 'codex'. Matches provider_registry.provider_key exactly, so there is one name
+  -- for a seat across the registry, the queue, the heartbeat and the run explanation.
+  seat          TEXT NOT NULL,
+  device_id     TEXT NOT NULL,
   hostname      TEXT,
   agent_version TEXT,
   -- ISO. The whole of the availability decision reads this column and nothing else.
@@ -85,11 +122,12 @@ CREATE TABLE IF NOT EXISTS claude_code_device (
   -- What the claimer says it is willing to take. Recorded for the Cockpit, never trusted as
   -- authority: eligibility is decided by the router, not claimed by the device.
   capabilities_json TEXT NOT NULL DEFAULT '[]',
-  first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (seat, device_id)
 );
 
--- "Which device was seen most recently" is the only query the router makes.
-CREATE INDEX IF NOT EXISTS idx_claude_code_device_seen ON claude_code_device (last_seen_at DESC);
+-- "Which device on THIS seat was seen most recently" is the only query the router makes.
+CREATE INDEX IF NOT EXISTS idx_seat_device_seen ON subscription_seat_device (seat, last_seen_at DESC);
 
 -- ── THE CLAIMABLE QUEUE ──────────────────────────────────────────────────────────────────────
 -- A run the router offers to this lane is PARKED here rather than executed by the Worker, because
@@ -107,16 +145,19 @@ CREATE INDEX IF NOT EXISTS idx_claude_code_device_seen ON claude_code_device (la
 -- with nothing anywhere able to end it. The reaper below is the third party that did not exist
 -- there, and `bk_local_runtime`'s "NO LOCAL HOST" disablement is the other failure this must not
 -- recreate: absence is ordinary here, so absence must be cheap rather than fatal.
-CREATE TABLE IF NOT EXISTS claude_code_run (
+CREATE TABLE IF NOT EXISTS subscription_seat_run (
   id              TEXT PRIMARY KEY,
+  -- Which seat this was parked for. A claimer asks for the seats it can actually serve, so a
+  -- machine with Claude Code installed and Codex not is never handed a Codex run.
+  seat            TEXT NOT NULL,
   -- The governed run this belongs to. The lane never creates work of its own: every row here is a
   -- leg of an `ai_run` that already passed every budget, egress and content-class gate.
   ai_run_id       TEXT,
   purpose         TEXT NOT NULL,
   -- The instruction, in words. Already through `classifyContent` and the egress gate upstream.
   prompt          TEXT NOT NULL,
-  -- PRIVATE_MODEL_ONLY in every row this lane accepts today. Stored rather than assumed so the
-  -- validator can assert the volume decision against real rows instead of against a comment.
+  -- Stored rather than assumed, so the validator can assert the volume decision against real rows
+  -- instead of against a comment. Today the router parks only PRIVATE_MODEL_ONLY work here.
   model_access    TEXT NOT NULL DEFAULT 'PRIVATE_MODEL_ONLY'
     CHECK (model_access IN ('PUBLIC_MODEL_APPROVED', 'PRIVATE_MODEL_ONLY')),
   work_card_id    TEXT,
@@ -142,9 +183,9 @@ CREATE TABLE IF NOT EXISTS claude_code_run (
 );
 
 -- The claim query: oldest QUEUED row first. The reaper query: anything not terminal, by age.
-CREATE INDEX IF NOT EXISTS idx_claude_code_run_status ON claude_code_run (status, created_at);
-CREATE INDEX IF NOT EXISTS idx_claude_code_run_claimed ON claude_code_run (status, claimed_at);
-CREATE INDEX IF NOT EXISTS idx_claude_code_run_ai_run ON claude_code_run (ai_run_id);
+CREATE INDEX IF NOT EXISTS idx_seat_run_status ON subscription_seat_run (seat, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_seat_run_claimed ON subscription_seat_run (status, claimed_at);
+CREATE INDEX IF NOT EXISTS idx_seat_run_ai_run ON subscription_seat_run (ai_run_id);
 
 -- ═════════════════════════════════════════════════════════════════════════════════════════════
 -- A LANE NO WORKER CAN CALL
@@ -232,6 +273,61 @@ INSERT OR IGNORE INTO model_evaluation (id, provider_model_id, task_class, metho
 VALUES
   ('mev_0187_claude_code', 'pm_claude_code_local', 'private-model-only-drafting', 'FIXTURE', 0, 0,
    'Registration decision, 17 Sep 2026, migration 0187. The firm''s PRIVATE_MODEL_ONLY work had one lane, claude-sonnet-5 at $2/$10, and one benched alternative behind an unfunded account. This registers the owner''s own Claude Max subscription as a $0 frontier lane for that slice only. NOT a quality benchmark: no run has been served here yet, and provider_lane_health starts it at zero completions so it cannot undercut a proven lane on price until it has actually finished work.',
+   'system');
+
+-- ═════════════════════════════════════════════════════════════════════════════════════════════
+-- RUNG 0b — THE CODEX SEAT, on the same machinery and with the same reservations.
+--
+-- Registered identically to rung 0a and for the same reasons, so the only things worth saying here
+-- are the ways it DIFFERS.
+--
+-- THE NO-TRAINING BASIS IS DIFFERENT AND IS WEAKER, AND THAT IS SAID PLAINLY BECAUSE IT DECIDES
+-- WHETHER LP NAMES MAY GO HERE. Anthropic's Commercial Terms §B is an unconditional contractual
+-- prohibition — "Anthropic may not train models on Customer Content from Services" — which is why
+-- 0184 accepted it for `claude-haiku-4.5` and why rung 0a carries private work without argument.
+-- OpenAI's consumer ChatGPT terms are NOT that: on a Plus plan, training on conversations is a
+-- SETTING, defaulted on for chat and off for Codex/API-shaped traffic, and a setting an account
+-- holder can flip is not a contractual bar.
+--
+-- SO THIS SEAT IS REGISTERED PRIVATE-CAPABLE ONLY TO THE SAME LABEL AS RUNG 0a — PUBLIC and
+-- INTERNAL, never CONFIDENTIAL — and `scripts/validate/two-seats-she-already-pays-for.mjs` fails if
+-- anybody widens either seat past INTERNAL without a migration that argues for it. That is the
+-- honest position given what can be established from this repository: the traffic is Codex-shaped
+-- rather than chat-shaped, which is the category OpenAI excludes by default, but "excluded by
+-- default" is a weaker sentence than "may not", and the difference belongs on the record rather
+-- than in somebody's memory.
+
+INSERT OR IGNORE INTO provider_registry
+  (id, provider_key, display_name, enabled, kill_switched, capabilities_json, cost_metadata_json,
+   base_url, training_permitted, claimable, firm_scope)
+VALUES
+  ('prov_codex', 'codex', 'Codex CLI (her ChatGPT seat)', 1, 0, '["text-completion"]',
+   '{"note":"OpenAI Codex CLI running under the owner''s ChatGPT Plus subscription on her own machine. NOT an API vendor: the Worker cannot dial it, and the local auth.json carries auth_mode=chatgpt with a null OPENAI_API_KEY, so no metered billing is involved. A run assigned here is parked in subscription_seat_run and the claimer takes it. Absence is the normal state: when the machine is asleep the heartbeat goes stale and the router skips this seat with zero delay."}',
+   NULL, 0, 1, 'west-peek');
+
+INSERT OR IGNORE INTO provider_data_policy (id, provider_id, privacy_label, allowed) VALUES
+  ('pdp_codex_public', 'prov_codex', 'PUBLIC', 1),
+  ('pdp_codex_internal', 'prov_codex', 'INTERNAL', 1);
+
+INSERT OR IGNORE INTO provider_model
+  (id, provider_id, model, display_name, capabilities_json, context_window, max_output_tokens,
+   supports_tools, supports_reasoning, latency_source, max_data_class,
+   pricing_state, pricing_source_note, pricing_sourced_at, status, registered_by, firm_scope)
+VALUES
+  ('pm_codex_local', 'prov_codex', 'codex-local', 'Codex CLI on her Mac',
+   '["text-completion"]', 272000, 8192, 1, 1, 'UNKNOWN', 'INTERNAL',
+   'SOURCED',
+   'Zero, and the zero is real: ~/.codex/auth.json on the claiming machine records auth_mode=chatgpt with a null OPENAI_API_KEY, so the CLI draws on a flat-fee ChatGPT Plus subscription and no metered billing occurs. Recorded as plan-equivalent usage, not as a bill. Registered as the second private-capable subscription seat so that one laptop process dying does not take the firm''s only free frontier capacity with it. Confirmed by a real headless generation on 17 Sep 2026; the claimer re-verifies auth_mode at startup rather than trusting this note, because a seat that has silently fallen back to API billing would spend real money while reporting $0.',
+   '2026-09-17', 'ACTIVE', 'migration:0187', 'west-peek');
+
+INSERT OR IGNORE INTO provider_pricing_snapshot (id, provider_id, model, input_per_mtok_usd, output_per_mtok_usd, request_usd, captured_at)
+SELECT 'pps_0187_codex', 'prov_codex', 'codex-local', 0.0, 0.0, 0.0, '2026-09-17T00:00:00.000Z'
+WHERE NOT EXISTS (SELECT 1 FROM provider_pricing_snapshot WHERE id = 'pps_0187_codex');
+
+INSERT OR IGNORE INTO model_evaluation (id, provider_model_id, task_class, method, score, sample_size, notes, evaluated_by)
+VALUES
+  ('mev_0187_codex', 'pm_codex_local', 'private-model-only-drafting', 'FIXTURE', 0, 0,
+   'Registration decision, 17 Sep 2026, migration 0187. The second subscription seat, registered alongside Claude Code so that neither is a single point of failure for the firm''s free frontier capacity. A real headless generation completed before registration. NOT a quality benchmark and NOT a claim that the two seats are interchangeable: provider_lane_health starts it at zero completions, and model_job_outcome will reorder the two on their actual results once twenty decided outcomes exist.',
    'system');
 
 -- ═════════════════════════════════════════════════════════════════════════════════════════════

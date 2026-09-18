@@ -1082,8 +1082,8 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
    * Never throws — see `reapClaudeCodeRuns`. Housekeeping that can break the tick is worse than
    * housekeeping that skips a minute.
    */
-  const { reapClaudeCodeRuns } = await import("../ai/claudeCodeLane");
-  const claimed = await reapClaudeCodeRuns(env, now);
+  const { reapSeatRuns } = await import("../ai/subscriptionSeats");
+  const claimed = await reapSeatRuns(env, now);
   // Dynamic, matching the runDailyForAll import below — dailyIntelligence reaches back into this
   // module, and a top-level import here would close that cycle at load time.
   const { closeAbandonedReports } = await import("./dailyIntelligence");
@@ -1110,7 +1110,7 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
      * answered on another lane at the time, and always worth seeing if it becomes a pattern.
      */
     results.push({
-      job_key: "_claude_code_queue",
+      job_key: "_subscription_seat_queue",
       status: "SWEPT",
       summary:
         `returned ${claimed.returnedToPool.length} silent claim(s) to the pool and closed ` +
