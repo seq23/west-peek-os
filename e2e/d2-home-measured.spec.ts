@@ -127,7 +127,7 @@ test("Home holds its measured numbers: contrast, tap targets, overflow, unwrappe
             if (getComputedStyle(el).overflowX === "auto" || getComputedStyle(el).overflowX === "scroll") return false;
             return r.width > 0 && Math.round(r.right) > w + 1;
           })
-          .map((el) => `${el.tagName.toLowerCase()}.${(el.className || "").toString().split(" ")[0]} → ${Math.round(el.getBoundingClientRect().right)}px`)
+          .map((el) => `${el.tagName.toLowerCase()}.${(el.className || "").toString().split(" ")[0]}[${el.getAttribute("data-testid") || ""}] "${(el.textContent || "").trim().slice(0, 40)}" → ${Math.round(el.getBoundingClientRect().right)}px`)
           .slice(0, 8);
       },
       vp.width,

@@ -2412,7 +2412,17 @@ details h3 {
 .composition-fill { display: block; height: 100%; border-radius: var(--radius-xs); }
 .composition-pct { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }
 
-.connect-list li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-lg); }
+/* WRAPS, because at 320px it did not: the name and what-it-unlocks column held its content width
+   and pushed `Connect` off the right edge of the phone. Found by `e2e/d2-home-measured`, which
+   measures every element's right edge against the viewport rather than eyeballing a screenshot. */
+.connect-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-lg);
+}
+.connect-list li > div:first-child { flex: 1 1 14rem; min-width: 0; }
 
 /* Notifications: the row is a message plus what you can do about it, in fixed positions. */
 .notification-row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-lg); }
@@ -2790,10 +2800,16 @@ details h3 {
   margin: var(--space-xs) 0 var(--space-lg);
 }
 
+/* A chip is shrink-to-fit, so a long suggested interest ("how attention is bought, held and
+   measured") sat at its own content width and ran off a 320px screen — `flex-wrap` on the row
+   cannot help a single item wider than the row. It may now wrap inside itself. */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: var(--space-2xs) var(--space-sm);
   border: 1px solid var(--wp-line-strong);
   border-radius: var(--radius-pill);
