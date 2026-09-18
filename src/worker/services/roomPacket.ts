@@ -75,6 +75,8 @@ import { howToAnswer } from "../../shared/events/packetDecisionToken";
 import { tokenForPacket } from "./packetReplyDecision";
 import { guidanceBlock } from "../../shared/skills/library";
 import { writtenGuidance } from "./firmSkills";
+import { sendOrPreview } from "./previewApproval";
+import { parkerAddressedNote, parkerSponsorAsk } from "../../shared/events/parkerNote";
 import { sendPartnersEmail } from "./execEmail";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
@@ -1755,7 +1757,96 @@ export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: 
     dedupeKey: `room_packet:${packet.id}:proposed`,
     firmScope: packet.firm_scope,
   }).catch(() => undefined);
+  /*
+   * AND THE ADDRESSED NOTE, WHEN THE CARD SAYS WHO THIS IS FOR (18 Sep 2026).
+   *
+   * Everything above is the partners' copy: a status report to two people who already know what a
+   * West Peek Room is. It is addressed to nobody outside the firm, which is why a partner who
+   * wanted a sponsor to see the packet had exactly one move left — forward it from her own mailbox,
+   * putting her name on Parker's work.
+   *
+   * `result_recipient` on the card is her answering "Who is this for?". When it names somebody,
+   * Parker composes a SECOND, DIFFERENT message — a letter to that person, with none of the firm's
+   * economics in it — and puts it through the lane. Nothing is sent by this: the recipient is
+   * outside the firm, so the send boundary refuses it until she presses Send it, and then it goes
+   * from Parker's own address in Parker's own words.
+   */
+  await emailAddressedNote(env, packet, { workshop: workshop !== null, monthName });
   return { sent, failed };
+}
+
+/**
+ * The covering note to the person the card names, through the preview lane.
+ *
+ * QUIET WHEN THERE IS NOBODY TO WRITE TO, and that is a legitimate stop rather than an inert
+ * branch: most packets are for the partners to decide on and have no outside recipient at all. It
+ * says so on the spine either way, so "Parker sent nothing" can be told apart from "Parker was
+ * never asked to".
+ */
+async function emailAddressedNote(
+  env: Env,
+  packet: PacketRow,
+  opts: { workshop: boolean; monthName: string },
+): Promise<void> {
+  if (!packet.work_card_id) return;
+  const card = await env.WP_OS_DB.prepare(
+    `SELECT id, kind, result_recipient, preview_first, preview_owner_id, requested_by_email, firm_scope
+       FROM work_card WHERE id = ?1`,
+  )
+    .bind(packet.work_card_id)
+    .first<{
+      id: string;
+      kind: string | null;
+      result_recipient: string | null;
+      preview_first: number | null;
+      preview_owner_id: string | null;
+      requested_by_email: string | null;
+      firm_scope: string;
+    }>();
+  const to = (card?.result_recipient ?? "").trim().toLowerCase();
+  if (!card || !to) return;
+
+  const what = opts.workshop ? "Workshop" : "Room";
+  const workshopView = workshopViewOf(packet);
+  const note = parkerAddressedNote({
+    recipient: to,
+    what,
+    monthName: opts.monthName,
+    title: packet.title.replace(/^Workshop: /, ""),
+    premise: workshopView?.promise ?? packet.central_question ?? packet.theme,
+    venue: opts.workshop ? WORKSHOP_WHERE : null,
+    targetMin: packet.target_min,
+    targetMax: packet.target_max,
+    packetUrl: packet.document_id
+      ? `https://os.joinwestpeek.com/api/documents/${packet.document_id}/download`
+      : null,
+    theAsk: parkerSponsorAsk({ what, monthName: opts.monthName }),
+  });
+
+  const out = await sendOrPreview(env, {
+    to,
+    email: note,
+    objectType: "room_packet",
+    objectId: packet.id,
+    workCardId: card.id,
+    cardKind: card.kind ?? null,
+    cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
+    tickedByFirmUserId: card.preview_owner_id ?? null,
+    requestedByEmail: card.requested_by_email ?? null,
+    firmScope: packet.firm_scope,
+    actorId: "aie_parker",
+    what: `Parker's note to ${to} about the ${opts.monthName} ${what}`,
+  });
+
+  await appendEvent(env, {
+    eventType: out.previewed ? "room_packet.note_previewed" : "room_packet.note_sent",
+    actorType: "ai_employee",
+    actorId: "aie_parker",
+    objectType: "room_packet",
+    objectId: packet.id,
+    firmScope: packet.firm_scope,
+    payload: { recipient: to, owner: out.owner ?? null, approval_id: out.approvalId ?? null, detail: out.reason },
+  }).catch(() => undefined);
 }
 
 // ── Decisions ────────────────────────────────────────────────────────────────
