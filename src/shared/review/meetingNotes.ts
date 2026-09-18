@@ -1,4 +1,5 @@
 import { REVIEW_HEADINGS } from "./weeklyAgenda";
+import { PARTNERS } from "../registry/partners";
 
 /**
  * Turning meeting notes into agenda items (P37).
@@ -123,12 +124,12 @@ export function parseProposals(raw: string): ProposedItem[] | null {
  * somebody outside the firm, and turning that into an owner would assign work to a person this
  * system has never heard of.
  */
-export function resolveOwner(hint: string | null): "fu_sequoia_taylor" | "fu_scooter_taylor" | null {
+export function resolveOwner(hint: string | null): string | null {
   if (!hint) return null;
   const h = hint.toLowerCase();
-  const seq = h.includes("sequoia");
-  const sco = h.includes("scooter");
-  if (seq && !sco) return "fu_sequoia_taylor";
-  if (sco && !seq) return "fu_scooter_taylor";
-  return null;
+  // ASKED OF THE REGISTRY, not matched against two literals. The partners are named in one place
+  // (shared/registry/partners.ts) and this reads it, so a note naming a partner resolves to the
+  // same `firm_user` id the mail boundary and the productions duty use.
+  const named = PARTNERS.filter((p) => h.includes(p.firstName.toLowerCase()));
+  return named.length === 1 ? named[0]!.firmUserId : null;
 }

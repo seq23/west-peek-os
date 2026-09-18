@@ -1,4 +1,5 @@
 import { chiefOfStaffFor } from "../work/chiefOfStaff";
+import { PARTNER_EMAILS } from "../registry/partners";
 
 /**
  * When a message in the firm's mailbox is an ASSIGNMENT, and when it is merely mail.
@@ -62,11 +63,14 @@ import { chiefOfStaffFor } from "../work/chiefOfStaff";
  * CLOSED, AND SHORT ON PURPOSE. This list is the whole security boundary. Adding to it is granting
  * somebody the ability to direct the firm's employees by writing an email, so it is a decision a
  * human makes in a commit, never configuration and never a database row an admin path could touch.
+ *
+ * DERIVED FROM `shared/registry/partners.ts` SINCE 17 SEP 2026, and nothing about the boundary moved
+ * by doing it. The addresses are the same two, still written in a commit, still not configuration —
+ * they are now written in the ONE place that also holds each partner's `firm_user` id, so a feature
+ * that needs to go from an authenticated address to the person it belongs to no longer has to type
+ * a fifth copy of who the partners are. See that file for the four copies this replaced.
  */
-export const ASSIGNING_PARTNERS: readonly string[] = [
-  "sequoia@westpeek.ventures",
-  "scooter@westpeek.ventures",
-];
+export const ASSIGNING_PARTNERS: readonly string[] = PARTNER_EMAILS;
 
 /**
  * Who wrote the `Authentication-Results` we are willing to believe.

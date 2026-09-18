@@ -7,9 +7,9 @@ import { fromAddressFor } from "../services/sendAs";
 import { trySendAsPartner } from "../services/googleConnect";
 import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
 import { aiOutboundSwitches, mayAiEmail } from "../../shared/policy/aiOutbound";
-import { MANAGING_PARTNERS } from "../../shared/registry/managingPartners";
+import { PARTNERS, PARTNER_EMAILS } from "../../shared/registry/partners";
 import { employeeSenderAddress } from "../../shared/registry/employeeMail";
-import type { EmailSendResult } from "./emailTransport";
+import { isPreviewEnv, type EmailSendResult } from "./emailTransport";
 import {
   cloudflareEmailBlockedReason,
   isCloudflareEmailEnabled,
@@ -241,6 +241,38 @@ export async function executeExternalEffect(
   requestId: string,
   receiptId: string | undefined,
 ): Promise<EffectExecutionResult> {
+  /*
+   * A PREVIEW NEVER EXECUTES AN EXTERNAL EFFECT — the second of the two stops that make
+   * "no external effects, ever" structural rather than remembered (17 Sep 2026).
+   *
+   * The first is at the transports, where a preview's recipient list is REPLACED with Sequoia's
+   * address alone (see `applyPreviewBoundary`). This one is here because THIS is the path that can
+   * reach somebody outside the firm at all: a founder, an LP, a journalist, through an approval
+   * receipt a human decided. Redirecting that would still be wrong — a preview must not spend a
+   * partner's one-time approval, and an approval consumed by a rehearsal is an approval that no
+   * longer exists when the real send is made.
+   *
+   * REFUSED BEFORE THE REQUEST ROW IS EVEN READ, which is stronger than refusing before
+   * `authorize()`: there is no branch, no state and no id for which this function does anything
+   * else in a preview. The receipt is left unconsumed and unconsumable, and nothing about the
+   * refusal is recoverable by retrying inside the preview — which is the point.
+   */
+  if (isPreviewEnv(env)) {
+    await appendEvent(env, {
+      eventType: "effect.refused_in_preview",
+      actorType: actor.type === "HUMAN" ? "firm_user" : actor.type === "AI" ? "ai_employee" : "system",
+      actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+      objectType: "external_effect_request",
+      objectId: requestId,
+      payload: { external_effect_request_id: requestId, receipt_id: receiptId ?? null },
+    });
+    throw new EffectError(
+      403,
+      "preview_cannot_send",
+      "this is a preview: nothing reaches anybody outside the firm, and no approval is consumed",
+    );
+  }
+
   const request = await env.WP_OS_DB.prepare("SELECT * FROM external_effect_request WHERE id = ?1")
     .bind(requestId)
     .first<ExternalEffectRequestRow>();
@@ -355,6 +387,16 @@ export async function executeExternalEffect(
  * on it is EXTERNAL, which is the safe direction to be wrong in.
  */
 function managingPartnerEmails(env: Env): string[] {
-  const domain = env.WP_OS_PARTNER_EMAIL_DOMAIN ?? "westpeek.ventures";
-  return MANAGING_PARTNERS.map((mp) => `${mp.firstName.toLowerCase()}@${domain}`);
+  /*
+   * THE REGISTRY'S OWN ADDRESSES WHEN THE DOMAIN IS THE FIRM'S, rebuilt from first names only when
+   * an environment has overridden the domain (a preview stack, a rehearsal domain). Before 17 Sep
+   * 2026 this ALWAYS rebuilt the address from a first name and a domain, which is a third way of
+   * spelling a partner's address and could disagree with the two that already existed. Asking
+   * `shared/registry/partners.ts` is the default; the override is kept because a firm's mail domain
+   * is not something to hard-code, and anything not on the list is EXTERNAL either way — the safe
+   * direction to be wrong in.
+   */
+  const domain = env.WP_OS_PARTNER_EMAIL_DOMAIN;
+  if (!domain) return [...PARTNER_EMAILS];
+  return PARTNERS.map((p) => `${p.firstName.toLowerCase()}@${domain}`);
 }

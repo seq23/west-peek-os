@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { defuseTriggers } from "./emailTransport";
+import { applyPreviewBoundary, defuseTriggers } from "./emailTransport";
 import type { EmailPayload, EmailSendResult } from "./emailTransport";
 
 /**
@@ -64,9 +64,17 @@ export function isDeliverableAddress(to: string): boolean {
  */
 export async function sendViaResend(
   env: Env,
-  payload: EmailPayload,
+  request: EmailPayload,
   fetchImpl: typeof fetch = fetch,
 ): Promise<EmailSendResult> {
+  /*
+   * THE SEND BOUNDARY, FIRST — before the key is read, before a recipient is validated, before any
+   * request exists. In preview mode this REPLACES the recipient list with Sequoia's address alone
+   * and stamps the header; outside preview it returns the payload untouched. See
+   * `applyPreviewBoundary` in emailTransport.ts for why the rule lives at the transport rather than
+   * in each of the callers that can reach one.
+   */
+  const payload = applyPreviewBoundary(env, request);
   const blocked = emailSendBlockedReason(env);
   if (blocked) return { sent: false, provider: "resend", provider_message_id: null, detail: blocked };
 
@@ -102,6 +110,9 @@ export async function sendViaResend(
         text,
         ...(html ? { html } : {}),
         ...(payload.replyTo ? { reply_to: payload.replyTo } : {}),
+        // Custom headers, documented by Resend with `In-Reply-To` and `References` named. Never a
+        // `Message-ID`: SES overrides it, so one set here would be a thread key that never arrives.
+        ...(payload.headers && Object.keys(payload.headers).length > 0 ? { headers: payload.headers } : {}),
       }),
       signal: controller.signal,
     });

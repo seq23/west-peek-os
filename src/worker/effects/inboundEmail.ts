@@ -8,6 +8,8 @@ import { pdfAttachments } from "./mimeAttachments";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 import { applyReplyDecision } from "../services/packetReplyDecision";
+import { writtenAndQuoted } from "../../shared/intake/replyBody";
+import { steerFromReply } from "../services/emailThread";
 
 /**
  * Mail arriving at the firm's machine inbox.
@@ -105,6 +107,13 @@ export interface InboundSummary {
   triggers: string[];
   routed: Array<{ tag: string; owner: string; lands: string }>;
   unrouted: boolean;
+  /**
+   * Tags that appear ONLY in the quoted original of a reply, and therefore did not fire.
+   *
+   * On the event so the behaviour is diagnosable. Without it, "why did my reply not open a second
+   * company" and "why is the inbox ignoring my tag" look identical from the outside.
+   */
+  quotedOnly?: string[];
   reason?: string;
 }
 
@@ -112,12 +121,59 @@ export interface InboundSummary {
  * Decide what an arriving message means. Pure, so the routing table can be tested without a
  * mail runtime and the handler below stays a thin shell around it.
  */
-export function classifyInbound(input: { to: string; from: string; subject: string; body: string }): InboundSummary {
+export function classifyInbound(input: {
+  to: string;
+  from: string;
+  subject: string;
+  body: string;
+  /**
+   * The threading headers, so a REPLY can be told from a fresh message or a forward. Optional, so
+   * every existing caller and test keeps its behaviour: without them nothing is a reply and the
+   * whole body is scanned, exactly as before.
+   */
+  inReplyTo?: string | null;
+  references?: string | null;
+}): InboundSummary {
   // Decoded before matching AND before recording: the subject is the natural place to put a trigger,
   // and it is the header most likely to be encoded.
   const subject = decodeMimeHeader(input.subject);
-  const haystack = `${subject}\n${input.body}`;
-  const found: EmailTrigger[] = triggersIn(haystack);
+
+  /*
+   * ── A TAG IN A QUOTE IS NOT A TAG THE PERSON TYPED (17 Sep 2026) ────────────────────────────
+   *
+   * THE BUG. This used to scan `subject + the whole body`. Every mail client quotes the message
+   * being replied to underneath the answer, so:
+   *
+   *   Scooter sends "#wpdealflow Northwind Robotics"      → a funnel entry opens.
+   *   Scooter replies into that thread, "skip this one"   → his client quotes the original, the
+   *   quote still says `#wpdealflow`, this scan sees it AGAIN, and a SECOND funnel entry opens for
+   *   a company he has just asked to drop.
+   *
+   * The same shape re-files a `#wpupdate` and re-proposes a `#wpnetwork` person every time somebody
+   * answers one in prose. `defuseTriggers` does not close it and it is worth saying why: that guard
+   * rewrites tags in mail the SYSTEM sends, and has nothing to say about a tag the PARTNER typed in
+   * the message he is now replying to.
+   *
+   * THE FIX IS NARROW. A REPLY is scanned for triggers in its written part only. A FORWARD is not
+   * touched, because a forward's quoted text IS the payload — this mailbox's most common shape, and
+   * scanning only the new words would break deal intake for the case it was built for. See
+   * `shared/intake/replyBody.ts` for how the two are told apart.
+   *
+   * WHAT IS QUOTED IS STILL READ, just not by the trigger scan: the raw message goes on to the
+   * routing card and to Porter exactly as before, which is what gives a bare "not this one"
+   * something to refer to.
+   */
+  const split = writtenAndQuoted(input.body, {
+    inReplyTo: input.inReplyTo,
+    references: input.references,
+    subject,
+  });
+  const found: EmailTrigger[] = triggersIn(`${subject}\n${split.written}`);
+  // Reported, not routed. "A tag was in the quote and did not fire" is the one fact that makes this
+  // behaviour diagnosable instead of mysterious the first time somebody expects a re-trigger.
+  const quotedOnly = split.applied
+    ? triggersIn(split.quoted).map((t) => t.tag).filter((tag) => !found.some((f) => f.tag === tag))
+    : [];
 
   return {
     to: input.to,
@@ -126,6 +182,7 @@ export function classifyInbound(input: { to: string; from: string; subject: stri
     triggers: found.map((t) => t.tag),
     routed: found.map((t) => ({ tag: t.tag, owner: t.owner, lands: t.lands })),
     unrouted: found.length === 0,
+    quotedOnly,
     ...(found.length === 0 ? { reason: NO_TRIGGER_ROUTE.does } : {}),
   };
 }
@@ -385,7 +442,15 @@ export async function handleInboundEmail(
   // subject carries the company name.
   const trueSubject = origin?.subject ?? subject;
 
-  const summary = classifyInbound({ to: message.to, from: trueSender, subject: trueSubject, body: raw });
+  /*
+   * THE THREADING HEADERS. Read once, here, and handed to everything that needs to know whether
+   * this message is a reply: the trigger scan (so a quoted tag cannot fire), and the steer matcher
+   * (so a reply reaches the work it is about).
+   */
+  const inReplyTo = message.headers.get("in-reply-to");
+  const references = message.headers.get("references");
+
+  const summary = classifyInbound({ to: message.to, from: trueSender, subject: trueSubject, body: raw, inReplyTo, references });
 
   /*
    * ── A REPLY THAT DECIDES A PACKET, READ BEFORE ANYTHING ELSE ─────────────────────────────────
@@ -454,6 +519,72 @@ export async function handleInboundEmail(
         from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
         owner: NO_TRIGGER_ROUTE.owner, routing_card_id: unsureCard,
         packet_decision: "NOT_READ", packet_decision_detail: replyDecision.capture,
+      },
+    });
+    return;
+  }
+
+  /*
+   * ── A REPLY THAT STEERS A PIECE OF WORK ──────────────────────────────────────────────────────
+   *
+   * Read after the packet decision (which is destructive and carries its own capability token) and
+   * before the trigger ladder, for the same reason the packet decision is read before it: a reply is
+   * ALREADY addressed. There is nothing for the ladder to work out, and running it first would let a
+   * reply whose quoted original names a company open a funnel entry for it.
+   *
+   * THE OUTER HEADERS, not `trueSender` — the same distinction the assignment check makes, and for
+   * the same reason: `trueSender` is the FORWARDED origin, so reading authority off it would let
+   * anyone whose email a partner forwards steer the firm's work.
+   *
+   * IT DOES NOT SWALLOW THE MESSAGE when it fails. A reply carrying one of our tokens that could not
+   * be acted on — an unknown token, an unauthenticated sender, nothing written above the quote —
+   * falls through to the routing card with the reason on it, which is the "unsure means Porter,
+   * never a guess" rule landing on the door Porter already owns.
+   */
+  const steer = await steerFromReply(env, {
+    fromHeader: message.headers.get("from"),
+    authenticationResults: message.headers.get("authentication-results"),
+    subject,
+    raw,
+    inReplyTo,
+    references,
+  });
+  if (steer.steered) {
+    await appendEvent(env, {
+      eventType: "inbound_email.received",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: {
+        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
+        steered: { thread_token: steer.thread!.token, card_kind: steer.thread!.card_kind, employee: steer.thread!.employee },
+        // What did NOT fire because it was only in the quoted original. The whole point of the fix.
+        ...(summary.quotedOnly?.length ? { quoted_only_triggers: summary.quotedOnly } : {}),
+      },
+    });
+    return;
+  }
+  if (steer.attempted && steer.reason) {
+    const unsureCard = await openRoutingCard(env, {
+      headline: "A reply I could not act on",
+      subject,
+      from: sender,
+      raw,
+      triggers: [],
+      why: `This replies to one of our own notes and I did not act on it: ${steer.reason}. Nothing was changed.`,
+    });
+    await appendEvent(env, {
+      eventType: "inbound_email.unrouted",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: {
+        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
+        owner: NO_TRIGGER_ROUTE.owner, routing_card_id: unsureCard, steer_refused: steer.reason,
       },
     });
     return;
@@ -753,6 +884,9 @@ export async function handleInboundEmail(
       owner: summary.unrouted ? NO_TRIGGER_ROUTE.owner : undefined,
       mailbox: INTAKE_MAILBOX,
       known_triggers: EMAIL_TRIGGERS.map((t) => t.tag),
+      // Tags that were in the quoted original of a reply and therefore did NOT fire. Recorded so
+      // the behaviour is diagnosable rather than mysterious.
+      ...(summary.quotedOnly?.length ? { quoted_only_triggers: summary.quotedOnly } : {}),
       ...(routingCardId ? { routing_card_id: routingCardId } : {}),
       /*
        * THE VERDICT IS ON THE SPINE FOR EVERY MESSAGE, not only the ones that passed.

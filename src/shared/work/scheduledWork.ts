@@ -115,8 +115,10 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
       "LinkedIn profiles, agency team pages, speaker lists, portfolios, award lists. Every profile URL " +
       "is checked, every candidate is judged against the written archetype, and Scooter gets ONE note — " +
       "who they are, why they fit with the page that shows it, a suggested opening line, a fit score. " +
-      "Candidates are remembered week to week; he marks each Contacted or Passed on Home and it never " +
-      "comes back. Nothing is sent to a candidate from here.",
+      "Candidates are remembered week to week, so a name already reported is listed once as still on " +
+      "the table rather than repeated. Scooter keeps no list and marks nothing: he steers by replying " +
+      "to the email in plain words, and Walker reads that before the next search. Nothing is sent to " +
+      "a candidate from here.",
     why: "So the agency's hire search runs every week without Scooter running it, and every name in the note is a real person on a live page.",
     deliveredBy: ["Walker"],
   },

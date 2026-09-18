@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
 import { JOB_FACTS, cadenceInWords, delivererLine, delivererNames, isOnRequest } from "@shared/work/scheduledWork";
+import { CARD_OPENING_JOB_KEYS, PREVIEW_COST_NOTICE, PREVIEW_RECIPIENT } from "@shared/work/preview";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
 /**
@@ -91,6 +92,35 @@ export function JobsPage({ me }: { me: MeResponse }) {
     jobs.reload();
   }
 
+  /**
+   * SEE IT BEFORE IT HAPPENS — the real note, in her inbox, changing nothing.
+   *
+   * WHY A BUTTON RATHER THAN A COMMAND. Production is behind Cloudflare Access, so the alternative
+   * was handing the owner a curl line and an Access token to fetch first. She is already signed in
+   * on this page; the browser is the credential.
+   *
+   * IT SAYS WHAT IT COSTS BEFORE IT RUNS, because it is not a dry run. Real searches, real model
+   * calls, real money against the firm's caps — the only things that differ from the scheduled run
+   * are that the mail goes to her alone and that nothing is written.
+   */
+  async function previewIt(j: Job): Promise<void> {
+    const ok = window.confirm(
+      `Preview "${j.name}"?\n\n${PREVIEW_COST_NOTICE}\n\nThe result is emailed to ${PREVIEW_RECIPIENT} and to nobody else, whoever it would normally go to. Nothing is filed, no card is closed, and the scheduled run still has all its work to do.`,
+    );
+    if (!ok) return;
+    setMessage(`Previewing "${j.name}" — this does the real work, so give it a minute.`);
+    const res = await api<{ preview?: { detail: string; sent_to: string; blocked: boolean }; error?: string; detail?: string }>(
+      "/api/preview",
+      { method: "POST", body: { kind: "JOB", key: j.job_key } },
+    );
+    const p = res.data?.preview;
+    setMessage(
+      p
+        ? `${j.name}: ${p.blocked ? "stopped before sending" : "preview sent"} to ${p.sent_to} — ${p.detail}`
+        : `Preview failed (HTTP ${res.status})${res.data?.detail ? ` — ${res.data.detail}` : ""}.`,
+    );
+  }
+
   /*
    * Sorted by what needs attention: anything broken first, then anything paused, then the jobs
    * quietly working. A page where the healthy and the broken are interleaved by job_key makes you
@@ -158,6 +188,20 @@ export function JobsPage({ me }: { me: MeResponse }) {
           <button type="button" className="btn-strong" data-testid={`job-run-${j.job_key}`} onClick={() => void runNow(j)}>
             Run it now
           </button>
+          {/* Only for the jobs whose work is a deliverable somebody receives. A tick that reads two
+              feeds has nothing to preview, and offering the button there would be a control that
+              answers "not previewable" — which is worse than no button. */}
+          {CARD_OPENING_JOB_KEYS.includes(j.job_key) && (
+            <button
+              type="button"
+              className="btn-ghost"
+              data-testid={`job-preview-${j.job_key}`}
+              title={`Runs it for real and emails the result to ${PREVIEW_RECIPIENT} only. Nothing is filed and the scheduled run is untouched.`}
+              onClick={() => void previewIt(j)}
+            >
+              Preview it to me
+            </button>
+          )}
           {paused ? (
             <button
               type="button"

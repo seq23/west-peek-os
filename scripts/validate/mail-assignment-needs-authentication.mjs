@@ -42,6 +42,18 @@ import path from "node:path";
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SRC = path.join(ROOT, "src");
 const AUTHORITY_FILE = path.join("src", "shared", "intake", "partnerAuthority.ts");
+/*
+ * WHERE THE TWO ADDRESSES ARE NOW WRITTEN (17 Sep 2026).
+ *
+ * `ASSIGNING_PARTNERS` used to hold the literals. It is now a view of the one place the firm answers
+ * "is this one of the two partners?", because a list of addresses with no `firm_user` ids could not
+ * answer that question for a feature that needed the join, and a fifth copy was being typed.
+ *
+ * NOTHING ABOUT THE BOUNDARY MOVED and this scan is STRICTER than it was: it reads the literals
+ * where they live now, AND requires that `ASSIGNING_PARTNERS` is derived from them rather than
+ * retyped. Before, a second copy in the registry could have disagreed with this one silently.
+ */
+const REGISTRY_FILE = path.join("src", "shared", "registry", "partners.ts");
 
 const EXPECTED_PARTNERS = ["scooter@westpeek.ventures", "sequoia@westpeek.ventures"];
 
@@ -63,24 +75,42 @@ export function checkSources(sources) {
   const violations = [];
   let assignmentSites = 0;
 
+  // 1 · The allow-list, exactly, where it is written — and derived, not retyped, where it is used.
+  const registryRaw = sources[REGISTRY_FILE];
+  if (!registryRaw) {
+    violations.push(`${REGISTRY_FILE} is missing — nothing states who the two partners are.`);
+  } else {
+    const registry = stripComments(registryRaw);
+    const listed = [...registry.matchAll(/["']([a-z0-9._-]+@[a-z0-9.-]+)["']/gi)]
+      .map((m) => m[1].toLowerCase())
+      .filter((a) => a.endsWith("@westpeek.ventures"));
+    const unique = [...new Set(listed)].sort();
+    if (unique.length === 0) {
+      violations.push(`${REGISTRY_FILE}: no partner addresses found at all, so the allow-list is not readable here.`);
+    } else if (unique.join("|") !== EXPECTED_PARTNERS.join("|")) {
+      violations.push(
+        `${REGISTRY_FILE}: the assigning allow-list is [${unique.join(", ")}], not exactly ` +
+          `[${EXPECTED_PARTNERS.join(", ")}]. Adding an address grants somebody the ability to direct ` +
+          `the firm's employees by writing an email — a decision, never an incidental edit.`,
+      );
+    }
+  }
+
   const authorityRaw = sources[AUTHORITY_FILE];
   if (!authorityRaw) {
     violations.push(`${AUTHORITY_FILE} is missing — nothing decides who may assign work by email.`);
   } else {
     const code = stripComments(authorityRaw);
 
-    // 1 · The allow-list, exactly.
-    const listed = [...code.matchAll(/["']([a-z0-9._-]+@[a-z0-9.-]+)["']/gi)]
-      .map((m) => m[1].toLowerCase())
-      .filter((a) => a.endsWith("@westpeek.ventures"));
-    const unique = [...new Set(listed)].sort();
-    if (unique.length === 0) {
-      violations.push(`${AUTHORITY_FILE}: no partner addresses found at all, so the allow-list is not readable here.`);
-    } else if (unique.join("|") !== EXPECTED_PARTNERS.join("|")) {
+    /*
+     * DERIVED, NOT RETYPED. A second copy of the two addresses here could disagree with the registry
+     * silently, which is the whole defect the registry was created to remove — and it would disagree
+     * on the one list that is the mail security boundary.
+     */
+    if (!/ASSIGNING_PARTNERS[^=]*=\s*PARTNER_EMAILS/.test(code)) {
       violations.push(
-        `${AUTHORITY_FILE}: the assigning allow-list is [${unique.join(", ")}], not exactly ` +
-          `[${EXPECTED_PARTNERS.join(", ")}]. Adding an address grants somebody the ability to direct ` +
-          `the firm's employees by writing an email — a decision, never an incidental edit.`,
+        `${AUTHORITY_FILE}: ASSIGNING_PARTNERS is not derived from PARTNER_EMAILS in ${REGISTRY_FILE}. ` +
+          "Two statements of who may assign work by email can disagree, and this is the one that decides.",
       );
     }
 
@@ -200,7 +230,7 @@ function selfTest() {
   const failures = [];
 
   const cleanAuthority = [
-    'export const ASSIGNING_PARTNERS = ["sequoia@westpeek.ventures", "scooter@westpeek.ventures"];',
+    'export const ASSIGNING_PARTNERS = PARTNER_EMAILS;',
     'export const TRUSTED_AUTHSERV_ID = "mx.cloudflare.net";',
     "export function isAligned(identity, fromDomain) {",
     "  if (domain === fromDomain) return true;",
@@ -227,7 +257,13 @@ function selfTest() {
     "  await openAssignmentCard(env, { partnerAddress: authority.partnerAddress });",
     "}",
   ].join("\n");
-  const clean = { [AUTHORITY_FILE]: cleanAuthority, "src/worker/effects/inboundEmail.ts": handler };
+  const cleanRegistry =
+    'export const PARTNERS = [{ email: "sequoia@westpeek.ventures" }, { email: "scooter@westpeek.ventures" }];';
+  const clean = {
+    [REGISTRY_FILE]: cleanRegistry,
+    [AUTHORITY_FILE]: cleanAuthority,
+    "src/worker/effects/inboundEmail.ts": handler,
+  };
 
   const cleanResult = checkSources(clean);
   if (cleanResult.violations.length !== 0) failures.push(`clean fixture was flagged: ${cleanResult.violations[0]}`);
@@ -235,6 +271,7 @@ function selfTest() {
 
   const cases = {
     "an assignment opened straight off a From header": {
+      [REGISTRY_FILE]: cleanRegistry,
       [AUTHORITY_FILE]: cleanAuthority,
       "src/worker/effects/inboundEmail.ts":
         "if (ASSIGNING_PARTNERS.includes(message.headers.get('from'))) { await openAssignmentCard(env, {}); }",
@@ -252,9 +289,16 @@ function selfTest() {
     },
     "a third address added to the allow-list": {
       ...clean,
+      [REGISTRY_FILE]: cleanRegistry.replace(
+        '{ email: "scooter@westpeek.ventures" }]',
+        '{ email: "scooter@westpeek.ventures" }, { email: "assistant@westpeek.ventures" }]',
+      ),
+    },
+    "ASSIGNING_PARTNERS retyped instead of derived, so it can drift from the registry": {
+      ...clean,
       [AUTHORITY_FILE]: cleanAuthority.replace(
-        '"scooter@westpeek.ventures"]',
-        '"scooter@westpeek.ventures", "assistant@westpeek.ventures"]',
+        "export const ASSIGNING_PARTNERS = PARTNER_EMAILS;",
+        'export const ASSIGNING_PARTNERS = ["sequoia@westpeek.ventures"];',
       ),
     },
     "an explicit DMARC failure no longer refused": {

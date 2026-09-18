@@ -14,6 +14,7 @@ import { sendPartnerEmail } from "./execEmail";
 import { deliver } from "./deliverables";
 import { notifyQuietly } from "./notifications";
 import { isoWeekOf } from "./jobs";
+import { standingSteer } from "./emailThread";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { guidanceBlock } from "../../shared/skills/library";
 import {
@@ -361,6 +362,23 @@ export async function judgeCandidates(
 
 // ── Remembering candidates across weeks ──────────────────────────────────────
 
+/**
+ * NEW (never reported) or SEEN (reported in an earlier week and still on the table).
+ *
+ * `CONTACTED` and `PASSED` ARE GONE, 17 Sep 2026. Operator: "i really dont think we should give him
+ * extra work if he likes one he will reach out with the sample draft intro language walker creates."
+ * She is right, and the deeper problem was not the two buttons: it was that the note's usefulness
+ * DEPENDED on him pressing them. A weekly note that degrades every week the recipient does not
+ * maintain a list is a note that has quietly assigned the work back to him.
+ *
+ * Nothing degrades now. A name he has acted on leaves the list because he says so in a reply, in his
+ * own words, and that reply reaches a reasoning model before the next search runs (see `steerFor`
+ * and `HIRE_SEARCH_STEPS`). If he never replies at all, the note keeps working: fresh candidates
+ * every week, and the ones still on the table listed once each as information.
+ *
+ * The column still allows the two retired values because historical rows may carry them, and a row
+ * that does is still left out — see `rememberCandidates`. Nothing in the product writes them.
+ */
 export type CandidateStatus = "NEW" | "SEEN" | "CONTACTED" | "PASSED";
 
 export interface CandidateRow {
@@ -387,7 +405,8 @@ export interface CandidateRow {
 /**
  * Sort this week's survivors into what the note says — FRESH (never shown before), SEEN BEFORE
  * (shown in an earlier week and not yet acted on — one line, not a full entry), and ACTED ON
- * (Scooter marked them CONTACTED or PASSED — never shown again, only counted) — and write them to
+ * (a historical row carrying one of the two retired statuses — never shown again, and no longer
+ * reported, because nothing in the product sets one any more) — and write them to
  * the table ONLY when there is a note to send. A week with nothing fresh is BLOCKED and must not
  * move the rows' week and card pointer onto a card that has no deliverable behind it: the Home
  * panel finds a note's candidates by that pointer.
@@ -399,22 +418,28 @@ export async function rememberCandidates(
   cardId: string,
   now: Date,
   firmScope = "west-peek",
-): Promise<{ fresh: HireCandidate[]; seenBefore: Array<HireCandidate & { firstSeen: string }>; actedOn: Array<{ name: string; status: CandidateStatus }> }> {
+): Promise<{ fresh: HireCandidate[]; seenBefore: Array<HireCandidate & { firstSeen: string }>; retired: string[] }> {
   type Known = { id: string; status: CandidateStatus; first_seen: string; week: string };
   const fresh: HireCandidate[] = [];
   const seenBefore: Array<HireCandidate & { firstSeen: string }> = [];
-  const actedOn: Array<{ name: string; status: CandidateStatus }> = [];
+  /*
+   * Rows written before 17 Sep 2026 may still carry CONTACTED or PASSED. They stay left out — a name
+   * Scooter already dealt with must not come back — but they are no longer counted in the note,
+   * because "acted on" was a fact only the retired buttons could produce and reporting it now would
+   * describe a mechanism that no longer exists.
+   */
+  const retired: string[] = [];
   const known = new Map<string, Known | null>();
   for (const c of candidates) {
     const row = await env.WP_OS_DB.prepare("SELECT id, status, first_seen, week FROM productions_candidate WHERE url = ?1").bind(c.profileUrl).first<Known>();
     known.set(c.profileUrl, row);
     if (!row) fresh.push(c);
-    else if (row.status === "CONTACTED" || row.status === "PASSED") actedOn.push({ name: c.name, status: row.status });
+    else if (row.status === "CONTACTED" || row.status === "PASSED") retired.push(c.name);
     // Found again in a LATER week: seen before. Found again in the same week (a re-run): still fresh.
     else if (row.week !== week || row.status === "SEEN") seenBefore.push({ ...c, firstSeen: row.first_seen });
     else fresh.push(c);
   }
-  if (fresh.length === 0) return { fresh, seenBefore, actedOn };
+  if (fresh.length === 0) return { fresh, seenBefore, retired };
 
   const at = now.toISOString();
   for (const c of candidates) {
@@ -437,7 +462,7 @@ export async function rememberCandidates(
         .run();
     }
   }
-  return { fresh, seenBefore, actedOn };
+  return { fresh, seenBefore, retired };
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
@@ -448,18 +473,48 @@ function checkLine(c: HireCandidate): string {
     : `Profile: ${c.profileUrl} (answered when checked)${c.evidenceUrl ? `; also ${c.evidenceUrl}` : ""}`;
 }
 
-/** The full note: every candidate, the page behind each, what was left out and why. */
+/**
+ * The full note: every candidate, the page behind each, what was left out and why — and no task.
+ *
+ * ─── WHAT CHANGED ON 17 SEP 2026, AND WHY ──────────────────────────────────────────────────────
+ *
+ * The note used to end with "HOW TO MARK THEM: … press Contacted or Passed beside each name", and
+ * section 2 was headed "SEEN BEFORE, STILL OPEN — shown in an earlier note and not yet marked". Both
+ * were asking Scooter to maintain a list so that the machine's next run would be correct.
+ *
+ * Operator: "i really dont think we should give him extra work if he likes one he will reach out
+ * with the sample draft intro language walker creates."
+ *
+ * So the ask is gone and the information is not. Section 2 still says who is on the table, because
+ * that is worth knowing — it is Walker telling him what he already has, not a queue awaiting his
+ * verdict. The closing paragraph is an invitation to reply in prose, in Walker's voice, because a
+ * reply is the one thing Scooter was always going to do anyway and it now steers the search: his
+ * words are read by a reasoning model before the next week's search runs.
+ *
+ * THE "LEFT OUT BECAUSE" LINES STAY, and they are the opposite of a task. Walker showing his work —
+ * whose page did not answer, who failed the archetype and why — is what makes the shortlist
+ * trustworthy without Scooter checking it.
+ */
 export function renderHireNote(
   week: string,
   fresh: readonly HireCandidate[],
   seenBefore: readonly (HireCandidate & { firstSeen: string })[],
-  actedOn: readonly { name: string; status: CandidateStatus }[],
   dropped: readonly { name: string; reason: string }[],
   rejected: readonly { name: string; reason: string }[],
+  /**
+   * What the interpreter understood his last reply to mean, when he has sent one.
+   *
+   * THE PROMISE THE NOTE MAKES, KEPT. The closing paragraph says "I read it before I search again,
+   * and I will say back what I understood it to mean." A promise a partner cannot see kept is a
+   * promise he stops believing — and this is the one line that tells him his words landed, in the
+   * model's own words, without him having to open the card.
+   */
+  understood: string | null = null,
 ): string {
   const lines = [
     `Scooter — Walker, your chief of staff. The week's hire search for a ${HIRE_ROLE} at West Peek Productions (${week}): ${fresh.length} new candidate(s). Nobody has been contacted from here; that stays yours.`,
     "",
+    ...(understood ? [`You told me: ${understood.trim()}`, "That is what I searched on this week.", ""] : []),
     `═══ 1 · NEW THIS WEEK ═══`,
     "Each one is on a live page; the fit is judged against the archetype, not the title alone.",
     "",
@@ -472,16 +527,26 @@ export function renderHireNote(
     ]),
     fresh.length === 0 ? "Nothing new this week that survived the checks — say where to look and I will." : "",
     "",
-    seenBefore.length ? `═══ 2 · SEEN BEFORE, STILL OPEN ═══` : "",
-    seenBefore.length ? "Shown in an earlier note and not yet marked Contacted or Passed:" : "",
+    seenBefore.length ? `═══ 2 · STILL ON THE TABLE ═══` : "",
+    seenBefore.length ? "From earlier weeks, so you have them in one place. Nothing to do with these — I list each one once and then keep going." : "",
     ...seenBefore.slice(0, 8).map((c) => `- ${c.name} — ${c.title} · first seen ${c.firstSeen.slice(0, 10)} · fit ${c.fit}/10 · ${c.profileUrl}`),
     seenBefore.length > 8 ? `- …and ${seenBefore.length - 8} more on your Home page.` : "",
     "",
-    actedOn.length ? `Left out because you already acted on them: ${actedOn.map((a) => `${a.name} (${a.status.toLowerCase()})`).join(", ")}.` : "",
     dropped.length ? `Left out because the page did not answer when checked: ${dropped.map((d) => `${d.name} — ${d.reason}`).join("; ")}` : "",
     rejected.length ? `Left out on judgement (searched, then held to the archetype and failed it): ${rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}` : "",
     "",
-    "HOW TO MARK THEM: on your Home page, under my name, open this week's Hire search and press Contacted or Passed beside each name. A name you mark never comes back; one you leave is listed as 'seen before' next week.",
+    /*
+     * THE INVITATION, IN WALKER'S VOICE, AND IT REPLACES A CHORE RATHER THAN ADDING ONE.
+     *
+     * Nothing here asks for a format, a code or a keyword, and nothing breaks if he ignores it. A
+     * reply lands on this thread, is matched to this search automatically (`shared/email/thread.ts`),
+     * and what he wrote — not what his mail client quoted back — is read by a reasoning model before
+     * next week's search runs.
+     */
+    "Just hit reply if you want to steer me. Plain sentences are fine — \"not this one\", \"more like",
+    "#2\", \"stop showing me agency people, I want independents\", \"I reached out to Dana\". I read it",
+    "before I search again, and I will say back what I understood it to mean. If you would rather not",
+    "reply at all, do nothing: next week's note arrives either way.",
     "",
     "— Walker. This is West Peek Productions work, on your desk only; nothing here touches the fund and nothing is sent to a candidate from here.",
   ];
@@ -498,7 +563,6 @@ export function hireSummary(
   week: string,
   fresh: readonly HireCandidate[],
   seenBefore: readonly HireCandidate[],
-  actedOn: readonly { name: string; status: CandidateStatus }[],
   dropped: readonly { name: string; reason: string }[],
   rejected: readonly { name: string; reason: string }[],
 ): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
@@ -513,7 +577,7 @@ export function hireSummary(
         bullets: [
           "Searched live public sources: LinkedIn results, agency team pages, speaker lists, portfolios, award lists.",
           "Asked every profile page for its status, then held each survivor to the archetype in a second judgement pass.",
-          `Checked them against past weeks: **${seenBefore.length}** seen before and still open, **${actedOn.length}** already contacted or passed and left out.`,
+          `Checked them against past weeks: **${seenBefore.length}** ${seenBefore.length === 1 ? "was" : "were"} in an earlier note and ${seenBefore.length === 1 ? "is" : "are"} still on the table.`,
         ],
       },
       {
@@ -526,11 +590,18 @@ export function hireSummary(
         ],
       },
       {
-        label: "Your call",
+        /*
+         * NOT "YOUR CALL — GO AND MARK THEM". The label and the bullets used to end with a chore:
+         * mark each one Contacted or Passed on Home so next week's note leaves them out. That is the
+         * extra work the operator asked to remove, and it was the thing the whole feature quietly
+         * depended on. What is left is the one thing he was always going to do — write to somebody —
+         * plus an offer to be steered, which costs him nothing if he ignores it.
+         */
+        label: "Yours to do with as you like",
         bullets: [
           "Pick who to write to; each entry below has the page and an opening line in your voice.",
-          "Mark each one Contacted or Passed on your Home page (under my name) so next week's note leaves them out.",
-          "Nothing goes to a candidate from here.",
+          "If you want to steer me — not this one, more like #2, only independents — just reply to this email in plain words. I read it before I search again.",
+          "Nothing goes to a candidate from here, and nothing here needs you to keep a list.",
         ],
       },
     ],
@@ -614,14 +685,29 @@ export async function runHireSearchCard(
    * the week this matters: before this, that note went into a column this runner never read, the
    * same search ran again, and he got the same people.
    */
+  /*
+   * AND WHAT HE SAID BY REPLYING TO AN EARLIER NOTE, which is now the only way he steers this at all.
+   *
+   * WITHOUT THIS THE WHOLE REPLY PATH IS INERT, and it would have looked like it worked. `steerFor`
+   * reads notes on the card it is given; this duty opens a NEW card every week and closes it the
+   * same day, so a reply arriving on Thursday answers a card that is already DONE. The note would be
+   * stored, acknowledged, and read by nothing — next Monday's card is a different row with no notes
+   * on it. `standingSteer` reads what the partners have said about this KIND of work, so "stop
+   * showing me agency people" applies next week and the week after.
+   *
+   * It is passed as `extra`, which is exactly what that parameter is for: prose the chain holds
+   * outside the card's own columns. One model call reads all of it, as before.
+   */
+  const replies = await standingSteer(env, HIRE_CARD_KIND, card.firm_scope);
   const steer = await steerFor(env, actor, {
     cardId: card.id,
-    cardKind: "PRODUCTIONS_HIRE_SEARCH",
+    cardKind: HIRE_CARD_KIND,
     title: card.title,
     employee: "Walker",
     chain: "the weekly hire search for West Peek Productions",
     steps: [...HIRE_SEARCH_STEPS],
     firmScope: card.firm_scope,
+    extra: replies,
   }, deps.interpret);
   if (steer.cannot.length > 0) {
     const why2 = await blockCard(env, card, {
@@ -680,13 +766,13 @@ export async function runHireSearchCard(
       trying: card.title,
       employee: "Walker",
       who: "SCOOTER",
-      detail: `Say whether to widen the search — ${remembered.seenBefore.length} name(s) were in an earlier note and ${remembered.actedOn.length} you have already contacted or passed.`,
+      detail: `Say whether to widen the search — every name this week was already in an earlier note (${remembered.seenBefore.length} of them). Reply to last week's note in plain words if you want me to look somewhere else.`,
     });
     return { finished: false, blocked: true, detail: blocked };
   }
 
-  const text = renderHireNote(week, remembered.fresh, remembered.seenBefore, remembered.actedOn, dropped, rejected);
-  const summary = hireSummary(week, remembered.fresh, remembered.seenBefore, remembered.actedOn, dropped, rejected);
+  const text = renderHireNote(week, remembered.fresh, remembered.seenBefore, dropped, rejected, steer.interpretation?.understood ?? null);
+  const summary = hireSummary(week, remembered.fresh, remembered.seenBefore, dropped, rejected);
   const title = `Hire search ${week}: ${remembered.fresh.length} candidate(s) for ${HIRE_ROLE}`;
 
   const delivered = await deliver(env, actor, {
@@ -704,6 +790,9 @@ export async function runHireSearchCard(
     email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: summary.sections, details: text },
     objectType: "work_card",
     objectId: card.id,
+    // The KIND goes with it, so a reply steers the SEARCH rather than a card that will be DONE
+    // before he opens his inbox. See services/emailThread.ts and migration 0180.
+    cardKind: HIRE_CARD_KIND,
     firmScope: card.firm_scope,
     actorId: "aie_walker",
   });
@@ -713,7 +802,7 @@ export async function runHireSearchCard(
     kind: "MEETING",
     severity: "INFO",
     title: `Walker: ${remembered.fresh.length} hire candidate(s) this week — on Home${mail.sent ? " and in your inbox" : ""}`,
-    body: `${title}. Mark each Contacted or Passed on Home so next week's note leaves them out.`,
+    body: `${title}. Nothing for you to mark — reply to the email in plain words if you want to steer next week's search.`,
     objectType: "deliverable",
     objectId: delivered.id,
     dedupeKey: `productions_hire:${card.id}:delivered`,
@@ -737,7 +826,7 @@ export async function runHireSearchCard(
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
-    payload: { week, fresh: remembered.fresh.length, seen_before: remembered.seenBefore.length, acted_on: remembered.actedOn.length, dropped: dropped.length, rejected: rejected.length, emailed: mail.sent, deliverable_id: delivered.id, subject: mail.subject },
+    payload: { week, fresh: remembered.fresh.length, seen_before: remembered.seenBefore.length, dropped: dropped.length, rejected: rejected.length, emailed: mail.sent, deliverable_id: delivered.id, subject: mail.subject },
   });
   return {
     finished: true,
@@ -774,29 +863,21 @@ export async function handleListHireCandidates(ctx: RouteContext): Promise<Respo
   return json({ candidates: rows });
 }
 
-/** POST /api/productions/candidates/:id/status { status: CONTACTED | PASSED | NEW } */
-export async function handleSetHireCandidateStatus(ctx: RouteContext): Promise<Response> {
-  if (!isScooter(ctx)) return json({ error: "not_found" }, { status: 404 });
-  let body: { status?: unknown } = {};
-  try { body = (await ctx.request.json()) as { status?: unknown }; } catch { body = {}; }
-  const status = body.status;
-  if (status !== "CONTACTED" && status !== "PASSED" && status !== "NEW") {
-    return json({ error: "invalid_input", detail: "status must be CONTACTED, PASSED or NEW" }, { status: 400 });
-  }
-  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM productions_candidate WHERE id = ?1").bind(ctx.params.id!).first<CandidateRow>();
-  if (!row) return json({ error: "not_found" }, { status: 404 });
-  await ctx.env.WP_OS_DB.prepare(
-    "UPDATE productions_candidate SET status = ?2, status_changed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), status_changed_by = ?3 WHERE id = ?1",
-  ).bind(row.id, status, ctx.identity!.id).run();
-  await appendEvent(ctx.env, {
-    eventType: "productions.candidate_marked",
-    actorType: "firm_user",
-    actorId: ctx.identity!.id,
-    objectType: "productions_candidate",
-    objectId: row.id,
-    firmScope: row.firm_scope,
-    payload: { name: row.name, url: row.url, from: row.status, to: status },
-  });
-  const fresh = await ctx.env.WP_OS_DB.prepare("SELECT * FROM productions_candidate WHERE id = ?1").bind(row.id).first<CandidateRow>();
-  return json({ candidate: fresh });
-}
+/*
+ * THE `POST /api/productions/candidates/:id/status` ROUTE IS GONE (17 Sep 2026).
+ *
+ * It let Scooter mark a candidate CONTACTED or PASSED from Home, and next week's note left them
+ * out. Operator: "i really dont think we should give him extra work if he likes one he will reach
+ * out with the sample draft intro language walker creates."
+ *
+ * REMOVED RATHER THAN HIDDEN. A route nothing calls is the "exists but nothing invokes it" defect
+ * this repo names, and an endpoint that can still write a status no reader reports would be worse:
+ * a partner pressing a button through the API would silently change what the search returns, with
+ * no surface saying so. The GET above stays — the list behind a note is information, and it is
+ * still Scooter's alone.
+ *
+ * What replaced it: he replies to the email in his own words, the reply is matched to the search by
+ * its `References` header (`shared/email/thread.ts`), and what he wrote reaches a reasoning model
+ * before the next search runs (`services/instruction.ts`). No state he maintains, and nothing
+ * degrades if he never touches it.
+ */

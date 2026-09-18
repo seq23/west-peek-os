@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { defuseTriggers } from "./emailTransport";
+import { applyPreviewBoundary, defuseTriggers } from "./emailTransport";
 import type { EmailPayload, EmailSendResult } from "./emailTransport";
 
 /**
@@ -80,9 +80,15 @@ export function cloudflareEmailBlockedReason(env: Env): string | null {
  */
 export async function sendViaCloudflare(
   env: Env,
-  payload: EmailPayload,
+  request: EmailPayload,
   binding?: SendEmailBinding,
 ): Promise<EmailSendResult> {
+  /*
+   * THE SEND BOUNDARY, FIRST — before the binding is read and before anything is sent. In preview
+   * mode this REPLACES the recipient list with Sequoia's address alone; outside preview the payload
+   * is untouched. See `applyPreviewBoundary` in emailTransport.ts.
+   */
+  const payload = applyPreviewBoundary(env, request);
   const email = binding ?? env.EMAIL;
   const from = payload.from ?? emailFromAddress(env);
 
@@ -100,7 +106,14 @@ export async function sendViaCloudflare(
     text: defuseTriggers(payload.text),
     ...(payload.html ? { html: defuseTriggers(payload.html) } : {}),
     ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
-  });
+    /*
+     * `In-Reply-To` and `References` only. Cloudflare publishes an allow-list: those two are
+     * settable, and `Message-ID` is platform-controlled — setting one is refused outright with
+     * `E_HEADER_NOT_ALLOWED`. Anything the caller puts here must be on that list, which is why
+     * `shared/email/thread.ts` writes those two and nothing else.
+     */
+    ...(payload.headers && Object.keys(payload.headers).length > 0 ? { headers: payload.headers } : {}),
+  } as Parameters<SendEmailBinding["send"]>[0]);
 
   // The real message id, straight from the platform. It is what makes the receipt checkable against
   // Cloudflare's own delivery log rather than merely our claim that we sent something.
