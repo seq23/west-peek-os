@@ -47,6 +47,16 @@ const TIMEOUT_OR_NETWORK =
   /(aborted|abort ?error|timed? ?out|timeout|etimedout|econnreset|econnrefused|enotfound|fetch failed|network (?:error|connection lost)|failed to fetch|socket hang up)/i;
 
 /**
+ * `provider_http_<status>`, optionally followed by WHAT THE VENDOR SAID.
+ *
+ * Anchored at the start and open at the end. It used to be anchored at both, which was correct
+ * while a status code was the whole message — and became a silent failover outage the moment the
+ * adapters started keeping the vendor's sentence (0185): every `provider_http_503: upstream
+ * unavailable` would have read as "not an outage" and stopped dead instead of failing over.
+ */
+const HTTP_FAILURE = /^provider_http_(\d{3})(?::|$)/;
+
+/**
  * True when the router may try the next vendor. `reason` is the message `executeAttempt` caught.
  */
 export function isProviderOutage(reason: string): boolean {
@@ -58,7 +68,7 @@ export function isProviderOutage(reason: string): boolean {
   // A vendor that answered with something we cannot parse has not served the call either. This is
   // how the Workers AI lane failed for weeks — malformed every time, on every run.
   if (reason === "provider_malformed_response") return true;
-  const http = /^provider_http_(\d{3})$/.exec(reason);
+  const http = HTTP_FAILURE.exec(reason);
   if (http) return isOutageStatus(Number(http[1]));
   return TIMEOUT_OR_NETWORK.test(reason);
 }
@@ -68,7 +78,7 @@ export function outageKind(reason: string): string {
   if (/^credential_missing:/.test(reason)) return "NO_CREDENTIAL";
   if (/^workers_ai_binding_absent/.test(reason)) return "BINDING_ABSENT";
   if (reason === "provider_malformed_response") return "MALFORMED_RESPONSE";
-  const http = /^provider_http_(\d{3})$/.exec(reason);
+  const http = HTTP_FAILURE.exec(reason);
   if (http) {
     const status = Number(http[1]);
     if (status === 401) return "AUTH_REJECTED";

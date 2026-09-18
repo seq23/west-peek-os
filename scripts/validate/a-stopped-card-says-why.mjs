@@ -129,6 +129,7 @@ export const NOT_LANE_FAILURES = [
 export async function checkFailuresBecomeReadableBlocks() {
   const lane = await import(path.join(ROOT, "src", "shared", "ai", "laneFailure.ts"));
   const blocks = await import(path.join(ROOT, "src", "shared", "work", "blocks.ts"));
+  const failure = await import(path.join(ROOT, "src", "shared", "ai", "providerFailure.ts"));
   const violations = [];
   let examined = 0;
 
@@ -140,6 +141,19 @@ export async function checkFailuresBecomeReadableBlocks() {
     if (!lane.isLaneFailure(read)) {
       violations.push(`"${f.name}" was not recognised as a lane failure at all, so the card would say "tried three times"`);
       continue;
+    }
+    /*
+     * KEEPING THE VENDOR'S WORDS MUST NOT TURN THE FAILOVER OFF.
+     *
+     * Caught here on the first full run: `isProviderOutage` matched `/^provider_http_(\d{3})$/`,
+     * anchored at BOTH ends, which was right while a status code was the whole message. Attaching
+     * the vendor's sentence made every 503 read as "not an outage", so the router would have
+     * stopped dead instead of failing over to the next lane — a worse outage than the one this
+     * change exists to explain.
+     */
+    const engages = failure.isProviderOutage(String(f.lifted ?? f.reason).replace(/^provider_failure:/, ""));
+    if (f.transient && !engages) {
+      violations.push(`"${f.name}" no longer engages the failover — keeping the vendor's words must not stop the router trying the next lane`);
     }
     if (!f.transient && lane.attemptsAllowedFor(read, 3) >= 3) {
       violations.push(`"${f.name}" cannot fix itself and still gets three attempts — that is the fourteen silent minutes, again`);
