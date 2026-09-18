@@ -26,6 +26,30 @@ import { credentialConfigured, credentialValueFor } from "../../shared/ai/provid
  * every existing call behaves.
  */
 
+/**
+ * A LANE THE OWNER HAS STOOD DOWN IS NOT A CANDIDATE (0185, 17 Sep 2026).
+ *
+ * "Send it to a different model" and "Stop using this one" are buttons on a blocked work card, and
+ * they are only real if the next run genuinely cannot take that lane. `paused_until` is how they
+ * say so: a timestamp in the future means the lane is out, for every card and not just the one she
+ * pressed the button on, until it expires by itself.
+ *
+ * Deliberately NOT `enabled`. That is the operator's own switch on the Integrations page, with no
+ * clock and no reason attached; a card button that flips it would leave a vendor off for ever with
+ * nothing on screen saying who did it or why.
+ *
+ * Every place that picks a lane has to ask this, which is exactly the kind of rule that rots — so
+ * `scripts/validate/a-stopped-card-says-why.mjs` fails the build for a provider query that forgets.
+ */
+export const LANE_NOT_STOOD_DOWN_SQL =
+  "(paused_until IS NULL OR paused_until < strftime('%Y-%m-%dT%H:%M:%fZ','now'))";
+
+/** The same question of a row already in hand. */
+export function laneIsStoodDown(row: { paused_until?: string | null } | null | undefined, now: Date = new Date()): boolean {
+  const until = row?.paused_until;
+  return Boolean(until && Date.parse(until) > now.getTime());
+}
+
 export interface RoutingCandidate {
   providerId: string;
   providerKey: string;

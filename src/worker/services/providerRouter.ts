@@ -11,6 +11,7 @@ import {
   credentialSourceName,
   GENERIC_CREDENTIAL_NAME,
 } from "../../shared/ai/providerCredentials";
+import { laneIsStoodDown } from "../ai/routing";
 import { directVendorRouteFor } from "../../shared/ai/directVendorRoute";
 
 /**
@@ -66,6 +67,8 @@ export async function handleProviderCatalog(ctx: RouteContext): Promise<Response
       enabled: number;
       kill_switched: number;
       base_url: string | null;
+      paused_until: string | null;
+      paused_reason: string | null;
     }>()
   ).results ?? [];
 
@@ -150,15 +153,21 @@ export async function handleProviderCatalog(ctx: RouteContext): Promise<Response
          * cannot be called. A provider that is switched on with no credential is reported here as
          * unavailable, with the reason, rather than as configured.
          */
-        available: p.enabled === 1 && p.kill_switched !== 1 && configured,
+        available: p.enabled === 1 && p.kill_switched !== 1 && configured && !laneIsStoodDown(p),
         unavailable_reason:
           p.enabled !== 1
             ? "provider is disabled"
             : p.kill_switched === 1
               ? "provider is kill-switched"
-              : configured
-                ? null
-                : `no credential: ${credentialSourceName(p.provider_key)} is not set in this environment`,
+              // A LANE THE OWNER STOOD DOWN FROM A WORK CARD (0185). It is not disabled and not
+              // broken — she pressed a button on a blocked card, and this page has to say so, with
+              // the reason and the date it comes back, or the lane reads as an unexplained outage.
+              : laneIsStoodDown(p)
+                ? `${p.paused_reason ?? "stood down from a work card"} Back on ${p.paused_until}.`
+                : configured
+                  ? null
+                  : `no credential: ${credentialSourceName(p.provider_key)} is not set in this environment`,
+        paused_until: laneIsStoodDown(p) ? p.paused_until : null,
         allowed_data_classes: policies.filter((d) => d.provider_id === p.id).map((d) => d.privacy_label),
         latest_health: health.find((h) => h.provider_id === p.id) ?? null,
       };

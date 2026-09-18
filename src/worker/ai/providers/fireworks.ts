@@ -1,5 +1,5 @@
-import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { providerHttpError } from "./httpError";
+import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 
 /**
  * Fireworks AI adapter (P16, GAP-03).

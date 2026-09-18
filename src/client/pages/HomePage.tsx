@@ -3,6 +3,7 @@ import { api, useApi, type MeResponse } from "../lib/api";
 import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttention";
 import { attentionSignature } from "@shared/setup/attentionKey";
 import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
+import { answerLine as answerLineFor, secondLine as secondLineFor } from "@shared/home/answerLine";
 import { DeliverableList } from "./DeliverableList";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { DailyBriefPanel } from "./DailyBriefPanel";
@@ -399,6 +400,10 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
   // Read once, for THIS viewer. Two partners share the application and, on a shared laptop, the
   // store; the id in the key is what stops one of them folding the other's brief away.
   const [briefCollapsed, setBriefCollapsed] = useState(() => readBriefCollapsed(me.id));
+  /* EVERY HOOK ABOVE EVERY EARLY RETURN — see the note below; these two are here for that reason
+     and not because they belong at the top of the component. */
+  const [showQuiet, setShowQuiet] = useState(false);
+  const [questionsOpen, setQuestionsOpen] = useState(false);
   const home = useApi<HomeResponse>("/api/mp-home");
   // §8 — the four operator questions Home's modules do not answer: what is blocked, is scheduled
   // work healthy, is AI failing, is setup incomplete. Derived from live endpoints only.
@@ -435,7 +440,11 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
   // Approvals are pulled out of the grid; everything else is a delivery.
   const waiting = data.modules.find((m) => m.key === "approvals") ?? null;
   const deliveries = data.modules.filter((m) => m.key !== "approvals");
-  const rank = (m: HomeModule): number => (hasNew(m) ? 0 : m.items.length > 0 ? 1 : 2);
+  const waitingItems = waiting?.items ?? [];
+  /* NEW gets a card; everyone else gets a name in the roll. The three-way sort this replaced —
+     new, then quiet, then empty — put nine cards on the page to report silence nine times. */
+  const freshDeliveries = deliveries.filter(hasNew);
+  const quietDeliveries = deliveries.filter((m) => !hasNew(m));
   // Open leaves the mark BEFORE navigating, so the module is quiet the next time Home is read.
   const markOpened = async (key: string): Promise<void> => {
     await api(`/api/mp-home/modules/${encodeURIComponent(key)}/seen`, { method: "POST", body: {} });
@@ -479,167 +488,109 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
     silenced.reload();
   }
 
+  /*
+   * RANK 0. Everything below is already on this page somewhere; the change is that it is now said
+   * ONCE, at the top, in the largest type, instead of five times at five weights. The sentences
+   * themselves are in `@shared/home/answerLine` so the grammar is testable.
+   */
+  const freshCount = freshDeliveries.length + (waiting && hasNew(waiting) ? 1 : 0);
+  const needsHer = waitingItems.length + visibleAttention.length;
+  const counts = {
+    decisions: waitingItems.length,
+    blockers: visibleAttention.length,
+    firstBlocker: visibleAttention[0]?.headline ?? null,
+    fresh: freshCount,
+    quiet: quietDeliveries.length,
+  };
+  const answerLine = answerLineFor(counts);
+  const secondLine = secondLineFor(counts);
+
+  /* The roll names PEOPLE, because that is what makes silence answerable — you can go and ask
+     Winter why there is nothing. A module with no colleague behind it falls back to its own
+     title rather than being dropped from the count. */
+  const quietNames = quietDeliveries
+    .map((m) => deliveryFor(m.key)?.by ?? m.title)
+    .join(", ")
+    .replace(/, ([^,]*)$/, " and $1");
+
   return (
     <section data-testid="home-page">
-      {/* SETUP SITS ABOVE THE DATE, folded to one line. It was a full screen of settings between
+      {/* SETUP SITS ABOVE THE ANSWER, folded to one line. It was a full screen of settings between
           the partner and the briefing they came for, every morning — so it now states what is on
           and what is not, and opens only when asked. Above rather than below because a status strip
-          is a header, not an interruption: read it or ignore it before the day starts. */}
+          is a header, not an interruption: read it or ignore it before the day starts.
+
+          Its height is RESERVED (see `.connect-strip` in styles.css): `/api/me/connections` answers
+          at roughly 2.5s and the strip then inserts at the very top of Home, pushing the whole page
+          down. That was Home's one measurable layout shift. */}
       <ConnectPanel me={me} />
 
-      {/* A delivery has a moment. "This morning" means something; "your dashboard" does not — so
-          the page is dated, addressed, and signed by whoever brought it. The hour comes from the
-          browser because a Worker runs in UTC and the partner does not. */}
+      {/* ══ RANK 0 · THE ANSWER LINE ═══════════════════════════════════════════════════════════
+          The largest type on the page states the page's ANSWER, not a greeting. "What needs me
+          right now" was previously spelled out across five separate places at five different
+          weights; a partner on her second hundred visit reads one line and knows.
+
+          The greeting and the date are the eyebrow ABOVE it, in one column. They used to be the
+          headline, with the actual status floated to the far right in grey — the two halves of one
+          sentence, as far apart as the layout allowed. */}
       <header className="home-masthead" data-testid="home-masthead">
-        <div>
-          <div className="home-date">
-            {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
-          </div>
-          {/* h2: the shell's page title. A second h1 on the page competed with the wordmark, and
-              a greeting is not the name of the application. */}
-          <h2 data-testid="home-greeting">
-            {greetingFor(new Date().getHours())}, {me.fullName.split(" ")[0]}
-          </h2>
-        </div>
-        {/* The byline used to live here, floating in the corner, nowhere near the thing it
-            described. It now sits ON the briefing, the way a byline sits on an article. */}
-        <div className="home-signed">
-          {/* "1 of your team have something" — the verb has to agree with the count, and one
-              colleague is singular. Small, but it is the first line on the page every morning.
-              NEW, not merely present: a module she has opened and nothing has reached since is
-              quiet, and quiet colleagues are not counted. */}
-          {(() => {
-            const n = deliveries.filter(hasNew).length + (waiting && hasNew(waiting) ? 1 : 0);
-            return (
-              <div className="muted small" data-testid="home-team-count">
-                {n === 0 ? "Nothing new from your team since you last looked" : n === 1 ? "One of your team has something new for you" : `${n} of your team have something new for you`}
-              </div>
-            );
-          })()}
+        <p className="home-date" data-testid="home-greeting">
+          {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
+          {" · "}
+          {greetingFor(new Date().getHours())}, {me.fullName.split(" ")[0]}
+        </p>
+
+        {/* h2, not h1: the shell already sets the page title, and a second h1 competed with the
+            wordmark. The stylesheet's heading scale targets THIS tag — it targeted `h1` until
+            17 Sep 2026 and therefore targeted nothing, which is why the headings on this page had
+            no weight. `scripts/validate/heading-scale-applies.mjs` now fails the build if a
+            heading-scale selector stops matching what the page emits. */}
+        <h2 data-testid="home-answer">{answerLine}</h2>
+
+        <p className="home-answer-second" data-testid="home-team-count">{secondLine}</p>
+
+        {/* ASK, DEMOTED FROM THE ONLY TINTED CARD ON THE PAGE to one docked affordance under the
+            answer. Operator direction (17 Aug 2026) was that Ask must be findable on Home, and it
+            still is — but a tint is the strongest signal this page has, and spending it on an
+            invitation meant the decision actually waiting on her was the plainest thing on screen.
+            The tint is now spent on a decision and nowhere else. */}
+        <div className="ask-dock" data-testid="home-ask">
+          <button type="button" className="ask-open" data-testid="home-ask-open" onClick={() => onNavigate("intent")}>
+            <span className="ask-label">Ask for anything</span>
+          </button>
+          <span className="ask-note">
+            Describe what you need in your own words — “what changed in the portfolio this week?” ·
+            “prep me for the Acme call”. Ask shows you the plan first and does nothing consequential
+            without your approval.
+          </span>
         </div>
       </header>
 
-      {/* ASK — its own highlighted band on Home, added on operator direction (17 Aug 2026): "it can
-          be on the home page in its own section that is highlighted so users know its there for
-          them when they need."
+      {/* ══ BAND ONE · WAITING ON YOU ══════════════════════════════════════════════════════════
+          Decisions blocked on her signature, then anything blocking the firm. Two separate
+          sections until now — "Waiting on you (0)" and "Needs your attention" — which meant the
+          page could carry two headed, near-identical blocks between her and the thing she came for.
 
-          Deliberately NOT a module card. The module grid is a list of places to go; this is an
-          offer, and making it look like the other cards is how it becomes invisible again. It also
-          stays in the nav — Home is where you are reminded it exists, the nav is where you reach
-          for it once you already know.
-
-          The examples are real capabilities, not placeholder prompts: showing something Ask cannot
-          do would teach the operator to distrust it on the first try. */}
-      <section className="card ask-band" data-testid="home-ask">
-        <h3>Ask</h3>
-        <p>
-          Describe what you need in your own words. Ask works out which part of the firm owns it,
-          shows you the plan, and does nothing consequential without your approval.
-        </p>
-        <div className="ask-examples">
-          <button type="button" className="btn-strong" data-testid="home-ask-open" onClick={() => onNavigate("intent")}>
-            Ask for something
-          </button>
-          <span className="muted small">
-            e.g. “what changed in the portfolio this week?” · “prep me for the Acme call” ·
-            “who should introduce me to a design partner?”
-          </span>
-        </div>
-      </section>
-
-      {/* §8 — what is blocked, first: a dead-lettered job or an unconfigured provider makes
-          everything below it unreliable. Absent when there is genuinely nothing wrong — an empty
-          command surface is a correct answer.
-
-          "One thing to watch" used to sit below this and was removed on operator direction
-          (17 Aug 2026): it restated what the modules already showed, so it cost a screenful of
-          Home to tell the operator something they were about to read anyway. The derivation
-          survives on the API as one_thing_to_watch for anything that still wants it. */}
-      {(visibleAttention.length > 0 || silencedCount > 0) && (
-        <section className="card" data-testid="home-attention">
-          <h3>Needs your attention</h3>
-          {visibleAttention.length === 0 && (
-            <p className="muted small">
-              Nothing outstanding. {silencedCount} {silencedCount === 1 ? "item is" : "items are"} silenced.
-            </p>
-          )}
-          <ul className="card-list small">
-            {visibleAttention.map((a) => (
-              <li key={a.key} data-testid={`home-attention-${a.key}`}>
-                <span
-                  className={
-                    a.severity === "BLOCKING"
-                      ? "help-tag help-tag-warn"
-                      : a.severity === "DEGRADED"
-                        ? "help-tag help-tag-warn"
-                        : "help-tag help-tag-muted"
-                  }
-                >
-                  {a.severity === "BLOCKING" ? "Blocked" : a.severity === "DEGRADED" ? "Degraded" : "Setup"}
-                </span>{" "}
-                <strong>{a.headline}</strong> {a.action}{" "}
-                <button type="button" className="link-button" onClick={() => onNavigate(a.link)}>
-                  Open
-                </button>{" "}
-                {/* TWO DIFFERENT ACTS, and until 21 Aug 2026 they were the same one: both wrote the
-                    same row and both lapsed after a week, which the operator noticed and asked to be
-                    fixed. "I know" means seen, still true, living with it — quiet for a week, because
-                    somebody who said it last Tuesday has not said it about today. "Stop telling me"
-                    is permanent. Both are still keyed to the exact wording, so the same problem
-                    described differently is a different item and will be said. */}
-                <button
-                  type="button"
-                  className="link-button"
-                  data-testid={`home-attention-ack-${a.key}`}
-                  title="Seen, still true. Quiet for a week."
-                  onClick={() => void silence(a.key, a.headline, "ACKNOWLEDGED")}
-                >
-                  I know
-                </button>{" "}
-                <button
-                  type="button"
-                  className="link-button"
-                  data-testid={`home-attention-dismiss-${a.key}`}
-                  title="Permanent. This exact item will not come back."
-                  onClick={() => void silence(a.key, a.headline, "DISMISSED")}
-                >
-                  Stop telling me, for good
-                </button>
-              </li>
-            ))}
-          </ul>
-          {silencedCount > 0 && (
-            <p className="muted small">
-              {silencedCount} silenced — acknowledged ones return after a week, dismissed ones do not.{" "}
-              <button
-                type="button"
-                className="link-button"
-                data-testid="home-attention-unsilence"
-                onClick={() => void unsilence()}
-              >
-                Bring them back
-              </button>
-            </p>
-          )}
-        </section>
-      )}
-
-      {/* Waiting on you: lifted out of the grid because it is the only group where something is
-          blocked on the reader rather than the other way round. A decision waiting three days
-          should not be one card among twelve. */}
-      {waiting && (
-        <section data-testid="home-waiting">
-          <div className="home-section-head">
+          IT DOES NOT RENDER WHEN IT IS EMPTY. A full section that exists to say "nothing" is the
+          single worst use of the top of this page; the answer line above has already said so, in
+          the one slot she actually reads. */}
+      {(waitingItems.length > 0 || visibleAttention.length > 0 || silencedCount > 0) && (
+        <section className="home-band" data-testid="home-waiting">
+          <div className="home-band-head">
             <h3>Waiting on you</h3>
-            <span className="count-pill">{waiting.count}</span>
+            {needsHer > 0 && <span className="count-pill">{needsHer}</span>}
+            <span className="home-band-when">
+              {waitingItems.length === 0
+                ? "no decision is blocked on your signature"
+                : waitingItems.length === 1
+                  ? "one decision is blocked on your signature"
+                  : `${waitingItems.length} decisions are blocked on your signature`}
+            </span>
           </div>
-          {waiting.items.length === 0 ? (
-            <p className="muted small" data-testid="home-waiting-empty">
-              {deliveryFor("approvals")?.whenEmpty ?? "Nothing is blocked on you."}
-            </p>
-          ) : (
+
+          {waitingItems.length > 0 && (
             <ul className="card-list waiting-list">
-              {waiting.items.slice(0, 5).map((item, i) => (
+              {waitingItems.slice(0, 5).map((item, i) => (
                 <li key={String(item.id ?? i)}>
                   <span>{summarize("approvals", item)}</span>
                   <button
@@ -654,49 +605,102 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
               ))}
             </ul>
           )}
+
+          {/* §8 — what is blocked: a dead-lettered job or an unconfigured provider makes everything
+              below it unreliable. It keeps its own semantic colour; orange never carries safety
+              meaning on this page. */}
+          <div data-testid="home-attention">
+            {visibleAttention.length === 0 && silencedCount > 0 && (
+              <p className="muted small">
+                Nothing outstanding. {silencedCount} {silencedCount === 1 ? "item is" : "items are"} silenced.
+              </p>
+            )}
+            {visibleAttention.length > 0 && (
+              <ul className="card-list small blocker-list">
+                {visibleAttention.map((a) => (
+                  <li key={a.key} className="blocker" data-testid={`home-attention-${a.key}`}>
+                    <span
+                      className={
+                        a.severity === "BLOCKING" || a.severity === "DEGRADED"
+                          ? "help-tag help-tag-warn"
+                          : "help-tag help-tag-muted"
+                      }
+                    >
+                      {a.severity === "BLOCKING" ? "Blocked" : a.severity === "DEGRADED" ? "Degraded" : "Setup"}
+                    </span>{" "}
+                    <strong>{a.headline}</strong> {a.action}{" "}
+                    <button type="button" className="link-button" onClick={() => onNavigate(a.link)}>
+                      Open
+                    </button>{" "}
+                    {/* TWO DIFFERENT ACTS, and until 21 Aug 2026 they were the same one: both wrote
+                        the same row and both lapsed after a week, which the operator noticed and
+                        asked to be fixed. "I know" means seen, still true, living with it — quiet
+                        for a week. "Stop telling me" is permanent. Both are keyed to the exact
+                        wording, so the same problem described differently is said again. */}
+                    <button
+                      type="button"
+                      className="link-button"
+                      data-testid={`home-attention-ack-${a.key}`}
+                      title="Seen, still true. Quiet for a week."
+                      onClick={() => void silence(a.key, a.headline, "ACKNOWLEDGED")}
+                    >
+                      I know
+                    </button>{" "}
+                    <button
+                      type="button"
+                      className="link-button"
+                      data-testid={`home-attention-dismiss-${a.key}`}
+                      title="Permanent. This exact item will not come back."
+                      onClick={() => void silence(a.key, a.headline, "DISMISSED")}
+                    >
+                      Stop telling me, for good
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {silencedCount > 0 && (
+              <p className="muted small">
+                {silencedCount} silenced — acknowledged ones return after a week, dismissed ones do not.{" "}
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid="home-attention-unsilence"
+                  onClick={() => void unsilence()}
+                >
+                  Bring them back
+                </button>
+              </p>
+            )}
+          </div>
         </section>
       )}
 
-      {/*
-        WRITTEN THINGS FIRST. The modules below are areas of the firm with something in them — a
-        count, a list, a signal. A deliverable is different in kind: somebody sat down and produced
-        a document for you, and it should not queue behind a panel reporting that there are three
-        portfolio alerts.
-
-        Filed and exportable from here, so the answer to "can I send this to Scooter" is on the page
-        you were already reading rather than three clicks into an archive.
-      */}
-      {/*
+      {/* ══ BAND TWO · SINCE YOU LAST LOOKED ═══════════════════════════════════════════════════
         ONE SECTION, NOT THREE. Operator, 22 Aug 2026: "why is prepared for you and from your team
-        different? maybe it belongs that way but tell me why? and the morning brief should just
-        default be inside the prepare for you section."
-
-        The distinction WAS real and it was the wrong cut. "Prepared for you" held artifacts — briefs,
-        research packets, the weekly review, things you open and keep. "From your team" held people —
-        each named colleague's card saying what they currently have. Two headings splitting one
+        different?" The distinction WAS real and it was the wrong cut — two headings splitting one
         question, *what is new for me*, along an implementation seam rather than anything a partner
-        would think.
-
-        So they are one section now, ordered by how finished the thing is: the brief that arrived
-        this morning, then everything else produced for you, then the colleagues who have something
-        but have not produced a document yet. The brief leads because it is the thing you came here
-        to read.
+        would think. Ordered by how finished the thing is: the brief that arrived this morning, then
+        everything else produced for you, then the colleagues who have something but no document.
       */}
-      <section data-testid="home-deliverables">
-        <div className="home-section-head">
-          <h3>Prepared for you</h3>
-          <span className="muted small">this morning's brief, then everything else waiting to be read</span>
+      <section className="home-band" data-testid="home-deliverables">
+        <div className="home-band-head">
+          <h3>Since you last looked</h3>
+          {freshCount > 0 && <span className="count-pill">{freshCount}</span>}
+          <span className="home-band-when" data-testid="home-deliveries-count">
+            {freshCount === 0
+              ? "nothing new since you last looked"
+              : `${freshCount} ${freshCount === 1 ? "has" : "have"} something new`}
+          </span>
         </div>
 
-  <section className="card brief-delivery" data-testid="home-brief-delivery">
+        <section className="card brief-delivery" data-testid="home-brief-delivery">
           <header className="brief-byline">
             <Face name={chiefOfStaff.name} role={chiefOfStaff.role} size={40} />
             <div className="brief-byline-who">
-              {/* SAYS WHAT IS TRUE, not what usually is. This read "Wren delivered your morning
-                  briefing" unconditionally, directly above a panel saying "No brief for today yet"
-                  — so the page claimed a delivery and then denied it in the next breath. Home does
-                  not hold the brief (the panel below fetches it), so the line is written to be
-                  honest either way: whose briefing it is, not a claim that it arrived. */}
+              {/* SAYS WHAT IS TRUE, not what usually is. Home does not hold the brief (the panel
+                  below fetches it), so the line is written to be honest either way: whose briefing
+                  it is, not a claim that it arrived. */}
               <div className="brief-byline-line">
                 <strong>{chiefOfStaff.name}</strong> — your morning briefing
               </div>
@@ -707,12 +711,19 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
             </div>
           </header>
           {/*
-            COLLAPSIBLE, AND REMEMBERED (17 Sep 2026). Operator: "we also need to be able to
-            collapse the executive brief on the home page." The panel's own disclosure folds its
-            insides; this folds the panel. The state lives per viewer in
-            `client/lib/briefCollapse.ts` — a collapse that forgets itself overnight is a chore, not
-            a control — and the collapsed panel still says the date and whether today's brief
-            arrived, because hiding whether the thing ran is worse than not showing it at all.
+            A SUMMARY CARD *AND* A COLLAPSE, which are two different controls and both are hers.
+
+            `compact` is the summary: the one-minute version — the numbered summary, the traffic
+            lights and the market read — with the remaining ten sections behind "Read the full
+            report". The designer argued that should be the whole answer and the collapse should
+            go; she overruled that on 18 Sep 2026 ("just make the exec brief collapsable and run
+            it"), so BOTH stand. Short by default, foldable away entirely, depth on request.
+
+            The collapse is the mechanism that shipped in PR #92 and is not duplicated here: the
+            state is owned by Home and remembered per viewer in `client/lib/briefCollapse.ts`,
+            keyed on `firm_user.id`, because two partners share this application and, on a shared
+            laptop, the store. A collapsed panel still says the date and whether today's brief
+            arrived — hiding whether the thing ran is worse than not showing it at all.
           */}
           <DailyBriefPanel
             compact
@@ -724,7 +735,6 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           />
         </section>
 
-        <h4>Also finished for you</h4>
         <DeliverableList
           limit={4}
           onNavigate={onNavigate}
@@ -736,50 +746,88 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           emptyNote="Nothing else has been prepared for you yet. Research packets and the weekly review arrive here once somebody produces one."
         />
 
-        <div className="home-section-head">
-          <h4>Who has something for you</h4>
-          <span className="muted small" data-testid="home-deliveries-count">
-            {(() => {
-              const n = deliveries.filter(hasNew).length;
-              return n === 0 ? "nothing new since you last looked" : `${n} ${n === 1 ? "has" : "have"} something new`;
-            })()}
-          </span>
-        </div>
-        {/* Anyone with something NEW first; then colleagues you have already heard from, greyed and
-            saying since when; then everyone with nothing. Silence from a named colleague is
-            information — an absent card is just a gap. */}
-        <ul className="delivery-list">
-          {[...deliveries]
-            .sort((a, b) => rank(a) - rank(b))
-            .map((m) => (
+        {/* Anyone with something NEW gets a card. Nobody else does. */}
+        {freshDeliveries.length > 0 && (
+          <ul className="delivery-list">
+            {freshDeliveries.map((m) => (
               <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} onOpened={markOpened} />
             ))}
-        </ul>
+          </ul>
+        )}
+
+        {/* NINE QUIET COLLEAGUES ARE ONE LINE, NOT NINE CARDS. Silence from a named colleague is
+            still information and is still reported — it is just no longer the largest visual mass
+            on a page whose job is to show what needs her. Each of them is one click away. */}
+        {quietDeliveries.length > 0 && (
+          <>
+            <p className="quiet-roll" data-testid="home-quiet-roll">
+              <span>
+                {quietNames} — <b>nothing new since you last looked</b>.
+              </span>
+              <button
+                type="button"
+                className="link-button"
+                data-testid="home-quiet-roll-toggle"
+                aria-expanded={showQuiet}
+                onClick={() => setShowQuiet((q) => !q)}
+              >
+                {showQuiet ? "Hide them" : "Show each"}
+              </button>
+            </p>
+            {showQuiet && (
+              <ul className="delivery-list">
+                {quietDeliveries.map((m) => (
+                  <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} onOpened={markOpened} />
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </section>
 
-      <section className="card" data-testid="home-questions">
-        <h4>The ten questions this surface answers</h4>
-        <ul className="question-list">
-          {data.questions.map((q) => (
-            <li key={q.question} data-testid={`home-question-${q.module ?? "none"}`}>
-              {q.question}{" "}
-              {q.module ? (
-                <code>{MODULE_LABELS[q.module] ?? q.module}</code>
-              ) : (
-                <span className="muted small">no module enabled for this yet</span>
-              )}
-            </li>
-          ))}
-        </ul>
+      {/* ══ BAND THREE · THE REST ══════════════════════════════════════════════════════════════
+          Configuration and reference. Nothing here changes on its own, and nothing here is read
+          more than once in two hundred visits — so it is a shelf of closed drawers rather than
+          three more open cards competing with the brief. */}
+      <section className="home-band" data-testid="home-rest">
+        <div className="home-band-head">
+          <h3>The rest</h3>
+          <span className="home-band-when">configuration and reference — nothing here changes on its own</span>
+        </div>
+
+        <section className="card" data-testid="home-questions">
+          <header className="module-card-head">
+            <h4>What this page answers</h4>
+            <button
+              type="button"
+              className="link-button"
+              data-testid="home-questions-toggle"
+              aria-expanded={questionsOpen}
+              onClick={() => setQuestionsOpen((o) => !o)}
+            >
+              {questionsOpen ? "Hide" : "Open"}
+            </button>
+          </header>
+          <p className="muted small">the ten questions, and which module answers each</p>
+          {questionsOpen && (
+            <ul className="question-list">
+              {data.questions.map((q) => (
+                <li key={q.question} data-testid={`home-question-${q.module ?? "none"}`}>
+                  {q.question}{" "}
+                  {q.module ? (
+                    <code>{MODULE_LABELS[q.module] ?? q.module}</code>
+                  ) : (
+                    <span className="muted small">no module enabled for this yet</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <ModuleSettings home={data} onSaved={home.reload} />
+        <PersonalIntelligencePanel />
       </section>
-
-      {/* The older `/api/briefings/current` card used to render here as a SECOND brief, beneath a
-          module also called "Daily Brief". Three surfaces for one idea. The richer report — the one
-          with sections and real citations — is now at the top of this page, and this block is gone
-          rather than left as a quieter duplicate. The endpoint still exists and Sources still uses it. */}
-
-      <ModuleSettings home={data} onSaved={home.reload} />
-      <PersonalIntelligencePanel />
     </section>
   );
 }

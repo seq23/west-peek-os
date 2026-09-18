@@ -1,6 +1,6 @@
+import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
-import { providerHttpError } from "./httpError";
 
 /**
  * OpenAI chat-completions adapter — a DIRECT vendor lane for OpenAI, and for Perplexity, which

@@ -1,6 +1,6 @@
+import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
-import { providerHttpError } from "./httpError";
 
 /**
  * Google Gemini adapter — a DIRECT vendor lane, used only when OpenRouter cannot serve a call

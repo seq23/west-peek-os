@@ -7,6 +7,7 @@ import { partnerByName } from "../../shared/registry/partners";
 import {
   BLOCK_ACTIONS,
   blockProblems,
+  isTechnicalBlock,
   blockSentence,
   describeBlock,
   type Block,
@@ -35,6 +36,30 @@ import {
 
 /** How long a block waits for somebody before it rings again. */
 export const BLOCK_NAG_HOURS = 24;
+
+/**
+ * A TECHNICAL BLOCK RINGS LESS OFTEN THAN A QUESTION, AND HERE IS WHY.
+ *
+ * It appears on Work IMMEDIATELY — that is not in question and is the whole fix. What is different
+ * is the ringing afterwards, and two facts pull against each other:
+ *
+ *   · A broken lane frequently un-breaks itself. Credit is topped up, a vendor's outage ends, a
+ *     rate limit expires. A question she owes an answer to never resolves without her; a dead lane
+ *     often does, and nagging her about something that has already fixed itself teaches her to
+ *     ignore the nag — which is how the NEXT one gets missed.
+ *   · A broken lane going unnoticed for a day is still worse than one notification. Every card in
+ *     the firm can be queued behind it.
+ *
+ * So: forty-eight hours rather than twenty-four. One ring, well after the self-healing window, and
+ * quiet hours are already honoured by the notification layer so it cannot ring at two in the
+ * morning — she cannot act on a dead lane then anyway.
+ */
+export const TECHNICAL_BLOCK_NAG_HOURS = 48;
+
+/** How long "send it to a different model" stands the refusing lane down for. */
+export const LANE_STAND_DOWN_HOURS = 6;
+/** How long "stop using this one" stands it down for. Long, and still self-clearing. */
+export const LANE_PAUSE_HOURS = 24 * 7;
 /** Nagging does not escalate for ever; after this many it says so and asks for an engineer. */
 export const BLOCK_NAGS_BEFORE_ESCALATING = 3;
 
@@ -42,6 +67,10 @@ export interface BlockCardInput extends BlockFacts {
   reason: BlockReason;
   /** Scooter's office gets the notice instead of both partners. */
   tellOnly?: string;
+  /** The provider key of the lane that refused, so a door can actually stand it down. */
+  laneKey?: string;
+  /** The provider's verbatim text, status code and all. Kept, never the headline. */
+  raw?: string;
 }
 
 export interface BlockedCard {
@@ -77,6 +106,9 @@ export async function blockCard(env: Env, card: BlockedCard, input: BlockCardInp
             block_who = ?7, block_actions_json = ?8,
             blocked_at = ?9, block_nag_at = ?10, block_nags = 0,
             block_answer = NULL, block_answered_by = NULL, block_answered_at = NULL,
+            -- Which lane refused, and its verbatim words. 0185: the doors need the first to act on
+            -- it, and the second is the appendix she can open when she wants the real text.
+            block_lane = ?11, block_lane_name = ?12, block_raw = ?13,
             lease_until = NULL,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?1`,
@@ -85,7 +117,8 @@ export async function blockCard(env: Env, card: BlockedCard, input: BlockCardInp
       card.id, sentence.slice(0, 900),
       block.reason, block.trying.slice(0, 400), block.stopped, block.needed.slice(0, 900),
       block.who, JSON.stringify(block.actions),
-      now.toISOString(), nagAt(now),
+      now.toISOString(), nagAt(now, block.reason),
+      input.laneKey ?? null, input.lane ?? null, (input.raw ?? "").slice(0, 900) || null,
     )
     .run();
 
@@ -101,8 +134,10 @@ export async function blockCard(env: Env, card: BlockedCard, input: BlockCardInp
   return sentence;
 }
 
-function nagAt(now: Date): string {
-  return new Date(now.getTime() + BLOCK_NAG_HOURS * 3_600_000).toISOString();
+/** When this block rings again if nobody has acted. A fault gets a gentler interval than a question. */
+export function nagAt(now: Date, reason?: string | null): string {
+  const hours = isTechnicalBlock(reason) ? TECHNICAL_BLOCK_NAG_HOURS : BLOCK_NAG_HOURS;
+  return new Date(now.getTime() + hours * 3_600_000).toISOString();
 }
 
 /** The block as stored, for the page and for the resurfacing sweep. */
@@ -164,7 +199,7 @@ export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredB
       dedupeKey: `work_card:${row.id}:block_nag:${nags}`,
     });
     await env.WP_OS_DB.prepare("UPDATE work_card SET block_nags = ?2, block_nag_at = ?3 WHERE id = ?1")
-      .bind(row.id, nags, nagAt(now))
+      .bind(row.id, nags, nagAt(now, row.block_reason))
       .run();
   }
   return rows;
@@ -300,6 +335,64 @@ export async function answerBlock(
     return { ok: true, state: "BLOCKED", said: "Sent to an engineer. It stays on this list until they have fixed it, so it cannot go quiet." };
   }
 
+  /*
+   * ── THE FOUR DOORS A TECHNICAL BLOCK NEEDS (17 Sep 2026) ───────────────────────────────────
+   *
+   * The test this feature is judged against: SHE COULD HAVE FIXED THAT NIGHT'S FAILURE WITHOUT AN
+   * ENGINEER. Every one of these is a real write, and every one ends with the card back in the
+   * queue — a door that records an intention and leaves the work blocked is the same "runs but
+   * inert" defect answering a question used to be.
+   */
+  if (input.action === "RETRY" || input.action === "ANOTHER_LANE" || input.action === "PAUSE_LANE") {
+    const lane = await laneOf(env, cardId);
+    let said: string;
+    if (input.action === "RETRY") {
+      said = `Back in the queue. ${who} tries again within a few minutes, the same way as before.`;
+    } else {
+      if (!lane) {
+        return {
+          ok: false,
+          state: card.state,
+          said: "This one did not record which model refused it, so there is nothing to stand down. Try it again, or send it to an engineer.",
+        };
+      }
+      const hours = input.action === "PAUSE_LANE" ? LANE_PAUSE_HOURS : LANE_STAND_DOWN_HOURS;
+      await standLaneDown(env, lane.key, identityId, hours, card.title);
+      said =
+        input.action === "PAUSE_LANE"
+          ? `${lane.name} is stood down for a week — nothing in the firm will use it until then, and it comes back on its own. The work is back in the queue.`
+          : `${lane.name} is stood down for six hours, so the next run has to take a different one. ${who} tries again within a few minutes.`;
+    }
+    await reopen(env, cardId, identityId, input.action, typed);
+    await record(env, card, identityId, input.action, typed || said);
+    return { ok: true, state: "OPEN", said };
+  }
+
+  if (input.action === "HAND_ON") {
+    // The employee is named by `choice`, because the roster is not something the catalogue can
+    // know — the page offers whoever is actually employed and the server refuses anybody else.
+    const seat = (input.choice ?? "").trim();
+    const to = seat
+      ? await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1 AND status = 'ACTIVE'").bind(seat).first<{ id: string; name: string }>()
+      : null;
+    if (!to) return { ok: false, state: card.state, said: "Pick which employee should take it." };
+    if (to.id === card.owner_id) return { ok: false, state: card.state, said: `${who} already has this one. Pick somebody else.` };
+    await env.WP_OS_DB.prepare(
+      `UPDATE work_card
+          SET owner_type = 'AI', owner_id = ?2, state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL,
+              work_last_failure = NULL, work_last_failure_at = NULL,
+              next_action = ?3,
+              block_answer = ?4, block_answered_by = ?5, block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1`,
+    )
+      .bind(card.id, to.id, `Handed to ${to.name} by you.`.slice(0, 900), `Handed to ${to.name}. ${typed}`.trim().slice(0, 1000), identityId)
+      .run();
+    await leaveNote(env, card.id, identityId, `This has moved to you from ${who}. ${typed || "It stopped on the way through and you are starting it again."}`);
+    await record(env, card, identityId, "HAND_ON", `${to.name}: ${typed}`);
+    return { ok: true, state: "OPEN", said: `${to.name} has it now and starts within a few minutes.` };
+  }
+
   // ANSWER and CHANGE both put the work back in the queue; they differ in what the employee reads.
   if (input.action === "CHANGE") {
     if (typed.length < 5) return { ok: false, state: card.state, said: "Write the job again in your own words — that is what they will work from." };
@@ -366,6 +459,61 @@ async function leaveNote(env: Env, cardId: string, authorId: string, body: strin
     .run();
 }
 
+/** Which lane this block named, if any. Null means nothing to stand down. */
+async function laneOf(env: Env, cardId: string): Promise<{ key: string; name: string } | null> {
+  const row = await env.WP_OS_DB.prepare("SELECT block_lane, block_lane_name FROM work_card WHERE id = ?1")
+    .bind(cardId)
+    .first<{ block_lane: string | null; block_lane_name: string | null }>();
+  if (!row?.block_lane) return null;
+  return { key: row.block_lane, name: row.block_lane_name ?? row.block_lane };
+}
+
+/**
+ * STAND A LANE DOWN — the write that makes "stop using this one" a fact rather than a promise.
+ *
+ * `paused_until`, not `enabled = 0`. `enabled` is the operator's own switch on the Integrations
+ * page with no clock attached to it, and a button on a work card that turns a vendor off for ever,
+ * from a surface with no way to turn it back on, is a trap. A pause names who set it and why (the
+ * database refuses one that does not — migration 0185) and expires by itself.
+ *
+ * Every place that picks a lane to run on honours this; `validate:stopped-cards` is what keeps that
+ * true for the next one somebody writes.
+ */
+async function standLaneDown(env: Env, laneKey: string, byId: string, hours: number, cardTitle: string): Promise<void> {
+  const until = new Date(Date.now() + hours * 3_600_000).toISOString();
+  await env.WP_OS_DB.prepare(
+    "UPDATE provider_registry SET paused_until = ?2, paused_reason = ?3, paused_by = ?4 WHERE provider_key = ?1",
+  )
+    .bind(laneKey, until, `Stood down from the work card "${cardTitle.slice(0, 80)}" after it refused the work.`, byId)
+    .run();
+  await appendEvent(env, {
+    eventType: "provider.stood_down",
+    actorType: "firm_user",
+    actorId: byId,
+    objectType: "provider_registry",
+    objectId: laneKey,
+    firmScope: "west-peek",
+    payload: { until, hours },
+  });
+}
+
+/** Put the card back in the queue with a clean slate — the half every fault door shares. */
+async function reopen(env: Env, cardId: string, identityId: string, action: string, typed: string): Promise<void> {
+  await env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL,
+            -- The failure is cleared because it is no longer the current fact about this card.
+            -- What happened is on the record; what the page shows is where the work IS.
+            work_last_failure = NULL, work_last_failure_at = NULL,
+            next_action = ?2,
+            block_answer = ?3, block_answered_by = ?4, block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?1`,
+  )
+    .bind(cardId, "Being tried again — you sent it back.", `${action}${typed ? `: ${typed}` : ""}`.slice(0, 1000), identityId)
+    .run();
+}
+
 async function record(env: Env, card: { id: string; firm_scope: string }, actorId: string, action: string, text: string): Promise<void> {
   await appendEvent(env, {
     eventType: "work_card.unblocked",
@@ -387,7 +535,15 @@ export async function handleUnblockWorkCard(ctx: RouteContext): Promise<Response
   const body = (await ctx.request.json().catch(() => null)) as { action?: unknown; text?: unknown; choice?: unknown } | null;
   const action = String(body?.action ?? "") as BlockActionKey;
   if (!BLOCK_ACTIONS.includes(action)) {
-    return json({ error: "invalid_input", detail: "Say whether you are answering it, changing it, dropping it, or sending it to an engineer." }, { status: 400 });
+    return json(
+      {
+        error: "invalid_input",
+        detail:
+          "Say what you are doing with it: answering it, changing it, dropping it, sending it to an engineer, " +
+          "trying it again, sending it to a different model, standing that model down, or handing it to somebody else.",
+      },
+      { status: 400 },
+    );
   }
   // A PERSON CLEARS A BLOCK. An employee answering the question it asked would be the loop talking
   // to itself, which is the failure work_card_note's author_id column already refuses.
@@ -402,7 +558,9 @@ export async function handleUnblockWorkCard(ctx: RouteContext): Promise<Response
 }
 
 /** The stored block, read back for a page. Null for a card that is not blocked. */
-export function blockOf(row: Partial<StoredBlock> & { state?: string }): (Block & { blockedAt: string | null }) | null {
+export function blockOf(
+  row: Partial<StoredBlock> & { state?: string; block_lane?: string | null; block_lane_name?: string | null; block_raw?: string | null },
+): (Block & { blockedAt: string | null; lane: string | null; laneName: string | null; raw: string | null }) | null {
   if (row.state !== "BLOCKED" || !row.block_stopped) return null;
   let actions: Block["actions"] = [];
   try {
@@ -418,5 +576,10 @@ export function blockOf(row: Partial<StoredBlock> & { state?: string }): (Block 
     who: (row.block_who ?? "SEQUOIA") as Block["who"],
     actions,
     blockedAt: row.blocked_at ?? null,
+    // 0185 — what the doors act on, and the appendix behind "show me what it said". `raw` is the
+    // provider's verbatim text and is NEVER the headline: the page keeps it shut until she opens it.
+    lane: row.block_lane ?? null,
+    laneName: row.block_lane_name ?? null,
+    raw: row.block_raw ?? null,
   };
 }

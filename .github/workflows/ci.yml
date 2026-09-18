@@ -78,6 +78,14 @@ jobs:
       - name: CSS class coverage
         run: npm run validate:css-classes
 
+      # THE COMPLEMENT OF THE SCAN ABOVE. That one asks whether every class the page applies is
+      # defined; this asks whether a defined heading rule reaches anything. `.home-section-head h2`
+      # was valid CSS aimed at a tag none of its 34 call sites emit, so every section heading in the
+      # product rendered at browser default — green build, no failing test, and an operator saying
+      # "the headings have no visual weight". It found two more of the same on the day it was written.
+      - name: A heading-scale rule reaches a heading
+        run: npm run validate:heading-scale
+
       - name: Every var(--token) resolves
         run: npm run validate:css-variables
 
@@ -111,6 +119,17 @@ jobs:
       # and offer a button. A service that blocks a card its own way fails here.
       - name: A block is something she can clear herself
         run: npm run validate:blocks
+
+      # A CARD THAT STOPS ON A FAULT SAYS WHAT REFUSED IT. On 17 Sep 2026 a card failed three times
+      # in fourteen minutes because one lane's account had run out of credit, and the Work page said
+      # "Open · queued — picked up within 5 min" throughout. The reason existed only as
+      # `provider_failure:provider_http_400` on a row in D1 and the fix was editing that database.
+      # This fails the build if an adapter throws a status code away, if a real failure stops
+      # producing a block a partner can read, if a lane she stood down can still be picked, if a
+      # door does not put the card back in the queue, or if the page stops telling a stopped card
+      # from a waiting one.
+      - name: A stopped card says why, and she can fix it from the card
+        run: npm run validate:stopped-cards
 
       # Nothing a partner types may reach no model. Every branch of the sweep's dispatch is read out
       # of the source, so the chain nobody remembers to wire is the one this fails on.

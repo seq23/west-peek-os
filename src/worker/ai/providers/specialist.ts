@@ -1,5 +1,5 @@
-import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { providerHttpError } from "./httpError";
+import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 
 /**
  * Specialist vendor adapters — Harvey (legal) and Norm (compliance) (P23, GAP-15).
