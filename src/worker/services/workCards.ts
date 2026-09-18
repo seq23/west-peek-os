@@ -9,6 +9,7 @@ import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityC
 import { getVisibleCapture } from "./captures";
 import { blockOf } from "./blocks";
 import { RECORD_GROUP_COLUMNS, RECORD_GROUP_SQL, RECORD_STATES, monthLabel, searchTerms, type RecordState } from "../../shared/work/record";
+import { partnerByFirmUserId } from "../../shared/registry/partners";
 
 /**
  * Work spine (P3): the unit of governed work. State transitions are enforced

@@ -15,7 +15,8 @@ import {
 } from "../effects/emailTransport";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { employeeSenderHeader } from "../../shared/registry/employeeMail";
-import { PREVIEW_PARTNER, partnerByFirmUserId } from "../../shared/registry/partners";
+import { partnerByFirmUserId, type Partner } from "../../shared/registry/partners";
+import { notifyQuietly } from "./notifications";
 import {
   PREVIEW_ACTION_DEFS,
   approvalExpiry,
@@ -24,7 +25,11 @@ import {
   mintApprovalToken,
   previewFirstFor,
   previewIntendedFor,
+  previewLapsedNote,
+  previewNagDue,
+  previewOwnerFor,
   readApprovalToken,
+  PREVIEW_NAG_AFTER_HOURS,
   type PreviewAction,
   type PreviewLaneReason,
 } from "../../shared/work/previewLane";
@@ -56,6 +61,15 @@ import { renderExecEmail, type ExecEmailInput } from "../../shared/email/execEma
 /** Where the buttons in her email point. The same host every other employee email links to. */
 const OS_BASE = "https://os.joinwestpeek.com";
 
+/**
+ * The three answers that END a preview. SEND_FAILED is deliberately not among them: she answered,
+ * the machinery did not, and a row in that state is still hers to act on.
+ */
+export const TERMINAL_STATES: readonly string[] = ["SENT", "RETURNED", "DISMISSED"];
+
+/** The states that still want something from the partner who owns them. What her Home shows. */
+export const LIVE_PREVIEW_STATES: readonly string[] = ["PENDING", "SEND_FAILED"];
+
 export interface PreviewApprovalRow {
   id: string;
   work_card_id: string | null;
@@ -69,7 +83,19 @@ export interface PreviewApprovalRow {
   recipient_set_by: "EMPLOYEE" | "PARTNER";
   proposed_recipient: string;
   lane_reason: PreviewLaneReason;
-  state: "PENDING" | "SENT" | "RETURNED" | "DISMISSED";
+  /**
+   * WHOSE PREVIEW THIS IS — the partner who ticked the box (0190).
+   *
+   * Not a role. Both endpoints used to ask "are you A partner?" and the list then returned the
+   * WHOLE FIRM'S previews, so Scooter saw hers on his Home and could approve or dismiss them.
+   * Authorising a role where the thing authorised is a person is the bug; this column is the fix.
+   */
+  owner_firm_user_id: string;
+  /**
+   * SEND_FAILED IS NOT TERMINAL. She said yes and the transport refused; the row stays answerable
+   * so she can send it again or dismiss it, rather than reading SENT with nothing delivered.
+   */
+  state: "PENDING" | "SENT" | "SEND_FAILED" | "RETURNED" | "DISMISSED";
   token_sha256: string;
   expires_at: string;
   used_at: string | null;
@@ -80,6 +106,11 @@ export interface PreviewApprovalRow {
   send_detail: string | null;
   provider_message_id: string | null;
   deliverable_id: string | null;
+  last_nagged_at: string | null;
+  nag_count: number;
+  /** Why her Home copy could not be filed, when it could not. Recorded, never swallowed. */
+  archive_error: string | null;
+  archive_failed_at: string | null;
   privacy_label: string;
   firm_scope: string;
   created_at: string;
@@ -99,6 +130,13 @@ export interface FilePreviewInput {
   /** The address the employee proposes. She may change it before sending. */
   recipient: string;
   laneReason: PreviewLaneReason;
+  /**
+   * THE PARTNER WHOSE PREVIEW THIS IS. A `Partner` object, never an id string, because the type is
+   * the guarantee: the only way to obtain one is to ask `registry/partners.ts`, so there is no
+   * spelling of this call that files a preview to somebody outside the firm — and the preview's
+   * single-use approval link is mailed to this person's address.
+   */
+  owner: Partner;
   workCardId?: string | null;
   cardKind?: string | null;
   firmScope?: string;
@@ -130,14 +168,14 @@ export async function filePreview(env: Env, input: FilePreviewInput): Promise<Fi
   await env.WP_OS_DB.prepare(
     `INSERT INTO preview_approval
        (id, work_card_id, card_kind, employee, what, subject, body_text, body_html,
-        recipient, recipient_set_by, proposed_recipient, lane_reason, state,
+        recipient, recipient_set_by, proposed_recipient, lane_reason, owner_firm_user_id, state,
         token_sha256, expires_at, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'EMPLOYEE', ?9, ?10, 'PENDING', ?11, ?12, ?13)`,
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'EMPLOYEE', ?9, ?10, ?11, 'PENDING', ?12, ?13, ?14)`,
   )
     .bind(
       id, input.workCardId ?? null, input.cardKind ?? null, input.employee, input.what,
       input.subject, input.bodyText, input.bodyHtml ?? null,
-      recipient, input.laneReason, tokenHash, expiresAt, firmScope,
+      recipient, input.laneReason, input.owner.firmUserId, tokenHash, expiresAt, firmScope,
     )
     .run();
 
@@ -151,6 +189,7 @@ export async function filePreview(env: Env, input: FilePreviewInput): Promise<Fi
    * would be the wrong trade.
    */
   let deliverableId: string | null = null;
+  let archiveError: string | null = null;
   try {
     const d = await deliver(
       env,
@@ -160,7 +199,8 @@ export async function filePreview(env: Env, input: FilePreviewInput): Promise<Fi
         title: `${input.employee}: ${input.what} — waiting for your yes`,
         body: previewBodyForHome({ ...input, recipient, expiresAt }),
         preparedBy: input.employee,
-        preparedFor: PREVIEW_PARTNER.firmUserId,
+        // THE OWNER, NOT A CONSTANT. It is filed on the Home of the partner who ticked the box.
+        preparedFor: input.owner.firmUserId,
         sourceType: "preview_approval",
         sourceId: id,
       },
@@ -169,12 +209,44 @@ export async function filePreview(env: Env, input: FilePreviewInput): Promise<Fi
     await env.WP_OS_DB.prepare("UPDATE preview_approval SET deliverable_id = ?2 WHERE id = ?1")
       .bind(id, d.id)
       .run();
-  } catch {
+  } catch (err) {
+    /*
+     * STILL BEST EFFORT — AND NO LONGER SILENT (18 Sep 2026).
+     *
+     * This was `catch { deliverableId = null; }`. An empty catch is why the `approval_preview`
+     * CHECK bug survived a full day unseen: production rejected every one of these inserts,
+     * migration 0189 is the repair, and the only symptom anybody could see was a validator that
+     * needs production credentials going red. The code held the exact reason in its hand and
+     * discarded it.
+     *
+     * The BEHAVIOUR is deliberately unchanged: losing her approval because the archive is down
+     * would be the wrong trade, so the preview still exists and the email still carries the three
+     * buttons. What changes is that the reason is written to the row, put on the event spine and
+     * counted, so the next silent archive outage is a number somebody can see rather than a day.
+     */
     deliverableId = null;
+    archiveError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    await env.WP_OS_DB.prepare(
+      "UPDATE preview_approval SET archive_error = ?2, archive_failed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+    )
+      .bind(id, archiveError.slice(0, 2000))
+      .run()
+      .catch(() => undefined);
+    await appendEvent(env, {
+      eventType: "preview_approval.archive_failed",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "preview_approval",
+      objectId: id,
+      firmScope,
+      payload: { employee: input.employee, owner: input.owner.firmUserId, detail: archiveError.slice(0, 2000) },
+    }).catch(() => undefined);
   }
 
   const mail = await sendPartnerEmail(env, {
-    to: PREVIEW_PARTNER.email,
+    // THE OWNER'S ADDRESS. The link in this message sends mail on the firm's behalf, so it goes to
+    // the one partner entitled to answer it — never to "a partner".
+    to: input.owner.email,
     email: previewEmailFor({ ...input, recipient, id, token, expiresAt }),
     objectType: "preview_approval",
     objectId: id,
@@ -195,8 +267,10 @@ export async function filePreview(env: Env, input: FilePreviewInput): Promise<Fi
       employee: input.employee,
       recipient,
       lane_reason: input.laneReason,
+      owner: input.owner.firmUserId,
       work_card_id: input.workCardId ?? null,
       deliverable_id: deliverableId,
+      archive_error: archiveError,
       emailed: mail.sent,
       expires_at: expiresAt,
     },
@@ -275,6 +349,15 @@ export interface SendOrPreviewInput {
   workCardId?: string | null;
   /** `work_card.preview_first`. NULL is "nobody said" and the default rule decides. */
   cardAsked?: boolean | null;
+  /**
+   * WHO TICKED THE BOX — `work_card.preview_owner_id`. The preview becomes theirs to answer.
+   */
+  tickedByFirmUserId?: string | null;
+  /**
+   * WHO ASKED FOR THE WORK — `work_card.requested_by_email`, the DKIM/DMARC-checked address from
+   * migration 0160. A scheduled job has nobody who ticked anything, so this answers instead.
+   */
+  requestedByEmail?: string | null;
   events?: { sent: string; notSent: string };
   /** In words, for her Home and the preview email. Defaults to the email's own `what`. */
   what?: string;
@@ -289,6 +372,8 @@ export interface SendOrPreviewOutcome {
   reason: string;
   subject: string;
   approvalId?: string;
+  /** The partner it is waiting on, when it went into the lane. */
+  owner?: string;
 }
 
 /**
@@ -318,6 +403,15 @@ export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promis
   }
 
   const rendered = renderExecEmail(input.email);
+  /*
+   * WHOEVER TICKED THE BOX OWNS THE PREVIEW (18 Sep 2026). Operator: not always her — Scooter's
+   * previews are Scooter's to answer. `previewOwnerFor` can only return a partner out of the
+   * registry, so making this dynamic cannot widen who receives an approval link.
+   */
+  const owner = previewOwnerFor({
+    tickedByFirmUserId: input.tickedByFirmUserId ?? null,
+    requestedByEmail: input.requestedByEmail ?? null,
+  });
   const filed = await filePreview(env, {
     employee: input.email.employee,
     what: input.what ?? input.email.what,
@@ -326,6 +420,7 @@ export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promis
     bodyHtml: rendered.html,
     recipient: to,
     laneReason: lane.reason!,
+    owner,
     workCardId: input.workCardId ?? null,
     cardKind: input.cardKind ?? null,
     firmScope: input.firmScope,
@@ -337,9 +432,10 @@ export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promis
     to,
     subject: rendered.subject,
     approvalId: filed.approval.id,
+    owner: owner.firmUserId,
     reason:
-      `${lane.why} It is on ${PREVIEW_PARTNER.firstName}'s Home and ` +
-      (filed.emailed ? "in her inbox" : `NOT in her inbox (${filed.emailReason})`) +
+      `${lane.why} It is on ${owner.firstName}'s Home and ` +
+      (filed.emailed ? `in ${owner.firstName}'s inbox` : `NOT in ${owner.firstName}'s inbox (${filed.emailReason})`) +
       ", with Send it / Send it back / Dismiss.",
   };
 }
@@ -392,18 +488,37 @@ export async function decidePreview(
     .bind(approvalId)
     .first<PreviewApprovalRow>();
   if (!row) throw new PreviewApprovalError(404, "not_found", "no such preview");
-  if (row.state !== "PENDING") {
+  /*
+   * DECIDED ONCE — AND SEND_FAILED IS NOT DECIDED (0190).
+   *
+   * She said yes and the transport refused. The old code had already written 'SENT' before calling
+   * the transport and then put the refusal in a text column nothing reads, so Home said SENT and
+   * the recipient got nothing. A failed send leaves the row answerable: she can send it again, or
+   * dismiss it. The TOKEN is still spent — `approvalByToken` refuses anything but a live PENDING
+   * row — so a retry can only come from the authenticated owner on Home, which is the point.
+   */
+  if (TERMINAL_STATES.includes(row.state)) {
     throw new PreviewApprovalError(
       409,
       "already_decided",
       `this preview was already ${row.state.toLowerCase()}${row.decided_at ? ` on ${row.decided_at}` : ""}. It cannot be decided twice.`,
     );
   }
-  if (Date.parse(row.expires_at) <= Date.now()) {
+  /*
+   * LAPSING STOPS A SEND, AND NOTHING ELSE (18 Sep 2026).
+   *
+   * An expired preview used to refuse all three answers and then vanish off Home entirely, which
+   * left the work gone with nobody told. Sending a 72-hour-old draft is still refused — that is
+   * what the expiry is for — but "Send it back" is exactly how she gets a fresh one, and "Dismiss"
+   * is how she closes it. Refusing those two was refusing the two ways out.
+   */
+  const lapsed = Date.parse(row.expires_at) <= Date.now();
+  if (lapsed && input.action === "SEND") {
     throw new PreviewApprovalError(
       410,
       "expired",
-      `this preview expired on ${row.expires_at}. Ask ${row.employee} for a fresh one rather than sending a stale draft.`,
+      `this preview lapsed on ${row.expires_at}, so it will not go out as it stands. Send it back to ` +
+        `${row.employee} with a word and he will put a fresh one in front of you.`,
     );
   }
   if (input.action === "RETURN" && !(input.note ?? "").trim()) {
@@ -423,14 +538,21 @@ export async function decidePreview(
 
   const nextState = input.action === "SEND" ? "SENT" : input.action === "RETURN" ? "RETURNED" : "DISMISSED";
 
-  // The claim. Nothing below this line can run twice for one approval.
+  /*
+   * The claim. Nothing below this line can run twice for one approval.
+   *
+   * A PENDING row is claimed once, by its unspent token or by its owner on Home. A SEND_FAILED row
+   * is claimable again by its owner — the send she already authorised did not happen — and the
+   * `used_at` guard is relaxed for exactly that case and no other.
+   */
   const claim = await env.WP_OS_DB.prepare(
     `UPDATE preview_approval
         SET state = ?2, recipient = ?3, recipient_set_by = ?4, note = ?5,
             decided_by = ?6, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
             decided_via = ?7, used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-      WHERE id = ?1 AND state = 'PENDING' AND used_at IS NULL`,
+      WHERE id = ?1
+        AND ((state = 'PENDING' AND used_at IS NULL) OR state = 'SEND_FAILED')`,
   )
     .bind(approvalId, nextState, to, setBy, input.note ?? null, input.byFirmUserId, input.via)
     .run();
@@ -444,17 +566,45 @@ export async function decidePreview(
   if (input.action === "SEND") {
     const result = await sendApproved(env, { ...row, recipient: to });
     sent = result.sent;
-    detail = result.detail;
+    /*
+     * NEVER A SILENT 'SENT' WITH NOTHING DELIVERED. The row was claimed as SENT a moment ago
+     * because the claim has to happen before the transport — that is what makes a double tap
+     * impossible — so a refusal moves it to SEND_FAILED, which surfaces on her Home with the
+     * transport's own words and stays answerable.
+     */
+    detail = result.sent
+      ? result.detail
+      : `NOT sent to ${to}. The transport refused: ${result.detail}. Nothing reached them. ` +
+        "It is still on your Home — send it again, or dismiss it.";
     await env.WP_OS_DB.prepare(
-      "UPDATE preview_approval SET send_detail = ?2, provider_message_id = ?3, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+      `UPDATE preview_approval
+          SET state = ?4, send_detail = ?2, provider_message_id = ?3,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1`,
     )
-      .bind(approvalId, detail, result.provider_message_id)
+      .bind(approvalId, detail, result.provider_message_id, result.sent ? "SENT" : "SEND_FAILED")
       .run();
+    if (!result.sent) {
+      await notifyQuietly(env, {
+        firmUserId: row.owner_firm_user_id,
+        kind: "MEETING",
+        severity: "WARNING",
+        title: `${row.employee}: you approved this and it did not go out`,
+        body:
+          `"${row.subject}" was approved for ${to} and the transport refused it: ${result.detail}. ` +
+          "Nothing reached them. It is on your Home to send again or dismiss.",
+        objectType: "preview_approval",
+        objectId: approvalId,
+        dedupeKey: `preview_approval:${approvalId}:send_failed`,
+        firmScope: row.firm_scope,
+      }).catch(() => undefined);
+    }
   } else if (input.action === "RETURN") {
     await returnToEmployee(env, row, input.note!.trim());
-    detail = `sent back to ${row.employee} with your note. They redo it and preview it again.`;
+    detail = `sent back to ${row.employee} with your note. The card is open again and the sweep picks it up within minutes.`;
   } else {
-    detail = "dismissed. Nothing was sent and nobody was told.";
+    const closed = await closeCardOnDismiss(env, row);
+    detail = `dismissed. Nothing was sent and nobody outside the firm was told. ${closed}`;
   }
 
   await appendEvent(env, {
@@ -541,6 +691,58 @@ async function sendApproved(env: Env, row: PreviewApprovalRow): Promise<EmailSen
  * there is a card, so the trail is complete in both directions.
  */
 async function returnToEmployee(env: Env, row: PreviewApprovalRow, note: string): Promise<void> {
+  /*
+   * AND THE CARD IS WORKED AGAIN — THE PART THAT WAS MISSING (18 Sep 2026).
+   *
+   * "Send it back" wrote a steer, wrote a note, set `state = 'RETURNED'` and STOPPED. Nothing
+   * reopened the card, so her rejection reached an employee who was never asked to do anything
+   * with it. That is the exact bug fixed in decks on 14 Sep — "a rejection wrote a row and an
+   * event and nothing happened" — reproduced here four days later in a different feature.
+   *
+   * THE DECK PRECEDENT, followed rather than re-invented: `requestDeckRework` in services/deck.ts
+   * puts a card in front of `claimNextCard` and the sweep picks it up within minutes. That query
+   * (services/workSweep.ts) wants `owner_type = 'AI'`, an `owner_id`, a state of OPEN or
+   * IN_PROGRESS, no live lease, and `work_attempts` under the ceiling. A card that produced a
+   * preview is DONE with its attempts spent, so all four are restored here.
+   *
+   * HER WORDS GO IN `prompt`, which is what `steerFor` reads before any stage runs — the same
+   * channel `runDeckRework` uses for a rejection reason. A note on the card alone would be a note
+   * no model ever sees, which is how a redo comes back identical to the draft she rejected.
+   */
+  if (row.work_card_id) {
+    const reopened = await env.WP_OS_DB.prepare(
+      `UPDATE work_card
+          SET state = 'OPEN',
+              work_attempts = 0,
+              lease_until = NULL,
+              next_action = ?3,
+              prompt = substr(?2, 1, 4000),
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1 AND owner_type = 'AI' AND owner_id IS NOT NULL`,
+    )
+      .bind(
+        row.work_card_id,
+        `You previewed this and it was sent back. Redo it with this in mind, then preview it again.\n\n${note}`,
+        `Redo "${row.what}" — it was sent back`,
+      )
+      .run()
+      .catch(() => null);
+    await appendEvent(env, {
+      eventType: "preview_approval.card_reopened",
+      actorType: "firm_user",
+      actorId: row.owner_firm_user_id,
+      objectType: "work_card",
+      objectId: row.work_card_id,
+      firmScope: row.firm_scope,
+      payload: {
+        preview_approval_id: row.id,
+        employee: row.employee,
+        // A card owned by a person rather than an employee cannot be reworked by the sweep, and
+        // saying so on the spine is what stops "sent back" from meaning nothing a second time.
+        reopened: (reopened?.meta?.changes ?? 0) > 0,
+      },
+    }).catch(() => undefined);
+  }
   if (row.card_kind) {
     await env.WP_OS_DB.prepare(
       `INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, firm_scope)
@@ -548,7 +750,9 @@ async function returnToEmployee(env: Env, row: PreviewApprovalRow, note: string)
     )
       .bind(
         `wst_${crypto.randomUUID()}`, row.card_kind, row.work_card_id,
-        PREVIEW_PARTNER.firmUserId, note, row.firm_scope,
+        // THE PARTNER WHO ANSWERED, not a constant. A steer attributed to the wrong partner is a
+        // steer the employee weighs against the wrong authority.
+        row.owner_firm_user_id, note, row.firm_scope,
       )
       .run()
       .catch(() => undefined);
@@ -558,10 +762,144 @@ async function returnToEmployee(env: Env, row: PreviewApprovalRow, note: string)
       `INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope)
        VALUES (?1, ?2, ?3, ?4, ?5)`,
     )
-      .bind(`wcn_${crypto.randomUUID()}`, row.work_card_id, PREVIEW_PARTNER.firmUserId, note, row.firm_scope)
+      .bind(`wcn_${crypto.randomUUID()}`, row.work_card_id, row.owner_firm_user_id, note, row.firm_scope)
       .run()
       .catch(() => undefined);
   }
+}
+
+/**
+ * DISMISS CLOSES THE CARD, AND SAYS SO (18 Sep 2026).
+ *
+ * "Dismiss" used to be a state change on the approval and nothing else: `detail` said "it dies
+ * there", and the work card that produced it was left exactly where it was. A card still OPEN or
+ * IN_PROGRESS then sat on the board forever, and the sweep would pick it up again and produce a
+ * second preview of the thing she had just thrown away.
+ *
+ * A CARD ALREADY FINISHED IS LEFT FINISHED. Most previews are filed by an employee at the end of a
+ * run, so the card is DONE by the time she answers — rewriting a completed card to CANCELLED would
+ * be falsifying the record of work that really was done. What is closed is a card that is still
+ * somebody's problem.
+ */
+async function closeCardOnDismiss(env: Env, row: PreviewApprovalRow): Promise<string> {
+  if (!row.work_card_id) return "There was no card behind it.";
+  const closed = await env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET state = 'CANCELLED',
+            next_action = NULL,
+            lease_until = NULL,
+            description = substr(COALESCE(description, '') || char(10) || char(10) || ?2, 1, 16000),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?1 AND state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')`,
+  )
+    .bind(
+      row.work_card_id,
+      `• Dismissed at the preview: "${row.subject}" was not sent to ${row.recipient} and the card was closed.`,
+    )
+    .run()
+    .catch(() => null);
+  const didClose = (closed?.meta?.changes ?? 0) > 0;
+  await appendEvent(env, {
+    eventType: "preview_approval.card_closed",
+    actorType: "firm_user",
+    actorId: row.owner_firm_user_id,
+    objectType: "work_card",
+    objectId: row.work_card_id,
+    firmScope: row.firm_scope,
+    payload: { preview_approval_id: row.id, employee: row.employee, closed: didClose },
+  }).catch(() => undefined);
+  return didClose
+    ? `The card is closed — ${row.employee} will not work it again.`
+    : "The card behind it was already finished, so it is left as it was.";
+}
+
+// ── NOTHING EXPIRES INTO SILENCE ──────────────────────────────────────────────────────────────
+
+/**
+ * ASK AGAIN AT 48 HOURS, ON THE BLOCKED-CARD CADENCE (18 Sep 2026).
+ *
+ * A preview held finished work and an unspent credential and nagged NOBODY, while a blocked card
+ * beside it rang its owner every 48 hours (`TECHNICAL_BLOCK_NAG_HOURS` in services/blocks.ts).
+ * Both are the same shape of thing — work standing still because one person has not answered — so
+ * this is deliberately the same interval and deliberately the same delivery: `notifyQuietly`,
+ * which holds a non-CRITICAL notice through her quiet hours and still files the row so it is there
+ * when she looks. A second implementation of "not at 3am" is how the two drift.
+ *
+ * IT NAGS THE OWNER, one person, by `owner_firm_user_id` — never "the partners". A preview Scooter
+ * is sitting on is not something to ring her about.
+ *
+ * IT INCLUDES LAPSED PREVIEWS, which is the whole point of the second half of this fix: at 72
+ * hours the link stops working, and if nothing says so the work simply disappears.
+ *
+ * RULE 0: it returns what it did, and the caller records it. A run that nagged nobody because
+ * nothing was waiting is a legitimate stop and says so; it is not the same as a run that found
+ * nothing because the query broke.
+ */
+export async function resurfaceStalePreviews(
+  env: Env,
+  now: Date,
+): Promise<{ examined: number; nagged: string[] }> {
+  const rows = await env.WP_OS_DB.prepare(
+    `SELECT id, employee, what, subject, recipient, owner_firm_user_id, expires_at, created_at,
+            last_nagged_at, nag_count, firm_scope
+       FROM preview_approval
+      WHERE state = 'PENDING'
+      ORDER BY created_at ASC
+      LIMIT 5`,
+  ).all<{
+    id: string;
+    employee: string;
+    what: string;
+    subject: string;
+    recipient: string;
+    owner_firm_user_id: string;
+    expires_at: string;
+    created_at: string;
+    last_nagged_at: string | null;
+    nag_count: number;
+    firm_scope: string;
+  }>();
+  const waiting = rows.results ?? [];
+  const nagged: string[] = [];
+
+  for (const row of waiting) {
+    if (!previewNagDue({ createdAt: row.created_at, lastNaggedAt: row.last_nagged_at, now })) continue;
+    const lapsed = Date.parse(row.expires_at) <= now.getTime();
+    const count = (row.nag_count ?? 0) + 1;
+    await notifyQuietly(env, {
+      firmUserId: row.owner_firm_user_id,
+      kind: "MEETING",
+      severity: "WARNING",
+      title: lapsed
+        ? `${row.employee} is still waiting, and this one has lapsed: ${row.what}`
+        : `Still waiting on you: ${row.employee} — ${row.what}`,
+      body: lapsed
+        ? previewLapsedNote({ employee: row.employee, expiresAt: row.expires_at, what: row.what })
+        : `"${row.subject}" is addressed to ${row.recipient} and has not gone anywhere. ` +
+          `Send it, send it back, or dismiss it — it lapses on ${new Date(row.expires_at).toLocaleString("en-GB")}.`,
+      objectType: "preview_approval",
+      objectId: row.id,
+      // Per nag, like the blocked-card nag: the second ask must not be swallowed by the first.
+      dedupeKey: `preview_approval:${row.id}:nag:${count}`,
+      firmScope: row.firm_scope,
+    }).catch(() => undefined);
+    await env.WP_OS_DB.prepare(
+      "UPDATE preview_approval SET nag_count = ?2, last_nagged_at = ?3, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+    )
+      .bind(row.id, count, now.toISOString())
+      .run();
+    await appendEvent(env, {
+      eventType: "preview_approval.nagged",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "preview_approval",
+      objectId: row.id,
+      firmScope: row.firm_scope,
+      payload: { owner: row.owner_firm_user_id, nag: count, lapsed, after_hours: PREVIEW_NAG_AFTER_HOURS },
+    }).catch(() => undefined);
+    nagged.push(row.id);
+  }
+  return { examined: waiting.length, nagged };
 }
 
 // ── LOOKING ONE UP BY ITS TOKEN ───────────────────────────────────────────────────────────────
@@ -612,31 +950,64 @@ const decideSchema = z.object({
   recipient: z.string().trim().max(200).optional(),
 });
 
-/** GET /api/preview-approvals — what is waiting for her. Authenticated; partners only. */
+/**
+ * GET /api/preview-approvals — WHAT IS WAITING FOR *YOU*.
+ *
+ * ─── MINE, NOT THE FIRM'S (18 Sep 2026) ────────────────────────────────────────────────────────
+ *
+ * This asked "are you A partner?" and then returned every PENDING row in the firm. Both partners
+ * saw both partners' previews, so Scooter's Home carried hers and he could approve or dismiss
+ * them — a preview holds an unsent draft in an employee's voice and a decision only its owner is
+ * entitled to make. The role was authorised where the thing being authorised is a person.
+ *
+ * ─── AND NOTHING EXPIRES INTO SILENCE ──────────────────────────────────────────────────────────
+ *
+ * The old clause `expires_at > now` meant an unanswered preview left this list at 72 hours with
+ * nobody told: the work was gone and the only trace was a row. A lapsed preview now SURFACES,
+ * carrying `lapsed: true` and a sentence saying how to get a fresh one, and a SEND_FAILED one
+ * surfaces beside it — she approved that send and it did not happen.
+ */
 export async function handleListPreviewApprovals(ctx: RouteContext): Promise<Response> {
-  if (!partnerByFirmUserId(ctx.identity!.id)) {
+  const me = partnerByFirmUserId(ctx.identity!.id);
+  if (!me) {
     return json({ error: "forbidden", reason: "previews are answered by a Managing Partner" }, { status: 403 });
   }
   const rows = await ctx.env.WP_OS_DB.prepare(
     `SELECT id, work_card_id, card_kind, employee, what, subject, body_text, recipient,
-            recipient_set_by, proposed_recipient, lane_reason, state, expires_at, decided_at,
-            decided_via, note, send_detail, deliverable_id, created_at
+            recipient_set_by, proposed_recipient, lane_reason, owner_firm_user_id, state,
+            expires_at, decided_at, decided_via, note, send_detail, deliverable_id,
+            last_nagged_at, nag_count, created_at
        FROM preview_approval
-      WHERE firm_scope = ?1 AND state = 'PENDING' AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE firm_scope = ?1
+        AND owner_firm_user_id = ?2
+        AND state IN ('PENDING', 'SEND_FAILED')
       ORDER BY created_at DESC`,
   )
-    .bind("west-peek")
+    .bind("west-peek", me.firmUserId)
     .all();
   const previews = (rows.results ?? []) as Array<Record<string, unknown>>;
+  const now = Date.now();
   return json({
-    previews: previews.map((p) => ({
-      ...p,
-      intended_for: previewIntendedFor({
-        recipient: String(p.recipient),
-        employee: String(p.employee),
-        setBy: p.recipient_set_by === "PARTNER" ? "PARTNER" : "EMPLOYEE",
-      }),
-    })),
+    owner: me.firmUserId,
+    previews: previews.map((p) => {
+      const lapsed = Date.parse(String(p.expires_at)) <= now;
+      return {
+        ...p,
+        lapsed,
+        lapsed_note: lapsed
+          ? previewLapsedNote({
+              employee: String(p.employee),
+              expiresAt: String(p.expires_at),
+              what: String(p.what),
+            })
+          : null,
+        intended_for: previewIntendedFor({
+          recipient: String(p.recipient),
+          employee: String(p.employee),
+          setBy: p.recipient_set_by === "PARTNER" ? "PARTNER" : "EMPLOYEE",
+        }),
+      };
+    }),
     actions: PREVIEW_ACTION_DEFS,
   });
 }
@@ -648,8 +1019,38 @@ export async function handleListPreviewApprovals(ctx: RouteContext): Promise<Res
  * read every page is explicitly not allowed to authorise one.
  */
 export async function handleDecidePreviewApproval(ctx: RouteContext): Promise<Response> {
-  if (!partnerByFirmUserId(ctx.identity!.id)) {
+  const me = partnerByFirmUserId(ctx.identity!.id);
+  if (!me) {
     return json({ error: "forbidden", reason: "only a Managing Partner can approve a send" }, { status: 403 });
+  }
+  /*
+   * AND THIS PARTNER, NOT A PARTNER (18 Sep 2026).
+   *
+   * The check above authorises a ROLE. What is being authorised is a PERSON: the preview goes to
+   * whoever ticked the box, and Scooter's previews are Scooter's to answer. Without the row read
+   * here, either partner could approve, return or dismiss the other's unsent draft — and the
+   * sender on that mail would be an employee, in his voice, over the firm's domain.
+   *
+   * A 404 RATHER THAN A 403 FOR "NO SUCH ROW", and a 403 that names nobody. A partner who is not
+   * the owner learns that this preview is not theirs, and nothing about what it is or who it is
+   * for; the row holds an unsent draft.
+   */
+  const owned = await ctx.env.WP_OS_DB.prepare(
+    "SELECT owner_firm_user_id FROM preview_approval WHERE id = ?1",
+  )
+    .bind(ctx.params.id!)
+    .first<{ owner_firm_user_id: string }>();
+  if (!owned) return json({ error: "not_found", detail: "no such preview" }, { status: 404 });
+  if (owned.owner_firm_user_id !== me.firmUserId) {
+    return json(
+      {
+        error: "not_your_preview",
+        reason:
+          "this preview is waiting on the other Managing Partner. A preview is answered by whoever " +
+          "asked to see it first — it is their draft to send, send back or dismiss.",
+      },
+      { status: 403 },
+    );
   }
   const parsed = decideSchema.safeParse(await ctx.request.json().catch(() => null));
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
@@ -743,8 +1144,13 @@ export async function handleDecidePreviewApprovalByToken(ctx: RouteContext): Pro
   try {
     const out = await decidePreview(ctx.env, row.id, {
       action,
-      // The token authorises on her behalf; it was minted for, and mailed to, her address alone.
-      byFirmUserId: PREVIEW_PARTNER.firmUserId,
+      /*
+       * THE TOKEN AUTHORISES ON THE OWNER'S BEHALF — and the owner is read off the row rather than
+       * assumed (0190). The token was minted for this preview and mailed to exactly one address:
+       * `owner_firm_user_id`'s. Hard-coding her here would have recorded Scooter's own decision,
+       * made from his own inbox, as hers.
+       */
+      byFirmUserId: row.owner_firm_user_id,
       via: "EMAIL",
       note: String(form?.get("note") ?? "") || null,
       recipient: String(form?.get("recipient") ?? "") || null,
