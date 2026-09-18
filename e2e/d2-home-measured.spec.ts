@@ -49,61 +49,78 @@ async function openHome(page: Page): Promise<void> {
  * is what the browser does; taking `backgroundColor` off the text's own element would score most of
  * the page against `rgba(0,0,0,0)` and pass everything.
  */
-const MEASURE_CONTRAST = `() => {
-  const lum = (c) => {
-    const f = c.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); });
-    return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2];
+function measureContrast(): Array<{ text: string; ratio: number; need: number; px: number }> {
+  const lum = (c: number[]): number => {
+    const f = c.map((v) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * f[0]! + 0.7152 * f[1]! + 0.0722 * f[2]!;
   };
-  const parse = (s) => { const m = s.match(/[\\d.]+/g); return m ? m.slice(0, 3).map(Number) : null; };
-  const alpha = (s) => { const m = s.match(/[\\d.]+/g); return m && m.length > 3 ? Number(m[3]) : 1; };
-  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
-  const bgOf = (el) => {
-    let n = el;
+  const parse = (s: string): number[] | null => {
+    const m = s.match(/[\d.]+/g);
+    return m ? m.slice(0, 3).map(Number) : null;
+  };
+  const alpha = (s: string): number => {
+    const m = s.match(/[\d.]+/g);
+    return m && m.length > 3 ? Number(m[3]) : 1;
+  };
+  const ratio = (a: number[], b: number[]): number => {
+    const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+    return (x! + 0.05) / (y! + 0.05);
+  };
+  const bgOf = (el: Element): number[] => {
+    let n: Element | null = el;
     while (n) {
       const s = getComputedStyle(n);
-      if (alpha(s.backgroundColor) > 0.01) return parse(s.backgroundColor);
+      if (alpha(s.backgroundColor) > 0.01) return parse(s.backgroundColor) ?? [255, 255, 255];
       n = n.parentElement;
     }
     return [255, 255, 255];
   };
   const root = document.querySelector('[data-testid="home-page"]');
+  const out: Array<{ text: string; ratio: number; need: number; px: number }> = [];
+  if (!root) return out;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const out = [];
-  let node;
+  let node: Node | null;
   while ((node = walker.nextNode())) {
     if (!node.nodeValue || !node.nodeValue.trim()) continue;
     const el = node.parentElement;
     if (!el || !el.getClientRects().length) continue;
     const s = getComputedStyle(el);
-    if (s.visibility === 'hidden' || s.opacity === '0') continue;
+    if (s.visibility === "hidden" || s.opacity === "0") continue;
     const fg = parse(s.color);
     if (!fg) continue;
     const px = parseFloat(s.fontSize);
     const bold = Number(s.fontWeight) >= 700;
     // WCAG "large text": 18.66px bold, or 24px at any weight.
-    const need = (px >= 24 || (px >= 18.66 && bold)) ? 3 : 4.5;
+    const need = px >= 24 || (px >= 18.66 && bold) ? 3 : 4.5;
     out.push({ text: node.nodeValue.trim().slice(0, 60), ratio: ratio(fg, bgOf(el)), need, px });
   }
   return out;
-}`;
+}
 
 /** Anything a finger can press, with the box it actually occupies. */
-const MEASURE_TARGETS = `() => {
+function measureTargets(): Array<{ label: string; w: number; h: number; rects: number }> {
   const root = document.querySelector('[data-testid="home-page"]');
+  if (!root) return [];
   const sel = 'button, a[href], input, select, textarea, summary, [role="button"]';
   return [...root.querySelectorAll(sel)].flatMap((el) => {
     const rects = [...el.getClientRects()];
     if (rects.length === 0) return [];
     const r = el.getBoundingClientRect();
-    return [{
-      label: (el.getAttribute('data-testid') || el.textContent || el.tagName).trim().slice(0, 50),
-      w: r.width, h: r.height,
-      // A clickable broken over two lines is two hit areas with a seam down the middle, and the
-      // seam is where a thumb lands. Rect count is how you see it; a bounding box hides it.
-      rects: rects.length,
-    }];
+    return [
+      {
+        label: (el.getAttribute("data-testid") || el.textContent || el.tagName).trim().slice(0, 50),
+        w: r.width,
+        h: r.height,
+        // A clickable broken over two lines is two hit areas with a seam down the middle, and the
+        // seam is where a thumb lands. Rect count is how you see it; a bounding box hides it.
+        rects: rects.length,
+      },
+    ];
   });
-}`;
+}
 
 test("Home holds its measured numbers: contrast, tap targets, overflow, unwrapped clickables", async ({ page }) => {
   await signIn(page);
@@ -138,7 +155,7 @@ test("Home holds its measured numbers: contrast, tap targets, overflow, unwrappe
     expect(docWide, `the document itself scrolls sideways at ${vp.name}`).toBeLessThanOrEqual(1);
 
     // ── 2 · CONTRAST ──────────────────────────────────────────────────────────────────────────
-    const nodes: Array<{ text: string; ratio: number; need: number; px: number }> = await page.evaluate(MEASURE_CONTRAST);
+    const nodes = await page.evaluate(measureContrast);
     expect(nodes.length, `Rule 0 — measured 0 text nodes at ${vp.name}; a sweep over nothing is not a pass`).toBeGreaterThan(30);
     const failures = nodes.filter((n) => n.ratio < n.need - 0.005);
     expect(
@@ -148,7 +165,7 @@ test("Home holds its measured numbers: contrast, tap targets, overflow, unwrappe
     const min = Math.min(...nodes.map((n) => n.ratio));
 
     // ── 3 · TAP TARGETS, AND NONE OF THEM WRAPPED ─────────────────────────────────────────────
-    const targets: Array<{ label: string; w: number; h: number; rects: number }> = await page.evaluate(MEASURE_TARGETS);
+    const targets = await page.evaluate(measureTargets);
     expect(targets.length, `Rule 0 — found 0 clickables on Home at ${vp.name}`).toBeGreaterThan(5);
     const small = targets.filter((t) => t.h < 24 || t.w < 24);
     expect(small.map((t) => `${t.label} — ${Math.round(t.w)}×${Math.round(t.h)}`), `tap targets under 24px at ${vp.name}`).toEqual([]);

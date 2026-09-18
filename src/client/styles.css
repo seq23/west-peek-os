@@ -2799,6 +2799,9 @@ details h3 {
   padding: 0;
   margin: var(--space-xs) 0 var(--space-lg);
 }
+/* The li is the flex item, and a flex item's `min-width: auto` is the content width — so capping
+   the chip inside it changed nothing while the row itself still ran off a 320px screen. */
+.chip-row > li { min-width: 0; max-width: 100%; }
 
 /* A chip is shrink-to-fit, so a long suggested interest ("how attention is bought, held and
    measured") sat at its own content width and ran off a 320px screen — `flex-wrap` on the row
