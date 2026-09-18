@@ -242,15 +242,17 @@ UPDATE work_card SET audience = 'EXTERNAL' WHERE privacy_label = 'PUBLIC';
 -- No new surface. 0181 made `internal_memo` with audience='FIRM' the firmwide noticeboard and wired
 -- it into every employee prompt through `firmNoticesBlock`, so a thirteenth row IS the notification.
 --
--- ── ONE COHERENT RULE, NOT TWO THAT OVERLAP ──────────────────────────────────────────────────
+-- ── ONE COHERENT RULE, NOT TWO THAT OVERLAP — AND THE TABLE IS APPEND-ONLY ───────────────────
 -- Notice 4 already said "LP names and deal terms never reach a model that may train on the prompt".
--- That is still true and is now MECHANISED rather than merely asked for, so it is rewritten to name
--- the label that carries it. Two notices standing side by side, one describing a rule and one
--- describing a mechanism for the same rule, is how an employee ends up deciding which to follow.
-UPDATE internal_memo
-   SET title = 'LP names and deal terms are Private model only',
-       body  = 'LP names, deal terms, fund figures and diligence material never go to a model or a route whose terms permit training on what it is sent — any repo, any cost posture, however much better that model would be. A free route is usually free because the provider keeps the prompt. This is now carried by a label on the card: mark that work Private model only. If you are unsure whether what you are holding carries an LP name or a deal term, mark it Private model only — the cost of being wrong that way is a fraction of a cent.'
- WHERE id = 'memo_notice_04_confidential_never_trains';
+-- That is still true and now has a LABEL and a MECHANISM behind it, so leaving both standing would
+-- hand an employee two notices about one rule and let them choose which to follow.
+--
+-- `internal_memo` is append-only by trigger (0014, D15) and rightly so: a noticeboard somebody can
+-- quietly rewrite is not a record. So a notice is not edited, it is SUPERSEDED — the new row names
+-- the one it replaces, which is an INSERT, and `firmNoticesBlock` stops reading the old one. The
+-- history survives, the employee reads one rule, and nothing was overwritten. This is the same
+-- `supersedes_id` shape `knowledge_record` already uses for the same reason.
+ALTER TABLE internal_memo ADD COLUMN supersedes_id TEXT REFERENCES internal_memo (id);
 
 -- ── THE NEW NOTICE ───────────────────────────────────────────────────────────────────────────
 -- WORDING HAS WEIGHT HERE IN A WAY IT DOES NOT ELSEWHERE, and this is not a stylistic note. Every
@@ -260,10 +262,11 @@ UPDATE internal_memo
 -- happened in the sister system, where the single word "commitment" in a notice made every run scan
 -- as LP material and refused every free route firmwide.
 --
--- So this body is written to say what it means without using a marker phrase, and
+-- So this body says what it means without using a marker phrase, and
 -- `scripts/validate/two-labels-on-every-card.mjs` runs every seeded notice through the real
--- classifier and hard-fails if any of them trips it. The check is not a comment; it is a build step.
-INSERT OR IGNORE INTO internal_memo (id, author_type, author_id, audience, department, title, body) VALUES
+-- classifier and hard-fails if any of them trips it. The check is a build step, not a comment.
+INSERT OR IGNORE INTO internal_memo (id, author_type, author_id, audience, department, title, body, supersedes_id) VALUES
   ('memo_notice_13_two_labels_on_every_card', 'SYSTEM', 'west-peek-os', 'FIRM', NULL,
    'Every work card carries two labels, and neither one implies the other',
-   'The first label is Public model approved or Private model only, and it decides WHICH MODELS may see the work. Public model approved is the default and covers most of what we do — hiring searches, event kits, room and workshop packets, social posts, blog writing, Productions work. None of that is private and it runs on a free reasoning model at almost no cost. Private model only is for LP names, deal terms, fund figures and diligence material, and that work stays on a lane whose terms forbid training. The second label is Internal or External, and it decides PREVIEW AND APPROVAL, not which model runs. Internal means it goes to Sequoia or Scooter. External means anyone else, and it previews to Sequoia first. Read both labels; never infer one from the other. An LP memo for Sequoia is Internal and Private model only. An event kit for a guest is External and Public model approved. If a card is unlabelled, treat it as Internal and Public model approved, and say in your work that you did.');
+   'The first label is Public model approved or Private model only, and it decides WHICH MODELS may see the work. Public model approved is the default and covers most of what we do — hiring searches, event kits, room and workshop packets, social posts, blog writing, Productions work. None of that is private, and it runs on a free reasoning model at almost no cost. Private model only is for LP names, deal terms, fund figures and diligence material: that work never goes to a model or a route whose terms permit training on what it is sent, in any cost posture, however much better that model would be — a free route is usually free because the provider keeps the prompt. If you are unsure which one you are holding, mark it Private model only; being wrong that way costs a fraction of a cent. The second label is Internal or External, and it decides PREVIEW AND APPROVAL, not which model runs. Internal means it goes to Sequoia or Scooter. External means anyone else, and it previews to Sequoia first. Read both labels and never infer one from the other. An LP memo for Sequoia is Internal and Private model only. An event kit for a guest is External and Public model approved. If a card carries no labels, treat it as Internal and Public model approved, and say in your work that you did.',
+   'memo_notice_04_confidential_never_trains');

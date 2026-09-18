@@ -1272,6 +1272,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     declaredPublicModelApproved: input.budgetContext?.publicModelApproved,
     // `confidential` is the legacy spelling of PRIVATE_MODEL_ONLY and is still honoured verbatim.
     declaredPrivateModelOnly: input.budgetContext?.confidential,
+    sensitivity: input.sensitivity,
     machineKey: input.routing?.machineId
       ? (MACHINE_REGISTRY.find((m) => m.id === input.routing!.machineId)?.key ?? null)
       : null,

@@ -139,6 +139,18 @@ export function classifyContent(args: {
    * terms forbid training. Wins over everything, including a machine on the allow-list.
    */
   declaredPrivateModelOnly?: boolean;
+  /**
+   * THE RUN'S OWN EGRESS LABEL, and a PUBLIC one is already the declaration.
+   *
+   * This clause exists because leaving it out would have been a REGRESSION dressed as a safety
+   * improvement. The daily executive brief is labelled PUBLIC and has been for months — it is
+   * assembled from third-party headlines and published market levels — and PUBLIC is a statement
+   * about CONTENT, not recipient: it is the label that already means "this may leave the building".
+   * Requiring a second, newer declaration on top of it would have made the firm's single largest
+   * recurring job ineligible for the free lanes it was always entitled to, on the day they were
+   * introduced. A PUBLIC label IS public-model-approved; there is nothing further to assert.
+   */
+  sensitivity?: string | null;
   /** The machine this work sits on, where there is one. */
   machineKey?: string | null;
   /** The text that would actually be sent. */
@@ -152,7 +164,8 @@ export function classifyContent(args: {
   }
 
   const byMachine = Boolean(args.machineKey && PUBLIC_MODEL_APPROVED_MACHINE_KEYS.has(args.machineKey));
-  const declared = args.declaredPublicModelApproved === true || byMachine;
+  const byLabel = args.sensitivity === "PUBLIC";
+  const declared = args.declaredPublicModelApproved === true || byMachine || byLabel;
   if (!declared) {
     return {
       publicModelApproved: false,
@@ -178,7 +191,9 @@ export function classifyContent(args: {
 
   return {
     publicModelApproved: true,
-    reason: byMachine
+    reason: byLabel
+      ? "this run is labelled PUBLIC, which already says the content may leave the firm, so a route whose terms permit training may serve it"
+      : byMachine
       ? `this is ${args.machineKey} work — an event kit, a room packet, a hire search or a piece of writing meant to be ` +
         `published — which contains no LP names or deal terms, so a route whose terms permit training may serve it. ` +
         `Who the work is addressed to decides whether it previews; what is in it decides which models may see it, and ` +

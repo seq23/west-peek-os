@@ -15,6 +15,8 @@ import type { Env } from "../env";
  */
 
 interface NoticeRow {
+  id: string;
+  supersedes_id: string | null;
   title: string;
   body: string;
   author_type: string;
@@ -38,7 +40,7 @@ export async function firmNoticesBlock(env: Env, firmScope = "west-peek"): Promi
   const rows =
     (
       await env.WP_OS_DB.prepare(
-        `SELECT title, body, author_type, author_id, created_at
+        `SELECT id, supersedes_id, title, body, author_type, author_id, created_at
            FROM internal_memo
           WHERE audience = 'FIRM' AND firm_scope = ?1
           ORDER BY created_at, id`,
@@ -48,11 +50,28 @@ export async function firmNoticesBlock(env: Env, firmScope = "west-peek"): Promi
     ).results ?? [];
   if (rows.length === 0) return "";
 
+  /*
+   * A RESTATED RULE IS READ ONCE, NOT TWICE.
+   *
+   * `internal_memo` is append-only by trigger (0014, D15) — a noticeboard somebody can quietly
+   * rewrite is not a record — so a notice that is no longer how the firm says it is not edited and
+   * not deleted. A later notice NAMES the one it replaces, and this drops the replaced row from the
+   * prompt. The row survives in the table for anyone reading the history; the employee reads one
+   * rule instead of two that overlap and having to guess which wins.
+   *
+   * Notice 4 ("LP names and deal terms never reach a model that may train on the prompt") is the
+   * first of these: still true, but now carried by a label on the card, so notice 13 states both
+   * halves together and supersedes it.
+   */
+  const superseded = new Set(rows.map((r) => r.supersedes_id).filter((v): v is string => Boolean(v)));
+  const live = rows.filter((r) => !superseded.has(r.id));
+  if (live.length === 0) return "";
+
   return [
     "NOTICES FROM THE FIRM. These apply to every piece of work you do here, including this one.",
     "They describe how West Peek already operates. Where anything below conflicts with a general",
     "habit you would otherwise follow, these win.",
     "",
-    ...rows.flatMap((r) => [`${r.title} — ${r.body}`, `  (${noticeAuthor(r)}, ${r.created_at.slice(0, 10)})`, ""]),
+    ...live.flatMap((r) => [`${r.title} — ${r.body}`, `  (${noticeAuthor(r)}, ${r.created_at.slice(0, 10)})`, ""]),
   ].join("\n");
 }
