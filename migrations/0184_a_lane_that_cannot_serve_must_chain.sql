@@ -271,6 +271,68 @@ INSERT OR IGNORE INTO internal_memo (id, author_type, author_id, audience, depar
    'The first label is Public model approved or Private model only, and it decides WHICH MODELS may see the work. Public model approved is the default and covers most of what we do — hiring searches, event kits, room and workshop packets, social posts, blog writing, Productions work. None of that is private, and it runs on a free reasoning model at almost no cost. Private model only is for LP names, deal terms, fund figures and diligence material: that work never goes to a model or a route whose terms permit training on what it is sent, in any cost posture, however much better that model would be — a free route is usually free because the provider keeps the prompt. If you are unsure which one you are holding, mark it Private model only; being wrong that way costs a fraction of a cent. The second label is Internal or External, and it decides PREVIEW AND APPROVAL, not which model runs. Internal means it goes to Sequoia or Scooter. External means anyone else, and it previews to Sequoia first. Read both labels and never infer one from the other. An LP memo for Sequoia is Internal and Private model only. An event kit for a guest is External and Public model approved. If a card carries no labels, treat it as Internal and Public model approved, and say in your work that you did.',
    'memo_notice_04_confidential_never_trains');
 
+-- ═════════════════════════════════════════════════════════════════════════════════════════════
+-- A CHEAP LANE FOR THE WORK THAT MAY NOT USE A FREE ONE — REGISTERED, PRICED, AND HELD AT BENCH
+--
+-- With the two labels in place, PUBLIC_MODEL_APPROVED work goes to a free reasoning lane at $0.
+-- What is left on `anthropic/claude-sonnet-5` at $2/$10 is PRIVATE_MODEL_ONLY work — LP names, deal
+-- terms, fund figures — and that work has no cheap door at all, because every cheap lane registered
+-- in this firm is a FREE lane and free lanes are capped at PUBLIC for the correct reason.
+--
+-- CHEAP AND FREE ARE NOT THE SAME THING. The missing row is a PAID low-cost model whose terms
+-- forbid training. Terms read from the vendors' own pages on 17 Sep 2026:
+--
+--   Anthropic, Commercial Terms of Service §B (anthropic.com/legal/commercial-terms), verbatim:
+--     "Anthropic may not train models on Customer Content from Services."
+--   That is an unconditional contractual prohibition rather than a default setting that an account
+--   toggle could undo, which makes it the strongest of the options and the one chosen.
+--
+--   Considered and not chosen, with reasons:
+--   · Google Gemini paid tier — also non-training ("When you use Paid Services ... Google doesn't
+--     use your prompts ... to improve our products", ai.google.dev/gemini-api/terms), and cheaper at
+--     $0.30/$2.50. But the exemption is TIER-level and depends on billing being enabled on the
+--     project, which cannot be verified from the repository. An unverified no-training claim is
+--     treated as training-permitting, so this stays capped at PUBLIC on `google_free`.
+--   · OpenAI gpt-5-mini at $0.25/$2.00, also non-training by default. No key issue, but it adds a
+--     fifth vendor for a saving the Anthropic lane already delivers.
+--
+-- HELD AT BENCH, AND THAT IS THE POINT RATHER THAN A HEDGE. Tonight's entire incident was a lane
+-- that passed a read-only probe and then failed every real call with "credit balance too low". A
+-- lane counts as usable when it has COMPLETED A REAL GENERATION, and this one has not: the account
+-- is unfunded and `provider_registry.enabled = 0` was set by hand for exactly that reason. BENCH
+-- means it cannot win a selection, so nothing changes today.
+--
+-- WHAT MAKES PROMOTING IT SAFE IS THE REST OF THIS MIGRATION. Once the account is funded, the lane
+-- can be enabled and promoted with no risk of repeating tonight: `provider_lane_health` starts it
+-- at zero completions, so it cannot undercut a working lane on price however cheap it is; and if it
+-- still cannot serve, the first outage-class failure cools it and the chain carries on to a lane
+-- that works. The remaining step is a funded account and one promote call — not a code change.
+
+INSERT OR IGNORE INTO provider_model
+  (id, provider_id, model, display_name, capabilities_json, context_window, max_output_tokens,
+   supports_tools, supports_reasoning, latency_source, max_data_class,
+   pricing_state, pricing_source_note, pricing_sourced_at, status, registered_by, firm_scope)
+VALUES
+  ('pm_anthropic_haiku_45', 'prov_anthropic', 'claude-haiku-4.5', 'Claude Haiku 4.5',
+   '["text-completion"]', 200000, 8192, 1, 1, 'UNKNOWN', 'INTERNAL',
+   'SOURCED',
+   'Read 17 Sep 2026 from platform.claude.com/docs/en/about-claude/pricing: $1.00 in / $5.00 out per Mtok. Supports extended thinking, so it may read a partner''s instruction. Registered as the cheap lane for PRIVATE_MODEL_ONLY work: Anthropic''s Commercial Terms §B state "Anthropic may not train models on Customer Content from Services", which is a contractual prohibition rather than an account setting. BENCH until the account is funded and it has completed a real generation — a lane that has only passed a read-only probe is exactly what failed tonight.',
+   '2026-09-17', 'BENCH', 'migration:0184', 'west-peek');
+
+INSERT OR IGNORE INTO provider_pricing_snapshot (id, provider_id, model, input_per_mtok_usd, output_per_mtok_usd, request_usd, captured_at)
+SELECT 'pps_0184_haiku45', 'prov_anthropic', 'claude-haiku-4.5', 1.0, 5.0, 0.0, '2026-09-17T00:00:00.000Z'
+WHERE NOT EXISTS (SELECT 1 FROM provider_pricing_snapshot WHERE id = 'pps_0184_haiku45');
+
+-- The promotion gate refuses ACTIVE without a recorded evaluation, and a migration is a human
+-- decision that leaves a diff — but it must leave the same evidence rather than skip it. FIXTURE
+-- and score 0: this is a REGISTRATION decision on record, not a benchmark, and recording it as LIVE
+-- with no ai_run to cite would be the fabricated evaluation that gate exists to prevent.
+INSERT OR IGNORE INTO model_evaluation (id, provider_model_id, task_class, method, score, sample_size, notes, evaluated_by)
+VALUES
+  ('mev_0184_haiku45', 'pm_anthropic_haiku_45', 'private-model-only-drafting', 'FIXTURE', 0, 0,
+   'Registration decision, 17 Sep 2026, migration 0184. The firm had no cheap lane that may carry LP or deal material: every cheap lane registered was a FREE lane, capped at PUBLIC because free terms permit training. This is the paid, no-training, reasoning-capable alternative at a fifth of Sonnet 5''s input price. NOT promoted: the account is unfunded and the lane has never completed a generation. Promote only after a real completion, which provider_lane_health now records.',
+   'system');
+
 -- The version marker every migration in this repo ends with. `/api/health` and the deploy gate both
 -- read it, so a migration that omits it reports the database as older than it is.
 INSERT OR IGNORE INTO schema_version (migration) VALUES ('0184_a_lane_that_cannot_serve_must_chain');
