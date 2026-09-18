@@ -154,6 +154,18 @@ jobs:
       - name: A brief that fails says so, and none is truncated by a ceiling nobody chose
         run: npm run validate:brief-arrives
 
+      # AND THE OTHER HALF OF THAT MORNING. At 14:58 Scooter's row read FAILED/3 with a reason on it
+      # and Sequoia's read GENERATING/3 with error_message empty: her write stage made both its
+      # model calls and the isolate was evicted before the outcome was persisted, so nothing wrote
+      # anything. `attempts` counts attempt STARTS and nothing counted ends, and the skip guard and
+      # both done-queries each tested FAILED by hand — so a row mid-pipeline with the budget spent
+      # matched none of them and was advanced, free, by every tick. This fails if any status/attempt
+      # pairing can rest with a spent budget in a non-terminal status, if the three places disagree
+      # about "finished", if nothing closes a stranded row before it is advanced again, or if the
+      # sentence she is left with does not say what happened and what she can do.
+      - name: A brief always ends stated, and never spends a budget it has not got
+        run: npm run validate:brief-ends-stated
+
       # DAY 200, NOT DAY 1. Measured on 18 Sep against 531 finished cards: the board returned every
       # card the firm had ever made under LIMIT 500 and the page rendered the first fifty of them
       # under a heading that said 496 — 481 unreachable, silently, and an OPEN card older than the
