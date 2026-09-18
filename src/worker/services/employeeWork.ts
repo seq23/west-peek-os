@@ -3,6 +3,14 @@ import { json } from "../router";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize } from "./authorize";
+import type { Actor } from "./authorize";
+import {
+  WORK_RESULT_KIND,
+  recipientForResult,
+  resultTitleFor,
+  type CloseProof,
+  type ResultRecipient,
+} from "../../shared/work/finishedWork";
 import { runAi } from "../ai/runAi";
 import { requestTask, runTask } from "./browserTask";
 import { searchQuestion } from "./liveSearch";
@@ -72,6 +80,16 @@ interface CardRow {
   prompt: string | null;
   firm_scope: string;
   requested_by_email?: string | null;
+  /**
+   * WHO THE RESULT IS FOR, and the reason a finished kit once reached nobody (0196).
+   *
+   * Both are NULL on every card created before 0183 made them writable, and NULL is not "no" — it
+   * is "nobody said". `recipientForResult` in shared/work/finishedWork.ts turns that into a real
+   * partner rather than leaving the result addressed to nothing, which is the state the October
+   * event kit closed in.
+   */
+  result_recipient?: string | null;
+  preview_first?: number | null;
 }
 
 export interface StepOutcome {
@@ -308,6 +326,79 @@ async function historyFor(env: Env, cardId: string): Promise<string[]> {
     if (l.status === "REQUESTED") return `Asked to look up "${String(l.objective)}" — waiting for a person to approve it.`;
     return `Tried to look up "${String(l.objective)}" and it failed: ${String(l.refusal_reason ?? l.status)}`;
   });
+}
+
+/**
+ * THE ONLY STATEMENT IN THIS FILE THAT CLOSES A CARD (0196).
+ *
+ * It takes a `CloseProof`, whose two constructors each demand the id of something that now exists —
+ * a deliverable somebody can open, or the card the work was handed on to. There is no third shape,
+ * so "closed having produced nothing" cannot be written here, and
+ * `scripts/validate/a-finished-card-files-its-work.mjs` fails the build if a raw `state = 'DONE'`
+ * update is added to this file alongside it.
+ *
+ * WHY A HELPER RATHER THAN A CHECK AT EACH SITE. There were two closing statements before this, one
+ * of them correct (a handover) and one of them the bug (a `done` that filed nothing). A rule
+ * enforced at each site is a rule that the third site, written next month, will not know about.
+ */
+async function closeCard(env: Env, card: CardRow, proof: CloseProof): Promise<void> {
+  await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1")
+    .bind(card.id)
+    .run();
+  await appendEvent(env, {
+    eventType: "work_card.closed",
+    actorType: "ai_employee",
+    actorId: card.owner_id ?? "unknown",
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload:
+      proof.closed === "FILED"
+        ? { closed: "FILED", deliverable_id: proof.deliverableId }
+        : { closed: "HANDED_ON", to_card_id: proof.toCardId },
+  });
+}
+
+/**
+ * File what the employee finished, so the card has something to close against.
+ *
+ * RULE 0 IS ENFORCED BY THROWING. Every other `deliver()` caller in the repo wraps this in a
+ * try/catch, deliberately, so that a filing failure cannot take down the brief or the packet it
+ * belongs to. HERE THE FILING IS THE WORK PRODUCT. If it fails there is nothing to close against,
+ * so the failure propagates, the card does not reach DONE, and it comes back round the sweep as
+ * work still to do — which is the truth. Swallowing it here would recreate the exact defect: a
+ * closed card and an artifact nobody can open.
+ */
+async function fileFinishedWork(
+  env: Env,
+  actor: Actor,
+  card: CardRow,
+  finding: string,
+  employeeName: string,
+): Promise<{ deliverableId: string; recipient: ResultRecipient }> {
+  const recipient = recipientForResult({
+    resultRecipient: card.result_recipient ?? null,
+    requestedByEmail: card.requested_by_email ?? null,
+  });
+
+  const delivered = await deliver(env, actor, {
+    kind: WORK_RESULT_KIND,
+    title: resultTitleFor(card.title),
+    body: finding,
+    preparedBy: employeeName,
+    preparedFor: recipient.firmUserId,
+    /*
+     * SOURCED ON THE CARD, NOT THE RUN. `deliver()` upserts on (source_type, source_id), so a card
+     * that is reopened and finished again CORRECTS the page the partner already has a link to
+     * rather than stacking a second, contradictory copy beside it. Sourcing on the run id would
+     * have produced one row per attempt.
+     */
+    sourceType: "work_card",
+    sourceId: card.id,
+    privacyLabel: "INTERNAL",
+  });
+
+  return { deliverableId: delivered.id, recipient };
 }
 
 async function appendFinding(env: Env, card: CardRow, text: string): Promise<void> {
@@ -651,7 +742,12 @@ async function applyDecision(
     }
     const line = `Handed to ${handed.toName} as work card ${handed.cardId}: ${d.brief!.slice(0, 300)}`;
     await appendFinding(env, card, line);
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1").bind(card.id).run();
+    /*
+     * A HANDOVER IS THE ONE HONEST CLOSE THAT FILES NOTHING, and it is honest precisely because the
+     * work did not finish here — it moved, and the card it moved to is the artifact. `HANDED_ON`
+     * carries that card's id, so the proof still names something that exists.
+     */
+    await closeCard(env, card, { closed: "HANDED_ON", toCardId: handed.cardId });
     return { step, action: "assigned", detail: line };
   }
 
@@ -668,12 +764,24 @@ async function applyDecision(
     return { step, action: "blocked", detail: d.needs! };
   }
 
-  // done
+  /*
+   * DONE — AND THE WHOLE OF THE OCTOBER EVENT KIT DEFECT WAS IN THESE FIVE LINES (0196).
+   *
+   * What stood here was `appendFinding` followed by `state = 'DONE'`. A finding is a bullet
+   * appended to `work_card.description`, truncated to 8,000 characters, on a card that is now
+   * closed and off every list a person looks at. Parker's finished event kit — three angles, a
+   * recommendation, a run of show, a discussion guide, social drafts — went into that bullet and
+   * nowhere else, and the owner was told it would be emailed to her.
+   *
+   * The finding is still written, because the card's own history is worth having. What changed is
+   * that it is FILED FIRST, as a deliverable with a real recipient, and the card closes against
+   * that deliverable's id. If the filing throws, `closeCard` is never reached: the card stays open
+   * and the sweep picks it up again, rather than reporting a success nobody can open.
+   */
   await appendFinding(env, card, d.finding!);
-  await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1")
-    .bind(card.id)
-    .run();
-  return { step, action: "done", detail: d.finding! };
+  const filed = await fileFinishedWork(env, actor, card, d.finding!, employeeName);
+  await closeCard(env, card, { closed: "FILED", deliverableId: filed.deliverableId });
+  return { step, action: "done", detail: `${d.finding!}\n\n${filed.recipient.why}` };
 }
 
 /** POST /api/work-cards/:id/work — have the employee who owns this card get on with it. */

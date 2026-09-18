@@ -21,6 +21,7 @@ export const DELIVERABLE_KINDS = [
   "productions_hire_search",
   "event_kit",
   "approval_preview",
+  "work_result",
 ] as const;
 
 export type DeliverableKind = (typeof DELIVERABLE_KINDS)[number];
@@ -181,6 +182,31 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     page: "home",
     docType: "BRIEF",
     file: false,
+  },
+  /*
+   * WHAT AN EMPLOYEE FINISHED ON A ONE-OFF CARD (18 Sep 2026).
+   *
+   * The generic employee loop could produce any artifact the firm asks a person for — an event kit,
+   * a shortlist, a comparison, a written answer — and until 0196 it filed NONE of them. It recorded
+   * a `finding` on the card and closed it, so the October event kit for the Kirx Diaz workshop
+   * existed only inside `ai_run.output_text`. See `shared/work/finishedWork.ts` for the whole of it.
+   *
+   * FILED, UNLIKE A MORNING BRIEF. The durability test in this file's `file` field is whether the
+   * firm refers back to it, and a commissioned piece of work is the clearest yes there is: it was
+   * asked for once, by a person, for a purpose, and it is the answer to that question. A brief is
+   * superseded tomorrow; this is not superseded by anything.
+   *
+   * ON THE WORK PAGE, because the live version of a result is the card that produced it — that is
+   * where the brief, the findings, the steps and the employee's name are. The deliverable is the
+   * artifact; the card is its provenance.
+   */
+  work_result: {
+    key: "work_result",
+    label: "Finished work",
+    blurb: "What your employee produced on a card you asked for, filed where you can open it.",
+    page: "work",
+    docType: "BRIEF",
+    file: true,
   },
 };
 
