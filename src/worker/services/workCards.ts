@@ -586,6 +586,10 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   const cards = await ctx.env.WP_OS_DB.prepare(
     `SELECT wc.id, wc.title, wc.description, wc.state, wc.priority, wc.owner_type, wc.owner_id,
             wc.next_action, wc.due_at, wc.capture_id, wc.created_at, wc.allows_browser,
+            -- THE TWO LABELS, SERVED SO THEY ARE VISIBLE ON THE CARD. A label you set once and
+            -- never see again cannot be corrected, and a wrong one is exactly what sends a room
+            -- packet to the dearest model on the account.
+            wc.model_access, wc.audience,
             COALESCE(wc.work_attempts, 0) AS work_attempts,
             -- 0173: a block carries its own sentences and its own doors, so the page never has to
             -- guess what a partner can do about it.
