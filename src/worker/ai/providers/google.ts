@@ -1,6 +1,7 @@
 import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
+import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
 
 /**
  * Google Gemini adapter — a DIRECT vendor lane, used only when OpenRouter cannot serve a call
@@ -43,6 +44,11 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
           headers: { "content-type": "application/json", "x-goog-api-key": options.apiKey },
           signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
           body: JSON.stringify({
+            // AN EXPLICIT CEILING, never the provider's own default. Leaving it unset is what
+            // truncated every Workers AI run at 256 tokens and failed both partners' briefs on
+            // 18 Sep 2026; a default that happens to be generous today is still a number this repo
+            // does not control. See `outputCeiling.ts`.
+            generationConfig: { maxOutputTokens: PROVIDER_MAX_OUTPUT_TOKENS },
             system_instruction: { parts: [{ text: `West Peek OS governed task: ${req.purpose}` }] },
             contents: [{ role: "user", parts }],
           }),

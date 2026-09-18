@@ -1,6 +1,7 @@
 import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
+import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
 
 /**
  * Perplexity adapter — the direct search lane, and the ONLY fallback search has.
@@ -87,6 +88,11 @@ export function createPerplexityAdapter(options: PerplexityOptions): ProviderAda
         signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
         body: JSON.stringify({
           model,
+          // AN EXPLICIT CEILING, never the provider's own default. Leaving it unset is what
+          // truncated every Workers AI run at 256 tokens and failed both partners' briefs on
+          // 18 Sep 2026; a default that happens to be generous today is still a number this repo
+          // does not control. See `outputCeiling.ts`.
+          max_output_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
           // `input`, not `messages` — the whole reason this adapter exists.
           input: [
             { role: "system", content: `West Peek OS governed task: ${req.purpose}` },

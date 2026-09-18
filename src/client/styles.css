@@ -1252,6 +1252,11 @@ details h3 {
 
 .notice-gate { border-left-color: var(--wp-warn); background: var(--wp-warn-tint); color: var(--wp-warn); }
 
+/* A THING THAT WAS SUPPOSED TO ARRIVE AND DID NOT. Danger rather than warn: the morning brief
+   failing is not a caveat on something she has, it is the absence of the thing she came for, and on
+   18 Sep 2026 that absence was rendered as nothing at all. */
+.notice-bad { border-left-color: var(--wp-danger); background: var(--wp-danger-tint); color: var(--wp-danger); }
+
 /* Loading / error / empty are the same slot, told apart by tone — never a blank. */
 .state-message {
   display: block;

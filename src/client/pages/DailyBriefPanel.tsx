@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { collapsedBriefLine } from "../lib/briefCollapse";
+import { briefArrival } from "../lib/briefState";
 
 /**
  * The expanded Daily Intelligence report (P41), rendered on the Sweeps page directly under the
@@ -24,6 +25,10 @@ interface Report {
   id: string; report_date: string; status: string; model: string | null;
   prompt_version: string | null; candidate_count: number; verification_flags: number;
   raw_count: number; deduped_count: number; completed_at: string | null;
+  /* WHY IT DID NOT ARRIVE. The pipeline writes both of these on every failure and the API has
+     always returned them (`SELECT *`); this panel simply never declared them, so a partner saw an
+     empty card while the reason sat on the row. See `client/lib/briefState.ts`. */
+  error_code: string | null; error_message: string | null;
   /** "Edition: Scooter — marketing & growth lens" — whose brief, read which way. System-written. */
   edition: string | null;
 }
@@ -476,6 +481,12 @@ export function DailyBriefPanel({
   const folded = compact && !expanded;
   const shown = folded ? sections.filter((s) => ABOVE_FOLD.includes(s.section_key)) : sections;
   const hiddenCount = sections.length - shown.length;
+  /*
+   * ONE ANSWER, SHARED WITH THE COLLAPSED LINE. Both surfaces used to decide for themselves whether
+   * a brief had arrived, and both decided it from "is the row non-null" — so both were wrong in the
+   * same way and only one of them would ever have been fixed. `briefArrival` is the single answer.
+   */
+  const arrival = briefArrival(report, sections.length);
 
   function sourcesFor(s: Section): Citation[] {
     let ids: string[] = [];
@@ -523,6 +534,7 @@ export function DailyBriefPanel({
         <p className="muted small" data-testid="daily-brief-collapsed-state">
           {collapsedBriefLine({
             report,
+            sectionCount: sections.length,
             loading: state.loading,
             date: state.data?.date ?? null,
             noBriefBecause: state.data?.no_brief_because ?? null,
@@ -561,6 +573,29 @@ export function DailyBriefPanel({
           {/* The reason the schedule gives, not a blank. A partner who cannot tell "nothing today"
               from "this is broken" stops trusting the thing she reads first every morning. */}
           {state.data?.no_brief_because ?? "No brief for today yet. Run a sweep first so there is something to read, then build it."}
+        </p>
+      )}
+
+      {/*
+        * A BRIEF THAT DID NOT ARRIVE SAYS SO — the defect this whole panel was rewritten for.
+        *
+        * Before this block, `report` being non-null was treated as "there is a brief": the masthead
+        * rendered, the counts rendered, and then `shown.map` over zero sections rendered nothing. On
+        * 18 Sep 2026 that produced exactly what both partners saw — a header, a button, the line
+        * "2026-09-18 · 300 items → 283 events → 30 considered", and no brief and no explanation.
+        *
+        * It is rendered BEFORE the sections rather than after, because the question it answers
+        * ("is there a brief?") is the one she has on opening the page, and an answer below an empty
+        * space is an answer she has to go looking for.
+        */}
+      {report && !arrival.arrived && !state.loading && (
+        <p
+          className={arrival.tone === "failed" ? "notice notice-bad" : "notice"}
+          data-testid="daily-brief-not-arrived"
+          role="status"
+        >
+          {arrival.line}
+          {arrival.remedy ? ` ${arrival.remedy}` : ""}
         </p>
       )}
 

@@ -74,7 +74,10 @@ describe("collapsed still says whether it ran", () => {
 
   it("names the date and the arrival in every one of the three states", () => {
     const arrived = collapsedBriefLine({
-      report: { report_date: DATE, completed_at: "2026-09-17T06:12:00.000Z" },
+      // READY *AND* WITH SECTIONS ON SCREEN. This fixture used to be `{ report_date, completed_at }`
+      // and nothing else, which is precisely the bug: the line called any non-null row an arrival.
+      report: { report_date: DATE, completed_at: "2026-09-17T06:12:00.000Z", status: "READY" },
+      sectionCount: 7,
       loading: false,
       date: DATE,
     });
@@ -105,10 +108,55 @@ describe("collapsed still says whether it ran", () => {
     expect(unknown).toMatch(/checking/i);
   });
 
-  it("never claims a brief arrived when none did", () => {
+  /*
+   * STRENGTHENED 18 Sep 2026. This assertion was right and its coverage was not: it only ever tried
+   * `report: null`, so the case that actually happened — a report row that EXISTS and is FAILED —
+   * was never put to it, and the line told both partners their brief had arrived on a morning
+   * neither had one. A row is now driven through in every state it can be in.
+   */
+  it("never claims a brief arrived when none did — including when the row exists", () => {
     for (const loading of [true, false]) {
       expect(collapsedBriefLine({ report: null, loading, date: DATE })).not.toMatch(/arrived/i);
     }
+
+    // The real 18 Sep shapes: his failed, hers was still writing, and both rows were present.
+    const failed = collapsedBriefLine({
+      report: {
+        report_date: DATE,
+        completed_at: "2026-09-18T12:40:06.505Z",
+        status: "FAILED",
+        error_code: "incomplete",
+        error_message: "the brief was rejected twice: executive_summary carries no [n] citation",
+      },
+      sectionCount: 0,
+      loading: false,
+      date: DATE,
+    });
+    expect(failed, "a FAILED row was reported as an arrival").not.toMatch(/brief arrived/i);
+    expect(failed, "collapsed said nothing about the failure").toMatch(/did not arrive/i);
+    expect(failed).toContain(DATE);
+    // AND IT DOES NOT INVITE HER TO OPEN AN EMPTY PANEL.
+    expect(failed, "she was invited to show a brief that is not there").not.toMatch(/show it when you want it/i);
+
+    const writing = collapsedBriefLine({
+      report: { report_date: DATE, completed_at: null, status: "GENERATING" },
+      sectionCount: 0,
+      loading: false,
+      date: DATE,
+    });
+    expect(writing, "a mid-flight row was reported as an arrival").not.toMatch(/brief arrived/i);
+    expect(writing, "collapsed did not say it is still coming").toMatch(/still being built/i);
+    expect(writing).toContain(DATE);
+
+    // A READY row whose every section the verifier held back is an empty card by another route.
+    const emptyReady = collapsedBriefLine({
+      report: { report_date: DATE, completed_at: "2026-09-18T12:40:06.505Z", status: "READY" },
+      sectionCount: 0,
+      loading: false,
+      date: DATE,
+    });
+    expect(emptyReady, "a READY row with no sections was reported as an arrival").not.toMatch(/brief arrived/i);
+    expect(emptyReady).toMatch(/held back/i);
   });
 });
 

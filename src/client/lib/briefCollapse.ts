@@ -29,6 +29,8 @@
  * a preference could not be read would be a far worse bug than a forgotten fold.
  */
 
+import { briefArrival, type BriefReportState } from "./briefState";
+
 const KEY_PREFIX = "wp.home.brief-collapsed";
 
 function keyFor(viewerId: string): string {
@@ -71,8 +73,15 @@ export function writeBriefCollapsed(viewerId: string, collapsed: boolean): void 
  * collapsing the third into the second would tell her the brief failed every time the page loaded.
  */
 export interface CollapsedBriefState {
-  /** Null when no brief exists for the day being shown. */
-  report: { report_date: string; completed_at: string | null } | null;
+  /*
+   * Null when no report row exists for the day being shown — which is NOT the same as "no brief".
+   * A row can exist and be FAILED, or still be writing, and this line used to call both of those
+   * "arrived" because it only ever checked whether the row was null. On 18 Sep 2026 both partners'
+   * rows existed and neither brief did. `briefArrival` is now the single answer; see `briefState.ts`.
+   */
+  report: BriefReportState | null;
+  /** How many sections are actually on screen. A READY report with none is still an empty card. */
+  sectionCount?: number;
   /** The request is still in flight: we do not yet know, and must not claim either way. */
   loading: boolean;
   /** The day the panel is reporting on, from the server, so it is the server's idea of "today". */
@@ -83,10 +92,12 @@ export interface CollapsedBriefState {
 
 export function collapsedBriefLine(s: CollapsedBriefState): string {
   if (s.report) {
-    const at = s.report.completed_at
-      ? ` at ${new Date(s.report.completed_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
-      : "";
-    return `${s.report.report_date} — today's brief arrived${at}. Folded away; show it when you want it.`;
+    const arrival = briefArrival(s.report, s.sectionCount ?? 0);
+    // ONLY AN ARRIVED BRIEF IS INVITED TO BE SHOWN. Telling her a failed brief is "folded away,
+    // show it when you want it" sends her to open an empty panel, which is what happened.
+    return arrival.arrived
+      ? `${arrival.line} Folded away; show it when you want it.`
+      : arrival.line;
   }
   // "CHECKING FOR", NOT "CHECKING WHETHER IT ARRIVED". Its own test caught the second wording: the
   // word "arrived" reads as an arrival at a glance, which is the exact claim this state must not
