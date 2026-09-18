@@ -1,4 +1,5 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
+import { providerHttpError } from "./httpError";
 
 /**
  * Fireworks AI adapter (P16, GAP-03).
@@ -42,7 +43,7 @@ export function createFireworksAdapter(options: FireworksOptions): ProviderAdapt
           ],
         }),
       });
-      if (!res.ok) throw new Error(`provider_http_${res.status}`);
+      if (!res.ok) throw await providerHttpError(res);
 
       const body = (await res.json()) as {
         model?: string;
