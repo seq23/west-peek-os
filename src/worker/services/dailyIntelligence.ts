@@ -26,6 +26,13 @@ import { machineForKey } from "./attribution";
 import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
 import { recentFeedbackFor } from "./deliverables";
 import { z } from "zod";
+import {
+  MAX_BRIEF_ATTEMPTS,
+  STRANDED_SQL,
+  TERMINAL_SQL,
+  briefTerminality,
+  strandedReason,
+} from "../../shared/intelligence/briefTerminality";
 
 /** Local body reader, matching the one in intelligence.ts: a malformed body is null, never a throw. */
 async function parseJsonBody(request: Request): Promise<unknown | null> {
@@ -340,7 +347,23 @@ async function failReport(env: Env, id: string, code: string, message: string, r
  * Idempotent on (firm_scope, firm_user_id, report_date): a second call the same day resets the same
  * row to GATHERING rather than creating a second report.
  */
-export async function startReport(env: Env, firmScope: string, firmUserId: string, now: Date): Promise<{ id: string; reportDate: string }> {
+export async function startReport(
+  env: Env,
+  firmScope: string,
+  firmUserId: string,
+  now: Date,
+  /*
+   * A HUMAN PRESSING THE BUTTON GETS A FRESH BUDGET, and the cron does not.
+   *
+   * Without this, "Rebuild today's brief" on a row that had already spent its three attempts left
+   * it at FOUR — past the cap — so if the rebuild also failed, nothing would ever retry it
+   * automatically and her only remaining option was to keep pressing. The owner's requirement is
+   * that it "should self heal and keep trying"; a manual rebuild is her saying try again today, so
+   * the day's budget starts over and the cron can carry on from there. The cap itself is unchanged
+   * at three, which is the number she asked for.
+   */
+  trigger: "scheduled" | "requested" = "scheduled",
+): Promise<{ id: string; reportDate: string }> {
   const profile = await loadProfile(env, firmUserId);
   const reportDate = localReportDate(now, profile.timezone);
   const reportId = `dir_${crypto.randomUUID()}`;
@@ -354,9 +377,11 @@ export async function startReport(env: Env, firmScope: string, firmUserId: strin
                      error_code = NULL, error_message = NULL, prompt_version = excluded.prompt_version,
                      -- Counted on the way IN, so a run that dies mid-flight still spends its
                      -- attempt. Counting on success would let a crash loop retry for ever.
-                     attempts = intelligence_report.attempts + 1`,
+                     -- A REQUESTED rebuild starts the day's budget over rather than adding to it;
+                     -- see the trigger parameter on this function.
+                     attempts = CASE WHEN ?6 = 'requested' THEN 1 ELSE intelligence_report.attempts + 1 END`,
   )
-    .bind(reportId, firmUserId, reportDate, PROMPT_VERSION, firmScope)
+    .bind(reportId, firmUserId, reportDate, PROMPT_VERSION, firmScope, trigger)
     .run();
   const row = (await env.WP_OS_DB.prepare(
     "SELECT id FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
@@ -760,10 +785,13 @@ export async function deliverReport(env: Env, reportId: string): Promise<{ deliv
 /**
  * How many times a partner's brief may be attempted on one date.
  *
- * Three across a morning survives a provider blip and a bad feed. A fourth would be the system
- * insisting rather than trying, and every attempt pays for two AI calls.
+ * MOVED to `shared/intelligence/briefTerminality.ts` and re-exported here so existing importers are
+ * unchanged. It sits beside the definition of "finished" now because the cap and that definition
+ * are the same rule seen from two sides, and on 18 Sep 2026 they drifted apart: the skip guard
+ * asked `status === 'FAILED' && attempts >= MAX`, so a row wedged mid-pipeline with the budget
+ * already spent matched neither "finished" nor "skip" and was advanced, free, for ever.
  */
-export const MAX_BRIEF_ATTEMPTS = 3;
+export { MAX_BRIEF_ATTEMPTS };
 
 /**
  * ONE PARTNER PER TICK, because a cron invocation gets ten milliseconds of CPU.
@@ -802,7 +830,7 @@ export async function briefsOwedToday(env: Env, now: Date, firmScope = "west-pee
         await env.WP_OS_DB.prepare(
           `SELECT firm_user_id, report_date FROM intelligence_report
             WHERE firm_scope = ?1 AND report_date >= ?2
-              AND (status = 'READY' OR (status = 'FAILED' AND attempts >= ${MAX_BRIEF_ATTEMPTS}))`,
+              AND ${TERMINAL_SQL}`,
         )
           .bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10))
           .all<{ firm_user_id: string; report_date: string }>()
@@ -842,6 +870,16 @@ export async function runDailyForAll(
     await recordSwallowed(env, "dailyIntelligence.closeAbandonedReports", err);
     return 0;
   });
+  /*
+   * AND CLOSE ANYTHING THAT CAN NO LONGER FINISH, before a single row is advanced. A stranded row
+   * is not merely stuck: left alone it is advanced again by this very tick, free of charge, because
+   * the attempt counter only moves when a report is STARTED. Closing it first is what makes the cap
+   * mean something and what puts a readable sentence on the partner's card.
+   */
+  await closeUnfinishableReports(env, now).catch(async (err) => {
+    await recordSwallowed(env, "dailyIntelligence.closeUnfinishableReports", err);
+    return 0;
+  });
 
   /*
    * WHO STILL NEEDS ONE TODAY. A partner with a READY or FAILED report for today is finished:
@@ -865,7 +903,7 @@ export async function runDailyForAll(
            */
           `SELECT firm_user_id, report_date FROM intelligence_report
             WHERE firm_scope = ?1 AND report_date >= ?2
-              AND (status = 'READY' OR (status = 'FAILED' AND attempts >= ${MAX_BRIEF_ATTEMPTS}))`,
+              AND ${TERMINAL_SQL}`,
         )
           .bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10))
           .all<{ firm_user_id: string; report_date: string }>()
@@ -975,8 +1013,16 @@ export async function runBriefTick(
     if (!isAfterLocalTime(now, p.timezone, p.earliest_start_local)) continue;
     const date = localReportDate(now, p.timezone);
     const row = byKey.get(`${p.id}:${date}`);
-    if (row?.status === "READY") continue;
-    if (row?.status === "FAILED" && row.attempts >= MAX_BRIEF_ATTEMPTS) continue;
+    /*
+     * ONE ANSWER TO "IS THIS FINISHED?", shared with the done-queries above and with the recovery.
+     * This used to be two hand-written lines — READY, and FAILED-with-the-budget-spent — and a row
+     * that was mid-pipeline with the budget ALREADY spent matched neither. It was therefore
+     * advanced by every tick, spending two model calls a time against a budget of nothing, and
+     * never charged an attempt (attempts is incremented in `startReport`, which is not called for a
+     * non-terminal row). That is how Sequoia's brief took six model calls against a three-attempt
+     * cap on 18 Sep 2026 and still ended the morning blank.
+     */
+    if (row && briefTerminality(row.status, row.attempts).terminal) continue;
     if (row && row.status !== "FAILED" && row.stage_lease_until && row.stage_lease_until > now.toISOString()) continue;
 
     if (!row || row.status === "FAILED") await startReport(env, firmScope, p.id, now);
@@ -1027,6 +1073,44 @@ export async function closeAbandonedReports(env: Env, now: Date = new Date()): P
       WHERE status NOT IN ('READY','FAILED') AND COALESCE(stage_at, started_at) < ?1`,
   )
     .bind(cutoff)
+    .run();
+  return res.meta?.changes ?? 0;
+}
+
+/**
+ * Close reports that are holding a spent attempt budget in a non-terminal status.
+ *
+ * WHY THIS IS A SECOND FUNCTION AND NOT A WIDER `closeAbandonedReports`. The two close different
+ * things for different reasons and must say different things to the partner. A row that stopped
+ * moving with attempts still on the clock is `abandoned` — it will be started again and probably
+ * succeed. A row that stopped moving with the budget gone is the END of the day's attempts, and
+ * telling her "build it again" without saying nothing further will be tried automatically is the
+ * difference between a card she can act on and one she has to interpret.
+ *
+ * WHAT IT IS FOR, precisely. On 18 Sep 2026 Sequoia's write stage made both its model calls at
+ * 14:56 and 14:57 and the row's `stage_at` never moved from 14:41:47: the isolate was evicted
+ * between the model returning and the outcome being persisted. `advanceBrief`'s catch cannot help,
+ * because no code of ours ran at all. Her partner's row, whose stage did complete, ended FAILED
+ * with a reason a person could read; hers ended with nothing, and the asymmetry was the bug.
+ *
+ * THE GRACE WINDOW IS NOT OPTIONAL. A healthy third attempt sits between stages holding no lease —
+ * the pipeline is three ticks — so closing every non-terminal row with a spent budget would kill
+ * runs that were about to write the brief. A row qualifies only once it is also holding no stage
+ * lease and has not moved for longer than a whole stage's lease. The tick runs every minute, so a
+ * live run moves long before that; a dead one never moves again.
+ */
+export async function closeUnfinishableReports(env: Env, now: Date = new Date()): Promise<number> {
+  const graceCutoff = new Date(now.getTime() - STAGE_LEASE_MINUTES * 60_000).toISOString();
+  const res = await env.WP_OS_DB.prepare(
+    `UPDATE intelligence_report
+        SET status = 'FAILED', error_code = 'unfinishable',
+            error_message = ?3,
+            stage_lease_until = NULL,
+            completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE ${STRANDED_SQL}`,
+  )
+    .bind(now.toISOString(), graceCutoff, strandedReason(MAX_BRIEF_ATTEMPTS))
     .run();
   return res.meta?.changes ?? 0;
 }
@@ -1164,7 +1248,7 @@ export async function handleGenerateDailyReport(ctx: RouteContext): Promise<Resp
       "SELECT status FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
     ).bind(firmScope, target, reportDate).first<{ status: string }>();
     const fresh = !existing || existing.status === "READY" || existing.status === "FAILED";
-    if (fresh) await startReport(ctx.env, firmScope, target, now);
+    if (fresh) await startReport(ctx.env, firmScope, target, now, "requested");
     const step = await advanceBrief(ctx.env, actor, target, now, {});
     if (step.status === "READY" && step.report_id) await deliverReport(ctx.env, step.report_id).catch(() => undefined);
     const done = step.status === "READY" || step.status === "FAILED";
