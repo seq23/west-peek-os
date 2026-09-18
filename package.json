@@ -36,6 +36,7 @@
     "validate:partner-email": "node scripts/validate/partner-email-boundary.mjs && node scripts/validate/partner-email-boundary.mjs --self-test",
     "validate:partners": "node scripts/validate/one-partner-registry.mjs && node scripts/validate/one-partner-registry.mjs --self-test",
     "validate:preview": "node scripts/validate/preview-sends-nowhere.mjs && node scripts/validate/preview-sends-nowhere.mjs --self-test",
+    "validate:preview-lane": "node scripts/validate/a-preview-guards-the-send.mjs && node scripts/validate/a-preview-guards-the-send.mjs --self-test",
     "validate:prices": "node scripts/prices/refresh.mjs --offline-check && node scripts/prices/refresh.mjs --self-test",
     "validate:sql": "node scripts/validate/sql-against-schema.mjs && node scripts/validate/sql-against-schema.mjs --self-test",
     "validate:value-shapes": "node scripts/validate/value-shapes.mjs && node scripts/validate/value-shapes.mjs --self-test",
