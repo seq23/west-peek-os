@@ -129,12 +129,28 @@ export async function visitSurface(page: Page, label: string): Promise<boolean> 
    * the suite lies, which is more expensive than the seconds this spends.
    */
   let last = "";
-  for (let i = 0; i < 20; i += 1) {
-    const now = JSON.stringify([await blankLists(page), await emptySlots(page)]);
-    // Settled when two consecutive reads agree AND nothing is still announcing that it is reading.
-    if (now === last && !/…|\.\.\./.test(now)) return true;
+  for (let i = 0; i < 25; i += 1) {
+    const blanks = await blankLists(page);
+    const now = JSON.stringify([blanks, await emptySlots(page)]);
+    /*
+     * SETTLED WHEN TWO CONSECUTIVE READS AGREE, NOTHING IS STILL ANNOUNCING THAT IT IS READING, AND
+     * NOTHING IS BLANK.
+     *
+     * The third clause is the one that was missing, and its absence made this sweep report a real
+     * defect at random. A list that renders NOTHING while its fetch is in flight is perfectly stable
+     * across two reads 250 ms apart, and it has no "…" in it to give itself away — so the loop
+     * called a half-loaded page settled and the caller recorded an unexplained blank. Measured:
+     * `d1-design-states` failed 1 run in 8 on 18 Sep 2026 on the Employees rooms and handoffs lists,
+     * which were exactly that (and are fixed to say "Reading the …" instead).
+     *
+     * Treating a blank as UNSETTLED is strictly stricter, not more forgiving: a page that is
+     * genuinely blank still spends the whole budget and is still reported, and the healthy case now
+     * leaves sooner than it did, because the first agreeing pair with nothing blank ends the wait.
+     * Stability is evidence of nothing when the thing being measured is an absence.
+     */
+    if (now === last && blanks.length === 0 && !/…|\.\.\./.test(now)) return true;
     last = now;
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(200);
   }
   return true;
 }
