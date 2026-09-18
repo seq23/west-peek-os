@@ -106,8 +106,16 @@ const PROVIDER_CANNOT_SERVE_PHRASES: readonly string[] = [
   "quota exhausted",
   "out of quota",
   // OpenRouter: {"error":{"code":402,"message":"Insufficient credits..."}} and, for a key whose
-  // account has lapsed, a 400 carrying "billing".
-  "billing",
+  // account has lapsed, a 400 carrying a billing phrase.
+  //
+  // NOT the bare word "billing", and the validator refuses it — one generic word is how a detector
+  // starts matching prose. Each of these is the vendor's own compound: OpenAI's "check your plan
+  // and billing details", Azure's "billing_not_active", the hard-limit message.
+  "billing details",
+  "billing not active",
+  "billing hard limit",
+  "billing issue",
+  "billing account",
   "payment required",
   "payment method",
   "add funds",

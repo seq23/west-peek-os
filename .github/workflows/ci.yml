@@ -139,6 +139,18 @@ jobs:
       - name: One central answer to who the partners are
         run: npm run validate:partners
 
+      # A LANE THAT CANNOT SERVE MUST CHAIN, AND A NOTICE MUST NOT TAKE THE FIRM OFFLINE.
+      #
+      # Two of these four checks cannot be written as a test. An adapter added next year that throws
+      # the bare HTTP status has silently opted its whole vendor out of the outage classifier — no
+      # existing test would exercise it. And a notice added by a future migration containing an LP
+      # marker phrase would, because notices are read into EVERY prompt and the classifier scans
+      # prompt inputs, mark every run in the firm as LP material and refuse every free route. That
+      # is not hypothetical: in the sister system the single word "commitment" in a notice did
+      # exactly that.
+      - name: A lane that cannot serve must chain, and no notice may take the firm offline
+        run: npm run validate:chaining
+
       - name: Build client
         run: npm run build
 
