@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { stage } from "@shared/investment/pipeline";
 import { gotoSurface } from "./support/nav";
 import { deliverMail } from "./support/mail";
 import { provisionLocalD1 } from "./support/provision";
@@ -193,11 +194,29 @@ test("a deal is walked the whole length of the pipeline to an investment decisio
   const dealId = (await boardDeals(request)).find((d) => d.company_name === companyName)!.id;
   expect(await statusOf(request, dealId)).toBe("NEW");
 
-  // First look → screening → diligence → committee → decided → invested. One press per stage, and
-  // the stage is read back from the record between each, so a stalled walk fails HERE rather than
-  // twenty lines later as "the control is missing".
+  /*
+   * First look → screening → diligence → committee → decided → invested. One press per stage, and
+   * the stage is read back from the record between each, so a stalled walk fails HERE rather than
+   * twenty lines later as "the control is missing".
+   *
+   * EVERY PRESS IS CHECKED AGAINST WHAT THE BUTTON SAYS, and that is the part this journey used to
+   * leave out. It pressed `deal-advance-…` five times and asserted the RECORD afterwards, never the
+   * control — so a button still rendering the previous stage's move looked identical to the right
+   * one, and the press went to the stage the deal had already left. That is how this spec failed
+   * intermittently with `Expected "CLOSED" / Received "IC_DECIDED"` (18 Sep 2026): the walk lost a
+   * press to a control that had not caught up, and the loop had no way to know.
+   *
+   * Asserting the LABEL first is strictly more than the old loop asked. It pins that the row offers
+   * the correct next move at the moment it is pressed — a claim about the interface a partner uses,
+   * not only about the row the server ends up with — and it removes the race as a side effect,
+   * because Playwright will not press a control whose text does not yet name the move being made.
+   */
   for (const expected of ["SCREENING", "DILIGENCE", "IC_READY", "IC_DECIDED", "CLOSED"]) {
-    await page.getByTestId(`deal-advance-${dealId}`).click();
+    const advance = page.getByTestId(`deal-advance-${dealId}`);
+    await expect(advance, `the row must offer the move to ${expected} before it is pressed`).toHaveText(
+      `Move to ${stage(expected)!.label.toLowerCase()}`,
+    );
+    await advance.click();
     await expect
       .poll(async () => await statusOf(request, dealId), { message: `the deal must reach ${expected}` })
       .toBe(expected);

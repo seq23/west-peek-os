@@ -504,6 +504,32 @@ function DealRow({ deal, open, onChanged, onOpen }: {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  /*
+   * A MOVE IS NOT OVER WHEN THE REQUEST RETURNS — IT IS OVER WHEN THE ROW SAYS SO.
+   *
+   * `moveTo` awaited the transition, cleared `busy`, then called `onChanged()`, which is
+   * `board.reload` — a fire-and-forget refetch that cannot be awaited. For the width of that refetch
+   * the row was re-enabled while still rendering the OLD stage, so the "Move to …" button on screen
+   * was offering the move that had just been made. Pressing it sent the firm's own pipeline a
+   * transition to the stage the deal was already in: a request the server correctly refuses, a press
+   * a partner made in good faith, and NOTHING on the page to say the press was thrown away.
+   *
+   * CONFIRMED 18 Sep 2026 by `p57-deal-intake-and-pipeline` — "a deal is walked the whole length of
+   * the pipeline" failed with `Expected: "CLOSED" / Received: "IC_DECIDED"`, because one press in
+   * the walk landed on a button that had not caught up. Under load that window is wide enough to
+   * hit; on an idle laptop it usually is not. The defect is the same either way.
+   *
+   * So the row stays busy until the STAGE IT IS RENDERING has actually changed. `movedFrom` is the
+   * status the press was made against; while the row is still showing that status, the move is
+   * still in flight and no second press is offered. It clears on any change, not only on the
+   * expected one, so a transition the server resolved differently can never wedge the control.
+   */
+  const [movedFrom, setMovedFrom] = useState<string | null>(null);
+  const settling = movedFrom !== null && deal.status === movedFrom;
+  useEffect(() => {
+    if (movedFrom !== null && deal.status !== movedFrom) setMovedFrom(null);
+  }, [deal.status, movedFrom]);
+
   // Forward moves and one backward one. Passing is a decision with a reason attached, which is why
   // it is its own control and not a value in a dropdown that makes it as cheap as a typo — but it
   // has to EXIST, and until 21 Aug 2026 it did not: the lifecycle allowed PASS from every live
@@ -518,7 +544,10 @@ function DealRow({ deal, open, onChanged, onOpen }: {
     });
     setBusy(false);
     if (res.status !== 200) setMessage(res.data?.detail ?? res.data?.error ?? `Could not move it (HTTP ${res.status}).`);
-    else onChanged();
+    else {
+      setMovedFrom(deal.status);
+      onChanged();
+    }
   }
 
   const rowClass = ["deal-row", left ? "deal-row-out" : "", open ? "deal-row-open" : ""].filter(Boolean).join(" ");
@@ -606,11 +635,11 @@ function DealRow({ deal, open, onChanged, onOpen }: {
           <button
             type="button"
             className="btn-strong"
-            disabled={busy}
+            disabled={busy || settling}
             data-testid={`deal-advance-${deal.id}`}
             onClick={() => void moveTo(next.key)}
           >
-            {busy ? "…" : `Move to ${next.label.toLowerCase()}`}
+            {busy || settling ? "…" : `Move to ${next.label.toLowerCase()}`}
           </button>
         )}
         {/*
@@ -648,7 +677,7 @@ function DealRow({ deal, open, onChanged, onOpen }: {
           <button
             type="button"
             className="btn-ghost"
-            disabled={busy}
+            disabled={busy || settling}
             data-testid={`deal-pass-${deal.id}`}
             onClick={() => {
               const reason = window.prompt(`Why is the firm passing on ${deal.company_name}?`);
@@ -696,7 +725,7 @@ function DealRow({ deal, open, onChanged, onOpen }: {
           <button
             type="button"
             className="btn-ghost"
-            disabled={busy}
+            disabled={busy || settling}
             data-testid={`deal-reopen-${deal.id}`}
             title="Brings it back at screening — the earlier work is not carried forward"
             onClick={() => void moveTo("SCREENING")}
@@ -1057,16 +1086,29 @@ function CompanyDealRecord({
     reloadAll();
   }
 
+  /* The same "a move is not over when the request returns" defect as `DealRow` above, on the open
+     record's own copy of the control. `reloadAll()` cannot be awaited either, so the record went on
+     offering the move it had just made until the refetch landed. */
+  const [movedFrom, setMovedFrom] = useState<string | null>(null);
+  const settling = movedFrom !== null && d?.status === movedFrom;
+  useEffect(() => {
+    if (movedFrom !== null && d?.status !== movedFrom) setMovedFrom(null);
+  }, [d?.status, movedFrom]);
+
   async function moveTo(to: string, reason?: string) {
     if (!d) return;
     setBusy(true);
+    const from = d.status;
     const failed = mutationError(
       await api(`/api/opportunities/${d.id}/transition`, { method: "POST", body: reason === undefined ? { to } : { to, reason } }),
       200,
     );
     setBusy(false);
     setMessage(failed ?? `${companyName} is now at ${(stage(to)?.label ?? "its new stage").toLowerCase()}.`);
-    if (!failed) reloadAll();
+    if (!failed) {
+      setMovedFrom(from);
+      reloadAll();
+    }
   }
 
   async function addSecondDeal(e: React.FormEvent) {
@@ -1202,15 +1244,15 @@ function CompanyDealRecord({
 
             <div className="record-actions">
               {next && (
-                <button type="button" className="btn-strong" disabled={busy} data-testid="deal-record-advance" onClick={() => void moveTo(next.key)}>
-                  {busy ? "…" : `Move to ${next.label.toLowerCase()}`}
+                <button type="button" className="btn-strong" disabled={busy || settling} data-testid="deal-record-advance" onClick={() => void moveTo(next.key)}>
+                  {busy || settling ? "…" : `Move to ${next.label.toLowerCase()}`}
                 </button>
               )}
               {PASSABLE.includes(d.status) && (
                 <button
                   type="button"
                   className="btn-ghost"
-                  disabled={busy}
+                  disabled={busy || settling}
                   data-testid="deal-record-pass"
                   onClick={() => {
                     const reason = window.prompt(`Why is the firm passing on ${companyName}?`);
