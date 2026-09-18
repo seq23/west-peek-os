@@ -1427,6 +1427,10 @@ export function WorkCardsPage({
       <section className="work-region" data-testid="work-elsewhere">
         <div className="work-band-head">
           <h3>Everything else</h3>
+          {/* EVERY BAND HEAD SAYS WHAT ITS BAND IS FOR. This one was the exception, and the rank
+              spec caught it by finding no note to measure against — which is the Rule-0 guard
+              doing its job on a real omission rather than on a fixture. */}
+          <p className="work-band-note">The two kinds that are not on this screen, and where they went.</p>
         </div>
         <div className="work-elsewhere-tiles">
           <div className="card work-tile">
