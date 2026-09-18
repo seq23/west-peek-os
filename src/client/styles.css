@@ -1727,7 +1727,7 @@ details h3 {
   /* 44px, not 38px: this rule has higher specificity than the mobile touch-target floor and would
      otherwise shrink the most-tapped links below it on a phone. The primary tier should be the
      LARGEST target, never the exception that undercuts the minimum. */
-  min-height: 44px;
+  min-height: var(--touch-min);
   font-size: var(--text-md);
   font-weight: 600;
   color: var(--wp-shell-ink);
@@ -1781,7 +1781,7 @@ details h3 {
 .intel-panel > summary {
   cursor: pointer;
   font-weight: 600;
-  min-height: 44px;
+  min-height: var(--touch-min);
   display: flex;
   align-items: center;
   gap: var(--space-2xs);
@@ -2036,7 +2036,7 @@ details h3 {
   gap: var(--space-sm);
 }
 .ask-open {
-  min-height: 44px;
+  min-height: var(--touch-min);
   padding: var(--space-xs) var(--space-md);
   background: var(--wp-surface);
   border: 1px solid var(--wp-line-control);
@@ -2921,6 +2921,19 @@ details h3 {
   background: var(--wp-neutral-tint);
   border: 1px solid var(--wp-line);
 }
+/* A DISCLOSURE IS A CONTROL, AND A THUMB NEEDS A THUMB-SIZED BOX. Measured at 320px by
+   `e2e/d2-home-measured`: three summaries on Home stood 19–23px tall — the setup strip, "What
+   happens if I connect?" and "What my brief covers". Buttons on this page have had a 44px floor
+   for a year; the disclosures beside them never got one, because nobody had measured them.
+   `display: flex` is what makes the min-height reach the text rather than leaving it top-aligned. */
+details.card > summary,
+.connect-strip > summary,
+.connect-help > summary {
+  min-height: var(--touch-min);
+  display: flex;
+  align-items: center;
+}
+
 /* THE STAND-IN THAT HOLDS THE GROUND until `/api/me/connections` answers at ~2.5s. This panel is
    Home's first child, so returning nothing until then dropped the whole page by one strip's height
    at the moment a partner had started reading — Home's one measurable layout shift.
