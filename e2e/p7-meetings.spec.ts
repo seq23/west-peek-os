@@ -35,11 +35,25 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   await expect(page.getByTestId("meeting-message")).toContainText("Transcript import refused: recording_policy_not_activated");
   await expect(page.getByTestId("transcript-list")).toContainText("REFUSED");
 
-  // Consent alone is not enough — the recording policy is a separate gate.
+  /*
+   * Consent alone is not enough — the recording policy is a separate gate.
+   *
+   * THE SECOND REFUSAL IS COUNTED, NOT JUST READ. Waiting on the refusal SENTENCE could not prove
+   * anything here: the identical sentence was already on the page from the attempt above, so the
+   * assertion was satisfied before the second import had even been answered and this gate would
+   * have passed wide open. The record is what cannot be stale — a second attempt that was refused
+   * leaves a second REFUSED row, and one that was allowed leaves an IMPORTED one.
+   */
   await page.getByTestId("consent-grant").click();
   await expect(page.getByTestId("meeting-consent")).toHaveText("GRANTED");
   await page.getByTestId("transcript-import").click();
   await expect(page.getByTestId("meeting-message")).toContainText("Transcript import refused: recording_policy_not_activated");
+  const refusals = page.locator('[data-testid^="transcript-"] .help-tag-warn', { hasText: "REFUSED" });
+  await expect(refusals, "consent without a recording policy must be refused AND recorded, twice").toHaveCount(2);
+  await expect(
+    page.locator('[data-testid^="transcript-"]', { hasText: "IMPORTED" }),
+    "nothing may have been imported while the recording policy is still off",
+  ).toHaveCount(0);
 
   // Activate the recording policy through the MP-reserved approval receipt.
   const meetingId = /mtg_[0-9a-f-]+/.exec((await page.getByTestId("meetings-message").textContent()) ?? "")?.[0];

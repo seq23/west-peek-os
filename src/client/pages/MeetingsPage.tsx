@@ -634,6 +634,30 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
   const m = meeting.data;
 
   const post = async (path: string, body: unknown, okStatus: number, label: string) => {
+    /*
+     * THE OLD ANSWER GOES BEFORE THE NEW QUESTION IS ASKED.
+     *
+     * This helper left the previous outcome on screen for the whole width of the request, so
+     * pressing "Import the transcript" a second time showed the FIRST attempt's verdict until the
+     * second one came back. For a surface whose whole job is saying whether a governed act was
+     * allowed, a stale "refused" sitting next to a button you have just pressed is the worst
+     * possible thing to show — and it is also read by a test.
+     *
+     * CONFIRMED 18 Sep 2026 in `p7-meetings`: "Consent alone is not enough — the recording policy is
+     * a separate gate" grants consent, imports again, and waits for
+     * `Transcript import refused: recording_policy_not_activated`. That sentence was ALREADY on the
+     * page from the previous attempt, so the assertion resolved instantly and the journey would have
+     * passed even if the gate had opened. A test that cannot fail is worse than a flaky one; this is
+     * the gate it was built to hold. The claim form in `App.tsx` has always cleared first — same
+     * repair, same reason.
+     *
+     * THIS LINE IS THE UX REPAIR AND NOT, BY ITSELF, THE FIX FOR THE SPEC. Measured: pressing the
+     * button and reading the banner in the same tick still returns the old sentence, because the
+     * re-render this schedules has not flushed by the time the click returns. A banner is the wrong
+     * thing to wait on either way, so `p7` now counts the REFUSED rows on the record — which cannot
+     * be stale — and this clears the old verdict for the person reading the page.
+     */
+    setMessage(null);
     const { status, data } = await api<{ error?: string; detail?: string }>(path, { method: "POST", body });
     setMessage(status === okStatus ? `${label} ok.` : `${label} refused: ${(data as { error?: string })?.error ?? status}`);
     meeting.reload();

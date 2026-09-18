@@ -306,8 +306,42 @@ async function recordCommitment(
   await page.getByTestId("commitment-amount").fill(String(amount));
   await page.getByTestId("commitment-state").selectOption(state);
   await page.getByTestId("commitment-save").click();
-  await expect(page.getByTestId("lp-message")).toContainText("Recorded");
+  /*
+   * WAIT FOR THIS SAVE, NOT FOR THE WORD "RECORDED".
+   *
+   * This line used to read `.toContainText("Recorded")`, and after the first commitment that string
+   * was ALREADY on the page — the surface said the same five letters after every save. So the
+   * assertion resolved instantly, the journey read `/api/lp/fundraising` before the write it was
+   * waiting for had landed, and the spec failed intermittently with
+   * `Expected: 0 / Received: 3000000` on a withdrawal that had not happened yet (18 Sep 2026).
+   * An assertion that is already satisfied when it is made is not a wait.
+   *
+   * The confirmation now names the investor, the amount and where the commitment stands, so no two
+   * consecutive saves in this journey can produce the same sentence. Asserting all three is
+   * strictly more than the old line asked: it pins that the surface tells a partner WHAT it
+   * recorded, which is the question a confirmation exists to answer, and it makes the wait real.
+   */
+  /* The amount is matched as "some amount" rather than as a formatted string: the page formats it
+     with the BROWSER's ICU and this file would format it with NODE's, and two runners that disagree
+     about where a currency symbol goes would fail a journey about fundraising. The investor and the
+     state are what make each save distinguishable from the one before it, and they are exact.
+     `.+` and not `[^,]+`: a grouped amount HAS commas in it, and the tighter class could not cross
+     them. The trailing `, <state>.` is still what terminates the match, and the three state
+     sentences cannot satisfy each other — "…, signed." never appears inside "…, not signed." */
+  await expect(
+    page.getByTestId("lp-message"),
+    `the confirmation must name this save — ${lpName}, ${amount}, ${state}`,
+  ).toContainText(
+    new RegExp(`Recorded ${lpName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} — .+, ${STATE_WORDS[state].toLowerCase()}\\.`),
+  );
 }
+
+/** The words the surface puts on each commitment state, as `LPPage`'s own `STATES` list defines them. */
+const STATE_WORDS: Record<"SIGNED" | "SOFT" | "WITHDRAWN", string> = {
+  SOFT: "Said yes, not signed",
+  SIGNED: "Signed",
+  WITHDRAWN: "Fell through",
+};
 
 async function fundraisingFor(request: Ctx, fundId: string): Promise<FundraisingRow> {
   const body = (await (await request.get("/api/lp/fundraising", { headers: MP })).json()) as {
