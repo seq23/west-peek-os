@@ -2105,6 +2105,20 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * costs this run one indexed read and the paid head leads exactly as it did yesterday. Prove it
    * by deleting every device row: the firm's work is unchanged.
    */
+  /*
+   * ── THIS CALL MAY NOT BE TRAINED ON ───────────────────────────────────────────────────────
+   *
+   * One boolean, decided once, carried into every adapter this run builds — the head, each free
+   * lane, each policy fallback, each direct-vendor lane, each last resort. Deciding it per adapter
+   * is how a chain ends up with a head that refuses training and a fourth fallback that does not,
+   * which is the failure the chain exists to avoid rather than one to introduce.
+   *
+   * `contentClass` decides, not the caller's declaration: `classifyContent` revokes a
+   * public-model claim outright when an LP or deal-term marker turns up in the text, so a
+   * mislabelled card still ends up here.
+   */
+  const denyDataCollection = !contentClass.publicModelApproved || input.budgetContext?.confidential === true;
+
   const seatsEligible =
     isJudgement &&
     // The volume decision, as an expression. Public work already has a free lane; it does not come
@@ -2251,7 +2265,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       };
       freeLanes.push({
         candidate,
-        adapter: adapterFor(env, candidate, deps.fetchImpl).adapter,
+        adapter: adapterFor(env, candidate, deps.fetchImpl, { denyDataCollection }).adapter,
         engageOn: "OUTAGE",
         estimate: {
           ...estimate,
@@ -2265,7 +2279,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     }
   }
 
-  const { adapter } = adapterFor(env, head, deps.fetchImpl);
+  const { adapter } = adapterFor(env, head, deps.fetchImpl, { denyDataCollection });
   const allowFallback = routePolicy?.allow_fallback === 1;
   /*
    * ── A FALLBACK THAT IS ACTUALLY THERE ─────────────────────────────────────────────────────
@@ -2315,7 +2329,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     };
     outageFallbacks.push({
       candidate,
-      adapter: adapterFor(env, candidate, deps.fetchImpl).adapter,
+      adapter: adapterFor(env, candidate, deps.fetchImpl, { denyDataCollection }).adapter,
       engageOn: "OUTAGE",
       // The same model, so the same rates. Only the provider key differs.
       estimate: { ...estimate, provider_key: candidate.providerKey, model: candidate.model },
@@ -2325,7 +2339,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   const policyFallbacks: FallbackOption[] = allowFallback
     ? ordered.slice(1).map((c) => ({
         candidate: c,
-        adapter: adapterFor(env, c, deps.fetchImpl).adapter,
+        adapter: adapterFor(env, c, deps.fetchImpl, { denyDataCollection }).adapter,
         engageOn: "ANY" as const,
       }))
     : [];
@@ -2384,7 +2398,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     const option = options.find((o) => o.provider.id === c.providerId && o.pricing.model === c.model);
     return {
       candidate: c,
-      adapter: adapterFor(env, c, deps.fetchImpl).adapter,
+      adapter: adapterFor(env, c, deps.fetchImpl, { denyDataCollection }).adapter,
       engageOn: "OUTAGE" as const,
       // Priced at ITS OWN rates, never the head's. A recovery that bills the partner for the model
       // that failed is a second defect wearing the first one's clothes.

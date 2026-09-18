@@ -89,10 +89,26 @@ export function orderByPolicy(policy: RoutingPolicyRow, available: RoutingCandid
  * `credentialConfigured` here is per-vendor (src/shared/ai/providerCredentials.ts), so "Anthropic
  * is configured" no longer means "some key, belonging to somebody, is set".
  */
+export interface AdapterOptions {
+  /**
+   * TRUE FOR ANY CALL CARRYING LP NAMES, DEAL TERMS OR FUND FIGURES.
+   *
+   * Passed down to the OpenRouter adapter as `provider: { data_collection: "deny" }`, which is
+   * OpenRouter's own routing constraint — verified live on 17 Sep 2026 to serve a paid lane and to
+   * REFUSE a `:free` one with "No endpoints found matching your data policy (Free model training)".
+   * See providers/openRouter.ts for the probe and the reasoning.
+   *
+   * It is threaded through here rather than read from the environment because it is a fact about
+   * THIS CALL, not about the deployment, and every adapter built for one run must agree about it.
+   */
+  denyDataCollection?: boolean;
+}
+
 export function adapterFor(
   env: Env,
   candidate: RoutingCandidate,
   fetchImpl?: typeof fetch,
+  opts: AdapterOptions = {},
 ): { adapter: ProviderAdapter; credentialConfigured: boolean } {
   const baseUrl = candidate.baseUrl ?? "";
   const key = credentialValueFor(env, candidate.providerKey);
@@ -100,7 +116,13 @@ export function adapterFor(
 
   if (candidate.providerKey === "openrouter" || candidate.providerKey === "openrouter_free") {
     return {
-      adapter: createOpenRouterAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+      adapter: createOpenRouterAdapter({
+        baseUrl,
+        model: candidate.model,
+        apiKey: key,
+        fetchImpl,
+        ...(opts.denyDataCollection ? { denyDataCollection: true } : {}),
+      }),
       credentialConfigured: configured,
     };
   }

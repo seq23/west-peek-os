@@ -29,6 +29,39 @@ export interface OpenRouterOptions {
   fetchImpl?: typeof fetch;
   /** Overridable so a test can prove the timeout path in milliseconds rather than a minute. */
   timeoutMs?: number;
+  /**
+   * ── REFUSE TO BE ROUTED ANYWHERE THAT MAY TRAIN ON THIS ──────────────────────────────────────
+   *
+   * Set on any call carrying LP names, deal terms or fund figures. It becomes
+   * `provider: { data_collection: "deny" }` on the request body, which is OpenRouter's own routing
+   * constraint rather than a claim we make about them.
+   *
+   * WHY THIS AND NOT THE ACCOUNT SETTING, which is the obvious alternative and is worse in three
+   * ways. openrouter.ai/settings/privacy carries the same switch account-wide. But an account
+   * setting is invisible from here, it can be flipped by anybody with the login and nothing in this
+   * repository would notice, and it cannot be asserted in a test. A per-request field is carried by
+   * the request that needs it, travels with the code that sets it, and is provable offline.
+   *
+   * ── WHAT THIS WAS VERIFIED TO ACTUALLY DO, probed against the live key on 17 Sep 2026 ─────────
+   *
+   * Three calls, and the middle one is the finding:
+   *
+   *   google/gemini-2.5-flash-lite          deny   → HTTP 200, "lane is alive", served by Google
+   *   nvidia/nemotron-3-ultra-550b:free     deny   → HTTP 404, "No endpoints found matching your
+   *                                                  data policy (Free model training)"
+   *   nvidia/nemotron-3-ultra-550b:free     allow  → HTTP 200, served by Nvidia
+   *
+   * So the constraint is REAL AND ENFORCED AT OPENROUTER, not advisory: a paid lane serves under it
+   * and a free lane is refused BY OPENROUTER'S OWN ROUTER rather than by us. That refusal is also
+   * the strongest available evidence that this firm's classification of the `:free` tier as
+   * training-permitting is correct — it is the vendor saying so, mechanically.
+   *
+   * AND THE FAILURE MODE IS THE SAFE ONE. If a paid lane ever loses its non-training endpoint, this
+   * returns 404 — an outage-class reason that chains to the next private-capable rung — rather than
+   * quietly serving the call from a provider that keeps the prompt. A lane that cannot serve
+   * privately drops out of the private ladder by itself.
+   */
+  denyDataCollection?: boolean;
 }
 
 export const OPENROUTER_PROVIDER_KEY = "openrouter";
@@ -57,6 +90,8 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
         signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
         body: JSON.stringify({
           model: req.model ?? options.model,
+          // Present only when asked for, so every existing public-content run is byte-identical.
+          ...(options.denyDataCollection ? { provider: { data_collection: "deny" } } : {}),
           messages: [
             { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
             {
