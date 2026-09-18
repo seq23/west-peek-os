@@ -40,6 +40,17 @@ const MP = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
 /** The oldest card in the seeded record, and the one the search has to be able to reach. */
 const NEEDLE = "Kirx Diaz retrospective — the needle in the record";
 
+/**
+ * A token unique to this run.
+ *
+ * Every spec in this suite drives ONE local D1, so a fixed title accumulates runs across tests and
+ * the collapse count stops being this test's to predict — it read "ran 6×" because another test in
+ * the same file had already finished three of the same card, which is the collapse working, not
+ * failing. The token makes the three identical runs unambiguously these three.
+ */
+const RUN = `r${Date.now().toString(36)}`;
+const PACKET = `Parker: build the October 2026 Room packet (${RUN})`;
+
 async function signIn(page: Page): Promise<void> {
   await page.goto("/");
   const login = page.getByTestId("dev-login-email");
@@ -55,6 +66,10 @@ async function openWork(page: Page): Promise<void> {
   await gotoSurface(page, "Work");
   await expect(page.getByTestId("work-cards-page")).toBeVisible();
   await expect(page.getByTestId("work-answer")).toBeVisible();
+  /* The answer line renders from counts that start at zero, so it is visible BEFORE the board has
+     answered. Waiting on the tiles — which are the last thing the desk renders — is what makes a
+     measurement of this page a measurement of the loaded page. */
+  await expect(page.getByTestId("work-elsewhere")).toBeVisible();
 }
 
 /**
@@ -87,7 +102,7 @@ async function seedRecord(request: APIRequestContext): Promise<number> {
   }
   // Three identical runs of one job. Before the change these rendered as three achievements.
   for (let i = 0; i < 3; i += 1) {
-    await finish("Parker: build the October 2026 Room packet", "• Room requested: an event for Black lawyers in our network");
+    await finish(PACKET, "• Room requested: an event for Black lawyers in our network");
   }
   return made;
 }
@@ -389,8 +404,8 @@ test("the desk stays short while the record grows, and the oldest row is still f
   await expect(page.getByText(NEEDLE, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
 
   // ── DUPLICATES COLLAPSE ───────────────────────────────────────────────────────────────────────
-  await page.getByTestId("work-record-search").fill("October 2026 Room packet");
-  const packets = page.locator('[data-testid^="work-record-row-"]').filter({ hasText: "October 2026 Room packet" });
+  await page.getByTestId("work-record-search").fill(PACKET);
+  const packets = page.locator('[data-testid^="work-record-row-"]').filter({ hasText: RUN });
   await expect(packets, "three identical runs of one job are one row, not three achievements").toHaveCount(1, {
     timeout: 10_000,
   });

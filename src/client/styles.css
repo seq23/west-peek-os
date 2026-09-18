@@ -3428,7 +3428,12 @@ details.card > summary,
    recurring job is a thing the firm owns, and a bullet list read as a log. */
 .job-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
+  /* `minmax(21rem, …)` is 336px, which is WIDER THAN A 320px PHONE — the track refused to shrink
+     and every job card pushed the page sideways. Measured by `d3-work-measured` the first time
+     anything looked at the machinery at 320px, which is only possible now that it is part of a
+     surface something measures. `min(21rem, 100%)` lets the track give way at narrow widths and
+     changes nothing above 336px; it is the pattern `.work-card-grid` already uses. */
+  grid-template-columns: repeat(auto-fit, minmax(min(21rem, 100%), 1fr));
   gap: var(--space-lg);
   list-style: none;
   margin: var(--space-lg) 0 0;
