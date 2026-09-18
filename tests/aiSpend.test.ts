@@ -178,19 +178,25 @@ describe("the spend lever has three positions and each one is stored as itself",
     await setPolicy({ prefers_frontier: 0 });
     const balanced = await run({}, { fetchImpl: stubFetch() });
     const balancedRouting = await t.db
-      .prepare("SELECT selected_model, explanation FROM ai_run_routing WHERE ai_run_id = ?1")
+      .prepare("SELECT attempts_json, explanation FROM ai_run_routing WHERE ai_run_id = ?1")
       .bind(balanced.run.id)
-      .first<{ selected_model: string; explanation: string }>();
+      .first<{ attempts_json: string; explanation: string }>();
 
     await setPolicy({ prefers_frontier: 1 });
     const best = await run({}, { fetchImpl: stubFetch() });
     const bestRouting = await t.db
-      .prepare("SELECT selected_model, explanation FROM ai_run_routing WHERE ai_run_id = ?1")
+      .prepare("SELECT attempts_json, explanation FROM ai_run_routing WHERE ai_run_id = ?1")
       .bind(best.run.id)
-      .first<{ selected_model: string; explanation: string }>();
+      .first<{ attempts_json: string; explanation: string }>();
 
-    // The whole point: the two postures now choose differently.
-    expect(bestRouting?.selected_model).not.toBe(balancedRouting?.selected_model);
+    /*
+     * The whole point: the two postures CHOOSE differently — asserted on the model each run reached
+     * for first, not on where it ended up. Since 0184 a run that cannot complete carries on to
+     * another adequate lane, so the final model is a fact about the chain rather than about the
+     * posture, and the posture is what this test is about.
+     */
+    const headOf = (r?: { attempts_json: string }) => (JSON.parse(r!.attempts_json) as Array<{ model: string }>)[0]!.model;
+    expect(headOf(bestRouting!)).not.toBe(headOf(balancedRouting!));
     expect(bestRouting?.explanation).toContain("best available");
     // And the run says WHY, including the honest caveat that price is standing in for quality.
     expect(bestRouting?.explanation).toContain("proxy");

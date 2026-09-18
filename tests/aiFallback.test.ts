@@ -241,10 +241,21 @@ describe("what must NOT fail over", () => {
 
     expect(run.status).toBe("BLOCKED_DEFERRED");
     expect(run.failure_reason).toContain("provider_http_503");
+    /*
+     * THE ASSERTION THAT MATTERS, AND IT IS UNCHANGED: the vendor with no key was NEVER CONTACTED.
+     * A provider with no credential is invisible, not enabled-and-broken.
+     *
+     * What has changed is what happens afterwards. Since 0184 the chain keeps going to any other
+     * adequate lane that IS credentialled — "fall back to one that is working" — so other OpenRouter
+     * models were tried here and the routing record says a handover happened. They were all behind
+     * the same 503, so the run still ends BLOCKED_DEFERRED with the honest reason, which is the
+     * behaviour this test was written to protect. Asserting fallback_used = 0 would now be asserting
+     * that the firm gives up early.
+     */
     expect(seen).not.toContain("api.anthropic.com");
     const routing = await routingFor(run.id);
-    expect(routing.fallback_used).toBe(0);
     expect(routing.explanation).not.toContain("Direct-vendor fallback is available");
+    expect(routing.attempts.every((a) => a.provider_key !== "anthropic")).toBe(true);
   });
 
   it("does not hand a request-shaped failure to another vendor", async () => {
@@ -357,6 +368,13 @@ describe("a price nobody read may not decide anything", () => {
 
   /** A model that is ACTIVE, egress-allowed, and cheaper than anything real. */
   async function plantCheapModel(pricingState: string): Promise<void> {
+    /*
+     * ONE VARIABLE AT A TIME. These four cases are about PRICE PROVENANCE and nothing else, so the
+     * lane-health tiering added in 0184 is cleared first — otherwise the planted lane loses for a
+     * second, correct reason (it has never completed a run) and the negative proof below would pass
+     * or fail for something other than the thing it names. Lane health has its own tests.
+     */
+    await t.db.prepare("DELETE FROM provider_lane_health").run();
     await t.db
       .prepare(
         `INSERT INTO provider_model (id, provider_id, model, display_name, capabilities_json, context_window,

@@ -213,3 +213,28 @@ export function outageKind(reason: string): string {
   if (TIMEOUT_OR_NETWORK.test(reason)) return "TIMEOUT_OR_NETWORK";
   return "NOT_AN_OUTAGE";
 }
+
+/**
+ * Should this failure put the lane into back-off?
+ *
+ * OUTAGE IS NOT THE SAME QUESTION AS BACK-OFF, and conflating them cost an afternoon. Back-off
+ * exists to stop re-attempting a vendor that is failing RIGHT NOW and will recover on its own. Two
+ * outage-class failures are neither:
+ *
+ *   · `credential_missing:<vendor>` — a key that was never set. That is an operator gap, it is
+ *     already reported as `unavailable_reason` on the Cockpit, and it will not heal in five
+ *     minutes. Cooling the lane for it replaces a precise, actionable reason ("no credential") with
+ *     a vague one ("in back-off") on every page that reads lane health.
+ *   · `workers_ai_binding_absent` — the same thing wearing a different hat.
+ *
+ * And there is a concrete failure behind the rule rather than only a tidiness argument: cooling on
+ * a missing key takes lanes out of selection ONE MODEL AT A TIME, so the next run picks a different
+ * model at the same keyless vendor, fails identically, and cools that one too — walking the whole
+ * catalogue down while the actual problem, a single unset secret, is never named.
+ */
+export function shouldBackOff(reason: string): boolean {
+  if (!isProviderOutage(reason)) return false;
+  if (/^credential_missing:/.test(reason)) return false;
+  if (/^workers_ai_binding_absent/.test(reason)) return false;
+  return true;
+}

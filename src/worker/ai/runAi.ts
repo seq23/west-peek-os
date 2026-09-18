@@ -32,7 +32,7 @@ import { directVendorRouteFor } from "../../shared/ai/directVendorRoute";
 import { credentialConfigured } from "../../shared/ai/providerCredentials";
 import { classifyContent, type ContentClassVerdict } from "../../shared/ai/contentClass";
 import { MACHINE_REGISTRY } from "../../shared/registry/machines";
-import { isProviderOutage, outageKind } from "../../shared/ai/providerFailure";
+import { isProviderOutage, outageKind, shouldBackOff } from "../../shared/ai/providerFailure";
 import {
   isCoolingDown,
   laneHealth,
@@ -811,11 +811,12 @@ async function executeAttempt(
      */
     const outage = isProviderOutage(reason);
     /*
-     * ARM THE BACK-OFF, but only for an outage. A capability refusal or a genuinely malformed
-     * request is OUR fault and would follow us to the next vendor; cooling a working lane for it
-     * would take capacity away for a bug that is not the lane's.
+     * ARM THE BACK-OFF, but only for a failure back-off can actually help with. A capability
+     * refusal or a genuinely malformed request is OUR fault and would follow us to the next vendor.
+     * A missing credential is an operator gap that will not heal in five minutes, and cooling for it
+     * replaces a precise reason with a vague one. See `shouldBackOff`.
      */
-    if (outage) await recordLaneOutage(env, rec.providerId, rec.model, reason);
+    if (shouldBackOff(reason)) await recordLaneOutage(env, rec.providerId, rec.model, reason);
 
     /*
      * ── FALL BACK TO ONE THAT IS WORKING ─────────────────────────────────────────────────────
@@ -2218,7 +2219,21 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     ),
   );
   const lastResortRanked = orderByLaneHealth(
-    routingCandidates.filter((c) => !alreadyInChain.has(`${c.providerId} ${c.model}`)),
+    routingCandidates
+      .filter((c) => !alreadyInChain.has(`${c.providerId} ${c.model}`))
+      /*
+       * A RECOVERY LANE MUST BE ONE THAT CAN ACTUALLY ANSWER.
+       *
+       * The primary path deliberately does NOT filter on credential presence — a missing key there
+       * produces a run that lands BLOCKED_DEFERRED with an honest reason, and that path is worth
+       * keeping exercisable. This path has no such reason: handing the work to a vendor we hold no
+       * key for is a certainty of failure, and spending a recovery attempt on a certainty is the
+       * same mistake as walking back into a lane that is already cooling.
+       *
+       * It is also what keeps the change from widening anything in an environment with no keys: no
+       * credential, no last resort, and behaviour is exactly what it was.
+       */
+      .filter((c) => credentialConfigured(env, c.providerKey)),
     await laneHealth(env),
     now,
   );
@@ -2310,7 +2325,17 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     taskClass: input.routing?.taskClass,
     policyId: routePolicy?.id ?? null,
     selectedProviderKey: attempts.find((a) => a.outcome === "COMPLETED")?.provider_key ?? selected.provider.provider_key,
-    selectedModel: run.model,
+    /*
+     * THE MODEL THAT DID THE WORK, or the one this run SELECTED when nothing did.
+     *
+     * This read `run.model`, which is the last lane the chain touched — so a run that failed over
+     * three times and then gave up recorded its final unsuccessful attempt as the "selected" model,
+     * while `selected_provider_key` on the same row recorded the one the router actually chose. Two
+     * columns describing the same decision and disagreeing, which is how "which model did this?"
+     * becomes unanswerable exactly when a chain has run. The provider key has always resolved it
+     * this way; the model now matches it.
+     */
+    selectedModel: attempts.find((a) => a.outcome === "COMPLETED")?.model ?? selected.pricing.model,
     attempts,
     // FAILED_OVER is an attempt that handed the work on. Counting only "FAILED" missed every
     // successful failover, which is precisely the event the Cockpit needs to be able to show.
