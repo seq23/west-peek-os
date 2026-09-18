@@ -176,7 +176,24 @@ function checkTwoLabelsAreWired() {
   const CHECK = "the two labels are wired end to end";
   let examined = 0;
   const wants = [
-    [WORK_CARDS, /model_access,\s*audience\)/, "the INSERT that creates a card must write both labels"],
+    /*
+     * BOTH LABELS ARE WRITTEN, WHEREVER THEY SIT IN THE COLUMN LIST (18 Sep 2026).
+     *
+     * This was /model_access,\s*audience\)/ — the two names, adjacent, at the END of the INSERT's
+     * column list. Adjacency and position are incidental; the contract is that a card is created
+     * carrying both labels. Migration 0190 appended `result_recipient`, `preview_first` and
+     * `preview_owner_id` after `audience` and the old pattern went false while the contract was
+     * untouched.
+     *
+     * It is REWRITTEN STRICTER, not relaxed. The old pattern checked the column list alone, so an
+     * INSERT naming both columns and binding neither would have passed it. These four require each
+     * label in the column list AND actually bound from the input — which is what "the card is
+     * created carrying both labels" has always meant.
+     */
+    [WORK_CARDS, /INSERT INTO work_card[\s\S]{0,600}?\bmodel_access\b/, "the INSERT that creates a card must name model_access in its column list"],
+    [WORK_CARDS, /INSERT INTO work_card[\s\S]{0,600}?\baudience\b/, "the INSERT that creates a card must name audience in its column list"],
+    [WORK_CARDS, /input\.model_access \?\?/, "the INSERT must BIND model_access from the input — a column named and never bound is a label nothing writes"],
+    [WORK_CARDS, /input\.audience \?\?/, "the INSERT must BIND audience from the input — a column named and never bound is a label nothing writes"],
     [WORK_CARDS, /model_access:\s*z\.enum/, "the create schema must accept model_access"],
     [WORK_CARDS, /audience:\s*z\.enum/, "the create schema must accept audience"],
     [WORK_CARDS, /wc\.model_access,\s*wc\.audience/, "the board query must return both labels, or the card cannot show them"],

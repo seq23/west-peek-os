@@ -5312,9 +5312,19 @@ body {
    The soft tint (#FFF1E9 = --wp-tint) is still used, in the place the brand
    system names it for: restrained emphasis, sparse, never a page wash. */
 
-.preview-list { gap: var(--space-md); }
+/* MEASURED IN A BROWSER, NOT ASSUMED. The first render put the two cards flush
+   against each other with a stray hairline between them: `.card-list > li`
+   (0,1,1) carries its own padding and border-bottom and outranks a bare
+   `.preview-card` (0,1,0), so the override has to match its shape. The list
+   becomes a flex column so `gap` is a gap rather than a declaration nothing
+   reads — which is this repo's whole recurring defect, in CSS. */
+.preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
 
-.preview-card {
+.preview-list > li.preview-card {
   border: 1px solid var(--wp-line);
   border-left: 6px solid var(--wp-orange);
   border-radius: var(--radius-md);
@@ -5327,7 +5337,7 @@ body {
 
 /* THE EYEBROW. Generated rather than written into the markup so it cannot be
    copied onto something that is not waiting on a decision. */
-.preview-card::before {
+.preview-list > li.preview-card::before {
   content: "Waiting on your yes";
   font-size: var(--text-2xs);
   letter-spacing: 0.08em;
@@ -5340,8 +5350,8 @@ body {
    nothing is going anywhere, so the rule goes quiet and the eyebrow says so —
    the card still has to be VISIBLE (that is the whole fix) without still
    shouting. */
-.preview-card[data-lapsed="yes"] { border-left-color: var(--wp-line-strong); }
-.preview-card[data-lapsed="yes"]::before {
+.preview-list > li.preview-card[data-lapsed="yes"] { border-left-color: var(--wp-line-strong); }
+.preview-list > li.preview-card[data-lapsed="yes"]::before {
   content: "Lapsed — nothing was sent";
   color: var(--wp-muted);
 }
@@ -5423,6 +5433,6 @@ body {
 .preview-lane-tick { display: flex; align-items: center; gap: var(--space-2xs); white-space: nowrap; }
 
 @media (max-width: 640px) {
-  .preview-card { padding: var(--space-sm) var(--space-md); }
+  .preview-list > li.preview-card { padding: var(--space-sm) var(--space-md); }
   .preview-doors button { flex: 1 1 100%; }
 }
