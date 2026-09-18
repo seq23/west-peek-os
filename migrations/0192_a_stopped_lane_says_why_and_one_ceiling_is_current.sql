@@ -72,3 +72,7 @@ UPDATE firm_spend_budget
              || 'it was a second answer waiting for the first query that forgot the version subquery.'
  WHERE budget_window = 'MONTHLY' AND active = 1
    AND version_no < (SELECT MAX(version_no) FROM firm_spend_budget b2 WHERE b2.budget_window = 'MONTHLY');
+
+-- Every migration records itself. An unrecorded one is invisible to anything that reasons about
+-- schema state, and `tests/policy.test.ts` and `tests/api.test.ts` both go red for it — correctly.
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0192_a_stopped_lane_says_why_and_one_ceiling_is_current');
