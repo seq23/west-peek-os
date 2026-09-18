@@ -199,6 +199,15 @@ jobs:
       - name: Two seats she already pays for, and one ladder walked down
         run: npm run validate:seats
 
+      # Migration 0189. `DELIVERABLE_KINDS` has offered `approval_preview` since 0183 built the
+      # preview lane; the CHECK on `deliverable.kind` was never widened to match, so production
+      # refused the one row the feature exists to write and nothing said so — previews arrive by
+      # email, and only the archived copy goes through `deliverable`. The single symptom was
+      # `validate:value-shapes` going red, and that one is deliberately outside CI because it needs
+      # production credentials. A list in TypeScript and a list in SQL with no link between them.
+      - name: A kind the code can produce is a kind the database accepts
+        run: npm run validate:deliverable-kinds
+
       - name: Build client
         run: npm run build
 
