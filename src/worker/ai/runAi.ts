@@ -30,6 +30,8 @@ import {
 import { evidenceForTaskKind, orderByEvidence, recordModelJobOutcome } from "./modelLearning";
 import { directVendorRouteFor } from "../../shared/ai/directVendorRoute";
 import { credentialConfigured } from "../../shared/ai/providerCredentials";
+import { classifyContent, type ContentClassVerdict } from "../../shared/ai/contentClass";
+import { MACHINE_REGISTRY } from "../../shared/registry/machines";
 import { isProviderOutage, outageKind } from "../../shared/ai/providerFailure";
 import {
   isCoolingDown,
@@ -219,6 +221,26 @@ export interface RunAiBudgetContext {
    * including CHEAPO. See `trainingPermitted` in shared/ai/freeLanes.ts.
    */
   confidential?: boolean;
+  /**
+   * THE OTHER HALF OF THE SAME QUESTION, and it exists because one column was answering two.
+   *
+   * "ITS NOT DEAL TERMS OR LP INFORMATION SO IT DOESNT MATTER IF ITS USING THIS DATA TO TRAIN. WHO
+   * CARES ABOUT HIRING SEARCH AND EVENT KITS AND ROOM KITS. THEY ARE NOT PRIVATE INFO." — the
+   * owner, 17 Sep 2026.
+   *
+   * `sensitivity: "INTERNAL"` says the work is ADDRESSED TO A PARTNER. It was being read as "too
+   * private to train on", which it never meant, and since every training-permitting lane is capped
+   * at PUBLIC that left one legal lane in the catalogue — the dearest model on the account — for a
+   * hire search. Setting this says the CONTENT carries no LP names, deal terms, fund figures or
+   * diligence material, and it lets the free reasoning lanes serve the run without moving any cap
+   * and without touching the recipient label, which still drives preview and approval elsewhere.
+   *
+   * PRIVATE_MODEL_ONLY always wins — `confidential: true` is the legacy spelling of it and still
+   * works, so the five call sites that already carry LP and deal material need no change. A caller
+   * asserting both has a bug, and the safe reading of a bug is the restrictive one. See
+   * shared/ai/contentClass.ts.
+   */
+  publicModelApproved?: boolean;
   /** Pin a specific provider by provider_key. */
   providerKey?: string;
 }
@@ -1228,11 +1250,60 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     }
   }
 
+  /*
+   * ── 4c. WHO IT GOES TO, AND WHAT IS IN IT, ARE TWO DIFFERENT QUESTIONS ────────────────────────
+   *
+   * "WHY IS INTERNAL STUFF COSTING A LOT? THAT IS BACKWARDS." — the owner, 17 Sep 2026, on finding
+   * that a hire search ran on `anthropic/claude-sonnet-5`.
+   *
+   * She was right, and the router was not at fault. `sensitivity: "INTERNAL"` means the work is
+   * ADDRESSED TO A PARTNER — her own rule, settled: "ITS INTERNAL IF IT GOES TO ME SEQUOIA OR
+   * SCOOTER". It had come to be read as "too private to train on", which it never meant. Every
+   * training-permitting lane is capped at PUBLIC — correctly, and that cap does not move — so an
+   * INTERNAL label made both free reasoning models ineligible and left exactly ONE legal lane in
+   * the entire catalogue: the dearest model on the account. One legal choice is not a choice.
+   *
+   * So the content class is decided here, separately, and it decides ONE thing: whether a route
+   * whose terms permit training may serve this run. It is declared — by the work card's own
+   * `confidential` flag, or by a named machine — never inferred from the recipient, and it is
+   * revoked by any LP or deal-term marker actually present in the text.
+   */
+  const contentClass: ContentClassVerdict = classifyContent({
+    declaredPublicModelApproved: input.budgetContext?.publicModelApproved,
+    // `confidential` is the legacy spelling of PRIVATE_MODEL_ONLY and is still honoured verbatim.
+    declaredPrivateModelOnly: input.budgetContext?.confidential,
+    machineKey: input.routing?.machineId
+      ? (MACHINE_REGISTRY.find((m) => m.id === input.routing!.machineId)?.key ?? null)
+      : null,
+    inputs: input.inputs,
+  });
+
   // 5. Egress check (D9 default-deny): the sensitivity label must be explicitly
   //    allowed for the provider. Restricted labels can never leave.
+  /*
+   * ONE EXCEPTION, AND IT IS NOT A LOOSENING OF THE GATE — it is the gate finally being asked the
+   * question it was always meant to answer.
+   *
+   * A training-permitting lane's PUBLIC cap is a statement about CONTENT: do not send this route
+   * anything private, because its terms let it train on what it receives. Checking that cap against
+   * a label that describes the RECIPIENT answered a different question and answered it wrongly in
+   * one direction only — a room packet for Sequoia was refused a free model it was perfectly
+   * entitled to use.
+   *
+   * So for a training-permitting provider, and ONLY where the content class says this run carries
+   * no LP or deal material, the cap is evaluated against PUBLIC. Every other provider, and every
+   * run whose content is not declared safe, is evaluated against the run's own label exactly as
+   * before. No cap moved, no label was rewritten, and nothing confidential gained a route: step 4b
+   * has already removed every training-permitting lane from a call marked confidential, and
+   * `classifyContent` refuses the declaration outright for such a call as well.
+   */
+  const egressLabelFor = (provider: ProviderRow): string =>
+    Number((provider as unknown as { training_permitted?: number }).training_permitted ?? 0) === 1 && contentClass.publicModelApproved
+      ? "PUBLIC"
+      : input.sensitivity;
   const egressAllowed: ProviderRow[] = [];
   for (const provider of candidates) {
-    if (await dataPolicyAllows(env, provider.id, input.sensitivity)) egressAllowed.push(provider);
+    if (await dataPolicyAllows(env, provider.id, egressLabelFor(provider))) egressAllowed.push(provider);
   }
   if (egressAllowed.length === 0) {
     return { run: await blocked("EGRESS_BLOCKED", `data_policy_denies_label:${input.sensitivity}`) };
@@ -1978,6 +2049,13 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    */
   const freeFirstEligible =
     isJudgement &&
+    /*
+     * THE NORMAL CASE, and the owner's instruction is that it should be: "MOST WORK IS INTERNAL AND
+     * NOT-CONFIDENTIAL SO CAN USE FREE TRAINING MODELS WITH REASONING AND CLOSE TO $0." A card that
+     * carries no LP or deal material leads on a free reasoning lane; the paid head stands behind it
+     * as an outage fallback, so quality is not at risk and the bill is.
+     */
+    contentClass.publicModelApproved &&
     // A free lane cannot reach the web, so a search call is not a candidate for one.
     !requiresSearch &&
     input.budgetContext?.confidential !== true &&
