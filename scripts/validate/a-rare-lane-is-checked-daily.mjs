@@ -326,4 +326,11 @@ function main() {
   );
 }
 
-main();
+/*
+ * RUN ONLY WHEN THIS FILE IS THE ENTRYPOINT. `a-steer-waits-for-its-month.mjs` imports
+ * `readMigrationsInOrder` and `effectiveSchedule` from here rather than keeping a second copy of
+ * the migration replay — two components each keeping their own list with no link is a defect class
+ * this repo names. Without this guard that import would also run this scan, so one failing scan
+ * would report itself twice and under the wrong name.
+ */
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
