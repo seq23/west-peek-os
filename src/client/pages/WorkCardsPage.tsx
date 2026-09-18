@@ -5,6 +5,8 @@ import { CARD_SOURCES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work
 import { isTechnicalBlock } from "@shared/work/blocks";
 import type { Block, BlockActionKey } from "@shared/work/blocks";
 import { deskAnswer, deskSubline } from "@shared/work/deskAnswer";
+import { previewStartsTicked } from "@shared/work/previewLane";
+import { PARTNERS, partnerFor } from "@shared/registry/partners";
 import { portraitFor } from "../lib/employeePortraits";
 import { WorkRecordView } from "./WorkRecordView";
 
@@ -234,6 +236,36 @@ export function WorkCardsPage({
   const [nextAction, setNextAction] = useState("");
   // Defaults to you. Assigning to your partner or to an employee is the same act either way.
   const [owner, setOwner] = useState(`HUMAN:${me.id}`);
+  /*
+   * HER TWO FIELDS, ON EVERY CARD (18 Sep 2026).
+   *
+   *     Who is this for?     [ Scooter          ]
+   *     Show me first?       [✓]
+   *
+   * Migration 0183 added both columns and NOTHING EVER WROTE EITHER — which is why the whole
+   * preview lane, boundary guard and approval token included, has never run once in production.
+   * This form is the thing that was missing.
+   *
+   * THE CHECKBOX IS ALWAYS PRESENT AND ALWAYS HERS. The recipient sets only where it STARTS —
+   * somebody outside the two partners starts it ticked, either partner starts it unticked. An
+   * earlier design derived preview-first FROM the recipient and her objection was exact: it made
+   * her real case, "something for Scooter that I want to see first", look impossible.
+   *
+   * `previewTouched` is what keeps that promise honest. Until she touches the box it follows the
+   * address she is typing; the moment she sets it herself it stays where she put it, and typing a
+   * different address never moves it back.
+   */
+  const [resultRecipient, setResultRecipient] = useState("");
+  const [previewTouched, setPreviewTouched] = useState(false);
+  const [previewFirst, setPreviewFirst] = useState(false);
+  /*
+   * RESOLVED THROUGH THE REGISTRY, NEVER TYPED. "Scooter" is what she writes; the address is
+   * `shared/registry/partners.ts`'s to supply. `validate:partners` fails the build on a partner
+   * address typed anywhere else, and this field would otherwise be the fifth copy of that fact.
+   */
+  const recipientAddress = (partnerFor(resultRecipient.trim())?.email ?? resultRecipient.trim()).toLowerCase();
+  const previewBoxStartsTicked = previewStartsTicked(recipientAddress);
+  const showFirst = previewTouched ? previewFirst : previewBoxStartsTicked;
   const [busy, setBusy] = useState(false);
 
   const all = board.data?.cards ?? [];
@@ -371,11 +403,19 @@ export function WorkCardsPage({
     }
     setMessage(
       (owner === `HUMAN:${me.id}` ? "Added, owned by you." : "Added and handed over.") +
-        (newAllowsBrowser ? " It can look things up online." : ""),
+        (newAllowsBrowser ? " It can look things up online." : "") +
+        (recipientAddress
+          ? showFirst
+            ? ` When it is finished you see it before it goes to ${recipientAddress}.`
+            : ` When it is finished it goes straight to ${recipientAddress}.`
+          : " The result lands on your Home; there is nobody to send it to."),
     );
     setNewAllowsBrowser(false);
     setTitle("");
     setNextAction("");
+    setResultRecipient("");
+    setPreviewTouched(false);
+    setPreviewFirst(false);
     setAdding(false);
     board.reload();
     onChanged();
@@ -585,6 +625,60 @@ export function WorkCardsPage({
               {busy ? "…" : "Add"}
             </button>
           </div>
+          {/* ── HER TWO FIELDS ──────────────────────────────────────────────────────────────
+              "Who is this for?" and "Show me first?", in that order, because the first sets where
+              the second starts. Both are on EVERY card: a checkbox that appears only sometimes is
+              a rule wearing a checkbox, and she was emphatic that this is a checkbox. */}
+          <div className="form-row preview-lane-fields">
+            <label style={{ flexGrow: 1 }}>
+              Who is this for?{" "}
+              <input
+                data-testid="work-card-result-recipient"
+                value={resultRecipient}
+                onChange={(e) => setResultRecipient(e.target.value)}
+                list="work-card-recipients"
+                placeholder="Scooter, or an email address — leave blank if it is for you"
+              />
+              <datalist id="work-card-recipients">
+                {/* The two partners by name, from the registry. Never a typed address. */}
+                {PARTNERS.map((p) => (
+                  <option key={p.firmUserId} value={p.firstName}>{p.fullName}</option>
+                ))}
+              </datalist>
+            </label>
+            <label className="preview-lane-tick" data-testid="work-card-preview-first-label">
+              <input
+                type="checkbox"
+                data-testid="work-card-preview-first"
+                checked={showFirst}
+                onChange={(e) => {
+                  setPreviewTouched(true);
+                  setPreviewFirst(e.target.checked);
+                }}
+              />{" "}
+              Show me first?
+            </label>
+          </div>
+          <p className="muted small" data-testid="work-card-preview-explainer">
+            {resultRecipient.trim() === "" ? (
+              <>
+                <strong>Blank means it is for you.</strong> The result lands on your Home — there is
+                nothing to send and nothing to preview.
+              </>
+            ) : showFirst ? (
+              <>
+                <strong>You see it before it goes.</strong> When it is finished it waits on your Home
+                and in your inbox, with <strong>Send it</strong>, <strong>Send it back</strong> and{" "}
+                <strong>Dismiss</strong>. Send it puts the employee's own words on the wire, from
+                their address — never a forward with your name on it.
+              </>
+            ) : (
+              <>
+                <strong>It goes straight out</strong> to {recipientAddress} when it is finished.
+                {previewTouched ? "" : " Anyone outside the two of you starts ticked; you can change it either way, on any card."}
+              </>
+            )}
+          </p>
           <label className="muted small">
             <input
               type="checkbox"
@@ -631,8 +725,10 @@ export function WorkCardsPage({
             searches, event kits, room and workshop packets, social posts, Productions work.{" "}
             <strong>Private model only</strong> is for LP names, deal terms, fund figures and diligence
             material, and keeps the work on a model whose terms forbid training on it.{" "}
-            <strong>Internal or External</strong> is a different question: it decides whether the work
-            previews to Sequoia before it leaves, not which model runs it. Neither answer implies the other.
+            <strong>Internal or External</strong> is a label on the work, not a control: what actually
+            decides whether something waits for a yes is <strong>Show me first?</strong> above, read
+            together with who it is for. Neither of these two answers implies the other, and neither
+            implies that one.
           </p>
           <p className="muted small">
             A card without a next action is a wish. Naming the next step is what makes it work

@@ -5278,3 +5278,151 @@ body {
   .record-field-grow { flex: 1 1 100%; }
   .record-field select { width: 100%; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE PREVIEW LANE ON HOME — a card waiting on her yes
+   ══════════════════════════════════════════════════════════════════════════
+
+   THE COLOUR PROBLEM, AND HOW IT WAS ACTUALLY SETTLED.
+
+   Amber (--wp-warn) already means BROKEN in this product, so it is wrong here:
+   a preview is finished work, not a fault. The obvious alternative — an orange
+   left rule over the soft tint — was checked against the real page before it
+   was written, and it FAILED. That exact pair is already three other things:
+
+     .mode-chip-on          orange border + --wp-tint   → SELECTED
+     .seat-suggested        2px orange rule + --wp-tint → SUGGESTED
+     .privacy-mode-current  2px orange rule + --wp-tint → CURRENT
+     .watch-banner          3px orange rule + --wp-tint → THE HEADLINE
+
+   A card merely SELECTED and a card WAITING ON HER YES must not look alike,
+   and against .watch-banner in particular the proposed treatment was the same
+   object. The brand system is not negotiable and no colour may be invented
+   (WEST_PEEK_BRAND_SYSTEM.md is CANONICAL/LOCKED, and blue, violet and purple
+   are forbidden outright), so the separation is made in WEIGHT AND STRUCTURE
+   inside the palette that already exists:
+
+     · a 6px orange rule — double the heaviest rule anywhere else, so the two
+       read as different objects at a glance rather than on inspection;
+     · an EYEBROW nothing else in the product has: "Waiting on your yes", in
+       --wp-orange-deep, which carries 5.7:1 on white and 5.1:1 on paper;
+     · the tint reserved for the DRAFT block inside the card, not the card
+       itself — so the emphasis sits on the thing she has to read.
+
+   The soft tint (#FFF1E9 = --wp-tint) is still used, in the place the brand
+   system names it for: restrained emphasis, sparse, never a page wash. */
+
+.preview-list { gap: var(--space-md); }
+
+.preview-card {
+  border: 1px solid var(--wp-line);
+  border-left: 6px solid var(--wp-orange);
+  border-radius: var(--radius-md);
+  background: var(--wp-surface);
+  padding: var(--space-md) var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+/* THE EYEBROW. Generated rather than written into the markup so it cannot be
+   copied onto something that is not waiting on a decision. */
+.preview-card::before {
+  content: "Waiting on your yes";
+  font-size: var(--text-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--wp-orange-deep);
+}
+
+/* A LAPSED PREVIEW IS NOT AN URGENT ONE. The link has stopped working and
+   nothing is going anywhere, so the rule goes quiet and the eyebrow says so —
+   the card still has to be VISIBLE (that is the whole fix) without still
+   shouting. */
+.preview-card[data-lapsed="yes"] { border-left-color: var(--wp-line-strong); }
+.preview-card[data-lapsed="yes"]::before {
+  content: "Lapsed — nothing was sent";
+  color: var(--wp-muted);
+}
+
+.preview-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-xs); }
+.preview-what { color: var(--wp-ink-2); }
+
+.preview-flag {
+  font-size: var(--text-xs);
+  color: var(--wp-orange-deep);
+  border: 1px solid var(--wp-tint-line);
+  background: var(--wp-tint);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-xs);
+}
+
+/* Something went wrong AFTER she answered, or the thing lapsed. This is the
+   one place amber belongs on this card: it is reporting a fault. */
+.preview-alarm {
+  margin: 0;
+  padding: var(--space-sm);
+  border: 1px solid var(--wp-warn-line);
+  border-left: 3px solid var(--wp-warn);
+  background: var(--wp-warn-tint);
+  color: var(--wp-warn);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.preview-intended { margin: 0; font-weight: 600; }
+
+.preview-field { display: flex; flex-direction: column; gap: var(--space-2xs); font-size: var(--text-sm); }
+.preview-field input,
+.preview-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: var(--space-xs);
+  border: 1px solid var(--wp-line-control);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface);
+  color: var(--wp-ink);
+}
+
+.preview-doors { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.preview-doors button { min-height: var(--touch-min, 44px); }
+
+.preview-effects {
+  margin: 0;
+  padding-left: var(--space-lg);
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+}
+
+.preview-toggle { align-self: flex-start; }
+
+/* THE DRAFT ITSELF carries the tint: it is the thing she is being asked to
+   read, and the emphasis belongs on it rather than on the frame around it. */
+.preview-draft {
+  background: var(--wp-tint);
+  border: 1px solid var(--wp-tint-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+}
+.preview-subject { margin: 0 0 var(--space-xs); font-size: var(--text-sm); }
+.preview-draft pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--wp-ink-2);
+}
+
+/* Her two fields on the work-card form. The tick sits on the same row as the
+   address because the address is only where the tick STARTS, and separating
+   them across the form is what makes it read as a derived rule. */
+.preview-lane-fields { align-items: flex-end; }
+.preview-lane-tick { display: flex; align-items: center; gap: var(--space-2xs); white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .preview-card { padding: var(--space-sm) var(--space-md); }
+  .preview-doors button { flex: 1 1 100%; }
+}
