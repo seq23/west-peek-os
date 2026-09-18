@@ -6,6 +6,7 @@ import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
 import { blockCard, resurfaceStaleBlocks } from "./blocks";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
+import { attemptsAllowedFor, isLaneFailure, readLaneFailure, type LaneFailure } from "../../shared/ai/laneFailure";
 
 /** A Productions card, by kind — kept here (not imported) so the sweep and productions.ts do not import each other. */
 function isProductionsKind(kind: string | null | undefined): boolean {
@@ -249,6 +250,81 @@ export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCa
  * The technical account of a failed attempt, kept WHERE AN ENGINEER LOOKS and not on the partner's
  * sentence. Deleting it would trade one bad outcome for another: a block nobody can diagnose.
  */
+/**
+ * WHICH LANE WAS BEHIND THIS FAILURE, and what it said.
+ *
+ * The sweep holds a step's `detail`, which for the general employee loop IS the run's
+ * `failure_reason` — but for the specialised chains (the Room packet, blog help, the Productions
+ * duties) it is that runner's own sentence, and the lane is invisible from here. So the run itself
+ * is asked: the most recent run attributed to this card that did not complete, and the provider row
+ * it was pointed at.
+ *
+ * THIS IS THE LOOKUP THAT DID NOT EXIST ON 17 SEP. `ai_run.failure_reason` held
+ * `provider_failure:provider_http_400` and nothing on the card path ever read it, which is why a
+ * card that had been refused by a lane three times still said "queued".
+ */
+async function laneBehindTheFailure(
+  env: Env,
+  cardId: string,
+  stepDetail: string,
+): Promise<{ failure: LaneFailure; key: string | null; name: string | null; raw: string }> {
+  const run = await env.WP_OS_DB.prepare(
+    `SELECT r.failure_reason, pr.provider_key, pr.display_name
+       FROM ai_run r
+       JOIN ai_run_attribution a ON a.ai_run_id = r.id
+       LEFT JOIN provider_registry pr ON pr.id = r.provider_id
+      WHERE a.work_card_id = ?1 AND r.status <> 'COMPLETED'
+      ORDER BY r.created_at DESC
+      LIMIT 1`,
+  )
+    .bind(cardId)
+    .first<{ failure_reason: string | null; provider_key: string | null; display_name: string | null }>();
+
+  const fromRun = readLaneFailure(run?.failure_reason ?? null);
+  const failure = isLaneFailure(fromRun) ? fromRun : readLaneFailure(stepDetail);
+  if (!isLaneFailure(failure)) return { failure, key: null, name: null, raw: "" };
+
+  // The provider row is the better name ("Anthropic"); the failure text names a key only when the
+  // run never reached a provider at all (a missing credential, an everything-is-off refusal).
+  const key = run?.provider_key ?? failure.lane ?? null;
+  const name = run?.display_name ?? (failure.lane ? titleCase(failure.lane) : null);
+  return { failure, key, name, raw: (run?.failure_reason ?? stepDetail ?? "").slice(0, 900) };
+}
+
+function titleCase(key: string): string {
+  return key
+    .split(/[_-]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/**
+ * A FAILING CARD MUST NOT LOOK LIKE A WAITING CARD — written on every failed attempt, not only at
+ * the end.
+ *
+ * `work_attempts` reached three in silence on 17 Sep because it was counted and never read out.
+ * This is the line the Work page shows while the card is still retrying, so the first failure is
+ * visible rather than the third.
+ */
+async function noteFailedAttempt(env: Env, card: SweepCard, line: string, now: Date): Promise<void> {
+  await env.WP_OS_DB.prepare("UPDATE work_card SET work_last_failure = ?2, work_last_failure_at = ?3 WHERE id = ?1")
+    .bind(card.id, line.slice(0, 400), now.toISOString())
+    .run();
+}
+
+/** What that line says. Plain, and never the status code. */
+function attemptLine(card: SweepCard, failure: LaneFailure, laneName: string | null, allowed: number): string {
+  const which = `Attempt ${card.work_attempts} of ${allowed}`;
+  if (!isLaneFailure(failure)) return `${which} did not get anywhere.`;
+  if (failure.kind === "NO_LANE") return `${which} had nowhere to send the work — every model is switched off or unavailable.`;
+  const lane = laneName ? `the ${laneName} lane` : "the lane it tried";
+  if (failure.kind === "CREDIT") return `${which} was refused by ${lane} — the account behind it has run out of credit.`;
+  if (failure.kind === "CREDENTIAL") return `${which} was refused by ${lane} — the firm is not signed in to it.`;
+  if (failure.kind === "RATE_LIMIT") return `${which} was turned away by ${lane} for sending too much at once.`;
+  return `${which} was refused by ${lane}.`;
+}
+
 async function appendFailureNote(env: Env, cardId: string, detail: string): Promise<void> {
   if (!detail.trim()) return;
   await env.WP_OS_DB.prepare(
@@ -407,8 +483,29 @@ export async function sweepOnce(
     };
   }
 
-  // Neither done nor blocked: the run died or the employee chose nothing usable.
-  if (card.work_attempts >= MAX_WORK_ATTEMPTS) {
+  /*
+   * ── NEITHER DONE NOR BLOCKED: THE RUN DIED, OR THE EMPLOYEE CHOSE NOTHING USABLE ────────────
+   *
+   * 17 Sep 2026, and the reason this branch was rewritten. Parker's event-kit card came through
+   * here three times in fourteen minutes. Each time the third step had been refused by the direct
+   * Anthropic lane — "your credit balance is too low to access the Anthropic API" — and each time
+   * this code wrote nothing on the card, said nothing to anybody, and handed it back to the queue.
+   * The owner watched it say "Open · queued — picked up within 5 min", three times.
+   *
+   * Two things are different now, and they are the whole fix:
+   *
+   *   1. THE ATTEMPT IS WRITTEN DOWN. `work_last_failure` says, in plain words, what refused the
+   *      work — from the FIRST failure, not the third. `work_attempts` was already counting; it
+   *      was simply never read out anywhere a person looks.
+   *   2. HOW MANY GOES IT GETS DEPENDS ON WHAT BROKE. A rate limit or a vendor outage clears
+   *      itself, so those keep all three. An empty account does not, and repeating it twice more
+   *      buys nothing but fourteen minutes of a card looking healthy.
+   */
+  const lane = await laneBehindTheFailure(env, card.id, detail);
+  const allowed = attemptsAllowedFor(lane.failure, MAX_WORK_ATTEMPTS);
+  await noteFailedAttempt(env, card, attemptLine(card, lane.failure, lane.name, allowed), now);
+
+  if (card.work_attempts >= allowed) {
     /*
      * WHAT THE LAST ATTEMPT SAID IS NOT WHAT SHE READS.
      *
@@ -419,14 +516,36 @@ export async function sweepOnce(
      * engineer can find it; what the partner reads is a sentence and four buttons.
      */
     await appendFailureNote(env, card.id, detail);
-    const why = await blockCard(env, card, {
-      reason: "tried_and_could_not_finish",
-      trying: card.title,
-      employee: await employeeName(env, card.owner_id),
-      who: isProductionsKind(card.kind) ? "SCOOTER" : "SEQUOIA",
-    }, now);
+    const who = isProductionsKind(card.kind) ? ("SCOOTER" as const) : ("SEQUOIA" as const);
+    const employee = await employeeName(env, card.owner_id);
+    /*
+     * WHICH BLOCK THIS IS, AND WHY IT MATTERS THAT THEY ARE DIFFERENT.
+     *
+     * `tried_and_could_not_finish` says "Parker tried three times and could not get this done" and
+     * offers her an answer, a rewrite or a drop. Every one of those was the wrong thing to offer on
+     * 17 Sep: no answer she could type would have put credit on an account. A lane failure gets its
+     * own reason, the lane's own words, and doors that touch the actual fault.
+     */
+    const why = await blockCard(
+      env,
+      card,
+      isLaneFailure(lane.failure)
+        ? {
+            reason: lane.failure.kind === "NO_LANE" ? "no_lane_could_take_the_work" : "a_lane_refused_the_work",
+            trying: card.title,
+            employee,
+            who,
+            ...(lane.name ? { lane: lane.name } : {}),
+            ...(lane.key ? { laneKey: lane.key } : {}),
+            laneKind: lane.failure.kind,
+            vendorWords: lane.failure.vendorWords,
+            raw: lane.raw,
+          }
+        : { reason: "tried_and_could_not_finish", trying: card.title, employee, who },
+      now,
+    );
     await announceOutcome(env, card, "BLOCKED", why);
-    return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" blocked after ${MAX_WORK_ATTEMPTS} failed attempts and handed to you: ${detail.slice(0, 140)}`, card, outcome: "BLOCKED" };
+    return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" blocked after ${card.work_attempts} failed attempt(s) and handed to you: ${detail.slice(0, 140)}`, card, outcome: "BLOCKED" };
   }
   // THE SWEEP RAN; THE CARD IS NOT DONE YET. Reporting this as a failed RUN painted "FAILED" on the
   // Work page for a card that was simply on its first attempt of three (Vantage Robotics, 14 Sep,
@@ -435,7 +554,7 @@ export async function sweepOnce(
   // another go.
   return {
     status: "SUCCEEDED",
-    summary: `"${card.title.slice(0, 60)}" attempt ${card.work_attempts} of ${MAX_WORK_ATTEMPTS} did not finish: ${detail.slice(0, 160)}. It will be tried again.`,
+    summary: `"${card.title.slice(0, 60)}" attempt ${card.work_attempts} of ${allowed} did not finish: ${detail.slice(0, 160)}. It will be tried again.`,
     card,
     outcome: "FAILED",
   };

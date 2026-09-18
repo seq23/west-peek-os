@@ -1,6 +1,6 @@
+import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
-import { providerHttpError } from "./httpError";
 
 /**
  * Perplexity adapter — the direct search lane, and the ONLY fallback search has.

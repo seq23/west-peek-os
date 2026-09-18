@@ -1,5 +1,5 @@
-import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { providerHttpError } from "./httpError";
+import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 
 /**
  * httpExternal — generic HTTPS adapter for an external model provider.

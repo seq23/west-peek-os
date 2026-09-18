@@ -40,7 +40,19 @@
  * modelled block, and the catalogue below is short for that reason.
  */
 
-export const BLOCK_ACTIONS = ["ANSWER", "CHANGE", "DROP", "ESCALATE"] as const;
+/*
+ * THE DOORS.
+ *
+ * The first four answer a block that is a QUESTION — she knows something the employee does not.
+ * The last four answer a block that is a FAULT — nobody is waiting on her judgement, something in
+ * the machinery refused the work, and until 17 Sep 2026 she had no way to touch any of it. That
+ * night a card failed three times because one lane's account was empty, and the only fix in
+ * existence was someone editing a database row. RETRY, ANOTHER_LANE, PAUSE_LANE and HAND_ON are
+ * that fix, in her hands, on the card.
+ */
+import type { LaneFailureKind } from "../ai/laneFailure";
+
+export const BLOCK_ACTIONS = ["ANSWER", "CHANGE", "DROP", "ESCALATE", "RETRY", "ANOTHER_LANE", "PAUSE_LANE", "HAND_ON"] as const;
 export type BlockActionKey = (typeof BLOCK_ACTIONS)[number];
 
 export const BLOCK_PROVIDERS = ["SEQUOIA", "SCOOTER", "ENGINEER"] as const;
@@ -89,13 +101,56 @@ export const BLOCK_REASONS = [
   "the_brief_is_missing",
   "the_file_would_not_build",
   "asked_for_something_this_work_cannot_do",
+  // 17 Sep 2026 — a lane refused the work, or there was no lane left to try. The two shapes of
+  // technical stop. Before these, both wore `tried_and_could_not_finish`, which says "they tried
+  // three times" and offers her answers that could not possibly have helped.
+  "a_lane_refused_the_work",
+  "no_lane_could_take_the_work",
 ] as const;
 export type BlockReason = (typeof BLOCK_REASONS)[number];
+
+/**
+ * The reasons that are a FAULT rather than a question for her.
+ *
+ * They read differently on the Work page, they carry the lane doors, and they nag on a gentler
+ * interval — a dead lane may fix itself and she cannot act on one at two in the morning.
+ */
+export const TECHNICAL_BLOCK_REASONS: ReadonlyArray<BlockReason> = ["a_lane_refused_the_work", "no_lane_could_take_the_work"];
+
+export function isTechnicalBlock(reason: string | null | undefined): boolean {
+  return TECHNICAL_BLOCK_REASONS.includes((reason ?? "") as BlockReason);
+}
 
 const ANSWER = (label: string, hint: string, choices?: BlockAction["choices"]): BlockAction => ({ key: "ANSWER", label, hint, ...(choices ? { choices } : {}) });
 const CHANGE: BlockAction = { key: "CHANGE", label: "Change what you asked for", hint: "Rewrite the job. They start again from your new words." };
 const DROP: BlockAction = { key: "DROP", label: "Drop it", hint: "Decide it is not worth doing. Kept on the record with your reason, and they stop asking." };
 const ESCALATE: BlockAction = { key: "ESCALATE", label: "Send it to an engineer", hint: "Nobody here can answer this one. It goes to whoever maintains the system, with what they need to fix it." };
+
+/*
+ * THE FOUR DOORS A FAULT NEEDS, and what each actually does on the server (services/blocks.ts).
+ * Every hint says the real consequence, including how long a parked lane stays parked — a button
+ * whose effect she has to guess at is a button she will not press.
+ */
+const RETRY: BlockAction = {
+  key: "RETRY",
+  label: "Try it again now",
+  hint: "Puts the work straight back in the queue, on the same lane. Worth a press when whatever broke has since been fixed.",
+};
+const ANOTHER_LANE = (lane: string): BlockAction => ({
+  key: "ANOTHER_LANE",
+  label: "Send it to a different model",
+  hint: `Stands ${lane} down for six hours and puts the work back in the queue, so the next run has to take the next lane instead.`,
+});
+const PAUSE_LANE = (lane: string): BlockAction => ({
+  key: "PAUSE_LANE",
+  label: "Stop using this one",
+  hint: `Stands ${lane} down for a week, for every card and not just this one, and puts the work back in the queue. It comes back on its own.`,
+});
+const HAND_ON: BlockAction = {
+  key: "HAND_ON",
+  label: "Give it to somebody else",
+  hint: "Pick a different employee. They start it again from the beginning, with a note saying why it moved.",
+};
 
 export interface BlockFacts {
   /** The assignment, in the words it was given in. */
@@ -108,6 +163,41 @@ export interface BlockFacts {
   url?: string;
   /** Overrides the catalogue's default when the work belongs to Scooter's office. */
   who?: BlockProvider;
+  /** The route that refused the work, named the way she would name it ("Anthropic", "OpenRouter"). */
+  lane?: string;
+  /** Which way it refused — see shared/ai/laneFailure.ts. */
+  laneKind?: LaneFailureKind;
+  /** The vendor's own sentence, used VERBATIM where it is readable and dropped where it is not. */
+  vendorWords?: string;
+}
+
+/**
+ * THE VENDOR'S OWN WORDS, OR NONE OF THEM.
+ *
+ * "your credit balance is too low to access the Anthropic API" is the single most useful thing
+ * anybody could have put in front of her on 17 Sep, and no paraphrase of ours beats it. But an
+ * adapter hands back whatever the vendor felt like sending, which is sometimes a stack trace, a
+ * column name or a page of HTML — so the quote is offered to the SAME standard as the rest of the
+ * sentence, and dropped silently if it fails. What is dropped is never lost: the raw text is kept
+ * on the card behind "show me what it said".
+ */
+export function usableVendorWords(words: string | null | undefined): string {
+  const said = (words ?? "").replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "");
+  if (said.length < 12 || said.length > 120) return "";
+  // Judged inside the sentence it will actually live in, not on its own.
+  return plainLanguageProblems(`The lane refused the work — "${said}".`).length === 0 ? said : "";
+}
+
+/** What a lane did, in one plain sentence, with the vendor quoted when the quote is readable. */
+function laneRefusal(f: BlockFacts): string {
+  const lane = (f.lane ?? "").trim() || "The lane it tried";
+  const named = lane === "The lane it tried" ? lane : `The ${lane} lane`;
+  const quote = usableVendorWords(f.vendorWords);
+  if (quote) return `${named} refused the work — "${quote}".`;
+  if (f.laneKind === "CREDIT") return `${named} turned the work away because the account behind it has run out of credit.`;
+  if (f.laneKind === "CREDENTIAL") return `${named} would not let the work in, because the firm is no longer signed in to it.`;
+  if (f.laneKind === "RATE_LIMIT") return `${named} is turning work away for now because too much has been sent to it at once.`;
+  return `${named} refused the work and gave no reason anybody here can read.`;
 }
 
 /**
@@ -206,6 +296,54 @@ const CATALOGUE: Record<BlockReason, (f: BlockFacts) => Omit<Block, "reason" | "
       CHANGE,
       DROP,
     ],
+  }),
+
+  /*
+   * A LANE REFUSED THE WORK — 17 Sep 2026, and the reason this whole file grew four doors.
+   *
+   * THE BLOCK THAT SHOULD HAVE EXISTED THAT NIGHT. What she got instead was "Open · queued — picked
+   * up within 5 min", three times over fourteen minutes, while the direct Anthropic lane answered
+   * every attempt with "your credit balance is too low to access the Anthropic API".
+   *
+   * WHO IS "SEQUOIA", NOT "ENGINEER", AND THAT IS THE WHOLE POINT. Every fix for tonight's failure
+   * was hers: send it elsewhere, stand that lane down, top the account up, or hand the card on.
+   * Calling it an engineering fault would have been true of the wiring and useless to her.
+   *
+   * THE STATUS CODE IS NOT THE HEADLINE and does not appear in `stopped` at all — `plainLanguage
+   * Problems` would refuse it anyway. It is kept on the card, behind a disclosure, for whoever
+   * wants it.
+   */
+  a_lane_refused_the_work: (f) => ({
+    stopped: laneRefusal(f),
+    needed:
+      f.laneKind === "CREDIT"
+        ? `Send it to a different model, or put more credit on the ${f.lane ?? "account it uses"} account.`
+        : f.laneKind === "CREDENTIAL"
+          ? `Send it to a different model, or get the firm signed in to ${f.lane ?? "that one"} again.`
+          : f.laneKind === "RATE_LIMIT"
+            ? "Send it to a different model, or try it again in a little while."
+            : "Send it to a different model, stand that one down, or try it again.",
+    who: f.who ?? "SEQUOIA",
+    actions: [
+      ANOTHER_LANE(f.lane ?? "that one"),
+      PAUSE_LANE(f.lane ?? "that one"),
+      RETRY,
+      HAND_ON,
+      DROP,
+      // Money and sign-in are hers. A lane that is simply broken is not.
+      ...(f.laneKind === "CREDIT" || f.laneKind === "CREDENTIAL" ? [] : [ESCALATE]),
+    ],
+  }),
+
+  /*
+   * NOTHING LEFT TO TRY. Distinct from the above because no single lane is at fault and standing
+   * one down would make it worse — every one is already off, kill-switched or unaffordable.
+   */
+  no_lane_could_take_the_work: (f) => ({
+    stopped: `${f.employee} had nowhere to send this — every model the firm can use is switched off or unavailable.`,
+    needed: "Turn at least one of them back on from Integrations, or send this to an engineer.",
+    who: f.who ?? "SEQUOIA",
+    actions: [RETRY, HAND_ON, DROP, ESCALATE],
   }),
 
   the_file_would_not_build: (f) => ({

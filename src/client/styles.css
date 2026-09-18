@@ -2459,6 +2459,56 @@ details h3 {
 
 .card-block-form textarea { width: 100%; }
 
+/* ── A card that stopped does not look like a card that is waiting (0185) ──────
+ *
+ * 17 Sep 2026: Parker's event-kit card failed three times in fourteen minutes
+ * against a lane whose account had run out of credit, and every time the owner
+ * looked at Work it read "Open · queued — picked up within 5 min". The state was
+ * true; the impression was false. Colour is how a board says "this one, not the
+ * other five" before anybody reads a word.
+ *
+ * DANGER, NOT WARN, and the distinction is deliberate. Warn is the colour of a
+ * question addressed to her — .card-block above, where the system is waiting on
+ * a person. Danger is the colour of something broken. A dead lane is not her
+ * being slow to answer, and dressing it as one is what hid it.
+ * ───────────────────────────────────────────────────────────────────────────── */
+.work-card-failing {
+  border-left: 3px solid var(--wp-danger);
+}
+
+.card-failing-line {
+  margin: var(--space-sm) 0 0;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  background: var(--wp-danger-tint);
+  color: var(--wp-danger);
+}
+
+/* A fault, not a question: the same panel, re-coloured, so the two read apart at
+ * a glance on a board that holds both. */
+.card-block-fault {
+  border-left-color: var(--wp-danger);
+  background: var(--wp-danger-tint);
+}
+
+/* The vendor's verbatim text, shut by default. It is evidence, not an
+ * explanation — the sentence above it is the explanation. */
+.block-raw {
+  margin: 0 0 var(--space-sm);
+}
+
+.block-raw-text {
+  margin: var(--space-sm) 0 0;
+  padding: var(--space-sm);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface);
+  font-size: var(--text-xs);
+}
+
 /* ── The receipt: what she typed, and what it turned into (0175) ───────────────
  * Two columns so the comparison is the layout rather than something the reader has
  * to hold in their head — her words on the left, the model's reading on the right.
