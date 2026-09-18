@@ -3996,21 +3996,83 @@ details.card > summary,
   padding: 0;
 }
 
-/* The body as written, wrapped rather than scrolled sideways — it is prose, not code. */
-.deliverable-body {
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 26rem;
+/* ── A deliverable reads as a document ────────────────────────────────────────────────────────
+   Replaces the `<pre>` dump. One renderer for every kind on the surface that already holds them
+   all, because a page per kit is a second home to maintain. Brand: black and white first, orange
+   restrained to the one thing she has to decide. */
+.deliverable-doc {
+  max-height: 34rem;
   overflow-y: auto;
   background: var(--wp-paper);
   border: 1px solid var(--wp-line);
   border-radius: var(--radius-sm);
-  padding: var(--space-md) var(--space-lg);
-  font-family: inherit;
-  font-size: var(--text-sm);
-  line-height: var(--lh-normal);
+  padding: var(--space-lg);
   margin: var(--space-xs) 0;
 }
+.deliverable-doc-title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  text-wrap: balance;
+  margin: 0 0 var(--space-md);
+}
+.deliverable-doc-section + .deliverable-doc-section { margin-top: var(--space-lg); }
+.deliverable-doc-heading {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--wp-muted);
+  margin: 0 0 var(--space-xs);
+}
+.deliverable-doc-p {
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+  max-width: 68ch;
+  margin: 0 0 var(--space-sm);
+}
+/* THE DECISION SHE IS BEING ASKED TO MAKE. The one place orange is spent on this surface. */
+.deliverable-doc-recommendation {
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+  max-width: 68ch;
+  margin: 0 0 var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 4px solid var(--wp-orange);
+  background: var(--wp-tint);
+}
+.deliverable-doc-list {
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+  max-width: 68ch;
+  margin: 0 0 var(--space-sm);
+  padding-left: var(--space-lg);
+}
+.deliverable-doc-list li { margin-bottom: var(--space-2xs); }
+/* A run of show is wide. It scrolls in its own container so the page never scrolls sideways. */
+.deliverable-doc-tablewrap { overflow-x: auto; margin: 0 0 var(--space-sm); }
+.deliverable-doc-table {
+  border-collapse: collapse;
+  /* ONE SCALE FOR THE WHOLE DOCUMENT. `validate:design-tokens` refuses two adjacent steps in one
+     component — "a difference readers see as a mistake" — and it was right: a run of show is dense
+     because of its padding and column widths, not because its words are smaller than the list's. */
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+  min-width: 34rem;
+}
+.deliverable-doc-table th,
+.deliverable-doc-table td {
+  border: 1px solid var(--wp-line);
+  padding: var(--space-2xs) var(--space-xs);
+  text-align: left;
+  vertical-align: top;
+}
+.deliverable-doc-table th {
+  font-weight: 700;
+  background: var(--wp-paper);
+  white-space: nowrap;
+}
+.deliverable-doc-table td:first-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 .deliverable-actions { margin-top: var(--space-3xs); }
 

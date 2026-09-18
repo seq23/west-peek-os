@@ -8,6 +8,10 @@ import { requestTask, runTask } from "./browserTask";
 import { searchQuestion } from "./liveSearch";
 import { machineForEmployee } from "./attribution";
 import { deliver } from "./deliverables";
+import { sendOrPreview } from "./previewApproval";
+import { leadLine } from "../../shared/deliverables/sections";
+import { DELIVERABLE_KINDS, type DeliverableKind } from "../../shared/deliverables/deliverable";
+import { PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import { guidanceBlock } from "../../shared/skills/library";
 import { writtenGuidance } from "./firmSkills";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
@@ -72,6 +76,16 @@ interface CardRow {
   prompt: string | null;
   firm_scope: string;
   requested_by_email?: string | null;
+  /**
+   * WHO THE FINISHED WORK IS FOR. Migration 0183 added this and, until 0196, nothing read it in
+   * this path — which is why Parker's October kit finished and reached nobody.
+   */
+  result_recipient?: string | null;
+  /** `work_card.preview_first`. NULL is "nobody said" and the recipient decides. */
+  preview_first?: number | null;
+  /** Who ticked the box; the preview becomes theirs to answer. */
+  preview_owner_id?: string | null;
+  kind?: string | null;
 }
 
 export interface StepOutcome {
@@ -308,6 +322,99 @@ async function historyFor(env: Env, cardId: string): Promise<string[]> {
     if (l.status === "REQUESTED") return `Asked to look up "${String(l.objective)}" — waiting for a person to approve it.`;
     return `Tried to look up "${String(l.objective)}" and it failed: ${String(l.refusal_reason ?? l.status)}`;
   });
+}
+
+/**
+ * WHICH KIND OF DELIVERABLE A FINISHED CARD PRODUCES.
+ *
+ * The card's own kind when it names one the catalogue knows; `employee_finding` otherwise. That
+ * default is deliberate and honest: the October card carries `kind = NULL`, so nothing can be
+ * inferred from it, and filing it as `research_packet` or `ask_brief` to avoid adding a kind would
+ * put a lie in a column that `validate:deliverable-kinds` would then happily accept.
+ */
+export function deliverableKindForCard(card: { kind?: string | null }): DeliverableKind {
+  const k = (card.kind ?? "").toLowerCase();
+  return (DELIVERABLE_KINDS as readonly string[]).includes(k) ? (k as DeliverableKind) : "employee_finding";
+}
+
+/**
+ * WHO THE FILED COPY BELONGS TO. The partner who asked, where the card records an address the
+ * registry recognises; otherwise the preview owner; otherwise the firm's managing partner, which is
+ * today's behaviour and never nobody. A deliverable with no reader is the bug one step along.
+ */
+async function recipientFirmUserId(env: Env, card: CardRow): Promise<string> {
+  const asked = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+  if (asked) return asked.firmUserId;
+  if (card.preview_owner_id) return card.preview_owner_id;
+  return PREVIEW_PARTNER.firmUserId;
+}
+
+/**
+ * HAND THE FINISHED WORK TO WHOEVER IT IS FOR.
+ *
+ * Only when the card names a recipient. A card with nobody named has already been filed by the
+ * caller and sits on her Home — that is the whole outcome, and inventing an addressee for it would
+ * be worse than doing nothing.
+ *
+ * THE EMAIL CARRIES THE DECISION AND A LINK, NEVER THE BODY. Her instruction after being shown a
+ * 5,621-character kit rendered into a card: "the kit should not arrive on the fucking card, that
+ * sounds like hell — maybe a link to an external page". `leadLine` lifts the recommendation, which
+ * is the thing she is actually being asked to decide; the document itself stays on the one surface
+ * that already holds every kit.
+ *
+ * NEVER THROWS. The work is already filed by the time this runs. A send that fails must leave a
+ * readable deliverable and a recorded reason, not lose the work a second time.
+ */
+async function handOver(
+  env: Env,
+  card: CardRow,
+  input: { employee: string; finding: string; deliverableId: string | null },
+): Promise<void> {
+  const to = (card.result_recipient ?? "").trim();
+  if (!to) return;
+  try {
+    await sendOrPreview(env, {
+      to,
+      email: {
+        employee: input.employee,
+        what: card.title,
+        // The decision she is being asked to make, not the document. `leadLine` lifts the
+        // employee's own RECOMMENDED paragraph when there is one.
+        tldr: leadLine(input.finding),
+        // NO `details`. The body stays on the deliverable surface — a 5,621-character kit in an
+        // email is the same wall of text in a different window.
+        sections: [
+          {
+            label: "Where to read it",
+            bullets: [
+              "On your Home, under what your employees have prepared for you.",
+              "It opens as a document — the recommendation first, then the detail.",
+            ],
+          },
+        ],
+        details: null,
+      },
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      cardKind: card.kind ?? null,
+      workCardId: card.id,
+      cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
+      tickedByFirmUserId: card.preview_owner_id ?? null,
+      requestedByEmail: card.requested_by_email ?? null,
+      what: card.title,
+    });
+  } catch (err) {
+    await appendEvent(env, {
+      eventType: "work_card.handover_failed",
+      actorType: "system",
+      actorId: "employee_work",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { to, employee: input.employee, detail: String(err).slice(0, 300) },
+    });
+  }
 }
 
 async function appendFinding(env: Env, card: CardRow, text: string): Promise<void> {
@@ -670,6 +777,62 @@ async function applyDecision(
 
   // done
   await appendFinding(env, card, d.finding!);
+  /*
+   * ── FINISHING IS NOT DELIVERING ────────────────────────────────────────────────────────────
+   *
+   * 18 Sep 2026. Parker finished the October event kit for Kirx Diaz — five COMPLETED runs on a
+   * free lane, a real kit with three angles, a recommendation, a run of show, a discussion guide
+   * and social drafts. The card then went DONE and produced NOTHING anybody could open: no
+   * deliverable, no preview, no email. The kit survived only inside `ai_run.output_text`, because
+   * `appendFinding` writes into `work_card.description` and truncates at 8,000 characters — so
+   * even the copy on the card was cut off mid-sentence.
+   *
+   * She had asked for a preview. Her words afterwards: "preview means he was supposed to fucking
+   * email me the workshop packet." Rule 0 in this repo's own terms — no stage may exit 0 having
+   * done nothing — on the one card she was waiting for.
+   *
+   * So a finish now does two things it did not do, in this order, and NEITHER can lose the work:
+   *
+   *   1. FILE IT, in full. The deliverable carries the whole finding, not the truncated card copy.
+   *      That alone means a finished card is always something she can open.
+   *   2. HAND IT OVER, when the card names somebody. `sendOrPreview` decides send-or-preview by
+   *      her rule; a preview is an EMAIL to the owner with the doors on it, which is the shape she
+   *      specified ("all previews are supposed to be emailed — that is their shape").
+   *
+   * THE HANDOVER CANNOT UNDO THE FILING. Delivery is awaited first and the send is wrapped, so an
+   * email failure leaves a filed, readable deliverable rather than losing the work a second time.
+   * A swallowed failure is what hid the `approval_preview` bug for a day, so it is RECORDED.
+   */
+  let deliverableId: string | null = null;
+  try {
+    const filed = await deliver(
+      env,
+      { type: "SYSTEM", roles: [], firmScopes: [card.firm_scope] },
+      {
+        kind: deliverableKindForCard(card),
+        title: card.title,
+        body: d.finding!,
+        preparedBy: employeeName,
+        preparedFor: await recipientFirmUserId(env, card),
+        sourceType: "work_card",
+        sourceId: card.id,
+      },
+    );
+    deliverableId = filed.id;
+  } catch (err) {
+    await appendEvent(env, {
+      eventType: "deliverable.not_filed",
+      actorType: "system",
+      actorId: "employee_work",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { employee: employeeName, detail: String(err).slice(0, 300) },
+    });
+  }
+
+  await handOver(env, card, { employee: employeeName, finding: d.finding!, deliverableId });
+
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1")
     .bind(card.id)
     .run();

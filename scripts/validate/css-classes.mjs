@@ -17,6 +17,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { stripCssComments, stripTsComments } from "./lib/strip-comments.mjs";
 
 const CSS = "src/client/styles.css";
 const ROOT = "src/client";
@@ -85,7 +86,9 @@ function scan(cssText, files) {
   const defined = definedClasses(cssText);
   const problems = [];
   for (const f of files) {
-    for (const cls of usedClasses(readFileSync(f, "utf8")).keys()) {
+    // PROSE IS NOT USE. A comment naming a class it has just removed is not an element wearing it —
+    // this scan blocked a correct change on 18 Sep for exactly that. See lib/strip-comments.mjs.
+    for (const cls of usedClasses(stripTsComments(readFileSync(f, "utf8"))).keys()) {
       if (!defined.has(cls) && !ALLOWED_UNSTYLED.has(cls)) problems.push(`${f}: .${cls} is applied but has no rule`);
     }
   }
@@ -144,7 +147,7 @@ function braceBalance(css) {
   return depth === 0 ? null : `${depth} unclosed rule(s) in ${CSS}`;
 }
 
-const unbalanced = braceBalance(readFileSync(CSS, "utf8"));
+const unbalanced = braceBalance(stripCssComments(readFileSync(CSS, "utf8")));
 if (unbalanced) {
   console.error(`CSS CLASS SCAN FAILED — ${unbalanced}.\n`);
   console.error("esbuild reports this only as a warning during minify, so the build still succeeds");
@@ -162,7 +165,7 @@ if (tsxFiles.length === 0) {
   process.exit(1);
 }
 
-const problems = scan(readFileSync(CSS, "utf8"), tsxFiles);
+const problems = scan(stripCssComments(readFileSync(CSS, "utf8")), tsxFiles);
 if (problems.length > 0) {
   console.error("CSS CLASS SCAN FAILED — these are applied to elements and style nothing:\n");
   for (const p of problems) console.error(`  ${p}`);

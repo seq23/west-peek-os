@@ -21,6 +21,10 @@ export const DELIVERABLE_KINDS = [
   "productions_hire_search",
   "event_kit",
   "approval_preview",
+  // What a card produces when its work is not one of the named packet shapes above. Added 18 Sep
+  // 2026 with migration 0196: until then a generic card finished by appending a truncated string to
+  // its own description and filing nothing, so the work reached nobody. See `deliverableKindForCard`.
+  "employee_finding",
 ] as const;
 
 export type DeliverableKind = (typeof DELIVERABLE_KINDS)[number];
@@ -181,6 +185,19 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     page: "home",
     docType: "BRIEF",
     file: false,
+  },
+  /**
+   * The output of a card whose work is not one of the named packet shapes. Filed, kept and
+   * openable — the point of it existing at all is that a finished card must produce something a
+   * person can read, and before 0196 a generic card produced nothing.
+   */
+  employee_finding: {
+    key: "employee_finding",
+    label: "What they produced",
+    blurb: "The finished work from a card, in full.",
+    page: "home",
+    docType: "BRIEF",
+    file: true,
   },
 };
 

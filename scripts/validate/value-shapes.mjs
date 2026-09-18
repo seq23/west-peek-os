@@ -48,6 +48,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const exec = promisify(execFile);
 const ENV = process.argv.includes("--env") ? process.argv[process.argv.indexOf("--env") + 1] : "production";
@@ -261,7 +262,7 @@ async function polymorphicReport(tables) {
 function sqlLiteralAudit(tables, files, sources = {}) {
   const findings = [];
   for (const file of files) {
-    const src = sources[file] ?? readFileSync(file, "utf8");
+    const src = sources[file] ?? stripCommentsFor(file, readFileSync(file, "utf8"));
     /*
      * ONLY WHERE THE STATEMENT SAYS WHICH TABLE THE COLUMN IS.
      *
@@ -315,7 +316,7 @@ const PINNED = [
 ];
 
 function constantValues(file, name, suppliedSource) {
-  const src = suppliedSource ?? readFileSync(path.resolve(file), "utf8");
+  const src = suppliedSource ?? stripCommentsFor(path.resolve(file), readFileSync(path.resolve(file), "utf8"));
   const m = new RegExp(`export const ${name}[^=]*=\\s*\\[([\\s\\S]*?)\\]`).exec(src);
   if (!m) return null;
   return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);

@@ -31,6 +31,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SCAN_DIR = path.join(ROOT, "src", "worker");
@@ -147,7 +148,7 @@ function main() {
 
   const files = {};
   for (const full of listSourceFiles(SCAN_DIR)) {
-    files[path.relative(ROOT, full).split(path.sep).join("/")] = readFileSync(full, "utf8");
+    files[path.relative(ROOT, full).split(path.sep).join("/")] = stripCommentsFor(full, readFileSync(full, "utf8"));
   }
   const { violations, examined } = checkSources(files);
 

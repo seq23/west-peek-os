@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// DELIBERATELY DOES NOT STRIP COMMENTS, unlike its neighbours. The exemption protocol this scan
+// enforces LIVES in a comment — `/* design-token-exempt: why */` directly above the declaration —
+// so blanking comments removes the very grants it must honour. Tried on 18 Sep during the pass
+// that taught the other scanners to ignore prose: it immediately failed `.thesis-banner-statement`,
+// a clamp() carrying a valid exemption. A rule that reads prose ON PURPOSE is not the same defect
+// as one fooled by prose by accident.
 /**
  * Design-token boundary scan — type, space, radius, line-height.
  *

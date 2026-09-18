@@ -41,6 +41,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const MIGRATIONS = path.join(ROOT, "migrations");
@@ -70,7 +71,7 @@ export function readMigrationsInOrder(dir = MIGRATIONS) {
   const files = readdirSync(dir)
     .filter((f) => /^\d{4}_.*\.sql$/.test(f))
     .sort();
-  return files.map((f) => ({ file: f, sql: readFileSync(path.join(dir, f), "utf8") }));
+  return files.map((f) => ({ file: f, sql: stripCommentsFor(path.join(dir, f), readFileSync(path.join(dir, f), "utf8")) }));
 }
 
 function stripSqlComments(sql) {
@@ -275,7 +276,7 @@ function selfTest() {
   // 9 · And a board that types the cadence in prose instead of reading it.
   expect(
     "a board quoting the old cadence is caught",
-    auditSources(readFileSync(JOBS_FILE, "utf8"), "deck_reading schedule_kind — runs every fifteen minutes").some((m) =>
+    auditSources(stripCommentsFor(JOBS_FILE, readFileSync(JOBS_FILE, "utf8")), "deck_reading schedule_kind — runs every fifteen minutes").some((m) =>
       m.includes("every fifteen minutes"),
     ),
   );
@@ -305,7 +306,7 @@ function main() {
   for (const lane of RARE_LANES) {
     violations.push(...auditLane(lane, effectiveSchedule(migrations, lane.job_key)));
   }
-  violations.push(...auditSources(readFileSync(JOBS_FILE, "utf8"), readFileSync(HEALTH_FILE, "utf8")));
+  violations.push(...auditSources(stripCommentsFor(JOBS_FILE, readFileSync(JOBS_FILE, "utf8")), stripCommentsFor(HEALTH_FILE, readFileSync(HEALTH_FILE, "utf8"))));
 
   if (violations.length > 0) {
     console.error("RARE LANE SCAN FAILED — a lane that receives something rarely is being polled, or has lost its clock:");

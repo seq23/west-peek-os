@@ -22,6 +22,7 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 const SCHEMA = join(ROOT, "migrations/0004_ai_cost_privacy.sql");
@@ -133,14 +134,14 @@ function run() {
         fail(`missing surface ${rel} — this check names the screens that show these numbers and cannot skip one`);
         continue;
       }
-      surfaces[rel] = readFileSync(p, "utf8");
+      surfaces[rel] = stripCommentsFor(p, readFileSync(p, "utf8"));
     }
     const { problems, examined } = check({
-      schemaSql: readFileSync(SCHEMA, "utf8"),
-      spendTs: readFileSync(SPEND, "utf8"),
+      schemaSql: stripCommentsFor(SCHEMA, readFileSync(SCHEMA, "utf8")),
+      spendTs: stripCommentsFor(SPEND, readFileSync(SPEND, "utf8")),
       surfaces,
-      reasonProducer: readFileSync(join(ROOT, REASON_PRODUCER), "utf8"),
-      reasonConsumer: readFileSync(join(ROOT, REASON_CONSUMER), "utf8"),
+      reasonProducer: stripCommentsFor(join(ROOT, REASON_PRODUCER), readFileSync(join(ROOT, REASON_PRODUCER), "utf8")),
+      reasonConsumer: stripCommentsFor(join(ROOT, REASON_CONSUMER), readFileSync(join(ROOT, REASON_CONSUMER), "utf8")),
     });
     checked = examined;
     for (const p of problems) fail(p);
@@ -160,11 +161,11 @@ function run() {
 
 function selfTest() {
   const good = {
-    schemaSql: readFileSync(SCHEMA, "utf8"),
-    spendTs: readFileSync(SPEND, "utf8"),
-    surfaces: Object.fromEntries(SURFACES.map((r) => [r, readFileSync(join(ROOT, r), "utf8")])),
-    reasonProducer: readFileSync(join(ROOT, REASON_PRODUCER), "utf8"),
-    reasonConsumer: readFileSync(join(ROOT, REASON_CONSUMER), "utf8"),
+    schemaSql: stripCommentsFor(SCHEMA, readFileSync(SCHEMA, "utf8")),
+    spendTs: stripCommentsFor(SPEND, readFileSync(SPEND, "utf8")),
+    surfaces: Object.fromEntries(SURFACES.map((r) => [r, stripCommentsFor(join(ROOT, r), readFileSync(join(ROOT, r), "utf8"))])),
+    reasonProducer: stripCommentsFor(join(ROOT, REASON_PRODUCER), readFileSync(join(ROOT, REASON_PRODUCER), "utf8")),
+    reasonConsumer: stripCommentsFor(join(ROOT, REASON_CONSUMER), readFileSync(join(ROOT, REASON_CONSUMER), "utf8")),
   };
   const clean = check(good);
   if (clean.problems.length > 0) {
