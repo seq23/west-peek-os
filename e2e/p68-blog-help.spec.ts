@@ -63,7 +63,19 @@ test("an emailed blog ask becomes a BLOG_HELP card on Wren's desk, and the finis
   await expect(row.locator(".badge").first()).toHaveText(kindDef("blog_help")!.label);
   await expect(row).toContainText(kindDef("blog_help")!.blurb);
   await row.getByTestId(`deliverable-open-dlv_${marker.toLowerCase()}`).click();
-  await expect(row.locator(".deliverable-body")).toContainText("the scarce resource is people");
+  // STRICTER THAN THE CLASS IT REPLACES. The old assertion read a `<pre>` dump, so it would have
+  // passed on an unrendered wall of text. A deliverable is now a document: the words must appear
+  // inside a RENDERED PARAGRAPH, which fails if the renderer ever regresses to dumping the body.
+  const doc68 = row.locator(".deliverable-doc");
+  await expect(doc68).toBeVisible();
+  // A RENDERED BLOCK OF ANY KIND — paragraph, list or table. Not "a paragraph": Walker's note is a
+  // numbered candidate list, and `toSections` correctly renders `1. Jordan Example …` as a list
+  // item. Requiring a <p> would have asserted the parser's failure rather than its success.
+  await expect(
+    doc68.locator("p.deliverable-doc-p, p.deliverable-doc-recommendation, ul.deliverable-doc-list, table.deliverable-doc-table").first(),
+  ).toBeVisible();
+  await expect(doc68).toContainText("the scarce resource is people");
+  await expect(row.locator("pre")).toHaveCount(0);
 
   // The API says the same, filtered by the new kind.
   const list = (await (await request.get("/api/deliverables?kind=blog_help&mine=1", { headers: MP })).json()) as { deliverables: Array<{ title: string; prepared_by: string }> };

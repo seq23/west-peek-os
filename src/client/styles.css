@@ -4053,7 +4053,10 @@ details.card > summary,
 .deliverable-doc-tablewrap { overflow-x: auto; margin: 0 0 var(--space-sm); }
 .deliverable-doc-table {
   border-collapse: collapse;
-  font-size: var(--text-xs);
+  /* ONE SCALE FOR THE WHOLE DOCUMENT. `validate:design-tokens` refuses two adjacent steps in one
+     component — "a difference readers see as a mistake" — and it was right: a run of show is dense
+     because of its padding and column widths, not because its words are smaller than the list's. */
+  font-size: var(--text-sm);
   line-height: var(--lh-normal);
   min-width: 34rem;
 }
@@ -4070,22 +4073,6 @@ details.card > summary,
   white-space: nowrap;
 }
 .deliverable-doc-table td:first-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
-
-/* The body as written, wrapped rather than scrolled sideways — it is prose, not code. */
-.deliverable-body {
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 26rem;
-  overflow-y: auto;
-  background: var(--wp-paper);
-  border: 1px solid var(--wp-line);
-  border-radius: var(--radius-sm);
-  padding: var(--space-md) var(--space-lg);
-  font-family: inherit;
-  font-size: var(--text-sm);
-  line-height: var(--lh-normal);
-  margin: var(--space-xs) 0;
-}
 
 .deliverable-actions { margin-top: var(--space-3xs); }
 

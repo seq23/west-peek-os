@@ -56,7 +56,17 @@ test("the hire-search note renders on Scooter's Home with its candidates, and th
   await expect(row.locator(".owner-chip")).toContainText("Walker");
   await expect(row.locator(".badge").first()).toHaveText(kindDef("productions_hire_search")!.label);
   await row.getByTestId(`deliverable-open-${dlvId}`).click();
-  await expect(row.locator(".deliverable-body")).toContainText("Jordan Example");
+  // See p68: the words must land in a rendered paragraph, not a `<pre>` dump.
+  const doc70 = row.locator(".deliverable-doc");
+  await expect(doc70).toBeVisible();
+  // A RENDERED BLOCK OF ANY KIND — paragraph, list or table. Not "a paragraph": Walker's note is a
+  // numbered candidate list, and `toSections` correctly renders `1. Jordan Example …` as a list
+  // item. Requiring a <p> would have asserted the parser's failure rather than its success.
+  await expect(
+    doc70.locator("p.deliverable-doc-p, p.deliverable-doc-recommendation, ul.deliverable-doc-list, table.deliverable-doc-table").first(),
+  ).toBeVisible();
+  await expect(doc70).toContainText("Jordan Example");
+  await expect(row.locator("pre")).toHaveCount(0);
 
   // The candidates behind the note — as information, with nothing to maintain.
   const panel = page.getByTestId(`hire-candidates-${dlvId}`);
