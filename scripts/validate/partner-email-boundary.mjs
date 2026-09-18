@@ -46,13 +46,21 @@ const TRANSPORTS = /\b(sendViaResend|sendViaCloudflare|sendViaGmail)\s*\(/g;
  *   effects/executor.ts — the approved external effect: a human decided that send, on a receipt.
  *   services/googleConnect.ts — `trySendAsPartner`, the executor's send-as-the-partner path.
  *   services/execEmail.ts — the door.
+ *   services/previewApproval.ts — "Send it" on a preview. SEE THE NARROW CHECK BELOW: this one is
+ *     exempt only because it sends bytes THIS DOOR ALREADY COMPOSED AND LINTED, verbatim. She
+ *     approved a specific message; re-rendering it at send time would be a second composition and a
+ *     second chance to differ from the thing she said yes to. The exemption is enforced, not
+ *     trusted — a version of that file which composed fresh prose fails this scan.
  */
+const PREVIEW_SEND = path.join("src", "worker", "services", "previewApproval.ts");
+
 const MAY_CALL_A_TRANSPORT = new Set([
   path.join("src", "worker", "effects", "resendClient.ts"),
   path.join("src", "worker", "effects", "cloudflareEmailClient.ts"),
   path.join("src", "worker", "effects", "googleClient.ts"),
   path.join("src", "worker", "effects", "executor.ts"),
   path.join("src", "worker", "services", "googleConnect.ts"),
+  PREVIEW_SEND,
   DOOR,
 ]);
 
@@ -84,6 +92,33 @@ export function checkSources(sources) {
     // A partner address named beside a transport is the same bypass with the destination hardcoded.
     if (!MAY_CALL_A_TRANSPORT.has(file) && /(sequoia|scooter)@westpeek\.ventures/.test(raw) && /\bfetch\s*\(\s*["'`]https:\/\/api\.resend\.com/.test(raw)) {
       violations.push(`${file}: reaches the Resend API directly with a partner address in the same file.`);
+    }
+  }
+
+  /*
+   * THE PREVIEW EXEMPTION, NARROWED TO THE THING THAT MAKES IT SAFE.
+   *
+   * An allowlist entry with only a comment behind it is how a boundary quietly acquires a second
+   * door. This one is allowed to reach a transport for exactly one reason: it re-sends bytes that
+   * already went through `renderExecEmail` and `lintExecEmail` on the way IN, when the preview was
+   * filed. So the file must send the STORED message and must not compose a new one at send time.
+   */
+  const previewSend = sources[PREVIEW_SEND] ? stripComments(sources[PREVIEW_SEND]) : undefined;
+  if (previewSend !== undefined) {
+    const at = previewSend.search(/\b(sendViaResend|sendViaCloudflare)\s*\(/);
+    const around = previewSend.slice(Math.max(0, at - 1500), at + 500);
+    if (!/row\s*\.\s*body_text/.test(around) || !/row\s*\.\s*subject/.test(around)) {
+      violations.push(
+        `${PREVIEW_SEND}: reaches a transport without sending the stored subject and body. It is exempt ` +
+          `from ${DOOR} ONLY because it re-sends a message that door already composed and linted; a version ` +
+          "that composes at send time is a second door and must go through the first one.",
+      );
+    }
+    if (/\brenderExecEmail\s*\(/.test(around)) {
+      violations.push(
+        `${PREVIEW_SEND}: composes with renderExecEmail() at the transport. She approved specific bytes — ` +
+          "re-rendering them is a second chance to differ from what she said yes to.",
+      );
     }
   }
 
@@ -126,6 +161,11 @@ function selfTest() {
     "src/worker/services/requestReply.ts": "const out = await sendPartnerEmail(env, { to, email, objectType: 'work_card' });",
     // A comment naming the transport is not a call.
     "src/worker/services/productions.ts": "// used to call sendViaResend( here\nconst mail = await sendPartnerEmail(env, {});",
+    // "Send it" on a preview: the stored bytes, verbatim. Exempt, and the exemption is checked.
+    [PREVIEW_SEND]:
+      "async function sendApproved(env, row) {\n" +
+      "  const payload = { to: row.recipient, subject: row.subject, text: row.body_text };\n" +
+      "  return await sendViaResend(approvedEnv, payload);\n}",
   };
   const cleanResult = checkSources(clean);
   if (cleanResult.violations.length !== 0) failures.push(`clean fixture was flagged: ${cleanResult.violations[0]}`);
@@ -141,10 +181,27 @@ function selfTest() {
     "the door lints but ignores the verdict": { ...clean, [DOOR]: cleanDoor.replace("  if (violations.length > 0) return { sent: false };\n", "") },
     "the door does not lay the email out": { ...clean, [DOOR]: cleanDoor.replace("renderExecEmail(input.email)", "input.email") },
     "the door is gone": Object.fromEntries(Object.entries(clean).filter(([f]) => f !== DOOR)),
+    // THE EXEMPTION TURNED INTO A HOLE. Both shapes: composing fresh prose at the transport, and
+    // reaching it with something other than the message she actually approved.
+    "the preview send composes its own prose at the transport": {
+      ...clean,
+      [PREVIEW_SEND]:
+        "async function sendApproved(env, row) {\n" +
+        "  const rendered = renderExecEmail(row);\n" +
+        "  return await sendViaResend(approvedEnv, { to: row.recipient, subject: row.subject, text: row.body_text });\n}",
+    },
+    "the preview send reaches the transport with something she did not approve": {
+      ...clean,
+      [PREVIEW_SEND]:
+        "async function sendApproved(env, row) {\n" +
+        "  return await sendViaResend(approvedEnv, { to: row.recipient, subject: 'Re: ' + row.what, text: fresh });\n}",
+    },
   };
   for (const [name, files] of Object.entries(cases)) {
     if (checkSources(files).violations.length === 0) failures.push(`violating fixture NOT caught: ${name}`);
   }
+  // A HARDCODED COUNT IS A COUNT THAT STOPS MOVING. This line said "all 7" while nine cases ran.
+  selfTest.caseCount = Object.keys(cases).length;
   // Nobody calls the door: not a violation list entry, but the scan below hard-fails on it.
   const nobody = checkSources({ ...clean, "src/worker/services/requestReply.ts": "// nothing", "src/worker/services/productions.ts": "// nothing" });
   if (nobody.doorCallers !== 0) failures.push("a fixture with no door callers reported some");
@@ -173,7 +230,10 @@ if (process.argv.includes("--self-test")) {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  console.log("SELF-TEST PASSED: clean fixture passes; all 7 violating fixtures are caught, including a service calling the transport itself.");
+  console.log(
+    `SELF-TEST PASSED: clean fixture passes; all ${selfTest.caseCount} violating fixtures are caught, ` +
+      "including a service calling the transport itself and a preview send that composes instead of re-sending.",
+  );
   process.exit(0);
 }
 
