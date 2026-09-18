@@ -67,6 +67,10 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await expect(page.getByTestId("home-page")).toBeVisible();
   await expect(page.getByTestId("home-module-intelligence")).toContainText(headline);
+  /* The ten questions moved to "The rest" — the shelf band — as a closed drawer in the 18 Sep
+     redesign. They are reference: read once in two hundred visits, and a permanently open list of
+     them was competing with the brief the partner came for. Still one click, still on Home. */
+  await page.getByTestId("home-questions-toggle").click();
   await expect(page.getByTestId("home-questions")).toContainText("What needs my decision?");
   await expect(page.getByTestId("home-questions")).toContainText("What is costing money?");
 
@@ -96,6 +100,11 @@ test("home layout is configurable and saved as a new version", async ({ page }) 
   await page.getByTestId("module-toggle-ic_priorities").check();
   await page.getByTestId("home-settings-save").click();
   await expect(page.getByTestId("home-settings-message")).toContainText("version");
+  /* A module with nothing NEW in it is a name in the quiet roll, not a card — nine colleagues
+     reporting silence in nine bordered cards was the largest visual mass on the page. The card is
+     one click behind "Show each", and this asserts the enabled module reaches the page either way. */
+  const shelved = page.getByTestId("home-quiet-roll-toggle");
+  if (await shelved.isVisible()) await shelved.click();
   await expect(page.getByTestId("home-module-ic_priorities")).toBeVisible();
 });
 
@@ -177,6 +186,13 @@ test("pressing Open quiets a colleague until something new arrives, and the coun
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await expect(page.getByTestId("home-page")).toBeVisible();
 
+  /* Quiet and empty colleagues live behind "Show each" since the 18 Sep redesign; this journey is
+     about a card going from new to quiet, so it opens the roll and keeps it open throughout. */
+  const openRoll = async () => {
+    const toggle = page.getByTestId("home-quiet-roll-toggle");
+    if (await toggle.isVisible()) await toggle.click();
+  };
+
   const wren = page.getByTestId("home-module-my_work");
   await expect(wren).toHaveAttribute("data-fresh", "new");
   await expect(wren).toContainText("Read the Sensori memo before Thursday");
@@ -190,6 +206,7 @@ test("pressing Open quiets a colleague until something new arrives, and the coun
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await expect(page.getByTestId("home-page")).toBeVisible();
 
+  await openRoll();
   await expect(wren).toHaveAttribute("data-fresh", "quiet");
   await expect(wren.getByTestId("home-module-quiet-my_work")).toContainText(/nothing new since \d/);
   await expect(wren).toHaveClass(/delivery-quiet/);

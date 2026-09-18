@@ -213,7 +213,33 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
   }>("/api/me/connections");
 
   const d = state.data;
-  if (!d) return null;
+  /*
+   * THE SHIFT THIS PLACEHOLDER EXISTS TO STOP. `/api/me/connections` answers at roughly 2.5s, and
+   * this panel is the FIRST child of Home — so returning null until then meant the whole page was
+   * painted, read, and then pushed down by one strip's height the moment the call landed. That was
+   * Home's one measurable layout shift, and it arrived at the exact moment a partner had started
+   * reading. The fix is to reserve the space: a matching `min-height` on this placeholder and on
+   * `.connect-strip` itself (styles.css), so the strip drops into ground that was already its own.
+   *
+   * aria-hidden and empty: it reserves height and says nothing, because announcing "loading" for a
+   * status strip nobody asked for is noise in a screen reader.
+   */
+  if (!d) {
+    /* The placeholder MIRRORS the real strip rather than guessing at its height: same box, same
+       badge, same one line of muted text. A hand-written `min-height: 38px` got within 3px at
+       1280 and would have drifted again the first time the strip wrapped to two lines on a phone.
+       `visibility: hidden` keeps the box and paints nothing — and it is a <details> with a
+       <summary>, not a div, so the 44px touch floor on `.connect-strip > summary` applies to the
+       placeholder too. It did not when this was a div, and the page still dropped 21px. */
+    return (
+      <details className="card connect-strip connect-strip-reserve" data-testid="connect-panel-loading" aria-hidden="true">
+        <summary>
+          <span className="badge badge-gate">setup</span>
+          <span className="muted small">checking what is connected</span>
+        </summary>
+      </details>
+    );
+  }
 
   const connected = d.connections.filter((c) => c.status === "CONNECTED");
   const broken = d.connections.filter((c) => c.status === "EXPIRED" || c.status === "FAILED" || c.status === "REVOKED");

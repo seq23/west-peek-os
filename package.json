@@ -24,6 +24,7 @@
     "validate:chaining": "node scripts/validate/a-lane-that-cannot-serve-must-chain.mjs && node scripts/validate/a-lane-that-cannot-serve-must-chain.mjs --self-test",
     "validate:call-classification": "node scripts/validate/every-call-is-classified.mjs && node scripts/validate/every-call-is-classified.mjs --self-test",
     "validate:css-classes": "node scripts/validate/css-classes.mjs",
+    "validate:heading-scale": "node scripts/validate/heading-scale-applies.mjs && node scripts/validate/heading-scale-applies.mjs --self-test",
     "validate:css-variables": "node scripts/validate/css-variables.mjs",
     "validate:deck-decision": "node scripts/validate/deck-current-requires-a-decision.mjs && node scripts/validate/deck-current-requires-a-decision.mjs --self-test",
     "validate:design-tokens": "node scripts/validate/design-tokens.mjs && node scripts/validate/design-tokens.mjs --self-test",
