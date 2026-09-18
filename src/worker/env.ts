@@ -68,6 +68,14 @@ export interface Env {
    * has already verified both halves before a request reaches us.
    */
   CF_ACCESS_CLIENT_SECRET?: string;
+  /**
+   * The Access service token client id the Claude Code claimer on the owner's Mac presents
+   * (migration 0187). A NAME, not a secret — the secret half never reaches this Worker, because
+   * Access verifies both and forwards only a signed assertion. Absent means the claimer identity
+   * simply does not exist and the lane can never be claimed, which is a safe default rather than a
+   * broken one: the chain answers every run on the lanes it always used.
+   */
+  WP_CLAUDE_CODE_CLIENT_ID?: string;
   RESEND_API_KEY?: string;
   /** Runware image generation. Absent means the capability is simply off, not broken. */
   RUNWARE_API_KEY?: string;

@@ -1067,6 +1067,23 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
    * and closes that window to fifteen minutes.
    */
   const swept = await closeAbandonedRuns(env, now);
+  /*
+   * ── AND THE CLAIMABLE QUEUE, ON THE SAME TICK ──────────────────────────────────────────────
+   *
+   * A run claimed by a machine that then stopped must not sit there. This is the exact failure the
+   * sister system had in production: a run claimed at 22:10 and never reported, its task reading
+   * "running" for two days and eleven hours, with nothing anywhere able to end it — the report
+   * route refused a run that was not running, the claim route skipped a run that was claimed, and
+   * no third party existed. This is the third party.
+   *
+   * ON THE TICK THAT ALREADY EXISTS, beside the other sweeps, for the same reason `closeAbandonedRuns`
+   * is here: a reaper that needs its own schedule is a reaper somebody forgets to schedule.
+   *
+   * Never throws — see `reapClaudeCodeRuns`. Housekeeping that can break the tick is worse than
+   * housekeeping that skips a minute.
+   */
+  const { reapClaudeCodeRuns } = await import("../ai/claudeCodeLane");
+  const claimed = await reapClaudeCodeRuns(env, now);
   // Dynamic, matching the runDailyForAll import below — dailyIntelligence reaches back into this
   // module, and a top-level import here would close that cycle at load time.
   const { closeAbandonedReports } = await import("./dailyIntelligence");
@@ -1085,6 +1102,21 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
 
   // Reported rather than done quietly: a tick that closed abandoned work is a fact the operator
   // wants, and a tick that closes some every time is a symptom rather than housekeeping.
+  if (claimed.returnedToPool.length > 0 || claimed.abandoned.length > 0) {
+    /*
+     * REPORTED SEPARATELY FROM `_sweep`, because it means something different. A returned claim is
+     * a laptop that closed mid-run and the queue recovering from it, which is the design working.
+     * An abandoned one is work that will never run here — always harmless, since the card was
+     * answered on another lane at the time, and always worth seeing if it becomes a pattern.
+     */
+    results.push({
+      job_key: "_claude_code_queue",
+      status: "SWEPT",
+      summary:
+        `returned ${claimed.returnedToPool.length} silent claim(s) to the pool and closed ` +
+        `${claimed.abandoned.length} run(s) nobody will serve, from ${claimed.examined} open row(s)`,
+    });
+  }
   if (swept.jobRuns > 0 || swept.aiRuns > 0 || sweptReports > 0 || swept.rescheduled > 0 || swept.unrepairable.length > 0) {
     results.push({
       job_key: "_sweep",

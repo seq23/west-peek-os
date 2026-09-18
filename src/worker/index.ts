@@ -116,6 +116,12 @@ import {
   handleRunAi,
 } from "./services/aiRuns";
 import {
+  handleClaudeCodeClaim,
+  handleClaudeCodeHeartbeat,
+  handleClaudeCodeReport,
+  handleClaudeCodeStatus,
+} from "./services/claudeCode";
+import {
   handleAskLiveHelp,
   handleGetLiveHelp,
   handleReleaseEmployee,
@@ -1264,6 +1270,15 @@ const router = new Router()
   .get("/api/jobs", handleListJobs)
   .post("/api/jobs", handleCreateJob)
   .post("/api/jobs/tick", handleRunDueJobs)
+  /*
+   * P16 / migration 0187 — the Claude Code lane on the owner's Mac. Three routes for the claimer
+   * and one for a person asking why a card cost money. None of them can create work: the claimer
+   * only ever takes a run the router already parked, authorised and classified.
+   */
+  .post("/api/claude-code/heartbeat", handleClaudeCodeHeartbeat)
+  .post("/api/claude-code/claim", handleClaudeCodeClaim)
+  .post("/api/claude-code/report", handleClaudeCodeReport)
+  .get("/api/claude-code/status", handleClaudeCodeStatus)
   .get("/api/jobs/runs/:id", handleGetJobRun)
   .post("/api/jobs/runs/:id/cancel", handleCancelJobRun)
   .post("/api/jobs/:key/run", handleRunJob)

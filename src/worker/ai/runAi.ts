@@ -41,6 +41,8 @@ import {
   recordLaneOutage,
   type LaneHealthRow,
 } from "./laneHealth";
+import { CLAIM_WAIT_MS, CLAUDE_CODE_PROVIDER_KEY, laneAvailability } from "./claudeCodeLane";
+import { createClaudeCodeAdapter } from "./providers/claudeCode";
 
 /**
  * runAi — THE governed AI boundary (P4). No other module may call a provider
@@ -492,6 +494,12 @@ interface ProviderRow {
   base_url: string | null;
   /** 1 when this lane's terms permit the vendor to train on what it is sent. See migration 0178. */
   training_permitted?: number;
+  /**
+   * 1 when no Worker can dial this lane: the run is parked and an agent claims it. See migration
+   * 0187. A claimable lane is excluded from ordinary ranking for the same reason a free one is —
+   * both cost $0 and would otherwise take every unpinned call in the firm.
+   */
+  claimable?: number;
 }
 
 interface PricingRow {
@@ -1424,7 +1432,25 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * keeps going where it went, and mechanical work stays on Workers AI, which is nearly free AND
    * carries no training rights at all.
    */
-  const paidOptions = options.filter((o) => Number(o.provider.training_permitted ?? 0) !== 1);
+  /*
+   * ── AND A CLAIMABLE LANE NEVER WINS AN ORDINARY SELECTION EITHER, FOR THE SAME REASON ────────
+   *
+   * The paragraph above is about free lanes and it is exactly the trap the Claude Code lane would
+   * otherwise fall into, arriving through a different column. That lane costs $0 too — the
+   * subscription is a flat fee already paid — so it is the cheapest thing in the catalogue. What it
+   * is NOT is training-permitting: Anthropic's Commercial Terms §B forbid it outright, which is the
+   * whole reason the lane may carry private work at all. So the `training_permitted` filter does
+   * not catch it, and without this line a zero-cost Anthropic-terms lane would silently win every
+   * unpinned selection in the firm — routing everything to the owner's own laptop on the strength
+   * of a zero, which is precisely what she asked not to happen.
+   *
+   * `claimable` names the real property rather than the row: a lane no Worker can dial, served by
+   * an agent that takes the run. Such a lane is assembled only by its own eligibility gate at step
+   * 8a, where the two labels and the heartbeat decide, and it is said out loud on the run.
+   */
+  const paidOptions = options.filter(
+    (o) => Number(o.provider.training_permitted ?? 0) !== 1 && Number(o.provider.claimable ?? 0) !== 1,
+  );
   const everyCandidate: RoutingCandidate[] = paidOptions.map((o) => ({
     providerId: o.provider.id,
     providerKey: o.provider.provider_key,
@@ -2049,6 +2075,96 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * through a training-permitting lane to save a fraction of a cent would trade confidentiality
    * for nothing.
    */
+  /*
+   * ── 8a-i. HER OWN MACHINE FIRST, FOR THE ONE SLICE THAT HAS NOWHERE CHEAP TO GO ─────────────
+   *
+   * The stack the owner asked both her systems to share:
+   *
+   *     1. Claude Code on her Mac     $0, frontier   — when it is available
+   *     2. Free reasoning lanes       $0
+   *     3. Sonnet via OpenRouter      paid           — last resort
+   *
+   * WHICH WORK COMES HERE, stated rather than defaulted: PRIVATE_MODEL_ONLY WORK, AND NOTHING ELSE.
+   *
+   * The reasoning is a subtraction. PUBLIC_MODEL_APPROVED work — most of what this firm does — is
+   * already answered at $0 by the free reasoning lanes assembled immediately below. Moving it here
+   * would not save a penny, and it WOULD spend the interactive capacity the partners use to work.
+   * That is a pure loss, and it is the "do not silently route everything" failure in its most
+   * tempting form, because the lane looks free from the router's side.
+   *
+   * What is left is the private slice, and migration 0184 already wrote down that it has no cheap
+   * door: every cheap lane in this firm is a FREE lane, free lanes are capped at PUBLIC because
+   * their terms permit training, and the one paid non-training alternative is benched behind an
+   * unfunded account. So this slice — and only this slice — both saves real money here and is
+   * legally allowed to be here, under the same Anthropic Commercial Terms §B prohibition 0184 cites
+   * for `claude-haiku-4.5`. It is also where frontier quality earns its keep: the work that may not
+   * use a free reasoning model is the work that most wants a strong one.
+   *
+   * IT IS A CHAIN MEMBER AND NEVER A DEPENDENCY. If the heartbeat is stale the lane is not
+   * assembled at all — not skipped later, not waited on, simply never built — so a shut laptop
+   * costs this run one indexed read and the paid head leads exactly as it did yesterday. Prove it
+   * by deleting every device row: the firm's work is unchanged.
+   */
+  const claudeCodeEligible =
+    isJudgement &&
+    // The volume decision, as an expression. Public work already has a free lane; it does not come
+    // here, and `contentClass` — not the caller's say-so — is what decides which this run is.
+    !contentClass.publicModelApproved &&
+    // The claimer hands the model a text instruction over a local pipe. There is no wire format
+    // here for a picture or a deck, and an adapter that dropped one would answer confidently about
+    // a file the model never saw.
+    !input.images?.length &&
+    !input.documents?.length &&
+    // A local Claude Code session is not a search-grounded model, and a call that needs the live
+    // web must not be quietly answered from memory.
+    !requiresSearch;
+
+  const claudeCodeLanes: FallbackOption[] = [];
+  let claudeCodeNote = "";
+  if (claudeCodeEligible) {
+    const option = options.find((o) => Number(o.provider.claimable ?? 0) === 1 && o.provider.provider_key === CLAUDE_CODE_PROVIDER_KEY);
+    if (option) {
+      /*
+       * THE ONE READ. Asked BEFORE anything is parked and before any wait exists, which is the
+       * entire difference between a heartbeat and a timeout: absence is answered by a single
+       * indexed lookup rather than by ninety seconds of a partner's time.
+       */
+      const availability = await laneAvailability(env, now);
+      if (availability.available) {
+        const candidate: RoutingCandidate = {
+          providerId: option.provider.id,
+          providerKey: option.provider.provider_key,
+          model: option.pricing.model,
+          estimatedCostUsd: 0,
+          baseUrl: option.provider.base_url,
+        };
+        claudeCodeLanes.push({
+          candidate,
+          adapter: createClaudeCodeAdapter({
+            env,
+            modelAccess: "PRIVATE_MODEL_ONLY",
+            workCardId: input.routing?.workCardId ?? null,
+            aiEmployeeId: input.aiEmployeeId ?? null,
+            taskClass: input.routing?.taskClass ?? null,
+            firmScope,
+          }),
+          /*
+           * ENGAGES ON ANYTHING WHEN IT LEADS — it is the head, so this field only governs whether
+           * it may be RE-ENTERED later in a chain, and it may not: a lane that has just failed to
+           * produce an answer must not be offered the same work twice in one run.
+           */
+          engageOn: "OUTAGE",
+          estimate: { ...estimate, estimated_cost_usd: 0, provider_key: candidate.providerKey, model: candidate.model, input_per_mtok_usd: 0, output_per_mtok_usd: 0 },
+        });
+        claudeCodeNote = ` ${availability.reason}. This call may not use a training-permitting lane, and her subscription's terms forbid training, so it leads here at no cost.`;
+      } else {
+        // Said out loud even though it changed nothing — a silent skip is indistinguishable from a
+        // lane that was never wired up, which is how "runs but inert" hides.
+        claudeCodeNote = ` The Claude Code lane was not offered this run: ${availability.reason}. Nothing waited on it.`;
+      }
+    }
+  }
+
   const freeFirstEligible =
     isJudgement &&
     /*
@@ -2264,7 +2380,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * prices, while a free tier that has run out (429) does.
    */
   const paidHeadAsFallback: FallbackOption[] =
-    freeLanes.length > 0 ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }] : [];
+    freeLanes.length > 0 || claudeCodeLanes.length > 0 ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }] : [];
 
   /*
    * THE ORDER OF LAST RESORT, and each step is a smaller concession than the one after it:
@@ -2272,16 +2388,33 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * vendor → any other adequate lane that is working. Quality is surrendered as late as possible,
    * and the direct vendor lanes sit behind OpenRouter here exactly as they do in selection.
    */
+  /*
+   * HER MACHINE LEADS WHERE IT IS AWAKE AND ELIGIBLE, AND EVERYTHING ELSE STANDS BEHIND IT
+   * UNCHANGED. `claudeCodeLanes` is empty whenever the lane is asleep, absent, or not entitled to
+   * this run, in which case this array is byte-for-byte the chain that landed in 0184 — which is
+   * the property that makes the lane a member rather than a dependency.
+   *
+   * Note what follows it for a PRIVATE_MODEL_ONLY call: `freeLanes` is empty by construction (this
+   * work may not use a training-permitting lane), so the next stop is the paid head. The chain does
+   * not get shorter or weaker; it gains one free frontier step in front of it.
+   */
+  /**
+   * The $0 lanes in the order they are tried, her own machine first. ONE array rather than two
+   * spreads, so the head can never also appear as its own fallback — which is what a hand-written
+   * `slice(1)` on the wrong list quietly does.
+   */
+  const zeroCostLead: FallbackOption[] = [...claudeCodeLanes, ...freeLanes];
+
   const fallbacks: FallbackOption[] = [
-    ...freeLanes.slice(1),
+    ...zeroCostLead.slice(1),
     ...paidHeadAsFallback,
     ...policyFallbacks,
     ...outageFallbacks,
     ...lastResortFallbacks,
   ];
 
-  /** What actually runs first: a free lane where one is eligible, the chosen model otherwise. */
-  const lead = freeLanes[0];
+  /** What actually runs first: her Mac if it is awake, then a free lane, then the chosen model. */
+  const lead = zeroCostLead[0];
   if (outageFallbacks.length > 0) {
     explanation +=
       ` Direct-vendor fallback is available for this call (${outageFallbacks
@@ -2296,7 +2429,17 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   }
   const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [];
 
-  if (lead) {
+  /*
+   * THE LANE IS NAMED WHETHER IT SERVED OR NOT. A run whose explanation mentions her Mac only on
+   * the mornings it happens to be awake reads as an intermittent bug rather than as a design, and
+   * "why did this cost money today" becomes unanswerable on exactly the days it matters.
+   */
+  explanation += claudeCodeNote;
+  if (claudeCodeLanes.length > 0 && lead === claudeCodeLanes[0]) {
+    explanation +=
+      ` If her machine does not answer within ${Math.round(CLAIM_WAIT_MS / 1000)} seconds, or reports a failure, the run ` +
+      `moves on to ${head.providerKey}/${head.model} inside this same run and the handover is recorded. Nothing waits on the Mac twice.`;
+  } else if (lead) {
     explanation +=
       ` Free frontier capacity is tried first for this call (${lead.candidate.providerKey}/${lead.candidate.model}); ` +
       `it carries no LP names or deal terms and is labelled ${input.sensitivity}, so a lane whose terms permit training is allowed to serve it. ` +
