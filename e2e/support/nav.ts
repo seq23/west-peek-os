@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 /**
  * Shell navigation helper (design overhaul, D3).
@@ -59,4 +59,27 @@ export async function gotoSurface(page: Page, label: string): Promise<void> {
     await openSystemAreaIfCollapsed(page);
   }
   await target.click();
+}
+
+/**
+ * Open Work, then the machinery, the way an operator does — AND PIN THAT IT IS NOT ON THE DESK.
+ *
+ * The scheduled machinery used to render below the whole board on the Work surface, so four specs
+ * reached it by navigating to Work and asserting `jobs-page` was visible. The 18 Sep redesign
+ * separated the four kinds the page carries: what needs her, what is happening now, what the firm
+ * has done, and what runs on a clock. Machinery is the fourth, and it stopped competing with the
+ * second by getting its own address.
+ *
+ * WHY THIS HELPER ASSERTS THE ABSENCE FIRST. Replacing `expect(jobs-page).toBeVisible()` with a
+ * click and the same expectation would have been a weaker test than the one it replaced — it would
+ * pass just as happily if the machinery quietly reappeared under the board tomorrow, which is the
+ * exact regression this redesign exists to prevent. So the contract is stated in both directions:
+ * the machinery is NOT on the desk, and it IS one deliberate click away.
+ */
+export async function openWorkMachinery(page: Page): Promise<void> {
+  await gotoSurface(page, "Work");
+  const jobs = page.getByTestId("jobs-page");
+  await expect(jobs, "the machinery must not be on the desk — it is the kind that does not need her").toHaveCount(0);
+  await page.getByTestId("work-view-machinery").click();
+  await expect(jobs, "the machinery must be exactly one click from the desk").toBeVisible();
 }

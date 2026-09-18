@@ -3412,7 +3412,15 @@ details.card > summary,
 }
 
 .work-legend-wrap { margin: 0 0 var(--space-lg); }
-.work-legend-wrap > summary { cursor: pointer; }
+/* MEASURED AT 19px TALL ON A 320px SCREEN by `d3-work-measured`, which is under the 24px WCAG
+   2.5.8 floor and well under a thumb. A disclosure is a control; it gets a control's target. */
+.work-legend-wrap > summary {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-min);
+  padding: var(--space-2xs) 0;
+}
 .work-legend-wrap > .work-legend { margin-top: var(--space-sm); }
 
 /* ── Scheduled work: cards, not rows ───────────────────────────────────────

@@ -288,8 +288,17 @@ test("Work holds its measured numbers at day-200 volume: contrast, tap targets, 
  * band heads, and the band heads meaningfully larger than body copy. Three ranks of meaning, three
  * ranks of type.
  */
-test("Work has three ranks of type, not one", async ({ page }) => {
+test("Work has three ranks of type, not one", async ({ page, request }) => {
   await signIn(page);
+
+  /* A rank comparison needs something at every rank. On an empty firm there are no bands and no
+     band note, so one live card is the fixture — and the Rule-0 guard below is what caught this. */
+  const made = await request.post("/api/work-cards", {
+    headers: MP,
+    data: { title: "A card so the desk has a band to measure", next_action: "be measured" },
+  });
+  expect(made.status(), await made.text()).toBe(201);
+
   await page.setViewportSize({ width: 1280, height: 900 });
   await openWork(page);
 
@@ -336,6 +345,12 @@ test("the desk stays short while the record grows, and the oldest row is still f
   await signIn(page);
   await page.setViewportSize({ width: 1280, height: 900 });
 
+  /* The suite shares one database, so "the record is empty" is never true by the time this runs.
+     Reading the total first turns the assertion into a delta, which is the stronger claim. */
+  const before = (await (await request.get("/api/work-cards/record?limit=1", { headers: MP })).json()) as {
+    total: { cards: number };
+  };
+
   await openWork(page);
   const emptyDesk = await page.evaluate(
     () => (document.querySelector('[data-testid="work-cards-page"]') as HTMLElement).scrollHeight,
@@ -367,7 +382,7 @@ test("the desk stays short while the record grows, and the oldest row is still f
   await expect(page.getByTestId("work-record")).toBeVisible();
 
   const summary = page.getByTestId("work-record-summary");
-  await expect(summary).toContainText(`${seeded} finished`);
+  await expect(summary).toContainText(`${before.total.cards + seeded} finished`);
 
   // THE NEEDLE IS THE OLDEST ROW IN THE RECORD. Recency cannot find it; search has to.
   await page.getByTestId("work-record-search").fill("needle in the record");
@@ -384,5 +399,5 @@ test("the desk stays short while the record grows, and the oldest row is still f
   // ── AND A FILTER THAT MATCHES NOTHING SAYS SO ─────────────────────────────────────────────────
   await page.getByTestId("work-record-search").fill("zzz nothing has ever been called this zzz");
   await expect(page.getByTestId("work-record-empty")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId("work-record-empty")).toContainText(`${seeded}`);
+  await expect(page.getByTestId("work-record-empty")).toContainText(`${before.total.cards + seeded}`);
 });
