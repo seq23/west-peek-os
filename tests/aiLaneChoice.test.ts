@@ -228,7 +228,20 @@ describe("the unfunded lane chains instead of stopping the work", () => {
       for (const [needle, handler] of Object.entries(routes)) {
         if (needle === host || body.includes(needle)) return handler();
       }
-      throw new Error(`no stub matched host ${host} — the test did not expect this call`);
+      /*
+       * ── AN UNSTUBBED LANE IS A BROKEN VENDOR, NOT A TEST ERROR ────────────────────────────
+       *
+       * This used to throw, and that was right when the catalogue held five models: an unexpected
+       * call meant the test had lost track of the chain. Migration 0188 registered ten more lanes,
+       * so the chain now legitimately walks past lanes these cases have no opinion about — and a
+       * thrown "no stub" is NOT outage-class, so it HALTED the chain and the run deferred. The test
+       * would have been asserting the size of the catalogue rather than the behaviour of the chain.
+       *
+       * A 503 is the honest stand-in: it says "this vendor is down", which is exactly the situation
+       * each of these cases is about. The assertions below therefore now prove something STRONGER
+       * than they did — the chain reaches the working lane past MORE broken ones, not fewer.
+       */
+      return new Response(JSON.stringify({ error: `unstubbed lane ${host} treated as down` }), { status: 503 });
     }) as unknown as typeof fetch;
     return { fetchImpl, seen };
   }

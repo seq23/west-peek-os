@@ -97,12 +97,12 @@ async function seededNotices(): Promise<Array<{ id: string; title: string; body:
 }
 
 describe("the firm has actually written its notices down", () => {
-  it("seeds thirteen firmwide notices, one of which supersedes another, and refuses to pass on an empty table", async () => {
+  it("seeds fourteen firmwide notices, one of which supersedes another, and refuses to pass on an empty table", async () => {
     const rows = await seededNotices();
     // RULE 0. If 0181 ever stops seeding, this file must go red rather than quietly assert nothing.
     expect(rows.length, "no firmwide notices are seeded — every assertion below would be vacuous").toBeGreaterThan(0);
-    expect(rows).toHaveLength(13);
-    // Twelve of the thirteen are READ. The thirteenth names the notice it replaces, and the
+    expect(rows).toHaveLength(14);
+    // Thirteen of the fourteen are READ. The one that names the notice it replaces, and the
     // replaced one is dropped from the prompt rather than from the table.
     const superseded = rows.filter((r) => r.supersedes_id);
     expect(superseded).toHaveLength(1);
@@ -273,7 +273,7 @@ describe("a notice reaches the employee, which is the entire point", () => {
      * differ on purpose, and asserting both is what proves supersession works rather than that a
      * row vanished.
      */
-    expect((await seededNotices()).length).toBe(13);
+    expect((await seededNotices()).length).toBe(14);
   });
 });
 

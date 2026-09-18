@@ -113,10 +113,26 @@ export function orderByPolicy(policy: RoutingPolicyRow, available: RoutingCandid
  * `credentialConfigured` here is per-vendor (src/shared/ai/providerCredentials.ts), so "Anthropic
  * is configured" no longer means "some key, belonging to somebody, is set".
  */
+export interface AdapterOptions {
+  /**
+   * TRUE FOR ANY CALL CARRYING LP NAMES, DEAL TERMS OR FUND FIGURES.
+   *
+   * Passed down to the OpenRouter adapter as `provider: { data_collection: "deny" }`, which is
+   * OpenRouter's own routing constraint — verified live on 17 Sep 2026 to serve a paid lane and to
+   * REFUSE a `:free` one with "No endpoints found matching your data policy (Free model training)".
+   * See providers/openRouter.ts for the probe and the reasoning.
+   *
+   * It is threaded through here rather than read from the environment because it is a fact about
+   * THIS CALL, not about the deployment, and every adapter built for one run must agree about it.
+   */
+  denyDataCollection?: boolean;
+}
+
 export function adapterFor(
   env: Env,
   candidate: RoutingCandidate,
   fetchImpl?: typeof fetch,
+  opts: AdapterOptions = {},
 ): { adapter: ProviderAdapter; credentialConfigured: boolean } {
   const baseUrl = candidate.baseUrl ?? "";
   const key = credentialValueFor(env, candidate.providerKey);
@@ -124,7 +140,13 @@ export function adapterFor(
 
   if (candidate.providerKey === "openrouter" || candidate.providerKey === "openrouter_free") {
     return {
-      adapter: createOpenRouterAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
+      adapter: createOpenRouterAdapter({
+        baseUrl,
+        model: candidate.model,
+        apiKey: key,
+        fetchImpl,
+        ...(opts.denyDataCollection ? { denyDataCollection: true } : {}),
+      }),
       credentialConfigured: configured,
     };
   }
@@ -143,6 +165,34 @@ export function adapterFor(
         model: candidate.model,
       }),
       credentialConfigured: Boolean(binding),
+    };
+  }
+  /*
+   * A CLAIMABLE LANE HAS NO WIRE, AND MUST NOT BE HANDED THE GENERIC ONE.
+   *
+   * `prov_claude_code` and `prov_codex` have a NULL base URL on purpose — there is nothing to dial — so the fall
+   * through at the bottom of this function would build an `httpExternal` adapter pointed at the
+   * empty string and POST a partner's instruction to a relative path. That is a nonsense request
+   * rather than a leak, but it would be reported as a provider failure with an unreadable reason,
+   * and the lane's real behaviour lives in `providers/claudeCode.ts` where the queue is.
+   *
+   * The subscription seats are assembled directly in `runAi` because it needs run context this
+   * function does not see — the work card, the employee, the firm scope. This branch exists so
+   * that a future caller reaching it by another path gets a NAMED refusal rather than a wire call,
+   * and so the fall-through below can never quietly acquire a claimable lane.
+   */
+  if (candidate.providerKey === "claude_code" || candidate.providerKey === "codex") {
+    return {
+      adapter: {
+        complete: async () => {
+          throw new Error(
+            "subscription_seat_unavailable:this seat is served by a claimer on the owner's Mac and cannot be dialled. " +
+              "It is assembled in runAi with the run's own context; reaching it through adapterFor is a wiring mistake.",
+          );
+        },
+      },
+      // No credential exists or is wanted: the claimer authenticates to US, not the other way round.
+      credentialConfigured: true,
     };
   }
   if (candidate.providerKey === "fireworks") {

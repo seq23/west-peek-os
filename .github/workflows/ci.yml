@@ -177,6 +177,19 @@ jobs:
       - name: A lane that cannot serve must chain, and no notice may take the firm offline
         run: npm run validate:chaining
 
+      # Migrations 0187 and 0188. Three of these seven cannot be written as a test.
+      #
+      # The heartbeat interval lives in TypeScript in the Worker AND in JavaScript on a laptop; a
+      # claimer that pings less often than the freshness window is permanently invisible and nothing
+      # anywhere says why, which looks exactly like a machine that is always asleep. The launchd
+      # label and log paths must stay distinct from Boss OS's, or `launchctl unload` on one silently
+      # stops the other. And a claimable lane costs $0 while NOT permitting training, so the filter
+      # that keeps the free lanes out of ordinary selection does not catch it — drop the `claimable`
+      # clause and every unpinned call in the firm routes to the owner's own laptop on the strength
+      # of a zero.
+      - name: Two seats she already pays for, and one ladder walked down
+        run: npm run validate:seats
+
       - name: Build client
         run: npm run build
 

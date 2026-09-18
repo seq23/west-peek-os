@@ -66,7 +66,7 @@ describe("migration 0001 — schema + seeds", () => {
      * approver role, so a roleless identity cannot approve, activate or decide anything.
      */
     const users = await t.db.prepare("SELECT COUNT(*) AS n FROM firm_user").first<{ n: number }>();
-    expect(users?.n).toBe(3);
+    expect(users?.n).toBe(4);
 
     const withRoles = await t.db
       .prepare("SELECT COUNT(DISTINCT firm_user_id) AS n FROM firm_user_role")

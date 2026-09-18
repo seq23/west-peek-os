@@ -50,6 +50,23 @@ const ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
 const BROWSER_AGENT_EMAIL = "browser-agent@westpeek.ventures";
 
 /**
+ * The claimer on the owner's Mac (migration 0187). A SECOND service token, named separately for
+ * the reason the paragraph above gives: granting a token access to this Access application must
+ * not hand it whichever firm identity happens to be first in this file.
+ *
+ * ITS OWN IDENTITY, NOT THE BROWSER AGENT'S. Two agents doing different jobs behind one email
+ * makes the audit log unreadable and means revoking one revokes the other. The claimer is a
+ * distinct `firm_user` row seeded by 0187, with no authority scopes and no roles — it needs none:
+ * the only three routes it may call check for it by name, and every run it serves was already
+ * authorised as somebody else's work before it was parked.
+ *
+ * NOT A PER-PERSON LANE. The owner has approved Scooter's work running on her subscription, so the
+ * claimer is the FIRM's agent and takes whatever the firm parked. There is deliberately no partner
+ * identity anywhere in this path.
+ */
+export const SUBSCRIPTION_CLAIMER_EMAIL = "subscription-claimer@joinwestpeek.com";
+
+/**
  * The service token's client id, read out of the Access assertion.
  *
  * WHERE THE IDENTITY ACTUALLY IS. `CF-Access-Client-Id` is what a caller SENDS, and Access strips
@@ -118,10 +135,21 @@ function identityEmail(request: Request, env: Env): string | null {
    *
    * Inert unless the client id is configured. No secret bound, no agent.
    */
+  const presented = serviceTokenClientId(request);
+
   const configured = env.CF_ACCESS_CLIENT_ID;
   if (typeof configured === "string" && configured.length > 0) {
-    const presented = serviceTokenClientId(request);
     if (presented && presented === configured) return BROWSER_AGENT_EMAIL;
+  }
+
+  /*
+   * The Claude Code claimer, on the same terms and by the same mechanism. Inert unless its own
+   * client id is configured — no token, no agent — and checked after the browser agent so the two
+   * can never collide on a shared value.
+   */
+  const claimerId = env.WP_OS_CLAIMER_CLIENT_ID;
+  if (typeof claimerId === "string" && claimerId.length > 0) {
+    if (presented && presented === claimerId) return SUBSCRIPTION_CLAIMER_EMAIL;
   }
   return null;
 }

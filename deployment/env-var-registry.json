@@ -14,48 +14,165 @@
     "NO VALUE IS EVER RECORDED HERE. Names and purposes only."
   ],
   "vars": {
-    "WP_OS_DB": { "kind": "binding", "required": true, "purpose": "D1 — relational operational truth." },
-    "WP_OS_DOCUMENTS": { "kind": "binding", "required": false, "purpose": "R2 — governed binary documents. Absent degrades cleanly." },
-    "WP_OS_KV": { "kind": "binding", "required": false, "purpose": "KV — ephemeral config and cache only, never institutional truth." },
-    "ASSETS": { "kind": "binding", "required": true, "purpose": "Static React client assets." },
-    "AI": { "kind": "binding", "required": false, "purpose": "Workers AI — the cheap tier, and the only free lane whose terms do not permit training." },
-    "BROWSER": { "kind": "binding", "required": false, "purpose": "Browser Rendering (P44). A binding, so no egress exemption and no third-party credential." },
-    "EMAIL": { "kind": "binding", "required": false, "purpose": "Cloudflare Email Sending. Commented out in wrangler.toml; Resend carries outbound mail." },
-
-    "WP_OS_ENV": { "kind": "var", "required": true, "purpose": "local | preview | production. Gates the dev identity header." },
-
-    "OPENROUTER_API_KEY": { "kind": "secret", "required": true, "purpose": "OpenRouter — the primary lane, and until 17 Sep 2026 the only one. Every ACTIVE model sat behind it." },
-    "OPENAI_API_KEY": { "kind": "secret", "required": false, "purpose": "OpenAI direct. Reached only when the primary fails, as the same model." },
+    "WP_OS_DB": {
+      "kind": "binding",
+      "required": true,
+      "purpose": "D1 — relational operational truth."
+    },
+    "WP_OS_DOCUMENTS": {
+      "kind": "binding",
+      "required": false,
+      "purpose": "R2 — governed binary documents. Absent degrades cleanly."
+    },
+    "WP_OS_KV": {
+      "kind": "binding",
+      "required": false,
+      "purpose": "KV — ephemeral config and cache only, never institutional truth."
+    },
+    "ASSETS": {
+      "kind": "binding",
+      "required": true,
+      "purpose": "Static React client assets."
+    },
+    "AI": {
+      "kind": "binding",
+      "required": false,
+      "purpose": "Workers AI — the cheap tier, and the only free lane whose terms do not permit training."
+    },
+    "BROWSER": {
+      "kind": "binding",
+      "required": false,
+      "purpose": "Browser Rendering (P44). A binding, so no egress exemption and no third-party credential."
+    },
+    "EMAIL": {
+      "kind": "binding",
+      "required": false,
+      "purpose": "Cloudflare Email Sending. Commented out in wrangler.toml; Resend carries outbound mail."
+    },
+    "WP_OS_ENV": {
+      "kind": "var",
+      "required": true,
+      "purpose": "local | preview | production. Gates the dev identity header."
+    },
+    "OPENROUTER_API_KEY": {
+      "kind": "secret",
+      "required": true,
+      "purpose": "OpenRouter — the primary lane, and until 17 Sep 2026 the only one. Every ACTIVE model sat behind it."
+    },
+    "OPENAI_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "OpenAI direct. Reached only when the primary fails, as the same model."
+    },
     "WP_ANTHROPIC_API_KEY": {
       "kind": "secret",
       "required": false,
       "purpose": "Anthropic direct. WP_-prefixed deliberately: the owner's vault treats the bare ANTHROPIC_API_KEY as reserved, alongside ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, CLAUDE_CODE_USE_BEDROCK, PATH and LD_PRELOAD, because emitting it into a process environment would hijack her own Claude tooling. Do not rename it."
     },
-    "GEMINI_API_KEY": { "kind": "secret", "required": false, "purpose": "Google Gemini, paid and unpaid quota. Unrelated to GOOGLE_OAUTH_*, which is the calendar client." },
-    "PERPLEXITY_API_KEY": { "kind": "secret", "required": false, "purpose": "Perplexity direct — the only fallback search has. Speaks /v1/responses, not chat-completions." },
-    "FIREWORKS_API_KEY": { "kind": "secret", "required": false, "purpose": "Fireworks. No key exists; the provider stays disabled until one does." },
+    "GEMINI_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Google Gemini, paid and unpaid quota. Unrelated to GOOGLE_OAUTH_*, which is the calendar client."
+    },
+    "PERPLEXITY_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Perplexity direct — the only fallback search has. Speaks /v1/responses, not chat-completions."
+    },
+    "FIREWORKS_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Fireworks. No key exists; the provider stays disabled until one does."
+    },
     "AI_PROVIDER_API_KEY": {
       "kind": "secret",
       "required": false,
       "purpose": "The name every vendor but OpenRouter and Fireworks used to share. Kept as a fallback so an environment configured before the per-vendor names existed keeps working; no vendor is REPORTED as using it any more."
     },
-    "HARVEY_API_KEY": { "kind": "secret", "required": false, "purpose": "Specialist legal lane (P23). No vendor account exists; a name only." },
-    "NORM_API_KEY": { "kind": "secret", "required": false, "purpose": "Specialist lane (P23). No vendor account exists; a name only." },
-
-    "RESEND_API_KEY": { "kind": "secret", "required": false, "purpose": "Outbound email transport (P33)." },
-    "RUNWARE_API_KEY": { "kind": "secret", "required": false, "purpose": "Image generation. Absent means the capability is off, not broken." },
-    "CF_ACCESS_CLIENT_ID": { "kind": "secret", "required": false, "purpose": "Access service token, read only by the browser client and only for this firm's own hosts." },
-    "CF_ACCESS_CLIENT_SECRET": { "kind": "secret", "required": false, "purpose": "The other half of that token. The Worker's own auth never reads it." },
-    "GOOGLE_OAUTH_CLIENT_ID": { "kind": "secret", "required": false, "purpose": "Read-only calendar client (P51). One client for the firm; each partner grants their own account." },
-    "GOOGLE_OAUTH_CLIENT_SECRET": { "kind": "secret", "required": false, "purpose": "The other half of the calendar client." },
-    "WP_OS_NETWORK_OS_SESSION_SECRET": { "kind": "secret", "required": false, "purpose": "Signs the wpn_session cookie Network OS accepts (P35)." },
-
-    "WP_OS_EMAIL_SEND": { "kind": "var", "required": false, "purpose": "Literal \"enabled\" switches sending on. Anything else, unset included, keeps it recorded-only." },
-    "WP_OS_EMAIL_FROM": { "kind": "var", "required": false, "purpose": "Verified sender address. Without it a send is refused rather than guessed." },
-    "WP_OS_AI_EMAIL_PARTNERS": { "kind": "var", "required": false, "purpose": "Whether an AI employee may email the Managing Partners. Off unless exactly \"enabled\"." },
-    "WP_OS_AI_EMAIL_EXTERNAL": { "kind": "var", "required": false, "purpose": "Whether an AI employee may email outside the firm. The one with no undo." },
-    "WP_OS_PARTNER_EMAIL_DOMAIN": { "kind": "var", "required": false, "purpose": "Domain the partners' addresses live on. A derived list, not a hard-coded one." },
-    "WP_OS_NETWORK_OS_BASE_URL": { "kind": "var", "required": false, "purpose": "Network OS origin (P35). All three Network OS names are required before the pull works." },
-    "WP_OS_NETWORK_OS_USER_EMAIL": { "kind": "var", "required": false, "purpose": "The identity Network OS authenticates; must be on its own approved-users list." }
+    "HARVEY_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Specialist legal lane (P23). No vendor account exists; a name only."
+    },
+    "NORM_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Specialist lane (P23). No vendor account exists; a name only."
+    },
+    "RESEND_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Outbound email transport (P33)."
+    },
+    "RUNWARE_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Image generation. Absent means the capability is off, not broken."
+    },
+    "CF_ACCESS_CLIENT_ID": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Access service token, read only by the browser client and only for this firm's own hosts."
+    },
+    "CF_ACCESS_CLIENT_SECRET": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "The other half of that token. The Worker's own auth never reads it."
+    },
+    "GOOGLE_OAUTH_CLIENT_ID": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Read-only calendar client (P51). One client for the firm; each partner grants their own account."
+    },
+    "GOOGLE_OAUTH_CLIENT_SECRET": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "The other half of the calendar client."
+    },
+    "WP_OS_NETWORK_OS_SESSION_SECRET": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Signs the wpn_session cookie Network OS accepts (P35)."
+    },
+    "WP_OS_EMAIL_SEND": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Literal \"enabled\" switches sending on. Anything else, unset included, keeps it recorded-only."
+    },
+    "WP_OS_EMAIL_FROM": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Verified sender address. Without it a send is refused rather than guessed."
+    },
+    "WP_OS_AI_EMAIL_PARTNERS": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Whether an AI employee may email the Managing Partners. Off unless exactly \"enabled\"."
+    },
+    "WP_OS_AI_EMAIL_EXTERNAL": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Whether an AI employee may email outside the firm. The one with no undo."
+    },
+    "WP_OS_PARTNER_EMAIL_DOMAIN": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Domain the partners' addresses live on. A derived list, not a hard-coded one."
+    },
+    "WP_OS_NETWORK_OS_BASE_URL": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Network OS origin (P35). All three Network OS names are required before the pull works."
+    },
+    "WP_OS_NETWORK_OS_USER_EMAIL": {
+      "kind": "var",
+      "required": false,
+      "purpose": "The identity Network OS authenticates; must be on its own approved-users list."
+    },
+    "WP_OS_CLAIMER_CLIENT_ID": {
+      "kind": "config",
+      "required": false,
+      "purpose": "Access service token client id of the subscription-seat claimer on the owner's Mac (migration 0187). A NAME, not a secret: Access verifies both halves at the edge and forwards only a signed assertion. Absent means the claimer identity does not exist and the subscription lanes can never be claimed — safe, not broken: the chain answers every run on the lanes it always used."
+    }
   }
 }
