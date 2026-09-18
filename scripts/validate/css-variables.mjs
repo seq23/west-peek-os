@@ -16,6 +16,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = "src/client";
 const CSS = "src/client/styles.css";
@@ -44,7 +45,7 @@ export function usedWithoutFallback(source) {
   return out;
 }
 
-export function scan(cssText, files, read = (f) => readFileSync(f, "utf8")) {
+export function scan(cssText, files, read = (f) => stripCommentsFor(f, readFileSync(f, "utf8"))) {
   const defined = definedTokens(cssText);
   const problems = [];
   for (const f of files) {
@@ -83,7 +84,7 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const problems = scan(readFileSync(CSS, "utf8"), files);
+const problems = scan(stripCommentsFor(CSS, readFileSync(CSS, "utf8")), files);
 if (problems.length > 0) {
   console.error("CSS VARIABLE SCAN FAILED — these resolve to nothing and are silently dropped:\n");
   for (const p of problems) console.error(`  ${p}`);

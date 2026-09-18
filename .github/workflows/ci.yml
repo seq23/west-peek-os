@@ -298,6 +298,14 @@ jobs:
       - name: A green run means something
         run: npm run validate:green-means-something
 
+      # 18 Sep 2026: `validate:css-classes` failed a correct branch because a comment explained that
+      # the class it named had just been removed. 25 of 40 scans stripped comments, 12 did not. The
+      # gate costs ~8 seconds in total, so the tax was never the number of validators — it was that
+      # a third of them could be fooled by a sentence, and a rule people route around is worse than
+      # no rule at all.
+      - name: A scan reads code, not prose
+        run: npm run validate:scans-read-code
+
       - name: Build client
         run: npm run build
 

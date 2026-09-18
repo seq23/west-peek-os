@@ -32,6 +32,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ADAPTER_DIR = path.resolve("src/worker/ai/providers");
 const MIGRATIONS_DIR = path.resolve("migrations");
@@ -64,7 +65,7 @@ function checkAdaptersCarryVendorDetail() {
   for (const entry of readdirSync(ADAPTER_DIR, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
     if (entry.name === "types.ts" || entry.name === "timeout.ts" || entry.name === "httpError.ts") continue;
-    const src = readFileSync(path.join(ADAPTER_DIR, entry.name), "utf8");
+    const src = stripCommentsFor(path.join(ADAPTER_DIR, entry.name), readFileSync(path.join(ADAPTER_DIR, entry.name), "utf8"));
     // Only adapters that actually make an HTTP call are in scope. mockLocal and the Workers AI
     // binding have no Response to read, and demanding one of them would be the check misfiring.
     if (!/\bres\.ok\b|\bresponse\.ok\b/.test(src)) continue;
@@ -88,7 +89,7 @@ function checkAdaptersCarryVendorDetail() {
 
 /** The REAL marker list, parsed out of the module the router uses. Never a copy kept in step. */
 function markerRegexes() {
-  const src = readFileSync(CONTENT_CLASS, "utf8");
+  const src = stripCommentsFor(CONTENT_CLASS, readFileSync(CONTENT_CLASS, "utf8"));
   const block = /const PRIVATE_MODEL_ONLY_MARKERS[\s\S]*?\]\);/.exec(src);
   if (!block) throw new Error("could not find PRIVATE_MODEL_ONLY_MARKERS in contentClass.ts — the parse is stale");
   const out = [];
@@ -100,7 +101,7 @@ function markerRegexes() {
 function seededFirmNotices() {
   const found = [];
   for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort()) {
-    const sql = readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
+    const sql = stripCommentsFor(path.join(MIGRATIONS_DIR, file), readFileSync(path.join(MIGRATIONS_DIR, file), "utf8"));
     if (!/internal_memo/.test(sql)) continue;
     // Rows are ('id', 'SYSTEM', 'author', 'FIRM', NULL, 'title', 'body'[, 'supersedes']).
     for (const row of sql.matchAll(/\(\s*'([^']*)',\s*'(?:SYSTEM|HUMAN|AI)',\s*'[^']*',\s*'FIRM',\s*NULL,\s*'((?:[^']|'')*)',\s*'((?:[^']|'')*)'/g)) {
@@ -139,7 +140,7 @@ function checkNoticesDoNotTripTheDetector() {
 // ── 3. The 400 guard stays narrow ────────────────────────────────────────────────────────────
 function checkFourHundredGuardStaysNarrow() {
   const CHECK = "the 400 guard stays narrow";
-  const src = readFileSync(PROVIDER_FAILURE, "utf8");
+  const src = stripCommentsFor(PROVIDER_FAILURE, readFileSync(PROVIDER_FAILURE, "utf8"));
   let examined = 0;
 
   examined += 1;
@@ -216,13 +217,13 @@ function checkTwoLabelsAreWired() {
   ];
   for (const [file, pattern, why] of wants) {
     examined += 1;
-    const src = readFileSync(file, "utf8");
+    const src = stripCommentsFor(file, readFileSync(file, "utf8"));
     if (!pattern.test(src)) fail(CHECK, `${path.relative(process.cwd(), file)} — ${why} (looked for ${pattern})`);
   }
   // The column must exist in a migration, or every one of the above is writing to nothing.
   const migration = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith(".sql"))
-    .map((f) => readFileSync(path.join(MIGRATIONS_DIR, f), "utf8"))
+    .map((f) => stripCommentsFor(path.join(MIGRATIONS_DIR, f), readFileSync(path.join(MIGRATIONS_DIR, f), "utf8")))
     .join("\n");
   examined += 2;
   if (!/ALTER TABLE work_card ADD COLUMN model_access/.test(migration)) fail(CHECK, "no migration adds work_card.model_access");
@@ -255,7 +256,7 @@ function selfTest() {
     problems.push("the two-labels notice was not parsed out of the migrations");
   }
 
-  const src = readFileSync(PROVIDER_FAILURE, "utf8");
+  const src = stripCommentsFor(PROVIDER_FAILURE, readFileSync(PROVIDER_FAILURE, "utf8"));
   if (!/vendorCannotServe/.test(src)) problems.push("providerFailure no longer exports vendorCannotServe");
 
   if (problems.length > 0) {

@@ -57,6 +57,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
@@ -186,7 +187,7 @@ function readMigrationsInOrder() {
   const files = readdirSync(MIGRATIONS)
     .filter((f) => f.endsWith(".sql"))
     .sort();
-  return { files, sql: files.map((f) => readFileSync(path.join(MIGRATIONS, f), "utf8")) };
+  return { files, sql: files.map((f) => stripCommentsFor(path.join(MIGRATIONS, f), readFileSync(path.join(MIGRATIONS, f), "utf8"))) };
 }
 
 function selfTest() {
@@ -275,7 +276,7 @@ function selfTest() {
 function main() {
   if (process.argv.includes("--self-test")) return selfTest();
 
-  const source = readFileSync(KINDS_FILE, "utf8");
+  const source = stripCommentsFor(KINDS_FILE, readFileSync(KINDS_FILE, "utf8"));
   const kinds = parseKinds(source);
   const defined = parseDefinedKeys(source);
   const { files, sql } = readMigrationsInOrder();

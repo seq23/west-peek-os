@@ -49,6 +49,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { effectiveSchedule, readMigrationsInOrder } from "./a-rare-lane-is-checked-daily.mjs";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const ROOMS_FILE = path.join(ROOT, "src", "worker", "services", "roomPacket.ts");
@@ -291,9 +292,9 @@ function selfTest() {
     if (!cond) failures.push(what);
   };
 
-  const roomsSrc = readFileSync(ROOMS_FILE, "utf8");
-  const jobsSrc = readFileSync(JOBS_FILE, "utf8");
-  const planSrc = readFileSync(PLAN_FILE, "utf8");
+  const roomsSrc = stripCommentsFor(ROOMS_FILE, readFileSync(ROOMS_FILE, "utf8"));
+  const jobsSrc = stripCommentsFor(JOBS_FILE, readFileSync(JOBS_FILE, "utf8"));
+  const planSrc = stripCommentsFor(PLAN_FILE, readFileSync(PLAN_FILE, "utf8"));
 
   // 1 · THE REAL PRE-FIX CADENCE: 0166's `interval_minutes = 15`, no zone.
   const preFix = [
@@ -409,9 +410,9 @@ function main() {
     console.error("STEER-WAITS SCAN FAILED — read zero migrations. Rule 0.");
     process.exit(1);
   }
-  const roomsSrc = readFileSync(ROOMS_FILE, "utf8");
-  const jobsSrc = readFileSync(JOBS_FILE, "utf8");
-  const planSrc = readFileSync(PLAN_FILE, "utf8");
+  const roomsSrc = stripCommentsFor(ROOMS_FILE, readFileSync(ROOMS_FILE, "utf8"));
+  const jobsSrc = stripCommentsFor(JOBS_FILE, readFileSync(JOBS_FILE, "utf8"));
+  const planSrc = stripCommentsFor(PLAN_FILE, readFileSync(PLAN_FILE, "utf8"));
 
   const sites = conceptsPromptSites(roomsSrc);
   const violations = [

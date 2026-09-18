@@ -45,6 +45,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const WORKER_DIR = path.resolve("src/worker");
 const MIGRATIONS_DIR = path.resolve("migrations");
@@ -71,7 +72,7 @@ export function extractStatements(files) {
     /"(\s*(?:SELECT|INSERT|UPDATE|DELETE)\b[^"]{10,700})"/gi,
   ];
   for (const file of files) {
-    const src = readFileSync(file, "utf8");
+    const src = stripCommentsFor(file, readFileSync(file, "utf8"));
     for (const re of patterns) {
       for (const m of src.matchAll(re)) {
         const raw = m[1];
@@ -98,7 +99,7 @@ function buildSchema() {
   const db = new DatabaseSync(":memory:");
   const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
   for (const file of files) {
-    const sql = readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
+    const sql = stripCommentsFor(path.join(MIGRATIONS_DIR, file), readFileSync(path.join(MIGRATIONS_DIR, file), "utf8"));
     for (const stmt of splitStatements(sql)) {
       try {
         db.exec(stmt);

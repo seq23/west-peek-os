@@ -36,6 +36,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -203,7 +204,7 @@ function readMigrations() {
   return readdirSync(dir)
     .filter((f) => f.endsWith(".sql"))
     .sort()
-    .map((f) => readFileSync(path.join(dir, f), "utf8"))
+    .map((f) => stripCommentsFor(path.join(dir, f), readFileSync(path.join(dir, f), "utf8")))
     .join("\n");
 }
 
@@ -288,7 +289,7 @@ function main() {
   if (process.argv.includes("--self-test")) return selfTest();
 
   const migrationSql = readMigrations();
-  const routerSource = readFileSync(path.join(ROOT, "src", "worker", "ai", "runAi.ts"), "utf8");
+  const routerSource = stripCommentsFor(path.join(ROOT, "src", "worker", "ai", "runAi.ts"), readFileSync(path.join(ROOT, "src", "worker", "ai", "runAi.ts"), "utf8"));
   const { violations, examined } = check({ migrationSql, routerSource });
 
   if (examined.length === 0) {

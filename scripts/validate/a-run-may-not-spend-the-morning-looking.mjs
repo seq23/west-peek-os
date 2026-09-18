@@ -25,6 +25,7 @@
  */
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 const F = {
@@ -376,19 +377,19 @@ function load() {
   const files = {};
   for (const rel of Object.values(F)) {
     const p = join(ROOT, rel);
-    if (existsSync(p)) files[rel] = readFileSync(p, "utf8");
+    if (existsSync(p)) files[rel] = stripCommentsFor(p, readFileSync(p, "utf8"));
   }
   const dir = join(ROOT, ADAPTER_DIR);
   if (existsSync(dir)) {
     for (const name of readdirSync(dir)) {
-      if (name.endsWith(".ts")) files[`${ADAPTER_DIR}/${name}`] = readFileSync(join(dir, name), "utf8");
+      if (name.endsWith(".ts")) files[`${ADAPTER_DIR}/${name}`] = stripCommentsFor(join(dir, name), readFileSync(join(dir, name), "utf8"));
     }
   }
   // Callers, so the largest expectedOutputTokens in the repo is read rather than assumed.
   const svc = join(ROOT, "src/worker/services");
   if (existsSync(svc)) {
     for (const name of readdirSync(svc)) {
-      if (name.endsWith(".ts")) files[`src/worker/services/${name}`] = readFileSync(join(svc, name), "utf8");
+      if (name.endsWith(".ts")) files[`src/worker/services/${name}`] = stripCommentsFor(join(svc, name), readFileSync(join(svc, name), "utf8"));
     }
   }
   return files;

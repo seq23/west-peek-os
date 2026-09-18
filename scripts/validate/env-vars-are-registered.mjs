@@ -26,6 +26,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -166,12 +167,12 @@ function selfTest() {
 function main() {
   if (process.argv.includes("--self-test")) return selfTest();
 
-  const envSource = readFileSync(path.join(ROOT, "src", "worker", "env.ts"), "utf8");
-  const registry = JSON.parse(readFileSync(path.join(ROOT, "deployment", "env-var-registry.json"), "utf8"));
-  const credentialSource = readFileSync(path.join(ROOT, "src", "shared", "ai", "providerCredentials.ts"), "utf8");
+  const envSource = stripCommentsFor(path.join(ROOT, "src", "worker", "env.ts"), readFileSync(path.join(ROOT, "src", "worker", "env.ts"), "utf8"));
+  const registry = JSON.parse(stripCommentsFor(path.join(ROOT, "deployment", "env-var-registry.json"), readFileSync(path.join(ROOT, "deployment", "env-var-registry.json"), "utf8")));
+  const credentialSource = stripCommentsFor(path.join(ROOT, "src", "shared", "ai", "providerCredentials.ts"), readFileSync(path.join(ROOT, "src", "shared", "ai", "providerCredentials.ts"), "utf8"));
   const srcFiles = {};
   for (const full of listSourceFiles(path.join(ROOT, "src"))) {
-    srcFiles[path.relative(ROOT, full)] = readFileSync(full, "utf8");
+    srcFiles[path.relative(ROOT, full)] = stripCommentsFor(full, readFileSync(full, "utf8"));
   }
 
   const { violations, examined } = check({ envSource, registry, credentialSource, srcFiles });

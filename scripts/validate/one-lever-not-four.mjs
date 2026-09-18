@@ -41,6 +41,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { stripCommentsFor } from "./lib/strip-comments.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -180,7 +181,7 @@ function main() {
     console.error("  that cannot find what it guards is protecting nothing.");
     process.exit(1);
   }
-  const source = readFileSync(full, "utf8");
+  const source = stripCommentsFor(full, readFileSync(full, "utf8"));
   const { violations, examined } = checkSources({ [ROUTING_FILE]: source });
 
   if (examined === 0) {
