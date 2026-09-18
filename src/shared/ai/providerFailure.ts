@@ -178,6 +178,24 @@ export function isProviderOutage(reason: string): boolean {
   if (/^provider_cannot_/.test(reason)) return false;
   if (/^credential_missing:/.test(reason)) return true;
   if (/^workers_ai_binding_absent/.test(reason)) return true;
+  /*
+   * ── A LANE THAT IS SIMPLY NOT AT HOME ─────────────────────────────────────────────────────
+   *
+   * The Claude Code lane runs on the owner's Mac. Her Mac sleeps, the lid closes, she travels — so
+   * "this lane cannot serve right now" is its ORDINARY state rather than an incident, and the whole
+   * design of migration 0187 is that absence must cost the firm nothing.
+   *
+   * It is an outage in the precise sense this function means: it says nothing whatever about the
+   * work, so asking a different lane the same question is exactly right. `shouldBackOff` then
+   * excludes it, and the reasoning for that split is written there.
+   */
+  if (/^claude_code_unavailable:/.test(reason)) return true;
+  /*
+   * The claimer took the run and could not finish it — Claude Code errored, the session was
+   * rate-limited, the local process died mid-answer. Also a fact about the lane rather than about
+   * the request, so the chain carries on.
+   */
+  if (/^claude_code_failed:/.test(reason)) return true;
   // A vendor that answered with something we cannot parse has not served the call either. This is
   // how the Workers AI lane failed for weeks — malformed every time, on every run.
   if (reason === "provider_malformed_response") return true;
@@ -199,6 +217,13 @@ export function isProviderOutage(reason: string): boolean {
 export function outageKind(reason: string): string {
   if (/^credential_missing:/.test(reason)) return "NO_CREDENTIAL";
   if (/^workers_ai_binding_absent/.test(reason)) return "BINDING_ABSENT";
+  /*
+   * NAMED FOR WHAT IT IS, not as an error. A Cockpit reading "Claude Code outage" would send
+   * somebody looking for a broken integration; LANE_ASLEEP says the laptop is shut, which is the
+   * expected state and needs nobody to do anything.
+   */
+  if (/^claude_code_unavailable:/.test(reason)) return "LANE_ASLEEP";
+  if (/^claude_code_failed:/.test(reason)) return "CLAIMER_FAILED";
   if (reason === "provider_malformed_response") return "MALFORMED_RESPONSE";
   const http = parseProviderHttpReason(reason);
   if (http) {
@@ -244,5 +269,28 @@ export function shouldBackOff(reason: string): boolean {
   if (!isProviderOutage(reason)) return false;
   if (/^credential_missing:/.test(reason)) return false;
   if (/^workers_ai_binding_absent/.test(reason)) return false;
+  /*
+   * ── A SHUT LID MUST NOT ARM A COOLDOWN ────────────────────────────────────────────────────
+   *
+   * This is the third member of the same family and the clearest case of it. Back-off exists to
+   * stop re-attempting a vendor that is failing RIGHT NOW and will recover on its own, and it does
+   * that by guessing at a duration: five minutes, then ten, then twenty, up to an hour.
+   *
+   * The Claude Code lane needs no guess. A heartbeat every thirty seconds ANSWERS THE SAME QUESTION
+   * EXACTLY, for free, on the next call. Arming a cooldown on top of it would be strictly worse in
+   * both directions: the lane would sit out up to an hour after she opened the laptop, and the
+   * Cockpit would replace a precise reason a person can read — "her Mac last checked in 14 hours
+   * ago" — with a vague one that says only "in back-off".
+   *
+   * Worse still, it would compound. Every skipped call is another consecutive failure, so a laptop
+   * shut overnight would walk the doubling straight to its hour-long ceiling and keep it there,
+   * meaning the lane would be least available in the first hour of the morning — precisely when she
+   * has just opened it.
+   *
+   * `claude_code_failed` is NOT excluded, and the difference is real: a claimer that took the run
+   * and could not finish it is a lane that is present and misbehaving, which is what a self-expiring
+   * cooldown is actually for.
+   */
+  if (/^claude_code_unavailable:/.test(reason)) return false;
   return true;
 }
