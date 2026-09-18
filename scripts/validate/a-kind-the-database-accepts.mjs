@@ -27,12 +27,19 @@
  *       `switch` can handle, and it will arrive from an older deploy or a hand-run statement.
  *   3 · EVERY KIND HAS A DEFINITION in `DELIVERABLE_KINDS_BY_KEY`. A key in the union with no
  *       definition is a label, page and doc_type read off `undefined` at the moment of handover.
- *   4 · `preview_approval.deliverable_id` STILL REFERENCES `deliverable`. Rebuilding a table to
- *       widen a CHECK requires renaming it, and SQLite rewrites other tables' foreign keys to
- *       follow the rename — so the obvious migration silently repoints the preview lane at its own
- *       rollback copy. Confirmed by experiment on 18 Sep 2026, not assumed. `legacy_alter_table`
- *       suppresses it, but a pragma D1 might ignore is not a guarantee, so the end state is
- *       asserted here instead of trusted there.
+ *   4 · NO FOREIGN KEY ANYWHERE POINTS AT A ROLLBACK COPY. Rebuilding a table to widen a CHECK
+ *       requires renaming it, and SQLite rewrites other tables' foreign keys to follow the rename,
+ *       so the obvious migration silently repoints them at a snapshot nothing writes to. Confirmed
+ *       by experiment on 18 Sep 2026, not assumed. `legacy_alter_table` suppresses it, but a pragma
+ *       D1 might ignore is not a guarantee, so the end state is asserted here instead of trusted
+ *       there.
+ *
+ *       THIS IS THE WHOLE SCHEMA, not one column. The first version of this check looked only at
+ *       `preview_approval` — the table already on the author's mind — and CI then found
+ *       `deliverable_feedback.deliverable_id` pointing at `deliverable_old_0180`, dragged there by
+ *       migration 0180 the previous day and unnoticed since. Every feedback row the owner left was
+ *       being validated against a frozen 56-row snapshot. A scan that only looks where you already
+ *       suspect is not a scan.
  *
  * THE EFFECTIVE CHECK is derived by replaying every migration in order, because the CHECK is
  * whatever the LAST statement to define the column said. Reading only the newest migration that
@@ -86,18 +93,64 @@ export function effectiveCheck(migrationsInOrder) {
   return found;
 }
 
-/** Which table `preview_approval.deliverable_id` points at, after every migration has run. */
-export function previewForeignKeyTarget(migrationsInOrder) {
-  let target = null;
-  for (const sql of migrationsInOrder) {
-    for (const m of sql.matchAll(/deliverable_id\s+TEXT\s+REFERENCES\s+"?([a-z_0-9]+)"?/g)) {
-      target = m[1];
-    }
-  }
-  return target;
+/**
+ * A table name that is a rollback copy rather than a live table: `_old_0180`, `_pre_0189`, `_copy`.
+ * Nothing should ever reference one — they exist to be read once by a person and then forgotten.
+ */
+export function isRollbackCopy(name) {
+  return /_(old|pre)_\d+$|_copy$/.test(name);
 }
 
-export function audit({ kinds, defined, check, fkTarget }) {
+/**
+ * EVERY foreign key in the schema, as it stands after every migration has run, keyed by
+ * `table.column` so the last definition of each wins.
+ *
+ * NOT one column somebody thought to check. The reason `deliverable_feedback` pointed at
+ * `deliverable_old_0180` for a full day is that the manual sweep looking for this was written for
+ * `preview_approval` — the table already on the author's mind — and a single sloppy LIKE missed the
+ * other one. A scan that only looks where you already suspect is not a scan.
+ */
+export function foreignKeys(migrationsInOrder) {
+  /** @type {Map<string, string>} */
+  const fks = new Map();
+
+  /*
+   * IN FILE ORDER, ONE STATEMENT AT A TIME. The first version of this grouped the work — every
+   * CREATE, then every RENAME, then every DROP — and was silently wrong on exactly the migration it
+   * was written for. A rebuild is create-new, drop-old, rename-new-into-place; processed in groups,
+   * the drops run last and delete the keys the renames had just established, so both repaired
+   * tables vanished from the scan and it reported 330 healthy keys with a straight face.
+   *
+   * The negative proof caught it: breaking the migration on purpose produced no violation. A guard
+   * that cannot fail is the "runs but inert" defect wearing a validator's clothes, and it would
+   * have shipped as proof that the thing it did not check was fine.
+   */
+  const STATEMENT =
+    /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z_0-9]+)"?\s*\(([\s\S]*?)\n\)|ALTER TABLE\s+"?([a-z_0-9]+)"?\s+RENAME TO\s+"?([a-z_0-9]+)"?|DROP TABLE(?:\s+IF EXISTS)?\s+"?([a-z_0-9]+)"?/gi;
+
+  for (const sql of migrationsInOrder) {
+    for (const m of sql.matchAll(STATEMENT)) {
+      const [, created, body, renameFrom, renameTo, dropped] = m;
+      if (created) {
+        for (const c of body.matchAll(/^\s*([a-z_0-9]+)\s+[A-Z]+[^,\n]*REFERENCES\s+"?([a-z_0-9]+)"?/gim)) {
+          fks.set(`${created}.${c[1]}`, c[2]);
+        }
+      } else if (renameFrom) {
+        for (const [key, target] of [...fks]) {
+          if (key.startsWith(`${renameFrom}.`)) {
+            fks.delete(key);
+            fks.set(`${renameTo}.${key.slice(renameFrom.length + 1)}`, target);
+          }
+        }
+      } else if (dropped) {
+        for (const key of [...fks.keys()]) if (key.startsWith(`${dropped}.`)) fks.delete(key);
+      }
+    }
+  }
+  return fks;
+}
+
+export function audit({ kinds, defined, check, fks }) {
   const violations = [];
   for (const k of kinds) {
     if (!check.includes(k)) {
@@ -118,11 +171,13 @@ export function audit({ kinds, defined, check, fkTarget }) {
       );
     }
   }
-  if (fkTarget !== "deliverable") {
-    violations.push(
-      `preview_approval.deliverable_id references \`${fkTarget}\`, not \`deliverable\` — a table ` +
-        `rename repointed the preview lane at a rollback copy`,
-    );
+  for (const [column, target] of fks) {
+    if (isRollbackCopy(target)) {
+      violations.push(
+        `${column} references \`${target}\`, a rollback copy — a table rename dragged this foreign ` +
+          `key onto a snapshot nothing writes to, so every row validates against frozen data`,
+      );
+    }
   }
   return violations;
 }
@@ -146,23 +201,54 @@ function selfTest() {
     kinds: ["event_kit", "approval_preview"],
     defined: ["event_kit", "approval_preview"],
     check: ["event_kit"],
-    fkTarget: "deliverable",
+    fks: new Map(),
   });
   if (!pre.some((v) => v.includes("refuse every row"))) fail("the real 0183 gap was not caught");
   ok("the kind 0183 added to the code and not to the CHECK");
 
-  const reverse = audit({ kinds: ["event_kit"], defined: ["event_kit"], check: ["event_kit", "ghost_kind"], fkTarget: "deliverable" });
+  const reverse = audit({ kinds: ["event_kit"], defined: ["event_kit"], check: ["event_kit", "ghost_kind"], fks: new Map() });
   if (!reverse.some((v) => v.includes("no page can render"))) fail("a CHECK-only kind was not caught");
   ok("a kind the database accepts that the code does not name");
 
-  const undef = audit({ kinds: ["event_kit"], defined: [], check: ["event_kit"], fkTarget: "deliverable" });
+  const undef = audit({ kinds: ["event_kit"], defined: [], check: ["event_kit"], fks: new Map() });
   if (undef.length === 0) fail("a kind with no definition was not caught");
   ok("a kind in the union with no definition behind it");
 
   // The silent one: the migration rebuilt the table and the rename dragged the foreign key along.
-  const fk = audit({ kinds: ["event_kit"], defined: ["event_kit"], check: ["event_kit"], fkTarget: "deliverable_pre_0189" });
+  const fk = audit({
+    kinds: ["event_kit"], defined: ["event_kit"], check: ["event_kit"],
+    fks: new Map([["preview_approval.deliverable_id", "deliverable_pre_0189"]]),
+  });
   if (!fk.some((v) => v.includes("rollback copy"))) fail("the repointed foreign key was not caught");
   ok("preview_approval dragged onto the rollback copy by the rename");
+
+  // The one that actually shipped, and the one a per-table check missed.
+  const real = audit({
+    kinds: ["event_kit"], defined: ["event_kit"], check: ["event_kit"],
+    fks: new Map([["deliverable_feedback.deliverable_id", "deliverable_old_0180"]]),
+  });
+  if (!real.some((v) => v.includes("deliverable_feedback"))) fail("the real 0180 drag was not caught");
+  ok("deliverable_feedback dragged onto deliverable_old_0180 — the one that shipped");
+
+  // THE ORDER BUG, pinned. A rebuild is create-new, drop-old, rename-into-place. A scan that
+  // groups statements by type runs the drop last and deletes the key the rename just established,
+  // so the repaired table disappears and the scan reports health. This fixture is the real shape of
+  // migration 0189 and must end with the key present and pointing at the live table.
+  const rebuilt = foreignKeys([
+    `CREATE TABLE t_new (\n  id TEXT PRIMARY KEY,\n  parent_id TEXT REFERENCES parent (id)\n);\nDROP TABLE t;\nALTER TABLE t_new RENAME TO t;`,
+  ]);
+  if (rebuilt.get("t.parent_id") !== "parent") {
+    fail("a rebuilt table's foreign key was lost — statements are not being walked in order");
+  }
+  ok("a create-drop-rename rebuild keeps its foreign key (the bug that made this guard inert)");
+
+  // The rename bookkeeping itself: a key defined under a temporary name must follow it home.
+  const followed = foreignKeys([
+    `CREATE TABLE d_new (\n  id TEXT PRIMARY KEY,\n  owner TEXT REFERENCES firm_user (id)\n)`,
+    `ALTER TABLE d_new RENAME TO deliverable`,
+  ]);
+  if (followed.get("deliverable.owner") !== "firm_user") fail("a rename did not carry its foreign keys");
+  ok("a foreign key follows its table through a rename");
 
   // Last-definition-wins: an earlier narrow CHECK must not mask a later wide one, and an unrelated
   // later migration mentioning the table must not blind the scan.
@@ -178,7 +264,7 @@ function selfTest() {
     kinds: ["event_kit", "approval_preview"],
     defined: ["event_kit", "approval_preview"],
     check: ["event_kit", "approval_preview"],
-    fkTarget: "deliverable",
+    fks: new Map([["preview_approval.deliverable_id", "deliverable"]]),
   });
   if (clean.length !== 0) fail(`a clean fixture was rejected: ${clean.join("; ")}`);
   ok("a clean fixture passes");
@@ -194,7 +280,7 @@ function main() {
   const defined = parseDefinedKeys(source);
   const { files, sql } = readMigrationsInOrder();
   const check = effectiveCheck(sql);
-  const fkTarget = previewForeignKeyTarget(sql);
+  const fks = foreignKeys(sql);
 
   if (!kinds || kinds.length === 0) {
     console.error("DELIVERABLE KIND SCAN FAILED — read zero kinds from DELIVERABLE_KINDS. Rule 0.");
@@ -216,12 +302,12 @@ function main() {
     );
     process.exit(1);
   }
-  if (!fkTarget) {
-    console.error("DELIVERABLE KIND SCAN FAILED — found no preview_approval.deliverable_id reference. Rule 0.");
+  if (fks.size === 0) {
+    console.error("DELIVERABLE KIND SCAN FAILED — read zero foreign keys from the migrations. Rule 0.");
     process.exit(1);
   }
 
-  const violations = audit({ kinds, defined, check, fkTarget });
+  const violations = audit({ kinds, defined, check, fks });
   if (violations.length > 0) {
     console.error("DELIVERABLE KIND SCAN FAILED — the code and the database disagree about what can be delivered:");
     for (const v of violations) console.error(`  ✗ ${v}`);
@@ -237,7 +323,7 @@ function main() {
   console.log(
     `DELIVERABLE KIND SCAN PASSED: ${kinds.length} kind(s) in DELIVERABLE_KINDS, each defined and each ` +
       `accepted by deliverable.kind's CHECK as replayed across ${files.length} migrations; the CHECK ` +
-      `names nothing the code cannot render; preview_approval still references deliverable.`,
+      `names nothing the code cannot render; none of ${fks.size} foreign keys points at a rollback copy.`,
   );
 }
 

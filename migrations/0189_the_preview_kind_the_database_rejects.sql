@@ -148,4 +148,53 @@ ALTER TABLE preview_approval_0189 RENAME TO preview_approval;
 CREATE INDEX idx_preview_approval_state ON preview_approval (state, created_at DESC);
 CREATE INDEX idx_preview_approval_card  ON preview_approval (work_card_id);
 
+
+-- ── deliverable_feedback, dragged onto a rollback copy back on 0180 ──────────────────────────────
+--
+-- Found by CI on this branch, not by the sweep that should have caught it. In production right now:
+--
+--   deliverable_feedback.deliverable_id TEXT NOT NULL REFERENCES "deliverable_old_0180" (id)
+--
+-- Migration 0180 renamed `deliverable` out of the way on 17 Sep 2026 and SQLite rewrote this
+-- reference to follow it. Nobody noticed. Every piece of feedback the owner leaves on a deliverable
+-- has since been validated against a FROZEN 56-row snapshot, so feedback on anything created after
+-- 0180 fails the foreign key outright. That is the exact bug the preview_approval rebuild above
+-- exists to prevent — already shipped, in a second table, silently, and it is why this migration
+-- also repairs history rather than only guarding the future.
+--
+-- The one existing row is preserved. `validate:deliverable-kinds` now refuses ANY reference to a
+-- rollback copy anywhere in the schema, not just this column, because the reason this sat unseen
+-- for a day is that the check was written for one table somebody happened to think of.
+
+CREATE TABLE deliverable_feedback_0189 (
+  id             TEXT PRIMARY KEY,
+  deliverable_id TEXT NOT NULL REFERENCES deliverable (id),
+  to_employee    TEXT NOT NULL,
+  from_user_id   TEXT NOT NULL REFERENCES firm_user (id),
+  note           TEXT NOT NULL,
+  verdict        TEXT NOT NULL DEFAULT 'NOTE'
+                 CHECK (verdict IN ('GOOD','NOT_WHAT_I_WANTED','TOO_LONG','WRONG_FOCUS','NOTE')),
+  firm_scope     TEXT NOT NULL DEFAULT 'west-peek',
+  created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+INSERT INTO deliverable_feedback_0189 (
+  id, deliverable_id, to_employee, from_user_id, note, verdict, firm_scope, created_at
+)
+SELECT
+  id, deliverable_id, to_employee, from_user_id, note, verdict, firm_scope, created_at
+FROM deliverable_feedback;
+
+DROP INDEX IF EXISTS idx_deliverable_feedback_employee;
+DROP TABLE deliverable_feedback;
+ALTER TABLE deliverable_feedback_0189 RENAME TO deliverable_feedback;
+
+CREATE INDEX idx_deliverable_feedback_employee
+  ON deliverable_feedback (to_employee, created_at DESC);
+
+-- Every migration records itself. Missing this is what turned `tests/policy.test.ts`'s
+-- latest-migration assertion red — correctly: an unrecorded migration is invisible to anything that
+-- reasons about schema state.
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0189_the_preview_kind_the_database_rejects');
+
 PRAGMA foreign_keys = ON;
