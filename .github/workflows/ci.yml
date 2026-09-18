@@ -288,13 +288,25 @@ jobs:
       - name: A run may not spend the morning discovering that nothing answered
         run: npm run validate:chain-budget
 
+      # A GREEN RUN HAS TO MEAN SOMETHING. On 18 Sep 2026 the Playwright step was
+      # `npm run e2e || (… && npm run e2e)`: a shell `||` that could not tell a `workerd` crash from
+      # a wrong assertion, so every intermittent failure in the suite got a free second attempt and
+      # the check reported green. Eleven pull requests merged that day on the strength of it, while
+      # the suite was failing 2 runs in 5 on untouched main. Nothing failed when that line was
+      # added, which is the whole reason this validator exists — it fails if anything in the repo
+      # can make a red journey look green, and it hard-fails if it examines no specs at all.
+      - name: A green run means something
+        run: npm run validate:green-means-something
+
       - name: Build client
         run: npm run build
 
   e2e:
     name: Playwright journeys
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Two full passes of the suite plus the browser install; the old single pass plus its retry
+    # already fitted in 30, and a timeout that trips is a red run nobody can read.
+    timeout-minutes: 45
     permissions:
       contents: read
 
@@ -348,15 +360,40 @@ jobs:
 
       # `npm run e2e` resets the local D1 and starts its own `wrangler dev --local` — offline,
       # no credentials, safe to re-run back to back (AGENTS.md: "that is a hard requirement, not
-      # a nicety"). The retry here is for `wrangler dev` itself, not for a failing assertion:
-      # observed twice on GitHub's Linux runners, never on macOS — `workerd` throws an internal,
-      # message-less error ("please create an issue at workers-sdk") and either drops the server
-      # outright or serves a stretch of requests before dying later, taking down every test after
-      # it with ECONNREFUSED. Neither occurrence traced to a real test failure once the retry ran
-      # clean. A single retry re-runs the WHOLE command, which is what actually resets state
-      # safely here — Playwright's own per-test retry would replay a test against a database a
-      # crashed server already half-mutated, which is unsafe for this suite's single shared D1
-      # (see playwright.config.ts). A journey that fails on its own merits fails the step: this
-      # tolerates the tool crashing, never a wrong assertion.
-      - name: Playwright journeys
-        run: npm run e2e || (echo "::warning::wrangler dev crashed or a journey failed — retrying the whole suite once" && npm run e2e)
+      # a nicety").
+      #
+      # THIS STEP USED TO BE `npm run e2e || (… && npm run e2e)`, AND THAT IS WHAT MADE A GREEN
+      # RUN WORTHLESS. The comment on it said the retry was for `wrangler dev` crashing and never
+      # for a failing assertion. A shell `||` cannot tell those apart — it retries on ANY non-zero
+      # exit. Measured on untouched origin/main on 18 Sep 2026, the suite failed 2 runs in 5; behind
+      # that `||` it reported green nearly nine times in ten, and the tenth got dismissed as
+      # "probably the flake". Eleven pull requests merged that day on the strength of this check.
+      #
+      # SO THE MEANING IS INVERTED, at the same wall clock the old retry already spent on a red run.
+      # The suite runs TWICE, each from a freshly reset database, and BOTH have to pass. One green
+      # run says almost nothing about a one-in-three failure; two independent clean runs is a claim
+      # worth reading. `&&` short-circuits, so a first-run failure still fails immediately.
+      #
+      # THE `workerd` CRASH THE OLD RETRY EXISTED FOR IS STILL HANDLED, and now only it. Observed
+      # twice on GitHub's Linux runners, never on macOS: an internal, message-less error ("please
+      # create an issue at workers-sdk") that drops the server and takes every later test down with
+      # ECONNREFUSED. The step below re-runs ONLY when that signature is in the output — matched on
+      # the crash, not on the exit code — so a journey that fails on its own merits fails the job,
+      # which is what the old comment claimed and the old code did not do.
+      #
+      # `npm run e2e` is deliberately named twice below rather than looped: `validate:green-means-
+      # something` counts the invocations in this job and hard-fails if the suite is run only once.
+      - name: Playwright journeys — twice, from a clean database, both must pass
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/e2e-1.log"
+          if ! npm run e2e 2>&1 | tee "$log"; then
+            if grep -qiE 'please create an issue at .*workers-sdk|internal error.*workerd' "$log"; then
+              echo "::warning::wrangler dev crashed (workerd internal error) — re-running the first pass"
+              npm run e2e
+            else
+              echo "::error::A journey failed on its own merits. This is NOT retried."
+              exit 1
+            fi
+          fi
+          npm run e2e
