@@ -131,6 +131,15 @@ jobs:
       - name: A stopped card says why, and she can fix it from the card
         run: npm run validate:stopped-cards
 
+      # DAY 200, NOT DAY 1. Measured on 18 Sep against 531 finished cards: the board returned every
+      # card the firm had ever made under LIMIT 500 and the page rendered the first fifty of them
+      # under a heading that said 496 — 481 unreachable, silently, and an OPEN card older than the
+      # cap would have fallen off the board entirely. Nothing failed. This fails if finished work is
+      # ever truncated in the browser again, if the board stops carrying live states only, or if a
+      # record control stops reaching the server.
+      - name: The record scales to day 200
+        run: npm run validate:record-scales
+
       # Nothing a partner types may reach no model. Every branch of the sweep's dispatch is read out
       # of the source, so the chain nobody remembers to wire is the one this fails on.
       - name: Everything she says reaches a thinking model
