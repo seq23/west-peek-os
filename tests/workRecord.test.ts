@@ -8,6 +8,9 @@ import {
   monthLabel,
   monthOf,
   recordSummary,
+  searchTerms,
+  LIKE_TERM_MAX,
+  LIKE_TERMS_MAX,
   type RecordRow,
 } from "../src/shared/work/record";
 import { deskAnswer, deskSubline } from "../src/shared/work/deskAnswer";
@@ -123,6 +126,42 @@ describe("the summary line", () => {
     expect(isFiltered({ who: "aie_parker" })).toBe(true);
     expect(isFiltered({ month: "2026-09" })).toBe(true);
     expect(isFiltered({ state: "CANCELLED" })).toBe(true);
+  });
+});
+
+describe("the search terms", () => {
+  /*
+   * MEASURED AGAINST THE REAL BINDING on 18 Sep 2026: D1 refuses a LIKE pattern of 50 characters
+   * or more with `SQLITE_ERROR: LIKE or GLOB pattern too complex`. 40 characters plus its two
+   * wildcards answers; 48 does not. One `%<whole query>%` therefore turned her longest and most
+   * specific searches — the ones she makes when she actually remembers something — into a 500 and
+   * a blank record, which reads as "the firm has never done this".
+   */
+  it("cannot build a pattern D1 would refuse, however long the query", () => {
+    const long = "a".repeat(400);
+    for (const term of searchTerms(long)) {
+      expect(term.length + 2, "the term plus its two wildcards must clear D1's 50-character limit").toBeLessThan(50);
+    }
+    expect(LIKE_TERM_MAX + 2).toBeLessThan(50);
+  });
+
+  it("caps how many terms a search can AND together", () => {
+    expect(searchTerms("one two three four five six seven eight nine")).toHaveLength(LIKE_TERMS_MAX);
+  });
+
+  it("splits on words, so the order she typed them in does not matter", () => {
+    expect(searchTerms("  room   packet  black lawyers ")).toEqual(["room", "packet", "black", "lawyers"]);
+  });
+
+  it("makes no terms out of nothing, so an empty box filters nothing", () => {
+    expect(searchTerms("")).toEqual([]);
+    expect(searchTerms("   ")).toEqual([]);
+  });
+
+  it("truncates one very long word rather than dropping the search", () => {
+    const terms = searchTerms("x".repeat(120));
+    expect(terms).toHaveLength(1);
+    expect(terms[0]).toHaveLength(LIKE_TERM_MAX);
   });
 });
 

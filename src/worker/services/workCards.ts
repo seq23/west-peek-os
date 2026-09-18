@@ -8,7 +8,7 @@ import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy"
 import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityClause } from "./authorize";
 import { getVisibleCapture } from "./captures";
 import { blockOf } from "./blocks";
-import { RECORD_GROUP_COLUMNS, RECORD_GROUP_SQL, RECORD_STATES, monthLabel, type RecordState } from "../../shared/work/record";
+import { RECORD_GROUP_COLUMNS, RECORD_GROUP_SQL, RECORD_STATES, monthLabel, searchTerms, type RecordState } from "../../shared/work/record";
 
 /**
  * Work spine (P3): the unit of governed work. State transitions are enforced
@@ -773,10 +773,17 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
   if (state !== "ALL") where.push(`wc.state = ${bind(state)}`);
   if (who) where.push(`wc.owner_id = ${bind(who)}`);
   if (month) where.push(`substr(wc.created_at, 1, 7) = ${bind(month)}`);
-  if (q) {
-    // Bound, never interpolated. A search box is user input and this one runs against the firm's
-    // entire history; the wildcards in what she typed are escaped so a stray % is a percent sign.
-    const like = `%${q.replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
+  /*
+   * ONE TERM PER WORD, ANDed — see `searchTerms`. A single `%<the whole query>%` is what this used
+   * to do, and D1 answers a LIKE pattern of 50 characters or more with `SQLITE_ERROR: LIKE or GLOB
+   * pattern too complex`, so the longest and most specific searches — the ones she makes when she
+   * actually remembers something — returned a 500 and a blank record.
+   *
+   * Bound, never interpolated: a search box is user input and this one runs against the firm's
+   * entire history. The wildcards in what she typed are escaped, so a stray % is a percent sign.
+   */
+  for (const term of searchTerms(q ?? "")) {
+    const like = `%${term.replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
     where.push(
       `(wc.title LIKE ${bind(like)} ESCAPE '\\' OR COALESCE(wc.description, '') LIKE ${bind(like)} ESCAPE '\\')`,
     );

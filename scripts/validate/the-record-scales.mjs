@@ -171,6 +171,41 @@ export function checkOneBareAggregate(serviceSrc) {
   return { examined: 1, violations };
 }
 
+// ── 4b · The search cannot build a LIKE pattern D1 refuses ────────────────────────────────────
+
+/**
+ * MEASURED AGAINST THE REAL BINDING, 18 Sep 2026: D1 answers a LIKE pattern of 50 characters or
+ * more with `SQLITE_ERROR: LIKE or GLOB pattern too complex`. A 40-character term (42 with its two
+ * wildcards) is fine; 48 is not. The first version of this route built one `%<whole query>%`, so
+ * the longest and most specific searches — the ones she makes when she actually remembers
+ * something — came back as a 500 and a blank record. That is the failure mode that looks like "the
+ * firm has never done this", which is the worst answer this surface can give.
+ *
+ * The fix is `searchTerms`: one capped term per word, ANDed. This holds the cap to a number that
+ * cannot reach the limit, and requires the route to go through it rather than around it.
+ */
+export function checkSearchCannotExceedTheLikeLimit(serviceSrc, termMax, termsMax) {
+  const src = stripComments(serviceSrc);
+  const violations = [];
+  if (!/for \(const term of searchTerms\(/.test(src)) {
+    violations.push(
+      "the record route no longer builds its LIKE terms through searchTerms() — a single pattern over the " +
+        "whole query is what D1 refused with 'LIKE or GLOB pattern too complex' on any search past ~48 characters",
+    );
+  }
+  // +2 for the wildcards the route wraps each term in. The limit itself is 50; 40 leaves headroom.
+  if (termMax + 2 > 44) {
+    violations.push(
+      `LIKE_TERM_MAX is ${termMax}, which with its two wildcards is ${termMax + 2} characters — D1 refuses a ` +
+        "pattern at 50 and this leaves no headroom",
+    );
+  }
+  if (termsMax > 8) {
+    violations.push(`LIKE_TERMS_MAX is ${termsMax} — that many ANDed LIKEs over the firm's whole history is a scan nobody asked for`);
+  }
+  return { examined: 3, violations };
+}
+
 // ── 5 · Every control reaches the server, and the view pages ──────────────────────────────────
 
 const CONTROLS = [
@@ -237,6 +272,7 @@ async function run() {
   });
   const group = checkGroupByMatchesSpec(service, columns, sqlFor);
   const aggregate = checkOneBareAggregate(service);
+  const like = checkSearchCannotExceedTheLikeLimit(service, shared.LIKE_TERM_MAX, shared.LIKE_TERMS_MAX);
   const controls = checkControlsReachTheServer(view);
   const route = checkRouteRegistered(router, service);
 
@@ -245,6 +281,7 @@ async function run() {
     truncation.examined === 0 && "read no Work client files",
     group.examined === 0 && "found no declared collapse columns",
     aggregate.examined === 0 && "found no grouped record query",
+    like.examined === 0 && "checked nothing about the search terms",
     controls.examined === 0 && "read nothing in the record view",
     route.examined === 0 && "checked no routes",
   ].filter(Boolean);
@@ -259,6 +296,7 @@ async function run() {
     ...truncation.violations,
     ...group.violations,
     ...aggregate.violations,
+    ...like.violations,
     ...controls.violations,
     ...route.violations,
   ];
@@ -274,7 +312,8 @@ async function run() {
   console.log(
     `RECORD SCALE SCAN PASSED: the board carries live work only; ${truncation.examined} Work client file(s) ` +
       `truncate no finished list in the browser; the collapse groups on the ${columns.length} declared columns ` +
-      `(${columns.join(", ")}) with one bare aggregate; ${CONTROLS.length} controls all reach the server and ` +
+      `(${columns.join(", ")}) with one bare aggregate; the search builds ≤${shared.LIKE_TERMS_MAX} terms of ` +
+      `≤${shared.LIKE_TERM_MAX} characters, under D1's 50-character LIKE limit; ${CONTROLS.length} controls all reach the server and ` +
       "the record pages; the route is registered.",
   );
 }
@@ -346,6 +385,16 @@ function selfTest() {
     /no longer groups by month/,
   );
   fail(
+    "one LIKE over the whole query — the shape D1 refused with 'pattern too complex'",
+    () => checkSearchCannotExceedTheLikeLimit('const like = `%${q}%`; where.push(`title LIKE ${bind(like)}`)', 32, 6).violations,
+    /no longer builds its LIKE terms through searchTerms/,
+  );
+  fail(
+    "a term cap raised until it can reach D1's limit again",
+    () => checkSearchCannotExceedTheLikeLimit("for (const term of searchTerms(q)) {}", 60, 6).violations,
+    /leaves no headroom/,
+  );
+  fail(
     "an unregistered route",
     () => checkRouteRegistered('.get("/api/work-cards/by-owner", handleWorkByOwner)', "export async function handleWorkRecord").violations,
     /is not registered/,
@@ -368,6 +417,10 @@ function selfTest() {
     {
       name: "a slice that is not of finished work",
       run: () => checkNoClientTruncation({ "p.tsx": "c.looks.slice(0, 2)" }).violations,
+    },
+    {
+      name: "the search as it now stands",
+      run: () => checkSearchCannotExceedTheLikeLimit("for (const term of searchTerms(q ?? \"\")) {}", 32, 6).violations,
     },
     {
       name: "a record view wired to the server on every control",

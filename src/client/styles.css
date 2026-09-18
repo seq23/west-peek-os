@@ -3469,7 +3469,7 @@ details.card > summary,
   align-items: center;
   justify-content: center;
   background: var(--wp-orange);
-  color: var(--wp-paper);
+  color: var(--wp-orange-ink);
   font-weight: 700;
   font-size: var(--text-xs);
 }
@@ -3735,7 +3735,7 @@ details.card > summary,
   align-items: center;
   justify-content: center;
   background: var(--wp-orange);
-  color: var(--wp-paper);
+  color: var(--wp-orange-ink);
   font-weight: 700;
   font-size: var(--text-2xl);
 }

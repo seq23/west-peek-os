@@ -47,6 +47,34 @@ export const RECORD_GROUP_SQL: Readonly<Record<(typeof RECORD_GROUP_COLUMNS)[num
   state: "wc.state",
 };
 
+/**
+ * WHAT SHE TYPED, TURNED INTO LIKE TERMS THE DATABASE WILL ACTUALLY ACCEPT.
+ *
+ * MEASURED, NOT ASSUMED. D1 refuses a LIKE pattern of 50 characters or more — `SQLITE_ERROR: LIKE
+ * or GLOB pattern too complex`. Probed against the local binding on 18 Sep 2026: a 40-character
+ * term (42 with its two wildcards) answers, 48 does not. A single `%…%` over the whole query
+ * therefore fails on any search longer than a short phrase, and it fails as a 500 — so the
+ * behaviour she would have seen is the record going blank on the longest, most specific searches,
+ * which are the ones she makes when she actually remembers something.
+ *
+ * TOKENISING IS THE FIX AND IT IS ALSO THE BETTER SEARCH. Each word becomes its own term and the
+ * terms are ANDed, so "room packet black lawyers" matches a title and a result line between them
+ * and does not care what order she typed them in. It cannot exceed the limit by construction:
+ * every term is capped well under it, and the number of terms is capped too, because ten ANDed
+ * LIKEs over the firm's whole history is a scan nobody asked for.
+ */
+export const LIKE_TERM_MAX = 32;
+export const LIKE_TERMS_MAX = 6;
+
+export function searchTerms(q: string): string[] {
+  return q
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => t.slice(0, LIKE_TERM_MAX))
+    .slice(0, LIKE_TERMS_MAX);
+}
+
 /** Which finished states the record can be narrowed to. `ALL` is both, and is the default. */
 export const RECORD_STATES = ["ALL", "DONE", "CANCELLED"] as const;
 export type RecordState = (typeof RECORD_STATES)[number];
