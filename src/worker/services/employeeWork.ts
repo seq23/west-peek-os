@@ -63,6 +63,12 @@ interface CardRow {
   owner_type: string;
   owner_id: string | null;
   allows_browser: number;
+  /**
+   * WHICH MODELS MAY SEE THIS CARD — and nothing else. PUBLIC_MODEL_APPROVED (the default, and the
+   * normal case) or PRIVATE_MODEL_ONLY. Set per card, migration 0184. Independent of `audience`,
+   * which decides whether the work previews before it leaves.
+   */
+  model_access: string;
   prompt: string | null;
   firm_scope: string;
   requested_by_email?: string | null;
@@ -400,8 +406,23 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
       // The card and its findings are firm-internal. Never raised: a higher label would let this
       // loop carry confidential material to a provider without anybody deciding that.
       sensitivity: "INTERNAL" as never,
+      /*
+       * THE TWO LABELS, KEPT APART. `sensitivity: "INTERNAL"` says a partner reads this — it drives
+       * preview and approval and it is never raised. `trainingSafe` says what is IN it, which is a
+       * different question and the only one that decides which models may see it.
+       *
+       * Reading the card's own flag rather than the label is the whole of the fix the owner asked
+       * for: "ITS NOT DEAL TERMS OR LP INFORMATION SO IT DOESNT MATTER IF ITS USING THIS DATA TO
+       * TRAIN. WHO CARES ABOUT HIRING SEARCH AND EVENT KITS AND ROOM KITS." A PUBLIC_MODEL_APPROVED card
+       * leads on a free reasoning lane at $0; a PRIVATE_MODEL_ONLY one cannot, and `classifyContent`
+       * revokes it anyway if an LP or deal-term marker turns up in the text.
+       */
       // The employee CHOOSING ITS NEXT MOVE is the thinking step; it is never downgraded.
-      budgetContext: { expectedOutputTokens: 400, judgement: true },
+      budgetContext: {
+        expectedOutputTokens: 400,
+        judgement: true,
+        ...(card.model_access === "PRIVATE_MODEL_ONLY" ? { confidential: true } : { publicModelApproved: true }),
+      },
       // Named, so the run lands on this employee's line in the cost centre and this machine's line
       // on the Machines page. Every run before this was attributed to nobody.
       aiEmployeeId: employee.id,

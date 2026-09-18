@@ -1,4 +1,5 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
+import { providerHttpError } from "./httpError";
 
 /**
  * httpExternal — generic HTTPS adapter for an external model provider.
@@ -39,7 +40,7 @@ export function createHttpExternalAdapter(options: HttpExternalOptions): Provide
         }),
       });
       if (!res.ok) {
-        throw new Error(`provider_http_${res.status}`);
+        throw await providerHttpError(res);
       }
       const body = (await res.json()) as {
         text?: string;

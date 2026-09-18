@@ -1,5 +1,6 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
+import { providerHttpError } from "./httpError";
 
 /**
  * Anthropic Messages API adapter — a DIRECT vendor lane, used only when OpenRouter cannot serve a
@@ -64,7 +65,7 @@ export function createAnthropicAdapter(options: AnthropicOptions): ProviderAdapt
           messages: [{ role: "user", content }],
         }),
       });
-      if (!res.ok) throw new Error(`provider_http_${res.status}`);
+      if (!res.ok) throw await providerHttpError(res);
 
       const body = (await res.json()) as {
         model?: string;

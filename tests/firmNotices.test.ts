@@ -86,22 +86,27 @@ async function allowExternalRuns(): Promise<void> {
   await t.db.prepare("UPDATE provider_registry SET enabled = 1").run();
 }
 
-async function seededNotices(): Promise<Array<{ id: string; title: string; body: string }>> {
+async function seededNotices(): Promise<Array<{ id: string; title: string; body: string; supersedes_id: string | null }>> {
   return (
     (
       await t.db
-        .prepare("SELECT id, title, body FROM internal_memo WHERE audience = 'FIRM' ORDER BY id")
-        .all<{ id: string; title: string; body: string }>()
+        .prepare("SELECT id, title, body, supersedes_id FROM internal_memo WHERE audience = 'FIRM' ORDER BY id")
+        .all<{ id: string; title: string; body: string; supersedes_id: string | null }>()
     ).results ?? []
   );
 }
 
 describe("the firm has actually written its notices down", () => {
-  it("seeds twelve firmwide notices, and refuses to pass on an empty table", async () => {
+  it("seeds thirteen firmwide notices, one of which supersedes another, and refuses to pass on an empty table", async () => {
     const rows = await seededNotices();
     // RULE 0. If 0181 ever stops seeding, this file must go red rather than quietly assert nothing.
     expect(rows.length, "no firmwide notices are seeded — every assertion below would be vacuous").toBeGreaterThan(0);
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(13);
+    // Twelve of the thirteen are READ. The thirteenth names the notice it replaces, and the
+    // replaced one is dropped from the prompt rather than from the table.
+    const superseded = rows.filter((r) => r.supersedes_id);
+    expect(superseded).toHaveLength(1);
+    expect(superseded[0]!.supersedes_id).toBe("memo_notice_04_confidential_never_trains");
   });
 
   it("names the two Managing Partners, both platform rules and the send prohibition", async () => {
@@ -125,8 +130,17 @@ describe("a notice reaches the employee, which is the entire point", () => {
     expect(rows.length).toBeGreaterThan(0);
     const block = await firmNoticesBlock(env, "west-peek");
     expect(block).toContain("NOTICES FROM THE FIRM");
-    for (const r of rows) {
+    /*
+     * EVERY LIVE NOTICE, and the superseded one deliberately NOT. A restated rule must be read
+     * once: notice 4's rule is stated in full by notice 13, and an employee reading both would have
+     * two overlapping instructions and no way to know which wins.
+     */
+    const replaced = new Set(rows.map((r) => r.supersedes_id).filter(Boolean));
+    for (const r of rows.filter((r) => !replaced.has(r.id))) {
       expect(block, `notice missing from the employee's context: ${r.title}`).toContain(r.title);
+    }
+    for (const r of rows.filter((r) => replaced.has(r.id))) {
+      expect(block, `a superseded notice is still being read: ${r.title}`).not.toContain(r.title);
     }
   });
 
@@ -160,9 +174,13 @@ describe("a notice reaches the employee, which is the entire point", () => {
     expect(sent).toContain("NOTICES FROM THE FIRM");
     expect(sent).toContain("West Peek Live is the only platform for virtual events");
     expect(sent).toContain("Employees draft. A person sends.");
-    for (const r of rows) {
+    const replacedOnTheWire = new Set(rows.map((r) => r.supersedes_id).filter(Boolean));
+    for (const r of rows.filter((r) => !replacedOnTheWire.has(r.id))) {
       expect(sent, `notice never reached the provider: ${r.title}`).toContain(r.title);
     }
+    // THE NEW NOTICE IS COVERED BY THIS ASSERTION, not sitting outside it: the two labels reach the
+    // wire like everything else, or an employee cannot act on them.
+    expect(sent).toContain("Every work card carries two labels");
   });
 
   it("leaves a run with no employee behind it exactly as it was", async () => {
@@ -247,7 +265,15 @@ describe("a notice reaches the employee, which is the entire point", () => {
     }
 
     // Restored, and provably so — a negative proof that left the firm empty would be a defect.
-    expect((await seededNotices()).length).toBe(12);
+    /*
+     * THIRTEEN ROWS, TWELVE READ. 0184 adds the two-labels notice and supersedes notice 4, whose
+     * rule it now states in full — `internal_memo` is append-only by trigger, so a notice that is
+     * no longer how the firm says it is never edited and never deleted; the replacement names it
+     * and `firmNoticesBlock` stops reading the old one. The row count and the READ count therefore
+     * differ on purpose, and asserting both is what proves supersession works rather than that a
+     * row vanished.
+     */
+    expect((await seededNotices()).length).toBe(13);
   });
 });
 

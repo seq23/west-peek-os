@@ -21,6 +21,7 @@
     "validate:authority": "node scripts/validate/no-unauthorized-effects.mjs && node scripts/validate/no-unauthorized-effects.mjs --self-test && node scripts/seed/generate-machine-seed.mjs --check",
     "validate:blocks": "node scripts/validate/a-block-can-be-cleared.mjs && node scripts/validate/a-block-can-be-cleared.mjs --self-test",
     "validate:brand": "node scripts/validate/west-peek-brand-system.mjs && node scripts/validate/west-peek-brand-system.mjs --self-test",
+    "validate:chaining": "node scripts/validate/a-lane-that-cannot-serve-must-chain.mjs && node scripts/validate/a-lane-that-cannot-serve-must-chain.mjs --self-test",
     "validate:call-classification": "node scripts/validate/every-call-is-classified.mjs && node scripts/validate/every-call-is-classified.mjs --self-test",
     "validate:css-classes": "node scripts/validate/css-classes.mjs",
     "validate:css-variables": "node scripts/validate/css-variables.mjs",

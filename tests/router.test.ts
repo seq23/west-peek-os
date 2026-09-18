@@ -446,9 +446,17 @@ describe("routing is explained, ordered, and opt-in", () => {
       sensitivity: "INTERNAL",
       routing: { taskClass: "diligence-drafting" },
     });
-    // The policy's FIRST candidate wins even though it is the more expensive model.
-    expect(run.model).toBe("gpt-4o");
-    const routing = await call<{ routing: { explanation: string; policy_id: string } }>(`/api/ai/runs/${run.id}/routing`, MP);
+    /*
+     * The policy's FIRST candidate wins even though it is the more expensive model — asserted on
+     * what the router SELECTED rather than on where the run finished. No credential exists in this
+     * environment, so since 0184 the selected lane fails and the chain carries on to any other
+     * adequate lane; `ai_run.model` is therefore the last lane touched, not the one chosen. The
+     * choice is the thing this test is about, and it is recorded on the routing row and in the
+     * first attempt.
+     */
+    const routing = await call<{ routing: { explanation: string; policy_id: string; selected_model: string; attempts_json: string } }>(`/api/ai/runs/${run.id}/routing`, MP);
+    expect(routing.body.routing.selected_model).toBe("gpt-4o");
+    expect((JSON.parse(routing.body.routing.attempts_json) as Array<{ model: string }>)[0]!.model).toBe("gpt-4o");
     expect(routing.body.routing.policy_id).toBe(policy.body.id);
     expect(routing.body.routing.explanation).toContain("routing policy 'diligence-drafting' v1");
     expect(routing.body.routing.explanation).toContain("no fallback");

@@ -1,5 +1,6 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
+import { providerHttpError } from "./httpError";
 
 /**
  * OpenRouter adapter (P16, GAP-03).
@@ -105,7 +106,7 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
             : {}),
         }),
       });
-      if (!res.ok) throw new Error(`provider_http_${res.status}`);
+      if (!res.ok) throw await providerHttpError(res);
 
       const body = (await res.json()) as {
         model?: string;
