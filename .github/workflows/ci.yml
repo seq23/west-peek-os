@@ -92,6 +92,17 @@ jobs:
       - name: SQL against schema
         run: npm run validate:sql
 
+      # A lane that receives a deck a few times a month is not polled 96 times a day, and where its
+      # hour was chosen on her clock it carries her zone — a bare UTC hour drifts every November.
+      - name: A rare lane is checked once a day, on her clock
+        run: npm run validate:deck-cadence
+
+      # "decks arriving is not broken. we just dont get decks every day." No check may ask for her
+      # attention because nothing happened; a board that fires on normal gets skimmed, and the check
+      # beside it that morning was genuinely failing.
+      - name: Quiet is not a fault
+        run: npm run validate:quiet-is-not-a-fault
+
       # The LP deck cannot become current without a human deciding. On 9 Sep 2026 an upload
       # published itself and displaced the deck the firm sends; migration 0155 is the cleanup.
       - name: A deck becomes current only by human decision
