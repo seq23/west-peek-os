@@ -584,6 +584,8 @@ export function ResearchPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             <span className="muted">{p.question}</span>
           </li>
         ))}
+        {/* Loading is a state, not a gap — see the note on `room-list` in EmployeesPage.tsx. */}
+        {projects.loading && <li className="state-empty">Reading the projects…</li>}
         {!projects.loading && (projects.data?.projects ?? []).length === 0 && <li className="state-empty">Nothing yet. Start one above and it opens straight away, with Wyatt ready to scope it.</li>}
       </ul>
 

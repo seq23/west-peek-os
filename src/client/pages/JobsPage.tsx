@@ -303,6 +303,8 @@ export function JobsPage({ me }: { me: MeResponse }) {
       <p className="muted small">On a clock. Each row says how often, honestly — a monthly duty says monthly.</p>
       <ul className="job-grid" data-testid="job-list">
         {scheduled.map(row)}
+        {/* Loading is a state, not a gap — see the note on `room-list` in EmployeesPage.tsx. */}
+        {jobs.loading && <li className="state-empty">Reading the clock…</li>}
         {!jobs.loading && scheduled.length === 0 && <li className="state-empty">Nothing is on a clock. A scheduled job names its target employee or machine, its budget, and its data class.</li>}
       </ul>
 
@@ -310,6 +312,8 @@ export function JobsPage({ me }: { me: MeResponse }) {
       <p className="muted small">No timer. These run only when you press Run it now, or when a card asks for them.</p>
       <ul className="job-grid" data-testid="job-list-on-request">
         {onRequest.map(row)}
+        {/* Loading is a state, not a gap — see the note on `room-list` in EmployeesPage.tsx. */}
+        {jobs.loading && <li className="state-empty">Reading what runs on request…</li>}
         {!jobs.loading && onRequest.length === 0 && <li className="state-empty">Nothing runs only on request.</li>}
       </ul>
     </section>

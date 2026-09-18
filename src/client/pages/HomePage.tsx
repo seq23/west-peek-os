@@ -340,6 +340,8 @@ function PersonalIntelligencePanel() {
                 <strong>{e.entry_date}</strong> · {e.kind} — {e.headline} <code>{e.calculation_state}</code>
               </li>
             ))}
+            {/* Loading is a state, not a gap — see the note on `room-list` in EmployeesPage.tsx. */}
+            {open && entries.loading && <li className="state-empty">Reading the entries…</li>}
             {open && !entries.loading && (entries.data?.entries ?? []).length === 0 && <li className="state-empty">No entries.</li>}
           </ul>
         </>

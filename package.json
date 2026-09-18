@@ -62,7 +62,8 @@
     "vault:sync:cloudflare": "node scripts/vault/vault.mjs sync:cloudflare",
     "validate:seats": "node scripts/validate/two-seats-and-one-ladder.mjs && node scripts/validate/two-seats-and-one-ladder.mjs --self-test && node scripts/claimer/subscription-seat-claimer.mjs --self-test",
     "validate:stopped-runs": "node scripts/validate/what-stopped-is-counted-once.mjs && node scripts/validate/what-stopped-is-counted-once.mjs --self-test",
-    "validate:chain-budget": "node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs && node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs --self-test"
+    "validate:chain-budget": "node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs && node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs --self-test",
+    "validate:green-means-something": "node scripts/validate/a-green-run-means-something.mjs && node scripts/validate/a-green-run-means-something.mjs --self-test"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",

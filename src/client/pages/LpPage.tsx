@@ -1064,7 +1064,25 @@ export function LpPage({ me }: { me: MeResponse }) {
       [200, 201],
     );
     setBusy(false);
-    setMessage(failed ?? "Recorded.");
+    /*
+     * SAY WHAT WAS RECORDED, NOT THAT SOMETHING WAS.
+     *
+     * "Recorded." was the same five letters after every save, on a form built for recording several
+     * commitments one after another. A partner who presses "Record it" four times in a row sees the
+     * identical word four times and has no way to tell the fourth press from the third — which is
+     * the one question the message exists to answer. The add-an-investor handler thirty lines above
+     * has always said `Added ${name}.`; this is the same courtesy, and it is also load-bearing.
+     *
+     * CONFIRMED 18 Sep 2026 by `p61-lp-raise-and-letter`: its helper waits for `lp-message` to say
+     * "Recorded", which the PREVIOUS save had already put there — so the assertion resolved
+     * instantly, the journey read the API before the write it was waiting for had landed, and the
+     * spec failed intermittently with `Expected 0 / Received 3000000` on a withdrawal that had not
+     * happened yet. An assertion that is already satisfied when it is made is not a wait; it is a
+     * test that cannot fail, until the day it does.
+     */
+    const who = records.find((r) => r.id === form.lp_record_id)?.legal_name ?? "that investor";
+    const where = STATES.find((st) => st.key === form.state)?.label ?? form.state;
+    setMessage(failed ?? `Recorded ${who} — ${money(amount)}, ${where.toLowerCase()}.`);
     if (!failed) {
       setForm((f) => ({ ...f, amount: "" }));
       reload();

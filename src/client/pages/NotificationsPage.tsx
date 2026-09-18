@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 
 /**
@@ -236,8 +236,36 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
    * actually saved, so the page showed a setting that was not the setting — and pressing Save
    * silently overwrote the real one with the default.
    */
+  /*
+   * SEEDED ONCE, AND NOT EDITABLE BEFORE IT IS SEEDED.
+   *
+   * The seeding above was right and incomplete, and the gap was a real defect rather than a test
+   * problem. `prefs` arrives asynchronously, and until it does the three pickers render the
+   * hardcoded 9 PM–7 AM default — enabled, and indistinguishable from a loaded setting. Two things
+   * followed from that, both silent:
+   *
+   *   1. A partner who opened the page and changed the hours inside that window had their choice
+   *      OVERWRITTEN the instant the response landed, because this effect ran afterwards and wrote
+   *      the stored values over the state they had just set. Pressing Save then stored the old
+   *      window and reported "Saved".
+   *   2. The same effect fires again on every later `prefs.reload()`, so a background refresh could
+   *      discard an edit in progress at any time, not only during the first load.
+   *
+   * CONFIRMED 18 Sep 2026 by `p20-notifications` — "quiet hours actually hold something back" failed
+   * 1 run in 3 with `DELIVERED_IN_APP` instead of `HELD_QUIET_HOURS`, because the window it thought
+   * it had saved was the 21–7 default this effect had put back. That is not a flaky test; it is the
+   * product losing an operator's input under load, and the test was right to notice.
+   *
+   * The repair is both halves: seed from the FIRST response only (a ref, not a dependency), and
+   * keep the controls DISABLED until that response exists. A picker that shows a setting which is
+   * not the setting — and accepts a change to it — is the defect the comment above already named.
+   */
   const savedQuiet = prefs.data?.preference?.quiet_hours_json;
+  const quietHydrated = !prefs.loading && prefs.status !== null;
+  const seeded = useRef(false);
   useEffect(() => {
+    if (seeded.current || !quietHydrated) return;
+    seeded.current = true;
     if (!savedQuiet) return;
     try {
       const parsed = JSON.parse(savedQuiet) as { start?: number; end?: number; timezone?: string };
@@ -247,7 +275,7 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
     } catch {
       // A malformed stored value leaves the pickers alone rather than throwing the page away.
     }
-  }, [savedQuiet]);
+  }, [savedQuiet, quietHydrated]);
 
   const all = notifications.data?.notifications ?? [];
 
@@ -438,6 +466,9 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
         <form
           className="quiet-hours"
           data-testid="quiet-hours-form"
+          /* Readable from a test and from the DOM inspector: whether these controls are showing the
+             firm's stored window or a placeholder nobody has loaded yet. */
+          data-hydrated={quietHydrated ? "true" : "false"}
           onSubmit={async (e) => {
             e.preventDefault();
             setSaveState("saving");
@@ -471,6 +502,7 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
             <select
               data-testid="quiet-start"
               aria-label="Quiet hours start"
+              disabled={!quietHydrated}
               value={quietStartLocal}
               onChange={(e) => { setQuietStartLocal(Number(e.target.value)); setSaveState("idle"); }}
             >
@@ -480,6 +512,7 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
             <select
               data-testid="quiet-end"
               aria-label="Quiet hours end"
+              disabled={!quietHydrated}
               value={quietEndLocal}
               onChange={(e) => { setQuietEndLocal(Number(e.target.value)); setSaveState("idle"); }}
             >
@@ -489,6 +522,7 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
             <select
               data-testid="quiet-zone"
               aria-label="Which timezone these hours are in"
+              disabled={!quietHydrated}
               value={quietZone}
               onChange={(e) => { setQuietZone(e.target.value); setSaveState("idle"); }}
             >
@@ -503,8 +537,13 @@ export function NotificationsPage({ me }: { me: MeResponse }) {
           </p>
 
           <div className="quiet-hours-actions">
-            <button type="submit" className="btn-strong" disabled={saveState === "saving"} data-testid="quiet-submit">
-              {saveState === "saving" ? "Saving…" : "Save"}
+            <button
+              type="submit"
+              className="btn-strong"
+              disabled={saveState === "saving" || !quietHydrated}
+              data-testid="quiet-submit"
+            >
+              {saveState === "saving" ? "Saving…" : !quietHydrated ? "Loading…" : "Save"}
             </button>
             {/* The change of state the operator asked for: the button itself moves, and a word
                 appears beside it. Previously pressing Save did nothing visible at all. */}

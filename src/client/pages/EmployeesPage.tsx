@@ -542,6 +542,14 @@ function RoomsPanel({ me }: { me: MeResponse }) {
             <span className="badge">{r.message_count} message(s)</span>
           </li>
         ))}
+        {/* LOADING IS A STATE, NOT A GAP. The design system's rule is that loading and empty share
+            one slot and are told apart by tone — never a blank (docs/WEST_PEEK_DESIGN_SYSTEM.md §7,
+            and `e2e/support/surfaces.ts` sweeps for exactly this). These two lists rendered NOTHING
+            while their fetch was in flight, so a reader on a slow connection got the ambiguous blank
+            the rule exists to forbid, and `d1-design-states` reported it intermittently — 1 run in 8
+            on 18 Sep 2026 — because whether the blank was on screen when the sweep measured depended
+            on how loaded the machine was. The spec was right; the page was wrong. */}
+        {rooms.loading && <li className="state-empty">Reading the department rooms…</li>}
         {!rooms.loading && (rooms.data?.rooms ?? []).length === 0 && <li className="state-empty">No rooms.</li>}
       </ul>
 
@@ -638,6 +646,7 @@ function HandoffsPanel({ onChanged }: { onChanged: () => void }) {
             )}
           </li>
         ))}
+        {handoffs.loading && <li className="state-empty">Reading the handoffs…</li>}
         {!handoffs.loading && (handoffs.data?.handoffs ?? []).length === 0 && <li className="state-empty">No handoffs proposed.</li>}
       </ul>
       {message && <p className="notice small" data-testid="handoff-message">{message}</p>}
