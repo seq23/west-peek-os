@@ -1638,6 +1638,11 @@ details h3 {
 /* — The Daily Brief: prose is the product. Measured line length, generous leading. */
 .brief-prose { max-width: 68ch; margin: var(--space-sm) 0; }
 .brief-prose p { margin: 0 0 var(--space-sm); color: var(--wp-ink); line-height: var(--lh-normal); }
+/* h4 first, and h5 kept as the hedge: this rule said `h5` only, and both places that use
+   `.brief-prose` (Wesley's LP draft, the portfolio summary draft) emit an `h4` — so the sub-heading
+   inside every generated draft has been rendering at browser default. Same disease as the Home
+   masthead, found by `validate:heading-scale` the day it was written. */
+.brief-prose h4,
 .brief-prose h5 {
   margin: var(--space-md) 0 var(--space-2xs);
   font-size: var(--text-sm);
@@ -1908,6 +1913,9 @@ details h3 {
 /* — Approval context. Indented under the card head so the decision controls stay the focus and the
      supporting material reads as supporting. */
 .approval-context { border-left: 2px solid var(--wp-line); padding-left: var(--space-sm); margin: var(--space-xs) 0; }
+/* `h5` only until 18 Sep 2026, while the panel emits `<h4>Evidence</h4>` — so the one heading
+   inside every approval's context block was unstyled. Found by `validate:heading-scale`. */
+.approval-context h4,
 .approval-context h5 { margin: var(--space-xs) 0 var(--space-2xs); font-size: var(--text-sm); }
 
 /* ── The approval queue ────────────────────────────────────────────────────

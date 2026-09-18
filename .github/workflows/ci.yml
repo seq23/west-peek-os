@@ -78,6 +78,14 @@ jobs:
       - name: CSS class coverage
         run: npm run validate:css-classes
 
+      # THE COMPLEMENT OF THE SCAN ABOVE. That one asks whether every class the page applies is
+      # defined; this asks whether a defined heading rule reaches anything. `.home-section-head h2`
+      # was valid CSS aimed at a tag none of its 34 call sites emit, so every section heading in the
+      # product rendered at browser default — green build, no failing test, and an operator saying
+      # "the headings have no visual weight". It found two more of the same on the day it was written.
+      - name: A heading-scale rule reaches a heading
+        run: npm run validate:heading-scale
+
       - name: Every var(--token) resolves
         run: npm run validate:css-variables
 
