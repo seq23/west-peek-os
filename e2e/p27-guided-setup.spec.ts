@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openWorkMachinery } from "./support/nav";
 
 /**
  * P27 browser journey — guided setup, the recommended team, and employee→work dependencies.
@@ -159,8 +159,7 @@ test("Home answers 'what is blocked' or stays honestly silent", async ({ page })
   } else {
     // Silence is a valid answer, but only when nothing is wrong — the strip must not be
     // suppressed while a dead-lettered job exists. Confirm via the jobs surface.
-    await gotoSurface(page, "Work");
-    await expect(page.getByTestId("jobs-page")).toBeVisible();
+    await openWorkMachinery(page);
     const deadLetters = await page.getByText(/dead-letter/i).count();
     expect(deadLetters, "Home hid the attention strip while jobs report dead letters").toBe(0);
   }

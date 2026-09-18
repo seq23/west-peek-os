@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { openWorkMachinery } from "./support/nav";
 import { provisionLocalD1 } from "./support/provision";
 
 /**
@@ -27,8 +27,9 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
    * `active === "work"`). This spec had been clicking a nav button that no longer exists, which is
    * why it timed out rather than failing on an assertion.
    */
-  await gotoSurface(page, "Work");
-  await expect(page.getByTestId("jobs-page")).toBeVisible();
+  /* The machinery is the Work page's third address since 18 Sep, not a section stacked under the
+     board. `openWorkMachinery` walks the operator's path and pins BOTH halves of that contract. */
+  await openWorkMachinery(page);
   /*
    * The page says what recurring work IS before it lists any.
    *
@@ -97,7 +98,7 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
  */
 test("the deck rebuild is on request, under its own heading, with no clock", async ({ page }) => {
   await signIn(page);
-  await gotoSurface(page, "Work");
+  await openWorkMachinery(page);
   const onRequest = page.getByTestId("job-list-on-request");
   await expect(onRequest.getByTestId("job-deck_rebuild")).toBeVisible();
   await expect(page.getByTestId("job-state-deck_rebuild")).toHaveText("On request");
@@ -114,7 +115,7 @@ test("the deck rebuild is on request, under its own heading, with no clock", asy
  */
 test("Walker's West Peek Productions duty is on the clock, one note a month, labelled as Scooter's agency work", async ({ page }) => {
   await signIn(page);
-  await gotoSurface(page, "Work");
+  await openWorkMachinery(page);
   // ONE job now (15 Sep 2026: "why is scooter getting 2 emails?"), MONTHLY on the 1st (0169); the
   // two it replaced and the one-off introduction are RETIRED and off the page.
   const job = page.getByTestId("job-productions_monthly");
@@ -142,7 +143,7 @@ test("Walker's West Peek Productions duty is on the clock, one note a month, lab
  */
 test("Walker's weekly hire search is WEEKLY on Monday at 14:00 UTC, labelled as Scooter's agency work, and runs by hand", async ({ page }) => {
   await signIn(page);
-  await gotoSurface(page, "Work");
+  await openWorkMachinery(page);
   const job = page.getByTestId("job-productions_hire_search");
   await expect(job).toBeVisible();
   await expect(job).toContainText("Scooter's own agency, not the fund");

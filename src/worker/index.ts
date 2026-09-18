@@ -63,6 +63,7 @@ import {
   handleCreateWorkCard,
   handleListWorkCardNotes,
   handleWorkByOwner,
+  handleWorkRecord,
   handleGetWorkCard,
   handleListWorkCards,
   handleUpdateWorkCard,
@@ -753,6 +754,9 @@ const router = new Router()
   .get("/api/work-cards/:id/instructions", handleWorkCardInstructions)
   .post("/api/work-cards/:id/notes", handleAddWorkCardNote)
   .get("/api/work-cards/by-owner", handleWorkByOwner)
+  // THE RECORD. Finished work left the board because a slice of a cap is not a record — see
+  // handleWorkRecord. Search, month spine, collapsed duplicates, paged.
+  .get("/api/work-cards/record", handleWorkRecord)
   .get("/api/work-cards", handleListWorkCards)
   .get("/api/work-cards/:id", handleGetWorkCard)
   .patch("/api/work-cards/:id", handleUpdateWorkCard)

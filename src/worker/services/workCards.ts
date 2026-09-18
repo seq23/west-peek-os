@@ -8,6 +8,7 @@ import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy"
 import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityClause } from "./authorize";
 import { getVisibleCapture } from "./captures";
 import { blockOf } from "./blocks";
+import { RECORD_GROUP_COLUMNS, RECORD_GROUP_SQL, RECORD_STATES, monthLabel, searchTerms, type RecordState } from "../../shared/work/record";
 
 /**
  * Work spine (P3): the unit of governed work. State transitions are enforced
@@ -608,8 +609,20 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
        LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
        LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
       WHERE ${visibility}
-      ORDER BY wc.created_at DESC
-      LIMIT 500`,
+        -- LIVE WORK ONLY, AND THAT IS THE FIX RATHER THAN A TRIM.
+        --
+        -- This query used to return every card the firm had ever made under a LIMIT of 500, and the
+        -- page then rendered the first fifty of them. Measured on 18 Sep 2026 against a
+        -- day-200 database: 531 finished cards, 50 reachable, 481 gone with nothing on screen
+        -- saying so. Worse, the cap is ordered by age — so on the day the firm passes 500 finished
+        -- cards, an OPEN card nobody has picked up since March falls off the BOARD, which is the
+        -- one row this page exists to keep visible.
+        --
+        -- Finished work is now served by /api/work-cards/record, which searches, groups and pages
+        -- it properly. What is left here is bounded by the firm's actual capacity to have work in
+        -- flight, so it needs no cap and can no longer push a waiting card out of its own list.
+        AND wc.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')
+      ORDER BY wc.created_at DESC`,
   ).all<Record<string, unknown>>();
 
   // What each employee has actually been doing. Recent rather than all time — "currently" is the
@@ -704,6 +717,177 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
     note:
       "Cards are work somebody owns over time. Runs are single acts that already happened. They are " +
       "kept apart on purpose — turning every run into a card would make this a log.",
+  });
+}
+
+/**
+ * THE RECORD — every finished card, searchable, grouped by month, identical runs collapsed.
+ *
+ * WHY THIS IS A ROUTE AND NOT A FILTER ON THE BOARD. `by-owner` capped at 500 rows and the page
+ * sliced 50 of them; at day-200 volume that made 481 of 531 finished cards unreachable with no
+ * symptom on screen. Filtering a truncated list client-side would have kept the truncation and
+ * hidden it behind a search box that appeared to work — the worse of the two states, because she
+ * would then TRUST an empty result. Retrieval belongs where the rows are.
+ *
+ * THE COLLAPSE IS IN SQL, NOT IN THE CLIENT, for the same reason. Collapsing after paging gives a
+ * page of eleven rows where the reader asked for forty; collapsing before paging is only possible
+ * where the whole set is. `RECORD_GROUP_COLUMNS` in `@shared/work/record` is the definition of
+ * "the same thing, run again", and `validate:record-scales` reads that array and requires the
+ * GROUP BY below to name exactly those columns, so the two cannot drift apart.
+ *
+ * SEARCH COVERS THE RESULT LINE, NOT JUST THE TITLE. What she remembers about last month's Room
+ * packet is "Black lawyers" — which is in the line an employee wrote, not in the title the
+ * machinery generated.
+ */
+const recordQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  who: z.string().trim().max(120).optional(),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  state: z.enum(RECORD_STATES).optional(),
+  cursor: z.coerce.number().int().min(0).max(100_000).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
+  const visibility = privacyVisibilityClause(ctx.identity!, "wc.privacy_label");
+  const url = new URL(ctx.request.url);
+  const parsed = recordQuerySchema.safeParse(Object.fromEntries(url.searchParams));
+  if (!parsed.success) {
+    return json({ error: "invalid_input", detail: parsed.error.issues[0]?.message ?? "bad query" }, { status: 400 });
+  }
+  const { q, who, month, cursor = 0 } = parsed.data;
+  const state: RecordState = parsed.data.state ?? "ALL";
+  const limit = parsed.data.limit ?? 40;
+
+  /*
+   * FINISHED MEANS DONE OR DROPPED, AND A DROPPED CARD IS PART OF THE RECORD. A decision not to do
+   * something is still a decision; hiding it would make this a highlight reel. It is filterable and
+   * labelled differently, and it is never silently absent.
+   */
+  const where: string[] = [visibility, "wc.state IN ('DONE', 'CANCELLED')"];
+  const binds: unknown[] = [];
+  const bind = (value: unknown): string => {
+    binds.push(value);
+    return `?${binds.length}`;
+  };
+  if (state !== "ALL") where.push(`wc.state = ${bind(state)}`);
+  if (who) where.push(`wc.owner_id = ${bind(who)}`);
+  if (month) where.push(`substr(wc.created_at, 1, 7) = ${bind(month)}`);
+  /*
+   * ONE TERM PER WORD, ANDed — see `searchTerms`. A single `%<the whole query>%` is what this used
+   * to do, and D1 answers a LIKE pattern of 50 characters or more with `SQLITE_ERROR: LIKE or GLOB
+   * pattern too complex`, so the longest and most specific searches — the ones she makes when she
+   * actually remembers something — returned a 500 and a blank record.
+   *
+   * Bound, never interpolated: a search box is user input and this one runs against the firm's
+   * entire history. The wildcards in what she typed are escaped, so a stray % is a percent sign.
+   */
+  for (const term of searchTerms(q ?? "")) {
+    const like = `%${term.replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
+    where.push(
+      `(wc.title LIKE ${bind(like)} ESCAPE '\\' OR COALESCE(wc.description, '') LIKE ${bind(like)} ESCAPE '\\')`,
+    );
+  }
+  const filter = where.join("\n        AND ");
+  const groupBy = RECORD_GROUP_COLUMNS.map((c) => RECORD_GROUP_SQL[c]).join(", ");
+  /** The same key as one string, for counting distinct groups without a subquery. */
+  const groupKey = RECORD_GROUP_COLUMNS.map((c) => `COALESCE(${RECORD_GROUP_SQL[c]}, '')`).join(" || ' ' || ");
+
+  const page = await ctx.env.WP_OS_DB.prepare(
+    `SELECT wc.title    AS title,
+            wc.state    AS state,
+            wc.owner_id AS owner_id,
+            COALESCE(e.name, u.full_name) AS owner_name,
+            substr(wc.created_at, 1, 7)   AS month,
+            MAX(wc.created_at)            AS at,
+            COUNT(*)                      AS runs,
+            wc.id           AS id,
+            wc.description  AS description,
+            wc.model_access AS model_access,
+            wc.audience     AS audience,
+            wc.kind         AS kind
+       FROM work_card wc
+       LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
+       LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
+      WHERE ${filter}
+      GROUP BY ${groupBy}
+      ORDER BY at DESC
+      LIMIT ${limit + 1} OFFSET ${cursor}`,
+  )
+    .bind(...binds)
+    .all<Record<string, unknown>>();
+
+  /*
+   * `wc.id` AND `wc.description` ARE THE ROW THAT PRODUCED `MAX(created_at)`, and that is a
+   * documented SQLite guarantee rather than luck: in a query with exactly one bare MAX() or MIN()
+   * aggregate, every bare column is taken from the row that produced it. So "Reopen" acts on the
+   * most recent attempt and the result line is that attempt's, not an arbitrary sibling's. If this
+   * query ever grows a second bare aggregate the guarantee lapses, which `validate:record-scales`
+   * checks for.
+   */
+  const raw = page.results ?? [];
+  const hasMore = raw.length > limit;
+  const rows = raw.slice(0, limit);
+
+  const counts = await ctx.env.WP_OS_DB.prepare(
+    `SELECT COUNT(*) AS cards, COUNT(DISTINCT ${groupKey}) AS row_count
+       FROM work_card wc
+      WHERE ${filter}`,
+  )
+    .bind(...binds)
+    .first<{ cards: number; row_count: number }>();
+
+  const totals = await ctx.env.WP_OS_DB.prepare(
+    `SELECT COUNT(*) AS cards, COUNT(DISTINCT ${groupKey}) AS row_count, MIN(wc.created_at) AS since
+       FROM work_card wc
+      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED')`,
+  ).first<{ cards: number; row_count: number; since: string | null }>();
+
+  /*
+   * THE FACETS COUNT THE WHOLE RECORD, NOT THE CURRENT FILTER. A month list that shrank as she
+   * typed would remove the very control she needs to widen the search again.
+   */
+  const months = await ctx.env.WP_OS_DB.prepare(
+    `SELECT substr(wc.created_at, 1, 7) AS month, COUNT(*) AS cards
+       FROM work_card wc
+      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED')
+      GROUP BY month ORDER BY month DESC LIMIT 60`,
+  ).all<{ month: string; cards: number }>();
+
+  const people = await ctx.env.WP_OS_DB.prepare(
+    `SELECT wc.owner_id AS owner_id, COALESCE(e.name, u.full_name, 'Nobody') AS name, COUNT(*) AS cards
+       FROM work_card wc
+       LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
+       LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
+      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED') AND wc.owner_id IS NOT NULL
+      GROUP BY wc.owner_id, name ORDER BY cards DESC LIMIT 40`,
+  ).all<{ owner_id: string; name: string; cards: number }>();
+
+  return json({
+    rows: rows.map((r) => {
+      // The verdict is the LAST "• …" line the employee wrote. Everything above it is working.
+      const lines = String(r.description ?? "").split("\n").filter((l) => l.startsWith("• "));
+      return {
+        id: String(r.id),
+        title: String(r.title),
+        state: String(r.state),
+        owner_id: (r.owner_id as string | null) ?? null,
+        owner_name: (r.owner_name as string | null) ?? null,
+        month: String(r.month),
+        at: String(r.at),
+        runs: Number(r.runs ?? 1),
+        result: lines.length > 0 ? lines[lines.length - 1]!.slice(2, 402) : null,
+        model_access: String(r.model_access ?? "PUBLIC_MODEL_APPROVED"),
+        audience: String(r.audience ?? "INTERNAL"),
+        kind: (r.kind as string | null) ?? null,
+      };
+    }),
+    matched: { cards: counts?.cards ?? 0, rows: counts?.row_count ?? 0 },
+    total: { cards: totals?.cards ?? 0, rows: totals?.row_count ?? 0 },
+    next_cursor: hasMore ? String(cursor + limit) : null,
+    months: (months.results ?? []).map((m) => ({ ...m, label: monthLabel(m.month) })),
+    people: people.results ?? [],
+    since: totals?.since ?? null,
   });
 }
 

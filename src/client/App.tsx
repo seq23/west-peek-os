@@ -4039,20 +4039,22 @@ export function App() {
           {authed && active === "today" && <HomePage me={me.data!} onNavigate={navigate} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} onNavigate={navigate} />}
           {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={navigate} />}
+          {/*
+            THE MACHINERY IS HANDED IN, NOT STACKED UNDERNEATH.
+
+            It used to render below the whole board behind a "Runs on a clock" heading, which put
+            twelve scheduled jobs in the same scroll as the one card that had stopped — machinery
+            competing with what is happening now, which is the third of the four things the 18 Sep
+            redesign was asked to separate. `WorkCardsPage` now owns the three addresses and renders
+            this only on the one it belongs to; the shell still owns what the machinery IS.
+          */}
           {authed && active === "work" && (
-            <>
-              <WorkSurface me={me.data!} onChanged={refresh} onNavigate={navigate} />
-              {/* "Runs on a schedule" read as a sentence fragment rather than a section name, and
-                  nothing said where the section ended. A chevron makes it obvious that what follows
-                  is the scheduled half of this page. */}
-              <div className="home-section-head work-scheduled-head">
-                <h3>
-                  <span className="chev" aria-hidden="true" /> Runs on a clock
-                </h3>
-                <span className="muted small">the machinery — what it does, who does it, and how its last run went</span>
-              </div>
-              <JobsPage me={me.data!} />
-            </>
+            <WorkSurface
+              me={me.data!}
+              onChanged={refresh}
+              onNavigate={navigate}
+              machinery={<JobsPage me={me.data!} />}
+            />
           )}
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && (

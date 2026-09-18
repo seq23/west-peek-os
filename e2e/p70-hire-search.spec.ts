@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { provisionLocalD1, queryLocalD1 } from "./support/provision";
-import { gotoSurface } from "./support/nav";
+import { openWorkMachinery } from "./support/nav";
 import { kindDef } from "../src/shared/deliverables/deliverable";
 
 /**
@@ -113,8 +113,7 @@ test("a partner can ask for a preview from the Work page, on the jobs that have 
   await page.getByTestId("dev-login-submit").click();
   await expect(page.getByTestId("identity-status")).toContainText("Sequoia Taylor");
 
-  await gotoSurface(page, "Work");
-  await expect(page.getByTestId("jobs-page")).toBeVisible();
+  await openWorkMachinery(page);
   const button = page.getByTestId("job-preview-productions_hire_search");
   await expect(button, "the hire search can be previewed").toBeVisible();
   await expect(button).toHaveText("Preview it to me");

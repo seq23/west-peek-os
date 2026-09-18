@@ -169,6 +169,36 @@ export function scan(root) {
     }
   }
 
+  /*
+   * 4b · TEXT ON AN ORANGE FILL IS NEAR-BLACK, NEVER PAPER OR WHITE.
+   *
+   * The token block already says this, in words, right beside the token:
+   *   --wp-orange-ink: #0a0a0a;  /* text ON an orange fill — 6.2:1. Never white: white is 3.4:1 *\/
+   * and on 18 Sep 2026 two rules did it anyway. `.job-face-initial` and `.professor-face-initial`
+   * set paper on orange, which measures 3.05:1 — below AA for anything under 24px, and the first of
+   * them was found by the new Work spec the moment the machinery came inside a surface something
+   * measures. A rule written in a comment governs nothing; this is the comment, read by code.
+   *
+   * Only the two fills that are unambiguously orange are checked: `background: var(--wp-orange)`
+   * and the literal itself. A gradient or a tint is a different question and is not guessed at.
+   */
+  if (tokenBlock) {
+    const css = stripCssComments(readFileSync(stylesPath, "utf8"));
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const body = m[2];
+      if (!/background(?:-color)?\s*:\s*var\(--wp-orange\)/.test(body)) continue;
+      const colour = /(?:^|[;\s])color\s*:\s*([^;]+)/.exec(body);
+      if (!colour) continue; // inherits — a separate question this scan does not guess at
+      const value = colour[1].trim();
+      if (!/var\(--wp-orange-ink\)/.test(value)) {
+        failures.push(
+          `text on an orange fill must be var(--wp-orange-ink): \`${m[1].trim().replace(/\s+/g, " ")}\` sets ` +
+            `color: ${value}. Paper and white measure about 3.05:1 on #F05A1A, which is below AA under 24px.`,
+        );
+      }
+    }
+  }
+
   // 5 · The approved mark is actually wired into the primary shell.
   const appPath = join(clientDir, "App.tsx");
   if (!existsSync(appPath)) {
@@ -262,6 +292,32 @@ function selfTest() {
       },
       expect: (f) => f.length === 0,
       describe: "semantic green / amber / red survive the hue rule",
+    },
+    {
+      name: "paper on an orange fill is caught — the exact shape that shipped twice",
+      mutate: (dir) => {
+        const p = join(dir, "src", "client", "styles.css");
+        writeFileSync(
+          p,
+          readFileSync(p, "utf8").replace("--wp-ink: #15120f;", "--wp-ink: #15120f;\n  --wp-orange-ink: #0a0a0a;\n  --wp-paper: #f7f2ea;") +
+            "\n.face-initial { background: var(--wp-orange); color: var(--wp-paper); }\n",
+        );
+      },
+      expect: (f) => f.some((x) => x.includes("text on an orange fill") && x.includes(".face-initial")),
+      describe: "paper on orange (3.05:1) — both .job-face-initial and .professor-face-initial shipped this",
+    },
+    {
+      name: "near-black on an orange fill passes, which is the whole point of the token",
+      mutate: (dir) => {
+        const p = join(dir, "src", "client", "styles.css");
+        writeFileSync(
+          p,
+          readFileSync(p, "utf8").replace("--wp-ink: #15120f;", "--wp-ink: #15120f;\n  --wp-orange-ink: #0a0a0a;") +
+            "\n.face-initial { background: var(--wp-orange); color: var(--wp-orange-ink); }\n",
+        );
+      },
+      expect: (f) => f.length === 0,
+      describe: "the correct pairing is not flagged",
     },
     {
       name: "an unwired brand mark is caught",

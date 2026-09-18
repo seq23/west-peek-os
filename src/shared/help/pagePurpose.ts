@@ -60,9 +60,15 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
     purpose: "Somewhere to put anything that arrives before it has a home — a note, a forward, a thought between meetings.",
     youCan: ["Capture something quickly", "Route it to the right machine later"],
   },
+  /*
+   * SHORTENED ON 18 SEP, AND THE LENGTH WAS THE PROBLEM. This block renders above everything a page
+   * puts on screen, and the four-sentence version pushed the one line that answers "is anything
+   * waiting on me" below where the eye lands. On day 200 she reads that answer twice a day and this
+   * paragraph never again. Three addresses, one clause each.
+   */
   "work": {
-    purpose: "Everything the firm is doing, in two kinds. Someone carries a work card and it stops if nobody picks it up; scheduled work is machinery that runs on a clock whether anyone looks. Both live here so you only check one place.",
-    youCan: ["See what has stopped, and who is carrying what", "Write a card and hand it to an employee or your partner", "Switch a scheduled job on or off", "See what your employees have actually been running"],
+    purpose: "Three places: the desk is what needs you and what is in flight, the record is everything the firm has finished, the machinery is what runs on a clock.",
+    youCan: ["See what has stopped, and who is carrying what", "Write a card and hand it to an employee or your partner", "Search the record of everything finished", "Check the machinery is healthy"],
   },
   notifications: {
     purpose: "What is waiting on you, then what is worth knowing, then what you have already dealt with. Dismissing something says you saw it; acknowledging says you have taken responsibility for it, and that is recorded.",

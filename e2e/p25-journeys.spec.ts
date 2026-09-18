@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openWorkMachinery } from "./support/nav";
 
 /**
  * P25 — cross-system journeys (task §9 P25).
@@ -130,8 +130,9 @@ test("journey 3 — employee lounge → scorecard → operator control", async (
 test("journey 4 — machine → scheduled run → artifact → notification → audit", async ({ page, request }) => {
   await signIn(page);
 
-  // Switch the daily intelligence job on and run it.
-  await gotoSurface(page, "Work");
+  // Switch the daily intelligence job on and run it. The machinery is Work's third address since
+  // 18 Sep, and the helper pins that it is off the desk and one click away.
+  await openWorkMachinery(page);
   // A paused job shows "Put it back on"; a running one shows "Pause… (why?)". Put it on if needed.
   const resume = page.getByTestId("job-resume-daily_intelligence");
   if (await resume.isVisible().catch(() => false)) {
