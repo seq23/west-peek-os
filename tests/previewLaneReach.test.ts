@@ -403,7 +403,16 @@ describe("the three doors", () => {
     captureFetch(sent);
 
     const liveId = await cardFor("Something still being worked");
-    await t.db.prepare("UPDATE work_card SET state = 'OPEN' WHERE id = ?1").bind(liveId).run();
+    /*
+     * THE ALLOWANCE COMES BACK WITH IT (0194). `cardFor` makes a DONE card with its attempts spent,
+     * and the database now refuses OPEN at the ceiling — so this fixture has to do what every real
+     * put-back does. The trigger caught this test setting up a state production can no longer hold,
+     * which is the guard doing its job on its first run.
+     */
+    await t.db
+      .prepare("UPDATE work_card SET state = 'OPEN', work_attempts = 0, lease_until = NULL WHERE id = ?1")
+      .bind(liveId)
+      .run();
     const live = await filePreview(env, {
       employee: "Walker", what: "a note", subject: "Walker: a note", bodyText: "b",
       recipient: "founder@startup.example", laneReason: "DEFAULT_OUTSIDE_FIRM",
@@ -564,5 +573,86 @@ describe("Parker writes to the person, not just about them", () => {
 
     // There is always a way out for them, which is what makes a cold note honest.
     expect(JSON.stringify(note)).toContain("Say so and I will not write again");
+  });
+});
+
+// ── 7 · putting a card back gives it its attempts back ────────────────────────────────────────
+
+describe("the Work page's own put-back", () => {
+  /**
+   * THE SECOND ROUTE INTO THE DEAD STATE, and the one that actually produced it.
+   *
+   * `ALLOWED_TRANSITIONS` permits BLOCKED → OPEN and IN_PROGRESS → OPEN from this handler. Every
+   * other door that puts a card back — `answerBlock`, `reopen`, the preview lane's "send it back",
+   * migration 0173's own backfill — writes `work_attempts = 0` with it. This one did not, so a
+   * person walking a card back to OPEN left the count at the ceiling: unclaimable, not BLOCKED,
+   * and therefore carrying no reason, no doors and no nag. That is exactly the state "Draft event
+   * kit: October workshop with Kirx Diaz" sat in for fourteen hours.
+   */
+  it("resets the allowance when a card is walked back into the queue", async () => {
+    const id = `wc_${crypto.randomUUID()}`;
+    await t.db
+      .prepare(
+        `INSERT INTO work_card (id, title, owner_type, owner_id, state, priority, privacy_label, firm_scope,
+             created_by, work_attempts, work_steps, lease_until)
+         VALUES (?1, 'Draft event kit: October workshop', 'AI', 'aie_parker', 'IN_PROGRESS', 'NORMAL', 'INTERNAL',
+             'west-peek', 'fu_sequoia_taylor', 3, 9, '2026-09-18T01:15:09.000Z')`,
+      )
+      .bind(id)
+      .run();
+
+    const res = await handleRequest(
+      new Request(`https://os.joinwestpeek.com/api/work-cards/${id}`, {
+        method: "PATCH",
+        headers: { ...SEQUOIA, "content-type": "application/json" },
+        body: JSON.stringify({ state: "OPEN" }),
+      }),
+      env,
+    );
+    expect(res.status, "the button must work, not 409").toBe(200);
+
+    const row = await t.db
+      .prepare("SELECT state, work_attempts, work_steps, lease_until FROM work_card WHERE id = ?1")
+      .bind(id)
+      .first<{ state: string; work_attempts: number; work_steps: number; lease_until: string | null }>();
+    expect(row!.state).toBe("OPEN");
+    // A fresh allowance, because a person putting a card back is SAYING try this again. Handing it
+    // back still exhausted would honour the button and not the intent.
+    expect(row!.work_attempts, "an OPEN card at the ceiling can never be picked up").toBe(0);
+    expect(row!.work_steps).toBe(0);
+    // And not leased to a run that is no longer happening.
+    expect(row!.lease_until).toBeNull();
+  });
+
+  it("leaves the allowance alone when the state is not what changed", async () => {
+    const made = await handleRequest(
+      new Request("https://os.joinwestpeek.com/api/work-cards", {
+        method: "POST",
+        headers: { ...SEQUOIA, "content-type": "application/json" },
+        body: JSON.stringify({ title: "A card being renamed, not re-queued", owner_type: "AI", owner_id: "aie_parker" }),
+      }),
+      env,
+    );
+    const card = (await made.json()) as { id: string };
+    await t.db.prepare("UPDATE work_card SET work_attempts = 2 WHERE id = ?1").bind(card.id).run();
+
+    await handleRequest(
+      new Request(`https://os.joinwestpeek.com/api/work-cards/${card.id}`, {
+        method: "PATCH",
+        headers: { ...SEQUOIA, "content-type": "application/json" },
+        body: JSON.stringify({ title: "Renamed" }),
+      }),
+      env,
+    );
+    const row = await t.db
+      .prepare("SELECT work_attempts FROM work_card WHERE id = ?1")
+      .bind(card.id)
+      .first<{ work_attempts: number }>();
+    /*
+     * A RENAME IS NOT A RE-QUEUE. Resetting on every update would make the ceiling unreachable —
+     * any edit mid-run would hand the card three more goes — which is the opposite failure and a
+     * worse one, because it is invisible.
+     */
+    expect(row!.work_attempts).toBe(2);
   });
 });
