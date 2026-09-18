@@ -21,6 +21,8 @@ interface CatalogResponse {
     kill_switched: number;
     credential_name: string;
     credential_configured: boolean;
+    /** Why this lane cannot serve, in the words of whoever switched it off. Null when it can. */
+    unavailable_reason: string | null;
     allowed_data_classes: string[];
     latest_health: { mode: string; ok: number; detail: string; created_at: string } | null;
   }>;
@@ -554,6 +556,19 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
                 {p.credential_configured ? `${p.credential_name} configured` : `${p.credential_name} not configured`}
               </span>
             </p>
+            {/*
+              * THE REASON THE SERVER ALREADY COMPUTED, FINALLY ON THE SCREEN. `unavailable_reason`
+              * has been in this payload since the catalogue was built and no surface rendered it, so
+              * a lane that was deliberately stood down looked identical to one nobody had got round
+              * to switching on. The owner saw exactly that on 18 Sep 2026: the Anthropic lane
+              * DISABLED beside a green "configured" badge, with the real cause — an empty account
+              * that had refused two of Parker's steps — recorded nowhere she could read it.
+              */}
+            {p.unavailable_reason && (
+              <p className="muted small" data-testid={`catalog-unavailable-${p.provider_key}`}>
+                Not serving: {p.unavailable_reason}
+              </p>
+            )}
             <p className="muted small">
               egress allowed for: {p.allowed_data_classes.length > 0 ? p.allowed_data_classes.join(", ") : "nothing (default deny)"}
             </p>

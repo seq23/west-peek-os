@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { periodStart } from "./routing";
 import { evaluateSpend, LADDER, type SpendBehaviour, type SpendLever } from "../../shared/ai/spendLever";
+import { readLaneFailure } from "../../shared/ai/laneFailure";
 
 /**
  * ONE definition of what the firm has spent. Everything that puts a spend figure on a screen, or
@@ -483,4 +484,122 @@ export async function currentSpendBehaviour(
 ): Promise<SpendBehaviour> {
   const spend = await firmSpend(env, firmScope, "THIS_MONTH", now);
   return evaluateSpend(lever, spend.total_usd, now);
+}
+
+// ── What STOPPED, and why, in words she can act on ──────────────────────────────────────────
+
+/**
+ * EVERY STATUS `ai_run.status` MAY HOLD, in the order migration 0004 declares them.
+ *
+ * Written down here because two screens were counting "blocked runs" from two hand-typed lists and
+ * getting different answers for the same morning. Home named five statuses literally; the cost
+ * centre said "anything not committed". The five Home named omitted `PREFLIGHT_BLOCKED` — which is
+ * the status of EVERY named stop the spend lever raises (`free_only_cannot_serve_protected_work`,
+ * `no_search_grounded_model_available`, `no_active_priced_model`) — and `FAILED`. So a run the
+ * owner's own lever had stopped was invisible on the page she reads first.
+ *
+ * `scripts/validate/what-stopped-is-counted-once.mjs` reads the CHECK constraint out of
+ * migrations/0004_ai_cost_privacy.sql and fails the build if this list and that constraint differ,
+ * so a status added in SQL cannot quietly become a run nobody counts.
+ */
+export const AI_RUN_STATUSES = [
+  "PREFLIGHT_BLOCKED",
+  "BUDGET_BLOCKED",
+  "EGRESS_BLOCKED",
+  "KILL_SWITCHED",
+  "PROVIDER_DISABLED",
+  "QUEUED",
+  "RUNNING",
+  "COMPLETED",
+  "FAILED",
+  "BLOCKED_DEFERRED",
+] as const;
+
+/**
+ * Runs that did NOT reach a model, or reached one and got nothing back. Derived — never typed out —
+ * so adding a status to the schema adds it here rather than creating a sixth place to forget it.
+ */
+export const STOPPED_RUN_STATUSES: readonly string[] = Object.freeze(
+  AI_RUN_STATUSES.filter((s) => !(COMMITTED_RUN_STATUSES as readonly string[]).includes(s)),
+);
+
+export interface StoppedRuns {
+  /** How many stopped inside the window. */
+  count: number;
+  /** The most recent one's timestamp, or null. A count with no clock reads as "right now" forever. */
+  last_at: string | null;
+  /** One sentence naming the cause, in the owner's vocabulary. Never a status code. */
+  reason: string | null;
+  /** Can she do anything about it from the Cockpit? Stated, because "2 blocked" alone cannot be acted on. */
+  she_can_fix: boolean;
+}
+
+/**
+ * A count is not a diagnosis. "2 blocked run(s)" is what the owner read on Home this morning and
+ * could not act on: no cause, no clock, and no idea whether the thing was still happening. Both
+ * numbers now come from here, with the vendor's own classification attached.
+ */
+export async function stoppedRuns(env: Env, firmScope: string, window: SpendWindow, now: Date = new Date()): Promise<StoppedRuns> {
+  const since = spendWindowStart(window, now);
+  const list = STOPPED_RUN_STATUSES.map((s) => `'${s}'`).join(",");
+  const where = since
+    ? `firm_scope = ?1 AND status IN (${list}) AND created_at >= ?2`
+    : `firm_scope = ?1 AND status IN (${list})`;
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT status, failure_reason, created_at FROM ai_run WHERE ${where} ORDER BY created_at DESC`,
+      )
+        .bind(...(since ? [firmScope, since] : [firmScope]))
+        .all<{ status: string; failure_reason: string | null; created_at: string }>()
+    ).results ?? [];
+  if (rows.length === 0) return { count: 0, last_at: null, reason: null, she_can_fix: false };
+
+  const newest = rows[0]!;
+  const failure = readLaneFailure(newest.failure_reason);
+  const sentence = stoppedRunSentence(newest.status, newest.failure_reason);
+  return {
+    count: rows.length,
+    last_at: newest.created_at,
+    reason: sentence,
+    /*
+     * WHAT "SHE CAN FIX IT" MEANS HERE: there is a control on the Cockpit that changes this outcome.
+     * A lane that is out of credit, refusing a key, or disabled is one she can stand down, fund or
+     * re-enable from that page. A vendor having a bad minute is not, and saying so is the honest
+     * answer rather than sending her to a page with nothing on it for her.
+     */
+    she_can_fix: failure.kind === "CREDIT" || failure.kind === "CREDENTIAL" || failure.kind === "NO_LANE",
+  };
+}
+
+/**
+ * The stop, in one sentence. Exported so the page, Home and any future channel print the same words
+ * — three glosses of one event is exactly how "what has the firm spent" came to have three answers.
+ */
+export function stoppedRunSentence(status: string, failureReason: string | null): string {
+  const failure = readLaneFailure(failureReason);
+  switch (failure.kind) {
+    case "CREDIT":
+      return "a lane refused the work because the account behind it is out of credit — fund it or stand the lane down on the Cockpit";
+    case "CREDENTIAL":
+      return `a lane refused our key${failure.lane ? ` (${failure.lane})` : ""} — set or replace that vendor's credential`;
+    case "RATE_LIMIT":
+      return "a lane was rate-limited; this clears itself and the run will be retried";
+    case "LANE_DOWN":
+      return "a lane failed to answer; the run fell through the chain and nothing left could serve it";
+    case "NO_LANE":
+      return "no enabled lane was allowed to serve this work — check which providers are enabled on the Cockpit";
+    default:
+      break;
+  }
+  if (status === "BUDGET_BLOCKED") return "a spending ceiling stopped it; raise the cap or grant a bypass on the Cockpit";
+  if (status === "EGRESS_BLOCKED") return "its privacy label is not allowed to reach any enabled lane";
+  if (status === "KILL_SWITCHED") return "the provider is kill-switched";
+  if (status === "PROVIDER_DISABLED") return "every lane that could serve it is disabled";
+  if (status === "PREFLIGHT_BLOCKED") {
+    return failureReason?.startsWith("free_only")
+      ? "the spend lever is set to Free only and this work is not allowed a weaker model, so it stopped rather than being downgraded"
+      : "it was stopped before any model was chosen; the run record names which rule";
+  }
+  return "it stopped without reaching a usable answer; the run record names the lane and the reason";
 }

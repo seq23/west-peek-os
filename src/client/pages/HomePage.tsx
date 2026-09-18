@@ -221,8 +221,25 @@ function summarize(moduleKey: string, item: Record<string, unknown>): string {
       return `${s("stage")} · ${s("legal_name")}${s("target_commitment") ? ` — target ${s("target_commitment")}` : ""}`;
     case "reconciliation":
       return `${s("exception_kind")} · ${s("record_kind")}/${s("record_key")} field ${s("field")}`;
-    case "ai_spend":
-      return `$${s("spent_usd")} of $${s("daily_cap_usd")} cap · ${s("cost_mode")}/${s("privacy_mode")} · ${s("blocked_runs_today")} blocked run(s)`;
+    case "ai_spend": {
+      /*
+       * WAS `${cost_mode}/${privacy_mode}` — two columns that no longer decide anything, printed as
+       * the firm's spending posture. The owner read "NORMAL/FRONTIER" on a morning the router was
+       * in fact economising, and reasonably concluded the opposite. The lever and the gradient
+       * position are what route; privacy keeps its own word so it cannot be read as a spend mode.
+       *
+       * And a stopped run now carries its cause and its clock. "2 blocked run(s)" with neither is
+       * the exact thing she has said twice she cannot act on — the two she saw had stopped eleven
+       * hours earlier and been fixed by a deploy in between, and the card could not say so.
+       */
+      const posture = s("gradient_applies") === "true" ? `${s("spend_lever")} · ${s("gradient_position")}` : s("spend_lever");
+      const stopped = Number(item["blocked_runs_today"] ?? 0);
+      const head = `$${s("spent_usd")} of $${s("daily_cap_usd")} cap · ${posture} · privacy ${s("privacy_mode")}`;
+      if (stopped === 0) return `${head} · nothing stopped today`;
+      return `${head} · ${stopped} run(s) stopped, last at ${s("blocked_last_at")} — ${s("blocked_reason")}${
+        item["blocked_is_hers_to_fix"] === true ? " (you can change this on the Cockpit)" : ""
+      }`;
+    }
     case "what_changed":
       return `${s("event_type")} — ${s("object_type")}/${s("object_id")} at ${s("created_at")}`;
     case "my_work":

@@ -58,6 +58,23 @@ async function parseJsonBody(request: Request): Promise<unknown | null> {
  */
 export { credentialNameFor, credentialConfigured } from "../../shared/ai/providerCredentials";
 
+/**
+ * The sentence whoever switched this lane off left behind, or null. Never invented: a lane with no
+ * recorded reason reports the bare status, so an unexplained stand-down stays visibly unexplained
+ * rather than acquiring a plausible-sounding cause.
+ */
+function standDownReason(costMetadataJson: unknown): string | null {
+  if (typeof costMetadataJson !== "string") return null;
+  try {
+    const meta = JSON.parse(costMetadataJson) as { stood_down_reason?: unknown };
+    return typeof meta.stood_down_reason === "string" && meta.stood_down_reason.trim().length > 0
+      ? meta.stood_down_reason.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleProviderCatalog(ctx: RouteContext): Promise<Response> {
   const providers = (
     await ctx.env.WP_OS_DB.prepare("SELECT * FROM provider_registry ORDER BY provider_key").all<{
@@ -69,6 +86,7 @@ export async function handleProviderCatalog(ctx: RouteContext): Promise<Response
       base_url: string | null;
       paused_until: string | null;
       paused_reason: string | null;
+      cost_metadata_json: string;
     }>()
   ).results ?? [];
 
@@ -156,7 +174,19 @@ export async function handleProviderCatalog(ctx: RouteContext): Promise<Response
         available: p.enabled === 1 && p.kill_switched !== 1 && configured && !laneIsStoodDown(p),
         unavailable_reason:
           p.enabled !== 1
-            ? "provider is disabled"
+            /*
+             * "PROVIDER IS DISABLED" IS A STATUS, NOT A REASON, and on 18 Sep 2026 that distinction
+             * cost the owner a morning. The Anthropic lane was switched off at 01:10 because the
+             * account had no credit and answered HTTP 400 — "your credit balance is too low" — to
+             * both of Parker's steps. The Cockpit showed DISABLED beside a green
+             * "WP_ANTHROPIC_API_KEY configured" badge and nothing else, which reads as an oversight
+             * somebody should correct. Re-enabling it would have deferred the same card again.
+             *
+             * So a lane switched off by hand carries the operator's own sentence, written into
+             * `cost_metadata_json.stood_down_reason` by whoever switched it off, and the fallback is
+             * still the bare status rather than an invention.
+             */
+            ? standDownReason(p.cost_metadata_json) ?? "provider is disabled"
             : p.kill_switched === 1
               ? "provider is kill-switched"
               // A LANE THE OWNER STOOD DOWN FROM A WORK CARD (0185). It is not disabled and not

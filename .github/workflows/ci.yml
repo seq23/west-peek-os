@@ -220,6 +220,16 @@ jobs:
       - name: A kind the code can produce is a kind the database accepts
         run: npm run validate:deliverable-kinds
 
+      # Migration 0192. The one line the owner reads first said "NORMAL/FRONTIER · 2 blocked run(s)"
+      # on a morning the router was in fact economising. `cost_mode` is DERIVED from the spend lever
+      # by runAi and never read back, and `privacy_mode` is about privacy — neither is a posture.
+      # And the blocked count was a hand-typed list of five statuses that omitted PREFLIGHT_BLOCKED,
+      # which is the status of every named stop the spend lever raises: a run her own lever had
+      # stopped was invisible on the page she reads first, while the Cockpit counted it. Two screens,
+      # one word, two populations. This reads the CHECK constraint out of the migration.
+      - name: What stopped is counted once, and the posture on screen is the one that routes
+        run: npm run validate:stopped-runs
+
       - name: Build client
         run: npm run build
 
