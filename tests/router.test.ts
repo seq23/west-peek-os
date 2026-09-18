@@ -380,14 +380,36 @@ describe("adapters fail closed without a credential", () => {
       budgetContext: { providerKey: "openrouter" },
     });
     expect(run.status).toBe("BLOCKED_DEFERRED");
-    expect(run.failure_reason).toContain("credential_missing:openrouter");
 
     const routing = await call<{ routing: { attempts_json: string; explanation: string } }>(`/api/ai/runs/${run.id}/routing`, MP);
     expect(routing.status).toBe(200);
-    const attempts = JSON.parse(routing.body.routing.attempts_json) as Array<{ outcome: string; detail: string }>;
-    // FAILED, not FAILED_OVER: openrouter has no key here and nothing caught the work, which is
-    // exactly what the record should say. The two outcomes are different facts.
-    expect(attempts[0]!.outcome).toBe("FAILED");
+    const attempts = JSON.parse(routing.body.routing.attempts_json) as Array<{ provider_key: string; outcome: string; detail: string }>;
+
+    /*
+     * ── WHERE THE REASON LIVES, AND WHY IT MOVED ──────────────────────────────────────────────
+     *
+     * The guarantee this case exists for is unchanged and is asserted below: A CREDENTIAL-LESS
+     * PROVIDER RECORDS ITS REASON RATHER THAN FAILING SILENTLY. What changed is WHICH FIELD carries
+     * it, and the change is the ladder working.
+     *
+     * `failure_reason` is the reason the run ENDED, which is by definition the LAST lane's. Until
+     * migration 0188 there was no second private-capable lane, so the first failure was also the
+     * last one and the two fields agreed. Now the chain genuinely continues — here it walks on to
+     * Google and ends on that key's own rejection — so the run's final reason is Google's and
+     * openrouter's lives in the attempts, which is the record of what was tried.
+     *
+     * Asserting it POSITIONALLY would re-break the moment another lane is registered, so it is
+     * found by provider instead: the fact worth guarding is that the reason EXISTS and is precise,
+     * not that it happens to be first in a list whose length is now a configuration detail.
+     */
+    const openrouterAttempt = attempts.find((a) => a.provider_key === "openrouter");
+    expect(openrouterAttempt, "the credential-less attempt must appear in the record at all").toBeTruthy();
+    expect(openrouterAttempt!.detail).toContain("credential_missing:openrouter");
+    // FAILED_OVER rather than FAILED, and that is the substantive change: there is now somewhere to
+    // fail over TO. A missing key no longer ends the firm's attempt at the work, it ends one lane's.
+    expect(openrouterAttempt!.outcome).toBe("FAILED_OVER");
+    // And the run still BLOCKED rather than silently succeeding on nothing.
+    expect(run.failure_reason).toBeTruthy();
     expect(attempts[0]!.detail).toContain("credential_missing");
   });
 });
