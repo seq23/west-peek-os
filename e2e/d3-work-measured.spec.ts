@@ -66,6 +66,9 @@ async function openWork(page: Page): Promise<void> {
   await gotoSurface(page, "Work");
   await expect(page.getByTestId("work-cards-page")).toBeVisible();
   await expect(page.getByTestId("work-answer")).toBeVisible();
+  /* Which address is on screen is a reading position that survives a re-navigation to a surface
+     already open, so this puts the desk back rather than assuming it. */
+  await page.getByTestId("work-view-desk").click();
   /* The answer line renders from counts that start at zero, so it is visible BEFORE the board has
      answered. Waiting on the tiles — which are the last thing the desk renders — is what makes a
      measurement of this page a measurement of the loaded page. */
