@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import type { Env } from "../src/worker/env";
+import { closeUnfinishableReports } from "../src/worker/services/dailyIntelligence";
 import {
   MAX_BRIEF_ATTEMPTS,
   STRANDED_SQL,
@@ -157,5 +160,86 @@ describe("the database and the code agree about finished", () => {
     expect(service, "the button does not identify itself as a request").toMatch(
       /startReport\(ctx\.env, firmScope, target, now, "requested"\)/,
     );
+  });
+});
+
+/**
+ * AND THE RECOVERY ACTUALLY FIRES — the shipped function, against a real migrated database.
+ *
+ * Everything above this point reasons about strings. A predicate that reads correctly and selects
+ * nothing is the "runs but inert" defect with a nicer face, and it is the one this repo keeps
+ * shipping: `closeUnfinishableReports` returning 0 for ever would look exactly like a morning on
+ * which nothing was stranded. So the real exported function is run here over the real 18 Sep row
+ * shapes, plus the five healthy shapes it must NOT touch.
+ *
+ * The parameter order is part of what this proves: `?3` appears BEFORE `?1` and `?2` in the
+ * statement, so a binder going by position rather than by index would write a timestamp into
+ * `error_message` and leave her with a date where the reason should be.
+ */
+describe("the stranded recovery selects exactly the right rows", () => {
+  let db: TestDb;
+  let env: Env;
+
+  const NOW = new Date("2026-09-18T15:20:00.000Z");
+
+  //  id            status        attempts  lease                        stage_at                     close?  why
+  const ROWS: Array<[string, string, number, string | null, string, boolean, string]> = [
+    ["hers",        "GENERATING", 3, null,                       "2026-09-18T14:41:47.366Z", true,  "the real stranded row"],
+    ["his",         "FAILED",     3, null,                       "2026-09-18T12:40:06.505Z", false, "already terminal, and it has a reason"],
+    ["ready",       "READY",      1, null,                       "2026-09-18T11:00:00.000Z", false, "delivered"],
+    ["budget_left", "GENERATING", 2, null,                       "2026-09-18T14:41:47.366Z", false, "still has attempts — must self-heal"],
+    ["between",     "RANKING",    3, null,                       "2026-09-18T15:18:00.000Z", false, "moved 2 min ago: alive between stages"],
+    ["leased",      "GENERATING", 3, "2026-09-18T15:25:00.000Z", "2026-09-18T14:00:00.000Z", false, "a stage is in flight right now"],
+    ["lease_dead",  "GENERATING", 3, "2026-09-18T15:05:00.000Z", "2026-09-18T14:00:00.000Z", true,  "lease expired and it never moved"],
+  ];
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    env = makeTestEnv(db.db);
+    await env.WP_OS_DB.prepare(
+      "INSERT OR IGNORE INTO firm_user (id, full_name, email, status) VALUES ('fu_probe','Probe','probe@example.com','ACTIVE')",
+    ).run();
+    for (const [id, status, attempts, lease, stageAt] of ROWS) {
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, attempts,
+                                          stage_lease_until, stage_at, started_at, firm_scope)
+         VALUES (?1,'fu_probe',?2,?3,?4,?5,?6,?6,'west-peek')`,
+      ).bind(id, `2026-09-${10 + ROWS.findIndex((r) => r[0] === id)}`, status, attempts, lease, stageAt).run();
+    }
+  });
+
+  afterAll(async () => {
+    await disposeTestDb(db);
+  });
+
+  it("closes the stranded ones, leaves every healthy one alone, and writes the real sentence", async () => {
+    const closed = await closeUnfinishableReports(env, NOW);
+    // HARD-FAIL ON AN EMPTY LOOP: a predicate that selects nothing proves nothing.
+    expect(closed, "the recovery selected no rows at all — it is inert").toBeGreaterThan(0);
+
+    for (const [id, , , , , shouldClose, why] of ROWS) {
+      const r = await env.WP_OS_DB.prepare(
+        "SELECT status, error_code, error_message FROM intelligence_report WHERE id = ?1",
+      ).bind(id).first<{ status: string; error_code: string | null; error_message: string | null }>();
+      expect(r?.error_code === "unfinishable", `${id} (${why})`).toBe(shouldClose);
+      if (shouldClose) {
+        expect(r?.status, `${id} was closed but not to a terminal status`).toBe("FAILED");
+        expect(r?.error_message, `${id} was closed with no reason — that is the 18 Sep silence`).toBeTruthy();
+        // And it must be the SENTENCE, not a bound timestamp: the ?3-before-?1 trap.
+        expect(r?.error_message, `${id}'s reason is not the sentence — parameters bound by position`)
+          .toMatch(/nothing further will be tried automatically/i);
+      }
+    }
+
+    // The row that started all of this now reads as something a person can act on.
+    const hers = await env.WP_OS_DB.prepare("SELECT error_message FROM intelligence_report WHERE id='hers'")
+      .first<{ error_message: string }>();
+    expect(hers?.error_message).toMatch(/stopped part-way through/i);
+    expect(hers?.error_message).toMatch(/build it again/i);
+
+    // AND IT IS NOW TERMINAL, so the tick will not pick it up again and spend another attempt.
+    const after = briefTerminality("FAILED", 3);
+    expect(after.terminal).toBe(true);
+    expect(after.mustBeClosed).toBe(false);
   });
 });
