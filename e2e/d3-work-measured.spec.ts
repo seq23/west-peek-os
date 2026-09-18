@@ -238,8 +238,11 @@ test("Work holds its measured numbers at day-200 volume: contrast, tap targets, 
           return [...root.querySelectorAll("*")]
             .filter((el) => {
               const r = el.getBoundingClientRect();
-              // A deliberately scrollable box (the tab strip, a wide table in its own overflow-x
-              // container) is not an overflowing page; its own width is what is asked about.
+              /* A deliberately scrollable box (a wide table in its own overflow-x container) is
+                 not an overflowing page; its own width is what is asked about. NOTE the hole this
+                 leaves, which the tab strip fell into on 18 Sep: a CHILD of a scroller is still
+                 measured, and it should be — an address parked at 351px on a 320px screen is a
+                 lost address whether or not its parent can be dragged. */
               const ox = getComputedStyle(el).overflowX;
               if (ox === "auto" || ox === "scroll") return false;
               return r.width > 0 && Math.round(r.right) > w + 1;

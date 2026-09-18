@@ -5006,9 +5006,12 @@ body {
      underline sits ON it instead of below it. A negative margin would have done the same and is
      off the 4pt scale, which `validate:design-tokens` is right to refuse. */
   box-shadow: inset 0 -1px 0 var(--wp-line);
-  /* Three tabs never need to scroll, but a long label in a future fourth must not push the page
-     sideways — the overflow is the tab strip's, not the document's. */
-  overflow-x: auto;
+  /* WRAP, NEVER SCROLL — and this was measured rather than reasoned about.
+     `overflow-x: auto` here put the third tab's right edge at 351px on a 320px phone under CI's
+     font metrics, off-screen inside a scroller nobody would think to drag. A hidden address is a
+     lost address, and an overflow check that excludes scrollers cannot see it. Three tabs wrap onto
+     a second row instead, which costs one line and hides nothing. */
+  flex-wrap: wrap;
 }
 
 /* TWO CLASSES DELIBERATELY. `.surface-body button` is (0,1,1) and outranks a lone

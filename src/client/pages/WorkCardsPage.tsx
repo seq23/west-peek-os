@@ -538,7 +538,10 @@ export function WorkCardsPage({
             data-testid={`work-view-${v}`}
             onClick={() => setView(v)}
           >
-            {v === "desk" ? "Desk" : v === "record" ? "The record" : "The machinery"}
+            {/* SHORT ON THE TAB, LONG ON THE BAND HEAD. "The record" and "The machinery" read as
+                prose where they name a region; on a 320px tab strip the two definite articles were
+                what pushed the third tab off the screen. */}
+            {v === "desk" ? "Desk" : v === "record" ? "Record" : "Machinery"}
             {v === "desk" && answer.count > 0 && <span className="work-view-dot" aria-hidden="true" />}
             {v === "machinery" && machineryHealth.total > 0 && (
               <span className="work-view-n">{machineryHealth.total}</span>
