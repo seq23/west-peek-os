@@ -1,6 +1,7 @@
 import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
+import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
 
 /**
  * OpenAI chat-completions adapter — a DIRECT vendor lane for OpenAI, and for Perplexity, which
@@ -61,6 +62,11 @@ export function createOpenAiChatAdapter(options: OpenAiChatOptions): ProviderAda
         signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
         body: JSON.stringify({
           model,
+          // AN EXPLICIT CEILING, never the provider's own default. Leaving it unset is what
+          // truncated every Workers AI run at 256 tokens and failed both partners' briefs on
+          // 18 Sep 2026; a default that happens to be generous today is still a number this repo
+          // does not control. See `outputCeiling.ts`.
+          max_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
           messages: [
             { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
             { role: "user", content },

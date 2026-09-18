@@ -21,6 +21,7 @@
     "validate:authority": "node scripts/validate/no-unauthorized-effects.mjs && node scripts/validate/no-unauthorized-effects.mjs --self-test && node scripts/seed/generate-machine-seed.mjs --check",
     "validate:deliverable-kinds": "node scripts/validate/a-kind-the-database-accepts.mjs && node scripts/validate/a-kind-the-database-accepts.mjs --self-test",
     "validate:blocks": "node scripts/validate/a-block-can-be-cleared.mjs && node scripts/validate/a-block-can-be-cleared.mjs --self-test",
+    "validate:brief-arrives": "node scripts/validate/a-brief-that-fails-says-so.mjs && node scripts/validate/a-brief-that-fails-says-so.mjs --self-test",
     "validate:brand": "node scripts/validate/west-peek-brand-system.mjs && node scripts/validate/west-peek-brand-system.mjs --self-test",
     "validate:chaining": "node scripts/validate/a-lane-that-cannot-serve-must-chain.mjs && node scripts/validate/a-lane-that-cannot-serve-must-chain.mjs --self-test",
     "validate:call-classification": "node scripts/validate/every-call-is-classified.mjs && node scripts/validate/every-call-is-classified.mjs --self-test",

@@ -1,4 +1,5 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
+import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
 
 /**
  * Cloudflare Workers AI — the cheap tier, and the only one that is ever actually free.
@@ -77,6 +78,15 @@ function generatedText(result: {
  * is worth today. Adding it to the catalogue without adding it here refuses images rather than
  * sending them somewhere that returns nothing, which is the point of the list.
  */
+/**
+ * AND THE PIN IS NOT ABSOLUTE. The header above says the morning brief is pinned to a frontier
+ * model and that this adapter is not meant to take over work pinned for a reason. True as intent,
+ * false as a guarantee: when every frontier lane fails the router fails over here rather than
+ * stopping, which is correct, and is what happened to both partners' briefs on 18 Sep 2026. So
+ * this adapter must be able to carry a job it was never first choice for — which is exactly why
+ * the output ceiling it now sends is not optional.
+ */
+
 const VISION_MODELS = new Set(["@cf/meta/llama-3.2-11b-vision-instruct"]);
 
 export interface WorkersAiOptions {
@@ -116,6 +126,19 @@ export function createWorkersAiAdapter(options: WorkersAiOptions): ProviderAdapt
       }
 
       const result = await options.binding.run(model, {
+        /*
+         * THE CEILING IS SENT, ALWAYS. Workers AI's own default is 256 output tokens, and sending
+         * no `max_tokens` meant the platform applied it to every run that ever reached this
+         * adapter. That is not a small reply: it is a reply cut off mid-word, which downstream
+         * cannot tell from a model that writes badly.
+         *
+         * On 18 Sep 2026 the daily brief failed over to this adapter and returned exactly 256
+         * output tokens eight times running. Its quality gate rejected all eight for missing
+         * citations and missing sections — correctly, since the model never got to write them —
+         * and both partners' morning brief was an empty card. The gate was right, the model was
+         * adequate, and the 3% of the reply that fitted was the whole bug.
+         */
+        max_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
         messages: [
           { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
           {

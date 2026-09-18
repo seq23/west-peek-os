@@ -1,6 +1,7 @@
 import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
+import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
 
 /**
  * Anthropic Messages API adapter — a DIRECT vendor lane, used only when OpenRouter cannot serve a
@@ -60,7 +61,10 @@ export function createAnthropicAdapter(options: AnthropicOptions): ProviderAdapt
         signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
         body: JSON.stringify({
           model,
-          max_tokens: 4096,
+          // THE SHARED CEILING, not a number of this adapter's own. 4096 stood here and is below what
+          // the daily brief asks for (8000); a reply cut off at a ceiling nobody linked to the
+          // callers looks like a bad model rather than a truncation. See `outputCeiling.ts`.
+          max_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
           system: `West Peek OS governed task: ${req.purpose}`,
           messages: [{ role: "user", content }],
         }),

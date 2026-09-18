@@ -131,6 +131,18 @@ jobs:
       - name: A stopped card says why, and she can fix it from the card
         run: npm run validate:stopped-cards
 
+      # BOTH PARTNERS' MORNING BRIEFS, 18 Sep 2026. A 60s provider deadline landed on a call this
+      # repo says takes ~3 min, so every frontier attempt aborted; the router failed over to Workers
+      # AI, whose adapter sent no max_tokens, so the platform applied its own default of 256; every
+      # one of the eight runs returned exactly 256 tokens, cut off mid-sentence; the quality gate
+      # correctly rejected all eight for the citations and sections the model never got to write;
+      # and Home rendered a header, a button, "300 items → 283 events → 30 considered" and nothing
+      # else. This fails if an adapter lets a provider's default decide how long a reply may be, if
+      # the deadline is too short for the largest reply any caller asks for, or if a report that is
+      # not a readable brief can reach her Home without saying so.
+      - name: A brief that fails says so, and none is truncated by a ceiling nobody chose
+        run: npm run validate:brief-arrives
+
       # DAY 200, NOT DAY 1. Measured on 18 Sep against 531 finished cards: the board returned every
       # card the firm had ever made under LIMIT 500 and the page rendered the first fifty of them
       # under a heading that said 496 — 481 unreachable, silently, and an OPEN card older than the
