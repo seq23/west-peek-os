@@ -213,7 +213,18 @@ export function ConnectPanel({ me }: { me: MeResponse }) {
   }>("/api/me/connections");
 
   const d = state.data;
-  if (!d) return null;
+  /*
+   * THE SHIFT THIS PLACEHOLDER EXISTS TO STOP. `/api/me/connections` answers at roughly 2.5s, and
+   * this panel is the FIRST child of Home — so returning null until then meant the whole page was
+   * painted, read, and then pushed down by one strip's height the moment the call landed. That was
+   * Home's one measurable layout shift, and it arrived at the exact moment a partner had started
+   * reading. The fix is to reserve the space: a matching `min-height` on this placeholder and on
+   * `.connect-strip` itself (styles.css), so the strip drops into ground that was already its own.
+   *
+   * aria-hidden and empty: it reserves height and says nothing, because announcing "loading" for a
+   * status strip nobody asked for is noise in a screen reader.
+   */
+  if (!d) return <div className="connect-strip-reserve" data-testid="connect-panel-loading" aria-hidden="true" />;
 
   const connected = d.connections.filter((c) => c.status === "CONNECTED");
   const broken = d.connections.filter((c) => c.status === "EXPIRED" || c.status === "FAILED" || c.status === "REVOKED");

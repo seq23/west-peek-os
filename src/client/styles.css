@@ -1766,15 +1766,10 @@ details h3 {
 @media (max-width: 700px) { .ic-questions { columns: 1; } }
 .ic-killer { border-left: 3px solid var(--wp-orange); padding-left: var(--space-xs); }
 
-/* — Ask band on Home. Tinted and rule-marked so it reads as an offer rather than another module
-     card; the module grid below is a list of destinations, this is an invitation. */
-.ask-band {
-  background: var(--wp-tint);
-  border-color: var(--wp-tint-line);
-  border-left: 3px solid var(--wp-orange);
-}
-.ask-band h3 { margin-top: 0; }
-.ask-examples { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; }
+/* Ask on Home was a tinted card here until 18 Sep 2026 — the ONLY tinted thing on the page, so it
+   read as the most important element while the decision actually waiting on the partner was plain
+   text. It is now `.ask-dock`, a ghost-bordered button under the answer line, and the page's one
+   tint is spent on a decision that earns it. */
 
 /* — Sweeps page reference panels. Native <details> so they stay keyboard-operable and findable by
      in-page search without any JS; they were consuming the screen above the items you came to read. */
@@ -1978,15 +1973,13 @@ details h3 {
    read as an arrival rather than a heading.
    ══════════════════════════════════════════════════════════════════════════ */
 
+/* ONE COLUMN, AND THE ANSWER IS THE BIG THING. This was a two-column flex row: the greeting large
+   on the left, and the thing the greeting was ABOUT ("nothing new from your team") small, grey and
+   floated to the far right — two halves of one sentence, as far apart as the layout allowed. They
+   are now stacked in reading order: eyebrow, answer, detail. */
 .home-masthead {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: var(--space-lg);
-  padding-bottom: var(--space-lg);
+  display: block;
   margin-bottom: var(--space-xl);
-  border-bottom: 1px solid var(--wp-line-strong);
 }
 .home-date {
   font-size: var(--text-2xs);
@@ -1994,17 +1987,89 @@ details h3 {
   text-transform: uppercase;
   color: var(--wp-muted);
   font-weight: 600;
-  margin-bottom: var(--space-xs);
+  margin-bottom: var(--space-sm);
 }
-.home-masthead h1 {
+/* ── THE SELECTOR BUG THIS FILE SHIPPED WITH ────────────────────────────────
+   This rule read `.home-masthead h1` and the page has emitted an `h2` since the
+   second `h1` was removed (a greeting is not the name of the application). It
+   therefore matched ZERO elements, the masthead fell back to the browser's own
+   h2, and the page's largest type was never set by this stylesheet at all. That
+   is the whole of "the headings have no visual weight" — a bug, not taste.
+
+   Both tags are named here so the scale survives the next honest change to the
+   document outline, and `scripts/validate/heading-scale-applies.mjs` fails the
+   build if any heading-scale selector stops matching what the client emits.
+   ────────────────────────────────────────────────────────────────────────── */
+.home-masthead h1,
+.home-masthead h2 {
   margin: 0;
   font-size: var(--text-2xl);
   line-height: var(--lh-tight);
   letter-spacing: var(--tracking-tight);
   font-weight: 700;
+  max-width: 26ch;
 }
-.home-signed { text-align: right; font-size: var(--text-sm); color: var(--wp-ink-2); }
-.home-signed .muted { color: var(--wp-muted); }
+/* --text-md against the --text-2xl above: three steps apart, so it reads as a deliberate drop
+   rather than the one-step drift `validate:design-tokens` exists to catch. */
+.home-answer-second {
+  margin: var(--space-sm) 0 0;
+  font-size: var(--text-md);
+  color: var(--wp-ink-2);
+  max-width: var(--measure);
+}
+
+/* ASK AS A DOCK, not as the only tinted card on the page. Ghost border, ink text: present, findable
+   and unmistakably not the most important thing here. */
+.ask-dock {
+  margin-top: var(--space-lg);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.ask-open {
+  min-height: 44px;
+  padding: var(--space-xs) var(--space-md);
+  background: var(--wp-surface);
+  border: 1px solid var(--wp-line-control);
+  border-radius: var(--radius-md);
+  color: var(--wp-ink);
+  font-weight: 600;
+}
+.ask-open:hover { background: var(--wp-surface-2); border-color: var(--wp-ink-2); }
+.ask-label { white-space: nowrap; }
+.ask-note {
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+  flex: 1 1 20rem;
+  min-width: 0;
+  max-width: var(--measure);
+}
+
+/* ══ THE THREE BANDS — the whole navigation of the page ═══════════════════════════════════════
+   Waiting on you · Since you last looked · The rest. A full-bleed hairline above each, and a head
+   two steps above body copy, so the eye can find the three places without reading any of them. */
+.home-band { margin-top: var(--space-2xl); }
+.home-band-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  border-top: 1px solid var(--wp-line-strong);
+  padding-top: var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+.home-band-head h3 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+}
+.home-band-when {
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+  margin-left: auto;
+}
 
 .home-section-head {
   display: flex;
@@ -2012,7 +2077,12 @@ details h3 {
   gap: var(--space-sm);
   margin: var(--space-xl) 0 var(--space-md);
 }
-.home-section-head h2 {
+/* THE SECOND DEAD SELECTOR. `.home-section-head h2` matched nothing anywhere in the client: the 34
+   places that use this class emit 27 `h3`s and 7 `h4`s. Every section heading in the product was
+   therefore browser-default, which is why they all looked the same weight as the text under them. */
+.home-section-head h2,
+.home-section-head h3,
+.home-section-head h4 {
   margin: 0;
   font-size: var(--text-lg);
   font-weight: 700;
@@ -2406,6 +2476,35 @@ details h3 {
 .delivery-headline { font-size: var(--text-base); margin-top: var(--space-3xs); }
 .delivery .module-items { margin: var(--space-2xs) 0 0; padding-left: var(--space-lg); font-size: var(--text-sm); }
 
+/* NINE QUIET COLLEAGUES ARE ONE LINE. Reporting silence nine times, in nine bordered cards, made
+   the emptiest part of the page its largest visual mass. The names are still here — silence from
+   a named person is information, and you can go and ask her — and each card is one click away. */
+.quiet-roll {
+  margin: var(--space-md) 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--wp-surface-2);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  color: var(--wp-ink-2);
+}
+.quiet-roll > span { flex: 1 1 20rem; min-width: 0; }
+.quiet-roll b { color: var(--wp-ink); font-weight: 600; }
+
+/* A blocker keeps its own semantic colour. Orange is the firm's accent and never carries a safety
+   meaning, so "something is wrong" is warn-tinted and says the word as well as showing it. */
+.blocker-list { margin-top: var(--space-md); }
+.blocker {
+  background: var(--wp-warn-tint);
+  border: 1px solid var(--wp-warn-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-md) var(--space-lg);
+}
+
 /* Untrusted text off a live page: monospaced and boxed, so it never reads as the product speaking. */
 .browser-result {
   background: var(--wp-surface-2);
@@ -2794,6 +2893,18 @@ details h3 {
   margin-bottom: var(--space-lg);
   background: var(--wp-neutral-tint);
   border: 1px solid var(--wp-line);
+  /* RESERVED, so its late arrival cannot move the page. See the comment in ConnectPanel.tsx: this
+     panel is Home's first child and `/api/me/connections` answers at ~2.5s, which made the whole
+     surface jump down one strip's height while it was being read. 38px is this strip's own closed
+     height (one line of --text-xs plus its padding and border), measured, not guessed. */
+  min-height: 38px;
+  box-sizing: border-box;
+}
+/* The empty stand-in that holds that ground until the call lands. Same box, no paint. */
+.connect-strip-reserve {
+  min-height: 38px;
+  margin-bottom: var(--space-lg);
+  box-sizing: border-box;
 }
 
 .connect-strip > summary {
