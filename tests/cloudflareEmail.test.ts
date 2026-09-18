@@ -7,6 +7,20 @@ import {
 } from "../src/worker/effects/cloudflareEmailClient";
 import type { Env } from "../src/worker/env";
 import { canSendAs, verifiedDomain } from "../src/worker/services/sendAs";
+import { APPROVED_SEND_ENV_KEY, SendBlocked } from "../src/worker/effects/emailTransport";
+
+/**
+ * AN APPROVAL FOR THE ADDRESS UNDER TEST (17 Sep 2026).
+ *
+ * The transport calls `applyPreviewBoundary` first, and since the preview lane that boundary now
+ * also refuses any recipient outside the firm without one of these. These tests are about the
+ * TRANSPORT — the binding, the sender address, the failure mode — so each one carries the approval
+ * its recipient would have had, and the lane itself is proven at the end of this file rather than
+ * accidentally re-proven in every case.
+ */
+function approving(base: Env, recipient: string): Env {
+  return { ...base, [APPROVED_SEND_ENV_KEY]: { approvalId: "pva_test", recipient } } as Env;
+}
 
 /**
  * Cloudflare Email Sending transport (P33).
@@ -78,7 +92,7 @@ describe("the gate", () => {
 describe("sending", () => {
   it("sends from the configured address and reports the platform's message id", async () => {
     const { binding, sent } = fakeBinding({ messageId: "cf-abc-123" });
-    const result = await sendViaCloudflare(env({ EMAIL: binding }), {
+    const result = await sendViaCloudflare(approving(env({ EMAIL: binding }), "lp@example.test"), {
       to: "lp@example.test",
       subject: "Q3 update",
       text: "Attached.",
@@ -101,25 +115,49 @@ describe("sending", () => {
     // receipt is what the audit trail treats as proof the message went out.
     const { binding } = fakeBinding({ throws: "domain not onboarded" });
     await expect(
-      sendViaCloudflare(env({ EMAIL: binding }), { to: "a@b.test", subject: "s", text: "t" }),
+      sendViaCloudflare(approving(env({ EMAIL: binding }), "a@b.test"), { to: "a@b.test", subject: "s", text: "t" }),
     ).rejects.toThrow(/not onboarded/);
   });
 
   it("refuses to send with no binding even if called directly", async () => {
     await expect(
-      sendViaCloudflare(env({ EMAIL: undefined }), { to: "a@b.test", subject: "s", text: "t" }),
+      sendViaCloudflare(approving(env({ EMAIL: undefined }), "a@b.test"), { to: "a@b.test", subject: "s", text: "t" }),
     ).rejects.toThrow(/no email binding/);
   });
 
   it("refuses to send with no sender address even if called directly", async () => {
     const { binding } = fakeBinding();
     await expect(
-      sendViaCloudflare(env({ EMAIL: binding, WP_OS_EMAIL_FROM: undefined }), {
+      sendViaCloudflare(approving(env({ EMAIL: binding, WP_OS_EMAIL_FROM: undefined }), "a@b.test"), {
         to: "a@b.test",
         subject: "s",
         text: "t",
       }),
     ).rejects.toThrow(/no sending address/);
+  });
+
+  /*
+   * THE LANE, THROUGH THE REAL TRANSPORT (17 Sep 2026).
+   *
+   * `tests/previewLane.test.ts` proves the rule; this proves the transport cannot get round it. It
+   * is here rather than there because THIS is the file that knows how to reach the binding, and the
+   * failure it guards against is a transport added or rewritten without the boundary in front of it.
+   */
+  it("refuses an outsider with no approval, before the binding is touched", async () => {
+    const { binding, sent } = fakeBinding();
+    await expect(
+      sendViaCloudflare(env({ EMAIL: binding }), { to: "founder@somestartup.example", subject: "s", text: "t" }),
+    ).rejects.toThrow(SendBlocked);
+    expect(sent, "the binding was reached despite the refusal").toHaveLength(0);
+
+    // And a partner needs nothing attached — Walker's Monday note to Scooter is unaffected.
+    const ok = await sendViaCloudflare(env({ EMAIL: binding }), {
+      to: "scooter@westpeek.ventures",
+      subject: "Walker: hire search",
+      text: "the note",
+    });
+    expect(ok.sent).toBe(true);
+    expect(sent).toHaveLength(1);
   });
 });
 

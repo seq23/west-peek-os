@@ -5,7 +5,8 @@ import { createWorkCardInternal } from "../src/worker/services/workCards";
 import { MAX_WORK_ATTEMPTS, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { answerBlock, blockOf, LANE_PAUSE_HOURS, LANE_STAND_DOWN_HOURS, TECHNICAL_BLOCK_NAG_HOURS } from "../src/worker/services/blocks";
 import { attemptsAllowedFor, readLaneFailure } from "../src/shared/ai/laneFailure";
-import { readVendorWords } from "../src/worker/ai/providers/httpError";
+import { blockProblems, describeBlock } from "../src/shared/work/blocks";
+import { vendorMessageFrom } from "../src/worker/ai/providers/httpError";
 import { laneIsStoodDown } from "../src/worker/ai/routing";
 
 /**
@@ -86,12 +87,26 @@ afterAll(async () => {
 });
 
 describe("the vendor's own sentence survives the wire", () => {
+  /*
+   * `vendorMessageFrom` is the sibling lane-chaining change's helper (0184) and this asserts the
+   * half THIS work depends on: the sentence a partner reads on a stopped card comes out of the body
+   * intact. The two arrived at the same helper from opposite ends — the router needs the words to
+   * decide whether to chain, the card needs them to explain itself.
+   */
   it("lifts the message out of the body Anthropic actually sends", () => {
-    expect(readVendorWords(ANTHROPIC_EMPTY_ACCOUNT)).toBe("Your credit balance is too low to access the Anthropic API.");
+    expect(vendorMessageFrom(ANTHROPIC_EMPTY_ACCOUNT)).toContain("Your credit balance is too low to access the Anthropic API.");
   });
 
-  it("does not paste an HTML error page onto a work card", () => {
-    expect(readVendorWords("<html><body><h1>502 Bad Gateway</h1></body></html>")).toBe("");
+  it("and the block quotes it without the wrapper the vendor put round it", () => {
+    const stopped = describeBlock("a_lane_refused_the_work", {
+      trying: "Draft event kit: October workshop with Kirx Diaz",
+      employee: "Parker",
+      lane: "Anthropic",
+      laneKind: "CREDIT",
+      vendorWords: "Your credit balance is too low to access the Anthropic API.",
+    }).stopped;
+    expect(stopped).toBe('The Anthropic lane refused the work — "Your credit balance is too low to access the Anthropic API".');
+    expect(blockProblems({ ...describeBlock("a_lane_refused_the_work", { trying: "x y z", employee: "Parker" }) })).toEqual([]);
   });
 });
 

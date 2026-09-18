@@ -32,7 +32,17 @@ import {
 import { evidenceForTaskKind, orderByEvidence, recordModelJobOutcome } from "./modelLearning";
 import { directVendorRouteFor } from "../../shared/ai/directVendorRoute";
 import { credentialConfigured } from "../../shared/ai/providerCredentials";
-import { isProviderOutage, outageKind } from "../../shared/ai/providerFailure";
+import { classifyContent, type ContentClassVerdict } from "../../shared/ai/contentClass";
+import { MACHINE_REGISTRY } from "../../shared/registry/machines";
+import { isProviderOutage, outageKind, shouldBackOff } from "../../shared/ai/providerFailure";
+import {
+  isCoolingDown,
+  laneHealth,
+  orderByLaneHealth,
+  recordLaneCompleted,
+  recordLaneOutage,
+  type LaneHealthRow,
+} from "./laneHealth";
 
 /**
  * runAi — THE governed AI boundary (P4). No other module may call a provider
@@ -213,6 +223,26 @@ export interface RunAiBudgetContext {
    * including CHEAPO. See `trainingPermitted` in shared/ai/freeLanes.ts.
    */
   confidential?: boolean;
+  /**
+   * THE OTHER HALF OF THE SAME QUESTION, and it exists because one column was answering two.
+   *
+   * "ITS NOT DEAL TERMS OR LP INFORMATION SO IT DOESNT MATTER IF ITS USING THIS DATA TO TRAIN. WHO
+   * CARES ABOUT HIRING SEARCH AND EVENT KITS AND ROOM KITS. THEY ARE NOT PRIVATE INFO." — the
+   * owner, 17 Sep 2026.
+   *
+   * `sensitivity: "INTERNAL"` says the work is ADDRESSED TO A PARTNER. It was being read as "too
+   * private to train on", which it never meant, and since every training-permitting lane is capped
+   * at PUBLIC that left one legal lane in the catalogue — the dearest model on the account — for a
+   * hire search. Setting this says the CONTENT carries no LP names, deal terms, fund figures or
+   * diligence material, and it lets the free reasoning lanes serve the run without moving any cap
+   * and without touching the recipient label, which still drives preview and approval elsewhere.
+   *
+   * PRIVATE_MODEL_ONLY always wins — `confidential: true` is the legacy spelling of it and still
+   * works, so the five call sites that already carry LP and deal material need no change. A caller
+   * asserting both has a bug, and the safe reading of a bug is the restrictive one. See
+   * shared/ai/contentClass.ts.
+   */
+  publicModelApproved?: boolean;
   /** Pin a specific provider by provider_key. */
   providerKey?: string;
 }
@@ -743,6 +773,14 @@ async function executeAttempt(
       .bind(running.id, JSON.stringify(actualUsage), response.text, quarantine ? 1 : 0, new Date().toISOString())
       .run();
     attempts.push({ provider_key: rec.providerKey ?? "local", model: response.model, outcome: "COMPLETED" });
+    /*
+     * THIS LANE WORKS. Recorded at the boundary itself, on the model the run was PLANNED on rather
+     * than the one the vendor echoed back — `rec.model` is the id selection will look up next time,
+     * and an alias resolving to a dated snapshot in `response.model` would file the credit under a
+     * lane nothing can ever choose. Clears any back-off outright: a completion is a definitive
+     * answer to "is this lane failing right now".
+     */
+    await recordLaneCompleted(env, rec.providerId, rec.model);
     await appendEvent(env, {
       eventType: "ai_run.completed",
       actorType: actorTypeForEvent(rec.input.actor),
@@ -776,7 +814,37 @@ async function executeAttempt(
      * passed to a second vendor that will answer it without the attachment.
      */
     const outage = isProviderOutage(reason);
-    const eligible = fallbacks.filter((f) => f.engageOn === "ANY" || outage);
+    /*
+     * ARM THE BACK-OFF, but only for a failure back-off can actually help with. A capability
+     * refusal or a genuinely malformed request is OUR fault and would follow us to the next vendor.
+     * A missing credential is an operator gap that will not heal in five minutes, and cooling for it
+     * replaces a precise reason with a vague one. See `shouldBackOff`.
+     */
+    if (shouldBackOff(reason)) await recordLaneOutage(env, rec.providerId, rec.model, reason);
+
+    /*
+     * ── FALL BACK TO ONE THAT IS WORKING ─────────────────────────────────────────────────────
+     *
+     * The owner's words, and the emphasis is hers: "make it fallback to one that is working". Not
+     * merely the next name on a list. So two things happen here that did not before.
+     *
+     * FIRST, lanes in outage back-off are skipped rather than attempted. Handing the work to a
+     * vendor we already know is unfunded spends the chain's remaining options on a certainty.
+     *
+     * SECOND — and this is the recursion, a few lines below — a fallback that ALSO fails hands on
+     * to the one after it, with the ones already tried removed. The chain only stops when nothing
+     * is left, which is the difference between "the work continued" and "the card deferred and
+     * somebody retried it fourteen minutes later".
+     *
+     * DEGRADES RATHER THAN REFUSES: if back-off would leave no option at all, the cooling lanes are
+     * tried anyway. A stale cooldown must never be the reason a partner gets nothing.
+     */
+    const health = await laneHealth(env);
+    const notCooling = (f: FallbackOption): boolean =>
+      !isCoolingDown(health.get(`${f.candidate.providerId} ${f.candidate.model}`), new Date());
+    const engaging = fallbacks.filter((f) => f.engageOn === "ANY" || outage);
+    const warm = engaging.filter(notCooling);
+    const eligible = warm.length > 0 ? warm : engaging;
     const next = eligible[0];
     if (next) {
       // Say WHAT kind of failure caused the handover, on the attempt itself, so the routing record
@@ -1190,11 +1258,61 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     }
   }
 
+  /*
+   * ── 4c. WHO IT GOES TO, AND WHAT IS IN IT, ARE TWO DIFFERENT QUESTIONS ────────────────────────
+   *
+   * "WHY IS INTERNAL STUFF COSTING A LOT? THAT IS BACKWARDS." — the owner, 17 Sep 2026, on finding
+   * that a hire search ran on `anthropic/claude-sonnet-5`.
+   *
+   * She was right, and the router was not at fault. `sensitivity: "INTERNAL"` means the work is
+   * ADDRESSED TO A PARTNER — her own rule, settled: "ITS INTERNAL IF IT GOES TO ME SEQUOIA OR
+   * SCOOTER". It had come to be read as "too private to train on", which it never meant. Every
+   * training-permitting lane is capped at PUBLIC — correctly, and that cap does not move — so an
+   * INTERNAL label made both free reasoning models ineligible and left exactly ONE legal lane in
+   * the entire catalogue: the dearest model on the account. One legal choice is not a choice.
+   *
+   * So the content class is decided here, separately, and it decides ONE thing: whether a route
+   * whose terms permit training may serve this run. It is declared — by the work card's own
+   * `confidential` flag, or by a named machine — never inferred from the recipient, and it is
+   * revoked by any LP or deal-term marker actually present in the text.
+   */
+  const contentClass: ContentClassVerdict = classifyContent({
+    declaredPublicModelApproved: input.budgetContext?.publicModelApproved,
+    // `confidential` is the legacy spelling of PRIVATE_MODEL_ONLY and is still honoured verbatim.
+    declaredPrivateModelOnly: input.budgetContext?.confidential,
+    sensitivity: input.sensitivity,
+    machineKey: input.routing?.machineId
+      ? (MACHINE_REGISTRY.find((m) => m.id === input.routing!.machineId)?.key ?? null)
+      : null,
+    inputs: input.inputs,
+  });
+
   // 5. Egress check (D9 default-deny): the sensitivity label must be explicitly
   //    allowed for the provider. Restricted labels can never leave.
+  /*
+   * ONE EXCEPTION, AND IT IS NOT A LOOSENING OF THE GATE — it is the gate finally being asked the
+   * question it was always meant to answer.
+   *
+   * A training-permitting lane's PUBLIC cap is a statement about CONTENT: do not send this route
+   * anything private, because its terms let it train on what it receives. Checking that cap against
+   * a label that describes the RECIPIENT answered a different question and answered it wrongly in
+   * one direction only — a room packet for Sequoia was refused a free model it was perfectly
+   * entitled to use.
+   *
+   * So for a training-permitting provider, and ONLY where the content class says this run carries
+   * no LP or deal material, the cap is evaluated against PUBLIC. Every other provider, and every
+   * run whose content is not declared safe, is evaluated against the run's own label exactly as
+   * before. No cap moved, no label was rewritten, and nothing confidential gained a route: step 4b
+   * has already removed every training-permitting lane from a call marked confidential, and
+   * `classifyContent` refuses the declaration outright for such a call as well.
+   */
+  const egressLabelFor = (provider: ProviderRow): string =>
+    Number((provider as unknown as { training_permitted?: number }).training_permitted ?? 0) === 1 && contentClass.publicModelApproved
+      ? "PUBLIC"
+      : input.sensitivity;
   const egressAllowed: ProviderRow[] = [];
   for (const provider of candidates) {
-    if (await dataPolicyAllows(env, provider.id, input.sensitivity)) egressAllowed.push(provider);
+    if (await dataPolicyAllows(env, provider.id, egressLabelFor(provider))) egressAllowed.push(provider);
   }
   if (egressAllowed.length === 0) {
     return { run: await blocked("EGRESS_BLOCKED", `data_policy_denies_label:${input.sensitivity}`) };
@@ -1314,13 +1432,52 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * carries no training rights at all.
    */
   const paidOptions = options.filter((o) => Number(o.provider.training_permitted ?? 0) !== 1);
-  const allCandidates: RoutingCandidate[] = paidOptions.map((o) => ({
+  const everyCandidate: RoutingCandidate[] = paidOptions.map((o) => ({
     providerId: o.provider.id,
     providerKey: o.provider.provider_key,
     model: o.pricing.model,
     estimatedCostUsd: estimateFor(o),
     baseUrl: o.provider.base_url,
   }));
+
+  /*
+   * ── OPENROUTER FIRST AND FOREMOST; THE DIRECT LANES ARE FALLBACKS ─────────────────────────────
+   *
+   * The owner's intended order, and until now it held only because the direct vendors happened to
+   * hold no ACTIVE catalogue rows. `directVendorRoute.ts` says so in as many words — "they exist on
+   * this path only, and only after the primary has actually failed" — but that was a property of
+   * the DATA, and on 17 Sep 2026 production had a `prov_anthropic / claude-sonnet-5` row that could
+   * win an ordinary selection. It priced BELOW the OpenRouter lane for the identical model, because
+   * it carries no margin, so it did win. It had never completed a run, and it answered "Your credit
+   * balance is too low". The card deferred three times in fourteen minutes.
+   *
+   * A doctrine that depends on nobody adding a row is not a doctrine. So it is enforced here: where
+   * the SAME MODEL is reachable both through OpenRouter and through its own vendor, the direct lane
+   * is removed from ordinary selection. Nothing is lost — it is rebuilt a few hundred lines below as
+   * an OUTAGE fallback, engaging only when OpenRouter actually fails, which is precisely the role
+   * the owner described for it.
+   *
+   * NARROW ON PURPOSE. Only a lane that is a direct peer OF A PRESENT OPENROUTER CANDIDATE is
+   * demoted. A vendor serving a model OpenRouter does not carry keeps its ordinary candidacy, so
+   * this can never shrink the firm's real choice — it only refuses to let the same model be counted
+   * twice at two prices and elected on the cheaper of them.
+   */
+  const viaOpenRouter = new Map<string, RoutingCandidate>();
+  for (const c of everyCandidate) {
+    if (c.providerKey !== "openrouter" && c.providerKey !== "openrouter_free") continue;
+    const direct = directVendorRouteFor(c.model);
+    if (direct) viaOpenRouter.set(`${direct.providerKey} ${direct.model}`, c);
+  }
+  const demotedDirectLanes = everyCandidate.filter((c) => viaOpenRouter.has(`${c.providerKey} ${c.model}`));
+  const allCandidates: RoutingCandidate[] =
+    demotedDirectLanes.length > 0 ? everyCandidate.filter((c) => !demotedDirectLanes.includes(c)) : everyCandidate;
+  const directLaneNote =
+    demotedDirectLanes.length === 0
+      ? ""
+      : ` ${demotedDirectLanes.map((c) => `${c.providerKey}/${c.model}`).join(", ")} ` +
+        `${demotedDirectLanes.length === 1 ? "is the same model" : "are the same models"} OpenRouter already serves for this call, so ` +
+        `${demotedDirectLanes.length === 1 ? "it was" : "they were"} not ranked against it on price: OpenRouter leads and a direct vendor lane ` +
+        `is reached only when OpenRouter cannot serve.`;
 
   /*
    * JUDGEMENT WORK DOES NOT GO TO A SEARCH MODEL, and the filter happens here rather than in the
@@ -1608,13 +1765,48 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     const notPoor = learned.applied
       ? learned.ordered.filter((c) => evidence.get(`${c.providerId} ${c.model}`)?.verdict !== "POOR")
       : learned.ordered;
-    const rankable = notPoor.length > 0 ? notPoor : learned.ordered;
+    /*
+     * ── A PRICE ON PAPER IS NOT A COST ────────────────────────────────────────────────────────
+     *
+     * The third instance of one shape, and the reason this line exists rather than a patch for the
+     * third case. `perplexity/sonar` won a judging job on price; migration 0158 mispriced a model
+     * into "cheapest adequate"; and on 17 Sep 2026 `prov_anthropic / claude-sonnet-5` — a lane with
+     * ZERO completed runs, ever — undercut `prov_openrouter / anthropic/claude-sonnet-5`, which had
+     * hundreds, because the direct lane carries no OpenRouter margin. It then answered "Your credit
+     * balance is too low" and the partner's card deferred.
+     *
+     * Every one of those is the same mistake: a NUMBER beat a FACT. So the cost comparison is now
+     * made on effective cost — a lane in outage back-off cannot serve, so it is infinite; a lane
+     * that has never completed anything is unknown, not cheap — and cheaper-on-paper can no longer
+     * beat working-in-practice.
+     *
+     * IT ONLY EVER DEMOTES. Lane health cannot widen the candidate set, cannot promote past the
+     * capability or privacy filters, and cannot overrule `orderByEvidence` — it runs AFTER it and
+     * preserves its order within each tier. And with no history at all every lane ties, which is
+     * exactly today's behaviour: this is how a newly registered model still gets its first run.
+     */
+    const health = await laneHealth(env);
+    const laneRanked = orderByLaneHealth(notPoor.length > 0 ? notPoor : learned.ordered, health, now);
+    const rankable = laneRanked.ordered;
+    // Both facts about which LANE, rather than which model, so they travel together on the run.
+    const laneNote = laneRanked.note + directLaneNote;
 
     // The cheapest PROVEN model where evidence exists, and the cheapest outright where it does not:
     // `learned.ordered` is already proven-first and price-sorted within each tier.
-    const cheapest = learned.applied
-      ? rankable[0]!
-      : rankable.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+    /*
+     * `rankable` arrives already tiered — proven-first by evidence, then working-before-untried by
+     * lane health, price-ordered inside each tier. Taking its head IS "cheapest effective cost", and
+     * re-reducing over `estimatedCostUsd` here would throw both tierings away and re-elect the
+     * untried lane on its paper price. That reduction is kept for exactly one case: nothing tiered
+     * anything, so the head is whatever order the rows arrived in and price must still decide.
+     */
+    const tiered = learned.applied || laneRanked.applied;
+    const cheapest = tiered ? rankable[0]! : rankable.reduce((a, b) => (a.estimatedCostUsd <= b.estimatedCostUsd ? a : b));
+    /*
+     * The dearest is still the dearest — "best available" is a quality posture and a lane's history
+     * does not make it a better model. What lane health DOES remove from this reduction is a lane in
+     * back-off, because the dearest lane that cannot answer is not the best available, it is nothing.
+     */
     const dearest = rankable.reduce((a, b) => (a.estimatedCostUsd >= b.estimatedCostUsd ? a : b));
     let head: RoutingCandidate;
     // `requiresSearch` joins `isJudgement` here: CHEAPO is a lever for volume, and neither the model
@@ -1636,7 +1828,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         head.model === preferred
           ? `no routing policy for this task; caller preferred ${preferred}`
           : `no routing policy for this task; preferred model ${preferred} unavailable, fell to ${prefersFrontier ? "the dearest available (spend posture 'best available')" : "cheapest adequate"}`;
-      explanation += judgementNote + provenanceNote + learnedNote;
+      explanation += judgementNote + provenanceNote + learnedNote + laneNote;
     } else if (prefersFrontier) {
       head = dearest;
       explanation =
@@ -1644,7 +1836,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
           ? `this call interprets or drafts, so it takes the dearest priced capable model rather than the cheapest: `
           : `spend posture is 'best available', so unpinned work takes the dearest priced capable model rather than the cheapest: `) +
         `${head.providerKey}/${head.model}. Price is the only quality signal ` +
-        `in the model registry, so this is a proxy for capability and not a benchmark result.${judgementNote}${provenanceNote}${learnedNote}`;
+        `in the model registry, so this is a proxy for capability and not a benchmark result.${judgementNote}${provenanceNote}${learnedNote}${laneNote}`;
     } else {
       head = cheapest;
       explanation =
@@ -1654,7 +1846,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         judgementNote +
         provenanceNote +
         freeOnlyNote +
-        learnedNote;
+        learnedNote +
+        laneNote;
     }
     // No policy → no fallback. Behaviour is exactly P4's.
     ordered = [head];
@@ -1865,6 +2058,13 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    */
   const freeFirstEligible =
     isJudgement &&
+    /*
+     * THE NORMAL CASE, and the owner's instruction is that it should be: "MOST WORK IS INTERNAL AND
+     * NOT-CONFIDENTIAL SO CAN USE FREE TRAINING MODELS WITH REASONING AND CLOSE TO $0." A card that
+     * carries no LP or deal material leads on a free reasoning lane; the paid head stands behind it
+     * as an outage fallback, so quality is not at risk and the bill is.
+     */
+    contentClass.publicModelApproved &&
     // A free lane cannot reach the web, so a search call is not a candidate for one.
     !requiresSearch &&
     input.budgetContext?.confidential !== true &&
@@ -1998,6 +2198,77 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     : [];
 
   /*
+   * ── AND THEN ANY OTHER LANE THAT IS ACTUALLY WORKING ──────────────────────────────────────────
+   *
+   * "fall back to one that is working" — the owner, 17 Sep 2026, and the emphasis is hers. Not
+   * merely to the next name on a list.
+   *
+   * THE GAP THIS CLOSES, CONFIRMED FROM PRODUCTION. Every routing policy in this firm names exactly
+   * one candidate, so `policyFallbacks` is empty; the only fallback that existed was the direct
+   * vendor peer of the head. When that peer was the unfunded Anthropic account, the chain had
+   * nowhere left to go and the run landed BLOCKED_DEFERRED — with other lanes sitting idle, funded,
+   * and perfectly able to answer. Retrying the whole card fourteen minutes later found the same
+   * dead end twice more.
+   *
+   * So the chain does not end at the named candidates. Every OTHER adequate lane — already through
+   * the capability, reasoning, search and privacy filters, so none of them is a downgrade the
+   * caller did not accept — stands behind them, working lanes first, and the run only stops when
+   * nothing at all is left.
+   *
+   * ENGAGES ON OUTAGE ONLY. A request the vendors are right to refuse must not be sprayed across
+   * the whole catalogue looking for one that will answer it anyway; that is how a model that
+   * silently drops an attachment ends up writing confidently about a file it never saw.
+   *
+   * CHEAPEST-EFFECTIVE FIRST, not cheapest-on-paper: the same `orderByLaneHealth` the selection
+   * used, so the lane that has actually completed work leads even when a never-tried lane prices
+   * lower. This is the recovery path — the one place where "it answers at all" outranks everything.
+   */
+  const alreadyInChain = new Set<string>(
+    [head, ...ordered, ...policyFallbacks.map((f) => f.candidate), ...outageFallbacks.map((f) => f.candidate)].map(
+      (c) => `${c.providerId} ${c.model}`,
+    ),
+  );
+  const lastResortRanked = orderByLaneHealth(
+    routingCandidates
+      .filter((c) => !alreadyInChain.has(`${c.providerId} ${c.model}`))
+      /*
+       * A RECOVERY LANE MUST BE ONE THAT CAN ACTUALLY ANSWER.
+       *
+       * The primary path deliberately does NOT filter on credential presence — a missing key there
+       * produces a run that lands BLOCKED_DEFERRED with an honest reason, and that path is worth
+       * keeping exercisable. This path has no such reason: handing the work to a vendor we hold no
+       * key for is a certainty of failure, and spending a recovery attempt on a certainty is the
+       * same mistake as walking back into a lane that is already cooling.
+       *
+       * It is also what keeps the change from widening anything in an environment with no keys: no
+       * credential, no last resort, and behaviour is exactly what it was.
+       */
+      .filter((c) => credentialConfigured(env, c.providerKey)),
+    await laneHealth(env),
+    now,
+  );
+  const lastResortFallbacks: FallbackOption[] = lastResortRanked.ordered.map((c) => {
+    const option = options.find((o) => o.provider.id === c.providerId && o.pricing.model === c.model);
+    return {
+      candidate: c,
+      adapter: adapterFor(env, c, deps.fetchImpl).adapter,
+      engageOn: "OUTAGE" as const,
+      // Priced at ITS OWN rates, never the head's. A recovery that bills the partner for the model
+      // that failed is a second defect wearing the first one's clothes.
+      estimate: option
+        ? {
+            ...estimate,
+            estimated_cost_usd: estimateFor(option),
+            provider_key: c.providerKey,
+            model: c.model,
+            input_per_mtok_usd: option.pricing.input_per_mtok_usd,
+            output_per_mtok_usd: option.pricing.output_per_mtok_usd,
+          }
+        : { ...estimate, provider_key: c.providerKey, model: c.model },
+    };
+  });
+
+  /*
    * THE PAID HEAD IS THE LAST RESORT WHEN A FREE LANE LEADS, and it is an OUTAGE fallback: a free
    * model that refuses the request on its merits does not get quietly repaid for at frontier
    * prices, while a free tier that has run out (429) does.
@@ -2005,11 +2276,18 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   const paidHeadAsFallback: FallbackOption[] =
     freeLanes.length > 0 ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }] : [];
 
+  /*
+   * THE ORDER OF LAST RESORT, and each step is a smaller concession than the one after it:
+   * another free lane → the paid head → the policy's own next choice → THE SAME MODEL at its own
+   * vendor → any other adequate lane that is working. Quality is surrendered as late as possible,
+   * and the direct vendor lanes sit behind OpenRouter here exactly as they do in selection.
+   */
   const fallbacks: FallbackOption[] = [
     ...freeLanes.slice(1),
     ...paidHeadAsFallback,
     ...policyFallbacks,
     ...outageFallbacks,
+    ...lastResortFallbacks,
   ];
 
   /** What actually runs first: a free lane where one is eligible, the chosen model otherwise. */
@@ -2019,6 +2297,12 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       ` Direct-vendor fallback is available for this call (${outageFallbacks
         .map((f) => `${f.candidate.providerKey}/${f.candidate.model}`)
         .join(", ")}) and engages only if the provider itself fails.`;
+  }
+  if (lastResortFallbacks.length > 0) {
+    explanation +=
+      ` Behind those, ${lastResortFallbacks.length} further adequate lane${lastResortFallbacks.length === 1 ? "" : "s"} ` +
+      `(${lastResortFallbacks.map((f) => `${f.candidate.providerKey}/${f.candidate.model}`).join(", ")}) ` +
+      `stand ready on a provider outage, so this run falls back to one that is working rather than stopping.${lastResortRanked.note}`;
   }
   const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [];
 
@@ -2051,7 +2335,17 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     taskClass: input.routing?.taskClass,
     policyId: routePolicy?.id ?? null,
     selectedProviderKey: attempts.find((a) => a.outcome === "COMPLETED")?.provider_key ?? selected.provider.provider_key,
-    selectedModel: run.model,
+    /*
+     * THE MODEL THAT DID THE WORK, or the one this run SELECTED when nothing did.
+     *
+     * This read `run.model`, which is the last lane the chain touched — so a run that failed over
+     * three times and then gave up recorded its final unsuccessful attempt as the "selected" model,
+     * while `selected_provider_key` on the same row recorded the one the router actually chose. Two
+     * columns describing the same decision and disagreeing, which is how "which model did this?"
+     * becomes unanswerable exactly when a chain has run. The provider key has always resolved it
+     * this way; the model now matches it.
+     */
+    selectedModel: attempts.find((a) => a.outcome === "COMPLETED")?.model ?? selected.pricing.model,
     attempts,
     // FAILED_OVER is an attempt that handed the work on. Counting only "FAILED" missed every
     // successful failover, which is precisely the event the Cockpit needs to be able to show.

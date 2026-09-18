@@ -50,6 +50,15 @@ interface WorkCardRow {
   owner_name?: string | null;
   owner_role?: string | null;
   allows_browser?: number;
+  /** PUBLIC_MODEL_APPROVED | PRIVATE_MODEL_ONLY — which models may see it. */
+  model_access?: string | null;
+  /** INTERNAL | EXTERNAL — whether it previews before it leaves. Not a model decision. */
+  audience?: string | null;
+  /**
+   * WHERE THE LAST RUN ACTUALLY WENT. Read from `ai_run`, which is immutable, so recategorising a
+   * card changes where its NEXT run goes and cannot touch the record of where the last one went.
+   */
+  last_run?: { provider_key: string | null; model: string | null; status: string; cost_usd: number | null; at: string } | null;
   kind?: string | null;
   work_attempts?: number;
   /**
@@ -127,6 +136,22 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
   }>("/api/work-cards/by-owner");
   const [message, setMessage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  /*
+   * THE TWO LABELS THE OWNER ASKED FOR, set as she writes the card rather than remembered
+   * afterwards — "WE NEED TO CLASSIFY ON EACH WORK CARD GOING FORWARD ... SO THERE IS NO CONFUSION."
+   *
+   * THE DEFAULTS ARE THE DESIGN. "MOST WORK IS INTERNAL AND NOT-CONFIDENTIAL SO CAN USE FREE
+   * TRAINING MODELS WITH REASONING AND CLOSE TO $0." If the normal case needed a deliberate choice
+   * it would not get one, the free lanes would stay unused, and the bill would not move — which is
+   * the state this whole change exists to leave behind. So the form opens on the normal case and
+   * only the exception costs a click.
+   *
+   * AND THEY ARE TWO CONTROLS, NOT ONE. Naming them separately is the point: an LP memo for Sequoia
+   * is Internal AND Private model only; an event kit for a guest is External AND Public model
+   * approved. A single control could not express either.
+   */
+  const [modelAccess, setModelAccess] = useState<"PUBLIC_MODEL_APPROVED" | "PRIVATE_MODEL_ONLY">("PUBLIC_MODEL_APPROVED");
+  const [audience, setAudience] = useState<"INTERNAL" | "EXTERNAL">("INTERNAL");
   const [looking, setLooking] = useState<string | null>(null);
   /**
    * WHICH CARD YOU ARE SAYING SOMETHING TO, and what has already been said on it.
@@ -238,6 +263,8 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
         ...(nextAction.trim() ? { next_action: nextAction.trim() } : {}),
         owner_type: owner.split(":")[0],
         owner_id: owner.split(":").slice(1).join(":"),
+        model_access: modelAccess,
+        audience,
       },
     });
     setBusy(false);
@@ -488,6 +515,42 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
               only for this card.
             </span>
           </label>
+          {/* TWO SEPARATE CONTROLS, SIDE BY SIDE, each saying what it actually decides. The words
+              on them are the words that get stored — "Public model approved", not a column called
+              `confidential` displayed under a friendlier name, because that is how the next reader
+              reintroduces the confusion this rename exists to remove. */}
+          <div className="form-row">
+            <label>
+              Which models may see it{" "}
+              <select
+                data-testid="work-card-model-access"
+                value={modelAccess}
+                onChange={(e) => setModelAccess(e.target.value as typeof modelAccess)}
+              >
+                <option value="PUBLIC_MODEL_APPROVED">Public model approved</option>
+                <option value="PRIVATE_MODEL_ONLY">Private model only</option>
+              </select>
+            </label>
+            <label>
+              Who it goes to{" "}
+              <select
+                data-testid="work-card-audience"
+                value={audience}
+                onChange={(e) => setAudience(e.target.value as typeof audience)}
+              >
+                <option value="INTERNAL">Internal — Sequoia or Scooter</option>
+                <option value="EXTERNAL">External — anyone else</option>
+              </select>
+            </label>
+          </div>
+          <p className="muted small">
+            <strong>Public model approved</strong> is the normal case and costs close to nothing — hiring
+            searches, event kits, room and workshop packets, social posts, Productions work.{" "}
+            <strong>Private model only</strong> is for LP names, deal terms, fund figures and diligence
+            material, and keeps the work on a model whose terms forbid training on it.{" "}
+            <strong>Internal or External</strong> is a different question: it decides whether the work
+            previews to Sequoia before it leaves, not which model runs it. Neither answer implies the other.
+          </p>
           <p className="muted small">
             A card without a next action is a wish. Naming the next step is what makes it work
             somebody can pick up.
@@ -595,6 +658,56 @@ export function WorkCardsPage({ me, onChanged, onNavigate }: { me: MeResponse; o
                         <span className="muted small">queued — picked up within 5 min</span>
                       )}
                       {c.priority !== "NORMAL" && <span className="badge badge-gate">{c.priority.toLowerCase()}</span>}
+                      {/*
+                          BOTH LABELS, ALWAYS, AND THE LANE BESIDE THEM.
+
+                          "they should include sensitivity public or private and audience: internal
+                          or external ON THE CARD so we can have a trail of how it's working."
+
+                          Badging only the exceptions was the cheaper design and it answers the
+                          wrong question. A trail has to be readable on the ordinary card too —
+                          otherwise "did this go where I expected?" is unanswerable for exactly the
+                          cards that make up the bill. So both labels show on every card, and the
+                          model that actually ran shows next to them.
+                      */}
+                      <span
+                        className={c.model_access === "PRIVATE_MODEL_ONLY" ? "badge badge-gate" : "badge"}
+                        data-testid={`work-card-model-access-${c.id}`}
+                        title={
+                          c.model_access === "PRIVATE_MODEL_ONLY"
+                            ? "LP names, deal terms, fund figures or diligence material — this stays on a model whose terms forbid training on it"
+                            : "No LP names or deal terms, so a free reasoning model may do it. This is the normal case."
+                        }
+                      >
+                        {c.model_access === "PRIVATE_MODEL_ONLY" ? "private model only" : "public model approved"}
+                      </span>
+                      <span
+                        className="badge"
+                        data-testid={`work-card-audience-${c.id}`}
+                        title={
+                          c.audience === "EXTERNAL"
+                            ? "Goes to somebody other than Sequoia or Scooter, so it previews to Sequoia before it leaves. This says nothing about which model runs it."
+                            : "Goes to Sequoia or Scooter. This says nothing about which model runs it."
+                        }
+                      >
+                        {c.audience === "EXTERNAL" ? "external" : "internal"}
+                      </span>
+                      {/* WHAT THE LABEL ACTUALLY CAUSED. A free lane is named as free, in words,
+                          because ":free" on the end of a model id is not something anybody should
+                          have to know to read their own cost. */}
+                      {c.last_run?.model && (
+                        <span
+                          className="muted small"
+                          data-testid={`work-card-lane-${c.id}`}
+                          title={`Last run ${new Date(c.last_run.at).toLocaleString()} on ${c.last_run.provider_key ?? "an unnamed provider"}/${c.last_run.model}`}
+                        >
+                          ran on{" "}
+                          {c.last_run.model.includes(":free") || c.last_run.provider_key?.endsWith("_free")
+                            ? "a free model"
+                            : c.last_run.model}
+                          {typeof c.last_run.cost_usd === "number" && (c.last_run.cost_usd === 0 ? " — $0" : ` — $${c.last_run.cost_usd.toFixed(4)}`)}
+                        </span>
+                      )}
                       {/* Two facts survive the collapse because they change what you do next. */}
                       {/* "12 looks" meant nothing to anybody — the operator's question was
                           literally "what is a fucking look?". It is a web page this card opened

@@ -10,7 +10,7 @@ import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { urlStatus } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
-import { sendPartnerEmail } from "./execEmail";
+import { sendOrPreview } from "./previewApproval";
 import { deliver } from "./deliverables";
 import { notifyQuietly } from "./notifications";
 import { isoWeekOf } from "./jobs";
@@ -785,7 +785,20 @@ export async function runHireSearchCard(
     sourceId: card.id,
   });
 
-  const mail = await sendPartnerEmail(env, {
+  /*
+   * THROUGH THE LANE, AND THIS ONE COMES STRAIGHT OUT THE OTHER SIDE (17 Sep 2026).
+   *
+   * `sendOrPreview` asks `previewFirstFor`, which asks the partner registry. Scooter is a Managing
+   * Partner — inside the firm — so Monday's note goes to his inbox on Monday with nobody's hand in
+   * between, exactly as it did before this lane existed. Nothing about this call changes what he
+   * receives or when.
+   *
+   * IT IS ROUTED THROUGH THE LANE ANYWAY, and deliberately. If this address ever became somebody
+   * else's — a freelance producer, a candidate, an agency — the default rule would catch it on the
+   * first run instead of on the first apology. `card.preview_first` is the other half: she can ask
+   * to see even this one first, and then it waits for her yes.
+   */
+  const mail = await sendOrPreview(env, {
     to: SCOOTER_EMAIL,
     email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: summary.sections, details: text },
     objectType: "work_card",
@@ -793,8 +806,11 @@ export async function runHireSearchCard(
     // The KIND goes with it, so a reply steers the SEARCH rather than a card that will be DONE
     // before he opens his inbox. See services/emailThread.ts and migration 0180.
     cardKind: HIRE_CARD_KIND,
+    workCardId: card.id,
+    cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
     firmScope: card.firm_scope,
     actorId: "aie_walker",
+    what: summary.what,
   });
 
   await notifyQuietly(env, {
@@ -811,7 +827,11 @@ export async function runHireSearchCard(
 
   const finding = [
     `• ${mail.subject}`,
-    mail.sent ? `• Emailed to ${SCOOTER_EMAIL}.` : `• NOT emailed to ${SCOOTER_EMAIL}: ${mail.reason}. The deliverable is on Home and in Documents.`,
+    mail.sent
+      ? `• Emailed to ${SCOOTER_EMAIL}.`
+      : mail.previewed
+        ? `• NOT emailed to ${SCOOTER_EMAIL} — it is preview-first: ${mail.reason}`
+        : `• NOT emailed to ${SCOOTER_EMAIL}: ${mail.reason}. The deliverable is on Home and in Documents.`,
     `• Deliverable ${delivered.id}${delivered.document_id ? `, filed as document ${delivered.document_id}` : " (not filed)"}.`,
     "",
     text,

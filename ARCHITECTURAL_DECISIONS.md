@@ -485,3 +485,41 @@ speech: their model wrote those words and nobody in the room said them. The acti
 deliberately NOT turned into commitments on import. Close-out reads the notes and PROPOSES
 commitments a person accepts, and a second path that assigned work straight out of a vendor's
 bullet list would go around the only step in the chain with a human in it.
+
+## A link that SENDS mail is a credential; a link that STEERS work is not (17 Sep 2026)
+
+**Both decisions were made on the same day, deliberately in opposite directions, and the reason is
+worth having written down where the next person adding an emailed button will hit it.**
+
+Scooter's steering replies were given **no token at all**. Recognising an authenticated sender was
+judged sufficient, because the worst a forged steer can do is waste a week of one employee's
+attention, and the next note makes it visible. Cheap to detect, cheap to undo, and a token would
+have been ceremony on a mechanism whose whole value is that answering costs nothing.
+
+**"Send it" on a preview is the opposite kind of link**, and the bar moves for three reasons:
+
+| | A steering reply | A preview approval |
+|---|---|---|
+| **What it does** | Changes what an employee does next | Puts a message in front of somebody outside the firm |
+| **Reversible?** | Yes — the next run corrects it | **No.** There is no unsend |
+| **Who sees the damage** | The firm | A founder, an LP, a journalist — in the firm's voice |
+| **Visible if forged?** | Yes, in the next note | **No.** It looks exactly like a real send in every log |
+| **Arrives as** | Mail, with SPF/DKIM/DMARC to check | **An HTTP request**, where there is no envelope at all |
+
+That last row is the one that settles it. **Recognising the sender is not sufficient here because
+there is no sender to recognise** — a click from a phone carries no `From`, no signature and no
+domain to verify. So the link itself is the credential, and it is built like one: per preview,
+26 symbols of a 31-symbol alphabet (≈2^128) from `crypto.getRandomValues`, **stored only as a
+SHA-256 hash** so a database read or a backup yields nothing usable, single use (claimed by the
+UPDATE, not checked before it), expiring, and **bound to one recipient** — the send boundary
+compares the approved address against the message's own, so a yes for one person cannot carry a
+different message to another.
+
+**And the link does not itself send.** The unauthenticated route is a GET that renders the draft and
+three buttons which POST back. A GET that sent mail would be sent by the first link scanner, mail
+client or corporate proxy that prefetched the URL, and that is standard behaviour in several of
+them rather than a theoretical actor.
+
+The contract is in `src/shared/work/previewLane.ts`, the enforcement in `assertPreviewLane` beside
+`applyPreviewBoundary`, and `npm run validate:preview-lane` fails the build if a future transport,
+route or handler gets round any of it.

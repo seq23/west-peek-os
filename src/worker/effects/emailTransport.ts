@@ -1,4 +1,5 @@
 import { PREVIEW_RECIPIENT, previewHeader, previewHeaderHtml, previewSubject } from "../../shared/work/preview";
+import { isPartnerEmail } from "../../shared/registry/partners";
 
 /**
  * What every outbound email transport agrees on.
@@ -144,25 +145,132 @@ export function wouldLoop(text: string): boolean {
  */
 export function applyPreviewBoundary(env: unknown, payload: EmailPayload): EmailPayload {
   const preview = previewContextOf(env);
-  if (!preview) return payload;
-  const normallyTo = [payload.to].flat().map((a) => a.trim().toLowerCase());
-  const header = previewHeader({
-    normallyTo,
-    what: preview.what,
-    requestedByEmail: preview.requestedByEmail,
-  });
-  return {
-    ...payload,
-    // Replaced, never filtered. This is the whole boundary.
-    to: [PREVIEW_RECIPIENT],
-    subject: previewSubject(payload.subject),
-    text: `${header}${payload.text}`,
-    ...(payload.html
-      ? {
-          html: `${previewHeaderHtml({ normallyTo, what: preview.what, requestedByEmail: preview.requestedByEmail })}${payload.html}`,
-        }
-      : {}),
-  };
+  const out = !preview
+    ? payload
+    : (() => {
+        const normallyTo = [payload.to].flat().map((a) => a.trim().toLowerCase());
+        const header = previewHeader({
+          normallyTo,
+          what: preview.what,
+          requestedByEmail: preview.requestedByEmail,
+        });
+        return {
+          ...payload,
+          // Replaced, never filtered. This is the whole boundary.
+          to: [PREVIEW_RECIPIENT],
+          subject: previewSubject(payload.subject),
+          text: `${header}${payload.text}`,
+          ...(payload.html
+            ? {
+                html: `${previewHeaderHtml({ normallyTo, what: preview.what, requestedByEmail: preview.requestedByEmail })}${payload.html}`,
+              }
+            : {}),
+        };
+      })();
+
+  /*
+   * THE LANE, CHECKED AFTER THE PREVIEW REPLACEMENT AND BEFORE THE WIRE.
+   *
+   * Order is load-bearing. A preview's recipient list has just been replaced with Sequoia's
+   * address, which is a partner, so a preview always clears the lane — exactly right: a preview
+   * reaches her and nobody else, and it needs no approval to do that. Everything that is NOT a
+   * preview is now held to her default rule. See `assertPreviewLane`.
+   */
+  assertPreviewLane(env, out);
+  return out;
+}
+
+// ── HER DEFAULT RULE, AT THE SAME BOUNDARY ────────────────────────────────────────────────────
+
+/**
+ * NOBODY OUTSIDE THE FIRM IS EMAILED WITHOUT AN APPROVED PREVIEW (17 Sep 2026).
+ *
+ * Operator: "anything to anyone other than sequoia@ and scooter@ should be default preview.
+ * everything else does not need to be default preview unless i specifically ask for it."
+ *
+ * ─── WHY IT IS HERE, BESIDE THE PREVIEW BOUNDARY, AND NOT IN THE FEATURES ──────────────────────
+ *
+ * The same argument that put `applyPreviewBoundary` here, and it is the argument this repo has
+ * already been bitten by: a rule each caller remembers is a rule the next caller forgets. There are
+ * exactly two things in this system that put a message on a wire, both call this function first,
+ * and every composer, employee, service and unwritten feature reaches a recipient through one of
+ * them. `services/execEmail.ts` restricts an employee's mail to the two partner addresses TODAY,
+ * which is a narrower rule — but it is a rule in one service, and `executeExternalEffect` is a
+ * second door with a different rule, and this is the floor under both.
+ *
+ * ─── WHAT CLEARS IT ────────────────────────────────────────────────────────────────────────────
+ *
+ *   · EVERY RECIPIENT IS A PARTNER. Asked of `isPartnerEmail`, the registry's one answer, never a
+ *     typed address and never a test on the domain (`info@westpeek.ventures` is on that domain and
+ *     is not a partner). Walker's Monday hire search to Scooter clears here with nothing attached,
+ *     which is the point — he is a Managing Partner, not an outsider.
+ *   · OR THE ENV CARRIES AN APPROVAL SHE GRANTED FOR THIS EXACT RECIPIENT. Set only by
+ *     `services/previewApproval.ts`, only after a single-use token has been claimed, and only for
+ *     the one address on the approved row. A token approved for one person cannot carry a message
+ *     to another: the recipient is compared, not merely counted.
+ *
+ * Anything else throws before the key is read, before the binding is touched, and before any
+ * network call exists.
+ */
+export const APPROVED_SEND_ENV_KEY = "__wpApprovedSend";
+
+export interface ApprovedSendMarker {
+  /** `preview_approval.id`. On the refusal event and the delivery record. */
+  approvalId: string;
+  /** The ONE address this approval authorises, lower-case. */
+  recipient: string;
+}
+
+export function approvedSendOf(env: unknown): ApprovedSendMarker | null {
+  if (!env || typeof env !== "object") return null;
+  const marker = (env as Record<string, unknown>)[APPROVED_SEND_ENV_KEY];
+  if (!marker || typeof marker !== "object") return null;
+  const m = marker as Partial<ApprovedSendMarker>;
+  return typeof m.approvalId === "string" && typeof m.recipient === "string"
+    ? { approvalId: m.approvalId, recipient: m.recipient.trim().toLowerCase() }
+    : null;
+}
+
+/**
+ * Thrown by the boundary. A distinct class so a caller can report the reason to a partner rather
+ * than logging "fetch failed", and so a test can assert the refusal rather than a generic throw.
+ */
+export class SendBlocked extends Error {
+  readonly code = "preview_required";
+  constructor(message: string) {
+    super(message);
+    this.name = "SendBlocked";
+  }
+}
+
+/** The check itself. Throws `SendBlocked`, or returns. */
+export function assertPreviewLane(env: unknown, payload: EmailPayload): void {
+  const recipients = [payload.to].flat().map((a) => a.trim().toLowerCase()).filter((a) => a.length > 0);
+  if (recipients.length === 0) return;
+
+  const outside = recipients.filter((a) => !isPartnerEmail(a));
+  if (outside.length === 0) return;
+
+  const approved = approvedSendOf(env);
+  if (!approved) {
+    throw new SendBlocked(
+      `${outside.join(", ")} is outside the firm and nothing has been approved to go there. ` +
+        "Her rule: anything to anyone other than the two partners is preview-first — it goes to her " +
+        "Home and her inbox, and only 'Send it' puts it on the wire.",
+    );
+  }
+  /*
+   * ONE APPROVAL, ONE RECIPIENT. Not a count and not a subset test: every outside address on this
+   * message must be the address she approved. A message addressed to the approved founder AND a
+   * journalist is not partly approved, it is refused.
+   */
+  const wrong = outside.filter((a) => a !== approved.recipient);
+  if (wrong.length > 0) {
+    throw new SendBlocked(
+      `approval ${approved.approvalId} authorises ${approved.recipient} only, and this message is also ` +
+        `addressed to ${wrong.join(", ")}. An approval is for one recipient; it is not a licence to send.`,
+    );
+  }
 }
 
 /**
