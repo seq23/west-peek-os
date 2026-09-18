@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The subscription-seat claimer for West Peek OS.
+
+  LABEL IS DELIBERATELY DISTINCT FROM BOSS OS'S. The two systems are separate properties and their
+  claimers must be separately loadable, unloadable and killable — `launchctl unload` on one must
+  never touch the other. If a label here ever collides with one in `boss-os`, this is the one that
+  changes.
+
+  NO SECRET IS IN THIS FILE, and that is why the program is a shell line rather than the script
+  directly: the two Access token halves come out of the encrypted vault at launch, through
+  `vault.mjs run --`, and exist only in the child process's environment. A plist lives in a
+  world-readable directory, so a plist with a credential in it is a credential on disk.
+
+  KeepAlive rather than RunAtLoad alone: the claimer's own loop handles the waiting, so launchd's
+  job is simply to notice if the process dies and start it again. It exits cleanly and immediately
+  when no seat is usable on this machine, which under KeepAlive would be a restart loop — hence
+  ThrottleInterval, which makes that case one quiet start every five minutes rather than a spin.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ventures.westpeek.os.seat-claimer</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-lc</string>
+    <!--
+      REPLACE ONLY THE REPO PATH if the checkout lives elsewhere. Everything else is deliberate:
+        · `vault.mjs run --` injects CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET and nothing else
+          reaches the environment.
+        · `exec` so launchd supervises node itself rather than a shell that owns it, which makes
+          KeepAlive and a clean SIGTERM actually work.
+    -->
+    <string>cd "$HOME/GitHub/west-peek-os" &amp;&amp; exec node scripts/vault/vault.mjs run -- node scripts/claimer/subscription-seat-claimer.mjs</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- Five minutes between restarts. See the note above about the no-seat clean exit. -->
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+
+  <!--
+    Logs go somewhere a person will actually look, and somewhere DIFFERENT from Boss OS's, so
+    reading one claimer's history never means filtering out the other's.
+  -->
+  <key>StandardOutPath</key>
+  <string>/tmp/westpeek-os-seat-claimer.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/westpeek-os-seat-claimer.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!--
+    Homebrew's bin must be on PATH or neither `claude` nor `codex` is found and the claimer decides,
+    correctly but uselessly, that no seat is installed. `-lc` above loads the login shell too; this
+    is the belt.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>
