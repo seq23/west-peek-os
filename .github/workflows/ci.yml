@@ -298,6 +298,20 @@ jobs:
       - name: A green run means something
         run: npm run validate:green-means-something
 
+      # Parker produced a complete October event kit on a free lane at $0 and the card closed DONE
+      # with no deliverable, no packet, no preview and no email — the kit existed only inside
+      # `ai_run.output_text`. This fails if any statement in employeeWork.ts can close a card
+      # without proof that something a person can open now exists.
+      - name: A finished card files its work
+        run: npm run validate:card-files-work
+
+      # The same card's `result_recipient` was NULL, so the result was addressed to nobody and
+      # rested on a closed card. This runs the real `recipientForResult` over every shape a card's
+      # two fields can be in and fails if any of them resolves to nobody — or if prose in a brief
+      # can name a send target.
+      - name: Finished work reaches a person
+        run: npm run validate:work-reaches-her
+
       - name: Build client
         run: npm run build
 

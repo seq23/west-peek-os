@@ -2,7 +2,7 @@
   "name": "west-peek-os",
   "private": true,
   "version": "0.25.0",
-  "description": "West Peek OS — governed institutional operating system (P0-P12 substrate, P13-P25 operating product).",
+  "description": "West Peek OS \u2014 governed institutional operating system (P0-P12 substrate, P13-P25 operating product).",
   "type": "module",
   "scripts": {
     "backup:local": "node scripts/backup/backup.mjs",
@@ -63,7 +63,9 @@
     "validate:seats": "node scripts/validate/two-seats-and-one-ladder.mjs && node scripts/validate/two-seats-and-one-ladder.mjs --self-test && node scripts/claimer/subscription-seat-claimer.mjs --self-test",
     "validate:stopped-runs": "node scripts/validate/what-stopped-is-counted-once.mjs && node scripts/validate/what-stopped-is-counted-once.mjs --self-test",
     "validate:chain-budget": "node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs && node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs --self-test",
-    "validate:green-means-something": "node scripts/validate/a-green-run-means-something.mjs && node scripts/validate/a-green-run-means-something.mjs --self-test"
+    "validate:green-means-something": "node scripts/validate/a-green-run-means-something.mjs && node scripts/validate/a-green-run-means-something.mjs --self-test",
+    "validate:card-files-work": "node scripts/validate/a-finished-card-files-its-work.mjs && node scripts/validate/a-finished-card-files-its-work.mjs --self-test",
+    "validate:work-reaches-her": "node scripts/validate/finished-work-reaches-a-person.mjs && node scripts/validate/finished-work-reaches-a-person.mjs --self-test"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",
