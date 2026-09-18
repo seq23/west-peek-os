@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
+import { collapsedBriefLine } from "../lib/briefCollapse";
 
 /**
  * The expanded Daily Intelligence report (P41), rendered on the Sweeps page directly under the
@@ -405,7 +406,26 @@ function InterestsEditor(): JSX.Element {
   );
 }
 
-export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {}): JSX.Element {
+/**
+ * COLLAPSING THE WHOLE BRIEF ON HOME (17 Sep 2026).
+ *
+ * Operator: "we also need to be able to collapse the executive brief on the home page."
+ *
+ * `compact` was already progressive disclosure INSIDE the panel — the summary and the traffic
+ * lights, with the rest opening in place. This is the other axis: getting the panel itself out of
+ * the way. The state is owned by Home, not here, because Home is what remembers it per viewer (see
+ * `client/lib/briefCollapse.ts`); the panel is told, and reports back when the header is clicked.
+ *
+ * COLLAPSED STILL SAYS WHETHER IT ARRIVED, AND WHEN. That is not a nicety — a panel that hides
+ * whether the thing ran is worse than no panel, because it turns "did my brief arrive?" from a
+ * glance into an action. So the fetch still happens, the date is still on screen, and a morning
+ * with no brief says so in the one line that is left.
+ */
+export function DailyBriefPanel({
+  compact = false,
+  collapsed = false,
+  onToggleCollapsed,
+}: { compact?: boolean; collapsed?: boolean; onToggleCollapsed?: (next: boolean) => void } = {}): JSX.Element {
   const state = useApi<{ report: Report | null; sections: Section[]; citations: Citation[]; date: string; no_brief_because?: string | null }>("/api/daily-intelligence");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -463,20 +483,58 @@ export function DailyBriefPanel({ compact = false }: { compact?: boolean } = {})
     return ids.map((i) => citations.get(i)).filter((c): c is Citation => Boolean(c));
   }
 
+  const collapsible = Boolean(onToggleCollapsed);
+  const masthead = (
+    <header className="brief-masthead">
+      <h3>Executive Intelligence Report</h3>
+      {report && (
+        <span className="brief-edition" data-testid="daily-brief-edition">
+          {report.edition ? `${report.edition} · ` : ""}
+          {report.report_date}
+          {report.completed_at
+            ? ` · delivered ${new Date(report.completed_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+            : ""}
+        </span>
+      )}
+      {collapsible && (
+        <button
+          type="button"
+          className="link-button brief-fold"
+          data-testid="daily-brief-fold"
+          aria-expanded={!collapsed}
+          aria-controls="daily-brief-contents"
+          onClick={() => onToggleCollapsed!(!collapsed)}
+        >
+          {collapsed ? "Show the brief" : "Hide the brief"}
+        </button>
+      )}
+    </header>
+  );
+
+  /*
+   * FOLDED AWAY, BUT NEVER SILENT ABOUT WHETHER IT RAN. One line: today's date, and whether a brief
+   * exists for it. The state she must never be left guessing at is "is this hidden, or did it not
+   * arrive?", so the collapsed panel answers exactly that question and nothing else.
+   */
+  if (collapsed) {
+    return (
+      <section className="card daily-brief daily-brief-collapsed" data-testid="daily-brief">
+        {masthead}
+        <p className="muted small" data-testid="daily-brief-collapsed-state">
+          {collapsedBriefLine({
+            report,
+            loading: state.loading,
+            date: state.data?.date ?? null,
+            noBriefBecause: state.data?.no_brief_because ?? null,
+          })}
+        </p>
+      </section>
+    );
+  }
+
   return (
-    <section className="card daily-brief" data-testid="daily-brief">
-      <header className="brief-masthead">
-        <h3>Executive Intelligence Report</h3>
-        {report && (
-          <span className="brief-edition" data-testid="daily-brief-edition">
-            {report.edition ? `${report.edition} · ` : ""}
-            {report.report_date}
-            {report.completed_at
-              ? ` · delivered ${new Date(report.completed_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
-              : ""}
-          </span>
-        )}
-      </header>
+    <section className="card daily-brief" data-testid="daily-brief" id="daily-brief-contents">
+      {masthead}
       <p className="muted small">
         Written from what the sweep gathered overnight and the levels read this morning. Every
         figure carries the source it came from; where a level could not be read, the report says so

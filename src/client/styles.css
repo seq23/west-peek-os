@@ -2268,6 +2268,22 @@ details h3 {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * THE FOLD ON HOME. The control sits in the masthead, at the end of the row, so the thing that
+ * hides the brief is on the brief's own title line rather than somewhere she has to look for it.
+ * `margin-left: auto` keeps it right-aligned when the edition line is short and lets it wrap under
+ * on a narrow screen rather than crushing the date.
+ */
+.brief-fold { margin-left: auto; white-space: nowrap; }
+
+/*
+ * COLLAPSED: one line, and it still says whether today's brief arrived. Padded down from the full
+ * panel so a folded brief reads as a strip rather than an empty card, and nothing below it moves
+ * when it opens again.
+ */
+.daily-brief-collapsed { padding-bottom: var(--space-md); }
+.daily-brief-collapsed p { margin-bottom: 0; }
+
 /* A packet's folded subsections: one line each, the number that matters on the line. */
 .packet-fold { margin: var(--space-2xs) 0; }
 .packet-fold > summary { cursor: pointer; padding: var(--space-2xs) 0; }

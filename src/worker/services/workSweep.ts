@@ -69,6 +69,12 @@ export interface SweepCard {
   work_attempts: number;
   firm_scope: string;
   requested_by_email?: string | null;
+  /**
+   * `work_card.preview_first`. NULL is "nobody said" — the default rule then decides from the
+   * recipient. 1 is her asking to see this one before it goes, even to a partner. See
+   * `shared/work/previewLane.ts`; the sweep only carries it, it does not interpret it.
+   */
+  preview_first?: number | null;
 }
 
 /** Who the sweep is when it works a card: the firm, acting on its own assignment. */
@@ -99,7 +105,7 @@ function sweepContext(env: Env, firmScope: string): RouteContext {
 export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | null> {
   const nowIso = now.toISOString();
   const candidate = await env.WP_OS_DB.prepare(
-    `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email
+    `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email, preview_first
        FROM work_card
       WHERE owner_type = 'AI' AND owner_id IS NOT NULL
         AND state IN ('OPEN', 'IN_PROGRESS')
@@ -218,7 +224,7 @@ export const DECK_WAIT_MINUTES = 15;
 export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCard[]> {
   const rows = (
     await env.WP_OS_DB.prepare(
-      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email
+      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email, preview_first
          FROM work_card
         WHERE owner_type = 'AI' AND state = 'IN_PROGRESS'
           AND COALESCE(work_attempts, 0) >= ?1

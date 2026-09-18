@@ -178,6 +178,12 @@ import {
   handleListDeliverableFeedback,
   handleListDeliverables,
 } from "./services/deliverables";
+import {
+  handleDecidePreviewApproval,
+  handleDecidePreviewApprovalByToken,
+  handleListPreviewApprovals,
+  handleOpenPreviewApproval,
+} from "./services/previewApproval";
 import { handleListHireCandidates } from "./services/productionsHire";
 import { handleRunPreview } from "./services/preview";
 import { handleRunMeetingPrep } from "./services/meetingPrep";
@@ -708,6 +714,32 @@ const router = new Router()
   .post("/api/deliverables/:id/dismiss", handleDismissDeliverable)
   .get("/api/deliverables/:id/feedback", handleListDeliverableFeedback)
   .post("/api/deliverables/:id/feedback", handleDeliverableFeedback)
+  /*
+   * THE PREVIEW LANE — "yes, send that" (17 Sep 2026). A deliverable could be dismissed or given
+   * feedback; there was no way to approve one. These are the three answers, and the two doors.
+   *
+   * THE TWO TOKEN ROUTES ARE `auth: false` DELIBERATELY, AND THE TOKEN IS THE CREDENTIAL. She reads
+   * these on a phone, from the email, where there is no session. That is a higher bar than the
+   * steering replies — which were given no token at all, because the worst a forged steer does is
+   * waste a week — so the token is per-preview, 128-bit, stored only as a hash, single use and
+   * expiring, and the recipient it authorises is checked again at the send boundary. The full
+   * threat model, and why recognising the sender is NOT sufficient here, is in
+   * `shared/work/previewLane.ts`.
+   *
+   * THE GET CHANGES NOTHING. It renders the draft and three buttons that POST back, because a GET
+   * that sent mail would be sent by the first link scanner or mail client that prefetched it.
+   */
+  .get("/api/preview-approvals", handleListPreviewApprovals)
+  .post("/api/preview-approvals/:id/decide", handleDecidePreviewApproval)
+  /*
+   * A SEPARATE PATH, NOT A SECOND SHAPE ON THE SAME ONE. `/api/preview-approvals/:id/decide` and a
+   * hypothetical `/api/preview-approvals/:token/decide` are the SAME four segments to this router,
+   * which matches in registration order — so the token door would have been permanently shadowed by
+   * the authenticated one and would have answered 401 from her phone, forever, with nothing in the
+   * logs saying why. `/api/approve/*` is its own space.
+   */
+  .get("/api/approve/:token", handleOpenPreviewApproval, { auth: false })
+  .post("/api/approve/:token/decide", handleDecidePreviewApprovalByToken, { auth: false })
   // Steering work in flight: a partner says something, the employee answers it on its next step.
   .get("/api/work-cards/:id/notes", handleListWorkCardNotes)
   // 0175 — the receipt: what she typed, and what the model turned it into, side by side. Her

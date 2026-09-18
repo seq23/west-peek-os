@@ -6,6 +6,7 @@ import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
 import { DeliverableList } from "./DeliverableList";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { DailyBriefPanel } from "./DailyBriefPanel";
+import { readBriefCollapsed, writeBriefCollapsed } from "../lib/briefCollapse";
 import { chiefOfStaffFor } from "@shared/work/chiefOfStaff";
 import { ConnectPanel } from "./ConnectPanel";
 
@@ -395,6 +396,9 @@ function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => 
 }
 
 export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
+  // Read once, for THIS viewer. Two partners share the application and, on a shared laptop, the
+  // store; the id in the key is what stops one of them folding the other's brief away.
+  const [briefCollapsed, setBriefCollapsed] = useState(() => readBriefCollapsed(me.id));
   const home = useApi<HomeResponse>("/api/mp-home");
   // §8 — the four operator questions Home's modules do not answer: what is blocked, is scheduled
   // work healthy, is AI failing, is setup incomplete. Derived from live endpoints only.
@@ -702,7 +706,22 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
               </div>
             </div>
           </header>
-          <DailyBriefPanel compact />
+          {/*
+            COLLAPSIBLE, AND REMEMBERED (17 Sep 2026). Operator: "we also need to be able to
+            collapse the executive brief on the home page." The panel's own disclosure folds its
+            insides; this folds the panel. The state lives per viewer in
+            `client/lib/briefCollapse.ts` — a collapse that forgets itself overnight is a chore, not
+            a control — and the collapsed panel still says the date and whether today's brief
+            arrived, because hiding whether the thing ran is worse than not showing it at all.
+          */}
+          <DailyBriefPanel
+            compact
+            collapsed={briefCollapsed}
+            onToggleCollapsed={(next) => {
+              setBriefCollapsed(next);
+              writeBriefCollapsed(me.id, next);
+            }}
+          />
         </section>
 
         <h4>Also finished for you</h4>
