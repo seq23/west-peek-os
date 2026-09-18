@@ -127,8 +127,28 @@ function speaksToAModel(src) {
   return /\b(messages|contents|input)\s*:\s*\[/.test(body);
 }
 
-/** Every way an adapter may name the ceiling on the wire. The VALUE must be the shared constant. */
-const CEILING_KEYS = /\b(max_tokens|max_output_tokens|maxOutputTokens)\s*:\s*PROVIDER_MAX_OUTPUT_TOKENS\b/;
+/**
+ * Every way an adapter may name the ceiling on the wire, and what the VALUE is allowed to be.
+ *
+ * ── WIDENED ONCE, AND ONLY TO SOMETHING STRICTER (18 Sep 2026) ────────────────────────────────
+ *
+ * This required the value to be `PROVIDER_MAX_OUTPUT_TOKENS` verbatim, which was exactly right
+ * when the only alternative was a provider default of 256 or a hard-coded 4096. It also meant the
+ * catalogue ceiling was the ONLY thing any caller could ever be given: a 400-token classification
+ * and an 8000-token brief asked the provider for the same 16,384, so `expectedOutputTokens` — the
+ * figure the caller actually declares, and which prices the run — still reached no adapter, and no
+ * deadline could be sized to the work.
+ *
+ * The per-call form is now accepted, and the acceptance is NARROWER than the old rule rather than
+ * wider: the per-call value must be wrapped in `Math.min(…, PROVIDER_MAX_OUTPUT_TOKENS)`, so a
+ * caller can lower its own ceiling and can never raise it past the catalogue. A bare
+ * `req.maxOutputTokens` is refused below, which the old pattern would have had nothing to say
+ * about. The constant remains the ceiling; it is no longer also the floor.
+ */
+const CEILING_VALUE = String.raw`(?:PROVIDER_MAX_OUTPUT_TOKENS\b|Math\.min\(\s*req\.maxOutputTokens\s*\?\?\s*PROVIDER_MAX_OUTPUT_TOKENS\s*,\s*PROVIDER_MAX_OUTPUT_TOKENS\s*\))`;
+const CEILING_KEYS = new RegExp(String.raw`\b(max_tokens|max_output_tokens|maxOutputTokens)\s*:\s*` + CEILING_VALUE);
+/** A per-call ceiling anywhere in the ceiling position. Legal only in the capped form above. */
+const PER_CALL_CEILING = new RegExp(String.raw`\b(max_tokens|max_output_tokens|maxOutputTokens)\s*:\s*[^\n]*req\.maxOutputTokens`);
 
 export function checkAdaptersSetACeiling(sources) {
   const violations = [];
@@ -137,6 +157,13 @@ export function checkAdaptersSetACeiling(sources) {
     if (!speaksToAModel(raw)) continue;
     examined += 1;
     const body = stripComments(raw);
+    if (PER_CALL_CEILING.test(body) && !CEILING_KEYS.test(body)) {
+      violations.push(
+        `${file} sends this caller's own output ceiling without capping it at PROVIDER_MAX_OUTPUT_TOKENS — ` +
+          "a caller could ask for more than the catalogue allows, and the shared ceiling would stop meaning anything",
+      );
+      continue;
+    }
     if (!CEILING_KEYS.test(body)) {
       violations.push(
         `${file} sends a completion with no explicit output ceiling from the shared constant — ` +
