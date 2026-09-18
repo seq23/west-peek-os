@@ -230,22 +230,52 @@ export const DECK_WAIT_MINUTES = 15;
  * count, notices, the three-strikes rule — without a model or a browser.
  */
 /**
- * A THIRD ATTEMPT THAT DIED MID-RUN LEFT THE CARD NOWHERE. Helios Grid, 14 Sep 14:09: the run was
- * killed hard (no `finally` ran), so the lease expired with `work_attempts = 3` and the card still
- * IN_PROGRESS — unclaimable (at the cap) and never finalised (the cap check lives in the run that
- * died). Every sweep now settles such cards first: BLOCKED, the failure named, the partners told.
+ * SPENDING EVERY ATTEMPT IS A TERMINAL STATE, AND IT MUST LOOK LIKE ONE (18 Sep 2026).
+ *
+ * `claimNextCard` takes OPEN and IN_PROGRESS cards under `MAX_WORK_ATTEMPTS`. A card that reaches
+ * the cap while still in one of those two states is therefore UNCLAIMABLE — and because it is not
+ * BLOCKED, none of PR #94's machinery touches it: no reason, no doors, no nag. On the Work page it
+ * reads as ordinary open work, indefinitely.
+ *
+ * Production, 18 Sep 2026: "Draft event kit: October workshop with Kirx Diaz" — `state = OPEN`,
+ * `work_attempts = 3`, untouched for fourteen hours, and it was the thing the owner most wanted
+ * that day. (Why it failed is separately known and separately fixed: two runs at 00:57 and 01:03
+ * failed over to a lane whose account had no credit. That lane was stood down and the ladder
+ * shipped the same morning. The bug here is that running out of attempts did not stop the card.)
+ *
+ * ─── WHAT THIS QUERY DID NOT CATCH, AND WHY ────────────────────────────────────────────────────
+ *
+ * It asked for `state = 'IN_PROGRESS' AND lease_until IS NOT NULL AND lease_until < now`, which
+ * misses two shapes that are equally dead and equally silent:
+ *
+ *   1. `state = 'OPEN'` AT THE CAP. Every door that puts a card back — `answerBlock`, `reopen`,
+ *      the preview lane's "send it back", migration 0173's own backfill — resets the allowance to
+ *      zero. `handleUpdateWorkCard` did not, so a person walking a card back to OPEN from the Work
+ *      page left the count at three and the card unclaimable. That is fixed at its source and
+ *      refused at the row by migration 0194; this clause is what settles the ones already there.
+ *   2. `lease_until IS NULL` AT THE CAP. `releaseLease` runs in the sweep's `finally` on every
+ *      tick, so a card whose final attempt failed is IN_PROGRESS at the cap with a NULL lease —
+ *      and `lease_until IS NOT NULL` excluded exactly that row. The original clause was written
+ *      for a run killed so hard the `finally` never ran; the ordinary path leaves no lease at all.
+ *
+ * A LIVE LEASE IS STILL LEFT ALONE. IN_PROGRESS at the cap with a lease in the future is a card
+ * BEING WORKED RIGHT NOW on its last attempt, which is legitimate and must not be blocked out from
+ * under the run. That is the whole reason this rule lives here rather than in a row trigger: it is
+ * a fact about time, and a trigger asserting it would abort `releaseLease` mid-tick.
  */
 export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCard[]> {
   const rows = (
     await env.WP_OS_DB.prepare(
-      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope, requested_by_email, preview_first
+      `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope,
+              requested_by_email, preview_first, work_last_failure
          FROM work_card
-        WHERE owner_type = 'AI' AND state = 'IN_PROGRESS'
+        WHERE owner_type = 'AI'
+          AND state IN ('OPEN', 'IN_PROGRESS')
           AND COALESCE(work_attempts, 0) >= ?1
-          AND lease_until IS NOT NULL AND lease_until < ?2`,
+          AND (state = 'OPEN' OR lease_until IS NULL OR lease_until < ?2)`,
     )
       .bind(MAX_WORK_ATTEMPTS, now.toISOString())
-      .all<SweepCard>()
+      .all<SweepCard & { work_last_failure: string | null }>()
   ).results ?? [];
   for (const card of rows) {
     const why = await blockCard(env, card, {
@@ -253,6 +283,12 @@ export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCa
       trying: card.title,
       employee: await employeeName(env, card.owner_id),
       who: isProductionsKind(card.kind) ? "SCOOTER" : "SEQUOIA",
+      /*
+       * WHAT THE LAST ATTEMPT SAID, CARRIED RATHER THAN REPLACED. `work_last_failure` is written
+       * on every failed attempt and is already phrased for a partner; inventing a fresh generic
+       * sentence beside it would throw away the only material on the card that says what happened.
+       */
+      ...(card.work_last_failure?.trim() ? { detail: card.work_last_failure.trim() } : {}),
     }, now);
     await announceOutcome(env, card, "BLOCKED", why);
   }

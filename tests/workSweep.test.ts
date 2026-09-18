@@ -176,12 +176,27 @@ describe("assignment causes work", () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', work_attempts = ?2, lease_until = ?3 WHERE id = ?1")
       .bind(id, MAX_WORK_ATTEMPTS, new Date(NOW.getTime() - 60_000).toISOString())
       .run();
+    /*
+     * AND WHAT THE LAST ATTEMPT SAID IS CARRIED (18 Sep 2026). This used to assert only the
+     * catalogue's generic sentence; the card already holds `work_last_failure`, written on every
+     * failed attempt and phrased for a partner, and blocking without it throws away the only
+     * material saying what actually happened. Rewritten stricter: the sentence AND the failure.
+     */
+    await env.WP_OS_DB.prepare("UPDATE work_card SET work_last_failure = ?2 WHERE id = ?1")
+      .bind(id, "Attempt 3 of 3 was refused by the Anthropic lane — the account behind it has run out of credit.")
+      .run();
     const settled = await settleAbandonedCards(env, NOW);
     expect(settled.map((c) => c.id)).toContain(id);
     const s = await state(id);
     expect(s.state).toBe("BLOCKED");
     expect(s.lease_until).toBeNull();
-    expect(s.next_action).toMatch(/was part way through this and the work stopped before they could report/);
+    expect(s.next_action).toMatch(/used every attempt on this and it stopped without reporting/);
+    const stored = await env.WP_OS_DB.prepare("SELECT block_needed, block_stopped FROM work_card WHERE id = ?1")
+      .bind(id)
+      .first<{ block_needed: string; block_stopped: string }>();
+    expect(stored!.block_needed).toContain("run out of credit");
+    // …and the one-sentence standard still holds on the sentence itself.
+    expect(stored!.block_stopped.match(/[.!?]\s+[A-Z]/)).toBeNull();
     expect((await notices(id))[0]!.title).toMatch(/is blocked on/);
     // A card whose lease is still held is a run in flight, not abandoned.
     const live = await card("Still running");
@@ -312,5 +327,130 @@ describe("the employee sees what the firm already holds", () => {
     expect(later.card?.id).toBe(id);
     expect(worked).toBe(true);
     expect((await state(id)).work_attempts).toBe(1);
+  });
+});
+
+// ── Spending every attempt is a terminal state (18 Sep 2026) ──────────────────────────────────
+
+/**
+ * "Draft event kit: October workshop with Kirx Diaz" — `state = OPEN`, `work_attempts = 3`,
+ * fourteen hours untouched, and it was the thing the owner most wanted that day.
+ *
+ * `claimNextCard` takes OPEN and IN_PROGRESS cards UNDER the ceiling, so nothing could pick it up;
+ * it was not BLOCKED, so none of PR #94's machinery applied — no reason, no doors, no nag. On the
+ * Work page it read as ordinary open work.
+ *
+ * Both routes into that state are reproduced here before they are proven closed.
+ */
+describe("a card that has spent every attempt", () => {
+  async function spent(title: string, attempts = MAX_WORK_ATTEMPTS): Promise<string> {
+    const id = await card(title);
+    // Written with state IN_PROGRESS, which is legal: it is what every third claim writes.
+    await env.WP_OS_DB.prepare(
+      "UPDATE work_card SET state = 'IN_PROGRESS', work_attempts = ?2, lease_until = NULL, work_last_failure = ?3 WHERE id = ?1",
+    )
+      .bind(id, attempts, "Attempt 3 of 3 was refused by the Anthropic lane — the account behind it has run out of credit.")
+      .run();
+    return id;
+  }
+
+  it("is unclaimable — which is why it must never be left in a claimable state", async () => {
+    const id = await spent("Draft event kit: October workshop with Kirx Diaz");
+    // The premise, stated rather than assumed: at the ceiling the picker cannot see it, however
+    // many times it is asked — and it is the ONLY claimable card on the board here.
+    for (let i = 0; i < 3; i++) {
+      const claimed = await claimNextCard(env, NOW);
+      expect(claimed?.id, "a card at the ceiling is invisible to the picker").not.toBe(id);
+      if (claimed) {
+        await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(claimed.id).run();
+      }
+    }
+    expect((await state(id)).state, "and it is still sitting there, untouched and unexplained").toBe("IN_PROGRESS");
+  });
+
+  it("is settled BLOCKED even with NO LEASE AT ALL — the shape the old query excluded", async () => {
+    const id = await spent("Draft event kit: no lease left behind");
+    /*
+     * `releaseLease` nulls the lease in the sweep's `finally` on EVERY tick, so the ordinary dead
+     * card has no lease. The old settler required `lease_until IS NOT NULL AND lease_until < now`,
+     * which excluded exactly this row — it was written for a run killed so hard the `finally`
+     * never ran, and the common case was never the uncommon one.
+     */
+    const settled = await settleAbandonedCards(env, NOW);
+    expect(settled.map((c) => c.id)).toContain(id);
+    const s = await state(id);
+    expect(s.state).toBe("BLOCKED");
+    const stored = await env.WP_OS_DB.prepare(
+      "SELECT block_stopped, block_needed, block_who, block_actions_json, block_nag_at FROM work_card WHERE id = ?1",
+    )
+      .bind(id)
+      .first<{ block_stopped: string; block_needed: string; block_who: string; block_actions_json: string; block_nag_at: string }>();
+    // #94's machinery now applies to it: a reason, the doors, and a nag.
+    expect(stored!.block_stopped).toContain("used every attempt");
+    expect(stored!.block_needed).toContain("run out of credit");
+    expect(stored!.block_who).toBe("SEQUOIA");
+    expect(JSON.parse(stored!.block_actions_json).length).toBeGreaterThan(0);
+    expect(stored!.block_nag_at).not.toBeNull();
+  });
+
+  it("is settled BLOCKED from OPEN — the state the Kirx card was actually in", async () => {
+    const id = await card("Draft event kit: sitting in OPEN at the ceiling");
+    /*
+     * WRITTEN PAST THE TRIGGER ON PURPOSE. Migration 0194 refuses this state, which is the point —
+     * so the only way to reproduce the production row is to drop the guard for one statement and
+     * put it straight back. Doing it any other way would be testing a state the database now
+     * forbids by pretending it is reachable.
+     */
+    await env.WP_OS_DB.exec("DROP TRIGGER work_card_spent_attempts_cannot_be_open_update");
+    try {
+      await env.WP_OS_DB.prepare(
+        "UPDATE work_card SET state = 'OPEN', work_attempts = ?2, lease_until = NULL, work_last_failure = ?3 WHERE id = ?1",
+      )
+        .bind(id, MAX_WORK_ATTEMPTS, "Attempt 3 of 3 had nowhere to send the work — every model is switched off or unavailable.")
+        .run();
+    } finally {
+      await env.WP_OS_DB.exec(
+        "CREATE TRIGGER IF NOT EXISTS work_card_spent_attempts_cannot_be_open_update BEFORE UPDATE ON work_card WHEN NEW.state = 'OPEN' BEGIN SELECT RAISE(ABORT, 'a card with no attempts left cannot be OPEN (0194)') WHERE COALESCE(NEW.work_attempts, 0) >= 3; END",
+      );
+    }
+
+    const settled = await settleAbandonedCards(env, NOW);
+    expect(settled.map((c) => c.id), "an OPEN card at the ceiling must be settled").toContain(id);
+    const s = await state(id);
+    expect(s.state).toBe("BLOCKED");
+    expect(s.next_action).toMatch(/used every attempt/);
+  });
+
+  it("a card still being worked on its last attempt is LEFT ALONE", async () => {
+    const id = await card("Being worked right now, on its third go");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', work_attempts = ?2, lease_until = ?3 WHERE id = ?1")
+      .bind(id, MAX_WORK_ATTEMPTS, new Date(NOW.getTime() + 60_000).toISOString())
+      .run();
+    /*
+     * THE ASYMMETRY THAT KEEPS THIS HONEST. IN_PROGRESS at the ceiling with a LIVE lease is a run
+     * in flight, and blocking it out from under the run would be a worse bug than the one being
+     * fixed. It is also why migration 0194 guards OPEN only: this exact row is legal.
+     */
+    expect((await settleAbandonedCards(env, NOW)).map((c) => c.id)).not.toContain(id);
+    expect((await state(id)).state).toBe("IN_PROGRESS");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+
+  it("CANNOT be written into OPEN at all — the database refuses it", async () => {
+    const id = await spent("Draft event kit: the database says no");
+    /*
+     * The rule that makes the state unreachable rather than merely repaired. 0173's precedent: a
+     * rule that lives only in a service is outrun by the next service.
+     */
+    await expect(
+      env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN' WHERE id = ?1").bind(id).run(),
+    ).rejects.toThrow();
+    expect((await state(id)).state, "the refused write changed nothing").toBe("IN_PROGRESS");
+
+    // …and the claim itself, which writes the very same ceiling, is untouched by the rule.
+    const fresh = await card("A card with attempts to spare");
+    const claimed = await claimNextCard(env, NOW);
+    expect(claimed).not.toBeNull();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id IN (?1, ?2)").bind(fresh, claimed!.id).run();
   });
 });

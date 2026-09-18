@@ -240,9 +240,24 @@ const CATALOGUE: Record<BlockReason, (f: BlockFacts) => Omit<Block, "reason" | "
     ],
   }),
 
+  /*
+   * EVERY ATTEMPT SPENT, AND NOTHING SAID (18 Sep 2026).
+   *
+   * `needed` now leads with what the LAST attempt actually said, when the card kept it.
+   * `work_last_failure` has been written on every failed attempt since PR #94 — "Attempt 3 of 3
+   * was refused by the Anthropic lane — the account behind it has run out of credit." — and it is
+   * already written for a partner rather than for a log, which is why it can be put in front of
+   * her verbatim instead of a fresh generic sentence being invented beside it.
+   *
+   * IT GOES IN `needed`, NOT IN `stopped`. `stopped` is held to ONE plain sentence by
+   * `plainLanguageProblems`, and appending a second would fail the standard the sentence exists to
+   * meet. `needed` is where an employee's own words already land.
+   */
   stopped_part_way: (f) => ({
-    stopped: `${f.employee} was part way through this and the work stopped before they could report.`,
-    needed: `Say whether ${f.employee} should try again, or drop it.`,
+    stopped: `${f.employee} used every attempt on this and it stopped without reporting.`,
+    needed: f.detail?.trim()
+      ? `${f.detail.trim()} Say whether ${f.employee} should try again now, or drop it.`
+      : `Say whether ${f.employee} should try again, or drop it.`,
     who: f.who ?? "SEQUOIA",
     actions: [ANSWER("Answer it", `Type anything you want them to do differently, and ${f.employee} picks this up again.`), DROP, ESCALATE],
   }),

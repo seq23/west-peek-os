@@ -47,6 +47,7 @@
     "validate:preview": "node scripts/validate/preview-sends-nowhere.mjs && node scripts/validate/preview-sends-nowhere.mjs --self-test",
     "validate:preview-lane": "node scripts/validate/a-preview-guards-the-send.mjs && node scripts/validate/a-preview-guards-the-send.mjs --self-test",
     "validate:prices": "node scripts/prices/refresh.mjs --offline-check && node scripts/prices/refresh.mjs --self-test",
+    "validate:spent-attempts": "node scripts/validate/spent-attempts-are-terminal.mjs && node scripts/validate/spent-attempts-are-terminal.mjs --self-test",
     "validate:sql": "node scripts/validate/sql-against-schema.mjs && node scripts/validate/sql-against-schema.mjs --self-test",
     "validate:steer-waits": "node scripts/validate/a-steer-waits-for-its-month.mjs && node scripts/validate/a-steer-waits-for-its-month.mjs --self-test",
     "validate:stopped-cards": "node scripts/validate/a-stopped-card-says-why.mjs && node scripts/validate/a-stopped-card-says-why.mjs --self-test",
