@@ -607,8 +607,34 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
   }
   if (sets.length === 0) return json({ error: "invalid_input", detail: "no updatable fields provided" }, { status: 400 });
 
+  /*
+   * PUTTING A CARD BACK GIVES IT ITS ATTEMPTS BACK (18 Sep 2026).
+   *
+   * `claimNextCard` takes OPEN and IN_PROGRESS cards under `MAX_WORK_ATTEMPTS`, so a card walked
+   * back to OPEN with its count still at the cap is UNCLAIMABLE — and, because it is not BLOCKED,
+   * it carries no reason, no doors and no nag. It reads as ordinary open work forever. That is
+   * exactly what happened to "Draft event kit: October workshop with Kirx Diaz", which sat OPEN at
+   * three attempts for fourteen hours while it was the thing the owner most wanted that day.
+   *
+   * THIS HANDLER WAS THE ONE PATH THAT DID NOT DO THIS. Every other door that puts a card back —
+   * `answerBlock` and `reopen` in services/blocks.ts, the preview lane's "send it back", migration
+   * 0173's own backfill — already writes `work_attempts = 0, work_steps = 0, lease_until = NULL`.
+   * `ALLOWED_TRANSITIONS` permits BLOCKED → OPEN and IN_PROGRESS → OPEN from here, and neither
+   * reset the allowance.
+   *
+   * WHY A FRESH ALLOWANCE IS THE RIGHT ANSWER rather than a refusal. A person moving a card back
+   * into the queue is SAYING try this again; handing it back still exhausted would honour the
+   * button and not the intent. The lease goes too — a card put back is not leased to a run that is
+   * no longer happening.
+   *
+   * It is refused at the row as well, by migration 0194: a service that forgets this in future
+   * cannot write the state at all.
+   */
+  const putBack = input.state !== undefined && input.state !== card.state && (input.state === "OPEN" || input.state === "IN_PROGRESS");
+  const allowanceReset = putBack ? ", work_attempts = 0, work_steps = 0, lease_until = NULL" : "";
+
   await env.WP_OS_DB.prepare(
-    `UPDATE work_card SET ${sets.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
+    `UPDATE work_card SET ${sets.join(", ")}${allowanceReset}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
   )
     .bind(card.id, ...binds)
     .run();
@@ -622,7 +648,7 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
     objectId: card.id,
     firmScope: card.firm_scope,
     payload: stateChanged
-      ? { from_state: card.state, to_state: input.state }
+      ? { from_state: card.state, to_state: input.state, allowance_reset: putBack }
       : { fields: Object.keys(input) },
   });
 

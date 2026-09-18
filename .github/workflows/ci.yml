@@ -166,6 +166,20 @@ jobs:
       - name: A brief always ends stated, and never spends a budget it has not got
         run: npm run validate:brief-ends-stated
 
+      # RUNNING OUT OF ATTEMPTS IS A TERMINAL STATE, AND IT HAS TO LOOK LIKE ONE. On 18 Sep 2026
+      # "Draft event kit: October workshop with Kirx Diaz" sat at `state = OPEN, work_attempts = 3`
+      # for fourteen hours. `claimNextCard` takes claimable cards UNDER the ceiling, so nothing could
+      # pick it up; it was not BLOCKED, so none of the block machinery reached it — no reason, no
+      # doors, no nag — and it read as ordinary open work while being the thing the owner most wanted
+      # that day. The same shape appeared in `intelligence_report` the same morning, which is why
+      # this scan is table-driven rather than written about one table. It fails the build if the
+      # ceiling in SQL and the ceiling in TypeScript disagree, if either trigger goes missing, if the
+      # settler stops covering a claimable state or a NULL lease, if the block stops carrying the
+      # failure the row already holds, or if any writer puts a card back without an opinion about the
+      # allowance.
+      - name: Work that runs out of attempts stops, and says why
+        run: npm run validate:spent-attempts
+
       # DAY 200, NOT DAY 1. Measured on 18 Sep against 531 finished cards: the board returned every
       # card the firm had ever made under LIMIT 500 and the page rendered the first fifty of them
       # under a heading that said 496 — 481 unreachable, silently, and an OPEN card older than the
