@@ -88,14 +88,16 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
         // A DEADLINE, so that "the provider never answered" becomes a failure the router can fail
         // over on instead of a run that sits RUNNING for ever. Without it, timeout was a failure
         // mode this system could describe and could not actually produce.
-        signal: AbortSignal.timeout(options.timeoutMs ?? PROVIDER_TIMEOUT_MS),
+        // An explicit adapter override wins, so a test can still prove the timeout path in
+        // milliseconds; production never sets one, so the per-call deadline governs there.
+        signal: AbortSignal.timeout(options.timeoutMs ?? req.deadlineMs ?? PROVIDER_TIMEOUT_MS),
         body: JSON.stringify({
           model: req.model ?? options.model,
           // AN EXPLICIT CEILING, never the provider's own default. Leaving it unset is what
           // truncated every Workers AI run at 256 tokens and failed both partners' briefs on
           // 18 Sep 2026; a default that happens to be generous today is still a number this repo
           // does not control. See `outputCeiling.ts`.
-          max_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
+          max_tokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS),
           // Present only when asked for, so every existing public-content run is byte-identical.
           ...(options.denyDataCollection ? { provider: { data_collection: "deny" } } : {}),
           messages: [

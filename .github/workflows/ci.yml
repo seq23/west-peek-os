@@ -230,6 +230,16 @@ jobs:
       - name: What stopped is counted once, and the posture on screen is the one that routes
         run: npm run validate:stopped-runs
 
+      # Migration 0192. Two provider deadlines in two days were chosen by matching a sentence —
+      # 60s as "comfortably above a long frontier completion", then 180s to match a comment reading
+      # "~3 min" — and both were too short. The owner named the flaw before anyone measured: a
+      # deadline set equal to the expected duration fails half the calls by construction. The
+      # production sample now lives in chainBudget.ts as data, every constant is checked against it,
+      # and the whole chain is bounded so that generous per-rung deadlines cannot add up to a
+      # morning of apparent silence.
+      - name: A run may not spend the morning discovering that nothing answered
+        run: npm run validate:chain-budget
+
       - name: Build client
         run: npm run build
 

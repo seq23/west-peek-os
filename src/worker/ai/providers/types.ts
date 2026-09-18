@@ -45,6 +45,22 @@ export interface ProviderRequest {
   documents?: ProviderDocument[];
   model: string | null;
   capabilityRequirement?: string;
+  /**
+   * THIS CALLER'S OWN ASK, finally reaching the wire.
+   *
+   * `expectedOutputTokens` has always existed — it is what prices the run — and it stopped at the
+   * cost estimate. Every adapter therefore sent the shared ceiling, so a 300-token classification
+   * and an 8000-token brief were indistinguishable to the provider and to the clock. Absent, an
+   * adapter falls back to `PROVIDER_MAX_OUTPUT_TOKENS` exactly as before, so nothing truncates: the
+   * shared ceiling sits above every caller's ask in this repo.
+   */
+  maxOutputTokens?: number;
+  /**
+   * How long THIS attempt may take, from `chainBudget.ts`. Sized to the work asked for and shortened
+   * to whatever is left of the run's total budget for finding a lane that answers. Absent, an
+   * adapter falls back to `PROVIDER_TIMEOUT_MS`, which stays the absolute ceiling either way.
+   */
+  deadlineMs?: number;
 }
 
 export interface ProviderUsage {

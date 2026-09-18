@@ -42,7 +42,7 @@ export function createFireworksAdapter(options: FireworksOptions): ProviderAdapt
           // truncated every Workers AI run at 256 tokens and failed both partners' briefs on
           // 18 Sep 2026; a default that happens to be generous today is still a number this repo
           // does not control. See `outputCeiling.ts`.
-          max_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
+          max_tokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS),
           messages: [
             { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
             { role: "user", content: req.inputs.join("\n\n") },
