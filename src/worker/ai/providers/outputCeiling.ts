@@ -26,9 +26,27 @@
  * `expectedOutputTokens` any caller in this repo asks for and fails if this is below it. The
  * catalogue and the callers can no longer disagree without something going red.
  *
- * WHY THIS NUMBER. 16384 is comfortably above the largest ask in the repo (8000, the daily brief)
- * with room for a caller to grow into, and below the output limit of every model registered here.
- * It is a CEILING, not a target: a 300-token classification still returns 300 tokens and costs what
- * 300 tokens cost. Nothing is paid for headroom that is not used.
+ * WHY THIS NUMBER, AND WHY IT IS NO LONGER 16384 (18 Sep 2026, second pass).
+ *
+ * 16384 was set as "comfortably above the largest ask in the repo (8000, the daily brief)". The ask
+ * was the wrong thing to measure against, and production says so plainly. Across 68 single-rung
+ * brief completions the brief DECLARES 8000 output tokens and actually returns 18,000-27,536:
+ *
+ *     27,536   26,562   26,130   25,899   24,351   23,211   22,969   22,578   22,556 …
+ *
+ * Twelve of the last twenty-one exceeded 16384. So the shared ceiling was itself below what the
+ * firm's single largest recurring job actually writes — the 256-token defect this file was created
+ * to fix, one order of magnitude up and waiting for the first brief to complete on a frontier lane.
+ * It had not bitten yet only because those runs predate the ceiling landing, and every run since
+ * has been failing earlier for other reasons.
+ *
+ * 32768 is 19% above the largest reply this system has ever produced (27,536) and inside the output
+ * limit of the frontier models registered here. It is a CEILING, not a target, and it is no longer
+ * what most calls are given: `wireOutputCeiling` in `chainBudget.ts` sends each caller a figure
+ * derived from its own ask, and this caps that. A 300-token classification is sent 8192 and returns
+ * 300, costing what 300 tokens cost. Nothing is paid for headroom that is not used.
+ *
+ * `validate:chain-budget` checks this against the observed sample and fails if it drops below
+ * something the firm has already written.
  */
-export const PROVIDER_MAX_OUTPUT_TOKENS = 16_384;
+export const PROVIDER_MAX_OUTPUT_TOKENS = 32_768;
