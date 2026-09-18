@@ -68,7 +68,14 @@ async function governedProviderChange(
     if (provider.enabled === 1 && provider.kill_switched !== 1) {
       throw new AiRouteError(409, "already_in_state", "provider is already enabled");
     }
-    await env.WP_OS_DB.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0 WHERE id = ?1").bind(provider.id).run();
+    // TURNING A LANE BACK ON LIFTS A STAND-DOWN TOO (0185). She can park a lane from a blocked
+    // work card; if deliberately enabling it here left `paused_until` in place, the switch would
+    // read on and the lane would still be unusable, with nothing on the page explaining why.
+    await env.WP_OS_DB.prepare(
+      "UPDATE provider_registry SET enabled = 1, kill_switched = 0, paused_until = NULL, paused_reason = NULL, paused_by = NULL WHERE id = ?1",
+    )
+      .bind(provider.id)
+      .run();
   }
 
   await consumeApprovalCard(env, receiptId!, { actorId: actor.firmUserId! });

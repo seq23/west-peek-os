@@ -112,6 +112,17 @@ jobs:
       - name: A block is something she can clear herself
         run: npm run validate:blocks
 
+      # A CARD THAT STOPS ON A FAULT SAYS WHAT REFUSED IT. On 17 Sep 2026 a card failed three times
+      # in fourteen minutes because one lane's account had run out of credit, and the Work page said
+      # "Open · queued — picked up within 5 min" throughout. The reason existed only as
+      # `provider_failure:provider_http_400` on a row in D1 and the fix was editing that database.
+      # This fails the build if an adapter throws a status code away, if a real failure stops
+      # producing a block a partner can read, if a lane she stood down can still be picked, if a
+      # door does not put the card back in the queue, or if the page stops telling a stopped card
+      # from a waiting one.
+      - name: A stopped card says why, and she can fix it from the card
+        run: npm run validate:stopped-cards
+
       # Nothing a partner types may reach no model. Every branch of the sweep's dispatch is read out
       # of the source, so the chain nobody remembers to wire is the one this fails on.
       - name: Everything she says reaches a thinking model
