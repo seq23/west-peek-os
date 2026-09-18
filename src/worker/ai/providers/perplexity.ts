@@ -1,3 +1,4 @@
+import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
 
@@ -93,7 +94,7 @@ export function createPerplexityAdapter(options: PerplexityOptions): ProviderAda
           ],
         }),
       });
-      if (!res.ok) throw new Error(`provider_http_${res.status}`);
+      if (!res.ok) throw await providerHttpError(res);
 
       const body = (await res.json()) as {
         model?: string;

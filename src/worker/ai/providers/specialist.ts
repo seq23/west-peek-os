@@ -1,3 +1,4 @@
+import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 
 /**
@@ -38,7 +39,7 @@ export function createSpecialistAdapter(options: SpecialistOptions): ProviderAda
         headers: { "content-type": "application/json", authorization: `Bearer ${options.apiKey}` },
         body: JSON.stringify({ model: req.model ?? options.model, purpose: req.purpose, inputs: req.inputs }),
       });
-      if (!res.ok) throw new Error(`provider_http_${res.status}`);
+      if (!res.ok) throw await providerHttpError(res);
       const body = (await res.json()) as { text?: string; model?: string; usage?: { input_tokens?: number; output_tokens?: number; cost_usd?: number } };
       if (typeof body.text !== "string") throw new Error("provider_malformed_response");
       return {
