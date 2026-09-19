@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 import { useSelectedFund } from "../lib/selectedFund";
+import { Composition } from "./FundAllocation";
+import { PortfolioAllocation } from "./PortfolioAllocation";
 
 /**
  * Portfolio — the companies the fund owns, and what is happening to them.
@@ -25,11 +27,20 @@ import { useSelectedFund } from "../lib/selectedFund";
  * worse" is how two surfaces end up disagreeing about the same company, which this repo has already
  * paid for once.
  *
- * WHAT IS DELIBERATELY NOT HERE. The fund-allocation ring and the composition bars used to sit on
- * top of this page. Both are about the PLAN — where the fund intends its money to go — and both
- * already live on Fund strategy. Worse, composition is counted from closed opportunities while
- * "what we own" below is counted from booked positions, so the two can print different portfolios on
- * one screen. One page, one answer.
+ * WHAT WE OWN IS ONE LIST, 18 Sep 2026. "What we own" used to be counted from booked positions
+ * alone, and the firm's only investment — Sensori, a $10K SPV that closed before Fund I existed —
+ * has no position, because a position is booked only by executing a transaction and a pre-fund SPV
+ * never walked that ladder. So this page said "The fund holds nothing yet" while Fund strategy's
+ * composition bars, counted from closed opportunities, drew Sensori at 100%. The comment that used
+ * to sit here recorded that disagreement as the reason the bars had been REMOVED from this page —
+ * which hid the symptom and kept the two portfolios. Now `/api/portfolio/holdings` merges closed
+ * investments with booked positions, per company, and says which each one is; the composition bars
+ * and the deployment ring below are computed from the same list. One list, one answer, two pages.
+ *
+ * THE PLAN STAYS ON FUND STRATEGY. "Where the fund goes" — fees, reserves, sleeves as the firm
+ * decided them — is where the fund is GOING. What sits here is where it IS against that plan:
+ * deployed, still to deploy, and the composition of what has been bought. Same ring, same
+ * arithmetic, hosted twice (`AllocationRing`, `@shared/fund/allocation`).
  */
 
 interface CompanyRow {
@@ -98,6 +109,45 @@ interface Performance {
   }>;
   honesty: { holdings_total: number; held_at_cost: number; note: string };
 }
+
+/** One company the firm has invested in, with the facts a partner asks about it. */
+interface Holding {
+  company_id: string;
+  company: string;
+  sector: string | null;
+  kind: string;
+  vehicle: string | null;
+  booked: boolean;
+  fund_id: string | null;
+  fund_name: string | null;
+  position_id: string | null;
+  amount_in: number | null;
+  provisional: boolean;
+  placeholder_note: string | null;
+  invested_on: string | null;
+  ownership_pct: number | null;
+  ownership_as_of: string | null;
+  valuation: { value: number; source: string; basis: string | null; as_of: string } | null;
+  last_check_in: string | null;
+  open_asks: number;
+  open_alerts: number;
+  open_follow_on_reviews: number;
+}
+
+interface Holdings {
+  holdings: Holding[];
+  totals: { companies: number; booked: number; unbooked: number; invested: number; held_at: number; unvalued: number };
+  note: string | null;
+}
+
+/** What kind of investment it is, in words. The enum never reaches the screen. */
+const KIND_WORDS: Record<string, string> = {
+  EARLY_STAGE_PRIMARY: "Early stage",
+  FOLLOW_ON: "Follow-on",
+  SECONDARY_PURCHASE: "Secondary",
+  SECONDARY_SALE: "Sold",
+  OTHER: "Investment",
+};
 
 /** Severity as somebody would say it out loud. The enum never reaches the screen. */
 const SEVERITY_WORDS: Record<string, string> = {
@@ -201,6 +251,7 @@ function Monitoring({ me }: { me: MeResponse }) {
   const cockpit = useApi<Cockpit>("/api/portfolio/cockpit", [nonce]);
   const selected = useSelectedFund();
   const perf = useApi<Performance>(selected.fund ? `/api/funds/${selected.fund.id}/performance` : null, [selected.fund?.id, nonce]);
+  const owned = useApi<Holdings>("/api/portfolio/holdings", [nonce]);
 
   const [companyId, setCompanyId] = useState("");
   const [metricName, setMetricName] = useState("");
@@ -220,6 +271,7 @@ function Monitoring({ me }: { me: MeResponse }) {
   const asks = requests.data?.support_requests ?? [];
   const p = perf.data;
   const currency = p?.fund.currency ?? "USD";
+  const own = owned.data;
   const nameOf = (id: string) => companyList.find((c) => c.id === id)?.canonical_name ?? "a company";
   const labelOf = (key: string | null) => (key ? tracked.find((d) => d.metric_key === key)?.name ?? key : "Something we track");
 
@@ -387,58 +439,90 @@ function Monitoring({ me }: { me: MeResponse }) {
           </div>
         )}
 
-        {p && p.holdings.length > 0 && (
+        {own && own.totals.companies > 0 && (
           <div className="cohort-grid" data-testid="holdings-totals">
             <div className="cohort">
-              <span className="cohort-count">{p.holdings.length}</span>
+              <span className="cohort-count">{own.totals.companies}</span>
               <span className="cohort-label">Companies</span>
-              <span className="cohort-pct">the fund actually owns</span>
+              <span className="cohort-pct">the firm has invested in</span>
             </div>
             <div className="cohort">
-              <span className="cohort-count">{money(p.cost, currency)}</span>
+              <span className="cohort-count">{money(own.totals.invested, currency)}</span>
               <span className="cohort-label">Invested</span>
               <span className="cohort-pct">what was paid for them</span>
             </div>
             <div className="cohort">
-              <span className="cohort-count">{money(p.value, currency)}</span>
+              <span className="cohort-count">{money(own.totals.held_at, currency)}</span>
               <span className="cohort-label">Held at</span>
-              <span className="cohort-pct">what they are carried at today</span>
+              <span className="cohort-pct">
+                {own.totals.unvalued === 0 ? "what they are carried at today" : `${own.totals.unvalued} at what was paid — never valued`}
+              </span>
             </div>
           </div>
         )}
 
         {/* Said before anybody reads the figures above, not discovered after quoting them. */}
-        {p && p.honesty.held_at_cost > 0 && (
+        {own?.note && (
+          <p className="notice notice-gate small" data-testid="holdings-honesty">
+            {own.note}
+          </p>
+        )}
+        {!own?.note && p && p.honesty.held_at_cost > 0 && (
           <p className="notice notice-gate small" data-testid="holdings-honesty">
             {p.honesty.note}
           </p>
         )}
 
         <ul className="card-list small" data-testid="holdings-list">
-          {selected.loading && <li className="state-message" data-testid="holdings-list-loading">Loading…</li>}
-          {(p?.holdings ?? []).map((h) => (
-            <li key={h.position_id} data-testid={`holding-${h.position_id}`}>
-              <strong>{h.company}</strong> — paid {money(h.cost, currency)}, held at {money(h.value, currency)}
-              {h.multiple !== null ? ` (${h.multiple}×)` : ""} ·{" "}
-              <span className="muted">
-                {h.mark_source === "COST"
-                  ? "nobody has valued it since we bought it"
-                  : `${MARK_SOURCES.find((s) => s.key === h.mark_source)?.label.toLowerCase() ?? h.mark_source.toLowerCase().split("_").join(" ")}${h.marked_as_of ? `, as of ${h.marked_as_of}` : ""}`}
-                {h.mark_basis ? ` — ${h.mark_basis}` : ""}
-              </span>
+          {owned.loading && !own && <li className="state-message" data-testid="holdings-list-loading">Loading…</li>}
+          {(own?.holdings ?? []).map((h) => (
+            <li key={h.company_id} data-testid={`holding-${h.company_id}`}>
+              <strong>{h.company}</strong>
+              {" — "}
+              {KIND_WORDS[h.kind] ?? "Investment"}
+              {h.vehicle ? ` via ${h.vehicle}` : ""}
+              {h.invested_on ? `, ${h.invested_on}` : ""}
+              {h.sector ? ` · ${h.sector}` : ""}
+              <div className="muted" data-testid={`holding-facts-${h.company_id}`}>
+                {h.amount_in !== null ? `Paid ${money(h.amount_in, currency)}` : "Amount not recorded"}
+                {h.provisional ? " (stand-in figures)" : ""}
+                {" · "}
+                {h.ownership_pct !== null ? `${h.ownership_pct}% owned` : "ownership not recorded"}
+                {" · "}
+                {h.valuation
+                  ? `held at ${money(h.valuation.value, currency)} — ${(MARK_SOURCES.find((s) => s.key === h.valuation!.source)?.label ?? h.valuation.source).toLowerCase()}, as of ${h.valuation.as_of}${h.valuation.basis ? ` — ${h.valuation.basis}` : ""}`
+                  : h.booked
+                    ? "nobody has valued it since we bought it"
+                    : "no valuation until it is booked"}
+              </div>
+              <div className="muted" data-testid={`holding-standing-${h.company_id}`}>
+                {h.booked
+                  ? `Booked to ${h.fund_name ?? "the fund"}`
+                  : "Recorded as closed; not yet booked to a fund — book the transaction on the company's record, under Dealflow"}
+                {" · "}
+                {h.last_check_in ? `last heard from ${h.last_check_in}` : "never reported a figure"}
+                {h.open_alerts > 0 ? ` · ${h.open_alerts} flagged` : ""}
+                {h.open_asks > 0 ? ` · ${h.open_asks} open ask${h.open_asks === 1 ? "" : "s"}` : ""}
+                {h.open_follow_on_reviews > 0 ? ` · follow-on under review` : ""}
+              </div>
+              {h.provisional && h.placeholder_note && (
+                <div className="muted small" data-testid={`holding-placeholder-${h.company_id}`}>{h.placeholder_note}</div>
+              )}
             </li>
           ))}
-          {p && p.holdings.length === 0 && (
+          {own && own.totals.companies === 0 && (
             <li className="state-empty" data-testid="holdings-empty">
-              The fund holds nothing yet. A holding appears the moment a transaction is executed against a company — that is
-              done on the company's own record, under Dealflow.
+              The firm has invested in nothing yet. A company appears here the moment a deal closes on Dealflow, and is
+              booked to the fund when the transaction is executed on the company's own record.
             </li>
-          )}
-          {!p && !selected.loading && (
-            <li className="state-empty">No fund is recorded, and a holding has to belong to one. Set the fund up on Fund strategy first.</li>
           )}
         </ul>
       </div>
+
+      {/* WHAT THE PORTFOLIO IS. The same two drawings Fund strategy hosts, from the same list as the
+          holdings above — a shape of what has been bought, and where the money sits against the plan. */}
+      <Composition />
+      <PortfolioAllocation fundId={selected.fund?.id ?? null} />
 
       <h3>Say what a holding is worth now</h3>
       <div className="card">
