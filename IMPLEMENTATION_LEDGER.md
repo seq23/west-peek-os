@@ -5612,3 +5612,44 @@ and now requires the DEFECT report and the partner notification.
 
 Counts: vitest **2447/2447** (was 2433; +14), `tsc --noEmit` green, and all **35** `validate:*`
 scripts PASSED with their self-tests, including the new `validate:steer-waits` (18 fixtures).
+
+## 18 Sep 2026 — Every company is in the pipeline; the weekly review is archived
+
+**Owner, on intake:** "all companies should be in the pipeline, no matter how they come in. They are
+top of funnel if they are in the system. From email we have to DECIDE on them." **On the weekly
+review:** "we don't need it anymore."
+
+**What was wrong.** `ROUTE_POLICY.opensRecord` in `services/dealIntake.ts` was true for MANUAL and
+false for EMAIL, NETWORK_OS and SCOUT: the three unattended routes registered the company and raised a
+card saying "then open it at the top of the funnel", and nothing checked that the card did. Read from
+production: Northwind Robotics (22 Aug, created by Wyatt, no card at all) and Vynlo (24 Aug, by email,
+deck read, card DONE) — two companies in the register with no opportunity, one behind a card that
+concluded without the thing it governed. The Companies page called each "Not in the pipeline", calmly.
+
+| File | What changed |
+|---|---|
+| `src/worker/services/dealIntake.ts` | Every route opens an `investment_opportunity` at NEW at arrival. MANUAL under the partner's name, unconditionally (she may open a second). The unattended routes open one only when the company has no live, non-archived opportunity, as the seat that owns the top of the funnel (`aie_wyatt`), with `source_channel` `<channel>:<who>` — `email:` is the board's badge contract — and `relationship_origin` INBOUND / NETWORK / OUTBOUND. `opensRecord` is gone as a concept; `FunnelEntry.opportunity_id` is non-nullable, so TypeScript proves no path returns without one. The card asks for the DECISION, never the admission; the header comment keeps the history of why it was the other way. |
+| `migrations/0197_every_company_is_in_the_pipeline.sql` | Backfill: one opportunity at NEW for every non-MERGED company with nothing non-archived on the board, dated to the company's `created_at`, `source_channel` from the `identity.company_created` event's `via` (`email:backfill`, …) else `backfill`, `created_by` `migration:0197`, one event per row saying why. |
+| `src/client/pages/CompaniesPage.tsx` | The calm label is gone. A row with no deal renders a fault notice (`company-no-deal-<id>`): not on the board, and it should be. |
+| `scripts/validate/every-company-is-in-the-pipeline.mjs` | `validate:companies-in-pipeline`: no switch in the route table, non-nullable return, the exactly-one-per-route pin present and naming every route, no calm label, 0197's shape. Self-tests on the real pre-fix shapes. |
+| `migrations/0198_the_weekly_review_is_archived.sql` | `weekly_mp_review` → RETIRED (the table's terminal status: the tick refuses it on every trigger including a hand-run, the status route answers 409, the machinery list omits it), `next_run_at` NULL, the reason on `pause_reason`. Every `weekly_review` row and deliverable is kept. |
+| `src/worker/services/jobs.ts` | The `weekly_mp_review` dispatcher branch is a named REFUSED outcome rather than a generator, so a hand-edited row finds a refusal rather than the INTELLIGENCE fallthrough. The generator is still reachable by a human from the page's own button, behind `weekly_review.manage`. |
+| `src/client/App.tsx` · `src/shared/help/pagePurpose.ts` · `PagePurposeBlock.tsx` | The nav item is removed with the dated reason; the route stays live; the page says it is archived above its controls. |
+| `src/shared/deliverables/deliverable.ts` · `src/worker/services/deliverables.ts` | `archived` on a kind definition; the unfiltered shelf excludes archived kinds via `archivedDeliverableKinds()` (derived, never a second list); `?kind=weekly_review` still returns every row. |
+| `scripts/validate/an-archived-lane-stays-archived.mjs` | `validate:weekly-review-archived`: replays every migration's `scheduled_job` status writes (seeds read by shape, UPDATEs by `=` and `IN`) and fails if a retired key is ever set back; reads the dispatcher, the nav, the kind and the shelf. Hard-fails on zero retired jobs. |
+
+**Not changed, and why.** `POST /api/companies` (the identity workbench's "New company" form) and a
+capture resolved to a COMPANY still create a register row with no deal. Folding an opportunity into
+those would make Dealflow's "add a deal on an existing company" — the flow every partner uses and
+`e2e/p6` pins at exactly one opportunity — open a second. The register now says loudly when that
+happens, 0197 backfilled every such row, and the four intake routes cannot produce one.
+
+**Tests made false were rewritten stricter.** `tests/dealIntake.test.ts` asserted "nothing has entered
+the pipeline" on three routes; it now asserts exactly one live opportunity per route, its channel, its
+creator and its origin, that a live one is never doubled, that a PASSed or ARCHIVED one does not strand
+the company, and that the route table has no switch under any name. `tests/weeklyReview.test.ts`
+pinned generation; it now pins the retirement (tick and hand-run both refused, status route 409, tick
+never due, nav absent while the route answers, `weekly_review.manage` proven with a cross-firm
+identity, archived kind off the shelf but there by name). `tests/jobs.test.ts` used the review as its
+occurrence-key vehicle and now uses `deck_reading`, asserting the premise that the first occurrence
+SUCCEEDED. `e2e/p57` asserts all four doors land on the board.
