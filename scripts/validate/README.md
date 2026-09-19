@@ -30,3 +30,16 @@ violations) on breach and proves its own detection with a self-test fixture run.
   after 0198 may set it ACTIVE or PAUSED again; the nav does not list it; the tick cannot reach the
   generator; the finished-work shelf hides the kind by default. Hard-fails if it examines zero
   jobs. `--self-test` runs a re-enabling migration and a restored nav item through it.
+- `a-guide-names-what-the-page-emits.mjs` (`npm run validate:page-guides`, 19 Sep 2026) — every
+  page guide in `src/shared/help/pageGuide/` describes the page as it renders today, and nothing
+  else. Against the comment-stripped source of the components each guide names: every band and act
+  testid is one the page emits, every act label is verbatim on the page, every primary control
+  (`btn-strong` / `btn-primary` with a testid) is one of the guide's acts or in `notActs` with a
+  reason, every `elsewhere` link is a route App.tsx renders, every `auto.job` is a `job_key` some
+  migration writes, the rendered answer carries every act in bold as a numbered band list and
+  bulleted acts (never a paragraph), and the retired Meetings trio ("Prepare for a meeting ·
+  Confer with an AI employee · Run a close-out") may not return to `pagePurpose.ts` or the Help
+  tab. Hard-fails on zero guides, files or acts. `--self-test` restores 19 Sep's stale Meetings
+  text as a guide against the real Meetings sources and proves it is caught, plus a missing
+  primary act, a ghost testid, a link to no page, a job no migration writes, a missing file, and a
+  paragraph-shaped answer.

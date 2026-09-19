@@ -5978,3 +5978,83 @@ and the scenario opened against the mandate's size; `p11` and `p64` kept green.
 **Not done, and why.** Per-company reserves (`position_reserve`) subtracting from the headroom
 wait on Portfolio writing them (Deals spec §6). A crosshair tooltip on the pace chart is a
 follow-up; the chart carries its sentence and marker labels.
+
+## "How does this page work" is answered from the page (19 Sep 2026)
+
+**The owner's report.** *"I asked Walter on the Meetings page how this page works now and I can't
+understand anything he said — it's all jumbled. All 'how does this page work' responses need to be
+overhauled to be clean, step by step and formatted; also I think he still has the old page
+instructions."* Her pasted example was one paragraph with three bolded phrases — "Prepare for a
+meeting… Confer with an AI employee during it… Run a close-out…" — the page before #115, #122 and
+#123. Two defects, CONFIRMED: `pageChat.ts` prompted the host with `pagePurpose.ts`, whose Meetings
+entry was that trio, and `PageHostChat.tsx` rendered every turn as one `<p>`, so a numbered answer
+was flattened on its way to the screen. The addition, same day: the Help tab carried a third,
+hand-written description of the same pages.
+
+**The source of truth.** `src/shared/help/pageGuide/` — one guide per page (21: Deals ×7, Firm ×5,
+Learn ×3, Now ×3, Home, Ask, Capture), each naming purpose · what you see top to bottom (bands, by
+testid) · what you can do (acts, by testid and visible label, with does / then / who / primary) ·
+what happens on its own (job keys) · where the rest lives (route keys). `pagePurpose.ts` derives a
+guided page's purpose block from its guide (`fromGuide`) — no second copy. `render.ts` produces the
+one Markdown shape (`renderGuideMarkdown` / `renderGuideAnswer`) and `asksHowThePageWorks` matches
+the question deterministically.
+
+**What was stale, per page** (from four read-only inventories of the components on 287ee44):
+Meetings — the whole purpose block (the trio; "live help" as a panel; no faces, room, Meet band or
+one-card approval); Companies — "See its metrics, claims and history" and "Check where a number came
+from" (those live on Dealflow's What we know face); Portfolio — nothing about Book it / Mark it /
+Reserve for it / Sell, the holdings or the ring; Secondaries — "See pricing against the last round"
+(nothing writes a pricing observation; the page says to confirm); Research — "Export it" (no such
+control); Documents — "Download any version" and "See what has been extracted from it" (no version
+picker, nothing extracted shown); University — "Be marked honestly" (prose, not a control);
+Capture — "Route it to the right machine later" (routing is offered only on the card just kept);
+Ask — the checks / lens gate unmentioned; `deal-math` — described the removed "Why the two agree";
+`reporting` — "Assemble a reporting packet" (the LP page's labels are Start / Put it in front of its
+reviewers / Send it to the investors) and did not say it moved to LP; `browser-tasks` — "Lives
+inside Work" (it does not; only its own route); `market-map` — "Sort by how much each has raised"
+(pre-sorted, no control). Help tab — "Work → Approvals" and "Work → Scheduled Work" (Approvals is
+under Now; jobs are Work's Machinery tab), "New jobs are created PAUSED" (a job is on unless there
+is a stated reason), a hard activation cap (the cap is the whole roster; the duty window is what is
+small), "More / System → Integrations" (Admin), LP's "evidence gate → publish → share" path (only
+revocation is on the page), and OpenRouter audit-era claims. Hosts unchanged; `pageHosts.ts` was
+already true.
+
+**The guard.** `validate:page-guides` (`scripts/validate/a-guide-names-what-the-page-emits.mjs`,
+in CI): 21 guides, 55 source files, 189 acts examined; fails on a named testid or label the page
+does not emit, a primary act the guide omits, a link to no route, a job no migration writes, a
+paragraph-shaped answer, or the retired trio anywhere in `pagePurpose.ts` / `HelpCenterPage.tsx`.
+Hard-fails on zero. Negative proof: `--self-test` restores 19 Sep's Meetings text as a guide
+against the real Meetings sources and it is caught on all three labels and on the omitted primary
+acts. `validate:scans-read-code` accepted it (every read is stripped at the read).
+
+**The answer.** `pageChat.ts`: a "how does this page work" question is answered with the guide
+verbatim as a recorded HOST turn, `detail = 'GUIDE'`, no `ai_run` — nothing to paraphrase, nothing
+to spend. Every other question is prompted with the same guide as the page's only description
+("never name a control that is not in it") and a fixed shape: one line, then numbered steps or
+bullets, controls in bold, at most twelve lines, no question back. `PageHostChat` paints a host's
+turn through `MarkdownLite` (shared parser `shared/help/markdownLite.ts`; headings one weight up,
+lists real `<ol>`/`<ul>`, at the thread's own size).
+
+**The Help tab.** `HelpCenterPage.tsx`: THE PAGES first — one section per page from the same guide,
+grouped as the rail, host named, `Open <page> →`, searchable by band and control; then HOW THE FIRM
+WORKS — the firm-level topics brought current, structured as lists, each pointing at the code that
+enforces it (`Where this is enforced`). Page-specific topics that duplicated a guide (intelligence,
+investing, LP, portfolio, notifications) removed. `How everything works →` on a page writes
+`wpos.help.focus` and Help scrolls to that page's section.
+
+**Proof.** `tests/pageGuide.test.ts` (17: every hosted / Now / pinned page has a guide, no guide
+for a dead route, titles are App.tsx's labels, purpose block equals guide, writing rules, the
+Meetings guide names the faces / room / Meet / one approval and never the trio, the rendered answer
+is one paragraph + one ordered list of bands + bulleted acts every one in bold with the human act
+first and no line over 300 characters, question detection both ways, the parser);
+`tests/pageChat.test.ts` (+2: over HTTP, Walter's answer on Meetings is the guide, lists, no trio,
+recorded as GUIDE with `ai_run_id NULL`; a question about one control still runs the model);
+`e2e/p72-how-this-page-works.spec.ts` (ask Walter → real `<ol>` of ≥7 bands, `<ul>` acts, >10
+bold controls, <4 paragraphs, current controls present, trio absent, no trailing question; Help →
+Meetings section, deep link lands in view, every room's section attached, search narrows on
+"hold to talk", the door back). Design-token, css-class, heading-scale and brand scans green.
+
+**Home.** Its guide's purpose and headline acts are written to `design/HOME_DESIGN.md`; its bands
+and act testids are the page as it renders today, because the validator holds the file to the
+page. When `design/home-overhaul` lands, the validator fails until that branch updates
+`pageGuide/home.ts` — the contract working, said in the file's header.
