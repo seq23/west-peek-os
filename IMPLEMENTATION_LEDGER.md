@@ -5824,7 +5824,7 @@ deployed origin, Cloudflare Access allowing the add-on's iframe (the same sessio
 Phase Meet `meet_conference_id` on `meeting` so the panel can be opened by conference rather than by
 meeting id.
 
-## The morning brief arrives (19 Sep 2026)
+## The morning brief is on demand, on Sonnet, any day (19 Sep 2026)
 
 **What production showed, CONFIRMED from the rows.** Saturday 19 Sep: no `intelligence_report` row
 for either partner between 06:15 and 09:29 ET; every scheduled tick read sources, because both
@@ -5837,53 +5837,77 @@ times each: twelve calls, all to `@cf/ibm-granite/granite-4.0-h-micro` under the
 every one exactly 256 output tokens; Sonnet — 38 of 38 accepted briefs 20 Aug–17 Sep — was never
 reached because a truncated reply is a completed run to the chain.
 
-**The decision: AUTO every morning PLUS on demand** (the model already in place, kept). Evidence: 44
-weekday briefs owed 20 Aug–18 Sep, 38 arrived (86%); 62 of 67 synthesis calls were the schedule's,
-5 were a person's button (3 hers, 3 of those on days the schedule had not delivered); her three
-complaints in 30 days (22 Aug, 18 Sep, 19 Sep) were each about the AUTOMATIC brief not being there,
-including a Saturday. On-demand-only was rejected: it converts every morning into a 4–5 minute wait
-she must start herself, and the evidence says she reads what arrives and presses only when it does
-not. Cost, measured: $0.12–$0.30 a brief on Sonnet (mean $0.20, 51 runs), ~$0.41/day for both
-partners = 16% of the $2.50 cap; the brief lane was $6.70 of September's $9.61 to the 18th. The
-free lanes have written zero acceptable briefs in thirteen attempts, so the write call now leads on
-its routing pin (`leadOnPolicy`); FREE_ONLY still stops it with a named reason.
+**The evidence for the delivery model, kept as the record.** 44 weekday briefs owed 20 Aug–18 Sep,
+38 arrived (86%); 62 of 67 synthesis calls were the schedule's, 5 a person's press; her three
+complaints in 30 days were each about the automatic brief not being there. Cost, measured: $0.12–
+$0.30 a brief on Sonnet (mean $0.20, 51 runs); the brief lane was $6.70 of September's $9.61 to the
+18th. The agent's call from that evidence was auto + on demand.
 
-**Built.** Migration 0211 (weekends on for stored profiles; `requested_at`, `requested_by`,
-`retry_after` on the row; the sweep job renamed for what it does). `serveBrief` on EVERY tick, both
-`runDueJobs` branches, walking every ready stage inside one invocation — a brief owed at 06:15 is
-READY by ~06:20 (gather ~2s, market ~10s, write 98–281s measured) and a press is picked up within a
-minute; the sweep job builds nothing. The button is a request: `POST /generate` records it and
-returns the named state at once (202; 200 `already: true` while moving); `GET /status` returns the
-state from `shared/intelligence/briefRunState.ts` — arrived · requested · running · queued ·
-retrying · failed_out · scheduled · off · stalled — each with a sentence, what happens next, elapsed
-against the MEASURED usual (median of the last 30 completed write calls + 75s), and the button's
-label and enabled flag. A FAILED row carries `retry_after` (+20 min, from the caller's clock) and a
-notification addressed to her — once for "retrying at HH:MM", once for "nothing more today; tomorrow
-at 06:15". The write lease is derived from `CHAIN_BUDGET_MS` (two walks + 4 min = 20). `stage_at`,
-`started_at`, `retry_after` are written from the caller's clock, never SQLite's — a requested row
-was being swept as "abandoned" under a test clock because the two disagreed. The health board gains
-the 08:00 sentinel: past `earliest_start + 105 min`, no row for today is DOWN "no brief and no
-explanation". `expectedOutputTokens` 8,000 → 24,000 (measured median 17,415, p90 22,969, max
-27,536). Home's band: state line with live dot and progress track, the examined line (built at · by
-whom · items → events → considered · model · requested by you at), one button with the states above.
+**THE OWNER'S DECISION, which overrides it — verbatim:** *"fix why the free tiers are failing! …
+Make the briefs on demand and make them use Sonnet — that is the new solution. On demand + Sonnet
+for briefs only. On demand any day of the week!"*
+
+**Built.** Migration 0211 (`0211_the_brief_is_on_demand_on_sonnet`): the schedule's retirement
+recorded as a RETIRED `scheduled_job` row (`morning_brief_schedule`, the 0198 precedent — refused
+on every trigger, 409 on the routes, never re-opened by a seed); `requested_at`, `requested_by`,
+`retry_after` on the row; the sweep job renamed for what it does. The every-morning path
+(`runDailyForAll`, `briefsOwedToday`, the weekend and earliest-hour gates) is gone; `weekends` and
+`earliest_start_local` no longer bear on a brief and are left as they are. The tick — every minute —
+ADVANCES only rows with `requested_at`, every ready stage inside one invocation; a press is picked up
+within a minute and READY about four minutes later (gather ~2s, market ~10s, write 98–281s measured).
+`POST /generate` records the press and returns the named state at once (202; 200 `already: true`
+while moving); `GET /status` returns the state from `shared/intelligence/briefRunState.ts` — arrived ·
+requested · running · queued · retrying · failed_out · idle · stalled — each with a sentence, what
+happens next, elapsed against the MEASURED usual (median of the last 30 completed write calls + 75s),
+and the button's label and enabled flag. An idle morning reads "No brief today yet. The last one
+arrived Thursday 7:42 AM." A FAILED row carries `retry_after` (+20 min, from the caller's clock);
+the clock retries the same press up to three attempts, then "Nothing more is tried automatically.
+Press the button to try again now." — with one notice for retrying and one WARNING for failed-out.
+The health board reads OK with "last brief N days ago · on demand" for an unrequested morning and
+carries no sentinel.
+
+**Sonnet for briefs only.** `budgetContext.requireModel: BRIEF_MODEL` ("anthropic/claude-sonnet-5")
+reduces the router's candidates to lanes serving that model before any ordering — no free lane
+assembled, no other model as a fallback, the same model at its own vendor as the outage fallback,
+a named PREFLIGHT stop if none serves it (FREE_ONLY included). No other caller pins; every other
+lane keeps the free-first ladder, and `validate:brief-lands` fails if a second caller pins.
+
+**Why the free tiers were failing — fixed at the router, for every lane.** (a) Every model-lane
+adapter maps its vendor's finish reason (`finish_reason: length` / `stop_reason: max_tokens` /
+`finishReason: MAX_TOKENS`) through `providers/finishReason.ts`; `executeAttempt` turns a capped
+reply — the vendor says so, or the tokens used reached the cap sent — into `truncated_reply:`, a
+FAILED attempt that hands on. (b) The cap on the wire is `wireOutputCeiling(expectedOutputTokens)`,
+never a platform default — pinned by test. (c) A caller's verifier runs INSIDE the walk
+(`RunAiInput.verify`); a refusal is `verifier_rejected:` and the chain moves to the next rung instead
+of the caller asking the same lane again; the brief passes its parse-and-verify as `verify`. Both
+classes are `isUnservedReply`, engage every fallback, and arm no back-off (the lane is healthy; the
+reply is not). (d) A hung rung is aborted on its attempt deadline (450 s for the brief's ask,
+`MAX_ATTEMPT_MS`) and the walk moves on — proven with a fake lane that never answers, under a
+tests-only deadline override no production caller may set. `expectedOutputTokens` 8,000 → 24,000
+(measured median 17,415, p90 22,969, max 27,536). The write lease is derived from `CHAIN_BUDGET_MS`.
+`stage_at`, `started_at`, `retry_after` are written from the caller's clock, never SQLite's. A
+requested row waiting its turn behind another partner's build is queued, not abandoned.
 
 **Also in this PR (coordinator's addition).** Meetings: a SCHEDULED meeting whose time + 90 min has
 passed is never "Coming up"; synced rows settle to HELD ("held, nothing on the record") from the sync
 and the list route; one shared split (`shared/meetings/pastMeetings.ts`) for server and page.
 
-**Proof.** `tests/briefRunState.test.ts` (224 row/schedule combinations, one arrival), 
-`tests/briefServed.test.ts` (the tick walks a Saturday brief to READY; a request is served on a day
-the schedule skips; a second press is refused from the row; a lane forced to fail leaves the reason,
-the retry time and the notice; the third failure says nothing more today; the numbers are derived),
-`tests/pastMeetings.test.ts`; strengthened, never loosened: `jobs.test.ts` (the sweep job never
-builds a brief; the tick's `_morning_brief` line), `briefTick.test.ts` (the retry waits for
-`retry_after`), `dailyIntelligence.test.ts` (weekends on unless a partner says otherwise, both
-directions), `briefTerminality.test.ts`, `meetingsLayout.test.ts`. `validate:brief-lands` (new,
-311 items, nine restored pre-fix shapes) plus `validate:brief-arrives` and `validate:brief-ends-stated`
-strengthened. `e2e/p62`: press → named state → second press refused → tick → arrived or the stated
-reason with its retry time.
+**Proof.** `tests/freeTierWalksOn.test.ts` (a capped reply, a cap-by-count reply, a verifier refusal
+each walk to the paid lane and say why in one word; a pinned lane with a refused reply STOPS with the
+verifier's reason; a hung lane is aborted and the walk moves on; the cap on the wire ≥ the ask),
+`tests/briefRunState.test.ts` (224 row combinations, one arrival; idle carries the last brief),
+`tests/briefServed.test.ts` (the clock starts nothing on a Saturday; a request is served any day
+whatever the profile says; a second press refused from the row; a lane forced to fail → reason,
+`retry_after`, notice; third failure → nothing more; the retirement row), `tests/pastMeetings.test.ts`,
+`tests/cheapoAndFreeLanes.test.ts` (pin with a control; an unserved pin stops by name); strengthened,
+never loosened: `jobs.test.ts`, `briefTick.test.ts`, `dailyIntelligence.test.ts`,
+`briefTerminality.test.ts`, `workSweep.test.ts`, `meetingsLayout.test.ts`. `validate:brief-lands`
+(542 items; fourteen restored pre-fix shapes), `validate:brief-arrives` and
+`validate:brief-ends-stated` strengthened. `e2e/p62` (press → named state → second press refused →
+tick → arrived or the stated reason) and `e2e/deals-surfaces.home-brief.spec.ts` (the band on the
+shared measured contract at five widths, idle and terminal).
 
-**Not done, and why.** Sonnet's reply is ~75% reasoning tokens (out_len ≈ 21k chars ≈ 6k tokens
-against 17k output tokens); a smaller thinking budget would cut the brief's cost 2–3× — a quality
-decision for the owner, recorded here, not taken. A cheaper paid long-form lane is UNPROVEN on this
-report shape; the one measured truth is Sonnet 38/38, free 0/13.
+**Not done, and why.** The band's visual design is Phase HOME_DESIGN's (a design agent's canvas
+awaits the owner's approval); the band here is functional and on-token. Sonnet's reply is ~75%
+reasoning tokens; a smaller thinking budget would cut the per-brief cost 2–3× — a quality decision
+for the owner, recorded, not taken.
