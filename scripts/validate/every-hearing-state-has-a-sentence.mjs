@@ -56,6 +56,7 @@ export const OWNED_PHRASES = ["transcribed by Google", "does not hear it live", 
 const SAMPLE_FACTS = {
   source: "google_calendar",
   meet_link: "https://meet.google.com/abc-defg-hij",
+  call_ended_at: null,
   firm_default_on: true,
   ingest_every_minutes: 60,
   meet: { state: "INGESTED", conference_ended_at: "2026-09-19T15:02:00Z", turns: 12, participants: 2, read_at: "2026-09-19T15:48:00Z", detail: "x" },

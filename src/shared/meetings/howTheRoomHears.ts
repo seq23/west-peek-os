@@ -40,6 +40,13 @@ export interface HearingFacts {
   firm_default_on: boolean;
   /** How often the Meet ingest runs, from its `scheduled_job` row. Null when the row is missing. */
   ingest_every_minutes: number | null;
+  /**
+   * THE END-OF-CALL SIGNAL (the contract with feat/meet-media-live, #131): `meeting.call_ended_at`,
+   * ISO, null until the call ends; first writer wins between the live listener's ENDED report and
+   * the ended-call ingest from Google's end time. On a head where that column does not exist yet it
+   * is null here and Google's end time on the inbox row (`meet.conference_ended_at`) stands in.
+   */
+  call_ended_at: string | null;
   /** The Meet inbox row for this meeting, once the ended call has been heard about. */
   meet: {
     state: MeetInboxState;
@@ -240,6 +247,11 @@ export function hearing(f: HearingFacts, now: HearingNow): Hearing {
     live_sentence: path ? LIVE_PATH_SENTENCES[path] : null,
     channel: isMeetCall(f) ? "Google Meet call" : "In person or by phone",
   };
+}
+
+/** Is the call over? The named signal first, Google's end time on the inbox row as the stand-in. */
+export function callIsOver(f: Pick<HearingFacts, "call_ended_at" | "meet">): boolean {
+  return Boolean(f.call_ended_at) || Boolean(f.meet?.conference_ended_at);
 }
 
 /** What `Join on Meet` does and does not do — one line, said beside the button and in its tooltip. */

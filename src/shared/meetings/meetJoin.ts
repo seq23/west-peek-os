@@ -19,10 +19,9 @@
  *                              opens the Meet and lets the add-on open `#/room/<id>` in its panel.
  *   `liveMeetPathAvailable`  — true for a meeting the Media API path can join; the laptop-mic
  *                              control then yields to it and says so.
- *   `CALL_ENDED_SIGNAL`      — the field the room reads to know the call is over: the Meet inbox
- *                              row's `conference_ended_at`, served as `facts.meet.conference_ended_at`
- *                              by `GET /api/meetings/:id/hearing`. The sibling's live path writes the
- *                              same field when it sees the conference end.
+ *   `CALL_ENDED_SIGNAL`      — the column the room reads to know the call is over:
+ *                              `meeting.call_ended_at` (#131's), served as `facts.call_ended_at`;
+ *                              until that column lands, Google's end time on the inbox row stands in.
  */
 
 export const JOIN_MODES = ["inside", "beside"] as const;
@@ -48,7 +47,14 @@ export function liveMeetPathAvailable(_meeting: { id: string; meet_link: string 
   return false;
 }
 
-export const CALL_ENDED_SIGNAL = "facts.meet.conference_ended_at" as const;
+/**
+ * The end-of-call signal, agreed with #131: `meeting.call_ended_at` (ISO, null until the call ends;
+ * first writer wins between the live listener's ENDED report and the ended-call ingest from
+ * Google's end time), served as `facts.call_ended_at` by `GET /api/meetings/:id/hearing`. On a head
+ * without that column, Google's end time on the inbox row (`facts.meet.conference_ended_at`) stands
+ * in — `callIsOver` in howTheRoomHears.ts reads both.
+ */
+export const CALL_ENDED_SIGNAL = "meeting.call_ended_at" as const;
 
 /** The laptop-mic path onto a Meet call, in the owner's words and the note beside the control. */
 export const LAPTOP_MIC_LABEL = "Use my laptop mic for this Meet call";

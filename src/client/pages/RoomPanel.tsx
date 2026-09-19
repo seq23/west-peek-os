@@ -2,7 +2,7 @@ import { AllocationRing } from "./AllocationRing";
 import type { RingSlice } from "@shared/fund/allocation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
-import { hearing as hearingOf, type HearingFacts } from "@shared/meetings/howTheRoomHears";
+import { callIsOver, hearing as hearingOf, type HearingFacts } from "@shared/meetings/howTheRoomHears";
 import { LAPTOP_MIC_NOTE, RETURN_LABEL, RETURN_LINE, meetingFaceHash } from "@shared/meetings/meetJoin";
 import { CallDoors } from "./CallDoors";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
@@ -137,11 +137,12 @@ export function RoomPanel({ meetingId, standalone = false, aside, armLaptopMic =
   const facts = hearingRead.data?.facts ?? null;
   /*
    * RETURN WHEN IT IS OVER (owner, 19 Sep 2026: "we can return when it's over"). The call is over
-   * when the Meet inbox row carries `conference_ended_at` (`CALL_ENDED_SIGNAL` — Google reported the
-   * end, or the sibling's live path saw it), or the meeting is HELD. The narrow room then shows one
-   * primary that returns her to the full After face in the app.
+   * when `meeting.call_ended_at` is set (`CALL_ENDED_SIGNAL`, #131's column — the live listener's
+   * ENDED report or Google's end time, first writer wins), or, on a head without that column, when
+   * the Meet inbox row carries Google's `conference_ended_at`; or the meeting is HELD. The narrow
+   * room then shows one primary that returns her to the full After face in the app.
    */
-  const over = Boolean(facts?.meet?.conference_ended_at) || state?.meeting.status === "HELD";
+  const over = (facts ? callIsOver(facts) : false) || state?.meeting.status === "HELD";
   const goToAfter = () => {
     window.location.hash = meetingFaceHash(meetingId, "after");
   };

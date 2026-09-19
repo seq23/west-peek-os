@@ -58,6 +58,7 @@ afterAll(async () => {
 const manual: HearingFacts = {
   source: "manual",
   meet_link: null,
+  call_ended_at: null,
   firm_default_on: true,
   ingest_every_minutes: 60,
   meet: null,
@@ -298,6 +299,19 @@ describe("GET /api/meetings/:id/hearing — the facts come from the rows", () =>
     expect(after.body.sources.map((s) => s.kind)).toEqual(["laptop_capture"]);
     // A chunk cannot claim to be anything else.
     expect((await req(`/api/meetings/${id}/capture/chunk`, "POST", { audio_base64: "AAAA", sequence: 2, content_type: "audio/webm", via: "meet_media" })).status).toBe(400);
+  });
+
+  it("the end-of-call signal: #131's meeting.call_ended_at when the column exists, Google's end time on the inbox row until then", async () => {
+    const { callIsOver } = await import("../src/shared/meetings/howTheRoomHears");
+    expect(callIsOver({ call_ended_at: null, meet: null })).toBe(false);
+    expect(callIsOver({ call_ended_at: "2026-09-19T15:02:00Z", meet: null })).toBe(true);
+    expect(callIsOver({ call_ended_at: null, meet: inbox("RECEIVED") })).toBe(true);
+    const created = await call<{ id: string }>("/api/meetings", "POST", { title: "Ended?", meeting_type: "FOUNDER" });
+    const facts = (await call<{ facts: HearingFacts }>(`/api/meetings/${created.body.id}/hearing`)).body.facts;
+    // On this head the column is not there: the read says null rather than throwing or guessing.
+    const col = await t.db.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('meeting') WHERE name = 'call_ended_at'").first<{ n: number }>();
+    expect(facts.call_ended_at).toBe(Number(col?.n) > 0 ? facts.call_ended_at : null);
+    expect(callIsOver(facts)).toBe(false);
   });
 
   it("is not served for a meeting the reader may not see", async () => {

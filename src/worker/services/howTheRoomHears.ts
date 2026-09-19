@@ -38,6 +38,8 @@ interface MeetingHearingRow {
   meet_link: string | null;
   firm_scope: string;
   privacy_label: string;
+  /** #131's column; not selected on this head (see `hearingFacts`). */
+  call_ended_at?: string | null;
 }
 
 interface InboxRowSlim {
@@ -79,6 +81,15 @@ export async function hearingFacts(env: Env, meeting: MeetingHearingRow): Promis
     env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1 AND note_type = 'MANUAL'").bind(meeting.id).first<{ n: number }>(),
   ]);
   return {
+    /*
+     * THE END-OF-CALL SIGNAL IS #131's COLUMN, `meeting.call_ended_at`, and this head does not have
+     * it: `validate:sql` refuses a statement against a column no migration here creates, and a
+     * guarded read would be a query the scan cannot see — the wrong kind of quiet. So the field is
+     * served null here with its name on the contract, `callIsOver` already reads it first, and
+     * #131 (which rebases onto this) replaces this line with the one-column read once its
+     * migration lands. Until then Google's end time on the inbox row stands in, below.
+     */
+    call_ended_at: meeting.call_ended_at ?? null,
     source: meeting.source === "google_calendar" ? "google_calendar" : "manual",
     meet_link: meeting.meet_link ?? null,
     firm_default_on: policy?.active === 1,

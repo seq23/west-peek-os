@@ -157,11 +157,16 @@ only path.
   in progress from the event (migration 0214, `markMeetingStarted`).
 - **Named hooks in `src/shared/meetings/meetJoin.ts`** for `feat/meet-media-live`:
   `meetAddonInstalled()`, `liveMeetPathAvailable(meeting)` (the laptop-mic control yields to it and
-  says so), and `CALL_ENDED_SIGNAL = facts.meet.conference_ended_at` — the Meet inbox row's
-  `conference_ended_at`, served by `GET /api/meetings/:id/hearing`. The narrow room shows "Open what
-  came out of it" (back to `#/meetings?open=<id>&face=after`) once that field is set or the meeting
-  is HELD. The live path writes the same column when it sees the conference end, and calls
-  `markMeetingStarted(env, actor, id, "conference_started", at)` when it sees it start.
+  says so), and `CALL_ENDED_SIGNAL = meeting.call_ended_at` — #131's column (ISO, null until the
+  call ends; first writer wins between the live listener's ENDED report and the ended-call ingest
+  from Google's end time), served as `facts.call_ended_at` by `GET /api/meetings/:id/hearing`. On
+  this head the column does not exist, so the field is served null and Google's end time on the
+  inbox row (`facts.meet.conference_ended_at`) stands in — `callIsOver` reads both. The narrow room
+  shows "Open what came out of it" (back to `#/meetings?open=<id>&face=after`; an unknown `face`
+  lands on Before) once the call is over or the meeting is HELD. The live path calls
+  `markMeetingStarted(env, actor, id, "conference_started", at)` when it sees it start. The add-on
+  panel renders `<RoomPanel meetingId standalone />` — the same component as `#/room/<id>` — so the
+  narrow layout applies inside its 360px shell with no further wiring.
 - **`howTheRoomHears.ts` keeps its shape** — facts in, one named state with one sentence and one
   chip out — so the live path's `MEET_LIVE_*` states are added as rows, not as a rewrite.
 
