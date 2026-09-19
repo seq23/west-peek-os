@@ -258,6 +258,9 @@ async function seedCommissionedFund(request: APIRequestContext): Promise<{ id: s
  */
 async function chooseFund(page: Page, fund: { id: string; name: string }): Promise<void> {
   await gotoSurface(page, "Thesis");
+  // The picker renders nothing until the fund list has loaded; asking which shape it took before
+  // then always answers "a line of text".
+  await expect(page.getByTestId("fund-picker")).toBeVisible();
   const select = page.getByTestId("fund-select");
   if (await select.isVisible().catch(() => false)) {
     await select.selectOption(fund.id);
