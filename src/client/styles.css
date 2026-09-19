@@ -5502,7 +5502,7 @@ body {
 /* ── Phase C: the live room (RoomPanel.tsx). Functional and on-token; Phase D redesigns. ── */
 .room { display: flex; flex-direction: column; gap: var(--space-md); }
 .room-standalone { max-width: 720px; margin: 0 auto; padding: var(--space-lg); }
-.room-head h2 { margin: 0; font-size: var(--text-xl); }
+.room-head h3 { margin: 0; font-size: var(--text-xl); }
 .room-line { display: flex; flex-direction: column; gap: var(--space-xs); }
 .room-status { font-size: var(--text-sm); }
 .room-consent {

@@ -116,7 +116,7 @@ export function RoomPanel({ meetingId, standalone = false }: { meetingId: string
     <section className={standalone ? "room room-standalone" : "room"} data-testid={`room-${meetingId}`}>
       {standalone && state && (
         <div className="room-head">
-          <h2>{state.meeting.title}</h2>
+          <h3>{state.meeting.title}</h3>
           <span className="muted small">{state.meeting.meeting_type} · {state.meeting.status}</span>
         </div>
       )}
@@ -277,13 +277,13 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
         {recording ? (
           <button type="button" data-testid="capture-stop" onClick={stop}>Stop</button>
         ) : (
+          /* Open only when the two things the prompt cannot supply are true: a transcription
+             service, and the Managing Partner's policy. Consent is what the prompt collects. */
           <button
             type="button"
             className="btn-strong"
             data-testid="capture-start"
             title={gateWords}
-            // Open only when the two things the prompt cannot supply are true: a transcription
-            // service, and the Managing Partner's policy. Consent is what the prompt collects.
             disabled={!state?.transcription_available || !state?.recording_policy_active || prompting || recording}
             onClick={() => setPrompting(true)}
           >
