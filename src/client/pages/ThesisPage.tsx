@@ -347,7 +347,10 @@ export function ThesisPage({ me }: { me: MeResponse }) {
 
           {latest && (
             // The date is `effective_from` as the version records it — never today, never a stand-in.
-            <p className="thesis-doc-stamp" data-testid="thesis-version">
+            // `small` in the banner's own ink. `.thesis-doc-stamp` set --wp-orange-deeper on the
+            // orange field (2.34:1) and `.surface-body .mono` sets --wp-ink-2 (2.83:1); the measured
+            // spec found both, so the stamp wears neither.
+            <p className="small" data-testid="thesis-version">
               <span>Version {latest.version_no}</span>
               <span>effective {latest.effective_from}</span>
             </p>
@@ -592,7 +595,9 @@ export function ThesisPage({ me }: { me: MeResponse }) {
             <button type="button" className="btn-ghost" disabled={writing} data-testid="thesis-write" onClick={() => void writeStatement()}>
               {writing ? "Writing…" : "Write it for me"}
             </button>
-            <button type="button" className="link-button" data-testid="thesis-print" onClick={() => window.print()}>
+            {/* `btn-ghost`, not `link-button`: a `button.link-button` is 23px tall on a desk (the
+                compact look is deliberate there) and the measured contract is 24px at every width. */}
+            <button type="button" className="btn-ghost" data-testid="thesis-print" onClick={() => window.print()}>
               Print or save as PDF
             </button>
           </div>
@@ -698,7 +703,7 @@ function ConstructionCard({ fundId, mandate }: { fundId: string; mandate: Mandat
         <h3>Construction</h3>
         <button
           type="button"
-          className="link-button"
+          className="btn-ghost"
           data-testid="construction-edit-toggle"
           aria-expanded={editing}
           onClick={() => {

@@ -75,7 +75,9 @@ export function FundPicker({ selected, label }: { selected: SelectedFund; label?
         {!adding && (
           <button
             type="button"
-            className="link-button"
+            // Quiet, but a real target: `button.link-button` measures 23px tall on a desk, one
+            // short of the 24px floor the Deals surfaces are held to (e2e/deals-surfaces.spec.ts).
+            className="btn-ghost"
             data-testid="fund-add-toggle"
             onClick={() => {
               setMessage(null);
