@@ -710,6 +710,9 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- a card that is stumbling from a card that is merely queued — which it could not do on
             -- 17 Sep, when three failures in fourteen minutes all read "Open · queued".
             wc.work_last_failure, wc.work_last_failure_at,
+            -- WHICH CHAIN WORKS IT. Served so the page can show an ARTIFACT card's build row
+            -- (19 Sep 2026); the board read every column but this one and the row never rendered.
+            wc.kind,
             COALESCE(e.name, u.full_name) AS owner_name,
             e.role AS owner_role
        FROM work_card wc

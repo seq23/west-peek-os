@@ -1,6 +1,5 @@
 import { expect, test } from "@playwright/test";
 import { figuresOf, numbersIn, textOfDocx, textOfPptx } from "../src/shared/artifacts/render";
-import { provisionLocalD1 } from "./support/provision";
 
 /**
  * Artifacts on demand (owner, 19 Sep 2026), against local `wrangler dev`:
@@ -24,10 +23,6 @@ const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
 
 test("door A: 'make this a dashboard' in the room → link block → ready → opens under Documents → exports parse → on the shelf", async ({ page, request }) => {
   const marker = `E2E-ART-${Date.now()}`;
-  // The room's host answers; Walter is seeded INACTIVE on a fresh firm and an unemployed host
-  // cannot act, so he is employed first — the rule under test is the build, not the seat.
-  provisionLocalD1("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_walter';");
-
   // A company with a deal, and a meeting about it.
   const co = await request.post("/api/companies", { headers: MP, data: { canonical_name: `${marker} Sensori` } });
   expect(co.status(), await co.text()).toBe(201);
@@ -142,8 +137,6 @@ test("door A: 'make this a dashboard' in the room → link block → ready → o
 
 test("door B: 'Wyatt, build me a dashboard on <company>' is an ARTIFACT card; worked with no model reachable it stops and says why, and the card carries the artifact row", async ({ page, request }) => {
   const marker = `E2E-ARTCARD-${Date.now()}`;
-  // Wyatt is seeded INACTIVE on a fresh firm; a card he owns is only worked once he is employed.
-  provisionLocalD1("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_wyatt';");
   const co = await request.post("/api/companies", { headers: MP, data: { canonical_name: `${marker} Northwind` } });
   expect(co.status()).toBe(201);
   const companyId = ((await co.json()) as { id: string }).id;
