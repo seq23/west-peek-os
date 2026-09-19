@@ -12,7 +12,7 @@
     "Then in any Meet: Activities › West Peek OS. Org-wide install is a private Marketplace listing (Admin console › Apps › Google Workspace Marketplace apps), optional.",
     "",
     "The side panel is behind Cloudflare Access on os.joinwestpeek.com and loads with HER session cookie: the Access",
-    "application must send it with SameSite=None (Zero Trust › Access › Applications › west-peek-os › Settings › Cookie settings › SameSite attribute: None)."
+    "application sends it with SameSite=None (set 19 Sep 2026 via the API; HttpOnly kept). If that is ever reset, the panel loads as the login page."
   ],
   "addOns": {
     "common": {
