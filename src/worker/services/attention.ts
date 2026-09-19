@@ -122,3 +122,39 @@ export async function handleClearSilencedAttention(ctx: RouteContext): Promise<R
   });
   return json({ ok: true });
 }
+
+// === Home overhaul ===
+/*
+ * QUIET SEVERAL AT ONCE (design/HOME_DESIGN.md §3.3). `I know — quiet selected for a week` and
+ * `Stop telling me` on the Waiting band's select bar land here as one request. Each item still
+ * carries its exact wording (`signature`), so the rule that a re-worded problem is said again holds
+ * for a batch exactly as it does for one. Zero items is a refusal, for the reason `markMany` gives.
+ */
+const dismissManySchema = z.object({
+  items: z.array(z.object({ key: z.string().trim().min(1).max(200), signature: z.string().trim().min(1).max(400) })).min(1, "at least one item").max(100),
+  kind: z.enum(["ACKNOWLEDGED", "DISMISSED"]).default("ACKNOWLEDGED"),
+});
+
+export async function handleDismissManyAttention(ctx: RouteContext): Promise<Response> {
+  const parsed = dismissManySchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", detail: "items: a non-empty list of {key, signature}", issues: parsed.error.issues }, { status: 400 });
+  const permanent = parsed.data.kind === "DISMISSED" ? 1 : 0;
+  for (const item of parsed.data.items) {
+    await ctx.env.WP_OS_DB.prepare(
+      `INSERT INTO attention_dismissal (id, item_key, signature, kind, permanent, dismissed_by, firm_scope)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    )
+      .bind(`atd_${crypto.randomUUID()}`, item.key, item.signature, parsed.data.kind, permanent, ctx.identity!.id, "west-peek")
+      .run();
+    await appendEvent(ctx.env, {
+      eventType: parsed.data.kind === "ACKNOWLEDGED" ? "attention.acknowledged" : "attention.dismissed",
+      actorType: "firm_user",
+      actorId: ctx.identity!.id,
+      objectType: "attention_item",
+      objectId: item.key,
+      firmScope: "west-peek",
+      payload: { signature: item.signature, batch: parsed.data.items.length },
+    });
+  }
+  return json({ ok: true, count: parsed.data.items.length, permanent: permanent === 1, ...(permanent === 0 ? { silenced_for_days: DISMISSAL_LIFETIME_DAYS } : {}) });
+}

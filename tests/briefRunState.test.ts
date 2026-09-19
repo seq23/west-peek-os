@@ -100,6 +100,20 @@ describe("no combination is silent, and exactly one arrives", () => {
     expect(s.button.label).toMatch(/^Already building — started 1m 20s ago$/);
   });
 
+  it("running past the measured usual is still RUNNING, says so in words, names the slow end, and carries the stage strip", () => {
+    // Started 30 minutes ago against a 264s usual: not stuck (the lease is live), just longer than most.
+    const s = briefRunState(row({ started_at: "2026-09-19T13:11:00.000Z", stage_lease_until: "2026-09-19T13:59:00.000Z" }), ON, EXP, NOW, TZ);
+    expect(s.kind).toBe("running");
+    expect(s.slow).toBe(true);
+    expect(s.line).toBe("Still building — writing it. 30m in; usually about 4 minutes. The slow end is 5.");
+    expect(s.button.enabled).toBe(false);
+    expect(s.stages.map((x) => `${x.words}:${x.state}`)).toEqual(["read 48h:done", "ranked:done", "writing:now", "checked:todo"]);
+    const fresh = briefRunState(row({ stage_lease_until: "2026-09-19T13:59:00.000Z" }), ON, EXP, NOW, TZ);
+    expect(fresh.slow).toBe(false);
+    const done = briefRunState(row({ status: "READY", section_count: 3, completed_at: NOW.toISOString() }), ON, EXP, NOW, TZ);
+    expect(done.stages.every((x) => x.state === "done")).toBe(true);
+  });
+
   it("a moving row with no lease is QUEUED between stages; a fresh request that nothing has picked up is REQUESTED", () => {
     expect(briefRunState(row({ status: "RANKING" }), ON, EXP, NOW, TZ).kind).toBe("queued");
     const req = briefRunState(row({ status: "GATHERING", requested_at: "2026-09-19T13:40:50.000Z", requested_by: "fu_sequoia_taylor" }), ON, EXP, NOW, TZ);
