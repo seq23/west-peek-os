@@ -113,12 +113,18 @@ export function buildMessage(mail: Mail): string {
 export async function deliverMail(request: APIRequestContext, mail: Mail): Promise<void> {
   const to = mail.to ?? "os@joinwestpeek.com";
   const envelope = mail.envelopeFrom ?? addressOf(mail.from);
-  const res = await request.post(
-    `/cdn-cgi/handler/email?from=${encodeURIComponent(envelope)}&to=${encodeURIComponent(to)}`,
-    { headers: { "content-type": "message/rfc822" }, data: buildMessage(mail) },
-  );
-  if (res.status() !== 200) {
-    throw new Error(`the local email handler refused the message (HTTP ${res.status()}): ${await res.text()}`);
+  const raw = buildMessage(mail);
+  const url = `/cdn-cgi/handler/email?from=${encodeURIComponent(envelope)}&to=${encodeURIComponent(to)}`;
+  // A TRANSPORT DROP IS RETRIED, A REFUSAL IS NOT. Under load the dev harness answers 500
+  // "Network connection lost" after the handler has finished; a relay would retry, and the handler
+  // is idempotent by Message-ID (`inbound_email_seen`), so the retry either lands or is a no-op.
+  // Any other status is the handler's own verdict and is reported as it was.
+  for (let attempt = 1; ; attempt += 1) {
+    const res = await request.post(url, { headers: { "content-type": "message/rfc822" }, data: raw });
+    if (res.status() === 200) return;
+    const text = await res.text();
+    if (res.status() === 500 && /Network connection lost/i.test(text) && attempt < 3) continue;
+    throw new Error(`the local email handler refused the message (HTTP ${res.status()}): ${text}`);
   }
 }
 
