@@ -6,6 +6,7 @@ import { actorFromIdentity } from "./authorize";
 import { CONSENT_TYPES, currentConsent, recordConsent, type ConsentType } from "./meetings";
 import { ingestTranscript } from "./captureAdapter";
 import { transcribeChunk, transcriptionAvailable, TranscriptionUnavailable } from "../ai/providers/workersAiWhisper";
+import { DiarisationUnavailable, diarisedLine, transcribeDiarised } from "../ai/providers/workersAiNova3";
 import { parseFireflies, turnLine } from "../../shared/meetings/firefliesTranscript";
 
 /**
@@ -163,6 +164,8 @@ const chunkSchema = z.object({
   audio_base64: z.string().min(1).max(9_000_000),
   /** Which slice this is, so a gap in the transcript can be seen rather than guessed at. */
   sequence: z.number().int().min(0).max(10_000),
+  /** The recorder's MIME type. Nova-3 reads the container from it; Whisper ignores it. */
+  content_type: z.string().trim().max(80).optional(),
 });
 
 export interface ChunkResult {
@@ -170,6 +173,42 @@ export interface ChunkResult {
   /** The words. Empty is legitimate — a slice in which nobody spoke. */
   text: string;
   turns_written: number;
+  /**
+   * Which engine wrote the words down. NOVA3 carries speaker turns; WHISPER is the fallback when
+   * the account has no Nova-3, and says so here rather than pretending the names were never there.
+   */
+  engine: "NOVA3" | "WHISPER";
+  /** Distinct speakers the diariser heard in this slice. Empty under Whisper. */
+  speakers: number[];
+  /** Why Whisper was used, when it was. */
+  fallback_reason: string | null;
+}
+
+/**
+ * The words, with speaker turns when the platform can give them (Phase C).
+ *
+ * NOVA-3 FIRST, WHISPER WHEN THE MODEL IS NOT THERE. The fallback is on `DiarisationUnavailable`
+ * only — the model missing, refused, not deployed. A slice Nova-3 could read but failed on for any
+ * other reason is reported as that slice failing, because retrying it through a second model would
+ * make "which engine wrote this line" unanswerable on the record.
+ *
+ * AN UNATTRIBUTED TURN STAYS UNATTRIBUTED. `diarisedLine` writes "Speaker not identified" for a
+ * turn the model did not attribute; nothing here guesses from the neighbouring turn.
+ */
+export async function transcribeWithSpeakers(
+  env: Env,
+  audioBase64: string,
+  contentType: string | undefined,
+): Promise<Pick<ChunkResult, "text" | "engine" | "speakers" | "fallback_reason">> {
+  try {
+    const d = await transcribeDiarised(env.AI, audioBase64, contentType);
+    const text = d.turns.length > 0 ? d.turns.map(diarisedLine).join("\n") : d.text.trim();
+    return { text: text.trim(), engine: "NOVA3", speakers: d.speakers, fallback_reason: null };
+  } catch (err) {
+    if (!(err instanceof DiarisationUnavailable)) throw err;
+    const w = await transcribeChunk(env.AI, audioBase64);
+    return { text: w.text.trim(), engine: "WHISPER", speakers: [], fallback_reason: err.reason.slice(0, 300) };
+  }
 }
 
 /**
@@ -187,17 +226,18 @@ export async function captureChunk(
   input: z.infer<typeof chunkSchema>,
 ): Promise<ChunkResult> {
   const actor = actorFromIdentity(ctx.identity!);
-  let text: string;
+  let heard: Awaited<ReturnType<typeof transcribeWithSpeakers>>;
   try {
-    text = (await transcribeChunk(env.AI, input.audio_base64)).text.trim();
+    heard = await transcribeWithSpeakers(env, input.audio_base64, input.content_type);
   } catch (err) {
     if (err instanceof TranscriptionUnavailable) throw new CaptureRefused(503, "transcription_unavailable", err.reason);
     throw err;
   }
+  const text = heard.text;
 
   // A silent slice is a correct answer and not a failure. Writing an empty note for it would put a
   // blank line in the record of a conversation, which reads as something lost.
-  if (!text) return { sequence: input.sequence, text: "", turns_written: 0 };
+  if (!text) return { sequence: input.sequence, text: "", turns_written: 0, engine: heard.engine, speakers: [], fallback_reason: heard.fallback_reason };
 
   const { importTranscript } = await import("./meetings");
   const out = await ingestTranscript(
@@ -209,7 +249,7 @@ export async function captureChunk(
     { source: "NATIVE", text },
     importTranscript as never,
   );
-  return { sequence: input.sequence, text, turns_written: out.notes_created };
+  return { sequence: input.sequence, text, turns_written: out.notes_created, engine: heard.engine, speakers: heard.speakers, fallback_reason: heard.fallback_reason };
 }
 
 // ── A transcript somebody else recorded ──────────────────────────────────────
