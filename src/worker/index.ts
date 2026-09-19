@@ -210,6 +210,7 @@ import {
   handleResolveOpenQuestion,
   handleSaveMeetingArtifact,
 } from "./services/meetingAfter";
+import { handleRoomAsk, handleRoomRoll, handleRoomState } from "./services/meetingRoom";
 import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/deck";
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
@@ -1119,6 +1120,15 @@ const router = new Router()
   .post("/api/meeting-after-drafts/:id/discard", handleDiscardMeetingAfter)
   .get("/api/meeting-ledger/ask-offer", handleAskOfferLedger)
   // === end Phase B ====
+  // === Phase C: the live room ===
+  // The DURING face. One read for the whole room (recording status, the rolling draft, the blocks,
+  // who is seated, the tasks in flight); the draft rolled from the transcript so far; a question
+  // asked by text or push-to-talk voice, which always answers with a saved block and can open a
+  // preview-first card — and can never write a decision, commitment, question or stage move.
+  .get("/api/meetings/:id/room", handleRoomState)
+  .post("/api/meetings/:id/room/roll", handleRoomRoll)
+  .post("/api/meetings/:id/room/ask", handleRoomAsk)
+  // === end Phase C ====
   // P8 — portfolio monitoring: dated metrics, deterministic alerts, support.
   .post("/api/portfolio/metric-definitions", handleCreateMetricDefinition)
   .get("/api/portfolio/metric-definitions", handleListMetricDefinitions)

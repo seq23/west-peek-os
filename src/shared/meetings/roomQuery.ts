@@ -133,7 +133,7 @@ const ident = z.string().regex(/^[a-z_][a-z0-9_]*$/);
 
 export const recordQueryPlanSchema = z.object({
   table: ident,
-  select: z.array(ident).min(1).max(12).default([]),
+  select: z.array(ident).max(12).default([]),
   where: z
     .array(
       z.object({

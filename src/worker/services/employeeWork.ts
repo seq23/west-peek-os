@@ -86,6 +86,8 @@ interface CardRow {
   /** Who ticked the box; the preview becomes theirs to answer. */
   preview_owner_id?: string | null;
   kind?: string | null;
+  /** Migration 0199. The meeting this card was raised from; Phase C returns the result to it. */
+  meeting_id?: string | null;
 }
 
 export interface StepOutcome {
@@ -832,6 +834,30 @@ async function applyDecision(
   }
 
   await handOver(env, card, { employee: employeeName, finding: d.finding!, deliverableId });
+
+  /*
+   * THE RETURN ADDRESS (Phase C). A card raised from a meeting — pulled in from the live room, or
+   * converted from a commitment — sends its result back to that meeting as a block, so the During
+   * face shows "done" with the finding under it rather than a chip that never changes. Wrapped
+   * like the filing above: a room that cannot be reached must not un-finish the card, and the
+   * failure is recorded rather than swallowed.
+   */
+  if (card.meeting_id) {
+    try {
+      const { returnCardToRoom } = await import("./meetingRoom");
+      await returnCardToRoom(env, card.id, { employee: employeeName, finding: d.finding!, deliverableId });
+    } catch (err) {
+      await appendEvent(env, {
+        eventType: "meeting.room_return_failed",
+        actorType: "system",
+        actorId: "employee_work",
+        objectType: "work_card",
+        objectId: card.id,
+        firmScope: card.firm_scope,
+        payload: { meeting_id: card.meeting_id, detail: String(err).slice(0, 300) },
+      });
+    }
+  }
 
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1")
     .bind(card.id)
