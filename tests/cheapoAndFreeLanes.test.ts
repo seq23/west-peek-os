@@ -244,12 +244,12 @@ describe("free frontier capacity carries the important, public-facing work", () 
     expect(routing.attempts.some((a) => a.outcome === "COMPLETED")).toBe(true);
   });
 
-  it("a call that leads on its policy (the morning brief) never assembles a free lane, and the run says why it did not", async () => {
+  it("a call pinned to one model (the morning brief) runs on that model and nothing else, and the run says so", async () => {
     /*
-     * 18–19 Sep 2026: thirteen brief attempts on free lanes, zero accepted — twelve answered in
-     * exactly 256 tokens, one hung — against 38 of 38 accepted on the pinned lane. A short wrong
-     * reply is a COMPLETED run to the chain, so it never walked down. `leadOnPolicy` is the caller
-     * saying "the pin leads"; the same PUBLIC judgement call without it leads on a :free lane.
+     * The owner, 19 Sep 2026: "Sonnet for briefs only." Thirteen brief attempts on free lanes wrote
+     * zero acceptable briefs against 38 of 38 on Sonnet. `requireModel` reduces the candidates to
+     * lanes serving that model before anything is ordered: no free lane is assembled, no other
+     * model is a fallback. The identical PUBLIC judgement call without the pin leads on a :free lane.
      */
     const { fetchImpl } = hostRouter({ "openrouter.ai": () => OK_OPENAI_SHAPE("===SECTION executive_summary\nfine [1]\n===END") });
     const { run } = await runAi(
@@ -259,22 +259,34 @@ describe("free frontier capacity carries the important, public-facing work", () 
         actor: MP_ACTOR,
         inputs: ["write the brief"],
         sensitivity: "PUBLIC",
-        budgetContext: { judgement: true, expectedOutputTokens: 24_000, leadOnPolicy: true },
+        budgetContext: { judgement: true, expectedOutputTokens: 24_000, requireModel: "anthropic/claude-sonnet-5" },
       },
       { fetchImpl },
     );
     expect(run.status).toBe("COMPLETED");
+    expect(run.model).toBe("anthropic/claude-sonnet-5");
     const routing = await routingFor(run.id);
-    expect(routing.explanation, "a free lane led a call that asked to lead on its pin").not.toContain("Free frontier capacity is tried first");
-    expect(routing.attempts.every((a) => !String(a.model).includes(":free")), "a :free lane was attempted").toBe(true);
-    expect(routing.attempts.find((a) => a.outcome === "COMPLETED")!.model).not.toContain(":free");
-    // Control: the identical call WITHOUT the flag leads on the free lane — the flag is the difference.
+    expect(routing.explanation).toContain("runs on anthropic/claude-sonnet-5 and nothing else");
+    expect(routing.explanation, "a free lane led a pinned call").not.toContain("Free frontier capacity is tried first");
+    expect(routing.attempts.every((a) => a.model === "anthropic/claude-sonnet-5"), `another model was attempted: ${JSON.stringify(routing.attempts)}`).toBe(true);
+    // Control: the identical call WITHOUT the pin leads on the free lane — the pin is the difference.
     const control = await runAi(
       env(),
       { purpose: "daily intelligence report 2026-09-19 for Sequoia Taylor", actor: MP_ACTOR, inputs: ["write the brief"], sensitivity: "PUBLIC", budgetContext: { judgement: true, expectedOutputTokens: 24_000 } },
       { fetchImpl },
     );
     expect((await routingFor(control.run.id)).explanation).toContain("Free frontier capacity is tried first");
+  });
+
+  it("a pinned model nobody serves STOPS the run with a named reason rather than taking another model", async () => {
+    const { fetchImpl } = hostRouter({ "openrouter.ai": () => OK_OPENAI_SHAPE("anything") });
+    const { run } = await runAi(
+      env(),
+      { purpose: "daily intelligence report", actor: MP_ACTOR, inputs: ["write"], sensitivity: "PUBLIC", budgetContext: { judgement: true, requireModel: "vendor/model-that-does-not-exist" } },
+      { fetchImpl },
+    );
+    expect(run.status).toBe("PREFLIGHT_BLOCKED");
+    expect(run.failure_reason).toMatch(/^required_model_unavailable:this call runs on vendor\/model-that-does-not-exist and nothing else/);
   });
 
   it("says on the run, before anything happens, that free capacity is being tried", async () => {

@@ -121,19 +121,21 @@ describe("every status and attempt count has a stated outcome", () => {
 describe("the database and the code agree about finished", () => {
   const service = readFileSync(new URL("../src/worker/services/dailyIntelligence.ts", import.meta.url), "utf8");
 
-  it("every done-query uses the shared fragment rather than its own predicate", () => {
+  it("no SQL done-query remains in the service; the one definition of finished consulted is briefTerminality", () => {
     expect(TERMINAL_SQL).toContain(String(MAX_BRIEF_ATTEMPTS));
     // The hand-written form that drifted. If it comes back, so does the bug.
     expect(service, "a hand-written terminal predicate is back in the service").not.toMatch(
       /status = 'READY' OR \(status = 'FAILED' AND attempts >= \$\{MAX_BRIEF_ATTEMPTS\}\)/,
     );
-    // STRICTER THAN "AT LEAST TWO" (19 Sep 2026): there is ONE SQL done-query left — `runDailyForAll`'s —
-    // and it uses the fragment; the second one, `briefsOwedToday`, was the sweep job's gate and is
-    // gone with the branch it gated. A second done-query written by hand is exactly the drift this
-    // pin exists for, so any SQL that filters intelligence_report on a READY/FAILED pair must be
-    // the shared fragment, and the tick must ask `briefTerminality` rather than SQL at all.
-    expect(service.match(/\$\{TERMINAL_SQL\}/g)?.length ?? 0, "the remaining SQL done-query does not use the shared fragment").toBeGreaterThanOrEqual(1);
+    /*
+     * STRICTER AGAIN (19 Sep 2026, on demand only): the two SQL done-queries — `briefsOwedToday`,
+     * the sweep job's gate, and `runDailyForAll`'s — went with the schedule they gated (0211). The
+     * service now has NO SQL that decides "finished"; the tick asks `briefTerminality` in code, and
+     * a SQL done-query written back by hand is the drift this pin exists for.
+     */
+    expect(service.match(/\$\{TERMINAL_SQL\}/g)?.length ?? 0, "a SQL done-query is back in the service").toBe(0);
     expect(service, "briefsOwedToday is back — the brief must not ride inside the sweep job again").not.toMatch(/briefsOwedToday/);
+    expect(service, "the every-morning path is back — nothing starts a brief on the clock").not.toMatch(/runDailyForAll|scheduleMayStart|nextScheduledStart/);
     const handWritten = service.match(/status\s*=\s*'FAILED'\s*AND\s*attempts\s*>=/g) ?? [];
     expect(handWritten, "a hand-written FAILED-and-spent predicate exists outside the shared fragment").toEqual([]);
   });

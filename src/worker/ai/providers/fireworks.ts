@@ -1,6 +1,7 @@
 import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
+import { finishReasonFrom } from "./finishReason";
 
 /**
  * Fireworks AI adapter (P16, GAP-03).
@@ -53,7 +54,7 @@ export function createFireworksAdapter(options: FireworksOptions): ProviderAdapt
 
       const body = (await res.json()) as {
         model?: string;
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
       const text = body.choices?.[0]?.message?.content;
@@ -61,6 +62,7 @@ export function createFireworksAdapter(options: FireworksOptions): ProviderAdapt
 
       return {
         text,
+        finishReason: finishReasonFrom(body.choices?.[0]?.finish_reason),
         model: body.model ?? req.model ?? options.model,
         usage: {
           inputTokens: body.usage?.prompt_tokens ?? 0,

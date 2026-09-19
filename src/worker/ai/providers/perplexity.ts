@@ -2,6 +2,7 @@ import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
 import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
+import { finishReasonFrom } from "./finishReason";
 
 /**
  * Perplexity adapter — the direct search lane, and the ONLY fallback search has.
@@ -113,6 +114,7 @@ export function createPerplexityAdapter(options: PerplexityOptions): ProviderAda
 
       return {
         text,
+        finishReason: finishReasonFrom((body as { choices?: Array<{ finish_reason?: string }> }).choices?.[0]?.finish_reason ?? (body as { stop_reason?: string }).stop_reason),
         model: body.model ?? model,
         usage: {
           inputTokens: body.usage?.input_tokens ?? body.usage?.prompt_tokens ?? 0,

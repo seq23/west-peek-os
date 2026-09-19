@@ -57,15 +57,21 @@ export interface BriefRunRow {
   section_count?: number;
 }
 
-/** What the schedule says when there is no row yet. */
-export interface BriefSchedule {
-  enabled: boolean;
-  /** True when the partner's own calendar says today is a weekend AND weekends are off. */
-  weekendOff: boolean;
-  /** The next instant the clock will start a brief, as an ISO string, or null when it never will. */
-  nextStartAt: string | null;
-  /** "06:15" in the partner's zone — for the sentence. */
-  earliestStartLocal: string;
+/**
+ * WHAT THE RECORD SAYS WHEN THERE IS NO ROW TODAY (19 Sep 2026, the owner's decision).
+ *
+ * "Make the briefs on demand … On demand any day of the week!" There is no schedule any more, so a
+ * morning with no row is not a fault and not a countdown — it is "no brief today yet", followed by
+ * the last one that arrived, so the line carries a fact rather than an absence. The weekends column
+ * on the profile has no bearing on a brief: a request is served on any day.
+ */
+export interface BriefHistory {
+  /** When the most recent READY brief with sections arrived, or null when none ever has. */
+  lastArrivedAt: string | null;
+  /** Its report date. */
+  lastReportDate: string | null;
+  /** Who asked for it, when it was a request. */
+  lastRequestedBy: string | null;
 }
 
 /** Measured, not guessed: how long the write stage has actually taken, from real completed runs. */
@@ -91,10 +97,8 @@ export type BriefRunStateKind =
   | "retrying"
   /** It failed and the day's attempts are spent. Stated, and the button is the only door today. */
   | "failed_out"
-  /** Nothing yet, and the clock will start it at `nextStartAt`. */
-  | "scheduled"
-  /** Nothing yet, and nothing will be built: switched off, or a weekend she turned off. */
-  | "off"
+  /** Nothing yet today. The button is the door; the line says when the last one arrived. */
+  | "idle"
   /** It stopped moving and nothing has closed it yet — the sweeper will within STALE minutes. */
   | "stalled";
 
@@ -112,7 +116,7 @@ export interface BriefRunState {
   elapsedSeconds: number | null;
   /** The measured usual duration, for the moving states. */
   usualSeconds: number | null;
-  /** ISO instant the clock will act, for `retrying` and `scheduled`. */
+  /** ISO instant the clock will act, for `retrying`. */
   actAt: string | null;
   /** The button's label and whether pressing it does anything. */
   button: { label: string; enabled: boolean };
@@ -165,9 +169,27 @@ function clockWords(iso: string, timeZone?: string): string {
  */
 export const STALLED_AFTER_MINUTES = 30;
 
+/** "Thursday 6:20 AM", or "today 6:20 AM" / "yesterday 6:20 AM", in the partner's zone. */
+export function lastBriefWords(iso: string, now: Date, timeZone?: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "earlier";
+  const dayOf = (x: Date) => {
+    try { return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(x); } catch { return x.toISOString().slice(0, 10); }
+  };
+  const today = dayOf(now);
+  const that = dayOf(d);
+  const yesterday = dayOf(new Date(now.getTime() - 86_400_000));
+  const dayWord = that === today ? "today" : that === yesterday ? "yesterday" : (() => {
+    const days = Math.round((Date.parse(today) - Date.parse(that)) / 86_400_000);
+    if (days < 7) { try { return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone }).format(d); } catch { return `${days} days ago`; } }
+    try { return new Intl.DateTimeFormat("en-US", { weekday: "short", day: "numeric", month: "short", timeZone }).format(d); } catch { return that; }
+  })();
+  return `${dayWord} ${clockWords(iso, timeZone)}`;
+}
+
 export function briefRunState(
   row: BriefRunRow | null,
-  schedule: BriefSchedule,
+  history: BriefHistory,
   expectations: BriefExpectations,
   now: Date,
   /** The partner's zone, for the clock words. Optional so the pure function needs no environment. */
@@ -177,28 +199,14 @@ export function briefRunState(
   const build = { label: "Build today's brief", enabled: true };
 
   if (!row) {
-    if (!schedule.enabled) {
-      return {
-        kind: "off", arrived: false,
-        line: "Your morning brief is switched off, so nothing is being built.",
-        next: "Press the button and one is built now anyway.",
-        stage: null, elapsedSeconds: null, usualSeconds: null, actAt: null, button: build,
-      };
-    }
-    if (schedule.weekendOff) {
-      return {
-        kind: "off", arrived: false,
-        line: "No brief today — weekends are off in your settings.",
-        next: "Press the button and one is built now anyway.",
-        stage: null, elapsedSeconds: null, usualSeconds: null, actAt: null, button: build,
-      };
-    }
-    const at = schedule.nextStartAt ? clockWords(schedule.nextStartAt, timeZone) : schedule.earliestStartLocal;
+    const last = history.lastArrivedAt
+      ? ` The last one arrived ${lastBriefWords(history.lastArrivedAt, now, timeZone)}.`
+      : " None has been built yet.";
     return {
-      kind: "scheduled", arrived: false,
-      line: `No brief yet today. The clock starts it at ${at} your time.`,
-      next: `It ${usual} once it starts. Press the button to start it now.`,
-      stage: null, elapsedSeconds: null, usualSeconds: expectations.usualSeconds, actAt: schedule.nextStartAt, button: build,
+      kind: "idle", arrived: false,
+      line: `No brief today yet.${last}`,
+      next: `Press the button and it is built now — ${usual}, any day of the week.`,
+      stage: null, elapsedSeconds: null, usualSeconds: expectations.usualSeconds, actAt: null, button: build,
     };
   }
 
@@ -244,12 +252,11 @@ export function briefRunState(
         stage: null, elapsedSeconds: null, usualSeconds: expectations.usualSeconds, actAt: null, button: { label: "Try again now", enabled: true },
       };
     }
-    const tomorrow = schedule.nextStartAt ? ` The clock tries again tomorrow at ${clockWords(schedule.nextStartAt, timeZone)}.` : "";
     return {
       kind: "failed_out", arrived: false,
-      line: `No brief this morning. It was tried ${row.attempts} times and failed each time; the last reason: ${why}`,
-      next: `Nothing more is tried automatically today.${tomorrow} Press the button to try again now.`,
-      stage: null, elapsedSeconds: null, usualSeconds: expectations.usualSeconds, actAt: schedule.nextStartAt, button: { label: "Try again now", enabled: true },
+      line: `No brief today. It was tried ${row.attempts} times and failed each time; the last reason: ${why}`,
+      next: "Nothing more is tried automatically. Press the button to try again now.",
+      stage: null, elapsedSeconds: null, usualSeconds: expectations.usualSeconds, actAt: null, button: { label: "Try again now", enabled: true },
     };
   }
 

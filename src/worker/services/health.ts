@@ -1,12 +1,11 @@
 import type { Env } from "../env";
-import { isAfterLocalTime, isWeekend, localReportDate } from "../../shared/intelligence/pipeline";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { ago, summarise, worstOf, type HealthCheck } from "../../shared/health/checks";
 // The browser and the cheap tier are platform bindings that do not carry the WP_OS_ prefix.
 // Reading them through their owning module keeps the one cast in the one file that owns it.
 import { browserConfigured } from "../effects/browserClient";
-import { BRIEF_SENTINEL_GRACE_MINUTES, STALE_AFTER_MINUTES } from "./dailyIntelligence";
+import { STALE_AFTER_MINUTES } from "./dailyIntelligence";
 import { dailySpendUsd, workersAiConfigured } from "../ai/runAi";
 import { actionName } from "../../shared/help/actionNames";
 
@@ -75,15 +74,13 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
   });
 
   /*
-   * ── The morning brief, PER PARTNER ──
+   * ── The morning brief, PER PARTNER — ON DEMAND (19 Sep 2026) ──
    *
-   * The first cut of this read one global "Morning brief" and turned red because three runs had
-   * failed in three days. Both facts were true and the conclusion was wrong: the failures were
-   * spread across two partners with entirely independent briefs, and on most of those days one
-   * partner's brief landed perfectly well. The operator had been reading her brief while this page
-   * called the brief broken.
-   *
-   * There are two briefs. A board that averages them tells neither partner what happened to theirs.
+   * There are two briefs and no schedule: a partner presses for one, any day. So a morning with no
+   * row is not a fault and is never red — the reading is "last brief N days ago · requested by
+   * her at HH:MM", which is what the board can truthfully say. What IS a fault: a requested brief
+   * that FAILED (the reason is on the row and shown here), a requested brief that stopped moving
+   * past the sweeper's threshold, or a FAILED row that recorded no reason at all.
    */
   const briefs = ((await env.WP_OS_DB.prepare(
     `SELECT u.id, u.full_name,
@@ -95,30 +92,25 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
               WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS error_message,
             (SELECT started_at FROM intelligence_report r
               WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS started_at,
+            (SELECT requested_at FROM intelligence_report r
+              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS requested_at,
+            (SELECT requested_by FROM intelligence_report r
+              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS requested_by,
+            (SELECT completed_at FROM intelligence_report r
+              WHERE r.firm_user_id = u.id AND r.status = 'READY' ORDER BY r.completed_at DESC LIMIT 1) AS last_ready_at,
             (SELECT COUNT(*) FROM intelligence_report r
-              WHERE r.firm_user_id = u.id AND r.status = 'FAILED' AND r.report_date >= date('now','-7 day')) AS fails,
-            COALESCE(p.timezone, 'America/Chicago') AS timezone,
-            COALESCE(p.earliest_start_local, '06:15') AS earliest_start_local,
-            COALESCE(p.enabled, 1) AS enabled,
-            COALESCE(p.weekends, 1) AS weekends
+              WHERE r.firm_user_id = u.id AND r.status = 'FAILED' AND r.report_date >= date('now','-7 day')) AS fails
        FROM firm_user u
        JOIN firm_user_role fr ON fr.firm_user_id = u.id AND fr.role_id = 'role_managing_partner'
-       LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
       WHERE u.status = 'ACTIVE'
       ORDER BY u.full_name`,
-  ).all<{ id: string; full_name: string; status: string | null; report_date: string | null; error_message: string | null; started_at: string | null; fails: number; timezone: string; earliest_start_local: string; enabled: number; weekends: number }>()
+  ).all<{ id: string; full_name: string; status: string | null; report_date: string | null; error_message: string | null; started_at: string | null; requested_at: string | null; requested_by: string | null; last_ready_at: string | null; fails: number }>()
     .catch(() => {
       unreadable.push("intelligence_report");
       return { results: [] };
     })).results ?? []);
 
   const TERMINAL = new Set(["READY", "FAILED"]);
-  /** "06:15" + 105 → "08:00". A malformed hour is treated as its floor rather than as a throw. */
-  const plusMinutes = (hhmm: string, minutes: number): string => {
-    const m = /^(\d{2}):(\d{2})$/.exec(hhmm.trim());
-    const total = (m ? Number(m[1]) * 60 + Number(m[2]) : 6 * 60 + 15) + minutes;
-    return `${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-  };
   for (const b of briefs) {
     const firstName = b.full_name.split(" ")[0] ?? b.full_name;
     /*
@@ -128,47 +120,36 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
      */
     const ageMinutes = b.started_at ? (Date.now() - new Date(b.started_at).getTime()) / 60_000 : 0;
     const stuck = b.status !== null && !TERMINAL.has(b.status) && ageMinutes > STALE_AFTER_MINUTES;
-    /*
-     * THE SENTINEL (19 Sep 2026): by BRIEF_SENTINEL_GRACE_MINUTES after the partner's earliest
-     * start, on a day the schedule builds, today's row must EXIST and be either READY or FAILED
-     * with a reason. A morning with no row at all is the one failure the row-based checks above
-     * cannot see — it is what happened on Saturday 19 Sep, when the schedule skipped the day and
-     * nothing anywhere was red. "No brief and no explanation" is DOWN, named as such.
-     */
-    const now = new Date();
-    const today = localReportDate(now, b.timezone);
-    const buildsToday = b.enabled === 1 && (b.weekends === 1 || !isWeekend(now, b.timezone));
-    const pastSentinel = buildsToday && isAfterLocalTime(now, b.timezone, plusMinutes(b.earliest_start_local, BRIEF_SENTINEL_GRACE_MINUTES));
-    const missing = pastSentinel && b.report_date !== today;
-    const unstated = pastSentinel && b.report_date === today && b.status === "FAILED" && !(b.error_message ?? "").trim();
+    const unstated = b.status === "FAILED" && !(b.error_message ?? "").trim();
+    const daysSince = b.last_ready_at ? Math.floor((Date.now() - new Date(b.last_ready_at).getTime()) / 86_400_000) : null;
+    const lastLine = b.last_ready_at
+      ? `last brief ${daysSince === 0 ? "today" : daysSince === 1 ? "yesterday" : `${daysSince} days ago`}`
+      : "no brief has been built yet";
+    const who = b.requested_by ? (b.requested_by === b.id ? `requested by ${firstName}` : "requested by a partner") : "not requested";
+    const when = b.requested_at ? ` at ${new Date(b.requested_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : "";
     checks.push({
       key: `daily_brief_${b.id}`,
       label: `${firstName}'s brief`,
       state:
-        missing || unstated ? "DOWN"
-        : !b.status ? "DEGRADED"
+        !b.status ? "OK"
         : b.status === "READY" ? "OK"
         : b.status === "FAILED" || stuck ? "DOWN"
         : "DEGRADED",
-      reading: missing
-        ? `${today} · no brief and no explanation — the clock never started one${b.report_date ? `; the last row is ${b.report_date}` : ""}`
-        : b.status
-        ? `${b.report_date} · ${
+      reading: !b.status
+        ? `${lastLine} · on demand — press Build on Home`
+        : `${b.report_date} · ${
             b.status === "READY" ? "delivered"
             : stuck ? `stopped part-way, ${ago(b.started_at)}`
             : b.status.toLowerCase()
-          }${b.fails > 0 ? ` · ${b.fails} failed this week` : ""}`
-        : "none has ever been built",
+          } · ${who}${when} · ${lastLine}${b.fails > 0 ? ` · ${b.fails} failed this week` : ""}`,
       remedy:
-        missing
-          ? `It should have started at ${b.earliest_start_local} ${b.timezone} and the tick serves it every minute; if this stays red the cron is not firing. Press "Build today's brief" on Home now.`
-          : unstated
-            ? "It failed and the run did not record why. Build it again from Home; if it fails the same way, the lane that wrote it is the thing to look at."
-            : b.status === "FAILED"
-              ? (b.error_message ?? "It failed. Build it again from Home.")
-              : stuck
-                ? "It stopped part-way through and never finished. Build it again from Home."
-                : undefined,
+        unstated
+          ? "It failed and the run did not record why. Build it again from Home; if it fails the same way, the lane that wrote it is the thing to look at."
+          : b.status === "FAILED"
+            ? (b.error_message ?? "It failed. Build it again from Home.")
+            : stuck
+              ? "It stopped part-way through and never finished. Build it again from Home."
+              : undefined,
       page: "home",
     });
   }

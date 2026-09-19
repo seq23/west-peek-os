@@ -3,20 +3,21 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import {
   BRIEF_EXPECTED_OUTPUT_TOKENS, MAX_BRIEF_ATTEMPTS, RETRY_AFTER_MINUTES, WRITE_LEASE_MINUTES, STAGE_LEASE_MINUTES,
-  briefStateFor, measuredExpectations, nextScheduledStart, retryAfterIso, serveBrief, startReport, type BriefDeps,
+  BRIEF_MODEL, briefStateFor, measuredExpectations, retryAfterIso, serveBrief, startReport, type BriefDeps,
 } from "../src/worker/services/dailyIntelligence";
 import { CHAIN_BUDGET_MS } from "../src/worker/ai/chainBudget";
 
 /**
- * THE CLOCK SERVES THE BRIEF, AND THE BUTTON IS A REQUEST (19 Sep 2026).
+ * THE BUTTON IS A REQUEST, AND THE CLOCK SERVES IT — ON DEMAND ONLY (19 Sep 2026).
  *
- * Production that morning: a Saturday the schedule skipped by a default nobody chose, a button
+ * Production that morning: a Saturday the old schedule skipped by a default nobody chose, a button
  * that ran the model call inside her HTTP request and died with it, and a second press told
- * "Another run holds it". Every fix here is proven end to end against a migrated database:
+ * "Another run holds it". The owner's decision: "On demand + Sonnet for briefs only. On demand any
+ * day of the week!" Every part of that is proven end to end against a migrated database:
  *
- *   · a scheduled brief is walked from nothing to READY inside ONE tick;
- *   · a request on a day the schedule would skip is served anyway, and a second request while it
- *     moves changes nothing and says so from the row;
+ *   · the clock STARTS nothing — a Saturday tick with no request writes no row;
+ *   · a request is walked from nothing to READY inside ONE tick, any day, whatever the profile
+ *     says about weekends; a second request while it moves changes nothing and says so from the row;
  *   · a lane forced to fail leaves a FAILED row with the reason, a `retry_after` twenty minutes
  *     on, a notification addressed to her, and a state that says "retrying at HH:MM"; the third
  *     failure says "nothing more today" and names tomorrow's hour;
@@ -78,30 +79,23 @@ afterAll(async () => {
   await disposeTestDb(t);
 });
 
-describe("the tick serves a whole brief", () => {
-  it("walks a scheduled brief from nothing to READY inside one tick, on a Saturday, and says so", async () => {
+describe("the clock starts nothing", () => {
+  it("a Saturday tick with no request writes no row and says nothing was requested", async () => {
     const out = await serveBrief(env, SATURDAY, good);
-    expect(out.served).toBe(true);
-    expect(out.status).toBe("READY");
-    expect(out.steps).toEqual(["gathered", "market_read", "written"]);
-    expect(out.summary).toMatch(/^Morning brief for fu_.*gathered → market_read → written — now READY\.$/);
-    const r = await row(out.partner!, "2026-09-19");
-    expect(r!.status).toBe("READY");
-    expect(r!.requested_at, "a scheduled build is not a request").toBeNull();
-    const state = await briefStateFor(env, "west-peek", out.partner!, SATURDAY);
-    expect(state.state.kind).toBe("arrived");
-    expect(state.state.line).toMatch(/^Today's brief arrived at /);
+    expect(out.served).toBe(false);
+    expect(out.summary).toBe("no brief has been requested");
+    const n = await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report WHERE report_date = '2026-09-19'").first<{ n: number }>();
+    expect(n!.n).toBe(0);
+    const state = await briefStateFor(env, "west-peek", SEQUOIA, SATURDAY);
+    expect(state.state.kind).toBe("idle");
+    expect(state.state.line).toMatch(/^No brief today yet\. None has been built yet\./);
   });
 
-  it("the next tick serves the OTHER partner, and the one after that does nothing and writes nothing", async () => {
-    const second = await serveBrief(env, at(1), good);
-    expect(second.served).toBe(true);
-    expect(second.status).toBe("READY");
-    const third = await serveBrief(env, at(2), good);
-    expect(third.served).toBe(false);
-    expect(third.summary).toBe("no brief is owed right now");
-    const n = await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report WHERE report_date = '2026-09-19'").first<{ n: number }>();
-    expect(n!.n).toBe(2);
+  it("the retirement is on the record: a RETIRED job row the seeds cannot re-open, and the brief's model is Sonnet", async () => {
+    const job = await env.WP_OS_DB.prepare("SELECT status, schedule_kind, pause_reason FROM scheduled_job WHERE job_key = 'morning_brief_schedule'").first<{ status: string; schedule_kind: string; pause_reason: string }>();
+    expect(job?.status).toBe("RETIRED");
+    expect(job?.pause_reason).toMatch(/On demand \+ Sonnet for briefs only/);
+    expect(BRIEF_MODEL).toBe("anthropic/claude-sonnet-5");
   });
 });
 
@@ -124,11 +118,10 @@ describe("the button is a request the clock serves", () => {
     expect(after.state.kind).toBe("arrived");
   });
 
-  it("a request on a day the schedule skips is still served", async () => {
+  it("a request on a Saturday, with weekends off on the profile, is served like any other", async () => {
     await env.WP_OS_DB.prepare("UPDATE partner_intelligence_profile SET weekends = 0 WHERE firm_user_id = ?1").bind(SEQUOIA).run();
     const skipped = await briefStateFor(env, "west-peek", SEQUOIA, new Date("2026-09-26T13:00:00.000Z")); // next Saturday, no row
-    expect(skipped.state.kind).toBe("off");
-    expect(skipped.state.line).toMatch(/weekends are off/);
+    expect(skipped.state.kind, "a Saturday with weekends off on the profile is simply idle — the column no longer bears on a brief").toBe("idle");
     await startReport(env, "west-peek", SEQUOIA, new Date("2026-09-26T13:00:00.000Z"), "requested", SEQUOIA);
     const served = await serveBrief(env, new Date("2026-09-26T13:01:00.000Z"), good);
     expect(served.partner).toBe(SEQUOIA);
@@ -159,7 +152,7 @@ describe("a lane forced to fail — the negative proof", () => {
   const tuesday = new Date("2026-09-22T11:00:00.000Z"); // 07:00 New York
 
   it("the first failure leaves a FAILED row with the reason, a retry time twenty minutes on, and a notice addressed to her", async () => {
-    await env.WP_OS_DB.prepare("UPDATE partner_intelligence_profile SET enabled = 0 WHERE firm_user_id <> ?1").bind(SEQUOIA).run();
+    await startReport(env, "west-peek", SEQUOIA, tuesday, "requested", SEQUOIA);
     const out = await serveBrief(env, tuesday, broken);
     expect(out.partner).toBe(SEQUOIA);
     expect(out.status).toBe("FAILED");
@@ -184,7 +177,7 @@ describe("a lane forced to fail — the negative proof", () => {
     expect(notice!.body).toMatch(/tries again at 7:20 AM/);
   });
 
-  it("nothing is retried before retry_after; the third failure says nothing more today, names tomorrow, and warns her once", async () => {
+  it("nothing is retried before retry_after; the third failure says nothing more is tried, and warns her once", async () => {
     const tooSoon = await serveBrief(env, new Date(tuesday.getTime() + 10 * 60_000), broken);
     expect(tooSoon.served, "a failed brief was retried inside its retry window").toBe(false);
 
@@ -202,16 +195,15 @@ describe("a lane forced to fail — the negative proof", () => {
 
     const state = await briefStateFor(env, "west-peek", SEQUOIA, new Date(tuesday.getTime() + 70 * 60_000));
     expect(state.state.kind).toBe("failed_out");
-    expect(state.state.line).toMatch(/No brief this morning\. It was tried 3 times/);
-    expect(state.state.next).toMatch(/Nothing more is tried automatically today/);
-    expect(state.state.next).toMatch(/tomorrow at 6:15 AM/);
+    expect(state.state.line).toMatch(/No brief today\. It was tried 3 times/);
+    expect(state.state.next).toMatch(/Nothing more is tried automatically\. Press the button to try again now\./);
     expect(state.state.button.label).toBe("Try again now");
     expect(state.state.button.enabled).toBe(true);
 
     const notices = (await env.WP_OS_DB.prepare(
       "SELECT title, severity FROM notification WHERE firm_user_id = ?1 AND kind = 'INTELLIGENCE_BRIEF' AND object_id = ?2 ORDER BY created_at",
     ).bind(SEQUOIA, r!.id).all<{ title: string; severity: string }>()).results!;
-    const final = notices.filter((n) => /^No brief this morning/.test(n.title));
+    const final = notices.filter((n) => /^No brief today/.test(n.title));
     expect(final.length, "the final failure warns her exactly once").toBe(1);
     expect(final[0]!.severity).toBe("WARNING");
     expect(notices.filter((n) => /being retried/.test(n.title)).length, "the retry notice is not repeated per attempt").toBe(1);
@@ -220,7 +212,6 @@ describe("a lane forced to fail — the negative proof", () => {
     await startReport(env, "west-peek", SEQUOIA, new Date(tuesday.getTime() + 71 * 60_000), "requested", SEQUOIA);
     const again = await serveBrief(env, new Date(tuesday.getTime() + 72 * 60_000), good);
     expect(again.status).toBe("READY");
-    await env.WP_OS_DB.prepare("UPDATE partner_intelligence_profile SET enabled = 1").run();
   });
 });
 
@@ -242,14 +233,4 @@ describe("the numbers are derived, not typed", () => {
     expect(e.usualSeconds).toBe(189 + 75);
   });
 
-  it("the next scheduled start is the partner's own hour in the partner's own zone, skipping days they turned off", () => {
-    const p = { id: SEQUOIA, enabled: 1, timezone: "America/New_York", weekends: 0, earliest_start_local: "06:15" };
-    // Saturday 09:41 NY → Monday 06:15 NY = 10:15Z
-    expect(nextScheduledStart(p, SATURDAY)).toBe("2026-09-21T10:15:00.000Z");
-    // Weekends on → tomorrow, Sunday.
-    expect(nextScheduledStart({ ...p, weekends: 1 }, SATURDAY)).toBe("2026-09-20T10:15:00.000Z");
-    // Before the hour today → today.
-    expect(nextScheduledStart({ ...p, weekends: 1 }, new Date("2026-09-20T09:00:00.000Z"))).toBe("2026-09-20T10:15:00.000Z");
-    expect(nextScheduledStart({ ...p, enabled: 0 }, SATURDAY)).toBeNull();
-  });
 });

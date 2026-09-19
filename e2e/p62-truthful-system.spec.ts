@@ -61,7 +61,7 @@ test("the morning brief: press the button → a named state is on screen → the
   // 1 · THE STATE IS ON SCREEN BEFORE ANY PRESS, and it is one of the named ones.
   const state = page.getByTestId("daily-brief-state");
   await expect(state).toBeVisible();
-  const kinds = ["arrived", "requested", "running", "queued", "retrying", "failed_out", "scheduled", "off", "stalled"];
+  const kinds = ["arrived", "requested", "running", "queued", "retrying", "failed_out", "idle", "stalled"];
   expect(kinds, "the band renders a state the shared module does not name").toContain(await state.getAttribute("data-kind"));
   await expect(page.getByTestId("daily-brief-state-line")).not.toHaveText("");
 

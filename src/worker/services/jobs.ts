@@ -296,7 +296,8 @@ async function checkPreconditions(
 // ONE THING PER TICK (15 Sep 2026). Two feeds parsed plus a partner's brief in one invocation
 // measured 37 ms of CPU (wrangler tail: `exceededCpu`) against the Free plan's 10 ms, and the
 // platform killed it every run for seventeen hours — no brief, no intelligence. A tick now either
-// builds ONE partner's brief (when one is still owed today) or reads ONE source.
+// reads ONE source per tick. The brief is not this job's work any more (19 Sep 2026): it is
+// built when a partner asks, by the tick itself — see `serveBriefOnTick`.
 const SOURCES_PER_TICK = 1;
 
 async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runId: string, now: Date, trigger: "MANUAL" | "SCHEDULED" = "SCHEDULED"): Promise<RunOutcome> {
@@ -1158,10 +1159,12 @@ export async function runDueJobs(
 }
 
 /**
- * THE MORNING BRIEF IS SERVED BEFORE ANY JOB, ON EVERY TICK (19 Sep 2026).
+ * A REQUESTED BRIEF IS SERVED BEFORE ANY JOB, ON EVERY TICK (19 Sep 2026).
  *
- * One call, one indexed read when nothing is owed, and a `_morning_brief` line in the tick's
- * results only when it did something — so the Jobs page never fills with 1,440 inert rows a day
+ * The brief is on demand only, by the owner's decision; the clock never starts one. It ADVANCES
+ * the one a partner pressed for, every stage that is ready, inside this invocation. One call, one
+ * indexed read when nothing was requested, and a `_morning_brief` line in the tick's results only
+ * when it did something — so the Jobs page never fills with 1,440 inert rows a day
  * (the deck lane's lesson, 0193) and a tick that built a brief says so. Never throws: a brief that
  * cannot be built is a FAILED row with a reason and a notice, and the rest of the tick still runs.
  */

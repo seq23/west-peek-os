@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  STALLED_AFTER_MINUTES, briefRunState, elapsedWords, usualWords,
-  type BriefExpectations, type BriefRunRow, type BriefSchedule,
+  STALLED_AFTER_MINUTES, briefRunState, elapsedWords, lastBriefWords, usualWords,
+  type BriefExpectations, type BriefHistory, type BriefRunRow,
 } from "../src/shared/intelligence/briefRunState";
 import { MAX_BRIEF_ATTEMPTS } from "../src/shared/intelligence/briefTerminality";
 import { MOVING_KINDS, examinedLine, pressOutcomeLine, progressFraction, toneClassFor } from "../src/client/lib/briefBand";
@@ -20,7 +20,7 @@ const STATUSES = Array.from(SCHEMA.match(/status\s+TEXT NOT NULL DEFAULT 'QUEUED
 
 const NOW = new Date("2026-09-19T13:41:00.000Z"); // 09:41 New York
 const EXP: BriefExpectations = { usualSeconds: 264, slowSeconds: 313, measuredFrom: 30 };
-const ON: BriefSchedule = { enabled: true, weekendOff: false, nextStartAt: "2026-09-20T10:15:00.000Z", earliestStartLocal: "06:15" };
+const ON: BriefHistory = { lastArrivedAt: "2026-09-17T11:42:31.000Z", lastReportDate: "2026-09-17", lastRequestedBy: null };
 const TZ = "America/New_York";
 
 function row(over: Partial<BriefRunRow>): BriefRunRow {
@@ -123,13 +123,13 @@ describe("no combination is silent, and exactly one arrives", () => {
     expect(s.actAt).toBe("2026-09-19T14:01:00.000Z");
   });
 
-  it("a FAILED row with the attempts spent is FAILED OUT, says why, says nothing more is tried today, and says tomorrow's hour", () => {
+  it("a FAILED row with the attempts spent is FAILED OUT, says why, says nothing more is tried, and offers Try again", () => {
     const s = briefRunState(row({ status: "FAILED", attempts: MAX_BRIEF_ATTEMPTS, error_message: "the brief was rejected twice: the markets_macro section is missing" }), ON, EXP, NOW, TZ);
     expect(s.kind).toBe("failed_out");
-    expect(s.line).toMatch(/No brief this morning\. It was tried 3 times/);
+    expect(s.line).toMatch(/No brief today\. It was tried 3 times/);
     expect(s.line).toMatch(/markets_macro section is missing/);
-    expect(s.next).toMatch(/Nothing more is tried automatically today/);
-    expect(s.next).toMatch(/tomorrow at 6:15 AM/);
+    expect(s.next).toMatch(/Nothing more is tried automatically\. Press the button to try again now\./);
+    expect(s.next, "there is no schedule to promise").not.toMatch(/tomorrow/);
     expect(s.button.label).toBe("Try again now");
   });
 
@@ -139,23 +139,31 @@ describe("no combination is silent, and exactly one arrives", () => {
   });
 });
 
-describe("no row yet", () => {
-  it("on a day the schedule builds: SCHEDULED, with the clock hour in her zone and the measured duration", () => {
-    const s = briefRunState(null, { ...ON, nextStartAt: "2026-09-19T10:15:00.000Z" }, EXP, new Date("2026-09-19T09:00:00.000Z"), TZ);
-    expect(s.kind).toBe("scheduled");
-    expect(s.line).toMatch(/starts it at 6:15 AM your time/);
-    expect(s.next).toMatch(/usually 4–5 minutes/);
-    expect(s.button.enabled).toBe(true);
+describe("no row yet — on demand, any day", () => {
+  it("is IDLE: no brief today yet, when the last one arrived, and the button is the door", () => {
+    const s = briefRunState(null, ON, EXP, NOW, TZ);
+    expect(s.kind).toBe("idle");
+    expect(s.line).toBe("No brief today yet. The last one arrived Thursday 7:42 AM.");
+    expect(s.next).toMatch(/Press the button and it is built now — usually 4–5 minutes, any day of the week\./);
+    expect(s.button).toEqual({ label: "Build today's brief", enabled: true });
+    expect(s.actAt, "nothing is scheduled").toBeNull();
   });
 
-  it("a weekend she turned off, and a switched-off brief, are OFF — stated, and the button still works", () => {
-    const wk = briefRunState(null, { ...ON, weekendOff: true }, EXP, NOW, TZ);
-    expect(wk.kind).toBe("off");
-    expect(wk.line).toMatch(/weekends are off/);
-    expect(wk.button.enabled).toBe(true);
-    const off = briefRunState(null, { ...ON, enabled: false }, EXP, NOW, TZ);
-    expect(off.kind).toBe("off");
-    expect(off.line).toMatch(/switched off/);
+  it("says so when none has ever been built, and names today / yesterday / a weekday / a date", () => {
+    const none = briefRunState(null, { lastArrivedAt: null, lastReportDate: null, lastRequestedBy: null }, EXP, NOW, TZ);
+    expect(none.kind).toBe("idle");
+    expect(none.line).toMatch(/None has been built yet\./);
+    expect(lastBriefWords("2026-09-19T10:20:00.000Z", NOW, TZ)).toBe("today 6:20 AM");
+    expect(lastBriefWords("2026-09-18T10:20:00.000Z", NOW, TZ)).toBe("yesterday 6:20 AM");
+    expect(lastBriefWords("2026-09-15T10:20:00.000Z", NOW, TZ)).toBe("Tuesday 6:20 AM");
+    expect(lastBriefWords("2026-09-01T10:20:00.000Z", NOW, TZ)).toMatch(/^Tue, Sep 1 6:20 AM$/);
+  });
+
+  it("a Saturday, a partner with weekends off, an hour before any old start — all IDLE, all buildable", () => {
+    // The profile's weekends and earliest_start_local no longer bear on a brief; the state takes no schedule at all.
+    const s = briefRunState(null, ON, EXP, new Date("2026-09-19T09:00:00.000Z"), TZ);
+    expect(s.kind).toBe("idle");
+    expect(s.button.enabled).toBe(true);
   });
 
   it("with no measured history the duration is labelled a guess, never presented as measured", () => {
@@ -192,7 +200,7 @@ describe("the band", () => {
     expect(toneClassFor("retrying")).toBe("notice notice-gate");
     expect(toneClassFor("stalled")).toBe("notice notice-gate");
     expect(toneClassFor("running")).toBe("notice");
-    expect(toneClassFor("scheduled")).toBe("notice");
+    expect(toneClassFor("idle")).toBe("notice");
   });
 
   it("the examined line is built only from facts the row carries", () => {

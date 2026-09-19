@@ -2,6 +2,7 @@ import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
 import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
+import { finishReasonFrom } from "./finishReason";
 
 /**
  * Anthropic Messages API adapter — a DIRECT vendor lane, used only when OpenRouter cannot serve a
@@ -75,6 +76,7 @@ export function createAnthropicAdapter(options: AnthropicOptions): ProviderAdapt
 
       const body = (await res.json()) as {
         model?: string;
+        stop_reason?: string | null;
         content?: Array<{ type?: string; text?: string }>;
         usage?: { input_tokens?: number; output_tokens?: number };
       };
@@ -86,6 +88,8 @@ export function createAnthropicAdapter(options: AnthropicOptions): ProviderAdapt
 
       return {
         text,
+        // Anthropic's stop_reason: "max_tokens" is the cap; "end_turn" / "stop_sequence" are stops.
+        finishReason: finishReasonFrom(body.stop_reason),
         model: body.model ?? model,
         usage: {
           inputTokens: body.usage?.input_tokens ?? 0,
