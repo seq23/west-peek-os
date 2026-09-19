@@ -14,7 +14,7 @@ export const meetingsGuide: PageGuide = {
     "One meeting is one record with three faces: Before is the brief, During is the room, After is what came out of it — and one approval makes it the record. Above the record, what is coming up, what is on the record, and the Google Meet switch.",
   youCan: [
     "Open the room for the next meeting, brief in hand",
-    "Record with consent, ask the room, and seat an employee",
+    "Record on this laptop's microphone with consent, ask the room, and seat an employee",
     "Approve the draft of what came out — decisions, commitments, open questions, a stage move",
     "Turn the firm's Google Meet transcription on or off",
   ],
@@ -33,7 +33,7 @@ export const meetingsGuide: PageGuide = {
     { name: "Start a meeting now", testid: "band-start", shows: "the door for a meeting the calendar did not bring — title, type, company, now or later." },
     { name: "Google Meet", testid: "band-meet", shows: "the firm-default switch — transcribe every firm-hosted Meet — and whether Google is connected and syncing." },
     { name: "Before", testid: "face-", shows: "the brief: why this meeting, what we need to find out, what we said last time, the record, the diligence framework, who is in the room." },
-    { name: "During", shows: "the room: the recording switch with consent every time, the rolling draft, Ask the room by text or hold-to-talk, what the room handed back, who is seated, the notes." },
+    { name: "During", shows: "the room: how this room hears, the recording switch with consent every time, the rolling draft, Ask the room by text or hold-to-talk, what the room handed back, who is seated, the notes." },
     { name: "After", shows: "Move it on a proposed stage move, Decided, Still unknown, Owed — both sides, Saved from the room, who is holding each piece, and the draft with its one approval." },
   ],
   acts: [
@@ -54,7 +54,6 @@ export const meetingsGuide: PageGuide = {
     { label: "Ask", testid: "room-ask-send", primary: true, band: "During", does: "asks the room a question, by text or Hold to talk.", then: "The answer is saved on the meeting; nothing becomes a record until you approve the draft." },
     { label: "Seat", testid: "seat-", band: "During", does: "seats an employee in the room: they answer by name in Ask the room and can take a task that returns here; Release takes them out.", then: "They read what is written down and are never in the Meet call. Revoke all AI access shuts the room to employees." },
     { label: "Add a note", testid: "note-submit", primary: true, band: "During", does: "adds a note, on or off the record." },
-    { label: "Bring it in", testid: "fireflies-submit", primary: true, band: "During", does: "brings in a Fireflies transcript." },
     { label: "Done — open the record", testid: "live-finish", primary: true, band: "During", does: "leaves the room for After." },
     { label: "Draft what came out of it", testid: "draft-run", primary: true, band: "After", does: "has the lead employee draft decisions, commitments, open questions and a stage move from the notes." },
     { label: "Approve — make these the record", testid: "draft-approve", primary: true, band: "After", does: "makes the draft the record.", then: "The one human card a meeting costs. Set it aside discards it." },
@@ -67,7 +66,8 @@ export const meetingsGuide: PageGuide = {
   ],
   auto: [
     { what: "The partners' calendars are read and every Meet call appears under Coming up on its own", when: "every hour", job: "calendar_sync" },
-    { what: "An ended Meet call is read into its record — refused until the firm default is on", when: "every hour", job: "meet_ingest" },
+    { what: "An ended Meet call — Google's own transcript and who was there — is read into its record; refused until the firm default is on", when: "every hour", job: "meet_ingest" },
+    { what: "Nothing else writes a meeting down: the laptop microphone live, or Google's transcript after the call. Fireflies exports are no longer brought in", when: "since 19 Sep 2026" },
     { what: "A brief is written for every meeting in the next 36 hours that has none", when: "22:00 UTC nightly", job: "meeting_brief" },
     { what: "In the room, the draft rolls every five minutes while there is something new, and a recording posts a minute at a time", when: "while During is open" },
   ],

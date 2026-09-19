@@ -486,6 +486,16 @@ deliberately NOT turned into commitments on import. Close-out reads the notes an
 commitments a person accepts, and a second path that assigned work straight out of a vendor's
 bullet list would go around the only step in the chain with a human in it.
 
+**Addendum, 19 Sep 2026 — the Fireflies import is retired.** Owner, verbatim: "we will use Whisper in lieu of Fireflies — it's better." Two capture paths remain and are the only two: the room's recording
+switch (this laptop's microphone → Nova-3, Whisper as the fallback; a yes asked every session; live,
+a minute at a time) and Google Meet's own transcription read in after the call (`meetIngest.ts`).
+The paste-or-upload door is gone from the During face and the meeting record; its route answers
+**410 `fireflies_import_retired`** with the owner's words and the two paths named, never a 404
+(the 0198 precedent). The parser (`firefliesTranscript.ts`) stays because `meetTranscript.ts` and
+Nova-3's `diarisedLine` render every turn through its `turnLine` shape — it is a line shape now,
+not a door. `npm run validate:whisper-not-fireflies` holds all of this. Rows already stamped
+`FIREFLIES` are history and still read as what they were.
+
 ## A link that SENDS mail is a credential; a link that STEERS work is not (17 Sep 2026)
 
 **Both decisions were made on the same day, deliberately in opposite directions, and the reason is

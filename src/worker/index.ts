@@ -449,7 +449,7 @@ import {
   handleCaptureChunk,
   handleCaptureConsent,
   handleCaptureReadiness,
-  handleImportFireflies,
+  handleFirefliesRetired,
 } from "./services/liveTranscription";
 import {
   handleAddWatchlist,
@@ -985,7 +985,9 @@ const router = new Router()
   .post("/api/meetings/:id/capture/consent", handleCaptureConsent)
   .post("/api/meetings/:id/capture/chunk", handleCaptureChunk)
   // A transcript somebody else recorded. Same two gates, and importing is never consent.
-  .post("/api/meetings/:id/transcript/fireflies", handleImportFireflies)
+  // Retired 19 Sep 2026 ("we will use Whisper in lieu of Fireflies — it's better"): answers 410 with
+  // the two real paths named, never a silent 404.
+  .post("/api/meetings/:id/transcript/fireflies", handleFirefliesRetired)
   // === Phase Meet: Google Meet integration ===
   // Tier 1: the firm calendar becomes meetings. Tier 2: an ended Meet is read once, through the
   // governed import. The one reserved decision — recording on by default for every firm-hosted

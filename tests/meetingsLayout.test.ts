@@ -221,7 +221,7 @@ describe("Live Help and Close-out are faces of the meeting, not panels under it"
     const during = c.slice(c.indexOf('{face === "during" && ('), c.indexOf('{face === "after" && ('));
     expect(during).toContain("<RoomPanel");
     expect(during).toContain("<WrittenRecord");
-    for (const hook of ["meeting-recording", "meeting-consent", "consent-grant", "consent-revoke", "transcript-import", "note-form", "note-list", "fireflies-import", "transcript-list"]) {
+    for (const hook of ["meeting-recording", "meeting-consent", "consent-grant", "consent-revoke", "transcript-import", "note-form", "note-list", "fireflies-retired", "transcript-list"]) {
       expect(MEETINGS, `${hook} left the record`).toContain(`data-testid="${hook}"`);
     }
   });
@@ -350,11 +350,20 @@ describe("the stage move from a meeting is a click, not a card (owner, Q2, 18 Se
   });
 });
 
-describe("a transcript somebody else recorded is offered, and marked as theirs", () => {
-  it("takes a Fireflies export by paste or by file", () => {
-    expect(MEETINGS).toContain('data-testid="fireflies-text"');
-    expect(MEETINGS).toContain('data-testid="fireflies-file"');
-    expect(MEETINGS).toContain('data-testid="fireflies-submit"');
+describe("a transcript somebody else recorded is no longer offered; one already on the record is still marked as theirs", () => {
+  /*
+   * Owner, 19 Sep 2026: "we will use Whisper in lieu of Fireflies — it's better." The paste-or-upload
+   * door is gone and her words stand where it was; the two remaining paths are named there.
+   */
+  it("offers no Fireflies import — no paste box, no file input, no Bring it in — and says why, in her words", () => {
+    const c = code(MEETINGS);
+    for (const hook of ["fireflies-text", "fireflies-file", "fireflies-submit", "fireflies-import"]) expect(c, hook).not.toContain(`data-testid="${hook}"`);
+    expect(c).not.toContain("/transcript/fireflies");
+    expect(c).not.toContain("Bring it in");
+    expect(c).toContain('data-testid="fireflies-retired"');
+    expect(c).toContain("we will use Whisper in lieu of Fireflies — it's better");
+    expect(c).toMatch(/recording switch above/);
+    expect(c).toMatch(/Google Meet's own transcription/);
   });
 
   it("says on the record that the firm did not make that recording", () => {
@@ -474,12 +483,16 @@ describe("ADR-019 says what was decided and what was deliberately not built", ()
     expect(adr).toMatch(/recording bot/i);
   });
 
-  it("states that the Fireflies API route is designed and deferred, and why paste is enough", () => {
+  it("states that the Fireflies import was retired on 19 Sep 2026, in the owner's words, with the two paths that remain", () => {
     const adr = ADRS.slice(ADRS.indexOf("### ADR-019"));
     expect(adr).toMatch(/Fireflies/);
     expect(adr).toMatch(/validate:network-boundary/);
     expect(adr).toMatch(/Importing is never consent/);
     expect(adr).toMatch(/never guesses who spoke/);
+    expect(adr).toMatch(/the Fireflies import is retired/);
+    expect(adr).toMatch(/we will use Whisper in lieu of Fireflies/);
+    expect(adr).toMatch(/410 `fireflies_import_retired`/);
+    expect(adr).toMatch(/validate:whisper-not-fireflies/);
   });
 
   it("states that consent is prompted and logged every time, and names the two-party problem", () => {
