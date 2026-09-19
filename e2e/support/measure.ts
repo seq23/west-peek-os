@@ -236,7 +236,18 @@ export async function measureSurface(page: Page, rootTestId: string, label: stri
         longest = Math.max(longest, probe.getBoundingClientRect().width);
       }
       const inner = box.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-      if (longest > inner + 1) {
+      // SQUEEZED, NOT MERELY LONG. A word wider than the whole phone (a 25-character fixture
+      // marker at 320px) has nowhere to go and wraps inside itself by design (Hallmark responsive
+      // rule 63: `overflow-wrap: anywhere` on display text). The defect this rule exists for is a
+      // box made narrower than it needed to be by a sibling — so the word is a finding only when
+      // some ancestor is wide enough to have held it whole.
+      let squeezed = false;
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+        const acs = getComputedStyle(a);
+        const aInner = a.getBoundingClientRect().width - parseFloat(acs.paddingLeft) - parseFloat(acs.paddingRight);
+        if (aInner >= longest) { squeezed = true; break; }
+      }
+      if (longest > inner + 1 && squeezed) {
         out.push(`${el.tagName.toLowerCase()}.${(el.className || "").toString().split(" ")[0]} "${(el.textContent || "").trim().slice(0, 40)}" — longest word ${Math.round(longest)}px in a ${Math.round(inner)}px box`);
       }
     }
