@@ -713,11 +713,15 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
               The number{" "}
               <input className="input-money" inputMode="decimal" data-testid="snapshot-value" value={value} onChange={(e) => setValue(e.target.value)} placeholder="1000" />
             </label>
+          </div>
+          {/* The two acts on their own line: a button never wraps its words, so on a 320px phone in
+              a wide fallback face it must not share a line with a field that cannot shrink. */}
+          <div className="row">
             <button type="button" className="btn-strong" disabled={busy || tracked.length === 0} data-testid="snapshot-submit" onClick={() => void recordFigure()}>
               Record it
             </button>
             <button type="button" disabled={busy} data-testid="evaluate-alerts" onClick={() => void checkCompany()}>
-              Check this company against its history
+              Check its history
             </button>
           </div>
 
@@ -727,7 +731,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
               <input data-testid="metric-key" value={metricName} onChange={(e) => setMetricName(e.target.value)} placeholder="Monthly revenue" />
             </label>
             <button type="button" disabled={busy} data-testid="metric-define" onClick={() => void trackSomethingNew()}>
-              Track it across the portfolio
+              Track it
             </button>
           </div>
           <p className="muted small">
@@ -754,7 +758,8 @@ type RowForm = "book" | "mark" | "reserve" | null;
 function standingWords(h: Holding, approver: string): { label: string; tone: string; sub: string | null } {
   switch (h.standing) {
     case "booked":
-      return { label: `booked to ${h.fund_name ?? "the fund"}`, tone: "badge badge-ok", sub: h.sale ? "sale open on Dealflow" : null };
+      // The badge is one word — a badge never wraps, and a fund's name can be long on a phone.
+      return { label: "booked", tone: "badge badge-ok", sub: `to ${h.fund_name ?? "the fund"}${h.sale ? " · sale open on Dealflow" : ""}` };
     case "draft":
       return { label: "draft", tone: "badge", sub: h.booking ? `saved ${day(h.booking.created_at.slice(0, 10))}, not yet sent` : null };
     case "awaiting":

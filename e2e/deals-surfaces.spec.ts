@@ -154,12 +154,28 @@ async function measureSurface(page: Page, rootTestId: string, vp: (typeof VIEWPO
 
 type Ctx = import("@playwright/test").APIRequestContext;
 
+/**
+ * The firm's first fund, or a new one WITH its policies. Every spec drives one database, and a fund
+ * created here bare would become `funds[0]` for every journey after it — the deck journey (p64)
+ * snapshots the mandate and sleeve figures and refuses a fund that has none. So a fund this spec
+ * has to create is a readable one, shaped like the one p64 makes.
+ */
 async function ensureFund(request: Ctx, marker: string): Promise<{ id: string; name: string }> {
   const before = (await (await request.get("/api/funds", { headers: MP })).json()) as { funds: Array<{ id: string; name: string }> };
   if (before.funds.length > 0) return before.funds[0]!;
   const made = await request.post("/api/funds", { headers: MP, data: { name: `${marker} Fund I` } });
   expect(made.status(), await made.text()).toBe(201);
-  return (await made.json()) as { id: string; name: string };
+  const fund = (await made.json()) as { id: string; name: string };
+  for (const [kind, policy] of [
+    ["mandate", { target_size_usd: 30_000_000, sectors: ["AI"], target_positions: 25, check_size_usd: { min: 250_000, max: 1_000_000 }, management_fee_pct: 2, carried_interest_pct: 20 }],
+    ["sleeve", { estimated_fees_usd: 6_000_000, estimated_expenses_usd: 600_000, sleeves: [{ key: "EARLY_STAGE_PRIMARY", target_pct: 70 }, { key: "SECONDARY_PURCHASE", target_pct: 30 }] }],
+    ["reserve", { reserve_pct: 40 }],
+    ["concentration", { max_single_company_pct: 10 }],
+  ] as const) {
+    const res = await request.post(`/api/funds/${fund.id}/policies/${kind}`, { headers: MP, data: { version_no: 1, effective_from: "2026-01-01", policy } });
+    expect(res.status(), `${kind}: ${await res.text()}`).toBe(201);
+  }
+  return fund;
 }
 
 /** A company closed exactly as Sensori is in production: backfilled, with a $1 × N stand-in. */
@@ -334,7 +350,8 @@ test.describe("Portfolio", () => {
 
     // ── The row reads booked; Mark it and Reserve for it and Sell are on it ──────────────────
     await gotoSurface(page, "Portfolio");
-    await expect(page.getByTestId(`holding-standing-${companyId}`)).toContainText(`booked to ${fund.name}`);
+    await expect(page.getByTestId(`holding-standing-${companyId}`)).toContainText("booked");
+    await expect(page.getByTestId(`holding-standing-${companyId}`)).toContainText(`to ${fund.name}`);
     await expect(page.getByTestId(`holding-paid-${companyId}`)).toContainText("$10,000");
     await expect(page.getByTestId(`holding-paid-${companyId}`)).not.toContainText("stand-in");
     await expect(page.getByTestId(`holding-held-${companyId}`)).toContainText("still just what we paid");
