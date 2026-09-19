@@ -576,7 +576,7 @@ describe("8. the routes, through the router", () => {
   it("a cross-site write is refused before any handler runs; same-origin and non-browser requests pass", async () => {
     const post = (site: string | null) => handleRequest(new Request("https://test.local/api/meet/live/adopt", { method: "POST", headers: { ...MP, "content-type": "application/json", ...(site ? { "sec-fetch-site": site } : {}) }, body: JSON.stringify({ code: "ttt-uuuu-vvv" }) }), env);
     expect((await post("cross-site")).status).toBe(403);
-    expect((await (await post("cross-site")).json()).error).toBe("cross_site_refused");
+    expect(((await (await post("cross-site")).json()) as { error: string }).error).toBe("cross_site_refused");
     expect((await post("same-site")).status).toBe(403);
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting WHERE meet_conference_id = 'ttt-uuuu-vvv'").first<any>()).n, "refused before the handler: nothing was created").toBe(0);
     expect((await post("same-origin")).status).toBe(201);

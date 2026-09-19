@@ -5515,6 +5515,9 @@ body {
 .seats-collapsed:hover { border-color: var(--wp-line-strong); color: var(--wp-ink); }
 .seats-collapsed:focus-visible { outline: var(--focus-width) solid var(--focus-color); outline-offset: var(--focus-offset); }
 .seats-avatars { display: inline-flex; gap: var(--space-3xs); }
+/* Tier 3: the Meet add-on side panel — the room beside the call, at side-panel width. */
+.meet-panel-shell { padding: var(--space-md); }
+.meet-panel-head { display: flex; flex-direction: column; gap: var(--space-sm); margin-bottom: var(--space-md); }
 /* Touch targets on the two controls a partner presses mid-call. */
 .room-ptt,
 .room-line .btn-strong { min-height: 44px; min-width: 44px; }

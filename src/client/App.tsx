@@ -41,6 +41,7 @@ import { ThesisPage } from "./pages/ThesisPage";
 import { DealflowPage } from "./pages/DealflowPage";
 import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
 import { RoomPanel } from "./pages/RoomPanel";
+import { MeetPanel } from "./pages/MeetPanel";
 import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
 import { BrowserTasksPage } from "./pages/BrowserTasksPage";
 import { WorkCardsPage as WorkSurface } from "./pages/WorkCardsPage";
@@ -2695,13 +2696,23 @@ export function RoomStandalone({ meetingId }: { meetingId: string }): JSX.Elemen
   );
 }
 
+/** Tier 3 (Phase Meet): `#/meet-panel[?code=abc-defg-hij]` is the Meet add-on's side panel. */
+function isMeetPanelHash(): boolean {
+  return /^#\/meet-panel(\?|$)/.test(window.location.hash);
+}
+
 export function App() {
   const [roomId, setRoomId] = useState<string | null>(() => (typeof window === "undefined" ? null : roomIdFromHash()));
+  const [meetPanel, setMeetPanel] = useState<boolean>(() => (typeof window === "undefined" ? false : isMeetPanelHash()));
   useEffect(() => {
-    const onHash = () => setRoomId(roomIdFromHash());
+    const onHash = () => {
+      setRoomId(roomIdFromHash());
+      setMeetPanel(isMeetPanelHash());
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+  if (meetPanel) return <MeetPanel />;
   if (roomId) return <RoomStandalone meetingId={roomId} />;
   return <Shell />;
 }
