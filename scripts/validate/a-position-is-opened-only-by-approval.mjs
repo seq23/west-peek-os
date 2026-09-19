@@ -160,8 +160,13 @@ export function checkApprovalExecutes(approvals, investment) {
 }
 
 /**
- * Rule 5 — the routes live in the `// === Phase D: portfolio ===` block, once. The marker is a
- * comment, so it is found in the RAW text; every route check runs over stripped text.
+ * Rule 5 — the routes live in the `// === Phase D: portfolio ===` block, once.
+ *
+ * `indexRaw` is index.ts UNSTRIPPED, and the one reader of this file that is: the block markers
+ * `// === Phase D: portfolio ===` / `// === end Phase D ===` ARE comments, by the coordinator's
+ * convention for this branch, so they have to be found in the raw text. DELIBERATELY DOES NOT STRIP
+ * COMMENTS for that one lookup. Every route check below runs over the stripped text, so a sentence
+ * naming a route can neither satisfy nor block the scan.
  */
 export function checkRouteBlock(indexRaw) {
   const bad = [];
