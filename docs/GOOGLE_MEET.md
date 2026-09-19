@@ -205,12 +205,12 @@ records why the WebRTC peer is on her Mac and not in the Worker.
   the way Phase C does). Once `call_ended_at` is set → **Open what came out of it** → the full After
   face in the main app (`#/meetings?open=<id>&face=after`).
 - **Auth inside the iframe, decided: her own session cookie.** Cloudflare Access answers an iframe
-  on meet.google.com only if the application sends `CF_Authorization` with `SameSite=None` — today
-  the attribute is unset on both Access applications (probed 19 Sep 2026, read-only), so the panel
-  would load as the login page, which cannot be framed. A service token cannot live in a browser
-  page; an Access application "for the add-on origin" has nothing to verify. **Console step
-  (owner):** Zero Trust › Access › Applications › *west-peek-os* › Settings › Cookie settings ›
-  SameSite attribute → **None**. The cost — a cross-site form could POST with her cookie — is closed
+  on meet.google.com only if the application sends `CF_Authorization` with `SameSite=None` — it
+  was unset on both Access applications (probed 19 Sep 2026, read-only), so the panel would have
+  loaded as the login page, which cannot be framed. A service token cannot live in a browser page;
+  an Access application "for the add-on origin" has nothing to verify. **Set the same day** on the
+  os.joinwestpeek.com application (AUD `3ee619ef…`) through the Cloudflare API with the vault
+  token, verified on the response: `SameSite=None`, `HttpOnly` kept. The cost — a cross-site form could POST with her cookie — is closed
   in the Worker: a state-changing `/api` request whose `Sec-Fetch-Site` is not `same-origin`/`none`
   is refused 403 before any handler (`index.ts`, pinned in `tests/meetLive.test.ts`). If the cookie
   is absent the panel offers "Open West Peek OS" (a tab to sign in) and "Try again".
