@@ -5789,6 +5789,23 @@ body {
    stopping it · the act); `-3` drops the stage cell for a `.readiness` line (Meetings); `-2` is
    name + act (Secondaries). Selected = the one selection colour. ── */
 .deal-row-3 { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.4fr) auto; }
+/* A MEETING ROW WITH ITS CALL DOORS. The doors (Go to this meeting · Join on Meet · inside/beside ·
+   the laptop mic) are far wider than an "act" cell, and dropped into the third track they took the
+   row and squeezed the title to one word per line ("Sequoi / a //" — owner, 19 Sep 2026). The doors
+   are a second ROW of the same grid, spanning every column; the name and readiness keep the first.
+   The primary keeps its natural width — a full-width black bar per row read as a banner, not a door. */
+.deal-row-3 > .deal-actions-doors {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-xs) var(--space-sm);
+  min-width: 0;
+}
+.deal-actions-doors > .btn-strong { flex: 0 0 auto; }
+.deal-actions-doors > .field-help { flex: 1 1 100%; }
+.deal-actions-doors .call-doors { flex: 1 1 100%; max-width: none; }
 .deal-row-2 { grid-template-columns: minmax(0, 1fr) auto; }
 .deal-row-selected { background: var(--wp-tint); border-color: var(--wp-tint-line); }
 .deal-sub { font-size: var(--text-xs); color: var(--wp-muted); margin-top: var(--space-3xs); }
@@ -5928,7 +5945,10 @@ body {
 .surface-body .join-mode input[type="radio"],
 .join-mode input[type="radio"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .join-mode .join-mode-on { border-color: var(--wp-orange); background: var(--wp-tint); color: var(--wp-orange-deep); }
-.deal-actions-doors { flex-direction: column; align-items: stretch; gap: var(--space-xs); }
+/* Superseded on 19 Sep 2026 by `.deal-row-3 > .deal-actions-doors` above (§ the meeting row with its
+   call doors): stretched, the primary became a full-width black bar and the row's title lost its
+   column. The doors flow left-to-right under the title now; kept only for a non-row host. */
+.deal-actions-doors:not(.deal-row-3 > *) { flex-direction: column; align-items: stretch; gap: var(--space-xs); }
 
 /* The switch, eight states. role=switch + aria-checked; the 44px hit area is the ::before inset so
    the control itself stays 44×24. The knob slides on the one duration; the global reduced-motion

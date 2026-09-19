@@ -211,6 +211,40 @@ export async function measureSurface(page: Page, rootTestId: string, label: stri
   const wrapped = targets.filter((t) => t.kind === "press" && t.rects > 1);
   expect(wrapped.map((t) => `${t.label} — ${t.rects} rects`), `${label}: clickables broken over more than one line at ${vp.name}`).toEqual([]);
 
+  // ── 4 · NO WORD BROKEN IN HALF ──────────────────────────────────────────────────────────────
+  // A title squeezed into a track narrower than its longest word wraps INSIDE the word ("Sequoi /
+  // a //", the Meetings list on 19 Sep 2026: the call doors had taken the row's width). Nothing
+  // above catches it — it is not overflow, not a clickable, not contrast. So every heading and
+  // name is checked: its box must be at least as wide as its longest word laid on one line.
+  const broken = await page.evaluate((sel) => {
+    const root = document.querySelector(sel);
+    if (!root) return ["the surface did not render"];
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;top:0";
+    document.body.appendChild(probe);
+    const out: string[] = [];
+    for (const el of root.querySelectorAll("h1, h2, h3, h4, .deal-name, .masthead-answer, .band-head h3, .holding-name")) {
+      const box = (el as HTMLElement).getBoundingClientRect();
+      if (box.width === 0) continue;
+      const cs = getComputedStyle(el);
+      probe.style.font = cs.font;
+      probe.style.letterSpacing = cs.letterSpacing;
+      const words = (el.textContent || "").split(/\s+/).filter(Boolean);
+      let longest = 0;
+      for (const w of words) {
+        probe.textContent = w;
+        longest = Math.max(longest, probe.getBoundingClientRect().width);
+      }
+      const inner = box.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      if (longest > inner + 1) {
+        out.push(`${el.tagName.toLowerCase()}.${(el.className || "").toString().split(" ")[0]} "${(el.textContent || "").trim().slice(0, 40)}" — longest word ${Math.round(longest)}px in a ${Math.round(inner)}px box`);
+      }
+    }
+    probe.remove();
+    return out.slice(0, 8);
+  }, rootSelector);
+  expect(broken, `${label}: a word is broken in half by its box at ${vp.name}`).toEqual([]);
+
   return { textNodes: nodes.length, minContrast: Math.min(...nodes.map((n) => n.ratio)), clickables: targets.length };
 }
 
