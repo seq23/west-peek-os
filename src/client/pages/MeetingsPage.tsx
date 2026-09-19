@@ -654,13 +654,12 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
                     (App.tsx, RoomStandalone) — the second window a partner keeps beside the call. The
                     owner asked whether it was "a real room"; it is this one, and the line says so.
                   */}
-                  <p className="muted small">
-                    <a href={`#/room/${meetingId}`} target="_blank" rel="noopener noreferrer" data-testid={`room-standalone-link-${meetingId}`} aria-describedby={`room-standalone-line-${meetingId}`}>
+                  <div className="stack">
+                    <button type="button" className="btn-ghost" data-testid={`room-standalone-link-${meetingId}`} aria-describedby={`room-standalone-line-${meetingId}`} onClick={() => window.open(`#/room/${meetingId}`, "_blank", "noopener,noreferrer")}>
                       Open this room in its own window ↗
-                    </a>
-                    <br />
-                    <span id={`room-standalone-line-${meetingId}`} data-testid={`room-standalone-line-${meetingId}`}>{STANDALONE_ROOM_LINE}</span>
-                  </p>
+                    </button>
+                    <span className="field-help" id={`room-standalone-line-${meetingId}`} data-testid={`room-standalone-line-${meetingId}`}>{STANDALONE_ROOM_LINE}</span>
+                  </div>
                 </>
               }
             />

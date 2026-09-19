@@ -27,13 +27,13 @@ import { provisionLocalD1 } from "./support/provision";
 
 const MP = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
 
-async function ask(page: import("@playwright/test").Page, message: string): Promise<import("@playwright/test").Locator> {
-  const before = await page.getByTestId("page-chat-thread-meetings").locator('[data-role="HOST"]').count();
+/** Ask Walter, and return the HOST turn that opens with `opener` — the thread persists across specs. */
+async function ask(page: import("@playwright/test").Page, message: string, opener: string): Promise<import("@playwright/test").Locator> {
   await page.getByTestId("page-chat-input-meetings").fill(message);
   await page.getByTestId("page-chat-send-meetings").click();
-  const answers = page.getByTestId("page-chat-thread-meetings").locator('[data-role="HOST"]');
-  await expect(answers).toHaveCount(before + 1);
-  return answers.nth(before);
+  const answer = page.getByTestId("page-chat-thread-meetings").locator('[data-role="HOST"]', { hasText: opener }).last();
+  await expect(answer).toBeVisible();
+  return answer;
 }
 
 async function createMeeting(request: APIRequestContext, title: string): Promise<string> {
@@ -85,13 +85,13 @@ test("ask Walter to walk you through a real meeting: a numbered scenario from th
   await gotoSurface(page, "Meetings");
   await page.getByTestId("page-chat-toggle-meetings").click();
 
-  const answer = await ask(page, "walk me through a real meeting");
+  const answer = await ask(page, "walk me through a real meeting", "Here is how you would use Meetings, start to finish");
   // Two scenarios — the calendar Meet call and the in-person one — each a real <ol>.
   const ordered = answer.locator("ol.md-lite-list");
   await expect(ordered).toHaveCount(2);
   expect(await ordered.first().locator("li").count()).toBeGreaterThanOrEqual(10);
   const text = (await answer.innerText()).replace(/\s+/g, " ");
-  expect(text).toMatch(/^Here is how you would use Meetings, start to finish/);
+  expect(text).toMatch(/^WALTER Here is how you would use Meetings, start to finish — 2 scenarios/);
   for (const control of ["Seat", "Join on Meet", "Done — open the record", "Draft what came out of it", "Approve — make these the record", "Move it", "They said yes — record"]) expect(text, control).toContain(control);
   // What does not happen, and when the transcript lands — the two things she could not find out.
   expect(text).toContain("What does not happen: nothing joins for you");
@@ -102,12 +102,12 @@ test("ask Walter to walk you through a real meeting: a numbered scenario from th
   expect(text.trim().endsWith("?")).toBe(false);
 
   // The buttons, grouped by face: a heading per band and every act under one.
-  const buttons = await ask(page, "explain what all of the buttons do");
+  const buttons = await ask(page, "explain what all of the buttons do", "Every control on Meetings, band by band");
   const heads = await buttons.locator("h2, h3, h4, .md-lite-head").allInnerTexts();
   for (const face of ["Before", "During", "After", "Coming up", "Google Meet"]) expect(heads.map((h) => h.trim()), face).toContain(face);
   expect(await buttons.locator("ul.md-lite-list").count()).toBeGreaterThanOrEqual(5);
   const btext = (await buttons.innerText()).replace(/\s+/g, " ");
-  expect(btext).toMatch(/^Every control on Meetings, band by band/);
+  expect(btext).toMatch(/^WALTER Every control on Meetings, band by band/);
   for (const control of CURRENT_MEETINGS_CONTROLS) expect(btext, control).toContain(control);
   expect(btext).toContain("Seat");
 });
@@ -140,7 +140,13 @@ test("the During face says how this room hears — a calendar Meet call, then a 
   // Beside Seat, what a seated employee can and cannot do; the standalone link says what it is.
   await expect(page.getByTestId("seat-line")).toContainText("never in the Meet call");
   await expect(page.getByTestId(`room-standalone-line-${meetId}`)).toContainText("same room, without the app shell");
-  await expect(page.getByTestId(`room-standalone-link-${meetId}`)).toHaveAttribute("href", `#/room/${meetId}`);
+  const popup = page.waitForEvent("popup");
+  await page.getByTestId(`room-standalone-link-${meetId}`).click();
+  const standalone = await popup;
+  await standalone.waitForLoadState();
+  expect(standalone.url()).toContain(`#/room/${meetId}`);
+  await expect(standalone.getByTestId("room-standalone")).toBeVisible();
+  await standalone.close();
 
   // Turn the firm default on through its own route (the receipt path is proven in p-meet); the
   // line moves to MEET_PENDING and names the cadence from the job row — the real number, 60.
