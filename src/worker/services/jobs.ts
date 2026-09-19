@@ -496,6 +496,35 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     };
   }
 
+  /*
+   * Phase Meet (18 Sep 2026). Two INTERVAL jobs, neither runs a model.
+   *
+   * `calendar_sync` reads the firm calendar and keeps one meeting per event with a Meet link. A
+   * door that fails is a FAILED run with the door named — "via iCal" in the summary is the fallback
+   * being visible rather than silent.
+   *
+   * `meet_ingest` hears about ended conferences (Pub/Sub pulled, then polled) and reads each once:
+   * participants, speaker-attributed transcript, recording pointer, through the governed import.
+   * A tick with nothing to read says what it heard, because a run log that reads "nothing" on the
+   * day the subscription silently expired is the failure this repo keeps finding.
+   */
+  if (job.job_key === "calendar_sync") {
+    const { runCalendarSync } = await import("./calendarSync");
+    const results = await runCalendarSync(env, { now });
+    for (const r of results) artifacts.push({ kind: "CALENDAR_SYNC", ref_type: "google_calendar_sync", ref_id: r.calendarKey, note: r.detail });
+    return {
+      status: results.every((r) => r.ok) ? "SUCCEEDED" : "FAILED",
+      summary: results.map((r) => `${r.calendarKey}${r.via ? ` (${r.via})` : ""}: ${r.detail}`).join(" · "),
+      artifacts,
+    };
+  }
+  if (job.job_key === "meet_ingest") {
+    const { runMeetIngest } = await import("./meetIngest");
+    const out = await runMeetIngest(env, { now });
+    for (const r of out.read) artifacts.push({ kind: "MEET_CONFERENCE", ref_type: "meet_event_inbox", ref_id: r.conference_record, note: `${r.state}: ${r.detail}` });
+    return { status: out.ok ? "SUCCEEDED" : "FAILED", summary: out.summary, artifacts };
+  }
+
   if (job.job_key === "productions_intro_note") {
     const { runIntroNote } = await import("./productions");
     const out = await runIntroNote(env);

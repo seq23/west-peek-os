@@ -329,6 +329,14 @@ jobs:
       # ring and one arithmetic are hosted twice, and this fails if either page grows its own again.
       - name: The portfolio shows what the firm owns
         run: npm run validate:portfolio
+      # Phase Meet (18 Sep 2026). A calendar event exists here as exactly one meeting through both
+      # doors, and the calendar/Meet code paths never name the other business; an ended Meet call is
+      # read once, attributed only by Meet's own participant join, and reaches the transcript only
+      # through the governed import. Both hard-fail on zero fixtures.
+      - name: A calendar meeting exists once
+        run: npm run validate:calendar-sync
+      - name: A Meet call that ended is read
+        run: npm run validate:meet-ingest
 
       - name: Build client
         run: npm run build

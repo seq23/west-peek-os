@@ -309,6 +309,12 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // whole system already agrees on is the safe direction.
   { key: "duty_override.set", name: "Change who is on duty", description: "Put an employee on or off a named shift, or give them explicit working hours that supersede the shift model for them. Stored as a difference from the firm's default rota, never as a copy of it, and always with who changed it and why.", isExternalEffect: false },
   { key: "duty_override.clear", name: "Put a duty change back to default", description: "Remove a duty override so the employee follows the firm's default rota again. The change and its removal both stay on the event spine.", isExternalEffect: false },
+  // Phase Meet (18 Sep 2026) — Google Meet, seamless. All internal: reading a calendar and an
+  // ended conference writes only to this system. The reserved firm-default recording decision is
+  // in reservedActions.ts. Nothing here grants a write to Google.
+  { key: "calendar.sync", name: "Sync a partner calendar", description: "Read a partner's Google Calendar and create or update one meeting per event with a Meet link. Internal record only; reads nothing it cannot see and writes nothing to Google.", isExternalEffect: false },
+  { key: "meet.ingest", name: "Read an ended Google Meet", description: "Read the participants, transcript entries and recording pointer of a conference that ended, and ingest the transcript through the governed import. Never runs a model.", isExternalEffect: false },
+  { key: "meet.consent.platform_announced", name: "Record platform-announced consent", description: "Record TRANSCRIPTION and RECORDING consent as GRANTED for a Meet-native transcript, on the basis that Google Meet announced both to every participant. Never for a transcript uploaded by hand.", isExternalEffect: false },
 ] as const;
 
 /**
