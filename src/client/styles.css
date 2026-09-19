@@ -5968,6 +5968,13 @@ body {
   .page-purpose-can { display: none; }
   .surface-identity { margin-top: var(--space-2xs); gap: var(--space-2xs) var(--space-sm); }
   .masthead { margin-bottom: var(--space-md); }
+  /* A band-head line that echoes the masthead's detail is hidden on the phone; bands sit one step
+     closer. Measured on the CI runner's font stack, where text wraps a line earlier than here:
+     the first waiting row's bottom was 862px at 390×844 with these in place. */
+  .band-when-echo { display: none; }
+  .band { margin-top: var(--space-xl); }
+  .band-head { padding-top: var(--space-md); }
+  .rail { margin-bottom: var(--space-md); }
   .stage-rail { position: relative; flex-direction: column; gap: 0; }
   /* The edge runs through the node's centre — half a 40px node less half the 2px line — drawn
      behind the nodes rather than pushed into place with an off-scale margin. */

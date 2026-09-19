@@ -435,7 +435,9 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                 {waitingSelect ? "Cancel" : "Select…"}
               </button>
             )}
-            <span className="band-when" data-testid="home-waiting-when">
+            {/* `band-when-echo`: this line says what the masthead's detail already said, ninety
+                pixels up — on a phone it is hidden so the first row stays whole above the fold. */}
+            <span className="band-when band-when-echo" data-testid="home-waiting-when">
               {waitingCount === 0
                 ? "no decision is blocked on your signature"
                 : undecided.length + previews.previews.length === 0

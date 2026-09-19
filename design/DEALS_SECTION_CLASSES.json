@@ -482,6 +482,9 @@
     ],
     "identity-role": [
       "home"
+    ],
+    "band-when-echo": [
+      "home"
     ]
   }
 }
