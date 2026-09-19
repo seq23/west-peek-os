@@ -5978,3 +5978,69 @@ and the scenario opened against the mandate's size; `p11` and `p64` kept green.
 **Not done, and why.** Per-company reserves (`position_reserve`) subtracting from the headroom
 wait on Portfolio writing them (Deals spec §6). A crosshair tooltip on the pace chart is a
 follow-up; the chart carries its sentence and marker labels.
+## Home, rebuilt — what is waiting, what arrived, one count (19 Sep 2026)
+
+**Spec.** `design/HOME_DESIGN.md` (branch `design/home` @ 38c17a8, canvas
+https://claude.ai/artifact/BKqKjJN1iwNVhwzkutQdRV), approved by the owner 19 Sep with three picks
+decided: no bulk approve (select-many quiets blockers and clears arrivals only); the brief band never
+mentions a clock — scheduled/off collapse into idle and the "usually" figure is
+`expectations.usualSeconds`, measured, never typed; Ask and Setup move to the foot line (Ask stays in
+the nav). Audit findings honoured: 13 (5 critical, 6 major, 2 minor).
+
+**What landed.** One masthead answer in words from ONE count (`shared/home/answerLine.ts`:
+`needsHer` = decisions + blockers + previews; the Waiting pill renders the same number; the detail
+names the kind — "Not a signature — …"; one sentence of the brief's line). A filter rail under the
+masthead — All · Waiting on me · Arrived · Quiet — with `← Home` when a filter is on, remembered per
+viewer (`client/lib/homeFilter.ts`, `wp.home.filter:<viewer>`), never opening on an empty band, Esc
+returns. Waiting decides inline: Approve (`btn-strong`) · Reject (a reason under the row) · Open on
+the row through `POST /api/approvals/:id/decide`; the decided row wears its `approved 7:04 AM` badge
+and leaves on the next read; select-many quiets blockers for a week or stops them — the approval
+card's checkbox is disabled with "Decided one at a time", and there is no `Approve selected`. Arrived
+carries deliverables for the viewer with `daily_brief` excluded (`?exclude_kind=`), `Mark all read`
+and select-many `Mark read` / `Put away` as ONE request each (`POST /api/deliverables/acknowledge-many`,
+`/dismiss-many`, `POST /api/attention/dismiss-many`; zero ids is a 400; a partial batch is a 207
+that names what it could not find) with Undo. The brief is a band with eight named states, a stage
+strip, the product's progress track capped at 95% until READY, and the measured usual. One orange
+control on the page: the preview's Approve and send. The removals table honoured: the brief's
+Show/Hide fold, the quiet roll's toggle, the put-away shelf toggle, the Ask dock, the Connect strip,
+Home layout preferences, the Private layer (now its own route, `#/private`, linked from the foot) and
+"What this page answers" (Help) are off Home; 31 retired CSS rules removed. Every card she can decide
+is a row — `mpHome` no longer hands Home the first eight of them.
+
+**The 7 AM screen.** At 390×844 the shell put 437px of chrome above the answer (the identity line
+wrapped to three, the purpose block ran to five). On a phone the identity line drops the address
+and the role, the purpose block drops its verb line; the redundant "waiting on you" badge inside the
+Waiting band is gone; the masthead carries one sentence of the brief. Masthead at 346px; rail,
+Waiting head and the first row whole above the fold; Arrived within one row-height under the rows
+(above the fold when one thing waits). `design/home-screens/before-390.png` and `after-390.png`.
+
+**The sign-out race, fixed at its source (coordinator's addition, from main run 35457193192's
+predecessor 35457328146).** CONFIRMED from the runner's log: after sign-in, Home's children sent
+their first reads AFTER Sign out had dropped the identity; they came back 401 `{error}`; four
+children read `.length` / `.themes` / `.enabled` / `.map` off that body; one threw and React 18
+unmounted the whole tree — `#root` empty, no signed-out page. Reproduced deterministically by
+routing any one of those reads to a 401. `useApi` now hands `data` only for a 2xx (the status still
+says what happened; `IntegrationsPage`'s one error-body read is keyed on 403), and `SurfaceBoundary`
+(keyed on route and identity) keeps a page that still throws inside its own place. `p42` pins the
+real sequence — the click, the `/api/me` 401, then the sentence — and a fourth journey forces both
+guarantees. Negative proof: with the old `useApi` restored the journey fails at the fault pin.
+
+**Proof.** `tests/homeAnswerLine.test.ts` (the pill and the answer can never disagree, 18 mixes;
+one sentence of the brief), `tests/homeFilter.test.ts`, `tests/briefRunState.test.ts` (`slow`,
+`stages`), `tests/deliverables.test.ts` (zero ids 400 on three verbs; 200 with every id read; 207
+naming the missing id; `exclude_kind` keeps the brief off Arrived and only there),
+`tests/homeFreshness.test.ts` (the ninth card renders; the count is the rows). `validate:home`
+(eight source pins, 13 planted defects, hard-fails on zero). `e2e/home-overhaul.spec.ts` (the 7 AM
+screen; one count; `daily_brief` never in Arrived; reject → reason, approve → badge; Mark all read;
+select-many put-away and Undo; the rail remembered, `← Home`, Esc, never empty; no Approve selected;
+the measured contract at five widths — 285 text nodes, min 5.02:1, 100 clickables, 0 under the
+floor, 0 wrapped, 0 overflow at 320/375/414/768/1280). `d2-home-measured` and `measure.ts` treat the
+rail as the one declared inner scroller. Re-pointed stricter: `p14-mp-home`, `p25-journeys`,
+`p42-session`. Desk link-buttons meet the 24px floor everywhere.
+
+**Not done, and why.** The shell's status bar still says "N waiting on you" from unread
+notifications — a different number from the masthead's, in the masthead's words. It is the
+shell's copy on every page, defended in place by a comment, and outside Home's boundary; it is
+recorded here for the shell's own pass. `HOME_DESIGN.md` §1 #5's "26.8 min average" is the
+production figure; the band shows what the rows measure (`measuredExpectations`, last 30 completed
+write calls + 75 s), so the copy carries no number of its own.
