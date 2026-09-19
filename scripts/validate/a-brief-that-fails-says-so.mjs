@@ -109,9 +109,20 @@ export function largestAsk(sources) {
   let largest = 0;
   let examined = 0;
   for (const raw of Object.values(sources)) {
-    for (const m of stripComments(raw).matchAll(/expectedOutputTokens:\s*([0-9_]+)/g)) {
+    const body = stripComments(raw);
+    // A literal ask, or a NAMED one resolved to the constant the same file exports (19 Sep 2026:
+    // the brief's ask became `BRIEF_EXPECTED_OUTPUT_TOKENS` so a sibling validator can hold it
+    // against production's measured p90). An identifier this cannot resolve is a violation in the
+    // caller's own right — an ask nobody can read is an ask nothing can check — so it counts as
+    // examined and as the largest possible, which fails the ceiling comparison loudly.
+    for (const m of body.matchAll(/expectedOutputTokens:\s*([0-9_]+|[A-Z][A-Z0-9_]+)/g)) {
       examined += 1;
-      largest = Math.max(largest, Number(m[1].replace(/_/g, "")));
+      if (/^[0-9_]+$/.test(m[1])) {
+        largest = Math.max(largest, Number(m[1].replace(/_/g, "")));
+      } else {
+        const decl = new RegExp(`(?:export\\s+)?const\\s+${m[1]}\\s*=\\s*([0-9_]+)\\s*;`).exec(body);
+        largest = Math.max(largest, decl ? Number(decl[1].replace(/_/g, "")) : Number.POSITIVE_INFINITY);
+      }
     }
   }
   return { largest, examined };
@@ -476,6 +487,10 @@ async function selfTest() {
 
   // largestAsk reads the callers, and ignores a number inside a comment.
   const asks = largestAsk({ "a.ts": "budgetContext: { expectedOutputTokens: 8000 }", "b.ts": "expectedOutputTokens: 1_200" });
+  const named = largestAsk({ "n.ts": "export const BRIEF_EXPECTED_OUTPUT_TOKENS = 24_000;\nbudgetContext: { expectedOutputTokens: BRIEF_EXPECTED_OUTPUT_TOKENS }" });
+  say(named.largest === 24_000 && named.examined === 1, "a named ask did not resolve to its constant");
+  const unresolvable = largestAsk({ "u.ts": "budgetContext: { expectedOutputTokens: SOMEWHERE_ELSE }" });
+  say(unresolvable.largest === Number.POSITIVE_INFINITY, "an ask nobody can read passed as zero");
   say(asks.largest === 8000 && asks.examined === 2, `largestAsk read ${asks.largest} from ${asks.examined} callers, expected 8000 from 2`);
   const commented = largestAsk({ "c.ts": "/* expectedOutputTokens: 99999 */ expectedOutputTokens: 600" });
   say(commented.largest === 600, "a number written only in a comment was counted as a caller's ask");

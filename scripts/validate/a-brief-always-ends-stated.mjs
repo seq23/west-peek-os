@@ -144,10 +144,19 @@ export function checkOneDefinitionOfFinished(service) {
         "skip guard is how a row ended up matching none of them and being advanced for free",
     );
   }
+  /*
+   * EVERY SQL done-query uses the shared fragment — and there is exactly the number of them the
+   * service has, counted rather than assumed (19 Sep 2026: `briefsOwedToday`, the sweep job's gate,
+   * went with the branch it gated; the count went from two to one and "both" stopped being the
+   * right word). Stricter than the old `>= 2`: any SQL in the service that names READY and FAILED
+   * together in a WHERE must be the fragment, so a second done-query written by hand is caught
+   * whatever the count, and the gate that was deleted may not quietly return.
+   */
   const shared = (body.match(/\$\{TERMINAL_SQL\}/g) ?? []).length;
-  if (shared < 2) {
-    violations.push(`only ${shared} done-quer${shared === 1 ? "y uses" : "ies use"} the shared terminal fragment; both must`);
-  }
+  if (shared < 1) violations.push("no done-query uses the shared terminal fragment");
+  const byHand = (body.match(/WHERE[^`]*status\s*=\s*'FAILED'\s*AND\s*attempts\s*>=/g) ?? []).length;
+  if (byHand > 0) violations.push(`${byHand} done-quer${byHand === 1 ? "y" : "ies"} write${byHand === 1 ? "s" : ""} FAILED-and-spent by hand instead of using the shared fragment`);
+  if (/briefsOwedToday/.test(body)) violations.push("briefsOwedToday is back — the brief must not ride inside the sweep job's gate again");
 
   examined += 1;
   if (!/briefTerminality\(row\.status, row\.attempts\)\.terminal/.test(body)) {
