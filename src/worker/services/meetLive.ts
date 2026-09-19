@@ -39,10 +39,13 @@ import { AUDIO_CONTENT_TYPE } from "./meetingRoom";
  * THE GATES, in the order they are checked, each a named state on the meeting:
  *   1 · the meeting was created by the calendar sync and carries a Meet conference — a manual
  *       meeting has no live path at all (409 `not_firm_hosted`; its state stays NULL);
- *   2 · the firm's Meet recording default is on (0203) — else `meet_live_unavailable_policy`;
- *   3 · consent is recorded on the platform's announcement (`recordPlatformAnnouncedConsent`,
+ *   2 · the meeting's TYPE may join the media stream — LP and Broker meetings never do (the
+ *       owner's rule, 19 Sep 2026; the reason is term (vi) of the Developer Preview terms, written
+ *       above `liveAllowedForType` in meetLiveView.ts) — else `meet_live_off_lp_policy`;
+ *   3 · the firm's Meet recording default is on (0203) — else `meet_live_unavailable_policy`;
+ *   4 · consent is recorded on the platform's announcement (`recordPlatformAnnouncedConsent`,
  *       the same basis and the same exclusions as the ended-call ingest);
- *   4 · `meet.live.join` is authorised for the SYSTEM actor in the meeting's firm scope.
+ *   5 · `meet.live.join` is authorised for the SYSTEM actor in the meeting's firm scope.
  * Only then is a session row written, and only against that row may audio arrive.
  *
  * NOTHING WRITES FROM VOICE, still. A slice becomes TRANSCRIPT_DERIVED notes through the governed
@@ -67,9 +70,9 @@ export class MeetLiveError extends Error {
 }
 
 export { LIVE_PROVIDER, NOT_SUPERSEDED_NOTE_CLAUSE } from "./meetLiveNotes";
-export { MEET_LIVE_STATES, LISTENER_STALE_MS, DUE_BEFORE_MS, DUE_AFTER_MS, isFirmHostedMeet, meetLiveView, type MeetLiveState, type MeetLiveView } from "./meetLiveView";
+export { MEET_LIVE_STATES, LISTENER_STALE_MS, DUE_BEFORE_MS, DUE_AFTER_MS, LIVE_EXCLUDED_MEETING_TYPES, isFirmHostedMeet, liveAllowedForType, meetLiveView, type MeetLiveState, type MeetLiveView } from "./meetLiveView";
 import { LIVE_PROVIDER } from "./meetLiveNotes";
-import { MEET_LIVE_STATES, LISTENER_STALE_MS, DUE_BEFORE_MS, DUE_AFTER_MS, isFirmHostedMeet, type MeetLiveState } from "./meetLiveView";
+import { MEET_LIVE_STATES, LISTENER_STALE_MS, DUE_BEFORE_MS, DUE_AFTER_MS, LP_POLICY_DETAIL, isFirmHostedMeet, liveAllowedForType, type MeetLiveState } from "./meetLiveView";
 
 /** What the join costs to speak, for the ledger: Nova-3 ≈ 470 neurons a minute (probed 18 Sep 2026), $0.011 per 1,000 after the free 10,000/day. */
 export const USD_PER_NEURON = 0.011 / 1000;
@@ -148,6 +151,8 @@ export interface DueMeeting {
   confidential: boolean;
   policy_active: boolean;
   meet_live_state: MeetLiveState | null;
+  /** False for an LP or Broker meeting: the listener reads nothing for it, and the row already says why. */
+  live_allowed: boolean;
   session: { id: string; state: LiveSessionRow["state"]; conference_record: string } | null;
 }
 
@@ -188,9 +193,15 @@ export async function heartbeat(env: Env, identity: FirmUserIdentity, input: z.i
     const session = await env.WP_OS_DB.prepare(
       "SELECT id, state, conference_record FROM meet_live_session WHERE meeting_id = ?1 ORDER BY created_at DESC LIMIT 1",
     ).bind(m.id).first<{ id: string; state: LiveSessionRow["state"]; conference_record: string }>();
-    // A firm-hosted Meet in its window with nothing said about it yet is "not started" — a state
-    // the During face can render, rather than a blank that reads as "nothing will happen".
-    if (!m.meet_live_state) {
+    const allowed = liveAllowedForType(m.meeting_type);
+    if (!allowed && m.meet_live_state !== "meet_live_off_lp_policy") {
+      // The owner's rule, said on the row before the call even starts, so the During face never
+      // shows an LP meeting as "waiting to be joined".
+      await setMeetLiveState(env, m.id, "meet_live_off_lp_policy", LP_POLICY_DETAIL, now);
+      m.meet_live_state = "meet_live_off_lp_policy";
+    } else if (allowed && !m.meet_live_state) {
+      // A firm-hosted Meet in its window with nothing said about it yet is "not started" — a state
+      // the During face can render, rather than a blank that reads as "nothing will happen".
       await setMeetLiveState(env, m.id, "meet_not_started", "The Meet conference has not started; the OS joins when it does.", now);
       m.meet_live_state = "meet_not_started";
     }
@@ -199,6 +210,7 @@ export async function heartbeat(env: Env, identity: FirmUserIdentity, input: z.i
       confidential: m.meeting_type === "LP" || m.lp_record_id !== null,
       policy_active: policy?.active === 1,
       meet_live_state: m.meet_live_state,
+      live_allowed: allowed,
       session: session ?? null,
     });
   }
@@ -226,10 +238,19 @@ export async function openSession(env: Env, identity: FirmUserIdentity, input: z
     throw new MeetLiveError(409, "not_firm_hosted", "the live path exists only for a meeting the calendar sync created with a Meet conference; this one was typed in, or has no Meet link", null);
   }
 
+  // Gate 2 — the meeting's type. THE OWNER'S RULE (19 Sep 2026): LP and Broker meetings NEVER
+  // join the live media stream, because the Meet Media API is Pre-GA and term (vi) of the
+  // Developer Preview terms lets Google use what passes through it. Enforced here, at the join
+  // decision, before anything is written; the row says so; the post-call transcript still runs.
+  if (!liveAllowedForType(meeting.meeting_type)) {
+    await setMeetLiveState(env, meeting.id, "meet_live_off_lp_policy", LP_POLICY_DETAIL, now);
+    throw new MeetLiveError(409, "lp_policy", LP_POLICY_DETAIL, "meet_live_off_lp_policy");
+  }
+
   const existing = await env.WP_OS_DB.prepare("SELECT * FROM meet_live_session WHERE conference_record = ?1").bind(input.conference_record).first<LiveSessionRow>();
   if (existing && existing.state !== "REFUSED") return { session: existing, created: false };
 
-  // Gate 2 — the firm's Meet recording default, the one reserved decision (0203).
+  // Gate 3 — the firm's Meet recording default, the one reserved decision (0203).
   const policy = await firmRecordingPolicy(env, meeting.firm_scope);
   if (policy?.active !== 1) {
     const detail = "The firm's Meet recording default is off, so the OS does not join. Approve the meet.recording_policy.firm_default card and turn it on from the Meetings page.";
@@ -248,7 +269,7 @@ export async function openSession(env: Env, identity: FirmUserIdentity, input: z
     meeting.recording_enabled = 1;
   }
 
-  // Gate 4 — authorised as the SYSTEM actor, in the meeting's scope.
+  // Gate 5 — authorised as the SYSTEM actor, in the meeting's scope.
   const actor = systemActor(meeting.firm_scope);
   const authz = await authorize(env, actor, "meet.live.join", { objectType: "meeting", objectId: meeting.id, firmScope: meeting.firm_scope });
   if (authz.decision !== "ALLOW") {
@@ -256,7 +277,7 @@ export async function openSession(env: Env, identity: FirmUserIdentity, input: z
     throw new MeetLiveError(403, "forbidden", authz.reason, "meet_live_failed");
   }
 
-  // Gate 3 — consent on the platform's announcement. Same function, same basis, same exclusions
+  // Gate 4 — consent on the platform's announcement. Same function, same basis, same exclusions
   // as the ended-call ingest; it refuses a meeting the calendar did not create.
   let consent: { transcription: string; recording: string };
   try {

@@ -40,6 +40,9 @@
 --                                  enrolled in the Workspace Developer Preview (the second stop)
 --   meet_live_unavailable_edition  Google refused the join (the exact API error is in the detail)
 --   meet_live_unavailable_policy   the firm's Meet recording default is off
+--   meet_live_off_lp_policy        an LP or Broker meeting: never joined live, by the owner's rule
+--                                  (the Media API is Pre-GA; term (vi) of the preview terms lets
+--                                  Google use what passes through it) — the post-call path still runs
 --   meet_live_failed               the peer failed for a reason that is not one of the above
 --   NULL                           a manual meeting, or one without a Meet conference: not applicable
 --
@@ -67,7 +70,7 @@ ALTER TABLE meeting ADD COLUMN meet_live_state TEXT
   CHECK (meet_live_state IS NULL OR meet_live_state IN (
     'meet_not_started','meet_live_joining','meet_live_listening','meet_live_ended','meet_live_no_listener',
     'meet_live_unavailable_scope','meet_live_unavailable_preview','meet_live_unavailable_edition',
-    'meet_live_unavailable_policy','meet_live_failed'));
+    'meet_live_unavailable_policy','meet_live_off_lp_policy','meet_live_failed'));
 ALTER TABLE meeting ADD COLUMN meet_live_detail TEXT;
 ALTER TABLE meeting ADD COLUMN meet_live_updated_at TEXT;
 

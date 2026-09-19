@@ -6,7 +6,7 @@ import type { Env } from "../src/worker/env";
 import { runCalendarSync } from "../src/worker/services/calendarSync";
 import { runMeetIngest, PLATFORM_CONSENT_BASIS } from "../src/worker/services/meetIngest";
 import { liveChunk, stateForJoinFailure, costPerHour, LIVE_PROVIDER, MEET_LIVE_STATES, LISTENER_STALE_MS } from "../src/worker/services/meetLive";
-import { meetLiveView } from "../src/worker/services/meetLiveView";
+import { meetLiveView, liveAllowedForType } from "../src/worker/services/meetLiveView";
 import { roomState, buildRoomContext, ROLL_EVERY_MS } from "../src/worker/services/meetingRoom";
 import { draftInputFor } from "../src/worker/services/meetingAfter";
 import { SCOPE, serviceAccountToken, getSpace, connectActiveConference } from "../src/worker/effects/googleWorkspaceClient";
@@ -68,6 +68,7 @@ async function approvedReceipt(actionKey: string, objectType: string, objectId: 
 
 let lpMeeting: any;
 let internalMeeting: any;
+let founderMeeting: any;
 let manualMeeting: any;
 
 beforeAll(async () => {
@@ -79,11 +80,14 @@ beforeAll(async () => {
   g.calendarItems = [
     calendarItem({ id: "ev_lp", summary: "Oak catch-up", start: TODAY_START, code: "ddd-eeee-fff", attendees: [{ email: "sequoia@westpeek.ventures", self: true }, { email: "olive@oakfo.com", displayName: "Olive Oak" }] }),
     calendarItem({ id: "ev_internal", summary: "Partners sync", start: TODAY_START, code: "aaa-bbbb-ccc", attendees: [{ email: "sequoia@westpeek.ventures", self: true }, { email: "scooter@westpeek.ventures" }] }),
+    calendarItem({ id: "ev_founder", summary: "Acme intro", start: TODAY_START, code: "bbb-cccc-ddd", attendees: [{ email: "sequoia@westpeek.ventures", self: true }, { email: "founder@acme.example", displayName: "Ada Acme" }] }),
     calendarItem({ id: "ev_tomorrow", summary: "Tomorrow", start: TOMORROW_START, code: "ggg-hhhh-iii", attendees: [{ email: "sequoia@westpeek.ventures", self: true }] }),
   ];
   await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW });
   lpMeeting = await env.WP_OS_DB.prepare("SELECT * FROM meeting WHERE google_event_id = 'ev_lp'").first<any>();
   internalMeeting = await env.WP_OS_DB.prepare("SELECT * FROM meeting WHERE google_event_id = 'ev_internal'").first<any>();
+  founderMeeting = await env.WP_OS_DB.prepare("SELECT * FROM meeting WHERE google_event_id = 'ev_founder'").first<any>();
+  expect([lpMeeting.meeting_type, internalMeeting.meeting_type, founderMeeting.meeting_type]).toEqual(["LP", "INTERNAL", "FOUNDER"]);
   const manual = await call<{ id: string }>("/api/meetings", "POST", { title: "Typed in by hand", meeting_type: "FOUNDER", scheduled_at: NOW.toISOString() });
   expect(manual.status).toBe(201);
   manualMeeting = await env.WP_OS_DB.prepare("SELECT * FROM meeting WHERE id = ?1").bind(manual.body.id).first<any>();
@@ -97,7 +101,10 @@ describe("1. the states are one vocabulary", () => {
   it("names every state the migration's CHECK admits, and maps a failed join to the one the During face needs", async () => {
     const sql = (await env.WP_OS_DB.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'meeting'").first<{ sql: string }>())!.sql;
     for (const s of MEET_LIVE_STATES) expect(sql, `${s} must be in the CHECK`).toContain(`'${s}'`);
-    expect(MEET_LIVE_STATES).toHaveLength(10);
+    expect(MEET_LIVE_STATES).toHaveLength(11);
+    expect(liveAllowedForType("LP")).toBe(false);
+    expect(liveAllowedForType("BROKER")).toBe(false);
+    for (const t of ["INTERNAL", "FOUNDER", "DILIGENCE", "PORTFOLIO", "OTHER"]) expect(liveAllowedForType(t), t).toBe(true);
     expect(stateForJoinFailure("scope_missing")).toBe("meet_live_unavailable_scope");
     expect(stateForJoinFailure("preview_missing")).toBe("meet_live_unavailable_preview");
     expect(stateForJoinFailure("forbidden")).toBe("meet_live_unavailable_edition");
@@ -118,14 +125,19 @@ describe("2. the heartbeat: who may, and what is due", () => {
     expect(nobody.status).toBe(401);
     const hb = await call("/api/meet/live/heartbeat", "POST", { device_id: "mac-test", version: "meet-live-1", media_scope: "SCOPE_MISSING", detail: "grant missing" }, LISTENER);
     expect(hb.status).toBe(200);
-    // Today's two Meets, not tomorrow's, never the manual one. Sorted by schedule; both at 15:00.
+    // Today's three Meets, not tomorrow's, never the manual one.
     const ids = hb.body.due.map((d: any) => d.meeting_id).sort();
-    expect(ids).toEqual([internalMeeting.id, lpMeeting.id].sort());
-    expect(hb.body.due.find((d: any) => d.meeting_id === lpMeeting.id)).toMatchObject({ meeting_code: "ddd-eeee-fff", confidential: true, policy_active: false, meet_live_state: "meet_not_started", session: null });
+    expect(ids).toEqual([internalMeeting.id, lpMeeting.id, founderMeeting.id].sort());
+    expect(hb.body.due.find((d: any) => d.meeting_id === internalMeeting.id)).toMatchObject({ meeting_code: "aaa-bbbb-ccc", confidential: false, policy_active: false, meet_live_state: "meet_not_started", live_allowed: true, session: null });
+    // THE OWNER'S RULE: an LP meeting is offered with live_allowed=false and already says why on the row.
+    expect(hb.body.due.find((d: any) => d.meeting_id === lpMeeting.id)).toMatchObject({ meeting_code: "ddd-eeee-fff", confidential: true, meet_live_state: "meet_live_off_lp_policy", live_allowed: false, session: null });
     expect(hb.body.listener).toMatchObject({ device_id: "mac-test", media_scope: "SCOPE_MISSING", detail: "grant missing" });
     const row = await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(manualMeeting.id).first<any>();
     expect(row.meet_live_state).toBeNull();
-    expect((await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(lpMeeting.id).first<any>()).meet_live_state).toBe("meet_not_started");
+    expect((await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>()).meet_live_state).toBe("meet_not_started");
+    const lp = await env.WP_OS_DB.prepare("SELECT meet_live_state, meet_live_detail FROM meeting WHERE id = ?1").bind(lpMeeting.id).first<any>();
+    expect(lp.meet_live_state).toBe("meet_live_off_lp_policy");
+    expect(lp.meet_live_detail).toContain("off for LP and Broker meetings by policy");
   });
 });
 
@@ -138,53 +150,71 @@ describe("3. opening a session: the gates, in order", () => {
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meet_live_session").first<any>()).n).toBe(0);
   });
 
+  it("refuses an LP meeting by the owner's rule — no session, no consent, the row says why — and a Broker meeting the same", async () => {
+    const r = await call("/api/meet/live/sessions", "POST", { meeting_id: lpMeeting.id, conference_record: "conferenceRecords/lp_never", listener_device: "mac-test" }, LISTENER);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ error: "lp_policy", meet_live_state: "meet_live_off_lp_policy" });
+    expect(r.body.detail).toContain("Pre-GA");
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meet_live_session WHERE meeting_id = ?1").bind(lpMeeting.id).first<any>()).n).toBe(0);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(lpMeeting.id).first<any>()).n).toBe(0);
+    const broker = await call<{ id: string }>("/api/meetings", "POST", { title: "Broker call", meeting_type: "BROKER", scheduled_at: NOW.toISOString() });
+    await env.WP_OS_DB.prepare("UPDATE meeting SET source = 'google_calendar', meet_conference_id = 'brk-brkr-brk', calendar_key = 'westpeek' WHERE id = ?1").bind(broker.body.id).run();
+    const b = await call("/api/meet/live/sessions", "POST", { meeting_id: broker.body.id, conference_record: "conferenceRecords/brk_never", listener_device: "mac-test" }, LISTENER);
+    expect(b.status).toBe(409);
+    expect(b.body.error).toBe("lp_policy");
+    expect((await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(broker.body.id).first<any>()).meet_live_state).toBe("meet_live_off_lp_policy");
+  });
+
   it("refuses while the firm default is off — the meeting reads meet_live_unavailable_policy and no consent is written", async () => {
-    const r = await call("/api/meet/live/sessions", "POST", { meeting_id: lpMeeting.id, conference_record: "conferenceRecords/lp_live", listener_device: "mac-test" }, LISTENER);
+    const r = await call("/api/meet/live/sessions", "POST", { meeting_id: internalMeeting.id, conference_record: "conferenceRecords/int_live", listener_device: "mac-test" }, LISTENER);
     expect(r.status).toBe(409);
     expect(r.body).toMatchObject({ error: "recording_policy_off", meet_live_state: "meet_live_unavailable_policy" });
-    const m = await env.WP_OS_DB.prepare("SELECT meet_live_state, meet_live_detail FROM meeting WHERE id = ?1").bind(lpMeeting.id).first<any>();
+    const m = await env.WP_OS_DB.prepare("SELECT meet_live_state, meet_live_detail FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>();
     expect(m.meet_live_state).toBe("meet_live_unavailable_policy");
     expect(m.meet_live_detail).toContain("meet.recording_policy.firm_default");
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM consent_record").first<any>()).n).toBe(0);
-    expect((await env.WP_OS_DB.prepare("SELECT state FROM meet_live_session WHERE conference_record = 'conferenceRecords/lp_live'").first<any>()).state).toBe("REFUSED");
+    expect((await env.WP_OS_DB.prepare("SELECT state FROM meet_live_session WHERE conference_record = 'conferenceRecords/int_live'").first<any>()).state).toBe("REFUSED");
   });
 
-  it("a partner may not open one, even with the default on", async () => {
+  it("a partner may not open one, even with the default on; an LP meeting is still refused with the default on", async () => {
     const receipt = await approvedReceipt("meet.recording_policy.firm_default", "meet_recording_policy", "west-peek");
     const on = await call("/api/meet/recording-policy", "POST", { action: "activate", approval_receipt_id: receipt });
     expect(on.status).toBe(200);
-    const r = await call("/api/meet/live/sessions", "POST", { meeting_id: lpMeeting.id, conference_record: "conferenceRecords/lp_live", listener_device: "mac-test" });
+    const r = await call("/api/meet/live/sessions", "POST", { meeting_id: internalMeeting.id, conference_record: "conferenceRecords/int_live", listener_device: "mac-test" });
     expect(r.status).toBe(403);
+    const lp = await call("/api/meet/live/sessions", "POST", { meeting_id: lpMeeting.id, conference_record: "conferenceRecords/lp_never", listener_device: "mac-test" }, LISTENER);
+    expect(lp.status).toBe(409);
+    expect(lp.body.error).toBe("lp_policy");
   });
 
   it("opens with the default on: consent on the platform's announcement, recording enabled from the firm receipt, state joining — and a second open is the same session", async () => {
-    const r = await call("/api/meet/live/sessions", "POST", { meeting_id: lpMeeting.id, conference_record: "conferenceRecords/lp_live", listener_device: "mac-test", join_identity: "sequoia@westpeek.ventures" }, LISTENER);
+    const r = await call("/api/meet/live/sessions", "POST", { meeting_id: internalMeeting.id, conference_record: "conferenceRecords/int_live", listener_device: "mac-test", join_identity: "sequoia@westpeek.ventures" }, LISTENER);
     expect(r.status).toBe(201);
     expect(r.body.created).toBe(true);
-    expect(r.body.session).toMatchObject({ meeting_id: lpMeeting.id, meeting_code: "ddd-eeee-fff", state: "JOINING", listener_device: "mac-test", join_identity: "sequoia@westpeek.ventures", chunks: 0, turns: 0 });
-    const m = await env.WP_OS_DB.prepare("SELECT * FROM meeting WHERE id = ?1").bind(lpMeeting.id).first<any>();
+    expect(r.body.session).toMatchObject({ meeting_id: internalMeeting.id, meeting_code: "aaa-bbbb-ccc", state: "JOINING", listener_device: "mac-test", join_identity: "sequoia@westpeek.ventures", chunks: 0, turns: 0 });
+    const m = await env.WP_OS_DB.prepare("SELECT * FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>();
     const policy = await env.WP_OS_DB.prepare("SELECT receipt_id FROM meet_recording_policy WHERE firm_scope = 'west-peek'").first<any>();
     expect(m).toMatchObject({ meet_live_state: "meet_live_joining", recording_enabled: 1, recording_policy_receipt_id: policy.receipt_id });
-    const consent = (await env.WP_OS_DB.prepare("SELECT id, consent_type, state, basis, recorded_by FROM consent_record WHERE meeting_id = ?1 ORDER BY consent_type").bind(lpMeeting.id).all<any>()).results;
+    const consent = (await env.WP_OS_DB.prepare("SELECT id, consent_type, state, basis, recorded_by FROM consent_record WHERE meeting_id = ?1 ORDER BY consent_type").bind(internalMeeting.id).all<any>()).results;
     expect(consent.map((c: any) => [c.consent_type, c.state, c.recorded_by])).toEqual([["RECORDING", "GRANTED", "system"], ["TRANSCRIPTION", "GRANTED", "system"]]);
     for (const c of consent) expect(c.basis).toContain(`${PLATFORM_CONSENT_BASIS}:`);
     expect(r.body.session.consent_recording_id).toBe(consent[0].id);
     expect(r.body.session.consent_transcription_id).toBe(consent[1].id);
-    const again = await call("/api/meet/live/sessions", "POST", { meeting_id: lpMeeting.id, conference_record: "conferenceRecords/lp_live", listener_device: "mac-test" }, LISTENER);
+    const again = await call("/api/meet/live/sessions", "POST", { meeting_id: internalMeeting.id, conference_record: "conferenceRecords/int_live", listener_device: "mac-test" }, LISTENER);
     expect(again.status).toBe(200);
     expect(again.body.created).toBe(false);
     expect(again.body.session.id).toBe(r.body.session.id);
-    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(lpMeeting.id).first<any>()).n).toBe(2);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(internalMeeting.id).first<any>()).n).toBe(2);
   });
 });
 
 describe("4. a slice of the call becomes the room's record", () => {
   let sessionId: string;
   beforeAll(async () => {
-    sessionId = (await env.WP_OS_DB.prepare("SELECT id FROM meet_live_session WHERE conference_record = 'conferenceRecords/lp_live'").first<any>()).id;
+    sessionId = (await env.WP_OS_DB.prepare("SELECT id FROM meet_live_session WHERE conference_record = 'conferenceRecords/int_live'").first<any>()).id;
   });
 
-  it("a partner may not post audio; the listener's slice goes through Nova-3 and the governed import into TRANSCRIPT_DERIVED notes with the meeting's LP_PRIVATE label", async () => {
+  it("a partner may not post audio; the listener's slice goes through Nova-3 and the governed import into TRANSCRIPT_DERIVED notes carrying the meeting's own label", async () => {
     const partner = await call(`/api/meet/live/sessions/${sessionId}/chunk`, "POST", slice("no", 0));
     expect(partner.status).toBe(403);
     const r = await call(`/api/meet/live/sessions/${sessionId}/chunk`, "POST", slice("We agreed to send the term sheet by Friday and the founder said runway is fourteen months", 0), LISTENER);
@@ -193,14 +223,14 @@ describe("4. a slice of the call becomes the room's record", () => {
     expect(r.body.speakers).toEqual([0, 1]);
     expect(r.body.neurons).toBeGreaterThan(0);
     expect(r.body.session).toMatchObject({ state: "LISTENING", chunks: 1, turns: 2, seconds_heard: 60 });
-    const imp = (await env.WP_OS_DB.prepare("SELECT status, provider_name, source, imported_by, superseded_by FROM transcript_import WHERE meeting_id = ?1").bind(lpMeeting.id).all<any>()).results;
+    const imp = (await env.WP_OS_DB.prepare("SELECT status, provider_name, source, imported_by, superseded_by FROM transcript_import WHERE meeting_id = ?1").bind(internalMeeting.id).all<any>()).results;
     expect(imp).toEqual([{ status: "IMPORTED", provider_name: LIVE_PROVIDER, source: "NATIVE", imported_by: "system", superseded_by: null }]);
-    const notes = (await env.WP_OS_DB.prepare("SELECT body, note_type, privacy_label FROM meeting_note WHERE meeting_id = ?1 ORDER BY created_at, id").bind(lpMeeting.id).all<any>()).results;
+    const notes = (await env.WP_OS_DB.prepare("SELECT body, note_type, privacy_label FROM meeting_note WHERE meeting_id = ?1 ORDER BY created_at, id").bind(internalMeeting.id).all<any>()).results;
     expect(notes).toHaveLength(2);
-    expect(notes[0]).toMatchObject({ note_type: "TRANSCRIPT_DERIVED", privacy_label: "LP_PRIVATE" });
+    expect(notes[0]).toMatchObject({ note_type: "TRANSCRIPT_DERIVED", privacy_label: internalMeeting.privacy_label });
     expect(notes[0].body).toBe("Speaker 1: We agreed to send the term sheet by Friday");
     expect(notes[1].body).toBe("Speaker 2: and the founder said runway is fourteen months");
-    expect((await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(lpMeeting.id).first<any>()).meet_live_state).toBe("meet_live_listening");
+    expect((await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>()).meet_live_state).toBe("meet_live_listening");
   });
 
   it("a silent slice writes nothing and is not a failure; a slice after the session ends is refused", async () => {
@@ -208,17 +238,17 @@ describe("4. a slice of the call becomes the room's record", () => {
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ text: "", turns_written: 0 });
     expect(r.body.session.chunks).toBe(2);
-    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1").bind(lpMeeting.id).first<any>()).n).toBe(2);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1").bind(internalMeeting.id).first<any>()).n).toBe(2);
   });
 
   it("the During face reads it: the room's state says listening with the live turns, and the context pack carries what was just said", async () => {
     const identity = (await resolveFirmUser(new Request("https://test.local/", { headers: MP }), env))!;
-    const room = await roomState(env, identity, lpMeeting.id);
+    const room = await roomState(env, identity, internalMeeting.id);
     expect(room.meet_live).toMatchObject({ state: "meet_live_listening", applicable: true, live_turns: 2, superseded: false });
     expect(room.meet_live.session).toMatchObject({ state: "LISTENING", chunks: 2, turns: 2 });
     expect(room.meet_live.listener_seen_at).toBeTruthy();
     expect(room.capture.turns).toBe(2);
-    const context = await buildRoomContext(env, { ...lpMeeting, source: "google_calendar" });
+    const context = await buildRoomContext(env, { ...internalMeeting, source: "google_calendar" });
     expect(context).toContain("term sheet by Friday");
   });
 
@@ -240,20 +270,20 @@ describe("4. a slice of the call becomes the room's record", () => {
     const out2 = await liveChunk(env, identity, sessionId, slice("One more thing before we close", 4), later);
     expect(out2.turns_written).toBe(1);
     expect((await env.WP_OS_DB.prepare("SELECT last_draft_at FROM meet_live_session WHERE id = ?1").bind(sessionId).first<any>()).last_draft_at).toBe(later.toISOString());
-    const draft = await env.WP_OS_DB.prepare("SELECT state, notes_read FROM meeting_after_draft WHERE meeting_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(lpMeeting.id).first<any>();
+    const draft = await env.WP_OS_DB.prepare("SELECT state, notes_read FROM meeting_after_draft WHERE meeting_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(internalMeeting.id).first<any>();
     expect(draft, "the drafter wrote a row — a DRAFT, or a named failure when no model can be read").toBeTruthy();
     expect(["DRAFTED", "FAILED", "REFUSED"]).toContain(draft.state);
     for (const table of ["meeting_decision", "meeting_commitment", "meeting_open_question"]) {
-      expect((await env.WP_OS_DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE meeting_id = ?1`).bind(lpMeeting.id).first<any>()).n, `${table} untouched`).toBe(0);
+      expect((await env.WP_OS_DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE meeting_id = ?1`).bind(internalMeeting.id).first<any>()).n, `${table} untouched`).toBe(0);
     }
   });
 
   it("a listener gone quiet is not listening: the view says meet_live_no_listener with when it was last heard", async () => {
     const stale = new Date(Date.now() + LISTENER_STALE_MS + 60_000);
-    const view = await meetLiveView(env, lpMeeting, stale);
+    const view = await meetLiveView(env, internalMeeting, stale);
     expect(view.state).toBe("meet_live_no_listener");
     expect(view.detail).toContain("has not been heard from since");
-    const fresh = await meetLiveView(env, lpMeeting, new Date());
+    const fresh = await meetLiveView(env, internalMeeting, new Date());
     expect(fresh.state).toBe("meet_live_listening");
   });
 
@@ -268,7 +298,7 @@ describe("4. a slice of the call becomes the room's record", () => {
     const status = await call("/api/meet/live/status");
     expect(status.status).toBe(200);
     expect(status.body.listeners[0]).toMatchObject({ device_id: "mac-test" });
-    expect(status.body.sessions[0]).toMatchObject({ id: sessionId, title: "Oak catch-up", cost: c });
+    expect(status.body.sessions[0]).toMatchObject({ id: sessionId, title: "Partners sync", cost: c });
     expect(status.body.states).toEqual(MEET_LIVE_STATES);
   });
 
@@ -277,7 +307,7 @@ describe("4. a slice of the call becomes the room's record", () => {
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ state: "ENDED" });
     expect(r.body.ended_at).toBeTruthy();
-    const m = await env.WP_OS_DB.prepare("SELECT status, meet_live_state, meet_live_detail FROM meeting WHERE id = ?1").bind(lpMeeting.id).first<any>();
+    const m = await env.WP_OS_DB.prepare("SELECT status, meet_live_state, meet_live_detail FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>();
     expect(m.status).toBe("HELD");
     expect(m.meet_live_state).toBe("meet_live_ended");
     expect(m.meet_live_detail).toContain("4 turn(s) heard live");
@@ -288,8 +318,8 @@ describe("4. a slice of the call becomes the room's record", () => {
 });
 
 describe("5. the join fails: three named states, with Google's own words", () => {
-  const open = async (record: string) => (await call("/api/meet/live/sessions", "POST", { meeting_id: internalMeeting.id, conference_record: record, listener_device: "mac-test" }, LISTENER)).body.session.id as string;
-  const stateOf = async () => env.WP_OS_DB.prepare("SELECT meet_live_state, meet_live_detail FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>();
+  const open = async (record: string) => (await call("/api/meet/live/sessions", "POST", { meeting_id: founderMeeting.id, conference_record: record, listener_device: "mac-test" }, LISTENER)).body.session.id as string;
+  const stateOf = async () => env.WP_OS_DB.prepare("SELECT meet_live_state, meet_live_detail FROM meeting WHERE id = ?1").bind(founderMeeting.id).first<any>();
 
   it("scope missing → meet_live_unavailable_scope; preview missing → _preview; forbidden → _edition carrying the exact message; else → failed", async () => {
     let id = await open("conferenceRecords/int_a");
@@ -313,39 +343,39 @@ describe("5. the join fails: three named states, with Google's own words", () =>
     await call(`/api/meet/live/sessions/${id}/report`, "POST", { state: "FAILED", detail: "ice failed" }, LISTENER);
     expect((await stateOf()).meet_live_state).toBe("meet_live_failed");
     // Four sessions on the meeting, all FAILED, none accepting audio.
-    const sessions = (await env.WP_OS_DB.prepare("SELECT state FROM meet_live_session WHERE meeting_id = ?1").bind(internalMeeting.id).all<any>()).results;
+    const sessions = (await env.WP_OS_DB.prepare("SELECT state FROM meet_live_session WHERE meeting_id = ?1").bind(founderMeeting.id).all<any>()).results;
     expect(sessions.map((s: any) => s.state)).toEqual(["FAILED", "FAILED", "FAILED", "FAILED"]);
   });
 });
 
 describe("6. the official transcript supersedes the live notes, and consent is recorded once", () => {
-  const LP_CONF: FakeConference = {
-    name: "conferenceRecords/lp_live", space: "spaces/sp_lp", meetingCode: "ddd-eeee-fff",
+  const INT_CONF: FakeConference = {
+    name: "conferenceRecords/int_live", space: "spaces/sp_int", meetingCode: "aaa-bbbb-ccc",
     startTime: iso(-4 * 60_000), endTime: iso(35 * 60_000),
     participants: [
-      { name: "conferenceRecords/lp_live/participants/p1", displayName: "Sequoia Taylor", kind: "SIGNED_IN" },
-      { name: "conferenceRecords/lp_live/participants/p2", displayName: "Olive Oak", kind: "SIGNED_IN" },
+      { name: "conferenceRecords/int_live/participants/p1", displayName: "Sequoia Taylor", kind: "SIGNED_IN" },
+      { name: "conferenceRecords/int_live/participants/p2", displayName: "Scooter Taylor", kind: "SIGNED_IN" },
     ],
     transcript: {
-      name: "conferenceRecords/lp_live/transcripts/t1", state: "FILE_GENERATED", document: "doc_lp_live",
+      name: "conferenceRecords/int_live/transcripts/t1", state: "FILE_GENERATED", document: "doc_int_live",
       entries: [
-        { participant: "conferenceRecords/lp_live/participants/p1", text: "We agreed to send the term sheet by Friday.", startTime: iso(-3 * 60_000) },
-        { participant: "conferenceRecords/lp_live/participants/p2", text: "Olive will confirm the commitment amount next week.", startTime: iso(-2 * 60_000) },
+        { participant: "conferenceRecords/int_live/participants/p1", text: "We agreed to send the term sheet by Friday.", startTime: iso(-3 * 60_000) },
+        { participant: "conferenceRecords/int_live/participants/p2", text: "Scooter will confirm the amount next week.", startTime: iso(-2 * 60_000) },
       ],
     },
     recording: null,
   };
 
   it("after the call, the ingest reads the official transcript, supersedes the live import, and the draft input reads only the official words", async () => {
-    g.conferences = [LP_CONF];
-    const before = await draftInputFor(env, lpMeeting.id);
+    g.conferences = [INT_CONF];
+    const before = await draftInputFor(env, internalMeeting.id);
     expect(before.notes).toBe(4);
     const out = await runMeetIngest(env, { fetchImpl: g.fetch, now: new Date(NOW.getTime() + 60 * 60_000) });
-    const read = out.read.find((r) => r.conference_record === "conferenceRecords/lp_live")!;
+    const read = out.read.find((r) => r.conference_record === "conferenceRecords/int_live")!;
     expect(read.state).toBe("INGESTED");
     // Three slices carried words, so three live imports — each slice is its own governed import.
     expect(read.detail).toContain("supersedes 3 live import(s)");
-    const imports = (await env.WP_OS_DB.prepare("SELECT id, provider_name, superseded_by FROM transcript_import WHERE meeting_id = ?1 AND status = 'IMPORTED' ORDER BY created_at, rowid").bind(lpMeeting.id).all<any>()).results;
+    const imports = (await env.WP_OS_DB.prepare("SELECT id, provider_name, superseded_by FROM transcript_import WHERE meeting_id = ?1 AND status = 'IMPORTED' ORDER BY created_at, rowid").bind(internalMeeting.id).all<any>()).results;
     expect(imports).toHaveLength(4);
     const official = imports[imports.length - 1];
     const lives = imports.slice(0, 3);
@@ -353,21 +383,21 @@ describe("6. the official transcript supersedes the live notes, and consent is r
     expect(official.provider_name).toBe("GOOGLE_MEET");
     expect(official.superseded_by).toBeNull();
     const live = lives[0];
-    expect((await env.WP_OS_DB.prepare("SELECT official_import_id FROM meet_live_session WHERE conference_record = 'conferenceRecords/lp_live'").first<any>()).official_import_id).toBe(official.id);
+    expect((await env.WP_OS_DB.prepare("SELECT official_import_id FROM meet_live_session WHERE conference_record = 'conferenceRecords/int_live'").first<any>()).official_import_id).toBe(official.id);
     // The live notes are still on the record …
-    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1 AND transcript_import_id = ?2").bind(lpMeeting.id, live.id).first<any>()).n).toBe(2);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1 AND transcript_import_id = ?2").bind(internalMeeting.id, live.id).first<any>()).n).toBe(2);
     // … and the After draft reads the official transcript only.
-    const after = await draftInputFor(env, lpMeeting.id);
+    const after = await draftInputFor(env, internalMeeting.id);
     expect(after.notes).toBe(2);
-    expect(after.text).toContain("Olive Oak");
+    expect(after.text).toContain("Scooter Taylor");
     expect(after.text).not.toContain("Speaker 1:");
-    const context = await buildRoomContext(env, { ...lpMeeting, source: "google_calendar" });
+    const context = await buildRoomContext(env, { ...internalMeeting, source: "google_calendar" });
     expect(context).not.toContain("Speaker 1:");
-    expect(context).toContain("Olive Oak");
-    const view = await meetLiveView(env, lpMeeting, new Date());
+    expect(context).toContain("Scooter Taylor");
+    const view = await meetLiveView(env, internalMeeting, new Date());
     expect(view).toMatchObject({ state: "meet_live_ended", live_turns: 4, superseded: true });
     // Consent was recorded when the OS joined and is not recorded again when the transcript lands.
-    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(lpMeeting.id).first<any>()).n).toBe(2);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(internalMeeting.id).first<any>()).n).toBe(2);
   });
 });
 
@@ -489,9 +519,11 @@ describe("7. end to end: the listener's loop against a fake Meet media server", 
 
 describe("8. the routes, through the router", () => {
   it("resolves a Meet code to the meeting for the side panel (tier 3), refuses a code that is not one, and 401s nobody on every live route", async () => {
-    const ok = await call("/api/meet/live/resolve?code=DDD-EEEE-FFF");
+    const ok = await call("/api/meet/live/resolve?code=AAA-BBBB-CCC");
     expect(ok.status).toBe(200);
-    expect(ok.body).toMatchObject({ meeting_id: lpMeeting.id, title: "Oak catch-up", meet_live_state: "meet_live_ended", candidates: 1 });
+    expect(ok.body).toMatchObject({ meeting_id: internalMeeting.id, title: "Partners sync", meet_live_state: "meet_live_ended", candidates: 1 });
+    const lp = await call("/api/meet/live/resolve?code=ddd-eeee-fff");
+    expect(lp.body).toMatchObject({ meeting_id: lpMeeting.id, meet_live_state: "meet_live_off_lp_policy" });
     expect((await call("/api/meet/live/resolve?code=nope")).status).toBe(400);
     expect((await call("/api/meet/live/resolve?code=zzz-zzzz-zzz")).status).toBe(404);
     for (const [method, path] of [["POST", "/api/meet/live/heartbeat"], ["POST", "/api/meet/live/sessions"], ["POST", "/api/meet/live/sessions/x/report"], ["POST", "/api/meet/live/sessions/x/chunk"], ["GET", "/api/meet/live/status"], ["GET", "/api/meet/live/resolve?code=ddd-eeee-fff"]] as const) {

@@ -72,6 +72,7 @@
     "validate:fund-strategy-split": "node scripts/validate/fund-strategy-owns-the-plan-not-the-portfolio.mjs && node scripts/validate/fund-strategy-owns-the-plan-not-the-portfolio.mjs --self-test",
     "validate:calendar-sync": "node scripts/validate/a-calendar-meeting-exists-once.mjs && node scripts/validate/a-calendar-meeting-exists-once.mjs --self-test",
     "validate:meet-ingest": "node scripts/validate/a-meet-call-that-ended-is-read.mjs && node scripts/validate/a-meet-call-that-ended-is-read.mjs --self-test",
+    "validate:meet-live": "node scripts/validate/the-room-hears-only-a-firm-meet.mjs && node scripts/validate/the-room-hears-only-a-firm-meet.mjs --self-test && node scripts/meet/live-listener.mjs --self-test",
     "validate:meeting-yield": "node scripts/validate/a-meeting-produces-something.mjs && node scripts/validate/a-meeting-produces-something.mjs --self-test",
     "validate:meeting-brief": "node scripts/validate/a-brief-exists-before-every-meeting.mjs && node scripts/validate/a-brief-exists-before-every-meeting.mjs --self-test",
     "validate:voice-is-read-only": "node scripts/validate/nothing-writes-from-voice.mjs && node scripts/validate/nothing-writes-from-voice.mjs --self-test",

@@ -343,6 +343,13 @@ jobs:
         run: npm run validate:calendar-sync
       - name: A Meet call that ended is read
         run: npm run validate:meet-ingest
+      # Phase Meet, tier 4 (19 Sep 2026). The room hears a Meet LIVE only for a firm-hosted call,
+      # through four gates checked before a session exists; the listener on the Mac and its browser
+      # peer make no network call of their own, audio goes only to the Worker and then only to the
+      # Workers AI binding with mip_opt_out; the live states agree between the During face and the
+      # database. Includes the listener's own self-test against a fake Meet. Hard-fails on zero.
+      - name: The room hears only a firm-hosted Meet, and the audio goes nowhere else
+        run: npm run validate:meet-live
       # Phase B (18 Sep 2026): a meeting is one object with three faces. The AFTER face — what was
       # settled, what is owed on both sides, what is still unknown, what it means for the deal — is
       # drafted by an employee and becomes a record only when a partner approves. This fails if any

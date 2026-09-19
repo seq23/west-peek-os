@@ -21,9 +21,30 @@ export const MEET_LIVE_STATES = [
   "meet_live_unavailable_preview",
   "meet_live_unavailable_edition",
   "meet_live_unavailable_policy",
+  "meet_live_off_lp_policy",
   "meet_live_failed",
 ] as const;
 export type MeetLiveState = (typeof MEET_LIVE_STATES)[number];
+
+/**
+ * THE OWNER'S RULE, 19 Sep 2026: LP and Broker meetings NEVER join the live media stream.
+ *
+ * WHY. The Meet Media API is a Pre-GA API under the Google Workspace Developer Preview Program,
+ * and the program's terms — term (vi) — let Google use data sent through Pre-GA APIs to improve
+ * them. An LP conversation names limited partners and deal terms, which must never reach a route
+ * whose terms permit that (the same rule the router enforces for models). So the live path is
+ * gated BY MEETING TYPE at the join decision, in code: Internal, Founder, Diligence and Portfolio
+ * meetings may join; LP and Broker meetings keep the GA post-call transcript path (tier 2) and
+ * read `meet_live_off_lp_policy` on the row. `validate:meet-live` plants an LP meeting and
+ * requires the refusal.
+ */
+export const LIVE_EXCLUDED_MEETING_TYPES = ["LP", "BROKER"] as const;
+
+export function liveAllowedForType(meetingType: string): boolean {
+  return !(LIVE_EXCLUDED_MEETING_TYPES as readonly string[]).includes(meetingType);
+}
+
+export const LP_POLICY_DETAIL = "Live listening is off for LP and Broker meetings by policy: the Meet Media API is a Pre-GA API whose terms let Google use what passes through it, and an LP conversation must never go there. The official transcript is read in after the call as usual.";
 
 /** A listener not heard from for this long is not listening, whatever its last row said. Three heartbeats. */
 export const LISTENER_STALE_MS = 90_000;

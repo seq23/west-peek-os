@@ -166,6 +166,9 @@ export function createListener(/** @type {Deps} */ deps) {
     const token = async () => (readToken ??= await deps.google.token([SCOPES.meetRead], deps.subject));
 
     for (const m of due) {
+      // THE OWNER'S RULE: an LP or Broker meeting is never joined live (Pre-GA terms). The Worker
+      // says so on the row and marks it here; this loop does not even read its space.
+      if (m.live_allowed === false) continue;
       const spaceName = `spaces/${m.meeting_code}`;
       const open = active.get(m.meeting_id);
       if (open) {
@@ -237,7 +240,10 @@ export async function selfTest() {
   const worker = { sessions: new Map(), policyOff: false, reports: [], chunks: [] };
   const workerCall = async (path, body) => {
     calls.push(["worker", path, body]);
-    if (path === "/api/meet/live/heartbeat") return { status: 200, body: { due: [{ meeting_id: "mtg_1", meeting_code: "abc-defg-hij", session: worker.sessions.get("mtg_1") ?? null }] } };
+    if (path === "/api/meet/live/heartbeat") return { status: 200, body: { due: [
+      { meeting_id: "mtg_1", meeting_code: "abc-defg-hij", live_allowed: true, session: worker.sessions.get("mtg_1") ?? null },
+      { meeting_id: "mtg_lp", meeting_code: "lpp-lppp-lpp", live_allowed: false, meet_live_state: "meet_live_off_lp_policy", session: null },
+    ] } };
     if (path === "/api/meet/live/sessions") {
       if (worker.policyOff) return { status: 409, body: { error: "recording_policy_off", meet_live_state: "meet_live_unavailable_policy", detail: "off" } };
       const s = { id: "mls_1", state: "JOINING", conference_record: body.conference_record };
@@ -319,7 +325,11 @@ export async function selfTest() {
   assert(peers.length === 2, "a Worker refusal creates no peer");
   assert(log.some((l) => /meet_live_unavailable_policy/.test(l)), "the refusal is logged with the meeting state");
 
-  // 6 · every host this loop spoke to is Google's or the Worker's — asserted on the call log.
+  // 6 · the LP meeting: offered with live_allowed=false every cycle, never read, never joined.
+  assert(!calls.some((c) => c[0] === "getSpace" && /lpp-lppp-lpp/.test(c[1])), "an LP meeting's space is never read");
+  assert(!calls.some((c) => c[0] === "worker" && c[1] === "/api/meet/live/sessions" && c[2]?.meeting_id === "mtg_lp"), "an LP meeting never gets a session request");
+
+  // 7 · every host this loop spoke to is Google's or the Worker's — asserted on the call log.
   assert(calls.every((c) => c[0] === "worker" || c[0] === "token" || c[0] === "getSpace" || c[0] === "connect"), "no other kind of call exists");
 
   return { calls: calls.length, reports: worker.reports.length, chunks: worker.chunks.length };
