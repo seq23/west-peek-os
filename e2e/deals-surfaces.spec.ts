@@ -286,17 +286,18 @@ async function openDealflow(page: Page): Promise<void> {
 }
 
 test.describe("Dealflow", () => {
-  test("holds its measured numbers on the pipeline and on the record's five faces, at five widths", async ({ page, request }) => {
-    // Nine rendered states at five widths is forty-five sweeps, each waiting on fonts and two
-    // painted frames; the Work equivalent (twelve sweeps) runs under `test.slow()`. This one is
-    // given the time its arithmetic needs rather than a multiplier.
-    test.setTimeout(300_000);
-    await installMeasurers(page);
-    await signIn(page);
-    const seed = await seedDealflow(request);
-    const report: string[] = [];
+  /*
+   * ONE TEST PER WIDTH. Nine rendered states at five widths is forty-five sweeps; as one test that
+   * needed a longer deadline, and `validate:green-means-something` is right that a longer deadline
+   * is never a fix. Five tests each run inside the ordinary allowance, and a failure names its width.
+   */
+  for (const vp of VIEWPORTS) {
+    test(`holds its measured numbers on the pipeline and on the record's five faces at ${vp.name}`, async ({ page, request }) => {
+      await installMeasurers(page);
+      await signIn(page);
+      const seed = await seedDealflow(request);
+      const report: string[] = [];
 
-    for (const vp of VIEWPORTS) {
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await openDealflow(page);
 
@@ -350,10 +351,10 @@ test.describe("Dealflow", () => {
       }
       await page.getByTestId("deal-record-close").click();
       await expect(page.getByTestId("deal-record")).toHaveCount(0);
-    }
 
-    console.log("DEALFLOW MEASURED\n  " + report.join("\n  "));
-  });
+      console.log("DEALFLOW MEASURED\n  " + report.join("\n  "));
+    });
+  }
 
   test("has three ranks of type, not one", async ({ page, request }) => {
     await installMeasurers(page);
