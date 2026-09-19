@@ -23,6 +23,7 @@ const ROOM = readFileSync(new URL("../src/client/pages/RoomPanel.tsx", import.me
 // Phase D: the Before and After faces, and the one seating card.
 const FACES = readFileSync(new URL("../src/client/pages/MeetingFacesPanel.tsx", import.meta.url), "utf8");
 const SEATING = readFileSync(new URL("../src/client/pages/LiveHelpPanel.tsx", import.meta.url), "utf8");
+const MEET = readFileSync(new URL("../src/client/pages/MeetBand.tsx", import.meta.url), "utf8");
 const ADRS = readFileSync(new URL("../ARCHITECTURAL_DECISIONS.md", import.meta.url), "utf8");
 
 /** Source with block and line comments removed: the file is allowed to SAY why something went. */
@@ -48,7 +49,7 @@ describe("Meetings keeps the ranks the shared pattern expects", () => {
      * h3, a thing inside one is an h4. Every h2 in these files must therefore sit inside a
      * `.masthead` — an h2 anywhere else is a rank the stylesheet does not reach.
      */
-    for (const [name, src] of [["MeetingsPage", MEETINGS], ["MeetingFacesPanel", FACES], ["CloseoutPanel", CLOSEOUT], ["LiveHelpPanel", SEATING], ["RoomPanel", ROOM]] as const) {
+    for (const [name, src] of [["MeetingsPage", MEETINGS], ["MeetingFacesPanel", FACES], ["CloseoutPanel", CLOSEOUT], ["LiveHelpPanel", SEATING], ["RoomPanel", ROOM], ["MeetBand", MEET]] as const) {
       expect(ranks(src).filter((r) => r < 2 || r > 4), `${name} uses a rank outside h2–h4`).toEqual([]);
       const c = code(src);
       for (const m of c.matchAll(/<h2[ >]/g)) {
@@ -78,6 +79,9 @@ describe("Meetings keeps the ranks the shared pattern expects", () => {
 describe("Meetings reads the order a partner asks in", () => {
   it("is three bands, flat, in the decided order — and the committee is not one of them", () => {
     expect(bands(MEETINGS)).toEqual(["Coming up", "On the record", "Start a meeting now"]);
+    // The fourth band is the Meet door, in its own file.
+    expect(code(MEETINGS)).toContain("<MeetBand onNavigate={onNavigate} />");
+    expect(bands(MEET)).toEqual(["Google Meet"]);
     expect(code(MEETINGS)).not.toContain("Where a deal stands with the committee");
   });
 
@@ -388,6 +392,40 @@ describe("the capture switch is never live-looking and inert", () => {
 
   it("sends the recorder's MIME type with every slice, so Nova-3 can read the container", () => {
     expect(ROOM).toContain("content_type: blob.type");
+  });
+});
+
+describe("the firm default has a door on the page, and the reserved act stays the receipt's", () => {
+  it("raises the card through the approvals path, activates only with the approved receipt, and turns off without one", () => {
+    const c = code(MEET);
+    expect(c).toContain('role="switch"');
+    expect(c).toContain("aria-checked={on}");
+    expect(c).toContain('"/api/approvals"');
+    expect(c).toContain('action_key: FIRM_DEFAULT_ACTION');
+    expect(c).toContain('export const FIRM_DEFAULT_ACTION = "meet.recording_policy.firm_default"');
+    expect(c).toContain('object_type: "meet_recording_policy"');
+    expect(c).toContain("object_id: s.recording_policy.firm_scope");
+    expect(c).toContain("submit: true");
+    expect(c).toContain('body: { action: "activate", approval_receipt_id: approved');
+    expect(c).toContain('body: { action: "deactivate"');
+    // Nothing here writes the policy row itself, and the switch never activates without a receipt.
+    expect(c).not.toMatch(/approval_receipt_id: (undefined|null|"")/);
+    expect(c).toContain("const act = on ? deactivate : approved ? activate : raise;");
+    // Waiting on a partner: the switch is disabled with the reason in words, and the way to Approvals is beside it.
+    expect(c).toContain("(!on && pending !== null)");
+    expect(c).toContain('onNavigate("approvals")');
+    expect(c).toContain('data-testid="meet-default-error"');
+  });
+
+  it("reads where the card stands from the status route, which names both the pending and the approved card", () => {
+    const status = readFileSync(new URL("../src/worker/services/meetIngest.ts", import.meta.url), "utf8");
+    const fn = status.slice(status.indexOf("export async function handleMeetStatus("), status.indexOf("export async function handleMeetInbox("));
+    expect(fn).toContain("action_key = 'meet.recording_policy.firm_default'");
+    expect(fn).toContain("object_type = 'meet_recording_policy'");
+    expect(fn).toContain("approved_card_id");
+    expect(fn).toContain("pending_card_id");
+    // An executed card has been consumed; it is not offered as a receipt again.
+    expect(fn).not.toMatch(/'executed'/);
   });
 });
 

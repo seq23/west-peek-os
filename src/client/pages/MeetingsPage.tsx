@@ -5,6 +5,7 @@ import { LiveHelpPanel } from "./LiveHelpPanel";
 import { RoomPanel } from "./RoomPanel";
 import { CloseoutPanel } from "./CloseoutPanel";
 import { AfterPanel, BeforePanel } from "./MeetingFacesPanel";
+import { MeetBand } from "./MeetBand";
 
 /**
  * Meetings — one object, three faces (design/DEALS_SECTION_DESIGN.md §3, approved 18 Sep 2026).
@@ -1033,6 +1034,9 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           {message && <p className="notice small" data-testid="meetings-message" role="status">{message}</p>}
         </form>
       </section>
+
+      {/* ── 4 ─────────────────────────────────────────────────────────────── */}
+      <MeetBand onNavigate={onNavigate} />
 
       {/* The committee moved to Dealflow with the design pass (§1.1 #1): one object per page. */}
       <p className="muted small hairline" data-testid="committee-pointer">

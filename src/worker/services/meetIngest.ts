@@ -668,19 +668,38 @@ export async function handleFirmRecordingPolicy(ctx: RouteContext): Promise<Resp
   }
 }
 
-/** GET /api/meet/status — policy, subscription, inbox counts. What a partner reads to know the door is open. */
+/**
+ * GET /api/meet/status — policy, subscription, inbox counts. What a partner reads to know the door
+ * is open.
+ *
+ * `approval` (Phase D, owner's addition 19 Sep 2026): the firm-default switch on the Meetings page
+ * needs to know where the reserved act stands — a card raised and waiting for a partner, or a card
+ * approved and not yet consumed. Until then the only door was two curls around an approval. The
+ * card is found by the same three fields `authorize()` matches a receipt on (action key, object
+ * type, object id = the firm scope); an executed card has been consumed and is not offered again.
+ */
 export async function handleMeetStatus(ctx: RouteContext): Promise<Response> {
   const actor = actorFromIdentity(ctx.identity!);
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const policy = await firmRecordingPolicy(ctx.env, firmScope);
   const ledger = (await ctx.env.WP_OS_DB.prepare("SELECT * FROM google_calendar_sync ORDER BY calendar_key").all()).results ?? [];
   const inbox = (await ctx.env.WP_OS_DB.prepare("SELECT state, COUNT(*) AS n FROM meet_event_inbox GROUP BY state").all<{ state: string; n: number }>()).results ?? [];
+  const cards = (await ctx.env.WP_OS_DB.prepare(
+    `SELECT id, state FROM approval_card
+      WHERE action_key = 'meet.recording_policy.firm_default' AND object_type = 'meet_recording_policy' AND object_id = ?1
+        AND state IN ('drafted', 'pending_review', 'revise_requested', 'approved')
+      ORDER BY created_at DESC`,
+  ).bind(firmScope).all<{ id: string; state: string }>()).results ?? [];
   return json({
     configured: isServiceAccountConfigured(ctx.env),
     pubsub: { topic: ctx.env.WP_OS_MEET_PUBSUB_TOPIC ?? null, subscription: ctx.env.WP_OS_MEET_PUBSUB_SUBSCRIPTION ?? null },
     recording_policy: policy ?? { firm_scope: firmScope, active: 0 },
     calendars: ledger,
     inbox: Object.fromEntries(inbox.map((r) => [r.state, r.n])),
+    approval: {
+      approved_card_id: cards.find((c) => c.state === "approved")?.id ?? null,
+      pending_card_id: cards.find((c) => c.state !== "approved")?.id ?? null,
+    },
   });
 }
 
