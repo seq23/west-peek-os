@@ -23,14 +23,17 @@ export function MarkdownLite({ text, className }: { text: string; className?: st
       {blocks.map((b, i) => {
         switch (b.kind) {
           case "heading":
+            // The product has three heading ranks (h2 answer · h3 band · h4 panel) and a rule
+            // against a fourth: a `##` inside a turn is the panel rank, and anything deeper is a
+            // bold line rather than a new rank.
             return b.level === 2 ? (
               <h4 key={i} className="md-lite-head">
                 <Inlines inlines={b.inlines} />
               </h4>
             ) : (
-              <h5 key={i} className="md-lite-head">
+              <p key={i} className="md-lite-head">
                 <Inlines inlines={b.inlines} />
-              </h5>
+              </p>
             );
           case "ordered":
             return (
