@@ -150,7 +150,9 @@ function measureRanks(rootId: string): Array<{ tag: string; px: number; weight: 
  * Returns a report line. Every assertion carries the state and the width so a failure reads.
  */
 async function sweep(page: Page, rootId: string, state: string, vp: { name: string; width: number }): Promise<string> {
-  await page.waitForTimeout(400);
+  // A condition, not a duration: the fonts are in and two frames have painted at this width, so the
+  // boxes being measured are the boxes a reader would see.
+  await page.evaluate(() => document.fonts.ready.then(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))));
   const overflow = await page.evaluate(([id, w]) => measureOverflowInPage(id as string, w as number), [rootId, vp.width] as const);
   expect(overflow, `horizontal overflow on ${state} at ${vp.name}`).toEqual([]);
   const docWide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
