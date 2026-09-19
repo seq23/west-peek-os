@@ -462,6 +462,21 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
     return { card, steps, finished: false, blocked: false, detail: `${employee.name} is not employed right now — switch them on first.` };
   }
 
+  /*
+   * AN ARTIFACT CARD IS WORKED BY THE ONE PRODUCER, whichever door starts the run (19 Sep 2026).
+   * The sweep dispatches on `card.kind`; the button on the card lands here. Handing the card to
+   * the general loop from here would have an employee "search and write a finding" about a
+   * dashboard she asked to be BUILT — the wrong chain, quietly. Dynamic import: artifacts.ts
+   * imports this file for the handover, and a static import would close that cycle at load time.
+   */
+  if (card.kind === "ARTIFACT") {
+    const { runArtifactCard } = await import("./artifacts");
+    const out = await runArtifactCard(env, { id: card.id });
+    const fresh = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<CardRow>();
+    return { card: fresh ?? card, steps: [{ step: 1, action: out.finished ? "done" : out.blocked ? "blocked" : "failed", detail: out.detail }], finished: out.finished, blocked: out.blocked, detail: out.detail };
+  }
+
+
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS' WHERE id = ?1 AND state = 'OPEN'")
     .bind(card.id)
     .run();

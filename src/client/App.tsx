@@ -1859,26 +1859,6 @@ function CompaniesPage({ me }: { me: MeResponse }) {
 }
 
 function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
-  /*
-   * AN ARTIFACT OPENS INSIDE DOCUMENTS (19 Sep 2026). `#/documents/a/<id>` renders the artifact's
-   * own page — the in-app dashboard, deck or document with its exports and versions — in place of
-   * the shelf, and "Back to Documents" is the shelf's own address. The shelf's band for what was
-   * built on demand is `BuiltOnDemand`, below the upload form, so a built thing and an uploaded
-   * thing sit on the same page.
-   */
-  const [artifactId, setArtifactId] = useState<string | null>(() => (typeof window === "undefined" ? null : artifactIdFromHash()));
-  useEffect(() => {
-    const onHash = () => setArtifactId(artifactIdFromHash());
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-  if (artifactId) {
-    return <ArtifactPage artifactId={artifactId} onNavigate={onNavigate} onBack={() => { window.location.hash = "#/documents"; }} />;
-  }
-  return <DocumentsShelf onNavigate={onNavigate} />;
-}
-
-function DocumentsShelf({ onNavigate }: { onNavigate: (page: string) => void }) {
   const documents = useApi<{ documents: DocumentRow[]; types: DocumentTypeChoice[] }>("/api/documents");
   const archived = useApi<{ documents: DocumentRow[] }>("/api/documents?archived=1");
   /*
@@ -2763,10 +2743,12 @@ function Shell() {
    * left the page where it was — which is worse than no routing, because the address then lies
    * about what is on screen.
    */
+  const [artifactId, setArtifactId] = useState<string | null>(() => (typeof window === "undefined" ? null : artifactIdFromHash()));
   useEffect(() => {
     const onHash = () => {
       const key = keyFromHash((k) => ALL_NAV_KEYS.has(k));
       setActive(key);
+      setArtifactId(artifactIdFromHash());
       if (SECONDARY_KEYS.has(key)) setSystemOpen(true);
     };
     window.addEventListener("hashchange", onHash);
@@ -3138,7 +3120,10 @@ function Shell() {
               answering "what has Cedar been told?" required knowing packets lived elsewhere.
               The route still resolves so an old link lands on the page that now holds it. */}
           {authed && active === "reporting" && <LpPage me={me.data!} />}
-          {authed && active === "documents" && <DocumentsPage onNavigate={navigate} />}
+          {/* AN ARTIFACT OPENS INSIDE DOCUMENTS (19 Sep 2026): `#/documents/a/<id>` renders the
+              artifact's own page — the in-app dashboard, deck or document with its exports and
+              versions — in the shelf's place; "Back to Documents" is the shelf's own address. */}
+          {authed && active === "documents" && (artifactId ? <ArtifactPage artifactId={artifactId} onNavigate={navigate} onBack={() => { window.location.hash = "#/documents"; }} /> : <DocumentsPage onNavigate={navigate} />)}
           {authed && active === "contradictions" && <ContradictionsPage />}
           {authed && active === "activity" && <ActivityPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "governance" && <GovernancePage me={me.data!} />}
