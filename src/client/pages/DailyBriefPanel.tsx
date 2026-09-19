@@ -563,9 +563,9 @@ export function DailyBriefPanel({
     <section className="card daily-brief" data-testid="daily-brief" id="daily-brief-contents">
       {masthead}
       <p className="muted small">
-        Written from what the sweep gathered overnight and the levels read this morning. Every
-        figure carries the source it came from; where a level could not be read, the report says so
-        rather than estimating.
+        Built when you ask, any day, on claude-sonnet-5, from what the sweeps gathered in the last
+        48 hours and the levels read at that moment. Every figure carries the source it came from;
+        where a level could not be read, the report says so rather than estimating.
       </p>
 
       {/*

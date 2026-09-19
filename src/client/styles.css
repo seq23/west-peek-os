@@ -2372,7 +2372,19 @@ details h3 {
 .brief-numbered li { margin-bottom: var(--space-sm); line-height: var(--lh-normal); }
 
 /* v5 citations: [n] in the prose links to the numbered source in the footer. */
-.brief-cite { color: var(--wp-orange-deep); text-decoration: none; font-size: var(--text-xs); vertical-align: super; }
+/* A [n] is a tap target like any other: 24px square at minimum, however small its type, so the
+   measured contract (e2e/deals-surfaces.home-brief.spec.ts) holds on a real brief with sixty of them. */
+.brief-cite {
+  color: var(--wp-orange-deep);
+  text-decoration: none;
+  font-size: var(--text-xs);
+  vertical-align: super;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--space-xl);
+  min-height: var(--space-xl);
+}
 .brief-cite:hover { color: var(--wp-orange-deeper); text-decoration: underline; }
 .brief-sources-list { margin: 0 0 var(--space-md); padding-left: var(--space-xl); }
 .brief-sources-list li { margin-bottom: var(--space-2xs); line-height: var(--lh-normal); overflow-wrap: anywhere; }
