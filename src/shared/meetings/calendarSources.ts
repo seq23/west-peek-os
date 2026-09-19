@@ -13,6 +13,8 @@
  * decision in a commit, never a row an admin path could add.
  */
 
+import { partnerByName } from "../registry/partners";
+
 export interface CalendarSource {
   /** Stable key stored on `meeting.calendar_key` and `google_calendar_sync.calendar_key`. */
   key: string;
@@ -29,7 +31,9 @@ export interface CalendarSource {
 export const CALENDAR_SOURCES: readonly CalendarSource[] = [
   {
     key: "westpeek",
-    subjectEmail: "sequoia@westpeek.ventures",
+    // Resolved from the partner registry — the one place that answers who the partners are
+    // (`validate:partners` refuses a typed copy). Sequoia's calendar is the firm's calendar.
+    subjectEmail: partnerByName("Sequoia")!.email,
     // The worker's HOME_FIRM_SCOPE, spelled here because shared code cannot import the worker.
     firmScope: "west-peek",
     firmDomains: ["westpeek.ventures", "joinwestpeek.com"],
