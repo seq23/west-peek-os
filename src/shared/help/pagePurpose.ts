@@ -125,13 +125,14 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
   },
   "fund-strategy": {
     purpose:
-      "Can we write this cheque, and what does it cost us later? What the portfolio is made of, " +
-      "what is going wrong in it, and what the next cheque would do to the shape of the fund.",
+      "Where the fund is going: the plan, how far reality is from it, the reserves, the deck the " +
+      "plan is told in, and the numbers to model the next cheque with. What the portfolio is made of, " +
+      "and what is going wrong in it, is on Portfolio.",
     youCan: [
-      "See where the money has actually gone",
-      "Find the companies moving the wrong way",
-      "Model the next cheque before committing to it",
-      "See what it leaves for reserves and follow-ons",
+      "Open the venture deals dashboards with this fund's numbers to hand",
+      "See how far initial cheques, companies, reserves and secondaries are from the plan",
+      "Amend the construction as a new version, and record first close",
+      "Approve or send back a deck version, and model the next cheque in a scenario",
     ],
   },
   network: {

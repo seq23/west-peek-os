@@ -24,6 +24,8 @@ interface FundRow {
   status: string;
   firm_scope: string;
   created_at: string;
+  /** 0212 — the day the clock started; null until typed or until the first SIGNED commitment. */
+  first_close_on?: string | null;
 }
 
 const POLICY_KINDS = {
@@ -381,14 +383,33 @@ export async function handleFundBasis(ctx: RouteContext): Promise<Response> {
   // `target_size_minor` is integer minor units; everything downstream of the allocation engine is
   // in whole currency, so it is converted once, here, rather than in each of its callers.
   const sizeMinor = (fund as unknown as { target_size_minor: number | null }).target_size_minor;
-  const size = typeof sizeMinor === "number" ? sizeMinor / 100 : null;
+  /*
+   * TWO FUND SIZES, ONE LINK (design/FUND_STRATEGY_DESIGN.md §1 #7, CONFIRMED in production on
+   * 19 Sep 2026: `fund.target_size_minor` is NULL while the current mandate says $30M). Only the LP
+   * page writes the recorded size; the ring, the deck and the construction editor read the
+   * mandate's `target_size_usd`. So this route refused to open a scenario — "the fund's size has
+   * not been recorded" — on the same page that drew a $30M ring. The recorded size still wins when
+   * it exists; otherwise the current mandate's figure is the basis, and the source says which.
+   */
+  const recorded = typeof sizeMinor === "number" ? sizeMinor / 100 : null;
+  const mandateRow = recorded === null
+    ? await ctx.env.WP_OS_DB.prepare("SELECT mandate_json FROM investment_mandate_version WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1").bind(fund.id).first<{ mandate_json: string }>()
+    : null;
+  let fromMandate: number | null = null;
+  try {
+    const m = JSON.parse(mandateRow?.mandate_json ?? "{}") as { target_size_usd?: unknown };
+    fromMandate = typeof m.target_size_usd === "number" && m.target_size_usd > 0 ? m.target_size_usd : null;
+  } catch { fromMandate = null; }
+  const size = recorded ?? fromMandate;
+  const sizeSource = recorded !== null ? "RECORDED" : fromMandate !== null ? "DERIVED" : "MISSING";
   const deployed = held?.deployed ?? 0;
 
   return json({
     fund_id: fund.id,
     fund_name: (fund as unknown as { name: string }).name,
     fund_size: size,
-    fund_size_source: size === null ? "MISSING" : "RECORDED",
+    fund_size_source: sizeSource,
+    first_close_on: fund.first_close_on ?? null,
     fund_deployed: deployed,
     // DERIVED even at zero, and that distinction matters: a fund that has bought nothing has
     // genuinely deployed nothing. Reporting that as MISSING would send the caller looking for a
@@ -404,7 +425,7 @@ export async function handleFundBasis(ctx: RouteContext): Promise<Response> {
     // Said in the partner's language, because the caller has to show this when it refuses.
     blocked_because:
       size === null
-        ? "The fund's size has not been recorded, so there is nothing true to model against. Set it on the fund record first."
+        ? "The fund's size has not been recorded and no mandate names one, so there is nothing true to model against. Set the thesis on Fund strategy or the size on the LP page first."
         : null,
   });
 }

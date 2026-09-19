@@ -69,6 +69,7 @@
     "validate:companies-in-pipeline": "node scripts/validate/every-company-is-in-the-pipeline.mjs && node scripts/validate/every-company-is-in-the-pipeline.mjs --self-test",
     "validate:weekly-review-archived": "node scripts/validate/an-archived-lane-stays-archived.mjs && node scripts/validate/an-archived-lane-stays-archived.mjs --self-test",
     "validate:portfolio": "node scripts/validate/the-portfolio-shows-what-the-firm-owns.mjs && node scripts/validate/the-portfolio-shows-what-the-firm-owns.mjs --self-test",
+    "validate:fund-strategy-split": "node scripts/validate/fund-strategy-owns-the-plan-not-the-portfolio.mjs && node scripts/validate/fund-strategy-owns-the-plan-not-the-portfolio.mjs --self-test",
     "validate:calendar-sync": "node scripts/validate/a-calendar-meeting-exists-once.mjs && node scripts/validate/a-calendar-meeting-exists-once.mjs --self-test",
     "validate:meet-ingest": "node scripts/validate/a-meet-call-that-ended-is-read.mjs && node scripts/validate/a-meet-call-that-ended-is-read.mjs --self-test",
     "validate:meeting-yield": "node scripts/validate/a-meeting-produces-something.mjs && node scripts/validate/a-meeting-produces-something.mjs --self-test",

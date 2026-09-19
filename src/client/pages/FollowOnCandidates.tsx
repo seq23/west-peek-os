@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
-import { HowThisWorks } from "./HowThisWorks";
 
 /**
- * Follow-On Decision Centre (P35, V1 #39, canon §12.4).
+ * Follow-on candidates — "Pulling ahead" on Portfolio (P35, V1 #39, canon §12.4; moved here by
+ * design/FUND_STRATEGY_DESIGN.md §2 on 19 Sep 2026).
  *
- * Two lists kept deliberately apart: reviews the firm has already opened, and companies that look
- * like they warrant one. Merging them would blur a recorded decision with a suggestion, and the
- * whole value of this surface is knowing which is which.
+ * Two lists kept deliberately apart, now on two pages: the REVIEWS the firm has opened live on Fund
+ * strategy's reserves band, beside the headroom they draw on; the CANDIDATES — companies whose latest
+ * reading beat the previous one — live here, on Portfolio, where the company is. Merging them would
+ * blur a recorded decision with a suggestion, and the whole value is knowing which is which.
  *
  * The candidate rule is PRINTED ON THE PAGE. A ranked list with an unstated rule invites the reader
  * to assume judgement that was never applied — these are companies where one number went up, not
@@ -38,7 +39,7 @@ function pct(a: number, b: number): string {
   return `${(((a - b) / b) * 100).toFixed(0)}%`;
 }
 
-export function FollowOnPage(): JSX.Element {
+export function FollowOnCandidates(): JSX.Element {
   const state = useApi<{ reviews: Review[]; pending_count: number; candidates: Candidate[]; candidate_rule: string }>("/api/follow-on");
   const scenarios = useApi<{ scenarios: Scenario[] }>("/api/allocation/scenarios");
   /*
@@ -105,58 +106,11 @@ export function FollowOnPage(): JSX.Element {
     setMessage(`A follow-on review is open for ${c.company_name}. It is waiting on a partner's decision above.`);
     state.reload();
   }
-  const reviews = state.data?.reviews ?? [];
   const candidates = state.data?.candidates ?? [];
 
   return (
-    <div className="page" data-testid="follow-on-page">
-      <h3>Follow-on</h3>
-      <p className="muted">Where more money might go, and what has already been reviewed.</p>
-
-      {/*
-        Said once, here, because four different words were being used for four stages of one path and
-        nothing connected them. A partner reading any single surface could not tell how far along a
-        company was.
-      */}
-      <p className="small" data-testid="follow-on-stages">
-        A company travels four stages, and each lives somewhere different. <strong>Candidate</strong> — a
-        holding whose latest reading beat its previous one, detected below. <strong>Option</strong> — a
-        cheque somebody modelled inside an allocation scenario, on Fund strategy.{" "}
-        <strong>Review</strong> — the path economics, opened here and decided by a partner.{" "}
-        <strong>Booked</strong> — an executed follow-on transaction, which is the only stage where money moved.
-      </p>
-
-      <section className="card">
-        <h4>
-          Open reviews{" "}
-          {state.data?.pending_count ? (
-            <span className="help-tag help-tag-warn" data-testid="follow-on-pending">{state.data.pending_count} pending</span>
-          ) : null}
-        </h4>
-        {reviews.length === 0 ? (
-          <p className="state-empty" data-testid="follow-on-reviews-empty">No follow-on reviews yet.</p>
-        ) : (
-          <ul className="card-list small" data-testid="follow-on-reviews">
-            {reviews.map((r) => (
-              <li key={r.id} data-testid={`follow-on-review-${r.id}`}>
-                {/* OPEN is the undecided state (migration 0011); "PENDING" is not a value this
-                    column can hold, so every review — including ones nobody had looked at — was
-                    painted with the good tag. An undecided decision reading as settled is the one
-                    thing this list must not do. */}
-                <span className={r.status === "OPEN" ? "help-tag help-tag-warn" : "help-tag help-tag-good"}>
-                  {r.status.toLowerCase()}
-                </span>{" "}
-                <strong>{r.company_name ?? r.company_id}</strong>
-                {r.reviewed_at && <span className="muted small"> · reviewed {new Date(r.reviewed_at).toLocaleDateString()}</span>}
-                {r.review_note && <div className="muted small">{r.review_note}</div>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="card">
-        <h4>Pulling ahead</h4>
+    <div data-testid="follow-on-candidates">
+      <div>
         <p className="muted small" data-testid="follow-on-rule">{state.data?.candidate_rule}</p>
         {candidates.length === 0 ? (
           <p className="state-empty" data-testid="follow-on-candidates-empty">
@@ -179,7 +133,7 @@ export function FollowOnPage(): JSX.Element {
                       setMessage(null);
                     }}
                   >
-                    {openFor === c.company_id ? "Never mind" : "Open a follow-on review"}
+                    {openFor === c.company_id ? "Never mind" : "Open a review"}
                   </button>
                 </div>
 
@@ -236,8 +190,8 @@ export function FollowOnPage(): JSX.Element {
                     </div>
                     {(scenarios.data?.scenarios ?? []).length === 0 && (
                       <p className="muted small">
-                        There is no allocation scenario to open this against yet. One is made on Fund
-                        strategy, and a follow-on is always modelled inside one.
+                        There is no allocation scenario to open this against yet. One is opened on Fund
+                        strategy, under Scenarios, and a follow-on is always modelled inside one.
                       </p>
                     )}
                   </div>
@@ -246,21 +200,11 @@ export function FollowOnPage(): JSX.Element {
             ))}
           </ul>
         )}
-      </section>
+      </div>
 
       {message && <p className="notice small" data-testid="follow-on-message" role="status">{message}</p>}
 
-      <HowThisWorks
-        title="Follow-on"
-        testId="follow-on"
-        what="Follow-on reviews the firm has opened, and companies where a tracked metric has improved since its previous reading."
-        when="When deciding where reserve capital goes, or preparing a pro-rata decision."
-        operatorDoes={["Read which reviews are pending.", "Look at what is moving and decide whether it warrants a review."]}
-        aiDoes={["Nothing decides here. The candidate list is a stated rule over recorded metrics, not a recommendation."]}
-        requiresOperator={["Opening a review, and every follow-on decision. Deploying capital is human-reserved."]}
-        next="A review carries through the portfolio surface and its approval path. Nothing on this page moves money."
-        blocked={["A company only appears under 'pulling ahead' with an open position and two readings of the same metric — with one reading there is nothing to compare."]}
-      />
+
     </div>
   );
 }

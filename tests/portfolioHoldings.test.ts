@@ -316,7 +316,18 @@ describe("composition and the deployment ring are computed from the same list", 
     // The one ledger figure is the same money the holdings list and composition report.
     const holdings = await call<HoldingsBody>("/api/portfolio/holdings", MP);
     expect(res.body.deployment.deployed).toBe(holdings.body.totals.invested);
-    expect(res.body.deployment).toEqual(deploymentSlices(fundStrategy, holdings.body.totals.invested));
+    // STRICTER SINCE 19 Sep 2026: the route now also carries the dated pace (`timeline`) and the
+    // secondaries figure (0212, design/FUND_STRATEGY_DESIGN.md §4). The plan-and-deployment figures
+    // must still equal the shared arithmetic exactly, and the two additions must be present and
+    // sum-consistent with the ledger: every timeline point is a dated, positive amount.
+    const { timeline, secondaries_deployed, ...slices } = res.body.deployment as typeof res.body.deployment & { timeline: Array<{ on: string; usd: number }>; secondaries_deployed: number };
+    expect(slices).toEqual(deploymentSlices(fundStrategy, holdings.body.totals.invested));
+    expect(Array.isArray(timeline)).toBe(true);
+    for (const p of timeline) {
+      expect(p.on).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(p.usd > 0, `a timeline point of ${p.usd}`).toBe(true);
+    }
+    expect(secondaries_deployed).toBeGreaterThanOrEqual(0);
     expect(res.body.deployment.remaining).toBe(9_660_000 - holdings.body.totals.invested);
     expect(res.body.deployment.overspend).toBe(0);
     expect(res.body.companies).toBe(holdings.body.totals.companies);

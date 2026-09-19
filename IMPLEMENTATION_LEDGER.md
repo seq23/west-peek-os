@@ -5911,3 +5911,70 @@ shared measured contract at five widths, idle and terminal).
 awaits the owner's approval); the band here is functional and on-token. Sonnet's reply is ~75%
 reasoning tokens; a smaller thinking budget would cut the per-brief cost 2–3× — a quality decision
 for the owner, recorded, not taken.
+
+## Fund strategy — where the fund is going (19 Sep 2026)
+
+**The owner's brief.** *"another design overhaul of the fund strategy page — I don't think we
+should repeat the same stuff that is on the portfolio page (at least in the same way), and the link
+to our venture deals dashboards should be bigger and more prominent."* The approved design is
+`design/FUND_STRATEGY_DESIGN.md` (canvas G1p5bFmgosQsxvoBrJymAR); her three decisions: orange goes
+to the dashboard door; monitoring leaves Fund strategy entirely; `first_close_on` is recorded.
+
+**The audit's twelve findings, each closed.** #1 the door is the first band and the page's one
+`.btn-primary.btn-lg` anchor (`DashboardDoor.tsx`); #2 `Composition` and `CockpitPage` no longer
+mount here (`CockpitPage.tsx` and `FollowOnPage.tsx` are gone — the former's data is Portfolio's
+four bands, the latter's candidates form moved to Portfolio's "Pulling ahead" as
+`FollowOnCandidates.tsx` and its reviews to the reserves band); #3 a masthead answer derived from
+`/api/portfolio/allocation` and the mandate ("One company in, nineteen to the plan."); #4 the
+construction reads as three sentences at rest, the editor opens behind Amend seeded from `current`,
+painted once seeded (a flash-then-flip was caught by the measured contract mid-transition at
+1.6:1); #5 one rank per level — masthead `h2`, band `h3`, panel `h4`, one fund, the picker only
+when `/api/funds` has more than one; #6 the scenario form asks one thing (investable after fees,
+prefilled from the sleeve's estimate and said to be an estimate), the capital/existing-cost
+defaults are gone, no `<code>` ids on the reading line; #7 **CONFIRMED in production**
+(`fund.target_size_minor` NULL, mandate $30M): `/api/funds/:id/basis` now falls back to the current
+mandate's `target_size_usd` with `fund_size_source: DERIVED` — the recorded size still wins; #8 the
+gap rows state the distance pool by pool; #9 `STRATEGY_STEPS` removed; #10 candidates are
+Portfolio's, reviews and headroom are here; #11 `pagePurpose` rewritten; #12 the xirr note stays in
+the code comment.
+
+**New on the record.** Migration 0212 `fund.first_close_on` — typed behind Amend (`PATCH
+/api/funds/:id/size`, `fund.set_size` authority, absent keeps / null clears / malformed 400), or
+set by the first SIGNED LP commitment (`committed_on`, else today; never by a SOFT one, never moved
+by a later signature; `fund.first_close_recorded` on the spine). `/api/portfolio/allocation` carries
+`fund.first_close_on`, `deployment.timeline[]` (executed purchases against the early-stage sleeve,
+dated) and `deployment.secondaries_deployed`. Fees paid to date stays "not recorded" — no fee ledger
+exists. The pace chart (`shared/fund/pace.ts`, inline SVG on `--viz-1` / `--wp-line-control`) has
+four states: no clock (the notice + "Record first close", nothing guessed), running (the verdict in
+words), overspend, no size.
+
+**Styles.** §5 classes appended to `styles.css` — `a.btn-primary`/`a.btn-strong` chrome (a link
+styled as a button did not exist), `.door*`, `.figures`, `.pace*`, `.gap-*`, `.policy-lines`,
+`.construct-line`, `.amend-tray`, `.sector-chips`, `.actions`, `.deck-row`, `.deck-title`,
+`.headroom` — registered under `fund-strategy` in `design/DEALS_SECTION_CLASSES.json`, landed.
+
+**Security.** The door is `<a target="_blank" rel="noreferrer noopener">` with an `aria-label`
+naming the destination; the clipboard write is client-side, the six figures only; every policy
+write is the existing versioned `POST /policies/:kind` (MP-only, 403 kept and shown as the disabled
+Amend with its sentence); `first_close_on` is validated (`YYYY-MM-DD`) and authorised the same way
+the size is.
+
+**Accessibility.** `h2` answer · `h3` band · `h4` panel; every act a `<button>` or `<a href>`;
+Amend and Open a scenario carry `aria-expanded` + `aria-controls`; the invalid cheque range is
+`aria-invalid` with `role=alert`; the chart is `role=img` with a sentence label and the verdict
+repeated in words; the gap bars carry `aria-label`s; 44 px targets below the phone breakpoint.
+
+**Proof.** `tests/fundStrategyBuild.test.ts` (the pace in every state; the sentences; the six
+figures; basis DERIVED then RECORDED; first close typed / cleared / refused; SOFT does not start
+the clock, the first SIGNED does, a second never moves it; the split by source),
+`tests/portfolioHoldings.test.ts` re-pinned stricter for the two new fields;
+`validate:fund-strategy-split` (new, 7 files / 36 mounts, hard-fails under ten items; self-test
+restores the audited page); `validate:portfolio` re-pointed at the ring's new host;
+`e2e/deals-surfaces.fund-strategy.spec.ts` on the shared measured contract — five widths at rest
+(210 text nodes, min 5.29:1, 11 clickables, 0 under the floor, 0 wrapped, 0 overflow) and with
+Amend open (289 text nodes, 31 clickables), the no-clock → running journey through Amend, the copy
+and the scenario opened against the mandate's size; `p11` and `p64` kept green.
+
+**Not done, and why.** Per-company reserves (`position_reserve`) subtracting from the headroom
+wait on Portfolio writing them (Deals spec §6). A crosshair tooltip on the pace chart is a
+follow-up; the chart carries its sentence and marker labels.

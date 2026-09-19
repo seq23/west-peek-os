@@ -566,7 +566,7 @@ export async function handlePortfolioAllocation(ctx: RouteContext): Promise<Resp
   const fundId = url.searchParams.get("fund_id");
   if (!fundId) return json({ error: "invalid_input", detail: "fund_id is required" }, { status: 400 });
 
-  const fund = await ctx.env.WP_OS_DB.prepare("SELECT id, name FROM fund WHERE id = ?1").bind(fundId).first<{ id: string; name: string }>();
+  const fund = await ctx.env.WP_OS_DB.prepare("SELECT id, name, first_close_on FROM fund WHERE id = ?1").bind(fundId).first<{ id: string; name: string; first_close_on: string | null }>();
   if (!fund) return json({ error: "not_found" }, { status: 404 });
 
   const current = async <T,>(table: string, column: string): Promise<T> => {
@@ -585,10 +585,34 @@ export async function handlePortfolioAllocation(ctx: RouteContext): Promise<Resp
   const provisional = holdings.some((h) => h.provisional);
 
   const plan = planSlices(fundSize, sleeve, reserve);
+  /*
+   * THE PACE, DATED (design/FUND_STRATEGY_DESIGN.md §3.2 / §4). One point per executed purchase —
+   * the day the money went and what it cost — so Fund strategy can draw deployed-over-time against
+   * the plan line from first close. Secondary purchases are counted apart: they draw on their own
+   * sleeve, not on initial-cheque capital, and the gap rows say so. Both are read from the ledger
+   * that `amount_in` is summed from, never inferred from the page.
+   */
+  const executed = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT t.transaction_date, t.net_amount, COALESCE(o.opportunity_type, '') AS opportunity_type
+         FROM "transaction" t
+         LEFT JOIN investment_opportunity o ON o.id = t.opportunity_id
+        WHERE t.status = 'EXECUTED'
+          AND t.transaction_type IN ('PURCHASE','PRIMARY_INVESTMENT','FOLLOW_ON')
+          AND (t.fund_id = ?1 OR t.fund_id IS NULL)
+        ORDER BY t.transaction_date, t.created_at`,
+    ).bind(fundId).all<{ transaction_date: string; net_amount: number; opportunity_type: string }>().catch(() => ({ results: [] as Array<{ transaction_date: string; net_amount: number; opportunity_type: string }> }))
+  ).results ?? [];
+  const timeline = executed
+    .filter((t) => t.opportunity_type !== "SECONDARY_PURCHASE")
+    .map((t) => ({ on: t.transaction_date.slice(0, 10), usd: Math.max(0, Number(t.net_amount) || 0) }));
+  const secondariesDeployed = executed
+    .filter((t) => t.opportunity_type === "SECONDARY_PURCHASE")
+    .reduce((sum, t) => sum + Math.max(0, Number(t.net_amount) || 0), 0);
   return json({
-    fund: { id: fund.id, name: fund.name },
+    fund: { id: fund.id, name: fund.name, first_close_on: fund.first_close_on ?? null },
     plan,
-    deployment: deploymentSlices(plan, deployed),
+    deployment: { ...deploymentSlices(plan, deployed), timeline, secondaries_deployed: secondariesDeployed },
     companies: holdings.length,
     provisional,
     note:

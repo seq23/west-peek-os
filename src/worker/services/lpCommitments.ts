@@ -118,13 +118,45 @@ export async function handleRecordCommitment(ctx: RouteContext): Promise<Respons
     },
   });
 
-  return json({ id, lp: lp.legal_name, fund: fund.name, amount: input.amount, state: input.state }, { status: existing ? 200 : 201 });
+  /*
+   * THE FIRST SIGNED COMMITMENT STARTS THE FUND'S CLOCK (0212). A fund with no `first_close_on`
+   * gets one the moment a subscription document lands: the commitment's own date if it carries
+   * one, else today. Never overwritten — a later signature is not a first close — and never set by
+   * a SOFT commitment, which is a verbal yes and belongs in no fund total and on no clock.
+   */
+  let firstCloseSet: string | null = null;
+  if (input.state === "SIGNED") {
+    const day = input.committed_on ?? new Date().toISOString().slice(0, 10);
+    const res = await ctx.env.WP_OS_DB.prepare("UPDATE fund SET first_close_on = ?2 WHERE id = ?1 AND first_close_on IS NULL")
+      .bind(fund.id, day)
+      .run();
+    if ((res.meta?.changes ?? 0) === 1) {
+      firstCloseSet = day;
+      await appendEvent(ctx.env, {
+        eventType: "fund.first_close_recorded",
+        actorType: "firm_user",
+        actorId: actor.firmUserId!,
+        objectType: "fund",
+        objectId: fund.id,
+        firmScope,
+        payload: { first_close_on: day, from: "first signed commitment", lp_commitment_id: id },
+      });
+    }
+  }
+
+  return json({ id, lp: lp.legal_name, fund: fund.name, amount: input.amount, state: input.state, first_close_on_set: firstCloseSet }, { status: existing ? 200 : 201 });
 }
 
 const fundSizeSchema = z.object({
   target_size: z.number().positive().nullable(),
   currency: z.string().trim().length(3).optional(),
   vintage_year: z.number().int().min(2000).max(2100).nullable().optional(),
+  /**
+   * THE DAY THE CLOCK STARTED (0212). Typed here by a Managing Partner behind Fund strategy's Amend,
+   * or set by the first SIGNED commitment below. A date, not a year: the investment period the
+   * pace chart draws against is counted from this day.
+   */
+  first_close_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD").nullable().optional(),
 });
 
 export async function handleSetFundSize(ctx: RouteContext): Promise<Response> {
@@ -138,19 +170,22 @@ export async function handleSetFundSize(ctx: RouteContext): Promise<Response> {
   const authz = await authorize(ctx.env, actor, "fund.set_size", { objectType: "fund", objectId: ctx.params.id!, firmScope });
   if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
 
-  const before = await ctx.env.WP_OS_DB.prepare("SELECT target_size_minor FROM fund WHERE id = ?1 AND firm_scope = ?2")
+  const before = await ctx.env.WP_OS_DB.prepare("SELECT target_size_minor, first_close_on FROM fund WHERE id = ?1 AND firm_scope = ?2")
     .bind(ctx.params.id!, firmScope)
-    .first<{ target_size_minor: number | null }>();
+    .first<{ target_size_minor: number | null; first_close_on: string | null }>();
   if (!before) return json({ error: "not_found" }, { status: 404 });
 
+  // `first_close_on` only moves when the body names it: absent keeps the record, null clears it.
+  const firstClose = parsed.data.first_close_on === undefined ? before.first_close_on : parsed.data.first_close_on;
   await ctx.env.WP_OS_DB.prepare(
-    "UPDATE fund SET target_size_minor = ?2, currency = COALESCE(?3, currency), vintage_year = COALESCE(?4, vintage_year) WHERE id = ?1",
+    "UPDATE fund SET target_size_minor = ?2, currency = COALESCE(?3, currency), vintage_year = COALESCE(?4, vintage_year), first_close_on = ?5 WHERE id = ?1",
   )
     .bind(
       ctx.params.id!,
       parsed.data.target_size === null ? null : toMinor(parsed.data.target_size),
       parsed.data.currency ?? null,
       parsed.data.vintage_year ?? null,
+      firstClose,
     )
     .run();
 
@@ -161,10 +196,14 @@ export async function handleSetFundSize(ctx: RouteContext): Promise<Response> {
     objectType: "fund",
     objectId: ctx.params.id!,
     firmScope,
-    payload: { from_minor: before.target_size_minor, to_minor: parsed.data.target_size === null ? null : toMinor(parsed.data.target_size) },
+    payload: {
+      from_minor: before.target_size_minor,
+      to_minor: parsed.data.target_size === null ? null : toMinor(parsed.data.target_size),
+      ...(parsed.data.first_close_on !== undefined ? { first_close_on_from: before.first_close_on, first_close_on_to: firstClose } : {}),
+    },
   });
 
-  return json({ ok: true });
+  return json({ ok: true, first_close_on: firstClose });
 }
 
 /**

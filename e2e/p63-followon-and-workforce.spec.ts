@@ -84,7 +84,10 @@ test("a company pulling ahead becomes a follow-on candidate, a review, and a par
   await page.goto("/");
   await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
   await page.getByTestId("dev-login-submit").click();
-  await gotoSurface(page, "Fund strategy");
+  // THE CANDIDATE IS WHERE THE COMPANY IS (19 Sep 2026, design/FUND_STRATEGY_DESIGN.md §2): Portfolio's
+  // "Pulling ahead" panel names it and opens the review; the review then sits on Fund strategy's
+  // reserves band beside the headroom it draws on.
+  await gotoSurface(page, "Portfolio");
   await expect(page.getByTestId("follow-on-rule")).toContainText("higher than the previous reading");
   await expect(page.getByTestId(`follow-on-candidate-${company.id}`)).toContainText(`${marker} Co`);
 
@@ -136,8 +139,10 @@ test("a company pulling ahead becomes a follow-on candidate, a review, and a par
   await gotoSurface(page, "Fund strategy");
   const row = page.getByTestId(`follow-on-review-${reviewId}`);
   await expect(row).toContainText(`${marker} Co`);
-  await expect(row, "an undecided review says it is open").toContainText("open");
-  await expect(page.getByTestId("follow-on-pending"), "and it is counted where a partner looks").toContainText("pending");
+  await expect(row, "an undecided review says it is waiting on a partner, never 'reviewed'").toContainText("waiting on a partner");
+  await expect(row).not.toContainText("reviewed");
+  await expect(page.getByTestId("fund-reserves-pending"), "and it is counted where a partner looks — the band's own pill").toHaveText(/^[1-9]\d*$/);
+  await expect(page.getByTestId("fund-reserves")).toContainText(/review(s)? waiting on a partner/);
 
   // ── A PARTNER DECIDES IT, and the note they leave IS the decision. ───────────────────────────
   const decided = await request.post(`/api/allocation/follow-on-reviews/${reviewId}/review`, {
@@ -183,7 +188,7 @@ test("a partner can open a follow-on review from the candidate that prompted it"
   await page.goto("/");
   await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
   await page.getByTestId("dev-login-submit").click();
-  await gotoSurface(page, "Fund strategy");
+  await gotoSurface(page, "Portfolio");
   await expect(page.getByTestId("follow-on-rule")).toBeVisible();
 
   const candidates = page.locator('[data-testid^="follow-on-candidate-"]');

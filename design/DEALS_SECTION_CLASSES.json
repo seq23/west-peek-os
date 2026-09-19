@@ -1,30 +1,34 @@
 {
-  "spec": "design/DEALS_SECTION_DESIGN.md \u00a712.1 \u2014 tokens and classes first, pages after",
+  "spec": "design/DEALS_SECTION_DESIGN.md §12.1 — tokens and classes first, pages after",
   "why": "These classes were added to src/client/styles.css BEFORE any page wears them, so that five tab branches start from one rule set. validate:css-classes proves every className used has a rule; it cannot see a rule nobody uses. This register is the other direction: every class here must have a rule now, must be emitted once every tab that owns it has landed, and a tab is marked landed the moment anything emits one of its classes. Read by scripts/validate/css-classes.mjs and scripts/validate/heading-scale-applies.mjs; a tab agent flips its `landed` flag in the PR that emits the classes, and edits `owners` when the page it built does not use a class the spec named for it.",
   "tabs": {
     "meetings": {
       "landed": true,
-      "spec": "\u00a73 \u2014 the list, the room's three faces, the standalone panel"
+      "spec": "§3 — the list, the room's three faces, the standalone panel"
     },
     "dealflow": {
       "landed": true,
-      "spec": "\u00a74 \u2014 the rail is the page; the committee lives here"
+      "spec": "§4 — the rail is the page; the committee lives here"
     },
     "companies": {
       "landed": true,
-      "spec": "\u00a75 \u2014 the register"
+      "spec": "§5 — the register"
     },
     "portfolio": {
       "landed": true,
-      "spec": "\u00a76 \u2014 holdings, the deployment ring, Book it"
+      "spec": "§6 — holdings, the deployment ring, Book it"
     },
     "thesis": {
       "landed": true,
-      "spec": "\u00a77 \u2014 one sentence and its numbers"
+      "spec": "§7 — one sentence and its numbers"
     },
     "secondaries": {
       "landed": true,
-      "spec": "\u00a78 \u2014 the sleeve, on the same rail"
+      "spec": "§8 — the sleeve, on the same rail"
+    },
+    "fund-strategy": {
+      "landed": true,
+      "spec": "design/FUND_STRATEGY_DESIGN.md §5 — the door, the pace, the gap rows, the policy lines, Amend, the headroom"
     }
   },
   "classes": {
@@ -34,7 +38,8 @@
       "portfolio",
       "companies",
       "thesis",
-      "secondaries"
+      "secondaries",
+      "fund-strategy"
     ],
     "masthead-date": [
       "meetings",
@@ -42,7 +47,8 @@
       "portfolio",
       "companies",
       "thesis",
-      "secondaries"
+      "secondaries",
+      "fund-strategy"
     ],
     "masthead-second": [
       "meetings",
@@ -50,33 +56,38 @@
       "portfolio",
       "companies",
       "thesis",
-      "secondaries"
+      "secondaries",
+      "fund-strategy"
     ],
     "band": [
       "meetings",
       "dealflow",
       "portfolio",
       "companies",
-      "secondaries"
+      "secondaries",
+      "fund-strategy"
     ],
     "band-head": [
       "meetings",
       "dealflow",
       "portfolio",
       "companies",
-      "secondaries"
+      "secondaries",
+      "fund-strategy"
     ],
     "band-when": [
       "meetings",
       "dealflow",
       "portfolio",
       "companies",
-      "secondaries"
+      "secondaries",
+      "fund-strategy"
     ],
     "section-head": [
       "meetings",
       "portfolio",
-      "thesis"
+      "thesis",
+      "fund-strategy"
     ],
     "stage-rail": [
       "dealflow",
@@ -159,7 +170,8 @@
     "deal-row-2": [
       "meetings",
       "dealflow",
-      "secondaries"
+      "secondaries",
+      "fund-strategy"
     ],
     "deal-row-selected": [
       "dealflow"
@@ -242,7 +254,8 @@
       "meetings",
       "dealflow",
       "portfolio",
-      "thesis"
+      "thesis",
+      "fund-strategy"
     ],
     "scorecard": [
       "meetings",
@@ -289,7 +302,8 @@
       "portfolio"
     ],
     "kv": [
-      "portfolio"
+      "portfolio",
+      "fund-strategy"
     ],
     "viz-row": [
       "portfolio"
@@ -304,10 +318,12 @@
       "portfolio"
     ],
     "bar": [
-      "portfolio"
+      "portfolio",
+      "fund-strategy"
     ],
     "version-rail": [
-      "thesis"
+      "thesis",
+      "fund-strategy"
     ],
     "v": [
       "thesis"
@@ -347,6 +363,69 @@
       "portfolio",
       "thesis",
       "secondaries"
+    ],
+    "door": [
+      "fund-strategy"
+    ],
+    "door-head": [
+      "fund-strategy"
+    ],
+    "door-lede": [
+      "fund-strategy"
+    ],
+    "door-answers": [
+      "fund-strategy"
+    ],
+    "door-actions": [
+      "fund-strategy"
+    ],
+    "figures": [
+      "fund-strategy"
+    ],
+    "pace": [
+      "fund-strategy"
+    ],
+    "pace-key": [
+      "fund-strategy"
+    ],
+    "gap-rows": [
+      "fund-strategy"
+    ],
+    "gap-label": [
+      "fund-strategy"
+    ],
+    "gap-figure": [
+      "fund-strategy"
+    ],
+    "gap-delta": [
+      "fund-strategy"
+    ],
+    "to-confirm": [
+      "fund-strategy"
+    ],
+    "policy-lines": [
+      "fund-strategy"
+    ],
+    "construct-line": [
+      "fund-strategy"
+    ],
+    "amend-tray": [
+      "fund-strategy"
+    ],
+    "sector-chips": [
+      "fund-strategy"
+    ],
+    "actions": [
+      "fund-strategy"
+    ],
+    "deck-row": [
+      "fund-strategy"
+    ],
+    "deck-title": [
+      "fund-strategy"
+    ],
+    "headroom": [
+      "fund-strategy"
     ]
   }
 }

@@ -227,8 +227,9 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
 
       {data.current && (
         <>
-          <p data-testid="deck-current">
-            <strong className="deck-current-title">{data.current.title}</strong>
+          {/* The current version as one row: title · who · when (design/FUND_STRATEGY_DESIGN.md §3.4). */}
+          <p className="deck-row" data-testid="deck-current">
+            <strong className="deck-title deck-current-title">{data.current.title}</strong>
             <span className="muted small">
               {data.current.origin === "UPLOADED" ? "Uploaded by" : "Built by"} {data.current.created_by} ·{" "}
               {when(data.current.created_at)}
