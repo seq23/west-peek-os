@@ -5978,6 +5978,7 @@ and the scenario opened against the mandate's size; `p11` and `p64` kept green.
 **Not done, and why.** Per-company reserves (`position_reserve`) subtracting from the headroom
 wait on Portfolio writing them (Deals spec §6). A crosshair tooltip on the pace chart is a
 follow-up; the chart carries its sentence and marker labels.
+
 ## Home, rebuilt — what is waiting, what arrived, one count (19 Sep 2026)
 
 **Spec.** `design/HOME_DESIGN.md` (branch `design/home` @ 38c17a8, canvas

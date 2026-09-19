@@ -6154,6 +6154,9 @@ body {
   .deck-title { margin-right: 0; }
   .surface-body a.btn-primary,
   .surface-body a.btn-strong { min-height: var(--touch-min); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    HOME (design/HOME_DESIGN.md §5, approved 19 Sep 2026). Tokens only.
    The shared vocabulary — .masthead*, .band*, .deal-row*, .count-pill,
    .badge*, .notice*, .progress-track, .live-dot, .state-empty — is reused
