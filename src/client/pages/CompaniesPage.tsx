@@ -343,7 +343,10 @@ function CompanyCard({ company: c, sectors, arrivedHere, onSaved, onNavigate }: 
         </p>
       )}
 
-      <dl className={left ? "company-facts deal-row-out" : "company-facts"}>
+      {/* Passed: the VALUES recede — `deal-row-out` on each dd, not on the list. Measured, not
+          chosen by eye (e2e/deals-surfaces.spec.ts composites opacity): ink at .72 on white is
+          7.5:1, but the 11px muted labels would be 3.2:1, so the labels keep their strength. */}
+      <dl className="company-facts">
         {!left && (
           <div>
             <dt>In it</dt>
@@ -355,13 +358,13 @@ function CompanyCard({ company: c, sectors, arrivedHere, onSaved, onNavigate }: 
         )}
         <div>
           <dt>Met via</dt>
-          <dd>{c.origin ? originLabel(c.origin) : "—"}</dd>
+          <dd className={left ? "deal-row-out" : undefined}>{c.origin ? originLabel(c.origin) : "—"}</dd>
         </div>
         <div>
           <dt>Meetings</dt>
-          <dd>
+          <dd className={left ? "deal-row-out" : undefined}>
             {c.meetings}
-            {c.next_meeting_at && <span className="muted small"> · next {shortDate(c.next_meeting_at)}</span>}
+            {!left && c.next_meeting_at && <span className="muted small"> · next {shortDate(c.next_meeting_at)}</span>}
           </dd>
         </div>
         {fourth && (
@@ -457,7 +460,7 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
      that reads as "no companies". */
   if (!register.data) {
     return (
-      <section data-testid="companies-page">
+      <section data-testid="companies-register">
         <p className="state-message" data-testid="companies-error">
           The register did not load{register.status ? ` (HTTP ${register.status})` : ""}.{" "}
           <button type="button" className="link-button" onClick={() => register.reload()}>
@@ -484,7 +487,7 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
         (passedInAll.length > 0 ? `, ${passedInAll.length} it turned down.` : ".");
 
   return (
-    <section data-testid="companies-page">
+    <section data-testid="companies-register">
       <div className="masthead" data-testid="companies-masthead">
         <p className="masthead-date">
           The register · {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
