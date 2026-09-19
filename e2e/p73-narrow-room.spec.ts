@@ -118,7 +118,16 @@ test("Use my laptop mic: the Meet opens, the consent prompt opens here, and noth
   // the switch never lies about being on.
   await room.getByTestId("consent-who").fill("Deana Oliver");
   await room.getByTestId("consent-yes").click();
-  await expect(room.getByTestId("capture-message")).toContainText(/on the file/);
+  await expect(room.getByTestId("room-status")).toContainText(/on the file/);
+  const checked = await room.getByTestId("capture-start").getAttribute("aria-checked");
+  if (checked === "true") {
+    // The recorder is on: the state line changed to laptop mic · live, and the chip says so.
+    await expect(room.getByTestId(`hears-${id}`)).toHaveAttribute("data-state", "MEET_LIVE_HERE");
+    await expect(room.getByTestId("hears-chip-words")).toHaveText("laptop mic · live");
+  } else {
+    // No service in this build: the line names the gate rather than pretending.
+    await expect(room.getByTestId("capture-message")).toContainText(/on the file, but nothing is recording/);
+  }
   const after = (await (await request.get(`/api/meetings/${id}/capture`, { headers: MP })).json()) as { consent: Record<string, string> };
   expect(after.consent.RECORDING).toBe("GRANTED");
   expect(after.consent.TRANSCRIPTION).toBe("GRANTED");
