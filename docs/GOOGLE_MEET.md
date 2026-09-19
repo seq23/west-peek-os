@@ -220,7 +220,7 @@ records why the WebRTC peer is on her Mac and not in the Worker.
   the four commands are in its `_README` — enable `gsuiteaddons.googleapis.com`, `gcloud
   workspace-add-ons deployments create west-peek-os-meet --deployment-file=…`, `… install
   west-peek-os-meet`. Org-wide is a private Marketplace listing, optional.
-- Proven in the browser: `e2e/p72-meet-panel.spec.ts`.
+- Proven in the browser: `e2e/p73-meet-panel.spec.ts`.
 
 ## The doors onto a call, and the hooks the live path wires (19 Sep 2026, PR #130)
 

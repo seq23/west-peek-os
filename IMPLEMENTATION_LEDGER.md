@@ -6176,7 +6176,7 @@ INSERT, the type rule against the REAL function with six planted meetings, the n
 the core/page/CLI, both speech adapters on the binding with `mip_opt_out`, state parity, the add-on
 deployment's origin. Negative proof on the real file: LP let in → `✗ a planted LP meeting … would
 JOIN` exit 1; restored → passes. `validate:meet-ingest` strengthened to the new provider list.
-`e2e/p72-meet-panel.spec.ts`: the panel beside an unknown call → Record this meeting now → the room
+`e2e/p73-meet-panel.spec.ts`: the panel beside an unknown call → Record this meeting now → the room
 at 360 px, no shell, no overflow → not firm-hosted, so no live session → the deep link lands on
 After.
 
