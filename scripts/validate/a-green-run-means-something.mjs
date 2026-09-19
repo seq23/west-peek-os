@@ -252,6 +252,18 @@ export function checkWorkflow(raw) {
       bad.push("a step that runs the journeys is conditioned on `always()` — it would report over an earlier failure");
     }
   }
+  /*
+   * THE SECOND PASS MAY BE SKIPPED ONLY ON A PULL REQUEST (19 Sep 2026). A PR run previews the
+   * claim; the push to main makes it in full. So the only permitted guard around a second
+   * invocation is `GITHUB_EVENT_NAME = "pull_request"` — a guard on anything else (a branch name,
+   * an input, `always()`) is a way to never run it twice, which is the defect this file exists for.
+   */
+  for (const m of job.matchAll(/\bif\s*\[[^\n]*\n([\s\S]*?)\n\s*fi\b/g)) {
+    const guard = m[0].split("\n")[0];
+    if (/npm run e2e\b/.test(m[1]) && !/pull_request/.test(guard)) {
+      bad.push("a second `npm run e2e` is guarded on something other than `pull_request` — main would not run it twice");
+    }
+  }
   const runs = (job.match(/npm run e2e\b/g) ?? []).length;
   if (runs < 2) {
     bad.push(
@@ -313,6 +325,18 @@ function selfTest() {
     checkWorkflow(
       "\n  e2e:\n    steps:\n      # this used to be `npm run e2e || (… && npm run e2e)` and `if: always()`\n" +
         "      - run: npm run e2e && npm run e2e\n",
+    ),
+  );
+  expectCaught(
+    "a second pass guarded on a branch name instead of pull_request",
+    checkWorkflow(
+      "\n  e2e:\n    steps:\n      - run: |\n          npm run e2e\n          if [ \"$GITHUB_REF\" = \"refs/heads/main\" ]; then\n            npm run e2e\n          fi\n",
+    ),
+  );
+  expectClean(
+    "a second pass skipped only on pull_request",
+    checkWorkflow(
+      "\n  e2e:\n    steps:\n      - run: |\n          npm run e2e\n          if [ \"${GITHUB_EVENT_NAME:-}\" = \"pull_request\" ]; then\n            echo skipped\n          else\n            npm run e2e\n          fi\n",
     ),
   );
 
