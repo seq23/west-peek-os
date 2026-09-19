@@ -5549,3 +5549,10 @@ body {
 .room-seated { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; }
 .room-seated .help-tag { display: inline-flex; align-items: center; gap: var(--space-xs); }
 .room-standalone-shell { min-height: 100vh; background: var(--wp-surface); }
+/* Touch targets on the two controls a partner presses mid-call. */
+.room-ptt,
+.room-line .btn-strong { min-height: 44px; min-width: 44px; }
+.room-ask-label { font-size: var(--text-sm); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) {
+  .room-ptt, .room-ptt-live { transition: none; }
+}

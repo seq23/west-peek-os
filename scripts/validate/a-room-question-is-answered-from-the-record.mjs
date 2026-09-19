@@ -155,6 +155,11 @@ export const FIXTURES = [
     expect: { refused: /limit/ },
   },
   {
+    question: "a plan that names a prototype key instead of a table",
+    plan: { table: "constructor", select: ["id"] },
+    expect: { refused: /"constructor" is not a table the room may read/ },
+  },
+  {
     question: "a plan that tries to smuggle SQL through the table name",
     plan: { table: "canonical_company; DROP TABLE meeting", select: ["id"] },
     expect: { refused: /not in the shape|is not a table/ },

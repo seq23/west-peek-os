@@ -185,7 +185,9 @@ export function compileRecordQuery(raw: unknown, ctx: { firmScope: string; visib
     throw new RecordQueryRefused("plan_unreadable", `The plan is not in the shape the room accepts: ${parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ").slice(0, 300)}`);
   }
   const plan = parsed.data;
-  const table = ALLOWLIST[plan.table];
+  // OWN property only. `ALLOWLIST["constructor"]` is Object.prototype.constructor — truthy, with no
+  // columns — and a plan naming it must be refused by name like any other, not crash.
+  const table = Object.prototype.hasOwnProperty.call(ALLOWLIST, plan.table) ? ALLOWLIST[plan.table] : undefined;
   if (!table) {
     throw new RecordQueryRefused("table_not_allowed", `"${plan.table}" is not a table the room may read. It can read: ${Object.keys(ALLOWLIST).join(", ")}.`);
   }

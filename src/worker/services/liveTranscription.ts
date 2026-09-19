@@ -164,8 +164,8 @@ const chunkSchema = z.object({
   audio_base64: z.string().min(1).max(9_000_000),
   /** Which slice this is, so a gap in the transcript can be seen rather than guessed at. */
   sequence: z.number().int().min(0).max(10_000),
-  /** The recorder's MIME type. Nova-3 reads the container from it; Whisper ignores it. */
-  content_type: z.string().trim().max(80).optional(),
+  /** The recorder's MIME type. Nova-3 reads the container from it; Whisper ignores it. Audio only. */
+  content_type: z.string().trim().max(80).regex(/^audio\/[a-z0-9.+-]{1,40}(;\s*codecs=[a-z0-9.,+ -]{1,60})?$/i, "content_type must be an audio type").optional(),
 });
 
 export interface ChunkResult {

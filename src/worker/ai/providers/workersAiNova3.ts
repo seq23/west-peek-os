@@ -112,7 +112,12 @@ export function diarisedLine(turn: DiarisedTurn): string {
 }
 
 function bytesFromBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
+  let bin: string;
+  try {
+    bin = atob(b64.replace(/\s+/g, ""));
+  } catch {
+    throw new TranscriptionUnavailable("the audio was not base64, so nothing could be read");
+  }
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
   return out;
@@ -138,10 +143,13 @@ export async function transcribeDiarised(
     throw new TranscriptionUnavailable("this build has no connection to the transcription service, so nothing would be written down");
   }
   if (!audioBase64) throw new TranscriptionUnavailable("no audio arrived");
+  // Decoded before the call, so a malformed body is "not base64" and never mistaken for the model
+  // being missing (which would send it to Whisper to fail again).
+  const body = bytesFromBase64(audioBase64);
   let result: unknown;
   try {
     result = await binding!.run(NOVA3_MODEL, {
-      audio: { body: bytesFromBase64(audioBase64), contentType },
+      audio: { body, contentType },
       diarize: true,
       punctuate: true,
       // The audio is a conversation the firm was given permission to record. It is not a

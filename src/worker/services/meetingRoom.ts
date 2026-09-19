@@ -595,10 +595,15 @@ export async function handleRoomRoll(ctx: RouteContext): Promise<Response> {
   }
 }
 
+/** What the recorder may say it produced. An audio container, optionally with codecs — nothing else reaches the model. */
+export const AUDIO_CONTENT_TYPE = /^audio\/[a-z0-9.+-]{1,40}(;\s*codecs=[a-z0-9.,+ -]{1,60})?$/i;
+
 const askSchema = z.object({
   question: z.string().trim().max(1200).optional(),
-  audio_base64: z.string().min(1).max(9_000_000).optional(),
-  content_type: z.string().trim().max(80).optional(),
+  // ~6.7 MB of base64, the same cap as a recording chunk; base64 alphabet only, so a malformed
+  // body is refused here with a 400 rather than inside the adapter with a 503.
+  audio_base64: z.string().min(1).max(9_000_000).regex(/^[A-Za-z0-9+/=\s]+$/, "audio must be base64").optional(),
+  content_type: z.string().trim().max(80).regex(AUDIO_CONTENT_TYPE, "content_type must be an audio type").optional(),
 }).refine((v) => Boolean(v.question?.trim()) || Boolean(v.audio_base64), { message: "type a question or hold the button and speak" });
 
 /** POST /api/meetings/:id/room/ask — text or push-to-talk. Always answers with a saved block. */

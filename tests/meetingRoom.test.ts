@@ -140,6 +140,13 @@ describe("2. the record query is a plan against an allowlist, never SQL", () => 
     expect(() => compileRecordQuery({ table: "canonical_company", select: ["mp_notes"] }, ctx)).toThrow(/"canonical_company.mp_notes" is not a column/);
     expect(() => compileRecordQuery({ table: "canonical_company", limit: 500 }, ctx)).toThrow(RecordQueryRefused);
     expect(() => compileRecordQuery({ table: "canonical_company; DROP TABLE meeting", select: ["id"] }, ctx)).toThrow(RecordQueryRefused);
+    // A prototype key is not an allowlist entry: refused by name, never a TypeError.
+    for (const t of ["constructor", "__proto__", "valueof"]) {
+      expect(() => compileRecordQuery({ table: t, select: ["id"] }, ctx), t).toThrow(new RegExp(`"${t}" is not a table the room may read`));
+    }
+    // Mixed-case prototype keys fail the identifier shape first — still a RecordQueryRefused, never a TypeError.
+    for (const t of ["hasOwnProperty", "toString"]) expect(() => compileRecordQuery({ table: t, select: ["id"] }, ctx), t).toThrow(RecordQueryRefused);
+    expect(() => compileRecordQuery({ table: "canonical_company", select: ["constructor"] }, ctx)).toThrow(/"canonical_company.constructor" is not a column/);
   });
 
   it("every allowlisted table and column exists in the schema the migrations built", async () => {
@@ -281,6 +288,15 @@ describe("5. pulling an employee in for a task, live", () => {
     expect(await returnCardToRoom(env, "wc_nowhere", { employee: "Wyatt", finding: "x", deliverableId: null })).toBeNull();
   });
 
+  it("a card raised from a meeting some other way (no receipt block) still returns, written by the system under meeting.note.add", async () => {
+    const m = await createMeeting(env, MP_ACTOR, { title: "Converted", meeting_type: "DILIGENCE", occurred_at: "2026-09-18T10:00:00.000Z" });
+    const { createWorkCardInternal } = await import("../src/worker/services/workCards");
+    const card = await createWorkCardInternal(env, MP_IDENTITY, { title: "Follow-up from a commitment", owner_type: "AI", owner_id: "aie_wyatt", meeting_id: m.id });
+    const returned = await returnCardToRoom(env, card.id, { employee: "Wyatt", finding: "Sent.", deliverableId: "dlv_x" });
+    expect(returned).toMatchObject({ kind: "packet", produced_by_type: "SYSTEM", work_card_id: card.id, asked_via: "SYSTEM" });
+    expect(JSON.parse(returned!.body_json)).toMatchObject({ state: "DONE", deliverable_id: "dlv_x" });
+  });
+
   it("a task for somebody not employed is not opened, and the block says why", async () => {
     const m = await createMeeting(env, MP_ACTOR, { title: "Not employed", meeting_type: "DILIGENCE", occurred_at: "2026-09-18T10:00:00.000Z" });
     const out = await askRoom(env, MP_IDENTITY, m.id, { question: "get Pierce to run the model" }, answers({ mode: "task", task: { employee: "Pierce", brief: "Run the model for this round." } }));
@@ -378,6 +394,11 @@ describe("9. the routes", () => {
     expect(roll.body.draft.state).toBe("REFUSED");
     const bad = await call(`/api/meetings/${m.id}/room/ask`, "POST", {});
     expect(bad.status).toBe(400);
+    // Audio must be base64 and an audio content type; anything else is a 400 before any adapter runs.
+    expect((await call(`/api/meetings/${m.id}/room/ask`, "POST", { audio_base64: "not base64!!", content_type: "audio/webm" })).status).toBe(400);
+    expect((await call(`/api/meetings/${m.id}/room/ask`, "POST", { audio_base64: "AAAA", content_type: "text/html" })).status).toBe(400);
+    expect((await call(`/api/meetings/${m.id}/room/ask`, "POST", { audio_base64: "AAAA", content_type: "audio/webm;codecs=opus" })).status).toBe(503);
+    expect((await call(`/api/meetings/${m.id}/capture/chunk`, "POST", { audio_base64: "AAAA", sequence: 0, content_type: "application/octet-stream" })).status).toBe(400);
     const asked = await call(`/api/meetings/${m.id}/room/ask`, "POST", { question: "what is on the record?" });
     expect(asked.status).toBe(201);
     expect(["FAILED", "REFUSED", "OK"]).toContain(JSON.parse(asked.body.artifact.body_json).state);

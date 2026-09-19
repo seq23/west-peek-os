@@ -113,7 +113,7 @@ export function RoomPanel({ meetingId, standalone = false }: { meetingId: string
 
   const state = room.data;
   return (
-    <section className={standalone ? "room room-standalone" : "room"} data-testid={`room-${meetingId}`}>
+    <section className={standalone ? "room room-standalone" : "room"} data-testid={`room-${meetingId}`} aria-label="The live room">
       {standalone && state && (
         <div className="room-head">
           <h3>{state.meeting.title}</h3>
@@ -270,7 +270,9 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
 
   return (
     <div className="room-line" data-testid={`capture-${meetingId}`}>
-      <div className="room-status" data-testid="room-status" title={gateWords}>
+      {/* role=status: a screen reader hears "Recording" / "Not recording — why" when it changes,
+          without the line stealing focus. The text IS the cue; the tint is decoration. */}
+      <div className="room-status" data-testid="room-status" title={gateWords} role="status" aria-live="polite">
         <span className={recording ? "capture-live" : "muted small"}>{status}</span>
       </div>
       <div className="form-row">
@@ -428,11 +430,28 @@ function SummaryBlock({ meetingId, summary, turns, rollEveryMs, onRolled }: { me
 
 // ── 3 · Ask the room: text, or hold to talk ───────────────────────────────────────────────────
 
+/**
+ * Ask the room.
+ *
+ * THE MICROPHONE IS HELD, NEVER LEFT OPEN. Pointer: down starts, up (or leaving the button) stops.
+ * Keyboard: hold Space — keydown starts, keyup stops — or, for anyone who cannot hold a key, Enter
+ * TOGGLES: once to start listening, once more to stop, with the button's own label saying which.
+ * A release that arrives while the microphone is still being granted is honoured: the stream is
+ * closed the moment it opens, so a quick tap never leaves the room listening.
+ *
+ * FOCUS STAYS WHERE IT WAS. The input is read-only while a question is in flight rather than
+ * disabled — a disabled control drops keyboard focus to the page, and a partner mid-call would have
+ * to find the box again for the next question.
+ */
 function AskBox({ meetingId, hostName, revoked, onAsked, onMessage }: { meetingId: string; hostName: string; revoked: boolean; onAsked: () => void; onMessage: (m: string | null) => void }): JSX.Element {
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [holding, setHolding] = useState(false);
   const recRef = useRef<{ rec: MediaRecorder; stream: MediaStream; parts: Blob[] } | null>(null);
+  // Set when a release arrives before the microphone was granted; holdStart reads it and stops.
+  const releasedEarlyRef = useRef(false);
+  const startingRef = useRef(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => () => recRef.current?.stream.getTracks().forEach((t) => t.stop()), []);
 
@@ -442,22 +461,33 @@ function AskBox({ meetingId, hostName, revoked, onAsked, onMessage }: { meetingI
     const res = await api<{ asked?: string; error?: string; detail?: string }>(`/api/meetings/${meetingId}/room/ask`, { method: "POST", body });
     setBusy(false);
     if (res.status !== 201) onMessage(res.data?.detail ?? res.data?.error ?? `The room could not answer (HTTP ${res.status}).`);
-    else if (body.audio_base64) onMessage(`Heard: “${res.data?.asked ?? ""}”`);
+    else if (body.audio_base64) onMessage(`Heard: “${res.data?.asked ?? ""}”. The answer is in the stream below.`);
+    else onMessage("Asked. The answer is in the stream below.");
     setQuestion("");
     onAsked();
+    inputRef.current?.focus();
   }
 
   async function holdStart() {
-    if (busy || holding) return;
+    if (busy || holding || startingRef.current) return;
     if (!canRecordHere()) {
       onMessage("This browser will not record audio for a page, so the room cannot hear you. Type it instead.");
       return;
     }
+    startingRef.current = true;
+    releasedEarlyRef.current = false;
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
+      startingRef.current = false;
       onMessage("The browser did not give this page the microphone. Type it instead.");
+      return;
+    }
+    startingRef.current = false;
+    if (releasedEarlyRef.current) {
+      // Released before the microphone opened: close it and ask nothing.
+      stream.getTracks().forEach((t) => t.stop());
       return;
     }
     const rec = new MediaRecorder(stream);
@@ -471,6 +501,10 @@ function AskBox({ meetingId, hostName, revoked, onAsked, onMessage }: { meetingI
   }
 
   function holdEnd() {
+    if (startingRef.current) {
+      releasedEarlyRef.current = true;
+      return;
+    }
     const cur = recRef.current;
     if (!cur) return;
     recRef.current = null;
@@ -501,12 +535,17 @@ function AskBox({ meetingId, hostName, revoked, onAsked, onMessage }: { meetingI
         if (question.trim().length >= 2 && !busy) void post({ question: question.trim() });
       }}
     >
+      <label className="room-ask-label" htmlFor={`room-ask-input-${meetingId}`}>Ask the room</label>
       <input
+        id={`room-ask-input-${meetingId}`}
+        ref={inputRef}
         data-testid="room-ask-input"
-        aria-label={`Ask ${hostName} or anyone seated — say a name first to address them`}
         value={question}
-        placeholder={revoked ? "AI access to this room is revoked" : `Ask ${hostName} — or “Wyatt, …” to address someone`}
-        disabled={busy || revoked}
+        placeholder={`Ask ${hostName} — or “Wyatt, …” to address someone`}
+        readOnly={busy}
+        disabled={revoked}
+        aria-busy={busy}
+        aria-describedby={`room-ask-hint-${meetingId}`}
         onChange={(e) => setQuestion(e.target.value)}
       />
       <button type="submit" className="btn-strong" disabled={busy || revoked || question.trim().length < 2} data-testid="room-ask-send">
@@ -517,19 +556,27 @@ function AskBox({ meetingId, hostName, revoked, onAsked, onMessage }: { meetingI
         className={holding ? "room-ptt room-ptt-live" : "room-ptt"}
         data-testid="room-ptt"
         aria-pressed={holding}
-        aria-label="Hold to talk to the room"
-        title="Hold to talk. The room hears only while this is held; there is no wake phrase."
+        aria-label={holding ? "Listening. Release, or press Enter, to stop" : "Hold to talk to the room. Hold Space, or press Enter to start and again to stop"}
+        title="Hold to talk. The room hears only while this is held; there is no wake phrase. Keyboard: hold Space, or press Enter to start and again to stop."
         disabled={busy || revoked}
         onPointerDown={(e) => { e.preventDefault(); void holdStart(); }}
         onPointerUp={holdEnd}
         onPointerLeave={() => { if (holding) holdEnd(); }}
         onPointerCancel={holdEnd}
-        onKeyDown={(e) => { if ((e.key === " " || e.key === "Enter") && !holding) { e.preventDefault(); void holdStart(); } }}
-        onKeyUp={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); holdEnd(); } }}
+        onKeyDown={(e) => {
+          if (e.repeat) return;
+          if (e.key === " ") { e.preventDefault(); void holdStart(); }
+          if (e.key === "Enter") { e.preventDefault(); if (holding) holdEnd(); else void holdStart(); }
+        }}
+        onKeyUp={(e) => { if (e.key === " ") { e.preventDefault(); holdEnd(); } }}
       >
         {holding ? "Listening…" : "Hold to talk"}
       </button>
-      <span className="muted small">Answers are saved on the meeting. Nothing said here becomes a record until you approve the draft.</span>
+      <span className="muted small" id={`room-ask-hint-${meetingId}`}>
+        {revoked
+          ? "AI access to this room is revoked, so nobody can answer here until a person restores it."
+          : "Two characters or more. Answers are saved on the meeting. Nothing said here becomes a record until you approve the draft."}
+      </span>
     </form>
   );
 }
