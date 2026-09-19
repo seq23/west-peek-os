@@ -189,22 +189,18 @@ test("a deck emailed about a company we already have is stored, queued, and read
  * A DECK FOR A COMPANY THE FIRM HAS NEVER HEARD OF — the other half of the operator's sentence,
  * "if its a new company they create a new one".
  *
- * IT DOES NOT WORK, AND THE BYTES ARE DISCARDED. `ROUTE_POLICY.EMAIL.opensRecord` is false, so an
- * unmatched company creates no `canonical_company` — correct, and deliberate: a hashtag is a public
- * word and may route but must never authorise. The problem is what happens NEXT. The attachment
- * loop in `dealIntake.ts` reads `if (!companyId) break;`, so with no company there is no R2 object
- * and no `pending_deck` row — while the card raised in the same breath tells the analyst
- * "Deck attached: x.pdf … Read it before judging whether this is thin."
+ * WHAT USED TO GO WRONG. `ROUTE_POLICY.EMAIL.opensRecord` was false, so an unmatched company
+ * created no `canonical_company`, and the attachment loop in `dealIntake.ts` read
+ * `if (!companyId) break;` — so with no company there was no R2 object and no `pending_deck` row,
+ * while the card raised in the same breath told the analyst "Deck attached: x.pdf … Read it before
+ * judging whether this is thin." The firm kept a card that pointed at a file it had thrown away:
+ * the same class of failure as the 7MB deck logged `too_large` and dropped.
  *
- * So the firm keeps a card that points at a file it threw away. That is the same class of failure
- * as the 7MB deck logged `too_large` and dropped: the loss is invisible, and the record actively
- * says otherwise. The oversize path already solved it — stream the bytes to R2 and put the key on
- * the card — and nothing here does.
- *
- * FIXED 22 Aug 2026, and the marker removed. `pending_deck.company_id` is nullable and the deck is
- * kept against the WORK CARD until a company exists — the EMAIL route deliberately does not write
- * the pipeline, so a brand-new company has no record to attach a deck to at the moment it arrives.
- * Losing the attachment is not an acceptable way to respect that boundary.
+ * FIXED 22 Aug 2026: `pending_deck.company_id` became nullable and the deck was kept against the
+ * WORK CARD until a company existed. Since 18 Sep 2026 (owner: every company is in the pipeline
+ * the moment it is in the system) the EMAIL route opens the company AND its opportunity at
+ * arrival, so the deck now has a company to attach to from the first moment, and the card id is
+ * still kept so the reader can hand the deck to the analyst's card.
  */
 test("a deck for a company we have never heard of is still KEPT, not thrown away", async ({ request }) => {
   const company = `Unheard Of Labs ${Date.now()}`;
