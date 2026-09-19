@@ -2419,87 +2419,11 @@ export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> 
   });
 }
 
-/**
- * What the portfolio is made of — live, by type and by sector.
- *
- * WHY COMPOSITION AND NOT A RING OF COMPANIES. A donut of positions is one circle at 100% with a
- * single holding and twenty unreadable wedges with twenty. Composition is different: the categories
- * are few and their COUNT is stable as the portfolio grows, which is what a part-of-a-whole reading
- * actually needs. "All of it is early stage" stays a true and useful sentence at one company and at
- * fifty, and it is the sentence a partner is really asking for.
- *
- * COUNTED BY MONEY, NOT BY HEADCOUNT. Three small cheques and one large one is not "75% early
- * stage"; concentration is the thing that matters and counting names hides it. Where an amount
- * cannot be computed the position is counted separately rather than assumed to be zero — a company
- * silently missing from a percentage is the failure this whole file guards against.
- *
- * PROVISIONAL MONEY IS FLAGGED THROUGH. Sensori's amount rests on placeholder values, so any
- * percentage derived from it is provisional too, and the response says so rather than leaving the
- * caller to discover it.
+/*
+ * `handlePortfolioComposition` lived here until 18 Sep 2026 and read CLOSED opportunities on its
+ * own, while Portfolio read `position` on its own — two portfolios. Both now read
+ * `services/portfolioHoldings.ts`.
  */
-export async function handlePortfolioComposition(ctx: RouteContext): Promise<Response> {
-  const visibility = privacyVisibilityClause(ctx.identity!, "o.privacy_label");
-
-  const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT o.id, o.opportunity_type, o.price_per_share, o.quantity, o.placeholder_fields,
-            c.canonical_name AS company_name, c.sector
-       FROM investment_opportunity o
-       JOIN canonical_company c ON c.id = o.company_id
-      WHERE ${visibility} AND o.status = 'CLOSED'`,
-  ).all<Record<string, unknown>>();
-
-  const held = rows.results ?? [];
-
-  let provisional = false;
-  let unvalued = 0;
-  const byType = new Map<string, number>();
-  const bySector = new Map<string, number>();
-  let total = 0;
-
-  for (const r of held) {
-    let placeholders: string[] = [];
-    try {
-      placeholders = JSON.parse(String(r.placeholder_fields ?? "[]")) as string[];
-    } catch {
-      placeholders = [];
-    }
-    if (placeholders.length > 0) provisional = true;
-
-    const price = typeof r.price_per_share === "number" ? r.price_per_share : null;
-    const qty = typeof r.quantity === "number" ? r.quantity : null;
-    const amount = price !== null && qty !== null ? price * qty : null;
-    if (amount === null) {
-      // Counted, not dropped. A holding with no recorded amount is a gap to fill, and a percentage
-      // that quietly excludes it reads as though the firm owns less than it does.
-      unvalued += 1;
-      continue;
-    }
-
-    total += amount;
-    const type = String(r.opportunity_type ?? "OTHER");
-    const sector = String(r.sector ?? "Not recorded");
-    byType.set(type, (byType.get(type) ?? 0) + amount);
-    bySector.set(sector, (bySector.get(sector) ?? 0) + amount);
-  }
-
-  const slice = (m: Map<string, number>) =>
-    [...m.entries()]
-      .map(([key, usd]) => ({ key, usd, pct: total > 0 ? (usd / total) * 100 : 0 }))
-      .sort((a, b) => b.usd - a.usd);
-
-  return json({
-    positions: held.length,
-    valued: held.length - unvalued,
-    unvalued,
-    total_usd: total,
-    by_type: slice(byType),
-    by_sector: slice(bySector),
-    provisional,
-    note: provisional
-      ? "Some amounts rest on placeholder values, so these percentages are provisional."
-      : null,
-  });
-}
 
 // ── An employee's view on a deal ──
 
