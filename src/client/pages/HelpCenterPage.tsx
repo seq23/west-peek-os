@@ -362,8 +362,11 @@ const TOPICS: Topic[] = [
           <li>
             <strong>Governed actions fail closed;</strong> a false success is never shown.
           </li>
+          <li>
+            <strong>No fund term is invented.</strong> Check size, ownership, reserves, pace, closing dates and LP totals appear only once you entered them — on Thesis, Fund strategy or LP — and a figure the record does not hold reads as not recorded, never as a guess.
+          </li>
         </ul>
-        <Where path="docs/AI_GOVERNANCE.md · scripts/validate/one-lever-not-four.mjs · scripts/validate/free-lanes-cannot-see-confidential.mjs" />
+        <Where path="docs/AI_GOVERNANCE.md · scripts/validate/one-lever-not-four.mjs · scripts/validate/free-lanes-cannot-see-confidential.mjs · src/shared/fund/pace.ts (no clock, nothing guessed)" />
       </>
     ),
   },

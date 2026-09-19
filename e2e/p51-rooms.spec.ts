@@ -28,8 +28,10 @@ test("Events & Rooms explains itself and offers a proposal", async ({ page }) =>
   await expect(page.getByTestId("propose-room")).toBeVisible();
   // Sponsors live on the same page: a Room and its funding are one decision.
   await expect(page.getByTestId("add-sponsor")).toBeVisible();
-  // The record of what happened is the same page too, not a tab away.
-  await expect(page.getByText("Every gathering on the record")).toBeVisible();
+  // The record of what happened is the same page too, not a tab away — as a band of its own with
+  // its heading, not merely a phrase somewhere on the page (the purpose line now says the words
+  // too, which is what turned this from a text match into a heading match).
+  await expect(page.getByRole("heading", { name: "Every gathering on the record" })).toBeVisible();
   /*
    * Operator: "declined proposals should go somewhere after they are declined. somewhere below
    * greyed out." The shelf is a section that renders even when it is empty — a shelf that appears

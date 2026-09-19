@@ -189,22 +189,37 @@ test("the rail collapses to a menu on a phone and still reaches system pages", a
   await expect(page.getByTestId("machines-page")).toBeVisible();
 });
 
-test("no help topic is left unaudited, and each states its evidence", async ({ page }) => {
+test("no help topic is left unaudited, and each page's section states its real controls", async ({ page }) => {
   await signIn(page);
   await page.getByRole("button", { name: "Help", exact: true }).click();
   await expect(page.getByTestId("help-center-page")).toBeVisible();
 
-  // Every topic must carry a maturity marker; none may still be "Not yet audited".
+  // Every firm-level topic must carry a maturity marker; none may still be "Not yet audited".
   await expect(page.getByTestId("help-tag-AUDIT_PENDING")).toHaveCount(0);
+  expect(await page.locator(".help-topic:not(.help-page) .help-tag").count()).toBeGreaterThan(8);
 
-  // The four formerly-unaudited topics now make specific, falsifiable claims.
-  await expect(page.getByTestId("help-topic-intelligence")).toContainText("until it is explicitly promoted");
-  await expect(page.getByTestId("help-topic-investing")).toContainText("receipted decision");
-  await expect(page.getByTestId("help-topic-lp")).toContainText("revocation");
-  await expect(page.getByTestId("help-topic-portfolio")).toContainText("MP introduction gate");
+  /*
+   * The four page-level topics that used to make prose claims here (intelligence, investing, LP,
+   * portfolio) are gone — 19 Sep 2026, each was a third description of a page beside the page's
+   * own purpose block and its host's prompt, and one of them was a week stale. Their claims now
+   * live in the page's SECTION, rendered from the page's guide, which `validate:page-guides` holds
+   * to the page's real controls. So the pins are stricter than the sentences they replace: the
+   * control that makes each claim true has to be named, and it has to exist on the page.
+   */
+  // Research: a finding stays research until it is explicitly promoted.
+  await expect(page.getByTestId("help-page-research")).toContainText("Promote into evidence");
+  // Dealflow: the committee's decision is a person's, against the approved card.
+  await expect(page.getByTestId("help-page-dealflow")).toContainText("The firm is investing");
+  await expect(page.getByTestId("help-page-dealflow")).toContainText("Managing Partner");
+  // LP: what goes out is reviewed, signed for, and access can be taken back.
+  await expect(page.getByTestId("help-page-lp")).toContainText("Send it to the investors");
+  await expect(page.getByTestId("help-page-lp")).toContainText("Close it");
+  // Portfolio: an introduction to a portfolio company is gated on a partner.
+  await expect(page.getByTestId("help-page-portfolio")).toContainText("Take it to a partner");
 
-  // And the LP topic still refuses to invent fund terms.
-  await expect(page.getByTestId("help-topic-lp")).toContainText("No other fund term is asserted");
+  // And Help still refuses to invent fund terms — now as a firm-level rule, beside where it is enforced.
+  await expect(page.getByTestId("help-topic-governance")).toContainText("No fund term is invented");
+  await expect(page.getByTestId("help-topic-governance")).toContainText("Where this is enforced");
 });
 
 
