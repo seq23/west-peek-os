@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
-import { MAX_BRIEF_ATTEMPTS, runBriefTick, type BriefDeps } from "../src/worker/services/dailyIntelligence";
+import { MAX_BRIEF_ATTEMPTS, RETRY_AFTER_MINUTES, retryAfterIso, runBriefTick, type BriefDeps } from "../src/worker/services/dailyIntelligence";
 import { fredUrl, parseCoinbaseSpot, parseFredCsv } from "../src/worker/effects/macroClient";
 
 /**
@@ -147,13 +147,30 @@ describe("one stage per tick", () => {
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM intelligence_report_section WHERE report_id = ?1").bind(row.id).first<{ n: number }>())!.n).toBe(0);
   });
 
-  it("a failed brief is started again from the top on the next tick, spending an attempt", async () => {
+  it("a failed brief waits RETRY_AFTER_MINUTES — written on the row — and is then started again from the top, spending an attempt", async () => {
+    /*
+     * STRICTER THAN "THE NEXT TICK" (19 Sep 2026). The old rule retried on the very next tick, so
+     * three attempts could burn in fifteen minutes against a provider having a bad quarter-hour.
+     * The row now carries `retry_after` (failure + RETRY_AFTER_MINUTES, from the caller's clock),
+     * the tick honours it, and the card reads it back as "retrying at 07:35" — a fact, not a hope.
+     */
     const partner = (await env.WP_OS_DB.prepare("SELECT firm_user_id FROM intelligence_report WHERE status = 'FAILED'").first<{ firm_user_id: string }>())!.firm_user_id;
-    const before = (await report(partner)).attempts;
-    const again = await runBriefTick(env, MP, at(90), deps(V5()));
+    const failed = await env.WP_OS_DB.prepare("SELECT attempts, retry_after FROM intelligence_report WHERE firm_user_id = ?1 AND status = 'FAILED'").bind(partner).first<{ attempts: number; retry_after: string | null }>();
+    expect(failed!.retry_after, "a FAILED row with attempts left says when the clock tries again").toBe(retryAfterIso(at(75)));
+    expect(RETRY_AFTER_MINUTES).toBe(20);
+
+    // Fifteen minutes later: not yet. Nobody is served, and the row is untouched.
+    const tooSoon = await runBriefTick(env, MP, at(90), deps(V5()));
+    expect(tooSoon.partner, "a failed brief was retried before its retry_after").toBeNull();
+    expect((await report(partner)).attempts).toBe(failed!.attempts);
+
+    // Twenty-one minutes later: started again from the top, and the attempt is spent on the way in.
+    const again = await runBriefTick(env, MP, at(96), deps(V5()));
     expect(again.partner).toBe(partner);
     expect(again.stage).toBe("gathered");
-    expect((await report(partner)).attempts).toBe(before + 1);
-    expect(before + 1).toBeLessThanOrEqual(MAX_BRIEF_ATTEMPTS);
+    expect((await report(partner)).attempts).toBe(failed!.attempts + 1);
+    expect(failed!.attempts + 1).toBeLessThanOrEqual(MAX_BRIEF_ATTEMPTS);
+    const restarted = await env.WP_OS_DB.prepare("SELECT retry_after FROM intelligence_report WHERE firm_user_id = ?1 AND report_date = '2026-09-15'").bind(partner).first<{ retry_after: string | null }>();
+    expect(restarted!.retry_after, "a restarted row no longer claims a retry time").toBeNull();
   });
 });

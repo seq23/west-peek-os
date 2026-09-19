@@ -194,12 +194,30 @@ describe("quiet days and weekends", () => {
     expect(s!.body_md).toMatch(/nothing reached the bar/i);
   });
 
-  it("skips weekends unless a partner asked for them", async () => {
+  it("builds on a weekend unless a partner turned weekends off — and honours the partner who did", async () => {
+    /*
+     * CONTRACT CHANGE, 19 Sep 2026 — the opposite default, pinned in both directions. Weekends were
+     * OFF by a column default nobody chose, and on Saturday 19 Sep the owner woke to no brief and
+     * no idea why. Migration 0211 turns them on for every profile and the code default follows.
+     * The column is still hers: a partner who sets weekends = 0 is skipped, and the other is not.
+     */
     const saturday = new Date("2026-08-15T12:00:00Z");
-    const before = await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report").first<{ n: number }>();
+    const partners = (await env.WP_OS_DB.prepare(
+      `SELECT u.id FROM firm_user u JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner' WHERE u.status = 'ACTIVE' ORDER BY u.id`,
+    ).all<{ id: string }>()).results!;
+    expect(partners.length).toBeGreaterThanOrEqual(2);
+    const [on, off] = [partners[0]!.id, partners[1]!.id];
+    const defaults = await env.WP_OS_DB.prepare("SELECT firm_user_id, weekends FROM partner_intelligence_profile").all<{ firm_user_id: string; weekends: number }>();
+    for (const p of defaults.results ?? []) expect(p.weekends, `${p.firm_user_id} still carries the weekday-only default`).toBe(1);
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO partner_intelligence_profile (firm_user_id, timezone, weekends) VALUES (?1, 'America/New_York', 0) ON CONFLICT (firm_user_id) DO UPDATE SET weekends = 0",
+    ).bind(off).run();
+
     await runDailyForAll(env, MP, saturday, fakeModel, undefined, DEPS);
-    const after = await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report").first<{ n: number }>();
-    expect(after!.n).toBe(before!.n);
+    const built = new Set(((await env.WP_OS_DB.prepare("SELECT firm_user_id FROM intelligence_report WHERE report_date = '2026-08-15'").all<{ firm_user_id: string }>()).results ?? []).map((r) => r.firm_user_id));
+    expect(built.has(on), "a partner with weekends on gets a Saturday brief").toBe(true);
+    expect(built.has(off), "a partner who turned weekends off does not").toBe(false);
+    await env.WP_OS_DB.prepare("UPDATE partner_intelligence_profile SET weekends = 1 WHERE firm_user_id = ?1").bind(off).run();
   });
 });
 

@@ -127,8 +127,15 @@ describe("the database and the code agree about finished", () => {
     expect(service, "a hand-written terminal predicate is back in the service").not.toMatch(
       /status = 'READY' OR \(status = 'FAILED' AND attempts >= \$\{MAX_BRIEF_ATTEMPTS\}\)/,
     );
-    expect(service.match(/\$\{TERMINAL_SQL\}/g)?.length ?? 0, "the shared fragment is not used by both done-queries")
-      .toBeGreaterThanOrEqual(2);
+    // STRICTER THAN "AT LEAST TWO" (19 Sep 2026): there is ONE SQL done-query left — `runDailyForAll`'s —
+    // and it uses the fragment; the second one, `briefsOwedToday`, was the sweep job's gate and is
+    // gone with the branch it gated. A second done-query written by hand is exactly the drift this
+    // pin exists for, so any SQL that filters intelligence_report on a READY/FAILED pair must be
+    // the shared fragment, and the tick must ask `briefTerminality` rather than SQL at all.
+    expect(service.match(/\$\{TERMINAL_SQL\}/g)?.length ?? 0, "the remaining SQL done-query does not use the shared fragment").toBeGreaterThanOrEqual(1);
+    expect(service, "briefsOwedToday is back — the brief must not ride inside the sweep job again").not.toMatch(/briefsOwedToday/);
+    const handWritten = service.match(/status\s*=\s*'FAILED'\s*AND\s*attempts\s*>=/g) ?? [];
+    expect(handWritten, "a hand-written FAILED-and-spent predicate exists outside the shared fragment").toEqual([]);
   });
 
   it("the tick asks the shared answer instead of testing FAILED by hand", () => {
@@ -157,9 +164,12 @@ describe("the database and the code agree about finished", () => {
 
   it("a requested rebuild starts the day's budget over, so the cron can still self-heal", () => {
     expect(service).toMatch(/CASE WHEN \?6 = 'requested' THEN 1 ELSE intelligence_report\.attempts \+ 1 END/);
-    expect(service, "the button does not identify itself as a request").toMatch(
-      /startReport\(ctx\.env, firmScope, target, now, "requested"\)/,
+    expect(service, "the button does not identify itself as a request, with the presser's name").toMatch(
+      /startReport\(ctx\.env, firmScope, target, now, "requested", actor\.firmUserId \?\? null\)/,
     );
+    // And the request is a FACT ON THE ROW — the card reads it back, nothing infers it.
+    expect(service).toMatch(/requested_at = CASE WHEN \?6 = 'requested' THEN strftime/);
+    expect(service).toMatch(/requested_by = CASE WHEN \?6 = 'requested' THEN \?7/);
   });
 });
 

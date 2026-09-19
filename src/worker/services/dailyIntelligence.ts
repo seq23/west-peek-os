@@ -383,19 +383,29 @@ async function stamp(env: Env, id: string, status: string, extra: Record<string,
 }
 
 /**
- * The SQL for "when will the clock try this again", shared by every path that closes a row FAILED.
- * NULL when the attempts are spent — the card then says "nothing more is tried today" as a fact.
+ * When the clock may try a failed brief again, from the caller's clock — the same one the tick
+ * compares `retry_after` against. SQLite's 'now' is a different clock (real wall time under a
+ * test's fake one), and mixing the two is how a retry becomes "never" without anything saying so.
  */
-export const RETRY_AFTER_SQL = `CASE WHEN attempts < ${MAX_BRIEF_ATTEMPTS} THEN strftime('%Y-%m-%dT%H:%M:%fZ','now','+${RETRY_AFTER_MINUTES} minutes') ELSE NULL END`;
+export function retryAfterIso(now: Date): string {
+  return new Date(now.getTime() + RETRY_AFTER_MINUTES * 60_000).toISOString();
+}
 
-async function failReport(env: Env, id: string, code: string, message: string, runId: string | null): Promise<GenerateResult> {
+/**
+ * The SQL that keeps `retry_after` only while attempts remain. NULL when the budget is spent — the
+ * card then says "nothing more is tried today" as a fact. `?R` is bound by the caller to
+ * `retryAfterIso(now)`.
+ */
+const RETRY_AFTER_CASE = (param: string) => `CASE WHEN attempts < ${MAX_BRIEF_ATTEMPTS} THEN ${param} ELSE NULL END`;
+
+async function failReport(env: Env, id: string, code: string, message: string, runId: string | null, now: Date = new Date()): Promise<GenerateResult> {
   await env.WP_OS_DB.prepare(
     `UPDATE intelligence_report SET status = 'FAILED', error_code = ?2, error_message = ?3, ai_run_id = ?4, stage_lease_until = NULL,
             stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-            retry_after = ${RETRY_AFTER_SQL}
+            retry_after = ${RETRY_AFTER_CASE("?5")}
       WHERE id = ?1`,
   )
-    .bind(id, code, message.slice(0, 600), runId)
+    .bind(id, code, message.slice(0, 600), runId, retryAfterIso(now))
     .run();
   return { report_id: id, status: "FAILED", sections: 0, candidates: 0, flags: 0 };
 }
@@ -536,7 +546,7 @@ async function stageMarket(env: Env, actor: Actor, row: ReportRow, now: Date, de
 }
 
 /** Stage 3 — write, verify, persist. One model call (two if the first reply cannot be used). */
-async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: string, deps: BriefDeps): Promise<GenerateResult> {
+async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: string, deps: BriefDeps, now: Date): Promise<GenerateResult> {
   const synthesise = deps.synthesise ?? defaultSynthesise;
   const profile = await loadProfile(env, row.firm_user_id);
   const interests = lensFrom(profile);
@@ -554,7 +564,7 @@ async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: str
   let stored: StoredMarket = { readings: [], failures: [], levels: [], calendar: [], citations: [], detail: "" };
   try { events = JSON.parse(row.candidates_json ?? "[]") as EvidenceEvent[]; } catch { events = []; }
   try { stored = { ...stored, ...(JSON.parse(row.market_json ?? "{}") as Partial<StoredMarket>) }; } catch { /* the market read is optional */ }
-  if (events.length === 0) return await failReport(env, row.id, "no_candidates", "the ranked candidates were lost between ticks; build it again", null);
+  if (events.length === 0) return await failReport(env, row.id, "no_candidates", "the ranked candidates were lost between ticks; build it again", null, now);
 
   // THE SAME PACKET SHAPE FOR EVERY PARTNER. The lens and the edition line are the only fields a
   // partner's profile changes here; the section list, the sources and the verifier are shared.
@@ -588,10 +598,10 @@ async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: str
     const result = await synthesise(env, actor, `${feedback}${buildSynthesisPrompt(packet)}`, row.report_date, row.firm_user_id);
     aiRunId = result.aiRunId;
     model = result.model;
-    if (result.failure) return await failReport(env, row.id, "synthesis_failed", result.failure, aiRunId);
+    if (result.failure) return await failReport(env, row.id, "synthesis_failed", result.failure, aiRunId, now);
     output = result.output;
   } catch (err) {
-    return await failReport(env, row.id, "synthesis_error", err instanceof Error ? err.message : String(err), aiRunId);
+    return await failReport(env, row.id, "synthesis_error", err instanceof Error ? err.message : String(err), aiRunId, now);
   }
 
   /*
@@ -617,11 +627,11 @@ async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: str
     if (retry.model) model = retry.model;
     if (!retry.failure && retry.output) ({ parsed, problems } = check(retry.output));
   }
-  if (!parsed) return await failReport(env, row.id, "unparseable", "the model did not return a usable report, twice", aiRunId);
+  if (!parsed) return await failReport(env, row.id, "unparseable", "the model did not return a usable report, twice", aiRunId, now);
   if (problems.length > 0) {
     // NEVER DELIVERED THIN. A brief missing a section, or citing a source that does not exist,
     // is failed with the reason rather than shown with holes.
-    return await failReport(env, row.id, "incomplete", `the brief was rejected twice: ${problems.map((p) => p.detail).join("; ")}`, aiRunId);
+    return await failReport(env, row.id, "incomplete", `the brief was rejected twice: ${problems.map((p) => p.detail).join("; ")}`, aiRunId, now);
   }
   const sections = parsed;
 
@@ -716,12 +726,12 @@ export async function advanceBrief(
       return { report_id: row.id, status: "GENERATING", stage: "market_read" };
     }
     // GENERATING or VERIFYING: write it (a VERIFYING row is a write that died before persisting).
-    const out = await stageWrite(env, actor, row, firmScope, deps);
+    const out = await stageWrite(env, actor, row, firmScope, deps, now);
     return { report_id: row.id, status: out.status, stage: out.status === "READY" ? "written" : "failed" };
   } catch (err) {
     // A throw at any stage closes the row with the real error rather than leaving it mid-flight.
     const message = err instanceof Error ? err.message : String(err);
-    await failReport(env, row.id, "generation_threw", message, row.ai_run_id).catch(() => undefined);
+    await failReport(env, row.id, "generation_threw", message, row.ai_run_id, now).catch(() => undefined);
     await recordSwallowed(env, "dailyIntelligence.advanceBrief", err, { firm_user_id: firmUserId, report_id: row.id });
     return { report_id: row.id, status: "FAILED", stage: "failed" };
   }
@@ -754,7 +764,7 @@ export async function generateForPartner(
     }
     if (step.stage === "busy" || step.stage === "none") break;
   }
-  return await failReport(env, id, "stalled", "the brief did not reach READY in one run; the row is left for the clock", null);
+  return await failReport(env, id, "stalled", "the brief did not reach READY in one run; the row is left for the clock", null, now);
 }
 
 /**
@@ -1324,10 +1334,10 @@ export async function closeAbandonedReports(env: Env, now: Date = new Date()): P
             error_message = 'The run stopped part-way through and never finished.',
             stage_lease_until = NULL,
             completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-            retry_after = ${RETRY_AFTER_SQL}
+            retry_after = ${RETRY_AFTER_CASE("?2")}
       WHERE status NOT IN ('READY','FAILED') AND COALESCE(stage_at, started_at) < ?1`,
   )
-    .bind(cutoff)
+    .bind(cutoff, retryAfterIso(now))
     .run();
   return res.meta?.changes ?? 0;
 }
