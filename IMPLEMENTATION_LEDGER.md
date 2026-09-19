@@ -5656,3 +5656,60 @@ id, { text })`, `afterDraftPrompt`, `parseAfterDraft`, `saveMeetingArtifact` /
 `POST /api/meetings/:id/artifacts`, `readMeetingAfter`, `latestBrief` / `GET /api/meetings/:id/brief`;
 tables `meeting_artifact` and `meeting_after_draft`. The Google Meet columns on `meeting` belong to
 the sibling phase's migrations (0202/0203) and are not touched here.
+
+## 18 Sep 2026 — Phase C: the meeting is a live room
+
+**The design, owner-approved 18 Sep 2026.** Phase B gave a meeting three faces and built BEFORE and
+AFTER. This is the DURING face: the room records itself with speaker turns, writes the After draft
+while people talk, answers a question asked out loud or typed, builds a table or chart on the spot
+from the firm's own record, and pulls an employee in for a task whose result comes back to the room.
+**Nothing in the room writes a record from voice.** A question — spoken or typed — produces a saved
+block, a preview-first work card, or a DRAFT; a person clicks Phase B's approve route to make any of
+it a decision, a commitment, an open question or a stage move.
+
+| Where | What |
+|---|---|
+| `migrations/0204_the_meeting_is_a_live_room.sql` | `meeting_artifact.asked_text`, `asked_via` (TEXT/VOICE/SYSTEM), `work_card_id` (unique — one card, one block); the `meeting.room.ask` key (P4 compensating block). The Google Meet columns (0202/0203) are not touched. |
+| `src/worker/ai/providers/workersAiNova3.ts` | Deepgram Nova-3 on the Workers AI binding, diarised, `mip_opt_out` on every call, words folded into turns; an unattributed word starts an unattributed turn ("Speaker not identified"), never joins its neighbour's. Same place and same argument as Whisper (ADR-019). **Probe CONFIRMED** on the owner's account through the Workers AI REST surface with a spoken fixture: Nova-3 200 with `speaker` on every word; Whisper 200 with none. Cost from the probe: 137 neurons / 17.4 s on Nova-3 (~470 a minute → ~21 free minutes a day, ~$0.31 an hour after) vs 13.5 on Whisper. |
+| `src/worker/services/liveTranscription.ts` | `transcribeWithSpeakers`: Nova-3 first, Whisper only when the MODEL is missing (`DiarisationUnavailable`), and the chunk result says which engine wrote the line and why. Each speaker turn becomes its own TRANSCRIPT_DERIVED note through the same two gates. `content_type` travels with the chunk. |
+| `src/shared/meetings/roomQuery.ts` | The read-only record query: the model produces a PLAN (table, columns, filters from a closed operator set, one aggregate, one grouping, chart bar/line/pie), the compiler turns it into one parameterised SELECT over a 15-table allowlist with the firm scope, the page's privacy clause, archived rows hidden, and a 50-row cap. **Chosen over validated SQL** because a plan has no surface to widen — safety is a property of the vocabulary, not of a parser that must be right about CTEs, ATTACH and comments on day one. The model never sees a row. No relative imports, so the validator loads it natively. |
+| `src/worker/services/meetingRoom.ts` | `roomState` (one read for the During face), `rollSummary` (Phase B's `draftMeetingAfter` — idempotent over the fingerprint, so a five-minute poll costs one run per change), `askRoom` (text or push-to-talk voice → the page host Walter, or the employee addressed by name, who is seated if not; one governed run returns answer / query / task / refuse, checked in code; EVERY outcome is a saved block, including a failure), `buildRoomContext` (the brief, the notes so far, the company/opportunity or LP record, prior meetings' After objects with the same counterparty, what was already asked — this meeting's objects only), `runRecordQuery` (compile → run → block with `cites` and the SQL that ran), `pullInEmployee` (seat, `createWorkCardInternal` with `meeting_id`, `preview_first`, her words on `prompt` for `steerFor`), `returnCardToRoom` (the return address: one block per card, updated to DONE with the finding), `saveRoomArtifact` (wraps Phase B's writer, stamps provenance). `confidential` derived from the meeting exactly as Phase B does, on every `runAi`. |
+| `src/worker/services/employeeWork.ts` | On finish, a card with `meeting_id` returns its result to the room; a failure to return is recorded, never swallowed, and cannot un-finish the card. |
+| `src/worker/index.ts` | One contiguous `// === Phase C: the live room ===` block after Phase B's: `GET …/room`, `POST …/room/roll`, `POST …/room/ask`. |
+| `src/client/pages/RoomPanel.tsx` | The During face: ONE recording status line and ONE button (the consent prompt opens from it, every session, never remembered; the recorder starts only on the server's `can_capture`; the two-gate explanation is the tooltip and a secondary line); the rolling draft with DRAFT/APPROVED chip; ask by text or **hold-to-talk** (the room hears only while the button is held; the microphone is released on release; no wake phrase); the artifacts stream (answers, tables, inline-SVG charts on `--viz-*`, task receipts with working / done / needs-you chips, refusals and failures shown as blocks); seated employees with live task chips. Mounted in the live card in place of the old CapturePanel; SeatingPanel and Phase B's panels untouched. |
+| `src/client/App.tsx` | **Tier 3 prep:** `#/room/<meeting id>` renders `RoomStandalone` — the same panel, no shell, behind the same `/api/me` gate. The shape a Meet Add-on side panel hosts later. |
+
+**Proof.** `tests/meetingRoom.test.ts`, 27 tests: a typed question ends in an answer block and the
+After face is untouched; a reply that proposes a record is not one of the four modes and is stored
+as a failure; a refusal and an unreachable model are both blocks with their reason; "Wyatt, …" seats
+Wyatt and answers in his name; an unemployed employee cannot answer; revoked access and an empty
+question are refused; a plan produces a table that cites its rows with the SQL that ran, a grouped
+plan with a chart type is a chart, a table outside the allowlist and a column outside its table are
+refused BY NAME as blocks; a task opens a preview-first card with `meeting_id` and her words on
+`prompt`, seats the employee, and its result returns to the SAME block; a blocked card reads "needs
+you"; the rolling summary is Phase B's draft and never approves; the context pack carries the record
+and prior meetings' After objects for the same company and not another's, and never an off-record
+note; Nova-3 turns fold by speaker with an unattributed word kept unattributed, and Whisper is the
+named fallback; a spoken question is saved as VOICE; the three routes answer, and answer 401 to
+nobody. `tests/meetingsLayout.test.ts` — six pins that moved with the recorder were rewritten
+stricter against `RoomPanel.tsx` (the Start button waits on the two gates the prompt cannot open;
+the recorder starts only on the server's `can_capture`; no control on the face can approve or move
+anything; push-to-talk releases the microphone; the standalone route exists).
+`e2e/p71-live-room.spec.ts`: start now → the one button → consent → recording or the named reason →
+ask by text → a block appears and stays → nothing in decisions, commitments, questions or proposals
+changed → `#/room/<id>` renders the face alone.
+
+**Two validators, registered, hard-failing on zero, with negative proofs run on the real files:**
+`validate:voice-is-read-only` (a `recordDecision` wired into an answer → caught by import AND by
+call, restored) and `validate:room-answers` (citations dropped → caught; the compiler letting
+`firm_user` through → caught with the SQL that would have run, restored).
+
+**Not done, and why.** Wake-phrase listening — the owner chose push-to-talk only. Live transcription
+inside Google Meet — Phase Meet (0202/0203). The visuals — Phase D. A real Nova-3 chunk through the
+Worker binding is UNPROVEN until deployed (the REST probe proves the model and the account; the
+binding's input shape is the documented one).
+
+**What Tier 3 needs.** A Meet Add-on manifest pointing its side panel at `#/room/<id>` on the
+deployed origin, Cloudflare Access allowing the add-on's iframe (the same session cookie), and the
+Phase Meet `meet_conference_id` on `meeting` so the panel can be opened by conference rather than by
+meeting id.
