@@ -254,9 +254,20 @@ async function main() {
       if (childArgs.length === 0) fail("usage: vault:run -- <command> [args...]");
       const key = loadMasterKey();
       const secrets = readVault(key);
+      // The Worker-side aliases (cloudflare-mapping.json) are injected too, so a script run under
+      // the vault sees the same names the Worker does. Values still never touch a terminal.
+      const aliased = {};
+      try {
+        const mapping = JSON.parse(readFileSync(join(new URL(".", import.meta.url).pathname, "cloudflare-mapping.json"), "utf8"));
+        for (const [name, vaultName] of Object.entries(mapping.secret_aliases ?? {})) {
+          if (vaultName in secrets) aliased[name] = secrets[vaultName];
+        }
+      } catch {
+        /* no mapping: nothing to alias */
+      }
       const child = spawn(childArgs[0], childArgs.slice(1), {
         stdio: "inherit",
-        env: { ...process.env, ...secrets },
+        env: { ...process.env, ...secrets, ...aliased },
       });
       child.on("exit", (code) => process.exit(code ?? 1));
       break;
@@ -325,11 +336,16 @@ async function main() {
       if (!secrets.CLOUDFLARE_API_TOKEN) fail("CLOUDFLARE_API_TOKEN absent from vault. CREDENTIAL GATE.");
       const workerName = mapping.worker_name ?? "west-peek-os";
       const names = mapping.secret_names ?? [];
-      if (names.length === 0) fail("mapping has empty secret_names; nothing to sync.");
-      for (const name of names) {
-        if (!(name in secrets)) fail(`mapped secret ${name} is not in the vault; refusing partial sync.`);
+      // Worker name → vault name, for the few secrets whose vault spelling predates the Worker's
+      // WP_OS_ prefix rule (validate:network-boundary: "only WP_OS_* bindings exist"). The value
+      // moves under the Worker's name; the vault keeps its own. Names only, as everything here.
+      const aliases = mapping.secret_aliases ?? {};
+      if (names.length === 0 && Object.keys(aliases).length === 0) fail("mapping has empty secret_names; nothing to sync.");
+      const pairs = [...names.map((n) => [n, n]), ...Object.entries(aliases)];
+      for (const [, vaultName] of pairs) {
+        if (!(vaultName in secrets)) fail(`mapped secret ${vaultName} is not in the vault; refusing partial sync.`);
       }
-      for (const name of names) {
+      for (const [name, vaultName] of pairs) {
         const res = await fetch(
           `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}/secrets`,
           {
@@ -338,11 +354,11 @@ async function main() {
               Authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ name, text: secrets[name], type: "secret_text" }),
+            body: JSON.stringify({ name, text: secrets[vaultName], type: "secret_text" }),
           },
         );
         if (!res.ok) fail(`Cloudflare secret sync failed for ${name}: HTTP ${res.status}`);
-        console.log(`Synced ${name} → Cloudflare worker ${workerName} (value never displayed).`);
+        console.log(`Synced ${name}${vaultName !== name ? ` (vault: ${vaultName})` : ""} → Cloudflare worker ${workerName} (value never displayed).`);
       }
       console.log("Cloudflare secret sync complete.");
       break;

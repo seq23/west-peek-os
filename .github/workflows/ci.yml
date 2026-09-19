@@ -298,6 +298,24 @@ jobs:
       - name: A green run means something
         run: npm run validate:green-means-something
 
+      # EVERY COMPANY IS IN THE PIPELINE, 18 Sep 2026. Owner: "all companies should be in the
+      # pipeline, no matter how they come in. They are top of funnel if they are in the system."
+      # Northwind Robotics and Vynlo sat in the register for a month with no opportunity because one
+      # route of four wrote the pipeline and a work card was trusted to do the rest. This fails if
+      # the route table grows a switch again, if the door can return without an opportunity, if the
+      # exactly-one-per-route pin is deleted or misses a route, if the Companies page goes back to
+      # calling a deal-less company "Not in the pipeline", or if the backfill's shape drifts.
+      - name: Every company is in the pipeline
+        run: npm run validate:companies-in-pipeline
+
+      # THE WEEKLY REVIEW IS ARCHIVED, 18 Sep 2026. Owner: "we don't need it anymore." The job is
+      # RETIRED, the nav item is gone, the route still answers a bookmark, every row is kept. This
+      # fails if any migration or seed after 0198 puts `weekly_mp_review` back to ACTIVE or PAUSED,
+      # if the nav lists it again, if the dispatcher can still reach the generator from the tick, or
+      # if the finished-work shelf surfaces the archived kind by default.
+      - name: An archived lane stays archived
+        run: npm run validate:weekly-review-archived
+
       # 18 Sep 2026: `validate:css-classes` failed a correct branch because a comment explained that
       # the class it named had just been removed. 25 of 40 scans stripped comments, 12 did not. The
       # gate costs ~8 seconds in total, so the tax was never the number of validators — it was that
@@ -305,6 +323,40 @@ jobs:
       # no rule at all.
       - name: A scan reads code, not prose
         run: npm run validate:scans-read-code
+
+      # 18 Sep 2026: Portfolio said the fund held nothing while Fund strategy drew the firm's one
+      # investment (a pre-fund SPV with no position row) at 100%. One list now feeds both pages, one
+      # ring and one arithmetic are hosted twice, and this fails if either page grows its own again.
+      - name: The portfolio shows what the firm owns
+        run: npm run validate:portfolio
+      # Phase Meet (18 Sep 2026). A calendar event exists here as exactly one meeting through both
+      # doors, and the calendar/Meet code paths never name the other business; an ended Meet call is
+      # read once, attributed only by Meet's own participant join, and reaches the transcript only
+      # through the governed import. Both hard-fail on zero fixtures.
+      - name: A calendar meeting exists once
+        run: npm run validate:calendar-sync
+      - name: A Meet call that ended is read
+        run: npm run validate:meet-ingest
+      # Phase B (18 Sep 2026): a meeting is one object with three faces. The AFTER face — what was
+      # settled, what is owed on both sides, what is still unknown, what it means for the deal — is
+      # drafted by an employee and becomes a record only when a partner approves. This fails if any
+      # of the four outputs can be dropped, written without its key, or moved without a person.
+      - name: A meeting produces something, and nothing becomes a record without a person
+        run: npm run validate:meeting-yield
+
+      # The BEFORE face: a brief for every meeting the night before, by a job that starts ENABLED,
+      # is dispatched, reports FAILED on a failure, and whose builder cannot hand over a blank.
+      - name: A brief exists before every meeting
+        run: npm run validate:meeting-brief
+
+      # The DURING face (Phase C): nothing asked in the live room — typed or spoken — can become a
+      # decision, commitment, question or stage move without a person; and a table or chart built
+      # in the room comes from the record, cites its rows, and refuses anything off the allowlist.
+      - name: Nothing writes from voice
+        run: npm run validate:voice-is-read-only
+
+      - name: A room question is answered from the record
+        run: npm run validate:room-answers
 
       - name: Build client
         run: npm run build

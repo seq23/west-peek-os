@@ -308,12 +308,20 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   // confirmed, not assumed. Dropping the CHECK would remove what stops a typo becoming a job that
   // silently never runs, so one documented special case is the better trade. See migration 0043.
   if (job.job_key === "weekly_mp_review") {
-    const { generateReview } = await import("./weeklyReview");
-    const out = await generateReview(env, actor, now);
-    artifacts.push({ kind: "WEEKLY_REVIEW", ref_type: "weekly_review", ref_id: String(out.review.id) });
+    /*
+     * ARCHIVED, 18 Sep 2026. Owner: "we don't need it anymore." The row is RETIRED (migration 0198)
+     * and `checkPreconditions` refuses it before this line on every trigger, so this branch is not
+     * reachable from a tick. It is kept as a REFUSAL rather than deleted, because deleting it would
+     * make a hand-edited row fall through to the INTELLIGENCE path below and run the sweep under
+     * this key — and a job that generates something other than what its name says is worse than one
+     * that says no. The generator itself (services/weeklyReview.ts) is still reachable by a human
+     * from the page's own button, behind `weekly_review.manage`; nothing on a clock reaches it.
+     */
     return {
-      status: "SUCCEEDED",
-      summary: `Weekly review assembled: ${(out.items ?? []).length} agenda item(s) across sixteen headings.`,
+      status: "REFUSED",
+      summary:
+        "The weekly review is archived (18 Sep 2026): the per-person Wednesday prep packet replaced it. " +
+        "This job is RETIRED and never generates again; every review already written is kept.",
       artifacts,
     };
   }
@@ -347,6 +355,29 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
         `${empties > 0 ? ` (${empties} with nothing completed, delivered and marked as such)` : ""}` +
         `${out.register ? `; discrepancy register: ${out.register.recorded} recorded, ${out.register.derived} newly noticed` : "; NO discrepancy register"}` +
         `${out.failures.length > 0 ? `. FAILED: ${out.failures.map((f) => `${f.what} — ${f.detail}`).join("; ")}` : ""}`,
+      artifacts,
+    };
+  }
+
+  /*
+   * The night-before meeting briefs (Phase B, migration 0200). Same DAILY_AT shape as
+   * `wednesday_prep`, dispatched by job_key for the same reason. One brief per SCHEDULED meeting in
+   * the next 36 hours that has none; a meeting whose brief could not be built is a CRITICAL
+   * notification and a FAILED run. A window with no meetings is SUCCEEDED and says how many it
+   * examined — the named stop, not the inert one.
+   */
+  if (job.job_key === "meeting_brief") {
+    const { runMeetingBriefs } = await import("./meetingBrief");
+    const out = await runMeetingBriefs(env, actor, now);
+    for (const b of out.built) artifacts.push({ kind: "MEETING_PREP", ref_type: "meeting", ref_id: b.meetingId });
+    const unwritten = out.built.filter((b) => !b.whyWritten).length;
+    return {
+      status: out.failures.length > 0 ? "FAILED" : "SUCCEEDED",
+      summary:
+        `${out.examined} meeting(s) in the next 36h examined; ${out.built.length} brief(s) built` +
+        `${out.alreadyBriefed > 0 ? `, ${out.alreadyBriefed} already had one` : ""}` +
+        `${unwritten > 0 ? ` (${unwritten} with no why-line — the brief says so)` : ""}` +
+        `${out.failures.length > 0 ? `. FAILED: ${out.failures.map((f) => `"${f.title}" — ${f.detail}`).join("; ")}` : "."}`,
       artifacts,
     };
   }
@@ -486,6 +517,35 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
             : `${out.read} read${out.failed ? ` · ${out.failed} could not be read` : ""}${out.skipped ? ` · ${out.skipped} waiting for a company to be opened` : ""}${out.deferred ? ` · ${out.deferred} left for the next run` : ""}`,
       artifacts,
     };
+  }
+
+  /*
+   * Phase Meet (18 Sep 2026). Two INTERVAL jobs, neither runs a model.
+   *
+   * `calendar_sync` reads the firm calendar and keeps one meeting per event with a Meet link. A
+   * door that fails is a FAILED run with the door named — "via iCal" in the summary is the fallback
+   * being visible rather than silent.
+   *
+   * `meet_ingest` hears about ended conferences (Pub/Sub pulled, then polled) and reads each once:
+   * participants, speaker-attributed transcript, recording pointer, through the governed import.
+   * A tick with nothing to read says what it heard, because a run log that reads "nothing" on the
+   * day the subscription silently expired is the failure this repo keeps finding.
+   */
+  if (job.job_key === "calendar_sync") {
+    const { runCalendarSync } = await import("./calendarSync");
+    const results = await runCalendarSync(env, { now });
+    for (const r of results) artifacts.push({ kind: "CALENDAR_SYNC", ref_type: "google_calendar_sync", ref_id: r.calendarKey, note: r.detail });
+    return {
+      status: results.every((r) => r.ok) ? "SUCCEEDED" : "FAILED",
+      summary: results.map((r) => `${r.calendarKey}${r.via ? ` (${r.via})` : ""}: ${r.detail}`).join(" · "),
+      artifacts,
+    };
+  }
+  if (job.job_key === "meet_ingest") {
+    const { runMeetIngest } = await import("./meetIngest");
+    const out = await runMeetIngest(env, { now });
+    for (const r of out.read) artifacts.push({ kind: "MEET_CONFERENCE", ref_type: "meet_event_inbox", ref_id: r.conference_record, note: `${r.state}: ${r.detail}` });
+    return { status: out.ok ? "SUCCEEDED" : "FAILED", summary: out.summary, artifacts };
   }
 
   if (job.job_key === "productions_intro_note") {

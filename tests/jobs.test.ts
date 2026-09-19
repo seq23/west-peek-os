@@ -590,16 +590,20 @@ describe("work whose invocation died is closed out rather than left running", ()
  */
 describe("a failed occurrence can be tried again, and a dead one does not wedge the clock", () => {
   it("advances the schedule when the work is CLAIMED, so a run that dies is due again tomorrow", async () => {
-    await call("/api/jobs/weekly_mp_review/status", MP, "POST", { status: "ACTIVE", reason: "on for this test" });
+    // `deck_reading` is the vehicle here since 18 Sep 2026: these tests used `weekly_mp_review`,
+    // which is RETIRED by 0198 and refuses every trigger — exactly the right behaviour for it, and
+    // useless for proving the occurrence key. `deck_reading` is DAILY_AT (0193) and SUCCEEDS on an
+    // empty queue, which is what the tests below need: a SUCCEEDED occurrence that holds its key.
+    await call("/api/jobs/deck_reading/status", MP, "POST", { status: "ACTIVE", reason: "on for this test" });
     const before = await t.db
-      .prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'")
+      .prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'deck_reading'")
       .first<{ next_run_at: string }>();
 
     const now = new Date("2026-09-02T12:30:00.000Z");
-    await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    await runJob(env, MP_ACTOR, "deck_reading", { trigger: "SCHEDULED", now });
 
     const after = await t.db
-      .prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'")
+      .prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'deck_reading'")
       .first<{ next_run_at: string }>();
     expect(after!.next_run_at).not.toBe(before!.next_run_at);
     expect(after!.next_run_at > now.toISOString()).toBe(true);
@@ -607,10 +611,12 @@ describe("a failed occurrence can be tried again, and a dead one does not wedge 
 
   it("treats a SUCCEEDED occurrence as done and refuses to run it twice", async () => {
     const now = new Date("2026-09-03T12:30:00.000Z");
-    const first = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    const first = await runJob(env, MP_ACTOR, "deck_reading", { trigger: "SCHEDULED", now });
     expect(first.replayed).toBe(false);
+    // The premise, asserted: the tests below only mean something if this occurrence SUCCEEDED.
+    expect(first.run.status, String(first.run.outcome_summary ?? "")).toBe("SUCCEEDED");
 
-    const second = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    const second = await runJob(env, MP_ACTOR, "deck_reading", { trigger: "SCHEDULED", now });
     expect(second.replayed).toBe(true);
   });
 
@@ -622,41 +628,41 @@ describe("a failed occurrence can be tried again, and a dead one does not wedge 
      * tick after, and nothing else in the firm ran for twelve minutes until a person noticed.
      */
     const now = new Date("2026-09-03T13:00:00.000Z"); // the same day as the SUCCEEDED run above
-    await t.db.prepare("UPDATE scheduled_job SET next_run_at = ?1 WHERE job_key = 'weekly_mp_review'").bind("2026-09-03T12:50:00.000Z").run();
+    await t.db.prepare("UPDATE scheduled_job SET next_run_at = ?1 WHERE job_key = 'deck_reading'").bind("2026-09-03T12:50:00.000Z").run();
 
-    const replay = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    const replay = await runJob(env, MP_ACTOR, "deck_reading", { trigger: "SCHEDULED", now });
     expect(replay.replayed).toBe(true);
 
-    const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ next_run_at: string }>();
+    const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'deck_reading'").first<{ next_run_at: string }>();
     expect(after!.next_run_at > now.toISOString(), `next_run_at ${after!.next_run_at} is still due`).toBe(true);
 
     // And the tick moves on: with that job no longer due, the next most overdue job runs instead.
     const results = await runDueJobs(env, now);
-    expect(results.map((r) => r.job_key)).not.toContain("weekly_mp_review");
+    expect(results.map((r) => r.job_key)).not.toContain("deck_reading");
   });
 
   it("does not push a future occurrence out when a finished one is replayed by hand", async () => {
     const now = new Date("2026-09-03T13:10:00.000Z");
-    const before = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ next_run_at: string }>();
+    const before = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'deck_reading'").first<{ next_run_at: string }>();
     expect(before!.next_run_at > now.toISOString()).toBe(true);
-    const replay = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now });
+    const replay = await runJob(env, MP_ACTOR, "deck_reading", { trigger: "SCHEDULED", now });
     expect(replay.replayed).toBe(true);
-    const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ next_run_at: string }>();
+    const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'deck_reading'").first<{ next_run_at: string }>();
     expect(after!.next_run_at).toBe(before!.next_run_at);
   });
 
   it("lets a FAILED occurrence be attempted again on a later tick of the same day", async () => {
-    const job = await t.db.prepare("SELECT * FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ id: string; firm_scope: string }>();
+    const job = await t.db.prepare("SELECT * FROM scheduled_job WHERE job_key = 'deck_reading'").first<{ id: string; firm_scope: string }>();
     // A failure earlier today, holding the day's occurrence key — the exact production shape.
     await t.db
       .prepare(
         `INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, attempt, started_at, finished_at, error, requested_by, firm_scope)
-         VALUES (?1, ?2, 'weekly_mp_review:2026-09-04', 'SCHEDULED', 'FAILED', 1, ?3, ?3, 'it fell over', 'system', ?4)`,
+         VALUES (?1, ?2, 'deck_reading:2026-09-04', 'SCHEDULED', 'FAILED', 1, ?3, ?3, 'it fell over', 'system', ?4)`,
       )
       .bind(`jrun_${crypto.randomUUID()}`, job!.id, "2026-09-04T12:00:00.000Z", job!.firm_scope)
       .run();
 
-    const retry = await runJob(env, MP_ACTOR, "weekly_mp_review", {
+    const retry = await runJob(env, MP_ACTOR, "deck_reading", {
       trigger: "SCHEDULED",
       now: new Date("2026-09-04T12:30:00.000Z"),
     });
@@ -667,16 +673,16 @@ describe("a failed occurrence can be tried again, and a dead one does not wedge 
   });
 
   it("leaves an occurrence alone while somebody is still running it", async () => {
-    const job = await t.db.prepare("SELECT * FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ id: string; firm_scope: string }>();
+    const job = await t.db.prepare("SELECT * FROM scheduled_job WHERE job_key = 'deck_reading'").first<{ id: string; firm_scope: string }>();
     await t.db
       .prepare(
         `INSERT INTO job_run (id, job_id, idempotency_key, trigger_kind, status, attempt, started_at, requested_by, firm_scope)
-         VALUES (?1, ?2, 'weekly_mp_review:2026-09-05', 'SCHEDULED', 'RUNNING', 1, ?3, 'system', ?4)`,
+         VALUES (?1, ?2, 'deck_reading:2026-09-05', 'SCHEDULED', 'RUNNING', 1, ?3, 'system', ?4)`,
       )
       .bind(`jrun_${crypto.randomUUID()}`, job!.id, new Date().toISOString(), job!.firm_scope)
       .run();
 
-    const concurrent = await runJob(env, MP_ACTOR, "weekly_mp_review", {
+    const concurrent = await runJob(env, MP_ACTOR, "deck_reading", {
       trigger: "SCHEDULED",
       now: new Date("2026-09-05T12:30:00.000Z"),
     });

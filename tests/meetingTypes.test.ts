@@ -41,15 +41,37 @@ describe("who can sit in the room", () => {
     expect(seats.slice(0, firstUnsuggested).every((s) => s.suggested)).toBe(true);
   });
 
-  it("never offers an internal-only employee for a meeting with outsiders in it", () => {
-    // Compliance exists to check the firm. Putting it in front of a founder is a category error.
-    const external = seatableFor("FOUNDER", EVERYONE).map((s) => s.name);
-    expect(external).not.toContain("Willow");
-    expect(external).not.toContain("Preston");
-    // The internal meeting is exactly where those seats belong.
-    const internal = seatableFor("INTERNAL", EVERYONE).map((s) => s.name);
-    expect(internal).toContain("Willow");
-    expect(internal).toContain("Preston");
+  it("offers EVERY active employee for EVERY type — the owner's rule — and warns rather than hides", () => {
+    // 18 Sep 2026: "all AI employees can be added to any meeting." The list used to drop
+    // INTERNAL_ONLY seats from external meetings, which read as a lock the server never held.
+    for (const t of MEETING_TYPES) {
+      const names = seatableFor(t.key, EVERYONE).map((s) => s.name).sort();
+      expect(names, `${t.key} does not offer the whole active roster`).toEqual([...EVERYONE].sort());
+    }
+  });
+
+  it("carries a warning — in words — for an internal-only seat in an external meeting, and nowhere else", () => {
+    const internalOnly = AI_EMPLOYEE_ROSTER.filter((e) => e.face === "INTERNAL_ONLY").map((e) => e.name);
+    expect(internalOnly.length).toBeGreaterThan(0);
+    for (const t of MEETING_TYPES) {
+      for (const s of seatableFor(t.key, EVERYONE)) {
+        const shouldWarn = t.external && internalOnly.includes(s.name);
+        if (shouldWarn) {
+          expect(s.warning, `${s.name} on ${t.key} needs a warning`).toMatch(/internal-only/);
+          expect(s.warning, "a warning has to name the seat and say why").toContain(s.name);
+          expect(s.warning!.length).toBeGreaterThan(40);
+        } else {
+          expect(s.warning, `${s.name} on ${t.key} must not be warned about`).toBeNull();
+        }
+      }
+    }
+    // Concretely: compliance and fund finance ARE offered for a founder meeting, with the warning.
+    const founder = seatableFor("FOUNDER", EVERYONE);
+    expect(founder.find((s) => s.name === "Willow")?.warning).toBeTruthy();
+    expect(founder.find((s) => s.name === "Preston")?.warning).toBeTruthy();
+    // …and sit in the internal meeting with no warning at all.
+    const internal = seatableFor("INTERNAL", EVERYONE);
+    expect(internal.find((s) => s.name === "Willow")?.warning).toBeNull();
   });
 
   it("never offers somebody who is switched off", () => {

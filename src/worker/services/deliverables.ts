@@ -8,6 +8,7 @@ import { actorFromIdentity, authorize, privacyVisibilityClause, type Actor } fro
 import { uploadDocument } from "./documents";
 import {
   type DeliverableForExport,
+  archivedDeliverableKinds,
   exportFilename,
   kindDef,
   renderMarkdown,
@@ -276,6 +277,17 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
           WHERE d2.kind = 'daily_brief' AND d2.prepared_for = d.prepared_for
             AND d2.firm_scope = d.firm_scope))`;
 
+  /*
+   * AN ARCHIVED KIND IS OFF THE SHELF, NOT OUT OF THE DATABASE. The weekly review was archived on
+   * 18 Sep 2026 (owner: "we don't need it anymore"); nothing produces one now, and the unfiltered
+   * shelf on Home would otherwise keep showing the last ones written as if they were current work.
+   * Asking for the kind by name (`?kind=weekly_review`) still returns every row, and each is still
+   * readable by URL. The list of archived kinds is derived from the kind definitions, so archiving
+   * a kind is one field on its definition and never a second list here.
+   */
+  const archived = archivedDeliverableKinds();
+  const archivedClause = archived.length > 0 ? `d.kind NOT IN (${archived.map((k) => `'${k}'`).join(", ")})` : "1=1";
+
   // BOTH PARTNERS SEE EACH OTHER'S. Research is INTERNAL by default, and the operator's question was
   // explicitly "if scooter requests research i can find it". Anything labelled more sensitive is
   // filtered by the visibility clause, which is where that decision belongs.
@@ -294,7 +306,7 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
         .bind(...(mineOnly ? [kind, limit, me] : [kind, limit]))
         .all<DeliverableRow>()
     : await ctx.env.WP_OS_DB.prepare(
-        `${select} WHERE ${dismissClause} AND ${currentClause}
+        `${select} WHERE ${dismissClause} AND ${currentClause} AND ${archivedClause}
             AND ${mineClause.replace("?mine", "?2")} AND ${visibility}
           ORDER BY created_at DESC LIMIT ?1`,
       )

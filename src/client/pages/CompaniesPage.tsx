@@ -230,10 +230,26 @@ function CompanyCard({ company: c, sectors, arrivedHere, onSaved }: {
         </p>
       )}
 
+      {/*
+        A COMPANY WITH NO DEAL IS A FAULT, NOT A STATE. Owner, 18 Sep 2026: "all companies should be
+        in the pipeline, no matter how they come in. They are top of funnel if they are in the
+        system." Every intake route opens the opportunity at arrival and migration 0197 backfilled
+        the register, so this row should never render — and when it does, it says so in those
+        terms rather than as the calm "Not in the pipeline" that let Northwind Robotics and Vynlo
+        sit unseen for a month. `validate:companies-in-pipeline` fails the build if the calm label
+        comes back.
+      */}
+      {!s && (
+        <p className="notice notice-bad small" data-testid={`company-no-deal-${c.id}`}>
+          <strong>Not on the board, and it should be.</strong> Every company in the system is meant to be at the
+          top of the funnel; this one has no deal, which is a fault in how it came in. Open it from Dealflow.
+        </p>
+      )}
+
       <dl className="company-facts">
         <div>
           <dt>Stage</dt>
-          <dd>{s?.label ?? "Not in the pipeline"}</dd>
+          <dd>{s?.label ?? "—"}</dd>
         </div>
         <div>
           <dt>In it</dt>

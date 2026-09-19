@@ -14,8 +14,9 @@ import { AI_EMPLOYEE_ROSTER } from "../registry/aiEmployees";
  * buddy turns that into a choice you can make in a second.
  *
  * SUGGESTIONS ARE NOT SEATING. Nothing here seats anybody: only an ACTIVE employee can be seated,
- * only a human can do it, and the server enforces both. This shortens the list you pick from and
- * nothing else — which is why an employee who is switched off simply will not appear.
+ * only a human can do it, and the server enforces both. This orders the list you pick from and
+ * nothing else — which is why an employee who is switched off simply will not appear, and why
+ * every employee who is on appears for every type (owner's rule, 18 Sep 2026).
  */
 
 export interface MeetingType {
@@ -26,7 +27,7 @@ export interface MeetingType {
   when: string;
   /** Roster names worth having in this room, best first. */
   suggests: readonly string[];
-  /** True when the counterparty is outside the firm — an internal-only employee must not be seated. */
+  /** True when the counterparty is outside the firm — an internal-only employee seated here is WARNED about, not blocked. */
   external: boolean;
 }
 
@@ -99,6 +100,11 @@ export interface Seatable {
   /** Why this employee is being suggested for this room. */
   because: string;
   suggested: boolean;
+  /**
+   * Set when seating this employee here is worth a second look: an INTERNAL_ONLY employee in a
+   * meeting with outsiders in it. A WARNING shown beside the seat, never a lock — see below.
+   */
+  warning: string | null;
 }
 
 /**
@@ -107,20 +113,21 @@ export interface Seatable {
  * `available` is the set of employees who are actually ACTIVE. Passing it matters: offering to seat
  * somebody who is switched off produces a refusal from the server and looks like a bug.
  *
- * AN INTERNAL-ONLY EMPLOYEE IS NEVER OFFERED FOR AN EXTERNAL MEETING. That is the whole point of
- * the `face` field: compliance and fund finance exist to check the firm, and putting them in front
- * of a founder is a category error. The server does not enforce this — seating is governed by
- * ACTIVE status and human-only action, not by face — so this is guidance rather than a gate, and
- * the wording says so rather than implying a lock that is not there.
+ * EVERY ACTIVE EMPLOYEE CAN BE SEATED ON ANY TYPE. The owner's rule, 18 Sep 2026: "all AI employees
+ * can be added to any meeting." This used to hide INTERNAL_ONLY employees from external meetings,
+ * which read as a lock the server never held — the server has always seated any ACTIVE employee.
+ * Now the list is the whole active roster and the `face` field becomes what it honestly is: a
+ * WARNING. Compliance and fund finance exist to check the firm, so an internal-only seat in front
+ * of a founder is flagged in words beside the seat, and the person seating them decides.
  */
 export function seatableFor(typeKey: string, available: readonly string[]): Seatable[] {
   const type = meetingType(typeKey);
   const availableSet = new Set(available);
 
   return AI_EMPLOYEE_ROSTER.filter((e) => availableSet.has(e.name))
-    .filter((e) => !(type?.external && e.face === "INTERNAL_ONLY"))
     .map((e) => {
       const suggested = Boolean(type?.suggests.includes(e.name));
+      const external = Boolean(type?.external);
       return {
         name: e.name,
         role: e.role,
@@ -128,6 +135,10 @@ export function seatableFor(typeKey: string, available: readonly string[]): Seat
         because: suggested
           ? `Usually worth having in a ${type!.label.toLowerCase()}.`
           : e.bio.split(".")[0] + ".",
+        warning:
+          external && e.face === "INTERNAL_ONLY"
+            ? `${e.name} is an internal-only seat — ${e.role.toLowerCase()} — and this meeting has people outside the firm in it. Seat them if you want them; know that what they say is meant for the firm.`
+            : null,
       };
     })
     .sort((a, b) => {

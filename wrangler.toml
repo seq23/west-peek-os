@@ -207,5 +207,15 @@ WP_OS_NETWORK_OS_BASE_URL = "https://network.joinwestpeek.com"
 # never have authenticated — checked in that repo rather than guessed at from here.
 WP_OS_NETWORK_OS_USER_EMAIL = "sequoia@westpeek.ventures"
 
+# Google Meet (Phase Meet, 18 Sep 2026). Non-secret names: the GCP project that owns the service
+# account and the Meet API enablement, the Pub/Sub topic Workspace Events publish to, and the PULL
+# subscription the hourly ingest drains. The service account itself is a Worker secret
+# (WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON, synced from the vault's GSC_SERVICE_ACCOUNT_JSON) and never in
+# this file. Pull, never push: this Worker sits behind Cloudflare Access, so a push endpoint could
+# never be reached — see effects/googleWorkspaceClient.ts.
+WP_OS_GCP_PROJECT_ID = "gsc-automation-493801"
+WP_OS_MEET_PUBSUB_TOPIC = "projects/gsc-automation-493801/topics/meet-events"
+WP_OS_MEET_PUBSUB_SUBSCRIPTION = "projects/gsc-automation-493801/subscriptions/meet-events-wpos"
+
 [env.production.observability]
 enabled = true

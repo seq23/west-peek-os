@@ -60,6 +60,15 @@ const ingestSchema = z.object({
   document_id: z.string().max(80).nullish(),
 });
 
+/**
+ * What the scheduled Meet ingest passes and the HTTP route cannot: the platform that generated the
+ * transcript. Deliberately NOT in `ingestSchema` — a request body must never be able to claim a
+ * platform announced consent on its behalf. Only `meetIngest.ts` constructs this.
+ */
+export interface PlatformNativeIngest {
+  platform: "GOOGLE_MEET";
+}
+
 export interface IngestResult {
   transcript_import_id: string;
   segments: number;
@@ -77,8 +86,8 @@ export async function ingestTranscript(
   env: Env,
   actor: Actor,
   meetingId: string,
-  input: z.infer<typeof ingestSchema>,
-  importTranscript: (env: Env, actor: Actor, meetingId: string, i: { source: string; document_id?: string }) => Promise<{ id: string }>,
+  input: z.infer<typeof ingestSchema> & Partial<PlatformNativeIngest>,
+  importTranscript: (env: Env, actor: Actor, meetingId: string, i: { source: string; document_id?: string; platform?: "GOOGLE_MEET" }) => Promise<{ id: string }>,
 ): Promise<IngestResult> {
   const meeting = await env.WP_OS_DB.prepare(
     "SELECT id, firm_scope, privacy_label FROM meeting WHERE id = ?1",
@@ -97,6 +106,7 @@ export async function ingestTranscript(
   const imported = await importTranscript(env, actor, meetingId, {
     source: input.source,
     document_id: input.document_id ?? undefined,
+    platform: input.platform,
   });
 
   const segments = splitSegments(input.text);
@@ -124,7 +134,7 @@ export async function ingestTranscript(
     objectType: "transcript_import",
     objectId: imported.id,
     firmScope: meeting.firm_scope,
-    payload: { meeting_id: meetingId, source: input.source, segments: created },
+    payload: { meeting_id: meetingId, source: input.source, platform: input.platform ?? null, segments: created },
   });
 
   return { transcript_import_id: imported.id, segments: segments.length, notes_created: created };

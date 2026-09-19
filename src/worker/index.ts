@@ -194,6 +194,23 @@ import {
 import { handleListHireCandidates } from "./services/productionsHire";
 import { handleRunPreview } from "./services/preview";
 import { handleRunMeetingPrep } from "./services/meetingPrep";
+import { handleGetMeetingBrief } from "./services/meetingBrief";
+import {
+  handleApproveMeetingAfter,
+  handleAskOfferLedger,
+  handleDecideStageProposal,
+  handleDiscardMeetingAfter,
+  handleDraftMeetingAfter,
+  handleGetMeetingAfter,
+  handleHonourCommitment,
+  handleListMeetingArtifacts,
+  handleProposeStageChange,
+  handleRecordDecision,
+  handleRecordOpenQuestion,
+  handleResolveOpenQuestion,
+  handleSaveMeetingArtifact,
+} from "./services/meetingAfter";
+import { handleRoomAsk, handleRoomRoll, handleRoomState } from "./services/meetingRoom";
 import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/deck";
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
@@ -308,7 +325,6 @@ import {
   handleBackfillOpportunity,
   handleConfirmPlaceholders,
   handleDealflowBoard,
-  handlePortfolioComposition,
   handleUpdateDealMathPacket,
   handleUpdateOpportunity,
   handleVoidTransaction,
@@ -490,6 +506,7 @@ import {
 } from "./services/machines";
 import { handleAllocationStrategyView, handlePortfolioCockpit } from "./services/cockpit";
 import { handleDraftPortfolioSummary, handlePortfolioReporting } from "./services/portfolioReporting";
+import { handlePortfolioAllocation, handlePortfolioComposition, handlePortfolioHoldings } from "./services/portfolioHoldings";
 import { handleCheckConnector, handleListConnectors, handleMeetingPrepQueue } from "./services/connectors";
 import { handleAcceptEngagement, handleListEngagements, handleOpenEngagement } from "./services/specialist";
 import {
@@ -568,6 +585,8 @@ import {
   handleListFirmSkills,
   handleRetireFirmSkill,
 } from "./services/firmSkills";
+import { handleCalendarLedger, handleRunCalendarSync } from "./services/calendarSync";
+import { handleFirmRecordingPolicy, handleMeetInbox, handleMeetStatus, handleRunMeetIngest } from "./services/meetIngest";
 import {
   handleCreatePersonalEntry,
   handleGetPersonalProfile,
@@ -874,7 +893,6 @@ const router = new Router()
   .get("/api/security-classes", handleListSecurityClasses)
   // P6 — investment opportunities (secondaries keep seller/broker/class provenance).
   .get("/api/dealflow/board", handleDealflowBoard)
-  .get("/api/portfolio/composition", handlePortfolioComposition)
   // Item 7, route 1: the manual door a partner drives herself. It runs through openIntoFunnel.
   .post("/api/opportunities", handleCreateOpportunity)
   // Item 7, route 4: the analyst's own scouting. His list, so his to cut — but it still arrives
@@ -959,6 +977,18 @@ const router = new Router()
   .post("/api/meetings/:id/capture/chunk", handleCaptureChunk)
   // A transcript somebody else recorded. Same two gates, and importing is never consent.
   .post("/api/meetings/:id/transcript/fireflies", handleImportFireflies)
+  // === Phase Meet: Google Meet integration ===
+  // Tier 1: the firm calendar becomes meetings. Tier 2: an ended Meet is read once, through the
+  // governed import. The one reserved decision — recording on by default for every firm-hosted
+  // Meet — is a receipt-gated POST. Everything here is read from Google and written here; no route
+  // writes to a calendar, a space or Drive. Literal paths only, so nothing shadows a :id route.
+  .get("/api/meet/status", handleMeetStatus)
+  .get("/api/meet/inbox", handleMeetInbox)
+  .get("/api/meet/calendar", handleCalendarLedger)
+  .post("/api/meet/calendar/sync", handleRunCalendarSync)
+  .post("/api/meet/ingest", handleRunMeetIngest)
+  .post("/api/meet/recording-policy", handleFirmRecordingPolicy)
+  // === end Phase Meet ===
   // P33 — Event OS / Community OS scaffolding.
   .get("/api/events", handleListEvents)
   .post("/api/events", handleCreateEvent)
@@ -1084,6 +1114,34 @@ const router = new Router()
   .post("/api/meeting-commitments/:id/convert", handleConvertCommitment)
   .post("/api/meetings/:id/debriefs", handleCreateDebrief)
   .post("/api/meetings/:id/claim-candidates", handlePromoteToClaim)
+  // === Phase B: meeting model ===
+  // A meeting is one object with three faces. BEFORE: the brief (built by POST …/prep, read here).
+  // AFTER: what came out — decisions, commitments on both sides, open questions, a stage PROPOSAL,
+  // saved artifacts — and the AI draft that is the only door in for a model, approved by a person.
+  .get("/api/meetings/:id/brief", handleGetMeetingBrief)
+  .get("/api/meetings/:id/after", handleGetMeetingAfter)
+  .post("/api/meetings/:id/decisions", handleRecordDecision)
+  .post("/api/meetings/:id/open-questions", handleRecordOpenQuestion)
+  .post("/api/meeting-open-questions/:id/resolve", handleResolveOpenQuestion)
+  .post("/api/meeting-commitments/:id/honour", handleHonourCommitment)
+  .post("/api/meetings/:id/stage-proposals", handleProposeStageChange)
+  .post("/api/meeting-stage-proposals/:id/decide", handleDecideStageProposal)
+  .get("/api/meetings/:id/artifacts", handleListMeetingArtifacts)
+  .post("/api/meetings/:id/artifacts", handleSaveMeetingArtifact)
+  .post("/api/meetings/:id/after-draft", handleDraftMeetingAfter)
+  .post("/api/meeting-after-drafts/:id/approve", handleApproveMeetingAfter)
+  .post("/api/meeting-after-drafts/:id/discard", handleDiscardMeetingAfter)
+  .get("/api/meeting-ledger/ask-offer", handleAskOfferLedger)
+  // === end Phase B ====
+  // === Phase C: the live room ===
+  // The DURING face. One read for the whole room (recording status, the rolling draft, the blocks,
+  // who is seated, the tasks in flight); the draft rolled from the transcript so far; a question
+  // asked by text or push-to-talk voice, which always answers with a saved block and can open a
+  // preview-first card — and can never write a decision, commitment, question or stage move.
+  .get("/api/meetings/:id/room", handleRoomState)
+  .post("/api/meetings/:id/room/roll", handleRoomRoll)
+  .post("/api/meetings/:id/room/ask", handleRoomAsk)
+  // === end Phase C ====
   // P8 — portfolio monitoring: dated metrics, deterministic alerts, support.
   .post("/api/portfolio/metric-definitions", handleCreateMetricDefinition)
   .get("/api/portfolio/metric-definitions", handleListMetricDefinitions)
@@ -1337,7 +1395,14 @@ const router = new Router()
   .post("/api/lp-ops/engagements/:id", handleUpdateLpEngagement)
   // P25 — MP cockpit views. Read-only aggregations; nothing is recomputed for display.
   .get("/api/portfolio/cockpit", handlePortfolioCockpit)
-  .get("/api/allocation/scenarios/:id/strategy-view", handleAllocationStrategyView);
+  .get("/api/allocation/scenarios/:id/strategy-view", handleAllocationStrategyView)
+  // === Phase Portfolio ===
+  // What the firm owns, as ONE list: closed investments and booked positions, merged per company.
+  // Composition and the deployment ring are computed from that list, so Portfolio and Fund
+  // strategy cannot name different portfolios (services/portfolioHoldings.ts).
+  .get("/api/portfolio/holdings", handlePortfolioHoldings)
+  .get("/api/portfolio/composition", handlePortfolioComposition)
+  .get("/api/portfolio/allocation", handlePortfolioAllocation);
 
 /**
  * Pure request handler — exported so tests can exercise it directly with a

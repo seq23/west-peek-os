@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { MEETING_TYPES, meetingType, seatableFor } from "@shared/meetings/meetingTypes";
 import { IC_FLOW } from "@shared/ic/meetingFlow";
 import { LiveHelpPanel } from "./LiveHelpPanel";
+import { RoomPanel } from "./RoomPanel";
 import { CloseoutPanel } from "./CloseoutPanel";
+import { AfterPanel, BeforePanel } from "./MeetingFacesPanel";
 
 /**
  * Meetings — the whole surface, in the order a partner asks in (ADR-019).
@@ -18,12 +20,15 @@ import { CloseoutPanel } from "./CloseoutPanel";
  * rendered `meeting-${id}`, and opening a meeting in one had no effect on the other. Anybody
  * looking at it was reading two surfaces and being asked to work out which one they were on.
  *
- * FIVE SECTIONS, ALWAYS RENDERED, EACH WITH AN EMPTY STATE. "Nothing has reached this yet" and
+ * FOUR SECTIONS, ALWAYS RENDERED, EACH WITH AN EMPTY STATE. "Nothing has reached this yet" and
  * "this is broken" look identical unless the page says which — the same defect the IC sequence
  * block was written to fix, applied to the whole page. The order is the argument: what is coming
- * up, what happened and what came of it, start one now, where a deal stands with the committee,
- * and last of all how any of this becomes work. The explainer goes last because a page that
- * explains itself before showing anything is a page you have to read before you can use.
+ * up, what happened and what came of it, start one now, and where a deal stands with the
+ * committee. The static "How a meeting becomes work" explainer went with Phase B (18 Sep 2026):
+ * every meeting record now SHOWS its three faces — the brief before, the capture during, and what
+ * came out after — so a chain described in the abstract at the foot of the page was describing
+ * something the record itself now says. The committee sequence stays inside section 4, where the
+ * deals it describes are.
  */
 
 interface MeetingRow {
@@ -49,6 +54,44 @@ interface MeetingRow {
   archived_at?: string | null;
   archived_by?: string | null;
   archive_reason?: string | null;
+  /** Phase Meet (migration 0202). Present on a meeting the calendar sync created. */
+  meet_link?: string | null;
+  source?: "manual" | "google_calendar";
+  type_inference?: "FIRM_ONLY" | "LP_CONTACT" | "COMPANY_DOMAIN" | "UNKNOWN_CHECK_IT" | null;
+  /**
+   * The three faces on the list (Phase B). Readiness for an upcoming meeting — is the brief built,
+   * what rolls forward from earlier meetings with the same company or LP — and outputs for a past
+   * one. Server-counted; the list never derives them.
+   */
+  brief_ready?: number;
+  carried_open_questions?: number;
+  we_owe_them?: number;
+  they_owe_us?: number;
+  decision_count?: number;
+  commitment_overdue_count?: number;
+  open_question_count?: number;
+  stage_proposal_pending_count?: number;
+  draft_waiting_count?: number;
+}
+
+/** "Brief ready · 3 open · 2 we owe them" — what an upcoming meeting is walking into. */
+function readinessInWords(m: MeetingRow): string {
+  const parts = [m.brief_ready ? "Brief ready" : "No brief yet"];
+  parts.push(`${m.carried_open_questions ?? 0} open`);
+  parts.push(`${m.we_owe_them ?? 0} we owe them`);
+  if ((m.they_owe_us ?? 0) > 0) parts.push(`${m.they_owe_us} they owe us`);
+  return parts.join(" \u00b7 ");
+}
+
+/** "2 decisions · 1 commitment overdue" — what a past meeting produced, and what is still owed. */
+function outputsInWords(m: MeetingRow): string {
+  const n = (k: number | undefined) => k ?? 0;
+  const parts = [`${n(m.decision_count)} decision${n(m.decision_count) === 1 ? "" : "s"}`];
+  if (n(m.commitment_overdue_count) > 0) parts.push(`${n(m.commitment_overdue_count)} commitment${n(m.commitment_overdue_count) === 1 ? "" : "s"} overdue`);
+  if (n(m.open_question_count) > 0) parts.push(`${n(m.open_question_count)} still open`);
+  if (n(m.stage_proposal_pending_count) > 0) parts.push(`${n(m.stage_proposal_pending_count)} stage move waiting on you`);
+  if (n(m.draft_waiting_count) > 0) parts.push("draft waiting for approval");
+  return parts.join(" \u00b7 ");
 }
 
 interface MeetingsResponse {
@@ -60,16 +103,6 @@ interface MeetingsResponse {
     decisions: number;
     facilitator: { name: string; status: string } | null;
   };
-}
-
-interface CaptureReadiness {
-  meeting_id: string;
-  transcription_available: boolean;
-  recording_policy_active: boolean;
-  consent: Record<string, string>;
-  can_capture: boolean;
-  blockers: string[];
-  turns: number;
 }
 
 interface OpenQuestion {
@@ -200,241 +233,12 @@ function owedInWords(q: OpenQuestion): string {
   }
 }
 
-// ── Section 3's working parts: consent, then capture ──────────────────────────
-
-const CHUNK_MS = 60_000;
-
-/** Blob → base64, without the data-URI prefix the API does not want. */
-function toBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("could not read the recording"));
-    reader.onload = () => {
-      const result = String(reader.result ?? "");
-      resolve(result.slice(result.indexOf(",") + 1));
-    };
-    reader.readAsDataURL(blob);
-  });
-}
-
-/**
- * The consent prompt and the recorder behind it.
- *
- * THE PROMPT IS SHOWN EVERY TIME AND IS NEVER REMEMBERED. California is a two-party state; New York
- * and Georgia are not. Consent is given by a person, in a room, on a day — a checkbox that carries
- * it forward to the next session is a record of something that did not happen. So the answer is
- * re-asked before every start, even when this meeting already carries a GRANTED row.
- *
- * THE BUTTON IS NEVER LIVE-LOOKING AND INERT. Whether a transcription service can be reached at all
- * is decided by the server and reported here, so wherever it cannot be, the control is disabled
- * with the reason printed beside it rather than failing after somebody has spoken for ten minutes.
- *
- * EACH SLICE IS A COMPLETE RECORDING. The recorder is stopped and restarted every minute rather
- * than streamed, because a timesliced stream produces fragments that are not independently
- * decodable — the container header only appears in the first one. A fragment nothing can read is
- * indistinguishable from silence, which is the worst possible failure for a record of a
- * conversation.
- */
-function CapturePanel({ meeting, onCaptured }: { meeting: MeetingRow; onCaptured: () => void }): JSX.Element {
-  const readiness = useApi<CaptureReadiness>(`/api/meetings/${meeting.id}/capture`, [meeting.id]);
-  const [asked, setAsked] = useState(false);
-  const [who, setWho] = useState("");
-  const [basis, setBasis] = useState("Asked out loud at the start of the call.");
-  const [recording, setRecording] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [heard, setHeard] = useState<string[]>([]);
-  const stopRef = useRef<(() => void) | null>(null);
-  const seqRef = useRef(0);
-
-  // A recorder left running after the panel goes away would hold the microphone open with nothing
-  // on screen saying so, which is the one thing a recording indicator exists to prevent.
-  useEffect(() => () => stopRef.current?.(), []);
-
-  const state = readiness.data;
-  const consentGranted = state?.consent.TRANSCRIPTION === "GRANTED" && state?.consent.RECORDING === "GRANTED";
-
-  async function answerPrompt(answer: "GRANTED" | "DENIED") {
-    setBusy(true);
-    setMessage(null);
-    const res = await api<{ error?: string; detail?: string }>(`/api/meetings/${meeting.id}/capture/consent`, {
-      method: "POST",
-      body: { answer, granted_by: who.trim() || undefined, basis: basis.trim() },
-    });
-    setBusy(false);
-    if (res.status !== 201) {
-      setMessage(res.data?.detail ?? res.data?.error ?? `Not recorded (HTTP ${res.status}).`);
-      return;
-    }
-    setAsked(answer === "GRANTED");
-    setMessage(
-      answer === "GRANTED"
-        ? "Recorded. Their answer is on the file for this meeting and can be taken back at any point."
-        : "Recorded as a no. Nothing will be captured, and that refusal is on the file too.",
-    );
-    readiness.reload();
-  }
-
-  async function send(blob: Blob) {
-    if (blob.size === 0) return;
-    let audio: string;
-    try {
-      audio = await toBase64(blob);
-    } catch {
-      setMessage("A slice of the recording could not be read, so it was not written down.");
-      return;
-    }
-    const res = await api<{ text?: string; error?: string; detail?: string }>(
-      `/api/meetings/${meeting.id}/capture/chunk`,
-      { method: "POST", body: { audio_base64: audio, sequence: seqRef.current++ } },
-    );
-    if (res.status !== 201) {
-      // Named, never dropped. A transcript with a silent hole in it is worse than a short one.
-      setMessage(`Minute ${seqRef.current} was not written down: ${res.data?.detail ?? res.data?.error ?? res.status}`);
-      return;
-    }
-    if (res.data?.text) setHeard((h) => [...h, res.data!.text!]);
-    onCaptured();
-    readiness.reload();
-  }
-
-  function stop() {
-    stopRef.current?.();
-    stopRef.current = null;
-    setRecording(false);
-    // The prompt is re-armed, deliberately: starting again is a new start and asks again.
-    setAsked(false);
-  }
-
-  async function start() {
-    setMessage(null);
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setMessage("This browser will not record audio for a page. Nothing was started.");
-      return;
-    }
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      setMessage("The browser did not give this page the microphone, so nothing is being recorded.");
-      return;
-    }
-    let stopped = false;
-    stopRef.current = () => {
-      stopped = true;
-      stream.getTracks().forEach((t) => t.stop());
-    };
-    setRecording(true);
-
-    const runOne = () => {
-      if (stopped) return;
-      const rec = new MediaRecorder(stream);
-      const parts: Blob[] = [];
-      rec.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) parts.push(e.data);
-      };
-      rec.onstop = () => {
-        void send(new Blob(parts, { type: rec.mimeType || "audio/webm" }));
-        runOne();
-      };
-      rec.start();
-      window.setTimeout(() => {
-        if (rec.state !== "inactive") rec.stop();
-      }, CHUNK_MS);
-    };
-    runOne();
-  }
-
-  return (
-    <div data-testid={`capture-${meeting.id}`}>
-      <h4>Before anything is recorded</h4>
-      <p className="muted small">
-        California needs everyone in the conversation to agree; New York and Georgia do not. This
-        firm sits in one and talks to founders in the others, so permission gets asked for out loud
-        every time — not remembered from last time, and not assumed from an invitation nobody read.
-      </p>
-
-      <p className="consent-script" data-testid="consent-script">
-        “Before we start — I record these calls so I can write up what we agreed rather than take
-        notes at you. It stays inside the firm. Is that alright with you?”
-      </p>
-
-      <div className="form-row">
-        <label>
-          Who said yes{" "}
-          <input
-            data-testid="consent-who"
-            value={who}
-            onChange={(e) => setWho(e.target.value)}
-            placeholder="Deana Oliver"
-          />
-        </label>
-        <label>
-          How you asked{" "}
-          <input
-            data-testid="consent-basis"
-            value={basis}
-            onChange={(e) => setBasis(e.target.value)}
-          />
-        </label>
-        <button type="button" className="btn-strong" disabled={busy} data-testid="consent-yes" onClick={() => void answerPrompt("GRANTED")}>
-          They said yes
-        </button>
-        <button type="button" disabled={busy} data-testid="consent-no" onClick={() => void answerPrompt("DENIED")}>
-          They said no
-        </button>
-      </div>
-
-      <h4>Record it</h4>
-      {state && state.blockers.length > 0 && (
-        <ul className="card-list small" data-testid="capture-blockers">
-          {state.blockers.map((b) => (
-            <li key={b} className="state-empty">{b}</li>
-          ))}
-        </ul>
-      )}
-      {state && state.can_capture && !asked && (
-        <p className="notice small" data-testid="capture-reask">
-          Permission is on the file for this meeting already. Ask again before you start anyway —
-          consent is something a person gave in a room on a day, not a setting.
-        </p>
-      )}
-
-      <div className="form-row">
-        <button
-          type="button"
-          className="btn-strong"
-          data-testid="capture-start"
-          disabled={!state?.can_capture || !asked || recording}
-          onClick={() => void start()}
-        >
-          Start recording
-        </button>
-        <button type="button" data-testid="capture-stop" disabled={!recording} onClick={stop}>
-          Stop
-        </button>
-        {recording && (
-          <span className="capture-live" data-testid="capture-live">
-            Recording. Every minute is written down as it finishes.
-          </span>
-        )}
-        {!recording && consentGranted && (
-          <span className="muted small">{state?.turns ?? 0} turns written down so far.</span>
-        )}
-      </div>
-
-      {heard.length > 0 && (
-        <ul className="card-list small" data-testid="capture-heard">
-          {heard.slice(-6).map((t, i) => (
-            <li key={i} className="closeout-quote">“{t}”</li>
-          ))}
-        </ul>
-      )}
-
-      {message && <p className="notice small" data-testid="capture-message" role="status">{message}</p>}
-    </div>
-  );
-}
+// ── Section 3's working parts: the live room ──────────────────────────────────
+//
+// The consent prompt and the recorder moved into RoomPanel.tsx (Phase C), where they are one
+// status line and one button on the During face beside the rolling draft, the ask box and the
+// artifacts stream. Nothing about the gates changed: the server still refuses a chunk without an
+// activated policy AND a granted consent, and the prompt is still asked every session.
 
 // ── Who is in the room ────────────────────────────────────────────────────────
 
@@ -505,6 +309,8 @@ function SeatingPanel({ meeting, me }: { meeting: MeetingRow; me: MeResponse }):
                   <strong>{s.name}</strong> <span className="muted small">{s.role}</span>
                   {s.suggested && <span className="badge">suggested</span>}
                   <div className="muted small">{s.because}</div>
+                  {/* A WARNING, NOT A LOCK. The owner's rule: any employee can be seated anywhere. */}
+                  {s.warning && <div className="notice small" data-testid={`seat-warning-${s.name}`}>{s.warning}</div>}
                 </div>
                 <button
                   type="button"
@@ -522,7 +328,8 @@ function SeatingPanel({ meeting, me }: { meeting: MeetingRow; me: MeResponse }):
 
       {type?.external && (
         <p className="muted small">
-          Internal-only employees are not offered here — this meeting has people outside the firm in it.
+          This meeting has people outside the firm in it. Every employee can be seated; the ones
+          whose job is checking the firm are marked so you know before you press.
         </p>
       )}
       {message && <p className="notice small" data-testid="seating-message" role="status">{message}</p>}
@@ -726,6 +533,8 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
         </button>
       </div>
 
+      <BeforePanel meetingId={meetingId} onChanged={() => meeting.reload()} />
+
       <h4>What was said</h4>
       <form
         className="form-row"
@@ -826,6 +635,7 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
       {m && <SeatingPanel meeting={m} me={me} />}
       <LiveHelpPanel meetingId={meetingId} />
       <CloseoutPanel meetingId={meetingId} />
+      <AfterPanel meetingId={meetingId} onChanged={() => meeting.reload()} />
 
       {message && <p className="notice small" data-testid="meeting-message" role="status">{message}</p>}
     </div>
@@ -1016,7 +826,23 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             <strong>{m.title}</strong>{" "}
             <span className="badge">{meetingType(m.meeting_type)?.label ?? m.meeting_type}</span>{" "}
             <span className="muted small">{whenInWords(m.scheduled_at)}</span>
+            {/*
+              THE TYPE WAS A GUESS, AND THE CARD SAYS SO. A calendar meeting whose attendees matched
+              neither the firm, a known LP contact nor a known company's domain is filed FOUNDER
+              because something has to be chosen; this is the flag that keeps the guess honest until
+              a person confirms or corrects it. Phase D redesigns the card; the flag stays.
+            */}
+            {m.type_inference === "UNKNOWN_CHECK_IT" && (
+              <span className="muted small" data-testid={`type-check-${m.id}`}> · type inferred, check it</span>
+            )}
+            <div className="muted small" data-testid={`readiness-${m.id}`}>{readinessInWords(m)}</div>
             <div className="form-row">
+              {/* Phase Meet: the Meet link the calendar carries, so joining is one press from here. */}
+              {m.meet_link && (
+                <a className="link-button" href={m.meet_link} target="_blank" rel="noreferrer noopener" data-testid={`join-${m.id}`}>
+                  Join on Meet
+                </a>
+              )}
               <button type="button" className="link-button" data-testid={`start-${m.id}`} onClick={() => setLive(m.id)}>
                 It is happening now
               </button>
@@ -1053,6 +879,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             </button>{" "}
             <span className="badge">{meetingType(m.meeting_type)?.label ?? m.meeting_type}</span>{" "}
             <span className="muted small">{whenInWords(m.occurred_at ?? m.scheduled_at)}</span>
+            <div className="muted small" data-testid={`outputs-${m.id}`}>{outputsInWords(m)}</div>
             {archiving === m.id ? (
               <div className="form-row">
                 {/* WHAT STAYS IS SAID BEFORE THE PRESS, not implied afterwards. */}
@@ -1189,9 +1016,8 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       {liveMeeting ? (
         <div className="card" data-testid="live-meeting">
           <h4>{liveMeeting.title}</h4>
-          <CapturePanel meeting={liveMeeting} onCaptured={() => meetings.reload()} />
+          <RoomPanel meetingId={liveMeeting.id} />
           <SeatingPanel meeting={liveMeeting} me={me} />
-          <LiveHelpPanel meetingId={liveMeeting.id} />
           <div className="form-row">
             <button type="button" className="link-button" data-testid="live-finish" onClick={() => { setOpen(liveMeeting.id); setLive(null); }}>
               We are done — open the record
@@ -1487,66 +1313,8 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         )}
       </ul>
 
-      {/* ── 5 ─────────────────────────────────────────────────────────────── */}
-      <div className="home-section-head">
-        <h3>How a meeting becomes work</h3>
-        <span className="muted small">the whole chain, whether or not anything is in it yet</span>
-      </div>
-      <p className="muted small">
-        Nothing on this page sends anything or decides anything. The chain below is what actually
-        happens to a conversation after it ends: it is read, what was agreed is proposed back to you
-        as work, and you are the one who accepts it.
-      </p>
-      <ol className="ic-flow" data-testid="meeting-chain">
-        <li className="ic-step">
-          <span className="ic-step-num" aria-hidden="true">1</span>
-          <div className="ic-step-body">
-            <p className="ic-step-title"><strong>Permission, then the recording</strong></p>
-            <p className="small">
-              You ask out loud, the answer goes on the file, and only then can anything be captured.
-              Taking permission back closes the door again immediately, and a refusal is written
-              down rather than leaving a gap that looks like an oversight.
-            </p>
-            <p className="muted small">You ask. Nobody else can record that somebody agreed.</p>
-          </div>
-        </li>
-        <li className="ic-step">
-          <span className="ic-step-num" aria-hidden="true">2</span>
-          <div className="ic-step-body">
-            <p className="ic-step-title"><strong>Walter reads the notes and proposes the follow-ups</strong></p>
-            <p className="small">
-              Each one quotes the line it came from, so you can check it against the words it was
-              read out of. Proposals only — nothing is assigned by the model.
-            </p>
-            <p className="muted small">Walter proposes. He never assigns.</p>
-          </div>
-        </li>
-        <li className="ic-step">
-          <span className="ic-step-num" aria-hidden="true">3</span>
-          <div className="ic-step-body">
-            <p className="ic-step-title"><strong>Who holds each one is decided in code, not by the model</strong></p>
-            <p className="small">
-              Employees by default; work that genuinely needs a person is recommended to you and
-              never assigned to anybody. The policy holds even on a run where the model ignores its
-              instructions, because it is not the model making the choice.
-            </p>
-            <p className="muted small">The firm's rule, applied the same way every time.</p>
-          </div>
-        </li>
-        <li className="ic-step">
-          <span className="ic-step-num" aria-hidden="true">4</span>
-          <div className="ic-step-body">
-            <p className="ic-step-title"><strong>You turn what you accept into a work card</strong></p>
-            <p className="small">
-              A promise sitting in a close-out is a note. A work card is the thing that gets worked,
-              chased and closed — so nothing leaves this page as work until you say it should.
-            </p>
-            <p className="muted small">You accept. Nothing is sent to anybody outside the firm by any of this.</p>
-          </div>
-        </li>
-      </ol>
-
-      <p className="small"><strong>And how a deal becomes a decision</strong></p>
+      {/* The committee's own sequence, kept with the deals it describes. */}
+      <p className="small"><strong>How a deal becomes a decision</strong></p>
       <ol className="ic-flow" data-testid="ic-flow">
         {IC_FLOW.map((step, i) => (
           <li key={step.key} className="ic-step" data-testid={`ic-step-${step.key}`}>

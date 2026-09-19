@@ -47,6 +47,7 @@ const EGRESS_ALLOWED = new Map([
   ["src/worker/effects/macroClient.ts", "Public macro figures for the morning brief (FRED CSV, Coinbase spot); read-only GET, https-only, key-less, small bodies capped, each figure kept with its as-of date and page"],
   ["src/worker/effects/urlLiveness.ts", "Liveness check on a page a search-grounded model cited (Walker's West Peek Productions research); GET with the body discarded, https-only, same host guard as feed acquisition, short timeout, carries nothing out"],
   ["src/worker/effects/googleClient.ts", "Google OAuth + Calendar (P51); READ-ONLY scopes so nothing here can alter a calendar, inert unless GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are both set, and reachable only for a partner who granted consent themselves"],
+  ["src/worker/effects/googleWorkspaceClient.ts", "Google Workspace as the firm (Phase Meet): Calendar v3, Meet REST v2, Workspace Events and Pub/Sub under the service account's domain-wide delegation over ONE partner mailbox; every call is a GET except minting a token, creating/renewing the firm's own event subscription and acknowledging its own Pub/Sub messages — no calendar, space or Drive write exists in the file; inert unless WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON is set; the private key is imported non-extractable and no token or body is ever logged"],
 ]);
 
 /**

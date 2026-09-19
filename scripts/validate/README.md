@@ -18,3 +18,15 @@ violations) on breach and proves its own detection with a self-test fixture run.
   fails the build; so does a door that forgets to lint or one that nothing calls. `--self-test`
   runs the real defect — a service composing prose and calling the transport itself — through
   the same check.
+- `every-company-is-in-the-pipeline.mjs` (`npm run validate:companies-in-pipeline`, 18 Sep 2026) —
+  every company in the system is at the top of the funnel the moment it arrives, whichever door it
+  came through; the human act is the decision, not the admission. Reads the route table for any
+  switch that could let a route skip the pipeline, the door's return type for a nullable
+  opportunity, the exactly-one-per-route pin in `tests/dealIntake.test.ts`, the Companies page for
+  the calm "Not in the pipeline" label, and migration 0197's backfill shape. `--self-test` runs the
+  real pre-fix shapes (the `opensRecord` switch, the nullable return, the calm label) through it.
+- `an-archived-lane-stays-archived.mjs` (`npm run validate:weekly-review-archived`, 18 Sep 2026) —
+  the weekly MP review is archived: its job `weekly_mp_review` is RETIRED and no migration or seed
+  after 0198 may set it ACTIVE or PAUSED again; the nav does not list it; the tick cannot reach the
+  generator; the finished-work shelf hides the kind by default. Hard-fails if it examines zero
+  jobs. `--self-test` runs a re-enabling migration and a restored nav item through it.

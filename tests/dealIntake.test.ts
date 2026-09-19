@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
@@ -26,13 +26,18 @@ import { companyFromSubject } from "../src/worker/effects/inboundEmail";
  * picks up the card.
  *
  * THE SHAPE OF THIS FILE IS THE CLAIM. One describe per route, each proving the same three things
- * (it matched first, it produced the right kind of outcome, it recorded provenance), then one block
- * that asserts the convergence directly. If a fifth route is ever added, it belongs here or it is
- * not consolidated.
+ * (it matched first, it opened the company at the top of the funnel, it recorded provenance), then
+ * one block that asserts the convergence directly. If a fifth route is ever added, it belongs here
+ * or it is not consolidated.
  *
- * Operator, after two wrong versions: "its not about going str8 to the funnel is about opening a
- * work card for Wyatt to route it appropriately", and "its about creating work cards for these
- * employees to do the things." So three of the four assert on the CARD, not on the pipeline.
+ * WHAT CHANGED ON 18 SEP 2026, AND WHY THESE PINS GOT STRICTER. Until then three of the four
+ * routes asserted "nothing has entered the pipeline" — a card for Wyatt, and no opportunity. The
+ * owner's rule replaced that: "all companies should be in the pipeline, no matter how they come in.
+ * They are top of funnel if they are in the system. From email we have to DECIDE on them." Two
+ * companies in production (Northwind Robotics, Vynlo) had been sitting in the register with no
+ * opportunity, one of them with a DONE card that had told the analyst to open one. So every route
+ * now asserts BOTH: exactly one live opportunity on the board, AND — on the three unattended routes
+ * — a card that asks for the decision rather than the admission.
  */
 
 let t: TestDb;
@@ -84,12 +89,38 @@ async function opportunityCount(): Promise<number> {
   return (await t.db.prepare("SELECT COUNT(*) AS n FROM investment_opportunity").first<{ n: number }>())!.n;
 }
 
+/** The live opportunities a company has on the board — the number every unattended route must leave at exactly one. */
+async function liveOpportunities(companyId: string | null): Promise<Array<{ id: string; status: string; source_channel: string; created_by: string; relationship_origin: string }>> {
+  expect(companyId).toBeTruthy();
+  return (
+    await t.db
+      .prepare(
+        "SELECT id, status, source_channel, created_by, relationship_origin FROM investment_opportunity WHERE company_id = ?1 AND status NOT IN ('CLOSED','PASS','WITHDRAWN') AND archived_at IS NULL",
+      )
+      .bind(companyId)
+      .all<{ id: string; status: string; source_channel: string; created_by: string; relationship_origin: string }>()
+  ).results ?? [];
+}
+
 beforeAll(async () => {
   t = await createTestDb();
   env = makeTestEnv(t.db);
 });
 afterAll(async () => {
   await disposeTestDb(t);
+});
+
+/*
+ * THE RUNAWAY-EMPLOYEE BREAKER IS REAL AND STAYS ON. `createWorkCardInternal` refuses Wyatt's 21st
+ * card in an hour, which this file — one card per arrival, dozens of arrivals — would trip a third
+ * of the way down. The breaker is tested on its own in `workCardOwnerShape.test.ts`; here the cards
+ * from earlier tests are aged past the window before each one, so the count measures this test's
+ * arrivals rather than the file's. Ageing rather than deleting, so every card is still readable.
+ */
+beforeEach(async () => {
+  await t.db
+    .prepare("UPDATE work_card SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 hours') WHERE owner_id = 'aie_wyatt'")
+    .run();
 });
 
 describe("reading a company out of a message", () => {
@@ -166,8 +197,8 @@ describe("route 1 · manual — a partner drives it herself", () => {
 
 // ── Route 2 of 4 ──
 
-describe("route 2 · email — a hashtag routes and never authorises", () => {
-  it("opens a work card for the analyst, not a row in the funnel", async () => {
+describe("route 2 · email — a hashtag routes and never authorises, and the company is in the pipeline anyway", () => {
+  it("opens the company at the top of the funnel AND a card for the analyst to decide on it", async () => {
     const before = await opportunityCount();
     const res = await intakeDealFromEmail(env, {
       company: "Northwind Robotics",
@@ -186,13 +217,92 @@ describe("route 2 · email — a hashtag routes and never authorises", () => {
     // at the last step, silently, with the test agreeing.
     expect(card.owner_id).toBe("aie_wyatt");
     expect(card.state).toBe("OPEN");
-    // Wyatt OWNS the top of the funnel, so he adds it himself. Inventing a hand-off would put a
-    // second desk between an email and a decision that is already this seat's job.
-    expect(card.next_action).toContain("top of the funnel");
+    // The card asks for the DECISION. It no longer asks anybody to put the company in the pipeline,
+    // because it is there — the old wording ("then open it at the top of the funnel") is exactly
+    // the instruction Vynlo's card carried to DONE without ever doing.
+    expect(card.next_action).toMatch(/^It is at the top of the funnel now\. Decide on it/);
+    expect(card.next_action).not.toContain("then open it");
     expect(card.next_action).not.toContain("hand to");
+    expect(card.description).toContain(`Opportunity ${res.opportunity_id} is on the board`);
 
-    // Nothing has entered the pipeline. An email is a claim to check, not a decision made.
-    expect(await opportunityCount()).toBe(before);
+    // THE COMPANY IS IN THE PIPELINE. One opportunity, at NEW, opened by the seat that owns the top
+    // of the funnel, wearing the `email:` prefix the board's badge keys on.
+    expect(res.outcome).toBe("IN_FUNNEL");
+    expect(await opportunityCount()).toBe(before + 1);
+    const live = await liveOpportunities(res.company_id);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.id).toBe(res.opportunity_id);
+    expect(live[0]!.status).toBe("NEW");
+    expect(live[0]!.source_channel).toBe("email:scout@example.com");
+    expect(live[0]!.created_by).toBe("aie_wyatt");
+    expect(live[0]!.relationship_origin).toBe("INBOUND");
+    // And the card is not the only record: the opportunity's own creation is on the spine.
+    const created = await t.db
+      .prepare("SELECT actor_type, actor_id FROM event_record WHERE event_type = 'investment.opportunity_created' AND object_id = ?1")
+      .bind(res.opportunity_id)
+      .first<{ actor_type: string; actor_id: string }>();
+    expect(created).toEqual({ actor_type: "ai_employee", actor_id: "aie_wyatt" });
+  });
+
+  it("does not open a second opportunity for a company that already has a live one, and says so on the card", async () => {
+    // A partner opened this one herself; then somebody emails about it.
+    const company = await call<{ id: string }>("/api/companies", MP, "POST", { canonical_name: "Twice Mailed Co" });
+    const hers = await call<{ id: string }>("/api/opportunities", MP, "POST", {
+      company_id: company.body.id, opportunity_type: "EARLY_STAGE_PRIMARY", title: "Twice Mailed Co — seed",
+    });
+    expect(hers.status).toBe(201);
+
+    const again = await intakeDealFromEmail(env, {
+      company: "Twice Mailed Co", sector: null, one_liner: null, website: null,
+      from: "c@d.co", isDeck: false, raw: "second",
+    });
+    expect(again.outcome).toBe("ALREADY_OPEN");
+    expect(again.company_id).toBe(company.body.id);
+    expect(again.opportunity_id).toBe(hers.body.id);
+    expect(await liveOpportunities(company.body.id)).toHaveLength(1);
+    // The card for a company already on the board asks a different question.
+    expect((await cardOf(again.work_card_id)).next_action).toContain("never open a second one");
+
+    // And the same email twice is a retry: it joins the card rather than multiplying it.
+    const retry = await intakeDealFromEmail(env, {
+      company: "Twice Mailed Co", sector: null, one_liner: null, website: null,
+      from: "c@d.co", isDeck: false, raw: "second, resent",
+    });
+    expect(retry.work_card_id).toBe(again.work_card_id);
+    expect(await liveOpportunities(company.body.id)).toHaveLength(1);
+  });
+
+  it("opens a fresh opportunity when the only one the company had has left the board", async () => {
+    const first = await intakeDealFromEmail(env, {
+      company: "Came Back Co", sector: null, one_liner: null, website: null,
+      from: "a@b.co", isDeck: false, raw: "",
+    });
+    await t.db.prepare("UPDATE investment_opportunity SET status = 'PASS' WHERE id = ?1").bind(first.opportunity_id).run();
+    const back = await intakeDealFromEmail(env, {
+      company: "Came Back Co", sector: null, one_liner: null, website: null,
+      from: "a@b.co", isDeck: false, raw: "raising again",
+    });
+    expect(back.outcome).toBe("IN_FUNNEL");
+    expect(back.opportunity_id).not.toBe(first.opportunity_id);
+    expect(await liveOpportunities(first.company_id)).toHaveLength(1);
+  });
+
+  it("treats an ARCHIVED opportunity as not on the board, so the company is not stranded", async () => {
+    const first = await intakeDealFromEmail(env, {
+      company: "Archived Typo Co", sector: null, one_liner: null, website: null,
+      from: "a@b.co", isDeck: false, raw: "",
+    });
+    await t.db
+      .prepare("UPDATE investment_opportunity SET archived_at = ?2, archived_by = 'test', archive_reason = 'typo' WHERE id = ?1")
+      .bind(first.opportunity_id, new Date().toISOString())
+      .run();
+    const back = await intakeDealFromEmail(env, {
+      company: "Archived Typo Co", sector: null, one_liner: null, website: null,
+      from: "a@b.co", isDeck: false, raw: "",
+    });
+    expect(back.outcome).toBe("IN_FUNNEL");
+    expect(back.opportunity_id).not.toBe(first.opportunity_id);
+    expect(await liveOpportunities(first.company_id)).toHaveLength(1);
   });
 
   it("does the lookup itself and puts the answer on the card", async () => {
@@ -210,6 +320,9 @@ describe("route 2 · email — a hashtag routes and never authorises", () => {
     // Matched despite the case, the comma and the "Inc." — those are one company.
     expect(res.company_id).toBe("cc_nw");
     expect(res.detail).toContain("already");
+    // On record with no deal is the Northwind/Vynlo state, and it ends here: one opportunity opened.
+    expect(res.outcome).toBe("IN_FUNNEL");
+    expect(await liveOpportunities("cc_nw")).toHaveLength(1);
 
     const card = await cardOf(res.work_card_id);
     expect(card.description).toContain("already a company on record");
@@ -273,8 +386,8 @@ describe("route 2 · email — a hashtag routes and never authorises", () => {
 
 // ── Route 3 of 4 ──
 
-describe("route 3 · Network OS — the partner system proposes, it does not write", () => {
-  it("opens a card for the analyst rather than a row in the funnel", async () => {
+describe("route 3 · Network OS — the partner system proposes, and the company is in the pipeline here", () => {
+  it("opens the company at the top of the funnel and a card for the analyst to decide on it", async () => {
     const before = await opportunityCount();
     const res = await intakeCompanyFromNetworkOs(env, {
       company: "Crossing Point Labs",
@@ -283,7 +396,11 @@ describe("route 3 · Network OS — the partner system proposes, it does not wri
       pushed_by: "porter@network.joinwestpeek.com",
       note: "Met at the November room; raising a seed.",
     });
-    expect(await opportunityCount()).toBe(before);
+    expect(await opportunityCount()).toBe(before + 1);
+    const live = await liveOpportunities(res.company_id);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.source_channel).toBe("network_os:porter@network.joinwestpeek.com");
+    expect(live[0]!.relationship_origin).toBe("NETWORK");
 
     const card = await cardOf(res.work_card_id);
     // The employee's ID, not their display name. Asserting "Wyatt" pinned a live bug: `runEmployeeWork`
@@ -318,7 +435,9 @@ describe("route 3 · Network OS — the partner system proposes, it does not wri
     expect(res.status).toBe(201);
     expect(res.body.route).toBe("NETWORK_OS");
     expect(res.body.owner).toBe("Wyatt");
-    expect(res.body.opportunity_id).toBeNull();
+    // The push answers with the opportunity it opened as well as the card — both, always.
+    expect(res.body.opportunity_id).toMatch(/^opp_/);
+    expect(res.body.opportunity.status).toBe("NEW");
     expect(res.body.work_card_id).toBeTruthy();
   });
 });
@@ -326,14 +445,19 @@ describe("route 3 · Network OS — the partner system proposes, it does not wri
 // ── Route 4 of 4 ──
 
 describe("route 4 · the analyst's own scouting", () => {
-  it("lands on the same seat, through the same door", async () => {
+  it("lands on the same seat, through the same door, and in the pipeline", async () => {
     const before = await opportunityCount();
     const res = await intakeScoutedCompany(env, {
       company: "Quiet Ledger",
       one_liner: "Reconciliation for small funds",
       where: "Two portfolio founders named them in the same week",
     });
-    expect(await opportunityCount()).toBe(before);
+    expect(await opportunityCount()).toBe(before + 1);
+    const live = await liveOpportunities(res.company_id);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.source_channel).toBe("scout:Wyatt");
+    // The firm went looking, so the origin says so.
+    expect(live[0]!.relationship_origin).toBe("OUTBOUND");
 
     const card = await cardOf(res.work_card_id);
     // The employee's ID, not their display name. Asserting "Wyatt" pinned a live bug: `runEmployeeWork`
@@ -413,13 +537,61 @@ describe("what an employee may throw away", () => {
 // ── The consolidation itself ──
 
 describe("all four routes converge on one entry point", () => {
-  it("has exactly four routes, and exactly one of them writes the pipeline", () => {
+  it("has exactly four routes, every one of them writes the pipeline, and the policy cannot say otherwise", () => {
     expect([...INTAKE_ROUTES].sort()).toEqual(["EMAIL", "MANUAL", "NETWORK_OS", "SCOUT"]);
-    const writers = INTAKE_ROUTES.filter((r) => ROUTE_POLICY[r].opensRecord);
-    expect(writers).toEqual(["MANUAL"]);
-    // The other three raise work for a named seat. None of them may land on nobody.
-    for (const route of INTAKE_ROUTES.filter((r) => !ROUTE_POLICY[r].opensRecord)) {
+    // `opensRecord` was the switch that let three routes skip the pipeline. It is gone as a
+    // concept, and this pins that nobody re-introduces a switch under another name.
+    for (const route of INTAKE_ROUTES) {
+      expect(Object.keys(ROUTE_POLICY[route]).filter((k) => /open|write|record|pipeline|skip/i.test(k))).toEqual([]);
+    }
+    // The three unattended routes raise work for a named seat. None of them may land on nobody.
+    for (const route of INTAKE_ROUTES.filter((r) => r !== "MANUAL")) {
       expect(ROUTE_POLICY[route].owner, `${route} must land on somebody`).toBeTruthy();
+    }
+  });
+
+  it("leaves EXACTLY ONE live opportunity on the board whichever door a new company arrives by", async () => {
+    /*
+     * The whole rule in one loop. Each route, a company nobody has heard of, and afterwards: one
+     * company in the register, one opportunity on the board at NEW, source_channel naming the
+     * route. This is the test the two stranded production companies did not have.
+     */
+    const company = await call<{ id: string }>("/api/companies", MP, "POST", { canonical_name: "Exactly One Manual Co" });
+    const results: Array<{ route: IntakeRoute; entry: FunnelEntry }> = [
+      {
+        route: "MANUAL",
+        entry: await openIntoFunnel(env, {
+          route: "MANUAL",
+          company: "Exactly One Manual Co",
+          company_id: company.body.id,
+          source: "Scooter Taylor",
+          actor: { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] },
+        }),
+      },
+      {
+        route: "EMAIL",
+        entry: await intakeDealFromEmail(env, {
+          company: "Exactly One Email Co", sector: null, one_liner: null, website: null,
+          from: "one@example.com", isDeck: false, raw: "",
+        }),
+      },
+      { route: "NETWORK_OS", entry: await intakeCompanyFromNetworkOs(env, { company: "Exactly One Network Co", pushed_by: "network-os" }) },
+      { route: "SCOUT", entry: await intakeScoutedCompany(env, { company: "Exactly One Scout Co" }) },
+    ];
+    for (const { route, entry } of results) {
+      expect(entry.outcome, route).toBe("IN_FUNNEL");
+      expect(entry.opportunity_id, `${route} must open an opportunity`).toMatch(/^opp_/);
+      const live = await liveOpportunities(entry.company_id);
+      expect(live, `${route} must leave exactly one live opportunity`).toHaveLength(1);
+      expect(live[0]!.id).toBe(entry.opportunity_id);
+      expect(live[0]!.status).toBe("NEW");
+      expect(live[0]!.source_channel.startsWith(`${ROUTE_POLICY[route].channel}:`), `${route} must stamp its channel`).toBe(true);
+      // The arrival on the spine points at the opportunity, on every route.
+      const arrival = await t.db
+        .prepare("SELECT object_type, object_id FROM event_record WHERE id = ?1")
+        .bind(entry.arrival_event_id)
+        .first<{ object_type: string; object_id: string }>();
+      expect(arrival).toEqual({ object_type: "investment_opportunity", object_id: entry.opportunity_id });
     }
   });
 
@@ -573,19 +745,12 @@ describe("all four routes converge on one entry point", () => {
     expect(again.work_card_id).toBe(first.work_card_id);
   });
 
-  it("refuses to open an OPPORTUNITY for a route with nobody to attribute the decision to", async () => {
+  it("refuses a MANUAL arrival with nobody to put the partner's name to", async () => {
     /*
-     * The governance in one line: the manual route claims partner attention because a partner is
-     * behind it. Take the actor away and it must refuse rather than open something nobody decided.
-     *
-     * THE REGISTER IS NOT THE PIPELINE, and this test used to conflate them by asserting no
-     * `canonical_company` row either. That conflation made the deck feature a permanent no-op: a
-     * company arriving by email got no register row, so the deck reader had nothing to attach to and
-     * skipped it for ever while the job reported "no decks waiting".
-     *
-     * Recording that the firm HEARD OF somebody commits nothing and is exactly what an arrival is.
-     * Opening an opportunity is a claim on partner attention and still needs a human — which is what
-     * `opensRecord` actually meant and now solely governs.
+     * The manual route writes the opportunity under the partner who pressed the button. Take the
+     * actor away and it must refuse rather than write a partner's decision with no partner behind
+     * it. (The unattended routes do not need one: their opportunity is opened by the seat that owns
+     * the top of the funnel, and the decision is what the card asks a person for.)
      */
     await expect(
       openIntoFunnel(env, { route: "MANUAL", company: "Unattributed Co", source: "nobody" }),

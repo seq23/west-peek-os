@@ -117,10 +117,10 @@ test("a company enters the funnel by each of the four routes, and each arrival s
   /*
    * EVERY ARRIVAL IS ON THE SPINE WITH ITS ROUTE, ITS SENDER AND ITS TIME.
    *
-   * Asserted from `dealflow.arrival` rather than from four different surfaces, because the four
-   * doors deliberately do NOT land in the same place — MANUAL opens a pipeline record while the
-   * other three open a work card for the analyst and write no opportunity. The arrival event is the
-   * one thing all four share, and it is what the provenance question is actually answered from.
+   * Asserted from `dealflow.arrival` rather than from four different surfaces: the arrival event
+   * is the one record every door writes in the same shape, and it is what the provenance question
+   * is actually answered from. (Since 18 Sep 2026 the four doors also land in the same place — an
+   * opportunity at the top of the funnel — which the board check further down pins.)
    */
   const arrivals = await arrivalsFor(request, marker);
   for (const [route, company] of [
@@ -149,9 +149,28 @@ test("a company enters the funnel by each of the four routes, and each arrival s
    */
   const board = await boardDeals(request);
   const manualDeal = board.find((d) => d.company_name === manualName)!;
-  expect(manualDeal, "the manual route is the only one that opens a pipeline record").toBeTruthy();
+  expect(manualDeal, "the manual route opens a pipeline record under the partner's name").toBeTruthy();
   expect(manualDeal.source_channel).toContain("manual:");
   expect(manualDeal.source_channel).toContain("Scooter Taylor");
+
+  /*
+   * EVERY COMPANY IS IN THE PIPELINE, WHICHEVER DOOR (owner, 18 Sep 2026: "they are top of funnel
+   * if they are in the system"). All four are on the board at NEW, each wearing its route, and the
+   * emailed one carries the `email:` prefix the "by email · not yet looked at" badge keys on. This
+   * is the journey Northwind Robotics and Vynlo never completed.
+   */
+  for (const [name, channel] of [
+    [emailName, "email:"],
+    [pushedName, "network_os:"],
+    [scoutedName, "scout:"],
+  ] as const) {
+    const deal = board.find((d) => d.company_name === name);
+    expect(deal, `${name} must be on the board — every company is in the pipeline`).toBeTruthy();
+    expect(deal!.status, `${name} arrives at the top of the funnel`).toBe("NEW");
+    expect(String(deal!.source_channel).startsWith(channel), `${name} must wear its route (${channel})`).toBe(true);
+  }
+  expect(pushedEntry.work_card_id, "the push still hands the decision to a person").toBeTruthy();
+  expect(scoutedEntry.work_card_id, "the scout's find still hands the decision to a person").toBeTruthy();
 
   /*
    * WHERE DEALS COME FROM, ON THE PAGE. The provenance panel is what turns four recorded arrivals

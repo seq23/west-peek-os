@@ -45,6 +45,7 @@ import { ThesisPage } from "./pages/ThesisPage";
 import { ModelingPage } from "./pages/ModelingPage";
 import { DealflowPage } from "./pages/DealflowPage";
 import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
+import { RoomPanel } from "./pages/RoomPanel";
 import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
 import { FundAllocation, Composition } from "./pages/FundAllocation";
 import { BrowserTasksPage } from "./pages/BrowserTasksPage";
@@ -257,7 +258,12 @@ const NAV_GROUPS = [
       // Introductions moved into Community. It sat here beside Approvals and Notifications — things
       // that always have something waiting — while being a surface that is deliberately empty most
       // months, so its presence read as a system that had stopped working. The route stays live.
-      { key: "weekly-review", label: "Weekly review" },
+      //
+      // The weekly review is archived, 18 Sep 2026 — owner: "we don't need it anymore." The
+      // per-person Wednesday prep packet (services/meetingPrep.ts, kind `meeting_prep`) replaced
+      // the one shared sixteen-heading agenda, and its job `weekly_mp_review` is RETIRED (0198).
+      // Every review already written is kept. The route stays live so a bookmark still lands;
+      // it is simply no longer listed here.
     ],
   },
   {
@@ -3725,7 +3731,46 @@ function keyFromHash(known: (key: string) => boolean): string {
   return resolved && known(resolved) ? resolved : "home";
 }
 
+/**
+ * TIER 3 PREP (Phase C). `#/room/<meeting id>` renders the During face ALONE — no rail, no top
+ * bar, no purpose block — behind the same `/api/me` gate as everything else. That is the shape a
+ * Google Meet Add-on side panel hosts later: one route, one meeting, the whole live room. Nothing
+ * else in the shell knows about it, so it cannot drift from the app's own During face — it is the
+ * same component.
+ */
+function roomIdFromHash(): string | null {
+  const m = window.location.hash.match(/^#\/room\/([A-Za-z0-9_-]+)$/);
+  return m ? m[1]! : null;
+}
+
+export function RoomStandalone({ meetingId }: { meetingId: string }): JSX.Element {
+  const me = useApi<MeResponse>("/api/me");
+  const authed = me.status === 200 && me.data;
+  return (
+    <main className="surface-body room-standalone-shell" id="wp-surface" data-testid="room-standalone">
+      {authed ? (
+        <RoomPanel meetingId={meetingId} standalone />
+      ) : me.loading ? (
+        <p className="muted small">Signing you in…</p>
+      ) : (
+        <SignInCard onLogin={() => me.reload()} />
+      )}
+    </main>
+  );
+}
+
 export function App() {
+  const [roomId, setRoomId] = useState<string | null>(() => (typeof window === "undefined" ? null : roomIdFromHash()));
+  useEffect(() => {
+    const onHash = () => setRoomId(roomIdFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  if (roomId) return <RoomStandalone meetingId={roomId} />;
+  return <Shell />;
+}
+
+function Shell() {
   const [active, setActive] = useState<string>(() => keyFromHash((k) => ALL_NAV_KEYS.has(k)));
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [navOpen, setNavOpen] = useState(false);

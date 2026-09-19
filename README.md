@@ -77,7 +77,10 @@ read-only scopes, reachable only for a partner who granted consent to their own 
 Runware client, which turns a prompt into an image and sends nothing but that prompt, the URL
 liveness check (a GET with the body discarded, so a page a search-grounded model cited is confirmed
 to answer before a lead is kept), and the macro client (FRED CSV and the Coinbase spot price, each
-figure kept with the date it is as of and the page it came from). External
+figure kept with the date it is as of and the page it came from), and the Google Workspace client
+(the firm's service account reading the ONE partner calendar and ended Meet calls under domain-wide
+delegation — every call a GET except its own event subscription and Pub/Sub acknowledgement; no
+calendar, space or Drive write exists in it). External
 *effects* (anything leaving the firm) execute only in `src/worker/effects/executor.ts`, only against
 an approved receipt.
 

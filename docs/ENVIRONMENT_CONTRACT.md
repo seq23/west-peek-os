@@ -16,6 +16,11 @@ PRESENT / MISSING / UNPROVEN (UNPROVEN = cannot be confirmed without credentials
 | `OPENROUTER_API_KEY` | yes (vault) | P4 live proof (optional provider) | AI provider adapter | MISSING — CREDENTIAL GATE |
 | `GOOGLE_OAUTH_CLIENT_ID` | no | P51 calendar + Gmail send | `effects/googleClient.ts` | SET |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | yes (vault) | P51 calendar + Gmail send | `effects/googleClient.ts` | SET |
+| `WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON` | yes (vault, as `GSC_SERVICE_ACCOUNT_JSON`; aliased by `scripts/vault/cloudflare-mapping.json`) | Phase Meet calendar sync + Meet ingest, as the firm | `effects/googleWorkspaceClient.ts` | IN VAULT — sync with `npm run vault:sync:cloudflare` |
+| `WP_OS_CAL_ICS_WESTPEEK` | yes (vault, as `CAL_ICS_WESTPEEK`; aliased) | the iCal fallback door for the firm calendar | `services/calendarSync.ts` | IN VAULT — sync as above |
+| `WP_OS_GCP_PROJECT_ID` | no (`wrangler.toml`) | Phase Meet: the GCP project (`gsc-automation-493801`) | `services/meetIngest.ts` | SET (production vars) |
+| `WP_OS_MEET_PUBSUB_TOPIC` | no (`wrangler.toml`) | Phase Meet: where Workspace Events publish Meet events | `services/meetIngest.ts` | SET (production vars) |
+| `WP_OS_MEET_PUBSUB_SUBSCRIPTION` | no (`wrangler.toml`) | Phase Meet: the pull subscription the hourly ingest drains | `services/meetIngest.ts` | SET (production vars) |
 | `RESEND_API_KEY` | yes (vault) | P33 outbound email | `effects/resendClient.ts` | SET |
 | `WP_OS_EMAIL_FROM` | no — config, not a secret | P33; the address the firm sends as | `effects/*`, `services/sendAs.ts` | SET (`os@westpeek.ventures`) |
 | `WP_OS_EMAIL_SEND` | no — config, not a secret | P33; must be the literal `enabled` | `effects/resendClient.ts` | SET (`enabled`) |

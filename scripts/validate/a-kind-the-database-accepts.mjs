@@ -84,11 +84,23 @@ export function parseDefinedKeys(source) {
  */
 export function effectiveCheck(migrationsInOrder) {
   let found = null;
+  const column = /kind\s+TEXT\s+NOT NULL\s*\n?\s*CHECK\s*\(\s*kind IN \(([^)]*)\)/g;
   for (const sql of migrationsInOrder) {
-    // Match the column definition wherever it is declared, including in a rebuild under a
-    // temporary name, and keep the LAST one seen.
-    for (const m of sql.matchAll(/kind\s+TEXT\s+NOT NULL\s*\n?\s*CHECK\s*\(\s*kind IN \(([^)]*)\)/g)) {
-      found = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+    /*
+     * ONLY THE DELIVERABLE TABLE'S OWN COLUMN, including a rebuild under a temporary name
+     * (`deliverable_0196`). This used to match ANY column called `kind` with a CHECK, wherever it
+     * was declared — fine for 184 migrations, and wrong the day 0199 created `meeting_artifact`
+     * with a `kind` CHECK of its own: the scan took THAT as the deliverable CHECK and reported
+     * every deliverable kind as one the database refuses. A scan that reads the wrong table is
+     * the "guard that cannot reach what it governs" defect with the sign flipped. A fixture with
+     * no CREATE TABLE at all is read whole, which is what the older self-tests hand in.
+     */
+    const blocks = [...sql.matchAll(/CREATE TABLE(?: IF NOT EXISTS)?\s+([a-z_0-9]+)\s*\(([\s\S]*?)\n\);/g)];
+    const scopes = blocks.length === 0 ? [sql] : blocks.filter((b) => /^deliverable(?:_\d+)?$/.test(b[1])).map((b) => b[2]);
+    for (const scope of scopes) {
+      for (const m of scope.matchAll(column)) {
+        found = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+      }
     }
   }
   return found;
@@ -260,6 +272,17 @@ function selfTest() {
   ]);
   if (!replayed || !replayed.includes("approval_preview")) fail("replay did not take the last definition");
   ok("the last definition wins, and an unrelated later migration does not blind the scan");
+
+  // ANOTHER TABLE'S `kind` IS NOT THIS TABLE'S. The real 18 Sep 2026 shape: 0196 rebuilt deliverable
+  // under a temporary name, then 0199 created meeting_artifact with its own `kind` CHECK.
+  const scoped = effectiveCheck([
+    "CREATE TABLE deliverable_0196 (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL\n  CHECK (kind IN ('event_kit','approval_preview')),\n  title TEXT\n);\nALTER TABLE deliverable_0196 RENAME TO deliverable;",
+    "CREATE TABLE IF NOT EXISTS meeting_artifact (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL CHECK (kind IN ('answer','table')),\n  title TEXT\n);",
+  ]);
+  if (!scoped || !scoped.includes("approval_preview") || scoped.includes("answer")) {
+    fail(`a later table with its own kind CHECK was read as the deliverable CHECK: ${JSON.stringify(scoped)}`);
+  }
+  ok("a later table with its own `kind` CHECK does not replace the deliverable CHECK");
 
   const clean = audit({
     kinds: ["event_kit", "approval_preview"],

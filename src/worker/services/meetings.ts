@@ -66,10 +66,21 @@ export interface MeetingRow {
   firm_scope: string;
   created_by: string;
   created_at: string;
+  /** Migration 0199. The LP this conversation is with, when it is one. */
+  lp_record_id?: string | null;
   /** Migration 0140. Set means the meeting is off the record; the three always travel together. */
   archived_at?: string | null;
   archived_by?: string | null;
   archive_reason?: string | null;
+  /** Migration 0202 (Phase Meet). Present on every row; NULL / 'manual' for meetings somebody typed in. */
+  calendar_key?: string | null;
+  google_event_id?: string | null;
+  meet_conference_id?: string | null;
+  meet_link?: string | null;
+  source?: "manual" | "google_calendar";
+  type_inference?: "FIRM_ONLY" | "LP_CONTACT" | "COMPANY_DOMAIN" | "UNKNOWN_CHECK_IT" | null;
+  recording_ref?: string | null;
+  transcript_ref?: string | null;
 }
 
 export interface ConsentRecordRow {
@@ -113,6 +124,8 @@ export interface CreateMeetingInput {
   title: string;
   meeting_type: (typeof MEETING_TYPES)[number];
   company_id?: string;
+  /** Migration 0199. The LP this conversation is with, so the next brief can find the last one. */
+  lp_record_id?: string;
   scheduled_at?: string;
   occurred_at?: string;
   location?: string;
@@ -126,11 +139,15 @@ export async function createMeeting(env: Env, actor: Actor, input: CreateMeeting
     const company = await env.WP_OS_DB.prepare("SELECT id FROM canonical_company WHERE id = ?1").bind(input.company_id).first();
     if (!company) throw new MeetingError(400, "unknown_company", `canonical_company '${input.company_id}' does not exist`);
   }
+  if (input.lp_record_id) {
+    const lp = await env.WP_OS_DB.prepare("SELECT id FROM lp_record WHERE id = ?1").bind(input.lp_record_id).first();
+    if (!lp) throw new MeetingError(400, "unknown_lp", `lp_record '${input.lp_record_id}' does not exist`);
+  }
   const id = `mtg_${crypto.randomUUID()}`;
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   await env.WP_OS_DB.prepare(
-    `INSERT INTO meeting (id, company_id, title, meeting_type, scheduled_at, occurred_at, location, status, privacy_label, firm_scope, created_by)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+    `INSERT INTO meeting (id, company_id, title, meeting_type, scheduled_at, occurred_at, location, status, privacy_label, firm_scope, created_by, lp_record_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
   )
     .bind(
       id,
@@ -144,6 +161,7 @@ export async function createMeeting(env: Env, actor: Actor, input: CreateMeeting
       input.privacy_label ?? "INTERNAL",
       firmScope,
       actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+      input.lp_record_id ?? null,
     )
     .run();
   for (const participant of input.participants ?? []) {
@@ -280,8 +298,14 @@ export async function activateRecordingPolicy(env: Env, actor: Actor, meetingId:
   return (await getMeeting(env, meetingId))!;
 }
 
-// ── Prep packets ──
+// ── Prep packets → the BEFORE brief (Phase B) ──
 
+/**
+ * Generalised, not duplicated. This was the IC-shaped prep (evidence summary, contradictions,
+ * open questions); it now assembles the whole BEFORE brief for every meeting type through
+ * `meetingBrief.assembleMeetingBrief`, which still fills the P7 columns beside the brief. The
+ * signature is unchanged so every caller and test of `POST /api/meetings/:id/prep` keeps working.
+ */
 export async function assemblePrepPacket(
   env: Env,
   actor: Actor,
@@ -289,47 +313,15 @@ export async function assemblePrepPacket(
   input: { open_questions?: string[]; ai_run_id?: string },
   visibleClause = "1=1",
 ) {
-  const meeting = await requireMeeting(env, meetingId);
-  await mustAuthorize(env, actor, "meeting.prep.assemble", "meeting_prep_packet", meetingId, meeting.firm_scope);
-  if (actor.type === "AI" && !input.ai_run_id) {
-    throw new MeetingError(400, "invalid_input", "an AI-drafted prep packet must record its ai_run_id (run_ai trace)");
+  await requireMeeting(env, meetingId);
+  const { assembleMeetingBrief, MeetingBriefError } = await import("./meetingBrief");
+  try {
+    const stored = await assembleMeetingBrief(env, actor, meetingId, input, visibleClause);
+    return env.WP_OS_DB.prepare("SELECT * FROM meeting_prep_packet WHERE id = ?1").bind(stored.id).first();
+  } catch (err) {
+    if (err instanceof MeetingBriefError) throw new MeetingError(err.status, err.code, err.message);
+    throw err;
   }
-  const summary = meeting.company_id ? await getEvidenceSummary(env, visibleClause, meeting.company_id) : null;
-  const id = `mpp_${crypto.randomUUID()}`;
-  const { actorType, actorId } = eventActor(actor);
-  await env.WP_OS_DB.prepare(
-    `INSERT INTO meeting_prep_packet
-       (id, meeting_id, company_id, evidence_summary_json, unresolved_contradictions_json, open_questions_json,
-        drafted_by_type, drafted_by_id, ai_run_id, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
-  )
-    .bind(
-      id,
-      meetingId,
-      meeting.company_id,
-      JSON.stringify(summary ?? {}),
-      JSON.stringify(summary?.unresolved_material_contradictions ?? []),
-      JSON.stringify(input.open_questions ?? []),
-      actor.type === "AI" ? "AI" : "HUMAN",
-      actorId,
-      input.ai_run_id ?? null,
-      meeting.firm_scope,
-    )
-    .run();
-  await appendEvent(env, {
-    eventType: "meeting.prep_assembled",
-    actorType,
-    actorId,
-    objectType: "meeting_prep_packet",
-    objectId: id,
-    firmScope: meeting.firm_scope,
-    payload: {
-      meeting_id: meetingId,
-      company_id: meeting.company_id,
-      unresolved_material_contradictions: (summary?.unresolved_material_contradictions ?? []).length,
-    },
-  });
-  return env.WP_OS_DB.prepare("SELECT * FROM meeting_prep_packet WHERE id = ?1").bind(id).first();
 }
 
 // ── Transcript import (two independent gates; refusals are recorded) ──
@@ -351,20 +343,20 @@ async function recordTranscriptImport(
   env: Env,
   meeting: MeetingRow,
   actorId: string,
-  input: { source: string; document_id?: string; consent_record_id?: string },
+  input: { source: string; document_id?: string; consent_record_id?: string; provider_name?: string },
   status: "IMPORTED" | "REFUSED",
   refusalReason?: string,
 ): Promise<TranscriptImportRow> {
   const id = `tri_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
-    `INSERT INTO transcript_import (id, meeting_id, document_id, consent_record_id, source, status, refusal_reason, imported_by, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    `INSERT INTO transcript_import (id, meeting_id, document_id, consent_record_id, source, status, refusal_reason, imported_by, firm_scope, provider_name)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
   )
-    .bind(id, meeting.id, input.document_id ?? null, input.consent_record_id ?? null, input.source, status, refusalReason ?? null, actorId, meeting.firm_scope)
+    .bind(id, meeting.id, input.document_id ?? null, input.consent_record_id ?? null, input.source, status, refusalReason ?? null, actorId, meeting.firm_scope, input.provider_name ?? null)
     .run();
   await appendEvent(env, {
     eventType: status === "IMPORTED" ? "meeting.transcript_imported" : "meeting.transcript_refused",
-    actorType: "firm_user",
+    actorType: actorId === "system" ? "system" : "firm_user",
     actorId,
     objectType: "transcript_import",
     objectId: id,
@@ -375,33 +367,51 @@ async function recordTranscriptImport(
 }
 
 /**
+ * The one platform whose transcripts may arrive without a person pressing anything. Google Meet
+ * announces recording and transcription to the room; `meetIngest.ts` says why that is consent and
+ * where it is not. Named as a constant so the exception is greppable and cannot widen by a typo.
+ */
+export const PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS = ["GOOGLE_MEET"] as const;
+export type PlatformNativeProvider = (typeof PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS)[number];
+
+/**
  * Import a transcript. Refused (and recorded as REFUSED) unless BOTH the recording
  * policy is active for this meeting AND transcription consent is currently GRANTED.
+ *
+ * HUMAN-INITIATED, WITH ONE NAMED EXCEPTION. A transcript somebody pastes or uploads is a human
+ * act and stays one. A transcript Google Meet generated for a call the firm hosted is read by the
+ * scheduled ingest as SYSTEM, and only when `platform` names it — the two gates above are NOT
+ * relaxed for it; the recording policy comes from the firm-level decision (migration 0203) and the
+ * consent row from the platform's announcement, both written before this is called. What the
+ * exception changes is who pressed the button, not whether the gates are checked.
  */
 export async function importTranscript(
   env: Env,
   actor: Actor,
   meetingId: string,
-  input: { source: string; document_id?: string },
+  input: { source: string; document_id?: string; platform?: PlatformNativeProvider },
 ): Promise<TranscriptImportRow> {
   const meeting = await requireMeeting(env, meetingId);
-  if (actor.type !== "HUMAN") throw new MeetingError(403, "forbidden", "transcript import is human-initiated");
+  const platformNative = actor.type === "SYSTEM" && input.platform !== undefined && (PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS as readonly string[]).includes(input.platform);
+  if (actor.type !== "HUMAN" && !platformNative) throw new MeetingError(403, "forbidden", "transcript import is human-initiated");
   await mustAuthorize(env, actor, "meeting.transcript.import", "transcript_import", meetingId, meeting.firm_scope);
+  const importer = actor.firmUserId ?? "system";
+  const record = { source: input.source, document_id: input.document_id, provider_name: input.platform };
 
   if (meeting.recording_enabled !== 1) {
-    const refused = await recordTranscriptImport(env, meeting, actor.firmUserId!, input, "REFUSED", "recording_policy_not_activated");
+    const refused = await recordTranscriptImport(env, meeting, importer, record, "REFUSED", "recording_policy_not_activated");
     throw new MeetingError(409, "recording_policy_not_activated", `transcript refused and recorded as ${refused.id}`);
   }
   const consent = await currentConsent(env, meetingId, "TRANSCRIPTION");
   if (!consent || consent.state !== "GRANTED") {
-    const refused = await recordTranscriptImport(env, meeting, actor.firmUserId!, input, "REFUSED", `consent_state:${consent?.state ?? "NOT_RECORDED"}`);
+    const refused = await recordTranscriptImport(env, meeting, importer, record, "REFUSED", `consent_state:${consent?.state ?? "NOT_RECORDED"}`);
     throw new MeetingError(409, "consent_not_granted", `transcript refused and recorded as ${refused.id}`);
   }
   if (input.document_id) {
     const doc = await env.WP_OS_DB.prepare("SELECT id FROM document WHERE id = ?1").bind(input.document_id).first();
     if (!doc) throw new MeetingError(400, "unknown_document", `document '${input.document_id}' does not exist`);
   }
-  return recordTranscriptImport(env, meeting, actor.firmUserId!, { ...input, consent_record_id: consent.id }, "IMPORTED");
+  return recordTranscriptImport(env, meeting, importer, { ...record, consent_record_id: consent.id }, "IMPORTED");
 }
 
 // ── Notes ──
@@ -536,6 +546,8 @@ export async function convertCommitment(env: Env, identity: FirmUserIdentity, co
     firm_scope: commitment.firm_scope,
     next_action: commitment.commitment_text,
     due_at: commitment.due_date ?? undefined,
+    // Migration 0199: a card raised from a meeting returns to it.
+    meeting_id: meeting.id,
   });
   await env.WP_OS_DB.prepare("UPDATE meeting_commitment SET status = 'CONVERTED', work_card_id = ?2 WHERE id = ?1").bind(commitmentId, card.id).run();
   await appendEvent(env, {
@@ -676,6 +688,7 @@ const createMeetingSchema = z.object({
   title: z.string().trim().min(1),
   meeting_type: z.enum(MEETING_TYPES),
   company_id: z.string().trim().min(1).optional(),
+  lp_record_id: z.string().trim().min(1).optional(),
   scheduled_at: z.string().optional(),
   occurred_at: z.string().optional(),
   location: z.string().optional(),
@@ -709,11 +722,28 @@ export async function handleListMeetings(ctx: RouteContext): Promise<Response> {
    */
   const wantArchived = url.searchParams.get("archived") === "1";
   const shelf = wantArchived ? "m.archived_at IS NOT NULL" : "m.archived_at IS NULL";
+  /*
+   * THE THREE FACES ON THE LIST (Phase B). An upcoming meeting carries its READINESS — is the brief
+   * built, how many open questions roll forward, how many things we still owe them — and a past
+   * one carries its OUTPUTS — decisions, and commitments overdue. "Same company or LP" is the join
+   * for anything carried forward; a meeting about neither carries zeros, honestly.
+   */
+  const today = new Date().toISOString().slice(0, 10);
+  const sameParty = "(m2.id <> m.id AND m2.archived_at IS NULL AND ((m.company_id IS NOT NULL AND m2.company_id = m.company_id) OR (m.lp_record_id IS NOT NULL AND m2.lp_record_id = m.lp_record_id)))";
   const select = `SELECT m.*,
       (SELECT COUNT(*) FROM meeting_note n WHERE n.meeting_id = m.id) AS note_count,
       (SELECT COUNT(*) FROM meeting_commitment c WHERE c.meeting_id = m.id) AS commitment_count,
       (SELECT COUNT(*) FROM meeting_commitment c WHERE c.meeting_id = m.id AND c.work_card_id IS NOT NULL) AS work_card_count,
-      (SELECT COUNT(*) FROM transcript_import t WHERE t.meeting_id = m.id) AS transcript_count
+      (SELECT COUNT(*) FROM transcript_import t WHERE t.meeting_id = m.id) AS transcript_count,
+      (SELECT COUNT(*) FROM meeting_prep_packet p WHERE p.meeting_id = m.id AND p.brief_json IS NOT NULL) > 0 AS brief_ready,
+      (SELECT COUNT(*) FROM meeting_open_question q JOIN meeting m2 ON m2.id = q.meeting_id WHERE q.state = 'OPEN' AND ${sameParty}) AS carried_open_questions,
+      (SELECT COUNT(*) FROM meeting_commitment c JOIN meeting m2 ON m2.id = c.meeting_id WHERE c.owner_side = 'FIRM' AND c.status = 'OPEN' AND c.honoured_at IS NULL AND ${sameParty}) AS we_owe_them,
+      (SELECT COUNT(*) FROM meeting_commitment c JOIN meeting m2 ON m2.id = c.meeting_id WHERE c.owner_side = 'COUNTERPARTY' AND c.status = 'OPEN' AND c.honoured_at IS NULL AND ${sameParty}) AS they_owe_us,
+      (SELECT COUNT(*) FROM meeting_decision d WHERE d.meeting_id = m.id) AS decision_count,
+      (SELECT COUNT(*) FROM meeting_commitment c WHERE c.meeting_id = m.id AND c.status = 'OPEN' AND c.honoured_at IS NULL AND c.due_date IS NOT NULL AND substr(c.due_date, 1, 10) < '${today}') AS commitment_overdue_count,
+      (SELECT COUNT(*) FROM meeting_open_question q WHERE q.meeting_id = m.id AND q.state = 'OPEN') AS open_question_count,
+      (SELECT COUNT(*) FROM meeting_stage_proposal sp WHERE sp.meeting_id = m.id AND sp.state = 'PROPOSED') AS stage_proposal_pending_count,
+      (SELECT COUNT(*) FROM meeting_after_draft ad WHERE ad.meeting_id = m.id AND ad.state = 'DRAFTED') AS draft_waiting_count
      FROM meeting m`;
   const rows = companyId
     ? await ctx.env.WP_OS_DB.prepare(`${select} WHERE m.company_id = ?1 AND ${visibility} AND ${shelf} ORDER BY m.created_at DESC, m.id LIMIT 500`).bind(companyId).all<MeetingRow>()

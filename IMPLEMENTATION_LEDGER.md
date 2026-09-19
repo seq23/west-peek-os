@@ -5612,3 +5612,214 @@ and now requires the DEFECT report and the partner notification.
 
 Counts: vitest **2447/2447** (was 2433; +14), `tsc --noEmit` green, and all **35** `validate:*`
 scripts PASSED with their self-tests, including the new `validate:steer-waits` (18 fixtures).
+
+## 18 Sep 2026 — Every company is in the pipeline; the weekly review is archived
+
+**Owner, on intake:** "all companies should be in the pipeline, no matter how they come in. They are
+top of funnel if they are in the system. From email we have to DECIDE on them." **On the weekly
+review:** "we don't need it anymore."
+
+**What was wrong.** `ROUTE_POLICY.opensRecord` in `services/dealIntake.ts` was true for MANUAL and
+false for EMAIL, NETWORK_OS and SCOUT: the three unattended routes registered the company and raised a
+card saying "then open it at the top of the funnel", and nothing checked that the card did. Read from
+production: Northwind Robotics (22 Aug, created by Wyatt, no card at all) and Vynlo (24 Aug, by email,
+deck read, card DONE) — two companies in the register with no opportunity, one behind a card that
+concluded without the thing it governed. The Companies page called each "Not in the pipeline", calmly.
+
+| File | What changed |
+|---|---|
+| `src/worker/services/dealIntake.ts` | Every route opens an `investment_opportunity` at NEW at arrival. MANUAL under the partner's name, unconditionally (she may open a second). The unattended routes open one only when the company has no live, non-archived opportunity, as the seat that owns the top of the funnel (`aie_wyatt`), with `source_channel` `<channel>:<who>` — `email:` is the board's badge contract — and `relationship_origin` INBOUND / NETWORK / OUTBOUND. `opensRecord` is gone as a concept; `FunnelEntry.opportunity_id` is non-nullable, so TypeScript proves no path returns without one. The card asks for the DECISION, never the admission; the header comment keeps the history of why it was the other way. |
+| `migrations/0197_every_company_is_in_the_pipeline.sql` | Backfill: one opportunity at NEW for every non-MERGED company with nothing non-archived on the board, dated to the company's `created_at`, `source_channel` from the `identity.company_created` event's `via` (`email:backfill`, …) else `backfill`, `created_by` `migration:0197`, one event per row saying why. |
+| `src/client/pages/CompaniesPage.tsx` | The calm label is gone. A row with no deal renders a fault notice (`company-no-deal-<id>`): not on the board, and it should be. |
+| `scripts/validate/every-company-is-in-the-pipeline.mjs` | `validate:companies-in-pipeline`: no switch in the route table, non-nullable return, the exactly-one-per-route pin present and naming every route, no calm label, 0197's shape. Self-tests on the real pre-fix shapes. |
+| `migrations/0198_the_weekly_review_is_archived.sql` | `weekly_mp_review` → RETIRED (the table's terminal status: the tick refuses it on every trigger including a hand-run, the status route answers 409, the machinery list omits it), `next_run_at` NULL, the reason on `pause_reason`. Every `weekly_review` row and deliverable is kept. |
+| `src/worker/services/jobs.ts` | The `weekly_mp_review` dispatcher branch is a named REFUSED outcome rather than a generator, so a hand-edited row finds a refusal rather than the INTELLIGENCE fallthrough. The generator is still reachable by a human from the page's own button, behind `weekly_review.manage`. |
+| `src/client/App.tsx` · `src/shared/help/pagePurpose.ts` · `PagePurposeBlock.tsx` | The nav item is removed with the dated reason; the route stays live; the page says it is archived above its controls. |
+| `src/shared/deliverables/deliverable.ts` · `src/worker/services/deliverables.ts` | `archived` on a kind definition; the unfiltered shelf excludes archived kinds via `archivedDeliverableKinds()` (derived, never a second list); `?kind=weekly_review` still returns every row. |
+| `scripts/validate/an-archived-lane-stays-archived.mjs` | `validate:weekly-review-archived`: replays every migration's `scheduled_job` status writes (seeds read by shape, UPDATEs by `=` and `IN`) and fails if a retired key is ever set back; reads the dispatcher, the nav, the kind and the shelf. Hard-fails on zero retired jobs. |
+
+**Not changed, and why.** `POST /api/companies` (the identity workbench's "New company" form) and a
+capture resolved to a COMPANY still create a register row with no deal. Folding an opportunity into
+those would make Dealflow's "add a deal on an existing company" — the flow every partner uses and
+`e2e/p6` pins at exactly one opportunity — open a second. The register now says loudly when that
+happens, 0197 backfilled every such row, and the four intake routes cannot produce one.
+
+**Tests made false were rewritten stricter.** `tests/dealIntake.test.ts` asserted "nothing has entered
+the pipeline" on three routes; it now asserts exactly one live opportunity per route, its channel, its
+creator and its origin, that a live one is never doubled, that a PASSed or ARCHIVED one does not strand
+the company, and that the route table has no switch under any name. `tests/weeklyReview.test.ts`
+pinned generation; it now pins the retirement (tick and hand-run both refused, status route 409, tick
+never due, nav absent while the route answers, `weekly_review.manage` proven with a cross-firm
+identity, archived kind off the shelf but there by name). `tests/jobs.test.ts` used the review as its
+occurrence-key vehicle and now uses `deck_reading`, asserting the premise that the first occurrence
+SUCCEEDED. `e2e/p57` asserts all four doors land on the board.
+
+## 18 Sep 2026 — The portfolio shows what the firm owns, once
+
+Operator: *"I think the one company we invested in should go there, and some of the pictorial graphs
+in portfolio allocation from the fund strategy page."*
+
+**What was true in production (read-only, `wrangler d1 execute --remote`).** One CLOSED
+`investment_opportunity` — Sensori, `opp_ea7463ad…`, `$1 × 10,000` placeholder shares standing in for
+a real $10K SPV, `backfill_reason: "$10K SPV that closed before Fund I existed; never went through
+West Peek's IC"`, `as_of_date 2025-08-06`. Zero `position` rows, zero `transaction` rows, zero
+`position_mark` rows. Portfolio's "What we own" read `/api/funds/:id/performance`, which reads
+`position` alone, so it said "The fund holds nothing yet"; Fund strategy's composition read CLOSED
+opportunities and drew Sensori at 100%. The Portfolio page's own header comment recorded the
+disagreement — as the reason the bars had been removed from it.
+
+**The fix is the query, not a position row.** Booking a pre-fund SPV with stand-in share counts into
+Fund I would put it into the fund's cost basis and from there into TVPI and the LP letter. What is
+true is that the firm invested in it, and that is what a CLOSED opportunity records.
+
+| File | What |
+|---|---|
+| `src/worker/services/portfolioHoldings.ts` | ONE list: CLOSED opportunities ∪ OPEN positions, merged per company, each row saying which it is (`booked`), with amount in, vehicle, ownership, current mark, last check-in, open asks, open flags, follow-on reviews. `GET /api/portfolio/holdings`. Composition (`/composition`, moved here from `investment.ts`) and the new deployment view (`/allocation?fund_id=`) are computed from it. Fund performance is deliberately untouched — the fund's ledger stays positions-only. |
+| `src/shared/fund/allocation.ts` | `planSlices` — the four plan figures Fund strategy used to work out inline — and `deploymentSlices`, the same plan with deployed / still-to-deploy drawn against it. Both pages call it. Colours are token names; the fifth "still to deploy" segment uses the ring's empty-track colour because the palette holds four separable hues on purpose. |
+| `src/client/pages/AllocationRing.tsx` | The ring SVG, legend and table, extracted from `FundAllocation.tsx`. One definition, two hosts. |
+| `src/client/pages/PortfolioAllocation.tsx` | Portfolio's host: "Where the money is, against the plan". |
+| `src/client/pages/PortfolioPage.tsx` | "What we own" renders from `/api/portfolio/holdings`, hosts `<Composition />` and `<PortfolioAllocation>`. The header comment that recorded the disagreement now records the fix. |
+| `src/worker/index.ts` | `// === Phase Portfolio ===` block: holdings, composition, allocation. |
+
+**Proof.** `tests/portfolioHoldings.test.ts` (8): the Sensori-shaped fixture (backfilled CLOSED,
+placeholder economics, no position) hard-fails the run if it produced no closed-but-unbooked row, then
+must appear with `booked: false`, `$10,000`, `SPV`, `2025-08-06`; a booked position appears with its
+cost basis and mark, one row per company; composition's total equals holdings' total; and the plan
+figures the server returns are diffed to the cent against `planSlices` over the same fixture
+(`$30M − $7M = $23M · 30% = $6.9M · 70% = $16.1M · 40% = $6.44M · initial $9.66M`).
+`validate:portfolio` (24-fixture self-test) fails if the closed SELECT joins `position`, if either page
+grows its own ring or its own arithmetic, if a route leaves the block, or if the test excuses itself.
+
+**Negative proofs, run.** The join planted on the closed SELECT: validator exits 1 naming it, 5 of 8
+tests red. The server's reserve percentage nudged 40 → 35: the diff test alone goes red. A second
+`strokeDasharray` file under `src/client`: validator exits 1. Each restored, each green again.
+
+Counts: vitest **2480/2480** (was 2472; +8), `tsc --noEmit` green, `validate:brand`,
+`design-tokens`, `css-classes`, `heading-scale`, `css-variables`, `sql`, `scans-read-code` and the new
+`validate:portfolio` all PASSED with self-tests.
+## Phase Meet — Google Meet, seamless (18 Sep 2026)
+
+Owner-approved. Tiers 1 and 2 built; 3 and 4 scoped in `docs/GOOGLE_MEET.md`, which also carries the
+probe table (CONFIRMED / SUSPECTED per row with the exact call), the owner's correction that this
+system reads only the firm calendar, and the named stops.
+
+| Where | What |
+|---|---|
+| `migrations/0202_…` | `meeting` gains `calendar_key`, `google_event_id` (UNIQUE with the key), `meet_conference_id`, `meet_link`, `source`, `type_inference`, `recording_ref`, `transcript_ref`; `google_calendar_sync` (the two-door ledger); `meet_event_inbox` (UNIQUE per conference record — one read per ended call is a property of the schema). |
+| `migrations/0203_…` | `meet.recording_policy.firm_default` (reserved, one decision per firm) and `meet_recording_policy`; `calendar.sync`, `meet.ingest`, `meet.consent.platform_announced`; `meet_space_subscription`; jobs `sjb_calendar_sync` / `sjb_meet_ingest` (INTERVAL 60, guarded `CHECK (matched = 2)`). |
+| `src/shared/meetings/calendarSources.ts` | The ONE calendar, `sequoia@westpeek.ventures` → `west-peek`. |
+| `src/shared/meetings/calendarSync.ts` | Pure: API and iCal events to one shape, identity across doors, the type inference, the plan (create/update/cancel/skip — every event one named action). |
+| `src/shared/meetings/meetTranscript.ts` | Pure: entries joined to participants by resource; unattributed stays unattributed; same `turnLine` renderer as Fireflies. |
+| `src/worker/effects/googleWorkspaceClient.ts` | The only file that talks to Google as the firm (allowlisted egress with its reason): SA JWT via WebCrypto, Calendar read, iCal, Meet v2 reads, Workspace Events per-space create/renew, Pub/Sub pull/ack. |
+| `src/worker/services/calendarSync.ts` | Tier 1: two doors, one ledger, every write authorised. |
+| `src/worker/services/meetIngest.ts` | Tier 2: subscriptions, pull, poll, one inbox, the governed read; the firm default; platform-announced consent with its argument and its exclusions. |
+| `src/worker/services/meetings.ts` | `importTranscript` admits a SYSTEM actor only with `platform: "GOOGLE_MEET"`; both gates unchanged. |
+| `src/client/pages/MeetingsPage.tsx` | "Join on Meet" and "type inferred, check it" on the upcoming card. |
+| `scripts/validate/a-calendar-meeting-exists-once.mjs` | `validate:calendar-sync` — one meeting per event through both doors, and the never-blend guard. |
+| `scripts/validate/a-meet-call-that-ended-is-read.mjs` | `validate:meet-ingest` — one read per conference, attribution by join only, LP private by construction, the governed path is the only path. |
+| `scripts/meet/probe-google.mjs` | The live probe through the Worker's own client. 12 checks, 0 not confirmed, 18 Sep 2026. |
+
+Provider layers: Calendar read, iCal read, Meet scopes, Workspace Events subscribe/renew, Pub/Sub pull
+are **PROVEN live** (read-only probe plus two real subscriptions); reading participants / transcript
+entries / recordings of an ended call is **UNPROVEN live** (no conference record exists yet under
+the grant) and proven against the fake; Pub/Sub push is **CONFIRMED impossible** behind Access.
+## 18 Sep 2026 — Phase B: a meeting is one object with three faces
+
+**The design, owner-approved 18 Sep 2026.** A meeting has a BEFORE (the brief), a DURING (capture and
+the live room — Phase C) and an AFTER (what came out). P7 built the record and the during-face; P33
+extracted firm-side follow-ups; nothing ever wrote down what was SETTLED, what was still UNKNOWN,
+what the OTHER side owed us, or what a deal meeting meant for the deal's stage. This phase is the
+data model and the Before/After halves, for EVERY meeting type — not only IC.
+
+| Where | What |
+|---|---|
+| `migrations/0199_a_meeting_has_three_faces.sql` | `meeting_decision`, `meeting_open_question`, `meeting_stage_proposal`, `meeting_artifact`, `meeting_after_draft`; `meeting_commitment` extended (`owed_by`, `honoured_at`, `honoured_note`, `after_draft_id`) rather than superseded; `meeting_prep_packet` generalised into the brief (`brief_json`, `body_md`, `coverage_json`, `prepared_by`); `meeting.lp_record_id`; `work_card.meeting_id`. Artifacts get their own table because `deliverable.kind` is a CHECK D1 cannot widen. |
+| `migrations/0200_the_brief_is_written_the_night_before.sql` | The five action keys (P4 compensating block) and `sjb_meeting_brief` — DAILY_AT 22:00 UTC, seeded **ENABLED** at the owner's ask, the loud way. |
+| `src/worker/services/meetingAfter.ts` | The AFTER face. `draftMeetingAfter` (idempotent over a fingerprint of the notes; `opts.text` for a rolling caller; every outcome a row), `parseAfterDraft`/`afterDraftPrompt`/`recordAfterDraft` (pure, for Phase C), `approveMeetingAfter` (human-only in code; each object through its own key; the P33 assignment policy for firm commitments), `proposeStageChange`/`decideStageProposal` (ACCEPT calls `transitionOpportunity` under `opportunity.transition` — nothing moves a deal on its own), `saveMeetingArtifact`, `askOfferLedger`. |
+| `src/worker/services/meetingBrief.ts` | The BEFORE face. `buildMeetingBrief` (deterministic; throws on zero coverage), `writeWhyLine` (the one model-written line, or a stated reason there is none), `assembleMeetingBrief` (stores on the P7 packet row), `runMeetingBriefs` (the job: CRITICAL on a failure; says how many it examined). LP conversations are declared `confidential` where `runAi` reads it — at the router, not in a prompt. |
+| `src/worker/services/meetings.ts` | `assemblePrepPacket` now builds the brief (generalised, not duplicated); the list carries readiness (`brief_ready`, `carried_open_questions`, `we_owe_them`, `they_owe_us`) and outputs (`decision_count`, `commitment_overdue_count`, …); `lp_record_id` on create; `convertCommitment` stamps `meeting_id` on the card. |
+| `src/worker/services/jobs.ts` | `job_key === "meeting_brief"` dispatched on the `wednesday_prep` pattern. |
+| `src/worker/index.ts` | One contiguous `// === Phase B: meeting model ===` block: `GET …/brief`, `GET …/after`, decisions, open questions (+resolve), commitments honour, stage proposals (+decide), artifacts (list + save), after-draft (+approve/discard), `GET /api/meeting-ledger/ask-offer`. |
+| `src/shared/meetings/meetingTypes.ts` | `seatableFor` offers every ACTIVE employee for every type (owner's rule) and carries a `warning` for an internal-only seat in an external room — a warning, never a lock. |
+| `src/client/pages/MeetingFacesPanel.tsx`, `MeetingsPage.tsx` | Before and After panels on the record (four objects, artifacts, the draft with the partner's button), readiness/outputs on the lists, the seat warning, the static "How a meeting becomes work" section removed (the committee sequence stays in its section). Phase D redesigns the visuals. |
+
+**Proof.** `tests/meetingModel.test.ts`, 35 tests: the draft refuses an empty page and an off-record
+note, is idempotent over its input, and is stored FAILED/REFUSED with a reason; an AI actor cannot
+approve or decide; approval writes all four objects, dedupes against hand-typed rows, and moves
+nothing; ACCEPT moves the deal through the pipeline's own event; the brief carries both sides'
+commitments and open questions forward by company and by LP, marks a resolved question gone, builds
+the diligence framework for FOUNDER/DILIGENCE, and lands on the P7 row through the P7 route; the job
+briefs the meeting in the window, skips next week's and the archived one, and does not brief twice;
+the lists carry the counts; a converted card returns to its meeting; Willow can be seated on a founder
+meeting. `tests/meetingTypes.test.ts` and `tests/meetingsLayout.test.ts` rewritten stricter where the
+change made them false.
+
+**Two validators, registered, hard-failing on zero, with negative proofs run on the real files:**
+`validate:meeting-yield` (approve dropping the stage proposal → caught, restored) and
+`validate:meeting-brief` (the job seeded PAUSED → caught; the dispatch key mistyped → "found 0 dispatch
+branches", restored). `validate:deliverable-kinds` was reading ANY column called `kind` and took
+`meeting_artifact.kind` as the deliverable CHECK; scoped to the deliverable table with a fixture
+planting the real 0196+0199 shape.
+
+**Extension points for Phase C (the live room):** `recordAfterDraft`, `draftMeetingAfter(env, actor,
+id, { text })`, `afterDraftPrompt`, `parseAfterDraft`, `saveMeetingArtifact` /
+`POST /api/meetings/:id/artifacts`, `readMeetingAfter`, `latestBrief` / `GET /api/meetings/:id/brief`;
+tables `meeting_artifact` and `meeting_after_draft`. The Google Meet columns on `meeting` belong to
+the sibling phase's migrations (0202/0203) and are not touched here.
+
+## 18 Sep 2026 — Phase C: the meeting is a live room
+
+**The design, owner-approved 18 Sep 2026.** Phase B gave a meeting three faces and built BEFORE and
+AFTER. This is the DURING face: the room records itself with speaker turns, writes the After draft
+while people talk, answers a question asked out loud or typed, builds a table or chart on the spot
+from the firm's own record, and pulls an employee in for a task whose result comes back to the room.
+**Nothing in the room writes a record from voice.** A question — spoken or typed — produces a saved
+block, a preview-first work card, or a DRAFT; a person clicks Phase B's approve route to make any of
+it a decision, a commitment, an open question or a stage move.
+
+| Where | What |
+|---|---|
+| `migrations/0204_the_meeting_is_a_live_room.sql` | `meeting_artifact.asked_text`, `asked_via` (TEXT/VOICE/SYSTEM), `work_card_id` (unique — one card, one block); the `meeting.room.ask` key (P4 compensating block). The Google Meet columns (0202/0203) are not touched. |
+| `src/worker/ai/providers/workersAiNova3.ts` | Deepgram Nova-3 on the Workers AI binding, diarised, `mip_opt_out` on every call, words folded into turns; an unattributed word starts an unattributed turn ("Speaker not identified"), never joins its neighbour's. Same place and same argument as Whisper (ADR-019). **Probe CONFIRMED** on the owner's account through the Workers AI REST surface with a spoken fixture: Nova-3 200 with `speaker` on every word; Whisper 200 with none. Cost from the probe: 137 neurons / 17.4 s on Nova-3 (~470 a minute → ~21 free minutes a day, ~$0.31 an hour after) vs 13.5 on Whisper. |
+| `src/worker/services/liveTranscription.ts` | `transcribeWithSpeakers`: Nova-3 first, Whisper only when the MODEL is missing (`DiarisationUnavailable`), and the chunk result says which engine wrote the line and why. Each speaker turn becomes its own TRANSCRIPT_DERIVED note through the same two gates. `content_type` travels with the chunk. |
+| `src/shared/meetings/roomQuery.ts` | The read-only record query: the model produces a PLAN (table, columns, filters from a closed operator set, one aggregate, one grouping, chart bar/line/pie), the compiler turns it into one parameterised SELECT over a 15-table allowlist with the firm scope, the page's privacy clause, archived rows hidden, and a 50-row cap. **Chosen over validated SQL** because a plan has no surface to widen — safety is a property of the vocabulary, not of a parser that must be right about CTEs, ATTACH and comments on day one. The model never sees a row. No relative imports, so the validator loads it natively. |
+| `src/worker/services/meetingRoom.ts` | `roomState` (one read for the During face), `rollSummary` (Phase B's `draftMeetingAfter` — idempotent over the fingerprint, so a five-minute poll costs one run per change), `askRoom` (text or push-to-talk voice → the page host Walter, or the employee addressed by name, who is seated if not; one governed run returns answer / query / task / refuse, checked in code; EVERY outcome is a saved block, including a failure), `buildRoomContext` (the brief, the notes so far, the company/opportunity or LP record, prior meetings' After objects with the same counterparty, what was already asked — this meeting's objects only), `runRecordQuery` (compile → run → block with `cites` and the SQL that ran), `pullInEmployee` (seat, `createWorkCardInternal` with `meeting_id`, `preview_first`, her words on `prompt` for `steerFor`), `returnCardToRoom` (the return address: one block per card, updated to DONE with the finding), `saveRoomArtifact` (wraps Phase B's writer, stamps provenance). `confidential` derived from the meeting exactly as Phase B does, on every `runAi`. |
+| `src/worker/services/employeeWork.ts` | On finish, a card with `meeting_id` returns its result to the room; a failure to return is recorded, never swallowed, and cannot un-finish the card. |
+| `src/worker/index.ts` | One contiguous `// === Phase C: the live room ===` block after Phase B's: `GET …/room`, `POST …/room/roll`, `POST …/room/ask`. |
+| `src/client/pages/RoomPanel.tsx` | The During face: ONE recording status line and ONE button (the consent prompt opens from it, every session, never remembered; the recorder starts only on the server's `can_capture`; the two-gate explanation is the tooltip and a secondary line); the rolling draft with DRAFT/APPROVED chip; ask by text or **hold-to-talk** (the room hears only while the button is held; the microphone is released on release; no wake phrase); the artifacts stream (answers, tables, inline-SVG charts on `--viz-*`, task receipts with working / done / needs-you chips, refusals and failures shown as blocks); seated employees with live task chips. Mounted in the live card in place of the old CapturePanel; SeatingPanel and Phase B's panels untouched. |
+| `src/client/App.tsx` | **Tier 3 prep:** `#/room/<meeting id>` renders `RoomStandalone` — the same panel, no shell, behind the same `/api/me` gate. The shape a Meet Add-on side panel hosts later. |
+
+**Proof.** `tests/meetingRoom.test.ts`, 27 tests: a typed question ends in an answer block and the
+After face is untouched; a reply that proposes a record is not one of the four modes and is stored
+as a failure; a refusal and an unreachable model are both blocks with their reason; "Wyatt, …" seats
+Wyatt and answers in his name; an unemployed employee cannot answer; revoked access and an empty
+question are refused; a plan produces a table that cites its rows with the SQL that ran, a grouped
+plan with a chart type is a chart, a table outside the allowlist and a column outside its table are
+refused BY NAME as blocks; a task opens a preview-first card with `meeting_id` and her words on
+`prompt`, seats the employee, and its result returns to the SAME block; a blocked card reads "needs
+you"; the rolling summary is Phase B's draft and never approves; the context pack carries the record
+and prior meetings' After objects for the same company and not another's, and never an off-record
+note; Nova-3 turns fold by speaker with an unattributed word kept unattributed, and Whisper is the
+named fallback; a spoken question is saved as VOICE; the three routes answer, and answer 401 to
+nobody. `tests/meetingsLayout.test.ts` — six pins that moved with the recorder were rewritten
+stricter against `RoomPanel.tsx` (the Start button waits on the two gates the prompt cannot open;
+the recorder starts only on the server's `can_capture`; no control on the face can approve or move
+anything; push-to-talk releases the microphone; the standalone route exists).
+`e2e/p71-live-room.spec.ts`: start now → the one button → consent → recording or the named reason →
+ask by text → a block appears and stays → nothing in decisions, commitments, questions or proposals
+changed → `#/room/<id>` renders the face alone.
+
+**Two validators, registered, hard-failing on zero, with negative proofs run on the real files:**
+`validate:voice-is-read-only` (a `recordDecision` wired into an answer → caught by import AND by
+call, restored) and `validate:room-answers` (citations dropped → caught; the compiler letting
+`firm_user` through → caught with the SQL that would have run, restored).
+
+**Not done, and why.** Wake-phrase listening — the owner chose push-to-talk only. Live transcription
+inside Google Meet — Phase Meet (0202/0203). The visuals — Phase D. A real Nova-3 chunk through the
+Worker binding is UNPROVEN until deployed (the REST probe proves the model and the account; the
+binding's input shape is the documented one).
+
+**What Tier 3 needs.** A Meet Add-on manifest pointing its side panel at `#/room/<id>` on the
+deployed origin, Cloudflare Access allowing the add-on's iframe (the same session cookie), and the
+Phase Meet `meet_conference_id` on `meeting` so the panel can be opened by conference rather than by
+meeting id.
