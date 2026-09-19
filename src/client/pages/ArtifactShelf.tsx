@@ -97,7 +97,8 @@ export function ArtifactShelf({
 
   if (shelf.loading && !shelf.data) return <p className="state-message" data-testid={`${testId}-loading`}>Reading the shelf…</p>;
   if (!shelf.data) return <p className="state-message" data-testid={`${testId}-failed`}>{isFailure(shelf.loading, shelf.status) ? failureText(shelf.status ?? 0) : "The shelf could not be read."}</p>;
-  if (rows.length === 0) return <p className="state-empty" data-testid={`${testId}-empty`}>{shelf.data.note ?? emptyNote}</p>;
+  // The caller's note first: it knows whose shelf this is (a card's, a company's); the server's is the generic one.
+  if (rows.length === 0) return <p className="state-empty" data-testid={`${testId}-empty`}>{emptyNote || shelf.data.note || "Nothing built yet."}</p>;
   return (
     <ul className="card-list" data-testid={testId}>
       {rows.map((r) => <ShelfRowView key={r.id} row={r} showObject={showObject} />)}

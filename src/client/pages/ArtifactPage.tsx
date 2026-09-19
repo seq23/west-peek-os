@@ -137,7 +137,7 @@ export function ArtifactPage({ artifactId, onNavigate, onBack }: { artifactId: s
       </div>
 
       <p className={a.state === "FAILED" ? "notice notice-bad" : a.state === "READY" ? "brief-state-line" : "notice"} data-testid="artifact-state" data-state={a.state}>
-        <strong>{a.state === "READY" ? "Ready" : a.state === "FAILED" ? "Failed" : "Building"}</strong> · {a.words}
+        <strong>{a.state === "READY" ? "Ready" : a.state === "FAILED" ? "Failed" : "Building"}</strong> · {a.words.replace(/^(ready|failed|building|requested)\s*[—·]\s*/, "")}
       </p>
       {message && <p className="notice" data-testid="artifact-message">{message}</p>}
 

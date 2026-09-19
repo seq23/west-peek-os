@@ -591,7 +591,7 @@ export async function buildFromRoom(
   }
   const artifact = await saveRoomArtifact(env, actor, meeting.id, {
     kind: "artifact",
-    title: `${KIND_WORDS[input.kind].label}: ${status.title}`,
+    title: status.title,
     body: { state: status.state, artifact_id: status.id, kind: input.kind, answered_by: input.askedOf, panels: input.plans?.length ?? null, brief: input.brief },
     ai_run_id: input.aiRunId,
     asked_text: input.asked,

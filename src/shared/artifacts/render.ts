@@ -163,9 +163,14 @@ export function sourceLines(spec: ArtifactSpec): string[] {
   });
 }
 
-/** A panel's rows as printed cells — the table every surface shows. */
+/**
+ * A panel's rows as printed cells — the table every surface shows. The `id` column rides on every
+ * row for the CITES (`citationsFor`) and is not printed when the panel has anything else to show:
+ * a partner reads names and figures, and the ids are on the sources line.
+ */
 export function panelTable(panel: ArtifactPanel): { columns: string[]; rows: string[][] } {
-  return { columns: panel.columns, rows: panel.rows.map((r) => panel.columns.map((c) => fmtCell(r[c]))) };
+  const columns = panel.columns.length > 1 ? panel.columns.filter((c) => c !== "id") : panel.columns;
+  return { columns, rows: panel.rows.map((r) => columns.map((c) => fmtCell(r[c]))) };
 }
 
 /** The deck: title, the summary, a slide per finding, a chart slide per panel, the sources. */

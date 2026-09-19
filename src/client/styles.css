@@ -6511,6 +6511,7 @@ body {
 /* ── Artifacts on demand (19 Sep 2026): the page, the dashboard grid, the slides, the shelf rows.
    Token-only; the grid collapses to one column under a phone width by its own minmax. ── */
 .artifact-page { display: flex; flex-direction: column; gap: var(--space-md); }
+.artifact-page .artifact-kind { flex-wrap: wrap; }
 .artifact-actions { flex-wrap: wrap; gap: var(--space-xs) var(--space-sm); }
 .artifact-grid {
   display: grid;
