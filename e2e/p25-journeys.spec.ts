@@ -205,12 +205,36 @@ test("journey 5 — company → research finding → governed evidence", async (
   expect(summary.status()).toBe(200);
 });
 
-test("journey 6 — portfolio cockpit → allocation view → human decision boundary", async ({ page }) => {
+test("journey 6 — the monitoring lives on Portfolio, the plan on Fund strategy, and neither repeats the other", async ({ page, request }) => {
+  /*
+   * RE-POINTED STRICTER, 19 Sep 2026 (design/FUND_STRATEGY_DESIGN.md §2, the owner's Q2): the cockpit —
+   * top risks, deteriorating, improving, stale, support asks — no longer mounts under Fund strategy.
+   * Portfolio's four bands carry that data; Fund strategy carries the plan and the distance from it.
+   * The journey now proves BOTH halves and that the split holds: the monitoring lists are on
+   * Portfolio, the pace and the gap rows are on Fund strategy, and Fund strategy shows no cockpit.
+   */
   await signIn(page);
+  await gotoSurface(page, "Portfolio");
+  await expect(page.getByTestId("portfolio-page")).toBeVisible();
+  await expect(page.getByTestId("deteriorating")).toBeVisible();
+  await expect(page.getByTestId("improving")).toBeVisible();
+  await expect(page.getByTestId("stale")).toBeVisible();
+  await expect(page.getByTestId("support-list")).toBeVisible();
+
+  // A fund exists on the record (this journey may run on an empty firm), so every band draws.
+  const funds = (await (await request.get("/api/funds", { headers: { "x-wpos-dev-user": "sequoia@westpeek.ventures" } })).json()) as { funds: Array<{ id: string }> };
+  if (funds.funds.length === 0) {
+    const made = await request.post("/api/funds", { headers: { "x-wpos-dev-user": "sequoia@westpeek.ventures" }, data: { name: "West Peek Ventures Fund I", vintage_year: 2026 } });
+    expect(made.status()).toBe(201);
+  }
+  await page.reload();
   await gotoSurface(page, "Fund strategy");
-  await expect(page.getByTestId("cockpit-page")).toBeVisible();
-  await expect(page.getByTestId("cockpit-definitions")).toContainText("never as a blank");
-  await expect(page.getByTestId("cockpit-risks")).toBeVisible();
+  await expect(page.getByTestId("fund-strategy-page")).toBeVisible();
+  await expect(page.getByTestId("fund-door")).toBeVisible();
+  await expect(page.getByTestId("fund-plan-vs-reality")).toBeVisible();
+  await expect(page.getByTestId("cockpit-page"), "the cockpit must not come back to Fund strategy").toHaveCount(0);
+  await expect(page.getByTestId("composition"), "the composition bars must not come back to Fund strategy").toHaveCount(0);
+  await expect(page.getByTestId("deteriorating")).toHaveCount(0);
 });
 
 test("journey 9 — AI cost centre → provider/model spend → policy action", async ({ page }) => {
