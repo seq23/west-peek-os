@@ -455,7 +455,7 @@ function SummaryBlock({ meetingId, summary, turns, rollEveryMs, onRolled, compac
           {draft.stage_proposal && (
             <p className="notice small" data-testid="room-draft-stage">Proposed stage move to <b>{draft.stage_proposal.to_status}</b>: {draft.stage_proposal.rationale}. A proposal only — you click it on the After face.</p>
           )}
-          {summary.state !== "APPROVED" && <p className="muted small">A partner approves this on the record after the meeting. Nothing here is a record yet.</p>}
+          {summary.state !== "APPROVED" && <p className="muted small">Nothing here is a record yet — a partner approves this on the record after the meeting.</p>}
           {summary.detail && <p className="muted small">{summary.detail}</p>}
         </div>
       )}

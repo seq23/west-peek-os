@@ -560,7 +560,7 @@ export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: stri
         <div className="row">
           {draft && a?.latest_draft ? (
             <>
-              <button type="button" className="btn-strong btn-lg" disabled={busy === a.latest_draft.id} data-testid="draft-approve" onClick={() => void post(`/api/meeting-after-drafts/${a.latest_draft!.id}/approve`, {}, [200], "Approved and recorded", a.latest_draft!.id)}>
+              <button type="button" className="btn-strong" disabled={busy === a.latest_draft.id} data-testid="draft-approve" onClick={() => void post(`/api/meeting-after-drafts/${a.latest_draft!.id}/approve`, {}, [200], "Approved and recorded", a.latest_draft!.id)}>
                 Approve — make these the record
               </button>
               <button type="button" disabled={busy === a.latest_draft.id} data-testid="draft-discard" onClick={() => void post(`/api/meeting-after-drafts/${a.latest_draft!.id}/discard`, {}, [200], "Set aside", a.latest_draft!.id)}>

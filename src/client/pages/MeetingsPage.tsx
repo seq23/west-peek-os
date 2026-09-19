@@ -504,7 +504,7 @@ function WrittenRecord({ meetingId, m, onChanged }: { meetingId: string; m: Meet
         {/* Both gates are independent: this is refused, and the refusal recorded, unless the
             recording policy was activated through an approved receipt. */}
         <button type="button" data-testid="transcript-import" onClick={() => post(`/api/meetings/${meetingId}/transcript`, { source: "transcription export" }, 201, "Transcript import")}>
-          Record that a transcript exists elsewhere
+          A transcript exists elsewhere
         </button>
       </div>
       {message && <p className="notice small" data-testid="meeting-message" role="status">{message}</p>}
@@ -642,7 +642,7 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
                   {seating}
                   <QuestionChecklist meetingId={meetingId} />
                   <button type="button" className="btn-strong btn-lg" data-testid="live-finish" onClick={() => onFace("after")}>
-                    We are done — open the record
+                    Done — open the record
                   </button>
                 </>
               }
@@ -888,11 +888,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
           {past.map((m) => (
             <li key={m.id} className="deal-row deal-row-3" data-testid={`meeting-${m.id}`}>
               <div>
-                <div className="deal-name">
-                  <button type="button" className="link-button" data-testid={`meeting-open-${m.id}`} onClick={() => openRecord(m.id, "after")}>
-                    {m.title}
-                  </button>
-                </div>
+                <div className="deal-name">{m.title}</div>
                 <div className="deal-sub">
                   {meetingType(m.meeting_type)?.label ?? m.meeting_type} · {whenShort(m.occurred_at ?? m.scheduled_at)} ·{" "}
                   {(m.transcript_count ?? 0) > 0 ? "transcript on the record" : m.recording_enabled === 1 ? "recording switched on" : "notes only, not recorded"}
@@ -900,8 +896,10 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
               </div>
               <ReadinessLine parts={outputsInWords(m)} testid={`outputs-${m.id}`} />
               <div className="deal-actions">
-                <button type="button" data-testid={`meeting-after-${m.id}`} onClick={() => openRecord(m.id, "after")}>
-                  Open what came out of it
+                {/* The row's door. The title rides in the accessible name so a screen reader hears which
+                    meeting's record this opens, and a test can find the row by what it is about. */}
+                <button type="button" data-testid={`meeting-open-${m.id}`} onClick={() => openRecord(m.id, "after")}>
+                  Open what came out of it<span className="sr-only">: {m.title}</span>
                 </button>
                 {archiving !== m.id && (
                   <button
@@ -965,7 +963,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             aria-expanded={showArchived}
             onClick={() => setShowArchived((v) => !v)}
           >
-            {showArchived ? "Hide what was taken off the record" : "Show what was taken off the record"}
+            {showArchived ? "Hide what was taken off" : "Show what was taken off"}
           </button>
         </p>
         {showArchived && (
