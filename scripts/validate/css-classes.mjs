@@ -14,10 +14,18 @@
  * page sideways on the very surface held up as the layout standard.
  *
  * A misspelt class is the one front-end mistake with no symptom. This turns it into a build failure.
+ *
+ * THE OTHER DIRECTION, for classes declared ahead of their pages. The Deals section was built
+ * tokens-first (design/DEALS_SECTION_DESIGN.md §12.1): every class six tabs would need went into
+ * the stylesheet on one branch before any page wore one, so the tab branches could not disagree.
+ * This scan cannot see a rule nobody uses, so those classes are listed in
+ * `design/DEALS_SECTION_CLASSES.json` with the tab that owns each, and the register is checked
+ * here from both sides — see lib/declared-ahead.mjs. It hard-fails on an empty register.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { stripCssComments, stripTsComments } from "./lib/strip-comments.mjs";
+import { REGISTER, checkRegister, parseRegister, readRegister, registerSummary } from "./lib/declared-ahead.mjs";
 
 const CSS = "src/client/styles.css";
 const ROOT = "src/client";
@@ -117,7 +125,35 @@ function selfTest() {
     }
   }
   if (failed) process.exit(1);
-  console.log(`SELF-TEST PASSED: ${cases.length}/${cases.length} cases, including the two interpolation traps.`);
+
+  // The declared-ahead register, both directions. Fixture-driven: each case is a register, what
+  // the stylesheet defines, what the client emits, and how many problems that must produce.
+  const reg = (landed, classes) =>
+    parseRegister({ tabs: { meetings: { landed }, dealflow: { landed: false } }, classes }, "fixture");
+  const registerCases = [
+    ["a declared-ahead class with a rule, unworn, tab pending — allowed", reg(false, { masthead: ["meetings"] }), ["masthead"], [], 0],
+    ["a declared-ahead class with NO rule is caught even while its tab is pending", reg(false, { masthead: ["meetings"] }), [], [], 1],
+    ["the tab landed and the class is worn — allowed", reg(true, { masthead: ["meetings"] }), ["masthead"], ["masthead"], 0],
+    ["the tab landed and nothing wears the class — dead on arrival, caught", reg(true, { masthead: ["meetings"] }), ["masthead"], [], 1],
+    ["the class is worn but the register still says pending — stale register, caught", reg(false, { masthead: ["meetings"] }), ["masthead"], ["masthead"], 1],
+    ["shared class: one owner landed, one pending, unworn — allowed until the last owner lands", reg(true, { band: ["meetings", "dealflow"] }), ["band"], [], 0],
+    ["an empty register is a failure, not a pass", parseRegister({ tabs: { meetings: { landed: false } }, classes: {} }, "fixture"), [], [], 1],
+    ["an owner that is not a tab is a failure", reg(false, { masthead: ["portfolio"] }), ["masthead"], [], 1],
+    ["a class with no owner is a failure", reg(false, { masthead: [] }), ["masthead"], [], 1],
+  ];
+  let regFailed = 0;
+  for (const [why, r, defined, emitted, want] of registerCases) {
+    const got = checkRegister(r, new Set(defined), new Set(emitted)).length;
+    if (got !== want) {
+      console.error(`SELF-TEST FAILED (register: ${why}): expected ${want} problem(s), got ${got}`);
+      regFailed += 1;
+    }
+  }
+  if (regFailed) process.exit(1);
+  console.log(
+    `SELF-TEST PASSED: ${cases.length}/${cases.length} cases, including the two interpolation traps;` +
+      ` ${registerCases.length}/${registerCases.length} declared-ahead register cases.`,
+  );
 }
 
 /**
@@ -174,4 +210,22 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log(`CSS CLASS SCAN PASSED: every className in ${ROOT} has a rule in ${CSS}.`);
+
+// ── The other direction: classes declared ahead of their pages ─────────────────────────────────
+{
+  const register = readRegister();
+  const defined = definedClasses(stripCssComments(readFileSync(CSS, "utf8")));
+  const emitted = new Set();
+  for (const f of tsxFiles) for (const cls of usedClasses(stripTsComments(readFileSync(f, "utf8"))).keys()) emitted.add(cls);
+  const problems = checkRegister(register, defined, emitted);
+  if (problems.length > 0) {
+    console.error(`DECLARED-AHEAD REGISTER FAILED — ${REGISTER} and the product disagree:\n`);
+    for (const p of problems) console.error(`  ${p}`);
+    console.error("\nA class declared before its page is allowed to be unworn only while the tab that owns it");
+    console.error("is still marked pending. Flip `landed` in the PR that emits the classes; drop an entry (and");
+    console.error("its rule) when the page it was named for turned out not to need it.");
+    process.exit(1);
+  }
+  console.log(`DECLARED-AHEAD REGISTER PASSED: ${registerSummary(register, emitted)}.`);
+}
 selfTest();

@@ -34,6 +34,13 @@
  * is the shape both real bugs took. And it proves reachability, not appearance — whether the
  * resulting size is the right one is a design question this file has no opinion about.
  *
+ * DECLARED AHEAD. The Deals section put its classes into the stylesheet before its pages existed
+ * (design/DEALS_SECTION_DESIGN.md §12.1), so `.masthead h2` and `.band-head h3` were, for a while,
+ * exactly the shape of the bug above. A dead rule is tolerated here ONLY while
+ * `design/DEALS_SECTION_CLASSES.json` says the rule's class is still awaiting a tab that owns it;
+ * the moment every owner has landed, dead is dead. The register itself is checked by
+ * `validate:css-classes` — see lib/declared-ahead.mjs. The pass line says how many are waiting.
+ *
  * ZERO IS A FAILURE. A run that finds no heading-scale selectors, or no .tsx files, exits non-zero
  * rather than printing a pass, because a scan that examined nothing has proven nothing. That is the
  * defect class this repo keeps finding: "runs but inert".
@@ -42,6 +49,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { REGISTER, allOwnersLanded, parseRegister, pendingOwners, readRegister } from "./lib/declared-ahead.mjs";
 
 const CSS = "src/client/styles.css";
 const ROOT = "src/client";
@@ -126,11 +134,26 @@ export function emittedPairs(sources) {
   return pairs;
 }
 
-export function scan(css, sources) {
+/**
+ * `register` (optional) is a parsed declared-ahead register. A dead rule whose every branch names a
+ * registered class with an owner still to land is moved from `dead` to `awaiting`, each carrying
+ * the tabs it waits for. A malformed register tolerates nothing.
+ */
+export function scan(css, sources, register = null) {
   const rules = headingScaleRules(css);
   const pairs = emittedPairs(sources);
-  const dead = rules.filter((r) => !r.branches.some((b) => pairs.has(`${b.cls} ${b.tag}`)));
-  return { rules, dead };
+  const dead = [];
+  const awaiting = [];
+  for (const r of rules) {
+    if (r.branches.some((b) => pairs.has(`${b.cls} ${b.tag}`))) continue;
+    const tolerated =
+      register &&
+      register.problems.length === 0 &&
+      r.branches.every((b) => b.cls in register.classes && !allOwnersLanded(register, b.cls));
+    if (tolerated) awaiting.push({ ...r, tabs: [...new Set(r.branches.flatMap((b) => pendingOwners(register, b.cls)))] });
+    else dead.push(r);
+  }
+  return { rules, dead, awaiting };
 }
 
 function run() {
@@ -143,7 +166,7 @@ function run() {
     process.exit(1);
   }
 
-  const { rules, dead } = scan(css, files.map((f) => readFileSync(f, "utf8")));
+  const { rules, dead, awaiting } = scan(css, files.map((f) => readFileSync(f, "utf8")), readRegister());
 
   if (rules.length === 0) {
     console.error(`HEADING SCALE SCAN FAILED — found 0 heading-scale selectors in ${CSS}.`);
@@ -165,9 +188,14 @@ function run() {
     process.exit(1);
   }
 
+  const waiting =
+    awaiting.length === 0
+      ? ""
+      : ` ${awaiting.length} declared ahead in ${REGISTER} and not yet reaching one, awaiting ` +
+        `${[...new Set(awaiting.flatMap((r) => r.tabs))].join(", ")}: ${awaiting.map((r) => r.selector).join("; ")}.`;
   console.log(
-    `HEADING SCALE SCAN PASSED: ${rules.length} heading-scale selectors in ${CSS}, every one of them` +
-      ` reaching a heading the client emits (${files.length} .tsx files examined).`,
+    `HEADING SCALE SCAN PASSED: ${rules.length} heading-scale selectors in ${CSS}, ${rules.length - awaiting.length} of them` +
+      ` reaching a heading the client emits (${files.length} .tsx files examined).${waiting}`,
   );
 }
 
@@ -232,9 +260,67 @@ function selfTest() {
     },
   ];
 
+  // Declared ahead: the register decides whether a dead rule is waiting or dead.
+  const reg = (landed) =>
+    parseRegister({ tabs: { meetings: { landed }, dealflow: { landed: false } }, classes: { masthead: ["meetings"], "band-head": ["meetings", "dealflow"] } }, "fixture");
+  cases.push(
+    {
+      name: "a declared-ahead heading rule is tolerated while its tab is pending",
+      css: ".masthead h2 { font-size: var(--text-2xl) }",
+      tsx: ['<div className="card"><h3>Not a masthead</h3></div>'],
+      register: reg(false),
+      dead: 0,
+      awaiting: 1,
+    },
+    {
+      name: "the same rule is dead once its tab has landed without emitting it",
+      css: ".masthead h2 { font-size: var(--text-2xl) }",
+      tsx: ['<div className="card"><h3>Not a masthead</h3></div>'],
+      register: reg(true),
+      dead: 1,
+      awaiting: 0,
+    },
+    {
+      name: "a shared class waits until its LAST owner lands",
+      css: ".band-head h3 { font-size: var(--text-xl) }",
+      tsx: ['<div className="card"><h3>Not a band</h3></div>'],
+      register: reg(true),
+      dead: 0,
+      awaiting: 1,
+    },
+    {
+      name: "a rule on a class the register does not know is dead regardless",
+      css: ".home-masthead h1 { font-size: var(--text-2xl) }",
+      tsx: ['<header className="home-masthead"><h2>Good evening</h2></header>'],
+      register: reg(false),
+      dead: 1,
+      awaiting: 0,
+    },
+    {
+      name: "a malformed register tolerates nothing",
+      css: ".masthead h2 { font-size: var(--text-2xl) }",
+      tsx: ['<div className="card"><h3>Not a masthead</h3></div>'],
+      register: parseRegister({ tabs: {}, classes: {} }, "fixture"),
+      dead: 1,
+      awaiting: 0,
+    },
+    {
+      name: "a declared-ahead rule that DOES reach its heading is simply live",
+      css: ".masthead h2 { font-size: var(--text-2xl) }",
+      tsx: ['<header className="masthead"><h2>Two briefs are ready</h2></header>'],
+      register: reg(false),
+      dead: 0,
+      awaiting: 0,
+    },
+  );
+
   let failed = 0;
   for (const c of cases) {
-    const { rules, dead } = scan(c.css, c.tsx);
+    const { rules, dead, awaiting } = scan(c.css, c.tsx, c.register ?? null);
+    if (c.awaiting !== undefined && awaiting.length !== c.awaiting) {
+      failed += 1;
+      console.error(`SELF-TEST FAILED: ${c.name} — expected ${c.awaiting} awaiting, got ${awaiting.length}`);
+    }
     const okDead = dead.length === c.dead;
     const okRules = c.rules === undefined || rules.length === c.rules;
     if (!okDead || !okRules) {
@@ -250,7 +336,7 @@ function selfTest() {
   }
 
   if (failed > 0) process.exit(1);
-  console.log(`SELF-TEST PASSED: ${cases.length}/${cases.length} cases, including both rules that actually shipped dead.`);
+  console.log(`SELF-TEST PASSED: ${cases.length}/${cases.length} cases, including both rules that actually shipped dead and the declared-ahead register.`);
 }
 
 if (process.argv.includes("--self-test")) selfTest();
