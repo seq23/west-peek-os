@@ -252,7 +252,8 @@ export function parseRoomReply(raw: string): RoomReply | null {
 
 /** "Wyatt, pull the comparables" → { name: "Wyatt", rest: "pull the comparables" }. */
 export function addressee(question: string): { name: string | null; rest: string } {
-  const m = question.match(/^\s*([A-Z][a-z]+)\s*[,:—-]\s*(.+)$/s);
+  // Any case: a spoken "wyatt, …" arrives however the transcriber cased it.
+  const m = question.match(/^\s*([A-Za-z]+)\s*[,:—-]\s*(.+)$/s);
   if (!m) return { name: null, rest: question.trim() };
   const onRoster = AI_EMPLOYEE_ROSTER.find((e) => e.name.toLowerCase() === m[1]!.toLowerCase());
   return onRoster ? { name: onRoster.name, rest: m[2]!.trim() } : { name: null, rest: question.trim() };
