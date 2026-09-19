@@ -218,6 +218,11 @@ export function SetupPage({ me }: { me: MeResponse }): JSX.Element {
   );
   const existingJobs = new Map((jobs.data?.jobs ?? []).map((j) => [j.job_key, j.status]));
   const jobPlan = recommendJobs(activeNames, existingJobs, aiProviderConfigured);
+  // A blocker is a claim about live state. Until the roster, the providers and the existing jobs
+  // have all arrived, "No AI provider" would be a claim about data the page has not read — it
+  // flashed as Blocked and then vanished, and p27 caught the flash. Nothing is proposed before
+  // every input is in.
+  const jobPlanLoaded = Boolean(lounge.data && providers.data && jobs.data);
   const activeCount = lounge.data?.active_count ?? 0;
   const slotsFree = cap > 0 && activeCount < cap;
 
@@ -316,8 +321,13 @@ export function SetupPage({ me }: { me: MeResponse }): JSX.Element {
             starts running on its own — switching a job on is a separate, deliberate act on{" "}
             <strong>Work → Scheduled Work</strong>.
           </p>
-          <ul className="card-list" data-testid="setup-jobs">
-            {jobPlan.map((j) => (
+          {!jobPlanLoaded && (
+            <p className="muted small" data-testid="setup-jobs-loading">
+              Reading the roster, the AI providers and the existing jobs…
+            </p>
+          )}
+          <ul className="card-list" data-testid="setup-jobs" data-loaded={jobPlanLoaded ? "true" : "false"}>
+            {jobPlanLoaded && jobPlan.map((j) => (
               <li key={j.job_key} className="card" data-testid={`setup-job-${j.job_key}`}>
                 <p>
                   <strong>{j.name}</strong>{" "}
