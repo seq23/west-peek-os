@@ -1,6 +1,6 @@
 import { AllocationRing } from "./AllocationRing";
 import type { RingSlice } from "@shared/fund/allocation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
@@ -20,7 +20,12 @@ import { portraitAlt, portraitFor } from "../lib/employeePortraits";
  *
  * TIER 3. The panel takes only a meeting id and reads one route, so `#/room/<id>` renders it alone
  * without the app shell — the shape a Meet Add-on side panel hosts later (App.tsx, `RoomStandalone`).
- * Functional and on-token; Phase D redesigns the visuals.
+ *
+ * PHASE D (design/DEALS_SECTION_DESIGN.md §3, artboards C2 and D). The recording is ONE line — a
+ * switch, the live dot, the status and its consent sentence, Stop — and the room is two columns:
+ * the draft, the ask box and the artifacts on the left; whatever the page puts beside it on the
+ * right (`aside`: who is in the room, the question checklist, the way out). Standalone at 360px it
+ * is one column and the seats are chips. Every class is from the stylesheet's declared-ahead block.
  */
 
 interface CaptureReadiness {
@@ -101,7 +106,7 @@ function parseBody(raw: string): Record<string, unknown> {
   }
 }
 
-export function RoomPanel({ meetingId, standalone = false }: { meetingId: string; standalone?: boolean }): JSX.Element {
+export function RoomPanel({ meetingId, standalone = false, aside }: { meetingId: string; standalone?: boolean; aside?: ReactNode }): JSX.Element {
   const room = useApi<RoomState>(`/api/meetings/${meetingId}/room`, [meetingId]);
   const [message, setMessage] = useState<string | null>(null);
   const reload = room.reload;
@@ -114,6 +119,13 @@ export function RoomPanel({ meetingId, standalone = false }: { meetingId: string
   }, [reload]);
 
   const state = room.data;
+  const left = (
+    <>
+      <SummaryBlock meetingId={meetingId} summary={state?.summary ?? null} turns={state?.capture.turns ?? 0} rollEveryMs={state?.roll_every_ms ?? 300_000} onRolled={reload} compact={standalone} />
+      <AskBox meetingId={meetingId} hostName={state?.host?.name ?? "Walter"} revoked={state?.meeting.ai_access_state === "REVOKED"} onAsked={reload} onMessage={setMessage} compact={standalone} />
+      <ArtifactStream artifacts={state?.artifacts ?? []} tasks={state?.tasks ?? []} loading={room.loading} />
+    </>
+  );
   return (
     <section className={standalone ? "room room-standalone" : "room"} data-testid={`room-${meetingId}`} aria-label="The live room">
       {standalone && state && (
@@ -125,13 +137,17 @@ export function RoomPanel({ meetingId, standalone = false }: { meetingId: string
 
       <RecordingLine meetingId={meetingId} capture={state?.capture ?? null} onChange={reload} />
 
-      <SummaryBlock meetingId={meetingId} summary={state?.summary ?? null} turns={state?.capture.turns ?? 0} rollEveryMs={state?.roll_every_ms ?? 300_000} onRolled={reload} />
-
-      <AskBox meetingId={meetingId} hostName={state?.host?.name ?? "Walter"} revoked={state?.meeting.ai_access_state === "REVOKED"} onAsked={reload} onMessage={setMessage} />
-
-      <ArtifactStream artifacts={state?.artifacts ?? []} tasks={state?.tasks ?? []} loading={room.loading} />
-
-      <SeatedRow seated={state?.seated ?? []} tasks={state?.tasks ?? []} />
+      {standalone || !aside ? (
+        <div className="stack">
+          {left}
+          <SeatedRow seated={state?.seated ?? []} tasks={state?.tasks ?? []} />
+        </div>
+      ) : (
+        <div className="room-grid">
+          <div className="stack">{left}</div>
+          <div className="stack">{aside}</div>
+        </div>
+      )}
 
       {message && <p className="notice small" data-testid="room-message" role="status">{message}</p>}
     </section>
@@ -269,32 +285,51 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
       : state.blockers.length > 0 && !state.can_capture
         ? `Not recording — ${state.blockers[0]}`
         : `Not recording · ${state.turns} turns on the record`;
+  // The sentence under the status: the consent on file, or the rule, or the last thing that went wrong.
+  const failed = message !== null && /was not written down/.test(message);
+  const consentLine = recording && consentGranted
+    ? "Their yes is on the file for this meeting and can be taken back at any point."
+    : `${gateWords.split(".")[0]}.`;
 
   return (
-    <div className="room-line" data-testid={`capture-${meetingId}`}>
-      {/* role=status: a screen reader hears "Recording" / "Not recording — why" when it changes,
-          without the line stealing focus. The text IS the cue; the tint is decoration. */}
-      <div className="room-status" data-testid="room-status" title={gateWords} role="status" aria-live="polite">
-        <span className={recording ? "capture-live" : "muted small"}>{status}</span>
-      </div>
-      <div className="form-row">
+    <div data-testid={`capture-${meetingId}`}>
+      {/*
+        THE SWITCH, EIGHT STATES (§3): off · on · focus · disabled with its reason in the line ·
+        loading "Reading the room…" · error "Minute N was not written down" · success (on, consent on
+        file). role=switch + aria-checked; the 44px hit area is the stylesheet's ::before inset. Off,
+        it opens the prompt — consent is what the prompt collects, so a switch gated on consent could
+        never be pressed to ask for it. On, it stops. It is never offered as on-and-inert: the two
+        gates the prompt cannot open (a transcription service, the Managing Partner's policy) disable
+        it, and the line says which.
+      */}
+      <div className="rec-line">
+        <button
+          type="button"
+          className="switch"
+          role="switch"
+          aria-checked={recording}
+          aria-label="Recording"
+          data-testid="capture-start"
+          title={gateWords}
+          aria-busy={!state}
+          data-state={failed ? "error" : recording && consentGranted ? "success" : undefined}
+          disabled={!recording && (!state?.transcription_available || !state?.recording_policy_active || prompting)}
+          onClick={recording ? stop : () => setPrompting(true)}
+        >
+          <i aria-hidden="true" />
+        </button>
+        <span className="live-dot" aria-hidden="true" hidden={!recording} />
+        {/* role=status: a screen reader hears "Recording" / "Not recording — why" when it changes,
+            without the line stealing focus. The text IS the cue; the tint is decoration. */}
+        <div className="rec-text" data-testid="room-status" role="status" aria-live="polite">
+          <strong className={recording ? "capture-live" : undefined}>{status}</strong>
+          <span>{consentLine}</span>
+        </div>
         {recording ? (
           <button type="button" data-testid="capture-stop" onClick={stop}>Stop</button>
         ) : (
-          /* Open only when the two things the prompt cannot supply are true: a transcription
-             service, and the Managing Partner's policy. Consent is what the prompt collects. */
-          <button
-            type="button"
-            className="btn-strong"
-            data-testid="capture-start"
-            title={gateWords}
-            disabled={!state?.transcription_available || !state?.recording_policy_active || prompting || recording}
-            onClick={() => setPrompting(true)}
-          >
-            Start recording
-          </button>
+          <span aria-hidden="true" />
         )}
-        <span className="muted small">{gateWords.split(".")[0]}.</span>
       </div>
 
       {state && state.blockers.length > 0 && (
@@ -358,7 +393,7 @@ interface DraftJson {
  * there is something new on the record, or on demand. Idempotent server-side (Phase B), so the
  * timer costs a run only when the transcript changed.
  */
-function SummaryBlock({ meetingId, summary, turns, rollEveryMs, onRolled }: { meetingId: string; summary: Draft | null; turns: number; rollEveryMs: number; onRolled: () => void }): JSX.Element {
+function SummaryBlock({ meetingId, summary, turns, rollEveryMs, onRolled, compact }: { meetingId: string; summary: Draft | null; turns: number; rollEveryMs: number; onRolled: () => void; compact: boolean }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const lastTurns = useRef<number>(-1);
@@ -384,49 +419,49 @@ function SummaryBlock({ meetingId, summary, turns, rollEveryMs, onRolled }: { me
   }, [turns, rollEveryMs, roll]);
 
   const draft: DraftJson = summary ? parseBody(summary.draft_json) : {};
-  const counts = [draft.decisions?.length ?? 0, draft.commitments?.length ?? 0, draft.open_questions?.length ?? 0];
+  const minutes = Math.max(1, Math.round(rollEveryMs / 60_000));
   return (
-    <div className="room-summary" data-testid="room-summary">
-      <div className="home-section-head">
-        <h4>What has been said, decided, promised, and left open</h4>
-        <button type="button" className="link-button" data-testid="room-roll" disabled={busy} onClick={() => void roll()}>
-          {busy ? "Writing…" : "Refresh the draft now"}
-        </button>
+    <section className="card" data-testid="room-summary">
+      <div className="panel-head">
+        <h3>{compact ? "Said, decided, promised, left open" : "What has been said, decided, promised, and left open"}</h3>
+        <span className="muted small">
+          {summary && <><span className="badge" data-testid="room-summary-state">{summary.state === "APPROVED" ? "APPROVED" : "DRAFT"}</span> by {summary.drafted_by} · </>}
+          rolls every {minutes} minute{minutes === 1 ? "" : "s"} ·{" "}
+          <button type="button" className="link-button" data-testid="room-roll" disabled={busy} onClick={() => void roll()}>
+            {busy ? "Writing…" : "refresh now"}
+          </button>
+        </span>
       </div>
       {!summary ? (
         <p className="state-empty" data-testid="room-summary-empty">
-          {turns > 0 ? "The draft is written every five minutes from what has been said. Nothing yet." : "Nothing is on the record yet. Once the room is recording, the draft writes itself as they talk."}
+          {turns > 0 ? `The draft is written every ${minutes} minutes from what has been said. Nothing yet.` : "Nothing is on the record yet. Once the room is recording, the draft writes itself as they talk."}
         </p>
       ) : (
-        <div className="room-draft">
-          <p className="muted small">
-            <span className="help-tag help-tag-warn" data-testid="room-summary-state">{summary.state === "APPROVED" ? "APPROVED" : "DRAFT"}</span>{" "}
-            by {summary.drafted_by} · {counts[0]} decided · {counts[1]} promised · {counts[2]} open
-            {summary.state !== "APPROVED" && " · a partner approves this on the record after the meeting"}
-          </p>
+        <div className="stack transcript">
           {(draft.decisions ?? []).length > 0 && (
-            <ul className="card-list small" data-testid="room-draft-decisions">
-              {draft.decisions!.map((d, i) => <li key={i}><strong>Decided:</strong> {d.decision_text}</li>)}
+            <ul className="card-list" data-testid="room-draft-decisions">
+              {draft.decisions!.map((d, i) => <li key={i}><b>Decided:</b> {d.decision_text}</li>)}
             </ul>
           )}
           {(draft.commitments ?? []).length > 0 && (
-            <ul className="card-list small" data-testid="room-draft-commitments">
-              {draft.commitments!.map((c, i) => <li key={i}><strong>{c.owner_side === "FIRM" ? "We owe:" : "They owe:"}</strong> {c.commitment_text}{c.owed_by ? ` — ${c.owed_by}` : ""}</li>)}
+            <ul className="card-list" data-testid="room-draft-commitments">
+              {draft.commitments!.map((c, i) => <li key={i}><b>{c.owner_side === "FIRM" ? "We owe:" : "They owe:"}</b> {c.commitment_text}{c.owed_by ? ` — ${c.owed_by}` : ""}</li>)}
             </ul>
           )}
           {(draft.open_questions ?? []).length > 0 && (
-            <ul className="card-list small" data-testid="room-draft-questions">
-              {draft.open_questions!.map((q, i) => <li key={i}><strong>Open:</strong> {q.question}{q.owed_by ? ` — ${q.owed_by}` : ""}</li>)}
+            <ul className="card-list" data-testid="room-draft-questions">
+              {draft.open_questions!.map((q, i) => <li key={i}><b>Open:</b> {q.question}{q.owed_by ? ` — ${q.owed_by}` : ""}</li>)}
             </ul>
           )}
           {draft.stage_proposal && (
-            <p className="notice small" data-testid="room-draft-stage">Proposed stage move to <strong>{draft.stage_proposal.to_status}</strong>: {draft.stage_proposal.rationale}. A proposal only.</p>
+            <p className="notice small" data-testid="room-draft-stage">Proposed stage move to <b>{draft.stage_proposal.to_status}</b>: {draft.stage_proposal.rationale}. A proposal only — you click it on the After face.</p>
           )}
+          {summary.state !== "APPROVED" && <p className="muted small">A partner approves this on the record after the meeting. Nothing here is a record yet.</p>}
           {summary.detail && <p className="muted small">{summary.detail}</p>}
         </div>
       )}
       {note && <p className="muted small" data-testid="room-roll-note">{note}</p>}
-    </div>
+    </section>
   );
 }
 
@@ -445,7 +480,7 @@ function SummaryBlock({ meetingId, summary, turns, rollEveryMs, onRolled }: { me
  * disabled — a disabled control drops keyboard focus to the page, and a partner mid-call would have
  * to find the box again for the next question.
  */
-function AskBox({ meetingId, hostName, revoked, onAsked, onMessage }: { meetingId: string; hostName: string; revoked: boolean; onAsked: () => void; onMessage: (m: string | null) => void }): JSX.Element {
+function AskBox({ meetingId, hostName, revoked, onAsked, onMessage, compact }: { meetingId: string; hostName: string; revoked: boolean; onAsked: () => void; onMessage: (m: string | null) => void; compact: boolean }): JSX.Element {
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [holding, setHolding] = useState(false);
@@ -528,58 +563,66 @@ function AskBox({ meetingId, hostName, revoked, onAsked, onMessage }: { meetingI
     if (cur.rec.state !== "inactive") cur.rec.stop();
   }
 
+  const hint = revoked
+    ? "AI access to this room is revoked, so nobody can answer here until a person restores it."
+    : "Two characters or more. Answers are saved on the meeting. Nothing said here becomes a record until you approve the draft.";
   return (
-    <form
-      className="room-ask"
-      data-testid="room-ask"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (question.trim().length >= 2 && !busy) void post({ question: question.trim() });
-      }}
-    >
-      <label className="room-ask-label" htmlFor={`room-ask-input-${meetingId}`}>Ask the room</label>
-      <input
-        id={`room-ask-input-${meetingId}`}
-        ref={inputRef}
-        data-testid="room-ask-input"
-        value={question}
-        placeholder={`Ask ${hostName} — or “Wyatt, …” to address someone`}
-        readOnly={busy}
-        disabled={revoked}
-        aria-busy={busy}
-        aria-describedby={`room-ask-hint-${meetingId}`}
-        onChange={(e) => setQuestion(e.target.value)}
-      />
-      <button type="submit" className="btn-strong" disabled={busy || revoked || question.trim().length < 2} data-testid="room-ask-send">
-        {busy ? "Asking…" : "Ask"}
-      </button>
-      <button
-        type="button"
-        className={holding ? "room-ptt room-ptt-live" : "room-ptt"}
-        data-testid="room-ptt"
-        aria-pressed={holding}
-        aria-label={holding ? "Listening. Release, or press Enter, to stop" : "Hold to talk to the room. Hold Space, or press Enter to start and again to stop"}
-        title="Hold to talk. The room hears only while this is held; there is no wake phrase. Keyboard: hold Space, or press Enter to start and again to stop."
-        disabled={busy || revoked}
-        onPointerDown={(e) => { e.preventDefault(); void holdStart(); }}
-        onPointerUp={holdEnd}
-        onPointerLeave={() => { if (holding) holdEnd(); }}
-        onPointerCancel={holdEnd}
-        onKeyDown={(e) => {
-          if (e.repeat) return;
-          if (e.key === " ") { e.preventDefault(); void holdStart(); }
-          if (e.key === "Enter") { e.preventDefault(); if (holding) holdEnd(); else void holdStart(); }
+    <section className="card" data-testid="room-ask-card">
+      <div className="panel-head">
+        <h3>Ask the room</h3>
+        {!compact && <span className="muted small">answers are saved on the meeting; nothing becomes a record until you approve the draft</span>}
+      </div>
+      <form
+        className="ask"
+        data-testid="room-ask"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (question.trim().length >= 2 && !busy) void post({ question: question.trim() });
         }}
-        onKeyUp={(e) => { if (e.key === " ") { e.preventDefault(); holdEnd(); } }}
       >
-        {holding ? "Listening…" : "Hold to talk"}
-      </button>
-      <span className="muted small" id={`room-ask-hint-${meetingId}`}>
-        {revoked
-          ? "AI access to this room is revoked, so nobody can answer here until a person restores it."
-          : "Two characters or more. Answers are saved on the meeting. Nothing said here becomes a record until you approve the draft."}
-      </span>
-    </form>
+        <label className="sr-only" htmlFor={`room-ask-input-${meetingId}`}>Ask the room</label>
+        <input
+          id={`room-ask-input-${meetingId}`}
+          ref={inputRef}
+          data-testid="room-ask-input"
+          value={question}
+          placeholder={compact ? `Ask ${hostName} — or “Wyatt, …”` : `Ask ${hostName} — or “Wyatt, …” to address someone`}
+          readOnly={busy}
+          disabled={revoked}
+          aria-busy={busy}
+          aria-describedby={`room-ask-hint-${meetingId}`}
+          onChange={(e) => setQuestion(e.target.value)}
+        />
+        <button type="submit" className="btn-strong" disabled={busy || revoked || question.trim().length < 2} data-testid="room-ask-send">
+          {busy ? "Asking…" : "Ask"}
+        </button>
+        <button
+          type="button"
+          className={compact ? "ptt btn-lg" : "ptt"}
+          data-testid="room-ptt"
+          aria-pressed={holding}
+          aria-busy={busy}
+          data-state={revoked ? "error" : undefined}
+          aria-label={holding ? "Listening. Release, or press Enter, to stop" : "Hold to talk to the room. Hold Space, or press Enter to start and again to stop"}
+          title="Hold to talk. The room hears only while this is held; there is no wake phrase. Keyboard: hold Space, or press Enter to start and again to stop."
+          disabled={busy || revoked}
+          onPointerDown={(e) => { e.preventDefault(); void holdStart(); }}
+          onPointerUp={holdEnd}
+          onPointerLeave={() => { if (holding) holdEnd(); }}
+          onPointerCancel={holdEnd}
+          onKeyDown={(e) => {
+            if (e.repeat) return;
+            if (e.key === " ") { e.preventDefault(); void holdStart(); }
+            if (e.key === "Enter") { e.preventDefault(); if (holding) holdEnd(); else void holdStart(); }
+          }}
+          onKeyUp={(e) => { if (e.key === " ") { e.preventDefault(); holdEnd(); } }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
+          {holding ? (compact ? "Listening… release to send" : "Listening…") : "Hold to talk"}
+        </button>
+      </form>
+      <p className={revoked ? "field-help err" : "field-help"} id={`room-ask-hint-${meetingId}`}>{hint}</p>
+    </section>
   );
 }
 
@@ -588,24 +631,47 @@ function AskBox({ meetingId, hostName, revoked, onAsked, onMessage }: { meetingI
 function ArtifactStream({ artifacts, tasks, loading }: { artifacts: Artifact[]; tasks: Task[]; loading: boolean }): JSX.Element {
   const taskById = new Map(tasks.map((t) => [t.work_card_id, t]));
   return (
-    <ul className="room-stream" data-testid="room-artifacts">
-      {artifacts.length === 0 && (
-        <li className="state-empty" data-testid="room-artifacts-empty">
-          {loading ? "Reading the room…" : "Nothing asked yet. What the room answers, builds or hands to an employee appears here and stays on the meeting."}
-        </li>
-      )}
-      {artifacts.map((a) => (
-        <li key={a.id} className={`room-block room-block-${a.kind}`} data-testid={`room-artifact-${a.id}`} data-kind={a.kind}>
-          {a.asked_text && (
-            <p className="room-asked">
-              <span className="turn-who">{a.asked_via === "VOICE" ? "You said" : a.asked_via === "SYSTEM" ? "Returned" : "You asked"}</span> {a.asked_text}
-            </p>
-          )}
-          <ArtifactBody artifact={a} task={a.work_card_id ? taskById.get(a.work_card_id) ?? null : null} />
-        </li>
-      ))}
-    </ul>
+    <section>
+      <div className="section-head">
+        <h4>What the room has handed back</h4>
+        <span className="muted small">newest first · stays on the meeting</span>
+      </div>
+      <ul className="card-list stack" data-testid="room-artifacts">
+        {artifacts.length === 0 && (
+          <li className="state-empty" data-testid="room-artifacts-empty">
+            {loading ? "Reading the room…" : "Nothing asked yet. What the room answers, builds or hands to an employee appears here and stays on the meeting."}
+          </li>
+        )}
+        {artifacts.map((a) => (
+          <li key={a.id} className="artifact" data-testid={`room-artifact-${a.id}`} data-kind={a.kind}>
+            <div className="artifact-kind">
+              <span>{kindInWords(a.kind)}</span>
+              <span className="muted">
+                {a.asked_via === "VOICE" ? "You said" : a.asked_via === "SYSTEM" ? "Returned" : "You asked"} · {timeOfDay(a.created_at)}
+                {a.asked_text ? ` · ${a.asked_text}` : ""}
+              </span>
+            </div>
+            <ArtifactBody artifact={a} task={a.work_card_id ? taskById.get(a.work_card_id) ?? null : null} />
+          </li>
+        ))}
+      </ul>
+    </section>
   );
+}
+
+function kindInWords(kind: Artifact["kind"]): string {
+  switch (kind) {
+    case "answer": return "Answer";
+    case "table": return "Table";
+    case "chart": return "Chart";
+    case "packet": return "Packet";
+    case "summary": return "Summary";
+  }
+}
+
+function timeOfDay(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
 function ArtifactBody({ artifact, task }: { artifact: Artifact; task: Task | null }): JSX.Element {
@@ -615,10 +681,9 @@ function ArtifactBody({ artifact, task }: { artifact: Artifact; task: Task | nul
 
   if (state === "REFUSED" || state === "FAILED") {
     return (
-      <div className="turn turn-blocked">
-        <span className="turn-who">{who ?? "The room"}</span>
-        <span className="turn-body">{artifact.title}</span>
-        <span className="turn-detail" data-testid={`room-artifact-detail-${artifact.id}`}>{String(body.detail ?? "")}</span>
+      <div className="stack">
+        <strong>{who ?? "The room"} · {artifact.title}</strong>
+        <span className="field-help err" data-testid={`room-artifact-detail-${artifact.id}`}>{String(body.detail ?? "")}</span>
       </div>
     );
   }
@@ -630,7 +695,7 @@ function ArtifactBody({ artifact, task }: { artifact: Artifact; task: Task | nul
     const cites = Array.isArray(body.cites) ? (body.cites as string[]) : [];
     return (
       <div>
-        <p className="room-block-title"><span className="turn-who">{who ?? "The record"}</span> {artifact.title}</p>
+        <strong>{artifact.title}</strong>
         {chart && rows.length > 0 && <RoomChart kind={chart} rows={rows} columns={columns} title={artifact.title} />}
         {rows.length === 0 ? (
           <p className="muted small">{String(body.note ?? "The record holds nothing matching that.")}</p>
@@ -660,10 +725,10 @@ function ArtifactBody({ artifact, task }: { artifact: Artifact; task: Task | nul
     const chip = task?.chip ?? (state === "DONE" ? "done" : "working");
     return (
       <div>
-        <p className="room-block-title">
-          <span className="turn-who">{String(body.employee ?? who ?? "An employee")}</span> {artifact.title}{" "}
+        <div className="row">
+          <span className="grow"><strong>{String(body.employee ?? who ?? "An employee")}</strong> · {artifact.title}</span>
           <TaskChip chip={chip} />
-        </p>
+        </div>
         {typeof body.brief === "string" && state !== "DONE" && <p className="muted small">{body.brief}</p>}
         {task?.chip === "needs you" && task.block_needed && <p className="notice small">{task.block_needed}</p>}
         {typeof body.finding === "string" && state === "DONE" && <p className="room-finding">{body.finding}</p>}
@@ -673,10 +738,10 @@ function ArtifactBody({ artifact, task }: { artifact: Artifact; task: Task | nul
   }
 
   return (
-    <div className="turn turn-ai">
-      <span className="turn-who">{who ?? "The room"}</span>
-      <span className="turn-body">{typeof body.text === "string" ? body.text : artifact.title}</span>
-    </div>
+    <p>
+      {who && <strong>{who} · </strong>}
+      {typeof body.text === "string" ? body.text : artifact.title}
+    </p>
   );
 }
 
@@ -686,9 +751,9 @@ function fmt(v: unknown): string {
   return String(v);
 }
 
-function TaskChip({ chip }: { chip: Task["chip"] }): JSX.Element {
-  const cls = chip === "done" ? "help-tag help-tag-good" : chip === "needs you" ? "help-tag help-tag-warn" : "help-tag help-tag-muted";
-  return <span className={cls} data-testid={`room-task-chip-${chip.replace(" ", "-")}`}>{chip}</span>;
+/** A chip per task: `working` is the live one, in words as well as tint. */
+function TaskChip({ chip, label }: { chip: Task["chip"]; label?: string }): JSX.Element {
+  return <span className={chip === "working" ? "task-chip task-chip-live" : "task-chip"} data-testid={`room-task-chip-${chip.replace(" ", "-")}`}>{label ?? chip}</span>;
 }
 
 // ── 5 · Charts: inline SVG on the token palette, bar / line / pie ─────────────────────────────
@@ -781,22 +846,24 @@ export function RoomChart({ kind, rows, columns, title }: { kind: string; rows: 
 
 function SeatedRow({ seated, tasks }: { seated: RoomState["seated"]; tasks: Task[] }): JSX.Element {
   return (
-    <div className="room-seated" data-testid="room-seated">
+    <div className="stack" data-testid="room-seated">
+      <p className="eyebrow">Seated</p>
       {seated.length === 0 ? (
         <p className="muted small" data-testid="room-seated-nobody">Nobody is seated yet. Address someone by name — “Wyatt, …” — and they join the room.</p>
       ) : (
-        seated.map((s) => {
-          const mine = tasks.filter((t) => t.owner_name === s.name);
-          return (
-            <span key={s.ai_employee_id} className="help-tag help-tag-good" data-testid={`room-seat-${s.name}`}>
-              {portraitFor(s.name) && (
-                <img className="employee-portrait" src={portraitFor(s.name)!} alt={portraitAlt(s.name, s.role)} width={22} height={22} loading="lazy" onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
-              )}
-              {s.name} · {s.role}
-              {mine.map((t) => <TaskChip key={t.work_card_id} chip={t.chip} />)}
-            </span>
-          );
-        })
+        <div className="chips">
+          {seated.map((s) => {
+            const mine = tasks.filter((t) => t.owner_name === s.name);
+            return (
+              <span key={s.ai_employee_id} className={mine.some((t) => t.chip === "working") ? "task-chip task-chip-live" : "task-chip"} data-testid={`room-seat-${s.name}`}>
+                {portraitFor(s.name) && (
+                  <img className="employee-portrait" src={portraitFor(s.name)!} alt={portraitAlt(s.name, s.role)} width={22} height={22} loading="lazy" onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                )}
+                {s.name} · {mine.length > 0 ? mine.map((t) => t.chip).join(", ") : s.role}
+              </span>
+            );
+          })}
+        </div>
       )}
     </div>
   );
