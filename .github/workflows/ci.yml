@@ -450,7 +450,14 @@ jobs:
       #
       # `npm run e2e` is deliberately named twice below rather than looped: `validate:green-means-
       # something` counts the invocations in this job and hard-fails if the suite is run only once.
-      - name: Playwright journeys — twice, from a clean database, both must pass
+      #
+      # ONCE ON A PULL REQUEST, TWICE ON MAIN. Owner, 19 Sep 2026: "what is taking so long" — every
+      # PR paid ~15 minutes of Playwright twice, then paid it again on the merge commit. The second
+      # clean pass is the claim that matters for what SHIPS, and what ships is main: a PR run is a
+      # preview of that claim, and the merge-commit run (push to main) and any dispatch still make it
+      # in full. `validate:green-means-something` pins this shape: the second pass may be skipped
+      # only on `pull_request`, never on push or dispatch, and never on the first pass's failure.
+      - name: Playwright journeys — twice from a clean database on main, once on a pull request
         run: |
           set -uo pipefail
           log="$RUNNER_TEMP/e2e-1.log"
@@ -463,4 +470,8 @@ jobs:
               exit 1
             fi
           fi
-          npm run e2e
+          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+            echo "::notice::second clean pass skipped on a pull request — the merge commit on main runs it"
+          else
+            npm run e2e
+          fi
