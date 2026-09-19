@@ -20,9 +20,13 @@ export const VIEWPORTS = [
   { name: "414 — the large-phone class", width: 414, height: 896 },
   { name: "768 — portrait tablet, where the rail folds away", width: 768, height: 1024 },
   { name: "1280 — the laptop the desk is read on", width: 1280, height: 900 },
-] as const;
+] as const satisfies readonly Viewport[];
 
-export type Viewport = (typeof VIEWPORTS)[number];
+export interface Viewport {
+  name: string;
+  width: number;
+  height: number;
+}
 
 /** The floor a finger needs below the shell's phone breakpoint; the floor a pointer needs above it. */
 export function targetFloor(width: number): number {

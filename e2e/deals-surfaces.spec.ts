@@ -129,7 +129,7 @@ test.describe("Meetings", () => {
     const s = await seedMeetings(request);
     await signIn(page);
     const report: string[] = [];
-    const panel: Viewport = { name: "360 — the Meet side panel", width: 360, height: 900 } as Viewport;
+    const panel: Viewport = { name: "360 — the Meet side panel", width: 360, height: 900 };
     for (const vp of [panel, ...VIEWPORTS]) {
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto(`/#/room/${s.upcomingId}`);
