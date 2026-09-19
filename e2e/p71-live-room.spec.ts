@@ -76,10 +76,11 @@ test("Phase C: start recording → consent → ask the room by text → a block 
       .poll(
         async () => {
           const checked = await room.getByTestId("capture-start").getAttribute("aria-checked");
-          const msg = await room.getByTestId("capture-message").textContent().catch(() => null);
+          // `count()` first: `textContent()` on an absent element waits for it, and would hold the poll.
+          const msg = (await room.getByTestId("capture-message").count()) > 0 ? await room.getByTestId("capture-message").textContent() : null;
           return checked === "true" || /on the file|nothing is recording|microphone/.test(msg ?? "");
         },
-        { message: "the switch turns on, or the line says why it did not", timeout: 30_000 },
+        { message: "the switch turns on, or the line says why it did not", timeout: 15_000 },
       )
       .toBe(true);
     // The yes is on the file — and the recorder either runs, or the line says why not.
