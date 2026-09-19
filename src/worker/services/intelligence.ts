@@ -306,11 +306,19 @@ async function acquireInternal(env: Env, now: Date): Promise<AcquiredItem[]> {
     });
   }
 
+  /*
+   * A REMOVED RECORD IS NOT INTELLIGENCE. `archived_at` (0098) is written by "Remove this record" —
+   * a duplicate, a typo, entered twice — and this acquisition read every NEW deal regardless, so a
+   * record the firm had struck out came back as an item on the partners' Home, scored as a live
+   * opportunity. Found on 19 Sep 2026 by the Companies measurement spec: its fixture deals, removed
+   * with a reason, still filled the Home module's top-eight window. The board, the register and
+   * every other list already filter it; this one did not.
+   */
   const opportunities = await env.WP_OS_DB.prepare(
     `SELECT o.id, o.status, o.title, o.opportunity_type, o.company_id, o.created_at, c.canonical_name
        FROM investment_opportunity o
        LEFT JOIN canonical_company c ON c.id = o.company_id
-      WHERE o.status IN ('NEW','SCREENING','IC_READY')
+      WHERE o.status IN ('NEW','SCREENING','IC_READY') AND o.archived_at IS NULL
       ORDER BY o.created_at DESC
       LIMIT 25`,
   ).all<{ id: string; status: string; title: string; opportunity_type: string; company_id: string; created_at: string; canonical_name: string | null }>();

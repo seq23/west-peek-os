@@ -302,6 +302,26 @@ async function seedRegister(request: APIRequestContext): Promise<{
   };
 }
 
+/**
+ * LEAVE THE FIRM AS IT WAS FOUND. The suite shares one database, and a live NEW deal is not inert:
+ * every intelligence run acquires the open NEW/SCREENING opportunities as items (services/
+ * intelligence.ts `acquireInternal`, scored 0.30 for naming a company), and Home's intelligence
+ * module shows the top EIGHT. Eight deals left here pushed journey 1 of p25 — an unscored manual
+ * item — out of that window, so the module had nothing new and did not render. Twice in CI,
+ * reproducibly, on a spec that never touches Home. The seeded live deals are therefore removed
+ * (the product's own "Remove this record", with a reason) once each test has measured them.
+ */
+async function tidyRegister(request: APIRequestContext, seed: Awaited<ReturnType<typeof seedRegister>>): Promise<void> {
+  for (const row of [seed.manual, seed.mailed]) {
+    if (!row.deal_id) continue;
+    const res = await request.post(`/api/opportunities/${row.deal_id}/archive`, {
+      headers: MP,
+      data: { reason: `e2e fixture for the Companies measurement (${seed.marker}); removed so it cannot bias another spec's Home` },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+  }
+}
+
 async function openCompanies(page: Page): Promise<void> {
   await gotoSurface(page, "Companies");
   await expect(page.getByTestId("companies-register")).toBeVisible();
@@ -313,7 +333,14 @@ async function openCompanies(page: Page): Promise<void> {
 async function sweepCompanies(page: Page, request: APIRequestContext, pointer: "fine" | "coarse"): Promise<void> {
   await signIn(page);
   const seed = await seedRegister(request);
+  try {
+    await sweepSeeded(page, seed, pointer);
+  } finally {
+    await tidyRegister(request, seed);
+  }
+}
 
+async function sweepSeeded(page: Page, seed: Awaited<ReturnType<typeof seedRegister>>, pointer: "fine" | "coarse"): Promise<void> {
   const report: string[] = [];
   for (const vp of VIEWPORTS) {
     await page.setViewportSize({ width: vp.width, height: vp.height });
@@ -361,100 +388,112 @@ test.describe("Companies", () => {
       );
       await signIn(page);
       const seed = await seedRegister(request);
-      await page.setViewportSize({ width: 1280, height: 900 });
-      await openCompanies(page);
-      expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
-      const links = (await page.evaluate(measureTargets, "companies-register")).filter((t) => t.textLink);
-      expect(links.length, "Rule 0 — no text links were measured").toBeGreaterThan(3);
-      expect(
-        links.filter((t) => t.h < 24).map((t) => `${t.label} — ${Math.round(t.h)}px`),
-        `text links under 24px at 1280 with a coarse pointer (seed ${seed.marker})`,
-      ).toEqual([]);
+      try {
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await openCompanies(page);
+        expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+        const links = (await page.evaluate(measureTargets, "companies-register")).filter((t) => t.textLink);
+        expect(links.length, "Rule 0 — no text links were measured").toBeGreaterThan(3);
+        expect(
+          links.filter((t) => t.h < 24).map((t) => `${t.label} — ${Math.round(t.h)}px`),
+          `text links under 24px at 1280 with a coarse pointer (seed ${seed.marker})`,
+        ).toEqual([]);
+      } finally {
+        await tidyRegister(request, seed);
+      }
     });
   });
 
   test("the card carries the rail and the clock, the contextual fact, and the fault is named at page level", async ({ page, request }) => {
     await signIn(page);
     const seed = await seedRegister(request);
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await openCompanies(page);
-
-    // ── The masthead answers from the counts the page loads. ────────────────────────────────
-    await expect(page.getByTestId("companies-answer")).toContainText(/\d+ compan(y|ies) on the record/);
-    await expect(page.getByTestId("companies-answer")).toContainText("it turned down");
-
-    // ── The rail and its clock, on a live card. ─────────────────────────────────────────────
-    const manual = page.getByTestId(`company-${seed.manual.id}`);
-    const rail = manual.getByTestId("stage-rail-compact");
-    await expect(rail).toBeVisible();
-    await expect(rail.locator(".stage-dot")).toHaveCount(6);
-    await expect(rail.locator(".stage-dot-current")).toHaveCount(1);
-    await expect(manual.getByTestId("stage-clock")).toHaveText(/^New · (today|1 day|\d+ days)$/);
-    await expect(rail).toHaveAttribute("aria-label", /^Stage: New · /);
-    // The stage is no longer a bare word in the facts; "Stage" is the rail's name, not a dt.
-    await expect(manual.locator("dt", { hasText: /^Stage$/ })).toHaveCount(0);
-    await expect(manual.getByTestId(`company-fourth-open-${seed.manual.id}`)).toContainText("nothing");
-
-    // ── "Looked at" is the board's own fact, shown here as a chip. ──────────────────────────
-    const board = (await (await request.get("/api/dealflow/board", { headers: MP })).json()) as {
-      deals: Array<{ id: string; unreviewed: boolean }>;
-    };
-    const mailedOnBoard = board.deals.find((d) => d.id === seed.mailed.deal_id);
-    expect(mailedOnBoard, "the emailed deal must be on the board").toBeTruthy();
-    expect(mailedOnBoard!.unreviewed, "the board badges an untouched emailed deal as not yet looked at").toBe(true);
-    expect(seed.mailed.looked_at, "the register says the same thing").toBe(false);
-    const mailed = page.getByTestId(`company-${seed.mailed.id}`);
-    await expect(mailed.getByTestId(`company-fourth-looked-at-${seed.mailed.id}`)).toContainText("not yet");
-    await expect(mailed.getByTestId(`company-fourth-looked-at-${seed.mailed.id}`).locator(".badge-attention")).toBeVisible();
-
-    // ── The fault: named at page level, and on the card. ────────────────────────────────────
-    const fault = page.getByTestId("companies-fault");
-    await expect(fault).toBeVisible();
-    await expect(fault).toContainText(`${seed.marker} Ghost Co`);
-    // The suite shares one database, so another spec's ghost may be named beside this one.
-    await expect(fault).toContainText(/not on the board, and (it|they) should be\./);
-    const ghost = page.getByTestId(`company-${seed.ghost.id}`);
-    await expect(ghost.getByTestId(`company-no-deal-${seed.ghost.id}`)).toBeVisible();
-    await expect(ghost.getByTestId("stage-rail-compact")).toHaveCount(0);
-    // The strip is the one thing that must not read as decoration: a left rule in the danger colour.
-    const rule = await fault.evaluate((el) => {
-      const s = getComputedStyle(el);
-      return { width: s.borderLeftWidth, colour: s.borderLeftColor, bg: s.backgroundColor };
-    });
-    expect(rule.width).toBe("3px");
-    expect(rule.colour).not.toBe(rule.bg);
-
-    // ── The strip survives a filter that hides the card. ────────────────────────────────────
-    await page.getByTestId("companies-search").fill("zzz nothing is called this zzz");
-    await expect(page.getByTestId("companies-empty")).toBeVisible();
-    await expect(ghost).toHaveCount(0);
-    await expect(fault, "a search that does not match the faulted company must not hide the fault").toBeVisible();
-    await expect(fault).toContainText(`${seed.marker} Ghost Co`);
-    await page.getByTestId("companies-search").fill("");
-
-    // ── Passed: the facts recede, the reason does not. ──────────────────────────────────────
-    const passed = page.getByTestId(`company-${seed.passed.id}`);
-    await expect(page.getByTestId("companies-passed")).toContainText("Who did we turn down, and why?");
-    await expect(passed.getByTestId(`company-passed-${seed.passed.id}`)).toContainText(seed.reason);
-    await expect(passed.getByTestId(`company-passed-${seed.passed.id}`)).toContainText("We said no on");
-    const opacities = await passed.evaluate((el) => {
-      const eff = (n: Element | null): number => {
-        let a = 1;
-        while (n) {
-          a *= Number(getComputedStyle(n).opacity);
-          n = n.parentElement;
-        }
-        return a;
-      };
-      const reason = el.querySelector('[data-testid^="company-passed-"]');
-      const facts = [...el.querySelectorAll(".company-facts dd")];
-      return { reason: eff(reason), facts: facts.map(eff), factCount: facts.length };
-    });
-    expect(opacities.factCount, "Rule 0 — the passed card rendered no facts to dim").toBeGreaterThan(0);
-    expect(opacities.reason, "the reason is the point of keeping the card and must be at full ink").toBe(1);
-    for (const f of opacities.facts) expect(f, "the facts recede").toBeLessThan(1);
-    await expect(passed.getByTestId("stage-rail-compact")).toHaveCount(0);
-    await expect(passed.getByTestId(`company-deal-${seed.passed.id}`)).toHaveText("Look at it again");
-    await expect(passed.getByTestId(`company-add-reason-${seed.passed.id}`)).toHaveCount(0);
+    try {
+      await checkCard(page, request, seed);
+    } finally {
+      await tidyRegister(request, seed);
+    }
   });
 });
+
+async function checkCard(page: Page, request: APIRequestContext, seed: Awaited<ReturnType<typeof seedRegister>>): Promise<void> {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openCompanies(page);
+
+  // ── The masthead answers from the counts the page loads. ────────────────────────────────
+  await expect(page.getByTestId("companies-answer")).toContainText(/\d+ compan(y|ies) on the record/);
+  await expect(page.getByTestId("companies-answer")).toContainText("it turned down");
+
+  // ── The rail and its clock, on a live card. ─────────────────────────────────────────────
+  const manual = page.getByTestId(`company-${seed.manual.id}`);
+  const rail = manual.getByTestId("stage-rail-compact");
+  await expect(rail).toBeVisible();
+  await expect(rail.locator(".stage-dot")).toHaveCount(6);
+  await expect(rail.locator(".stage-dot-current")).toHaveCount(1);
+  await expect(manual.getByTestId("stage-clock")).toHaveText(/^New · (today|1 day|\d+ days)$/);
+  await expect(rail).toHaveAttribute("aria-label", /^Stage: New · /);
+  // The stage is no longer a bare word in the facts; "Stage" is the rail's name, not a dt.
+  await expect(manual.locator("dt", { hasText: /^Stage$/ })).toHaveCount(0);
+  await expect(manual.getByTestId(`company-fourth-open-${seed.manual.id}`)).toContainText("nothing");
+
+  // ── "Looked at" is the board's own fact, shown here as a chip. ──────────────────────────
+  const board = (await (await request.get("/api/dealflow/board", { headers: MP })).json()) as {
+    deals: Array<{ id: string; unreviewed: boolean }>;
+  };
+  const mailedOnBoard = board.deals.find((d) => d.id === seed.mailed.deal_id);
+  expect(mailedOnBoard, "the emailed deal must be on the board").toBeTruthy();
+  expect(mailedOnBoard!.unreviewed, "the board badges an untouched emailed deal as not yet looked at").toBe(true);
+  expect(seed.mailed.looked_at, "the register says the same thing").toBe(false);
+  const mailed = page.getByTestId(`company-${seed.mailed.id}`);
+  await expect(mailed.getByTestId(`company-fourth-looked-at-${seed.mailed.id}`)).toContainText("not yet");
+  await expect(mailed.getByTestId(`company-fourth-looked-at-${seed.mailed.id}`).locator(".badge-attention")).toBeVisible();
+
+  // ── The fault: named at page level, and on the card. ────────────────────────────────────
+  const fault = page.getByTestId("companies-fault");
+  await expect(fault).toBeVisible();
+  await expect(fault).toContainText(`${seed.marker} Ghost Co`);
+  // The suite shares one database, so another spec's ghost may be named beside this one.
+  await expect(fault).toContainText(/not on the board, and (it|they) should be\./);
+  const ghost = page.getByTestId(`company-${seed.ghost.id}`);
+  await expect(ghost.getByTestId(`company-no-deal-${seed.ghost.id}`)).toBeVisible();
+  await expect(ghost.getByTestId("stage-rail-compact")).toHaveCount(0);
+  // The strip is the one thing that must not read as decoration: a left rule in the danger colour.
+  const rule = await fault.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { width: s.borderLeftWidth, colour: s.borderLeftColor, bg: s.backgroundColor };
+  });
+  expect(rule.width).toBe("3px");
+  expect(rule.colour).not.toBe(rule.bg);
+
+  // ── The strip survives a filter that hides the card. ────────────────────────────────────
+  await page.getByTestId("companies-search").fill("zzz nothing is called this zzz");
+  await expect(page.getByTestId("companies-empty")).toBeVisible();
+  await expect(ghost).toHaveCount(0);
+  await expect(fault, "a search that does not match the faulted company must not hide the fault").toBeVisible();
+  await expect(fault).toContainText(`${seed.marker} Ghost Co`);
+  await page.getByTestId("companies-search").fill("");
+
+  // ── Passed: the facts recede, the reason does not. ──────────────────────────────────────
+  const passed = page.getByTestId(`company-${seed.passed.id}`);
+  await expect(page.getByTestId("companies-passed")).toContainText("Who did we turn down, and why?");
+  await expect(passed.getByTestId(`company-passed-${seed.passed.id}`)).toContainText(seed.reason);
+  await expect(passed.getByTestId(`company-passed-${seed.passed.id}`)).toContainText("We said no on");
+  const opacities = await passed.evaluate((el) => {
+    const eff = (n: Element | null): number => {
+      let a = 1;
+      while (n) {
+        a *= Number(getComputedStyle(n).opacity);
+        n = n.parentElement;
+      }
+      return a;
+    };
+    const reason = el.querySelector('[data-testid^="company-passed-"]');
+    const facts = [...el.querySelectorAll(".company-facts dd")];
+    return { reason: eff(reason), facts: facts.map(eff), factCount: facts.length };
+  });
+  expect(opacities.factCount, "Rule 0 — the passed card rendered no facts to dim").toBeGreaterThan(0);
+  expect(opacities.reason, "the reason is the point of keeping the card and must be at full ink").toBe(1);
+  for (const f of opacities.facts) expect(f, "the facts recede").toBeLessThan(1);
+  await expect(passed.getByTestId("stage-rail-compact")).toHaveCount(0);
+  await expect(passed.getByTestId(`company-deal-${seed.passed.id}`)).toHaveText("Look at it again");
+  await expect(passed.getByTestId(`company-add-reason-${seed.passed.id}`)).toHaveCount(0);
+}
