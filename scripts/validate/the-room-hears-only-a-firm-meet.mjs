@@ -31,6 +31,10 @@
  *   6 · THE STATES ARE ONE VOCABULARY. `MEET_LIVE_STATES` in `meetLiveView.ts` and the CHECK on
  *       `meeting.meet_live_state` in migration 0215 must list the same names — a state the During
  *       face renders that the database refuses, or the reverse, is a page that lies.
+ *   8 · THE ADD-ON DEPLOYMENT NAMES THIS APP. `deployment/meet-addon/deployment.json` (what
+ *       Google is handed) and `src/shared/meetings/meetAddon.ts` (what the panel initialises with)
+ *       must agree on the origin, the side-panel URL and the name — a deployment pointing Meet at
+ *       a stale origin is a panel that never loads.
  *   7 · LP AND BROKER MEETINGS NEVER JOIN LIVE. The owner's rule (19 Sep 2026): the Meet Media API
  *       is Pre-GA and term (vi) of the Developer Preview terms lets Google use what passes through
  *       it, so an LP conversation never does. `openSession` must call `liveAllowedForType(` before
@@ -59,11 +63,14 @@ const SOURCES = {
   google: "src/worker/effects/googleWorkspaceClient.ts",
   nova: "src/worker/ai/providers/workersAiNova3.ts",
   whisper: "src/worker/ai/providers/workersAiWhisper.ts",
+  addon: "src/shared/meetings/meetAddon.ts",
 };
+const DEPLOYMENT = "deployment/meet-addon/deployment.json";
 
 function readSources() {
   const out = {};
   for (const [k, rel] of Object.entries(SOURCES)) out[k] = stripCommentsFor(rel, readFileSync(path.join(ROOT, rel), "utf8"));
+  out.deployment = stripCommentsFor(DEPLOYMENT, readFileSync(path.join(ROOT, DEPLOYMENT), "utf8"));
   return out;
 }
 
@@ -195,8 +202,23 @@ export function checkTypeRule(view) {
   return { violations, planted: planted.length };
 }
 
+/** 8 · the add-on deployment agrees with the app. */
+export function checkAddonDeployment(addonSource, deploymentJson) {
+  const violations = [];
+  const field = (name) => new RegExp(`${name}:\\s*"([^"]+)"`).exec(addonSource)?.[1] ?? null;
+  const origin = field("origin"); const path = field("sidePanelPath"); const name = field("name");
+  if (!origin || !path || !name) return { violations: ["meetAddon.ts no longer names origin, sidePanelPath and name"], checked: 0 };
+  let dep;
+  try { dep = JSON.parse(deploymentJson); } catch { return { violations: ["deployment.json is not JSON"], checked: 0 }; }
+  const web = dep?.addOns?.meet?.web ?? {};
+  if (web.sidePanelUrl !== `${origin}${path}`) violations.push(`deployment.json sidePanelUrl is ${web.sidePanelUrl}, not ${origin}${path}`);
+  if (!Array.isArray(web.addOnOrigins) || web.addOnOrigins.length !== 1 || web.addOnOrigins[0] !== origin) violations.push(`deployment.json addOnOrigins is ${JSON.stringify(web.addOnOrigins)}, not [${origin}]`);
+  if (dep?.addOns?.common?.name !== name) violations.push(`deployment.json name is ${dep?.addOns?.common?.name}, not ${name}`);
+  return { violations, checked: 3 };
+}
+
 function runAll(sources, view) {
-  const results = [checkGates(sources.live), checkHeartbeat(sources.live), checkGovernedPath(sources.live), checkListenerBoundary(sources), checkSpeechAdapters(sources), checkStates(sources), checkTypeRule(view)];
+  const results = [checkGates(sources.live), checkHeartbeat(sources.live), checkGovernedPath(sources.live), checkListenerBoundary(sources), checkSpeechAdapters(sources), checkStates(sources), checkTypeRule(view), checkAddonDeployment(sources.addon, sources.deployment)];
   return { violations: results.flatMap((r) => r.violations), gates: results[0].gates, states: results[5].states, fetches: results[3].fetches, hosts: results[3].hosts, planted: results[6].planted };
 }
 
@@ -232,11 +254,13 @@ async function selfTest() {
   expect("a CLI fetching elsewhere", { ...sources, cli: `${sources.cli}\nawait fetch("https://api.vendor.example/upload", { body: audio_base64 });` }, /only \$\{BASE_URL\}/);
   // h · a state the database refuses
   expect("a state the database refuses", { ...sources, view: sources.view.replace('"meet_live_failed",', '"meet_live_failed",\n  "meet_live_dreaming",') }, /refused by the database/);
+  // k · a deployment pointing Meet at the wrong origin
+  expect("a stale deployment origin", { ...sources, deployment: sources.deployment.replace(/os\.joinwestpeek\.com\/#\/meet-panel/, "west-peek-os.seq-taylor.workers.dev/#/meet-panel") }, /sidePanelUrl is/);
   // i · mip_opt_out removed
   expect("mip_opt_out removed", { ...sources, nova: sources.nova.replace("mip_opt_out: true", "mip_opt_out: false") }, /mip_opt_out/);
   // j · a vendor host in the speech adapter
   expect("a speech adapter that fetches", { ...sources, nova: `${sources.nova}\nawait fetch("https://api.deepgram.com/v1/listen");` }, /audio must go through the Workers AI binding/);
-  console.log("MEET LIVE SELF-TEST PASSED: 14 fixtures — clean, an LP meeting allowed live, a Broker meeting allowed live, founders refused, the type gate removed, no firm-hosted check, consent after the session, a manual meeting offered, a direct note write, a fetching core, a talking page, a CLI fetching elsewhere, a state the database refuses, mip_opt_out removed, a speech adapter that fetches.");
+  console.log("MEET LIVE SELF-TEST PASSED: 15 fixtures — clean, a stale deployment origin, an LP meeting allowed live, a Broker meeting allowed live, founders refused, the type gate removed, no firm-hosted check, consent after the session, a manual meeting offered, a direct note write, a fetching core, a talking page, a CLI fetching elsewhere, a state the database refuses, mip_opt_out removed, a speech adapter that fetches.");
 }
 
 async function main() {
@@ -261,7 +285,7 @@ async function main() {
       `${out.planted} planted meetings through the real rule — LP and Broker refused, the four types that may join admitted; ` +
       `the heartbeat offers only calendar Meets with a conference; the words enter only through transcribeWithSpeakers → ingestTranscript; ` +
       `the listener core and the peer page make no network call, the CLI fetches only the Worker (${out.fetches} call site(s)), audio goes only to /chunk, and the Google client names ${out.hosts} host(s), all Google's; ` +
-      `both speech adapters use the Workers AI binding with mip_opt_out; ${out.states} live states agree between the During face and migration 0215.`,
+      `both speech adapters use the Workers AI binding with mip_opt_out; ${out.states} live states agree between the During face and migration 0215; the add-on deployment names this app's origin, panel and name.`,
   );
 }
 

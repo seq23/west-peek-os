@@ -1,7 +1,7 @@
 {
   "_README": [
     "The West Peek OS Meet Add-on: the live room beside the call (Phase Meet, tier 3; 19 Sep 2026).",
-    "Values agree with src/shared/meetings/meetAddon.ts — `npm run validate:meet-addon` refuses drift.",
+    "Values agree with src/shared/meetings/meetAddon.ts — `npm run validate:meet-live` refuses drift.",
     "",
     "REGISTER (once, in the firm's Google Cloud project; the service account cannot — probed 19 Sep 2026,",
     "the Google Workspace Add-ons API is not enabled on gsc-automation-493801 and cloud-platform is not delegated):",

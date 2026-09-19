@@ -2,7 +2,7 @@
  * The Meet Add-on, named once (Phase Meet, tier 3; 19 Sep 2026).
  *
  * The side panel (`src/client/pages/MeetPanel.tsx`) and the deployment file
- * (`deployment/meet-addon/deployment.json`, which `validate:meet-addon` checks against this)
+ * (`deployment/meet-addon/deployment.json`, which `validate:meet-live` checks against this)
  * agree on these — the origin the add-on may load, the route it opens, the Cloud project number
  * the SDK is initialised with, and the SDK it loads. Not secrets: a project number and public URLs.
  */
