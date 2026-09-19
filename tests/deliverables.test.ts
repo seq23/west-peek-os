@@ -234,11 +234,14 @@ async function listDeliverables(query = ""): Promise<Array<Record<string, unknow
 }
 
 describe("answering a deliverable", () => {
+  // A research packet, since 18 Sep 2026: these used a weekly review as the generic fixture, and
+  // that kind is ARCHIVED now — off the unfiltered shelf by design — so a test that lists the shelf
+  // and expects to find one would be pinning the archive's absence as a defect.
   async function make(title: string): Promise<string> {
     const row = await deliver(env, ACTOR, {
-      kind: "weekly_review",
+      kind: "research_packet",
       title,
-      body: "the agenda",
+      body: "the packet",
       preparedBy: "Walker",
       preparedFor: "fu_sequoia_taylor",
     });
@@ -265,7 +268,7 @@ describe("answering a deliverable", () => {
 
     // The row itself still exists in full — this is the assertion that separates hiding from deleting.
     const still = await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(id).first<{ body: string }>();
-    expect(still?.body).toBe("the agenda");
+    expect(still?.body).toBe("the packet");
 
     expect((await handleRequest(apiReq(`/api/deliverables/${id}/dismiss?restore=1`, "POST", {}), env)).status).toBe(200);
     expect((await listDeliverables()).some((r) => r.id === id), "restoring must bring it back").toBe(true);
@@ -497,8 +500,28 @@ describe("only the latest morning brief is still a delivery", () => {
   });
 
   it("never supersedes anything that is referred back to", async () => {
-    // A weekly review, a research packet and a discrepancy register are looked up again; a brief is
-    // read on the morning it is about. Only the brief is superseded, and this is what pins that.
+    // A research packet and a discrepancy register are looked up again; a brief is read on the
+    // morning it is about. Only the brief is superseded, and this is what pins that.
+    await deliver(supEnv, ACTOR, {
+      kind: "research_packet", title: "Packet of 2026-09-02", body: "packet",
+      preparedBy: "Walker", preparedFor: HIS,
+      sourceType: "research_project", sourceId: "rp_super_1",
+    });
+    await deliver(supEnv, ACTOR, {
+      kind: "research_packet", title: "Packet of 2026-09-09", body: "packet",
+      preparedBy: "Walker", preparedFor: HIS,
+      sourceType: "research_project", sourceId: "rp_super_2",
+    });
+    const current = await list();
+    expect(current.filter((d) => d.kind === "research_packet" && d.prepared_for === HIS).length).toBe(2);
+  });
+
+  it("keeps an ARCHIVED kind off the unfiltered shelf, and every row of it reachable by name", async () => {
+    /*
+     * The weekly review was archived on 18 Sep 2026 (owner: "we don't need it anymore"). It is not
+     * superseded and not dismissed — it is simply no longer current work — so the shelf does not
+     * show it unless asked for by kind, and asking returns every row. Nothing is deleted.
+     */
     await deliver(supEnv, ACTOR, {
       kind: "weekly_review", title: "Week of 2026-09-02", body: "agenda",
       preparedBy: "Walker and Wren", preparedFor: HIS,
@@ -510,7 +533,11 @@ describe("only the latest morning brief is still a delivery", () => {
       sourceType: "weekly_review", sourceId: "wr_super_2",
     });
     const current = await list();
-    expect(current.filter((d) => d.kind === "weekly_review" && d.prepared_for === HIS).length).toBe(2);
+    expect(current.filter((d) => d.kind === "weekly_review").length).toBe(0);
+    const byName = await list("&kind=weekly_review");
+    expect(byName.filter((d) => d.prepared_for === HIS).length).toBe(2);
+    const kept = await supEnv.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deliverable WHERE kind = 'weekly_review'").first<{ n: number }>();
+    expect(kept!.n).toBe(2);
   });
 });
 
