@@ -114,6 +114,13 @@ export function FundConstruction({
   const [why, setWhy] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+  /*
+   * THE TRAY PAINTS ONLY ONCE IT IS SEEDED. Rendering the inputs on the same pass that opens the
+   * tray painted them with the empty state for one frame and then flipped every value and every
+   * pressed chip — a visible flash, and a 90ms colour transition the measured contract caught
+   * mid-way (a pressed chip read at 1.6:1 while it was still fading in). Seeded first, painted once.
+   */
+  const [seeded, setSeeded] = useState(false);
 
   const seedKey = `${open}:${mandate.data?.current?.version_no}:${sleeve.data?.current?.version_no}:${reserve.data?.current?.version_no}:${firstCloseOn ?? ""}`;
   useEffect(() => {
@@ -133,8 +140,10 @@ export function FundConstruction({
     }
     setFirstClose(firstCloseOn ?? "");
     setMessage(null);
+    setSeeded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedKey]);
+  useEffect(() => { if (!open) setSeeded(false); }, [open]);
 
   // ── The OUTPUTS. Computed on every keystroke, displayed, never editable. ──
   const derived = useMemo(() => {
@@ -284,7 +293,7 @@ export function FundConstruction({
             </span>
           </div>
 
-          {open && !refused && (
+          {open && seeded && !refused && (
             <div className="amend-tray" id="construction-amend-tray" data-testid="construction-inputs">
               <p className="muted small">
                 You change the percentages and the sizes. Everything below the line is worked out from them and cannot be typed — a percentage and a dollar figure that can disagree is what put $200K between two readings of this fund in August.
@@ -315,7 +324,7 @@ export function FundConstruction({
                 {SECTOR_CHOICES.map((s) => {
                   const on = sectors.includes(s.key);
                   return (
-                    <button key={s.key} type="button" className="chip" aria-pressed={on} data-testid={`sector-${s.key}`} onClick={() => setSectors(on ? sectors.filter((x) => x !== s.key) : [...sectors, s.key])}>
+                    <button key={s.key} type="button" className={on ? "chip btn-strong" : "chip"} aria-pressed={on} data-testid={`sector-${s.key}`} onClick={() => setSectors(on ? sectors.filter((x) => x !== s.key) : [...sectors, s.key])}>
                       {on ? "✓ " : ""}{s.label}
                     </button>
                   );

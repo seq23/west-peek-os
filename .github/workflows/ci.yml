@@ -332,6 +332,9 @@ jobs:
       # ring and one arithmetic are hosted twice, and this fails if either page grows its own again.
       - name: The portfolio shows what the firm owns
         run: npm run validate:portfolio
+
+      - name: Fund strategy owns the plan, not the portfolio
+        run: npm run validate:fund-strategy-split
       # Phase Meet (18 Sep 2026). A calendar event exists here as exactly one meeting through both
       # doors, and the calendar/Meet code paths never name the other business; an ended Meet call is
       # read once, attributed only by Meet's own participant join, and reaches the transcript only

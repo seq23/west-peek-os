@@ -31,15 +31,18 @@ export function PlanVsReality({
   targetPositions,
   investmentPeriodYears,
   onAmend,
+  reloadKey = 0,
 }: {
   fundId: string | null;
   targetPositions: number | null;
   investmentPeriodYears: number;
   /** Opens the construction Amend tray, where first close is typed. */
   onAmend: () => void;
+  /** Bumped by the page when a version was saved, so the band re-reads the plan and the clock. */
+  reloadKey?: number;
 }): JSX.Element | null {
-  const alloc = useApi<AllocationResponse>(fundId ? `/api/portfolio/allocation?fund_id=${encodeURIComponent(fundId)}` : null, [fundId]);
-  const reserves = useApi<{ reserve_allocations: Array<{ amount: number; status?: string }> }>(fundId ? "/api/allocation/reserve-allocations" : null, [fundId]);
+  const alloc = useApi<AllocationResponse>(fundId ? `/api/portfolio/allocation?fund_id=${encodeURIComponent(fundId)}` : null, [fundId, reloadKey]);
+  const reserves = useApi<{ reserve_allocations: Array<{ amount: number; status?: string }> }>(fundId ? "/api/allocation/reserve-allocations" : null, [fundId, reloadKey]);
 
   const today = new Date().toISOString().slice(0, 10);
   const series = useMemo(() => {

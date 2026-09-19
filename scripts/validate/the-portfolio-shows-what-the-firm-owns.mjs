@@ -56,7 +56,8 @@ const FILES = {
   index: "src/worker/index.ts",
   page: "src/client/pages/PortfolioPage.tsx",
   ring: "src/client/pages/AllocationRing.tsx",
-  fundAllocation: "src/client/pages/FundAllocation.tsx",
+  // Fund strategy's ring host moved to the construction band on 19 Sep 2026 (design/FUND_STRATEGY_DESIGN.md §3.3).
+  fundAllocation: "src/client/pages/FundConstruction.tsx",
   portfolioAllocation: "src/client/pages/PortfolioAllocation.tsx",
   shared: "src/shared/fund/allocation.ts",
   test: "tests/portfolioHoldings.test.ts",

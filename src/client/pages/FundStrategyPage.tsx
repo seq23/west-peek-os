@@ -38,6 +38,7 @@ export function FundStrategyPage({ onNavigate }: { onNavigate?: (key: string) =>
   const reserve = useApi<{ current: { version_no: number } | null }>(fundId ? `/api/funds/${fundId}/policies/reserve` : null, [fundId]);
   const alloc = useApi<AllocationResponse>(fundId ? `/api/portfolio/allocation?fund_id=${encodeURIComponent(fundId)}` : null, [fundId]);
   const [amendOpen, setAmendOpen] = useState(false);
+  const [savedNonce, setSavedNonce] = useState(0);
 
   const mandateDoc = useMemo<MandateDoc>(() => { try { return JSON.parse(mandate.data?.current?.mandate_json ?? "{}") as MandateDoc; } catch { return {}; } }, [mandate.data]);
   const sleeveDoc = useMemo<SleeveDoc>(() => { try { return JSON.parse(sleeve.data?.current?.sleeve_json ?? "{}") as SleeveDoc; } catch { return {}; } }, [sleeve.data]);
@@ -80,13 +81,13 @@ export function FundStrategyPage({ onNavigate }: { onNavigate?: (key: string) =>
       </header>
 
       <DashboardDoor fundId={fundId} />
-      <PlanVsReality fundId={fundId} targetPositions={targetPositions} investmentPeriodYears={period} onAmend={() => setAmendOpen(true)} />
+      <PlanVsReality fundId={fundId} targetPositions={targetPositions} investmentPeriodYears={period} onAmend={() => setAmendOpen(true)} reloadKey={savedNonce} />
       <FundConstruction
         fundId={fundId}
         firstCloseOn={firstCloseOn}
         open={amendOpen}
         onOpenChange={setAmendOpen}
-        onSaved={() => { basis.reload(); alloc.reload(); mandate.reload(); sleeve.reload(); reserve.reload(); }}
+        onSaved={() => { basis.reload(); alloc.reload(); mandate.reload(); sleeve.reload(); reserve.reload(); setSavedNonce((n) => n + 1); }}
       />
       <section className="band" data-testid="fund-deck">
         <div className="band-head">
