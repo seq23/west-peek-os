@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { fixtureDealsByMarker, retireFixtureDeals } from "./support/fixtures";
 
 /**
  * THE DEALS SURFACES, MEASURED RATHER THAN ASSERTED.
@@ -340,6 +341,16 @@ test.describe("Thesis — the document, the fit rail, the versions (design §7)"
 });
 
 test.describe("Secondaries — the sleeve, on the same rail (design §8)", () => {
+  /* THE FIXTURE CONTRACT (support/fixtures.ts). The block and the sale seeded below stay on the
+     rail through the measured test (it needs rows), then are retired: at IC_READY and SCREENING
+     they are exactly what every intelligence run acquires, and they filled p25's window. */
+  test.afterAll(async ({ request }) => {
+    const ids = await fixtureDealsByMarker(request, "D5 Block Co");
+    expect(ids.length, "Rule 0 — the Secondaries fixtures were not found to retire").toBeGreaterThan(0);
+    const retired = await retireFixtureDeals(request, ids, "the Secondaries measurement");
+    expect(retired, "every Secondaries fixture deal is retired").toBe(ids.length);
+  });
+
   test("empty: the budget is read from the policy, the row is drawn as its shape, nothing is invented", async ({ page, request }) => {
     const funds = (await (await request.get("/api/funds", { headers: MP })).json()) as { funds: Array<{ id: string }> };
     if (funds.funds.length === 0) await seedCommissionedFund(request);

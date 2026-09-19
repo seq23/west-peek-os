@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { retireFixtureDeals } from "./support/fixtures";
 
 /**
  * THE DEALS SURFACES, MEASURED RATHER THAN ASSERTED (design/DEALS_SECTION_DESIGN.md §12.7).
@@ -379,12 +380,18 @@ test.describe("Portfolio", () => {
     await expect(page.getByTestId(`holding-sale-open-${companyId}`)).toContainText("sale open");
     await expect(page.getByTestId(`holding-sale-${companyId}`)).toBeVisible();
     const deals = (await (await request.get(`/api/opportunities?company_id=${companyId}`, { headers: MP })).json()) as {
-      opportunities: Array<{ opportunity_type: string; status: string; source_channel: string }>;
+      opportunities: Array<{ id: string; opportunity_type: string; status: string; source_channel: string }>;
     };
     const sale = deals.opportunities.filter((d) => d.opportunity_type === "SECONDARY_SALE");
     expect(sale, "one sale opened from the row").toHaveLength(1);
     expect(sale[0]!.status).toBe("NEW");
     expect(sale[0]!.source_channel).toBe("portfolio:sell");
     expect((await positionsFor(request, companyId))[0]!.quantity, "opening a sale sells nothing").toBe(4000);
+
+    /* THE FIXTURE CONTRACT (support/fixtures.ts): the sale this journey opened is a live NEW deal,
+       exactly what every intelligence run acquires; it is retired now that it has been proved. The
+       booked primary is CLOSED and is never acquired, so it stays as the holding it is. */
+    const retired = await retireFixtureDeals(request, [sale[0]!.id], "the Portfolio Sell journey");
+    expect(retired, "the opened sale is retired").toBe(1);
   });
 });

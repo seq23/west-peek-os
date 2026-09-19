@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { gotoSurface, openDealFace } from "./support/nav";
+import { retireFixtureDeals } from "./support/fixtures";
 
 /**
  * THE DEALS SECTION, MEASURED RATHER THAN ASSERTED (design/DEALS_SECTION_DESIGN.md §10, §12.7).
@@ -223,7 +224,7 @@ async function installMeasurers(page: Page): Promise<void> {
  * (the committee band and the record's committee face), and an emailed arrival nobody has looked
  * at (the attention badge and the third kind of waiting item).
  */
-async function seedDealflow(request: APIRequestContext): Promise<{ proposed: string; committee: string; emailed: string; proposalId: string; committeeDealId: string; emailedDealId: string; meetingId: string }> {
+async function seedDealflow(request: APIRequestContext): Promise<{ proposed: string; committee: string; emailed: string; proposalId: string; proposedDealId: string; committeeDealId: string; emailedDealId: string; meetingId: string }> {
   const token = `M${Date.now().toString(36)}`;
   const mk = async (name: string, startAt: string[], extra: Record<string, unknown> = {}) => {
     const co = await request.post("/api/companies", { headers: MP, data: { canonical_name: name } });
@@ -273,7 +274,7 @@ async function seedDealflow(request: APIRequestContext): Promise<{ proposed: str
   expect(board.deals.find((d) => d.id === b.dealId)?.status, "the committee deal must be at the committee").toBe("IC_READY");
   expect(board.proposals.some((p) => p.id === proposalId), "the board must carry the proposal").toBe(true);
   expect(board.deals.find((d) => d.id === c.dealId)?.unreviewed, "the emailed arrival must read as not yet looked at").toBe(true);
-  return { proposed, committee, emailed, proposalId, committeeDealId: b.dealId, emailedDealId: c.dealId, meetingId };
+  return { proposed, committee, emailed, proposalId, proposedDealId: a.dealId, committeeDealId: b.dealId, emailedDealId: c.dealId, meetingId };
 }
 
 async function openDealflow(page: Page): Promise<void> {
@@ -286,6 +287,21 @@ async function openDealflow(page: Page): Promise<void> {
 }
 
 test.describe("Dealflow", () => {
+  /* THE FIXTURE CONTRACT (support/fixtures.ts): every deal a test seeds is retired when the test is
+     done, pass or fail, so it cannot fill a later spec's intelligence window. */
+  const seeded: string[] = [];
+  const seedAndRegister = async (request: APIRequestContext) => {
+    const seed = await seedDealflow(request);
+    seeded.push(seed.proposedDealId, seed.committeeDealId, seed.emailedDealId);
+    return seed;
+  };
+  test.afterEach(async ({ request }) => {
+    const ids = seeded.splice(0);
+    expect(ids.length, "Rule 0 — a Dealflow test ran without registering its fixtures for retirement").toBeGreaterThan(0);
+    const retired = await retireFixtureDeals(request, ids, "the Dealflow measurement");
+    expect(retired, "every Dealflow fixture deal is retired after the test").toBe(ids.length);
+  });
+
   /*
    * ONE TEST PER WIDTH. Nine rendered states at five widths is forty-five sweeps; as one test that
    * needed a longer deadline, and `validate:green-means-something` is right that a longer deadline
@@ -295,7 +311,7 @@ test.describe("Dealflow", () => {
     test(`holds its measured numbers on the pipeline and on the record's five faces at ${vp.name}`, async ({ page, request }) => {
       await installMeasurers(page);
       await signIn(page);
-      const seed = await seedDealflow(request);
+      const seed = await seedAndRegister(request);
       const report: string[] = [];
 
       await page.setViewportSize({ width: vp.width, height: vp.height });
@@ -359,7 +375,7 @@ test.describe("Dealflow", () => {
   test("has three ranks of type, not one", async ({ page, request }) => {
     await installMeasurers(page);
     await signIn(page);
-    await seedDealflow(request);
+    await seedAndRegister(request);
     await page.setViewportSize({ width: 1280, height: 900 });
     await openDealflow(page);
 
@@ -383,7 +399,7 @@ test.describe("Dealflow", () => {
   test("a proposal from a meeting is one click, and declining takes a reason inline", async ({ page, request }) => {
     await installMeasurers(page);
     await signIn(page);
-    const seed = await seedDealflow(request);
+    const seed = await seedAndRegister(request);
     await page.setViewportSize({ width: 1280, height: 900 });
     await openDealflow(page);
 
