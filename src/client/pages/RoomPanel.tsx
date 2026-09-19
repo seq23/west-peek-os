@@ -2,7 +2,6 @@ import { AllocationRing } from "./AllocationRing";
 import type { RingSlice } from "@shared/fund/allocation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
-import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
 /**
  * THE DURING FACE — the meeting is a live room (Phase C, owner-approved 18 Sep 2026).
@@ -598,7 +597,7 @@ function AskBox({ meetingId, hostName, revoked, onAsked, onMessage, compact }: {
         </button>
         <button
           type="button"
-          className={compact ? "ptt btn-lg" : "ptt"}
+          className="ptt"
           data-testid="room-ptt"
           aria-pressed={holding}
           aria-busy={busy}
@@ -751,9 +750,14 @@ function fmt(v: unknown): string {
   return String(v);
 }
 
-/** A chip per task: `working` is the live one, in words as well as tint. */
+/**
+ * A chip per task: `working` is the live one, in words as well as tint. Two literal branches rather
+ * than a computed class, so `validate:css-classes` can see both names it is asked to prove.
+ */
 function TaskChip({ chip, label }: { chip: Task["chip"]; label?: string }): JSX.Element {
-  return <span className={chip === "working" ? "task-chip task-chip-live" : "task-chip"} data-testid={`room-task-chip-${chip.replace(" ", "-")}`}>{label ?? chip}</span>;
+  const testid = `room-task-chip-${chip.replace(" ", "-")}`;
+  if (chip === "working") return <span className="task-chip task-chip-live" data-testid={testid}>{label ?? chip}</span>;
+  return <span className="task-chip" data-testid={testid}>{label ?? chip}</span>;
 }
 
 // ── 5 · Charts: inline SVG on the token palette, bar / line / pie ─────────────────────────────
@@ -854,12 +858,11 @@ function SeatedRow({ seated, tasks }: { seated: RoomState["seated"]; tasks: Task
         <div className="chips">
           {seated.map((s) => {
             const mine = tasks.filter((t) => t.owner_name === s.name);
+            const chip: Task["chip"] = mine.some((t) => t.chip === "working") ? "working" : mine.some((t) => t.chip === "needs you") ? "needs you" : "done";
+            const words = mine.length > 0 ? mine.map((t) => t.chip).join(", ") : s.role;
             return (
-              <span key={s.ai_employee_id} className={mine.some((t) => t.chip === "working") ? "task-chip task-chip-live" : "task-chip"} data-testid={`room-seat-${s.name}`}>
-                {portraitFor(s.name) && (
-                  <img className="employee-portrait" src={portraitFor(s.name)!} alt={portraitAlt(s.name, s.role)} width={22} height={22} loading="lazy" onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
-                )}
-                {s.name} · {mine.length > 0 ? mine.map((t) => t.chip).join(", ") : s.role}
+              <span key={s.ai_employee_id} data-testid={`room-seat-${s.name}`}>
+                <TaskChip chip={chip} label={`${s.name} · ${words}`} />
               </span>
             );
           })}

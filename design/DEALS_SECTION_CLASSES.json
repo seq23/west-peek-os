@@ -2,7 +2,7 @@
   "spec": "design/DEALS_SECTION_DESIGN.md §12.1 — tokens and classes first, pages after",
   "why": "These classes were added to src/client/styles.css BEFORE any page wears them, so that five tab branches start from one rule set. validate:css-classes proves every className used has a rule; it cannot see a rule nobody uses. This register is the other direction: every class here must have a rule now, must be emitted once every tab that owns it has landed, and a tab is marked landed the moment anything emits one of its classes. Read by scripts/validate/css-classes.mjs and scripts/validate/heading-scale-applies.mjs; a tab agent flips its `landed` flag in the PR that emits the classes, and edits `owners` when the page it built does not use a class the spec named for it.",
   "tabs": {
-    "meetings": { "landed": false, "spec": "§3 — the list, the room's three faces, the standalone panel" },
+    "meetings": { "landed": true, "spec": "§3 — the list, the room's three faces, the standalone panel" },
     "dealflow": { "landed": false, "spec": "§4 — the rail is the page; the committee lives here" },
     "companies": { "landed": false, "spec": "§5 — the register" },
     "portfolio": { "landed": false, "spec": "§6 — holdings, the deployment ring, Book it" },
@@ -39,9 +39,9 @@
     "face-tab": ["meetings", "dealflow"],
 
     "deal-row-3": ["meetings"],
-    "deal-row-2": ["secondaries"],
+    "deal-row-2": ["meetings", "secondaries"],
     "deal-row-selected": ["dealflow"],
-    "deal-sub": ["dealflow", "secondaries"],
+    "deal-sub": ["meetings", "dealflow", "secondaries"],
     "deal-sub-stalled": ["dealflow"],
     "readiness": ["meetings", "secondaries"],
     "dot": ["meetings", "secondaries"],
@@ -49,7 +49,7 @@
     "stage-chip-live": ["dealflow"],
     "task-chip": ["meetings"],
     "task-chip-live": ["meetings"],
-    "chips": ["dealflow"],
+    "chips": ["meetings", "dealflow"],
     "fault": ["companies"],
 
     "room-grid": ["meetings"],
@@ -73,8 +73,8 @@
     "on": ["meetings", "dealflow"],
 
     "field": ["dealflow", "portfolio"],
-    "field-help": ["dealflow", "portfolio"],
-    "err": ["dealflow", "portfolio"],
+    "field-help": ["meetings", "dealflow", "portfolio"],
+    "err": ["meetings", "dealflow", "portfolio"],
     "in-error": ["portfolio"],
     "in-success": ["portfolio"],
     "find-field": ["companies"],
@@ -93,7 +93,7 @@
     "v": ["thesis"],
     "v-current": ["thesis"],
     "thesis-statement": ["thesis"],
-    "eyebrow": ["thesis"],
+    "eyebrow": ["meetings", "thesis"],
 
     "stack": ["meetings", "dealflow", "companies", "portfolio", "thesis", "secondaries"],
     "between": ["meetings", "dealflow", "companies", "portfolio", "thesis", "secondaries"],
