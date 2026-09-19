@@ -618,3 +618,69 @@ describe("a week puts an unread deliverable away, by derivation", () => {
     expect(row?.restored_at).toBeTruthy();
   });
 });
+
+/**
+ * MANY AT ONCE (design/HOME_DESIGN.md §3.4, 19 Sep 2026). Home's Arrived band gained `Mark all
+ * read` and select-many, each ONE request. The pins: zero ids is a 400 (a page that lost its
+ * selection must not be told "done"); a partial batch answers 207 and names what it could not
+ * find; the brief never sits in Arrived (`?exclude_kind=daily_brief` leaves the band's list).
+ */
+describe("many at once, one honest answer", () => {
+  async function make(kind: "research_packet" | "daily_brief", title: string): Promise<string> {
+    const row = await deliver(env, ACTOR, { kind, title, body: "the body", preparedBy: "Wren", preparedFor: "fu_sequoia_taylor" });
+    return row.id;
+  }
+
+  it("refuses zero ids on both verbs rather than answering done to nothing", async () => {
+    for (const verb of ["acknowledge-many", "dismiss-many"]) {
+      for (const body of [{ ids: [] }, {}, { ids: [""] }]) {
+        const res = await handleRequest(apiReq(`/api/deliverables/${verb}`, "POST", body), env);
+        expect(res.status, `${verb} with ${JSON.stringify(body)}`).toBe(400);
+        expect(((await res.json()) as { error: string }).error).toBe("invalid_input");
+      }
+    }
+    const att = await handleRequest(apiReq(`/api/attention/dismiss-many`, "POST", { items: [] }), env);
+    expect(att.status).toBe(400);
+  });
+
+  it("marks every id read in one request and reads 200 when all were found", async () => {
+    const a = await make("research_packet", "batch read a");
+    const b = await make("research_packet", "batch read b");
+    const res = await handleRequest(apiReq(`/api/deliverables/acknowledge-many`, "POST", { ids: [a, b] }), env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; done: string[]; missing: string[]; note: string | null };
+    expect(body.ok).toBe(true);
+    expect(body.done.sort()).toEqual([a, b].sort());
+    expect(body.note).toBeNull();
+    const rows = await listDeliverables();
+    for (const id of [a, b]) {
+      const row = rows.find((r) => r.id === id);
+      expect(row?.acknowledged_by, `${id} must be read and still on the page`).toBe("fu_sequoia_taylor");
+    }
+    const summary = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE event_type = 'home.mark_all_read' ORDER BY rowid DESC LIMIT 1").first<{ payload_json: string }>();
+    expect(JSON.parse(summary!.payload_json)).toMatchObject({ asked: 2, done: 2, missing: 0 });
+  });
+
+  it("puts away what it can, answers 207, and names the id it could not find", async () => {
+    const a = await make("research_packet", "batch away a");
+    const res = await handleRequest(apiReq(`/api/deliverables/dismiss-many`, "POST", { ids: [a, "dlv_does_not_exist"] }), env);
+    expect(res.status).toBe(207);
+    const body = (await res.json()) as { ok: boolean; done: string[]; missing: string[]; note: string | null };
+    expect(body.ok).toBe(false);
+    expect(body.done).toEqual([a]);
+    expect(body.missing).toEqual(["dlv_does_not_exist"]);
+    expect(body.note).toBe("1 of 2 could not be found or are not yours to change.");
+    expect((await listDeliverables()).some((r) => r.id === a), "the one it found is off the page").toBe(false);
+    expect((await listDeliverables("&dismissed=1")).some((r) => r.id === a), "and reachable").toBe(true);
+  });
+
+  it("keeps the brief out of the Arrived list when asked to, and only then", async () => {
+    const packet = await make("research_packet", "beside the brief");
+    const brief = await make("daily_brief", "Morning brief — beside the packet");
+    const shelf = await listDeliverables();
+    expect(shelf.some((r) => r.id === brief), "the unfiltered shelf still carries the brief").toBe(true);
+    const arrived = await listDeliverables("&exclude_kind=daily_brief");
+    expect(arrived.some((r) => r.id === packet)).toBe(true);
+    expect(arrived.some((r) => r.kind === "daily_brief"), "no daily_brief may reach the Arrived band").toBe(false);
+  });
+});

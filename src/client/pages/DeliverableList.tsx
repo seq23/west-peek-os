@@ -336,9 +336,12 @@ export function DeliverableList({
                   <p className="muted small">
                     {d.prepared_by} is shown this before writing the next one.
                   </p>
+                  {/* btn-strong, not btn-primary: Home carries ONE orange control — the preview's
+                      "Approve and send" (design/HOME_DESIGN.md §4, 19 Sep 2026). A note to a
+                      colleague is a strong act, not the page's one decision. */}
                   <button
                     type="button"
-                    className="btn-primary"
+                    className="btn-strong"
                     disabled={busy === d.id || !note.trim()}
                     data-testid={`deliverable-feedback-send-${d.id}`}
                     onClick={() => void sendFeedback(d)}

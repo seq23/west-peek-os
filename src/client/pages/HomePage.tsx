@@ -587,7 +587,12 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                     <div>
                       {delivery && <Face name={delivery.by} role={roleFor(delivery.by) ?? ""} size={28} />}
                       <strong>{delivery?.by ?? m.title}</strong>
-                      <div className="muted small">{delivery?.headline ?? m.title}{typeof m.new_count === "number" && m.seen_at ? ` · ${m.new_count} new since ${sinceWhen(m.seen_at)}` : ""}</div>
+                      <div className="muted small">
+                        {delivery?.headline ?? m.title}
+                        {typeof m.new_count === "number" && m.seen_at && (
+                          <span data-testid={`home-module-new-${m.key}`}> · {m.new_count} new since {sinceWhen(m.seen_at)}</span>
+                        )}
+                      </div>
                       <ul className="module-items">{m.items.slice(0, 2).map((item, i) => <li key={String(item.id ?? i)}>{summarize(m.key, item)}</li>)}</ul>
                     </div>
                     <button type="button" data-testid={`home-open-${m.key}`} onClick={() => void api(`/api/mp-home/modules/${encodeURIComponent(m.key)}/seen`, { method: "POST", body: {} }).then(() => onNavigate(m.link))}>Open</button>
@@ -629,7 +634,9 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                     <div>
                       {delivery && <Face name={delivery.by} role={roleFor(delivery.by) ?? ""} size={28} />}
                       <strong>{delivery?.by ?? m.title}</strong>
-                      <div className="muted small">{m.items.length === 0 ? (delivery?.whenEmpty ?? m.note ?? "Nothing to report.") : `nothing new since ${m.seen_at ? sinceWhen(m.seen_at) : "you last looked"}`}</div>
+                      <div className="muted small" data-testid={m.items.length === 0 ? `home-module-empty-${m.key}` : `home-module-quiet-${m.key}`}>
+                        {m.items.length === 0 ? (delivery?.whenEmpty ?? m.note ?? "Nothing to report.") : `nothing new since ${m.seen_at ? sinceWhen(m.seen_at) : "you last looked"}`}
+                      </div>
                     </div>
                     <button type="button" data-testid={`home-open-${m.key}`} onClick={() => void api(`/api/mp-home/modules/${encodeURIComponent(m.key)}/seen`, { method: "POST", body: {} }).then(() => onNavigate(m.link))}>Open {m.title}</button>
                   </li>
