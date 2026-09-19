@@ -4,6 +4,8 @@ import { actorFromIdentity, authorize } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { pageHost } from "../../shared/help/pageHosts";
 import { pagePurpose } from "../../shared/help/pagePurpose";
+import { pageGuide } from "../../shared/help/pageGuide";
+import { asksHowThePageWorks, renderGuideAnswer, renderGuideMarkdown } from "../../shared/help/pageGuide/render";
 import { guidanceBlock } from "../../shared/skills/library";
 import { personaFor } from "../../shared/registry/aiEmployeePersonas";
 
@@ -34,6 +36,15 @@ import { personaFor } from "../../shared/registry/aiEmployeePersonas";
  * no email — `aiOutbound.ts` governs that and is not consulted here because nothing here sends
  * anything. A partner who wants work done presses the control on the page; this box explains which
  * control that is.
+ *
+ * "HOW DOES THIS PAGE WORK" IS NOT A MODEL QUESTION. Owner, 19 Sep 2026, after asking Walter on
+ * Meetings: "I can't understand anything he said — it's all jumbled … I think he still has the old
+ * page instructions." Both halves were true. The prompt carried `pagePurpose`, which still described
+ * the page before that week's redesign, and the model paraphrased it into one paragraph. So for
+ * this one question the answer is the page's GUIDE (`pageGuide/`), rendered verbatim — a fixed
+ * shape, held to the page by `validate:page-guides`, with no model in the loop to paraphrase it
+ * and nothing to spend. Every other question still goes to the model, but with the same guide as
+ * its only description of the page, and a format it may not depart from.
  */
 
 /** Long enough to be a question, short enough that the box is not a document editor. */
@@ -141,6 +152,20 @@ export async function handlePageReply(ctx: RouteContext): Promise<Response> {
     return json({ ok: false, reply: null, detail: why });
   }
 
+  const guide = pageGuide(navKey);
+
+  // The guide, verbatim, as a recorded HOST turn with no run behind it. `detail = 'GUIDE'` says
+  // where it came from, so a reader of the thread table can tell a spoken guide from a model turn.
+  if (guide && asksHowThePageWorks(message)) {
+    const reply = renderGuideAnswer(guide);
+    await ctx.env.WP_OS_DB.prepare(
+      "INSERT INTO page_turn (id, nav_key, firm_user_id, turn_no, role, body, state, detail) VALUES (?1, ?2, ?3, ?4, 'HOST', ?5, 'OK', 'GUIDE')",
+    )
+      .bind(`pt_${crypto.randomUUID()}`, navKey, ctx.identity!.id, nextNo + 1, reply)
+      .run();
+    return json({ ok: true, reply, detail: null, source: "guide" });
+  }
+
   const purpose = pagePurpose(navKey);
   const guidance = guidanceBlock(host.machineKeys);
   const persona = personaFor(host.name);
@@ -155,8 +180,17 @@ export async function handlePageReply(ctx: RouteContext): Promise<Response> {
         persona?.voice ? `How you come across: ${persona.voice}` : "",
         "",
         `WHY THIS PAGE IS YOURS: ${host.because}`,
-        purpose ? `WHAT THIS PAGE IS FOR: ${purpose.purpose}` : "",
-        purpose ? `WHAT THEY CAN DO HERE: ${purpose.youCan.join("; ")}.` : "",
+        guide
+          ? [
+              "THE PAGE, AS IT IS TODAY. This is the only description of the page you have, and it is",
+              "kept true to the page by a build check. Every band and every control named below exists;",
+              "nothing else does. Never name a control, tab, band or step that is not in it.",
+              "",
+              renderGuideMarkdown(guide),
+            ].join("\n")
+          : purpose
+            ? `WHAT THIS PAGE IS FOR: ${purpose.purpose}\nWHAT THEY CAN DO HERE: ${purpose.youCan.join("; ")}.`
+            : "",
         "",
         guidance,
         "",
@@ -173,7 +207,11 @@ export async function handlePageReply(ctx: RouteContext): Promise<Response> {
         "them where on the page to read the real figure. A confident made-up number is the single",
         "worst thing you can produce here.",
         "",
-        "Short. Direct. No preamble, no restating their question, no offers to help further.",
+        "HOW TO WRITE IT. Markdown, in this shape and no other: one line that answers, then numbered",
+        "steps or short bullets, never a paragraph; the name of every control in **bold**, exactly as",
+        "it is written on the page; at most twelve lines; readable on a phone. Short. Direct. No",
+        "preamble, no restating their question, no offers to help further, and do not end with a",
+        "question back to them.",
         "",
         priorTurns.length > 0 ? "The conversation so far:" : "",
         ...priorTurns.map((t) => `${t.role === "PARTNER" ? "Partner" : "You"}: ${t.body}`),

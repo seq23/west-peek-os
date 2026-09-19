@@ -1,20 +1,42 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CONNECTION_FACTS, FIRM_SENDING_FACTS, SEND_AS_FACTS } from "@shared/help/connectionFacts";
-import { AI_EMPLOYEE_ROSTER, MAX_ACTIVE_AI_EMPLOYEES_DOC } from "../lib/helpFacts";
+import { PAGE_GUIDES, pageGuidesInOrder, type PageGuide } from "@shared/help/pageGuide";
+import { renderGuideMarkdown, titleOf } from "@shared/help/pageGuide/render";
+import { pageHost } from "@shared/help/pageHosts";
+import { pagePurpose } from "@shared/help/pagePurpose";
+import { AI_EMPLOYEE_ROSTER, FOCUS_TEAM_SIZE_DOC, MAX_ACTIVE_AI_EMPLOYEES_DOC } from "../lib/helpFacts";
+import { MarkdownLite } from "../components/MarkdownLite";
 
 /**
- * The Help Center (P26 §2).
+ * The Help tab.
  *
- * THE RULE THIS FILE OBEYS: a help page may state what the product DOES, and may state what a
- * subsystem WOULD do once configured, but it may never assert that an integration is connected,
- * reachable or working. Those are runtime facts and they belong to the readiness surface, not to
- * prose that was true on the day someone typed it.
+ * TWO HALVES, ONE SOURCE EACH. The first half is THE PAGES: one section per page, rendered from the
+ * page's guide in `src/shared/help/pageGuide/` — the same text the page's host speaks when asked
+ * "how does this page work", and the same purpose the block at the top of the page shows. Nothing
+ * here is typed by hand about a page. Owner, 19 Sep 2026: Walter described Meetings as it was a
+ * week earlier, and this tab still carried its own, third description of the same page. A guide is
+ * held to the page by `validate:page-guides`; a paragraph here was held to nothing.
  *
- * So every topic below carries an explicit maturity marker. Where a claim depends on live state,
- * the topic says so and points at the surface that knows. Topics whose honest status cannot yet be
- * established are marked AUDIT PENDING rather than given confident text — an unverified claim in a
- * help centre is worse than an admitted gap, because the operator acts on it.
+ * The second half is HOW THE FIRM WORKS: the material that is not about one page — what needs a
+ * person, the employees, jobs, privacy, why something is blocked. Each topic carries a maturity
+ * marker and, where it states a rule, says where in the code that rule lives, so a reader can check
+ * it rather than trust it.
+ *
+ * THE RULE THIS FILE STILL OBEYS: it may say what the product DOES and what a subsystem WOULD do
+ * once configured; it may never assert that an integration is connected or working. Those are live
+ * facts and belong to Integrations and Diagnostics.
+ *
+ * `How everything works →` on a page lands on that page's section: the block writes the key to
+ * `sessionStorage` before navigating and this page scrolls to it on arrival.
  */
+
+/** Where the purpose block leaves the page it came from. Same mechanism as Documents' focus. */
+export const HELP_FOCUS_KEY = "wpos.help.focus";
+
+export interface HelpGroup {
+  group: string;
+  keys: readonly string[];
+}
 
 type Maturity =
   | "IMPLEMENTED"
@@ -57,6 +79,8 @@ interface Topic {
   id: string;
   title: string;
   maturity: Maturity;
+  /** Words the search may match beyond the title. */
+  keywords?: string;
   body: JSX.Element;
 }
 
@@ -66,6 +90,15 @@ function MaturityTag({ maturity }: { maturity: Maturity }): JSX.Element {
     <span className={`help-tag help-tag-${m.tone}`} title={m.blurb} data-testid={`help-tag-${maturity}`}>
       {m.label}
     </span>
+  );
+}
+
+/** Where a rule lives, so a reader can check it rather than trust it. */
+function Where({ path }: { path: string }): JSX.Element {
+  return (
+    <p className="muted small help-where">
+      Where this is enforced: <code>{path}</code>
+    </p>
   );
 }
 
@@ -144,24 +177,26 @@ const TOPICS: Topic[] = [
     id: "getting-started",
     title: "Getting started in five minutes",
     maturity: "IMPLEMENTED",
+    keywords: "start begin first day nav",
     body: (
       <ol>
         <li>
-          <strong>Home</strong> — what needs attention, what changed, what is blocked.
+          <strong>Home</strong> — what is waiting on you, what arrived, and today's brief on demand.
         </li>
         <li>
-          <strong>Work → Approvals</strong> — the decisions only a Managing Partner can make.
+          <strong>Now → Approvals</strong> — the decisions only a person can make, and what you have delegated.
         </li>
         <li>
-          <strong>Team → Employees</strong> — the AI roster, who is active, and the activation cap.
+          <strong>Now → Work</strong> — the Desk, the Record and the Machinery: what needs you, what is finished, what runs on a clock.
         </li>
         <li>
-          <strong>Work → Scheduled Work</strong> — recurring jobs, their cadence, and why any are
-          paused.
+          <strong>Deals</strong> — Thesis, Dealflow, Companies, Meetings, Secondaries, Portfolio, Fund strategy. Each page's section above says what is on it and who hosts it.
         </li>
         <li>
-          <strong>More / System</strong> — administration and diagnostics, only when something is
-          wrong.
+          <strong>Firm → Employees</strong> — who is on duty, who is employed, one press to employ.
+        </li>
+        <li>
+          <strong>Admin</strong> — how the system is set up and behaving, only when something is wrong.
         </li>
       </ol>
     ),
@@ -170,17 +205,24 @@ const TOPICS: Topic[] = [
     id: "cadence",
     title: "The Wednesday-to-Wednesday cadence",
     maturity: "IMPLEMENTED",
+    keywords: "week wednesday prep packet weekly review",
     body: (
       <>
         <p>
           The firm operates on a Wednesday-to-Wednesday week. The Managing Partner meeting on
           Wednesday is the decision point, and the week either prepares for it or executes what it
-          decided.
+          decided. Surfaces that group work "since last Wednesday" are using that boundary, not a
+          rolling seven days.
         </p>
-        <p>
-          Surfaces that group work "since last Wednesday" are using that boundary, not a rolling
-          seven days.
-        </p>
+        <ul>
+          <li>
+            <strong>Each partner's Wednesday prep packet</strong> is written by a job the night before and arrives on Home.
+          </li>
+          <li>
+            <strong>The shared weekly review is archived</strong> (18 Sep 2026). What was written is kept and still answers its address; nothing new is generated.
+          </li>
+        </ul>
+        <Where path="src/worker/services/meetingPrep.ts · scripts/validate/an-archived-lane-stays-archived.mjs" />
       </>
     ),
   },
@@ -188,66 +230,101 @@ const TOPICS: Topic[] = [
     id: "ai-vs-human",
     title: "What AI can do, and what needs you",
     maturity: "REQUIRES_APPROVAL",
+    keywords: "reserved approval human partner decide",
     body: (
       <>
         <p>AI in West Peek OS drafts, researches, monitors, summarises and prepares. It does not decide.</p>
-        <p>
-          <strong>Always a Managing Partner:</strong> investment decisions, activating an AI
-          employee, enabling consequential recurring work, anything designated a reserved action, and
-          any external communication to an LP, founder, portfolio company or the community.
-        </p>
-        <p>
-          Governed actions <em>fail closed</em>. If authority cannot be established, the action is
-          refused rather than attempted.
-        </p>
+        <ul>
+          <li>
+            <strong>Always a person:</strong> investing, booking a position, approving what goes to an LP, employing an AI employee for the first time, turning the Google Meet firm default off, any reserved action, and anything sent outside the firm.
+          </li>
+          <li>
+            <strong>One choke point.</strong> Every external effect and every reserved action passes through <code>authorize()</code>, which answers allow, require approval, or deny — and a require-approval answer is a card on Approvals.
+          </li>
+          <li>
+            <strong>Fail closed.</strong> If authority cannot be established, the action is refused rather than attempted, and the refusal names the missing authority.
+          </li>
+        </ul>
+        <Where path="src/worker/services/authorize.ts · src/shared/registry/reservedActions.ts · scripts/validate/no-unauthorized-effects.mjs" />
       </>
     ),
   },
   {
     id: "employees",
-    title: "AI employees and activation",
+    title: "AI employees and employment",
     maturity: "REQUIRES_APPROVAL",
+    keywords: "roster employ activate duty cap on duty pause retire",
     body: (
       <>
         <p>
-          There is a governed roster of <strong>{AI_EMPLOYEE_ROSTER} AI employee roles</strong>. Every
-          employee starts <code>INACTIVE</code>. At most{" "}
-          <strong>{MAX_ACTIVE_AI_EMPLOYEES_DOC} may be active at once</strong> — the cap is enforced
-          by the server, not by the interface.
+          There is a governed roster of <strong>{AI_EMPLOYEE_ROSTER} AI employee roles</strong>. All{" "}
+          <strong>{MAX_ACTIVE_AI_EMPLOYEES_DOC} may be active at once</strong> — the cap is the whole
+          roster. What stays small is the <strong>duty window</strong>: {FOCUS_TEAM_SIZE_DOC} on point
+          in a given hour, because attention is the scarce thing, not headcount.
         </p>
-        <p>
-          Activation requires explicit human selection and an approval receipt. An employee cannot
-          activate itself, and the interface cannot bypass the cap. Lifecycle states you will see:{" "}
-          <code>INACTIVE</code>, <code>CANDIDATE</code>, <code>ACTIVE</code>, <code>PAUSED</code>,{" "}
-          <code>RESTRICTED</code>, <code>RETIRED</code>.
-        </p>
+        <ol>
+          <li>
+            <strong>Employ</strong> on the employee's card is one press. The first employment raises one approval card; if you hold the role, it is approved as you press.
+          </li>
+          <li>
+            <strong>Working — turn off</strong> pauses an employee without a card. Restrict and retire are on the employee's detail panel.
+          </li>
+          <li>
+            <strong>On duty now</strong> at the top of Employees shows who is on point this hour; the roster itself is on AI controls.
+          </li>
+          <li>
+            An employee cannot employ itself, and the interface cannot bypass the cap.
+          </li>
+        </ol>
+        <Where path="src/worker/services/aiEmployees.ts (MAX_ACTIVE_AI_EMPLOYEES, FOCUS_TEAM_SIZE) · tests/help-facts.test.ts" />
       </>
     ),
   },
   {
     id: "work-approvals",
-    title: "Work and approvals",
+    title: "Work cards and approval cards",
     maturity: "IMPLEMENTED",
+    keywords: "card block sweep done blocked receipt",
     body: (
-      <p>
-        Work is captured, routed and tracked as work cards, moving through <code>OPEN</code>,{" "}
-        <code>IN_PROGRESS</code>, <code>BLOCKED</code>, <code>DONE</code> and <code>CANCELLED</code>.
-        Anything reserved becomes an approval card carrying its own receipt, so what was decided, by
-        whom, and on what evidence stays auditable.
-      </p>
+      <>
+        <ol>
+          <li>
+            <strong>A work card</strong> is a unit of work somebody owns with a next action. It moves through open, in progress, blocked, done and cancelled.
+          </li>
+          <li>
+            <strong>The sweep</strong> works the oldest employee-owned card every five minutes, up to three attempts, and ends it Done or Blocked. A blocked card says what it was asked and what would clear it.
+          </li>
+          <li>
+            <strong>An approval card</strong> is raised whenever a reserved action is requested. Approving it executes the action and writes a receipt — who approved what, when, on what evidence.
+          </li>
+          <li>
+            <strong>Standing authority</strong> — "approve, and don't ask again" until the task is done, today, or this week — is shown at the top of Approvals with Stop this on each grant. Reserved actions never delegate.
+          </li>
+        </ol>
+        <Where path="src/worker/services/workSweep.ts · src/worker/services/approvals.ts · src/worker/services/standingAuthority.ts · scripts/validate/a-block-can-be-cleared.mjs" />
+      </>
     ),
   },
   {
     id: "scheduled",
     title: "Scheduled and recurring work",
     maturity: "DEPENDS_ON_LIVE_STATE",
+    keywords: "job cron tick machinery cadence pause",
     body: (
-      <p>
-        Recurring work runs as jobs with an explicit cadence. New jobs are created{" "}
-        <code>PAUSED</code>; enabling one is a governed step. A job that cannot run will say why —
-        a missing employee, capability, integration, provider, authorisation or credential — rather
-        than failing silently.
-      </p>
+      <>
+        <ol>
+          <li>
+            <strong>One cron trigger</strong> runs every due job. The same path is <code>POST /api/jobs/tick</code>, and <strong>Run everything due now</strong> on Work → Machinery presses it by hand.
+          </li>
+          <li>
+            <strong>A job is on unless there is a stated reason it is not.</strong> Pausing one needs a reason; putting it back on does not.
+          </li>
+          <li>
+            <strong>A job that cannot run says why</strong> — a missing employee, integration, provider or credential — rather than failing silently, and a job that died is a notification.
+          </li>
+        </ol>
+        <Where path="src/worker/services/jobs.ts · src/shared/work/scheduledWork.ts" />
+      </>
     ),
   },
   {
@@ -266,15 +343,31 @@ const TOPICS: Topic[] = [
     id: "governance",
     title: "Governance, privacy and security",
     maturity: "IMPLEMENTED",
+    keywords: "privacy mode lockdown frontier local spend lever budget egress",
     body: (
-      <ul>
-        <li>Reserved actions require a Managing Partner and produce an approval receipt.</li>
-        <li>Evidence and provenance are retained for governed activity.</li>
-        <li>Privacy and egress controls constrain what may leave the system.</li>
-        <li>Budgets and cost limits bound AI spend.</li>
-        <li>Deterministic calculations are not delegated to a model.</li>
-        <li>Governed actions fail closed; a false success is never shown.</li>
-      </ul>
+      <>
+        <ul>
+          <li>
+            <strong>Reserved actions</strong> require a Managing Partner and produce an approval receipt.
+          </li>
+          <li>
+            <strong>Privacy mode</strong> is one of LOCAL, FRONTIER or LOCKDOWN; LOCAL and LOCKDOWN route every AI run to the deterministic offline adapter and nothing leaves the system.
+          </li>
+          <li>
+            <strong>Spend</strong> is one lever — FREE_ONLY, MODERATE or OPEN — with a monthly ceiling set on Cockpit; a free route never sees LP or deal material.
+          </li>
+          <li>
+            <strong>Evidence and provenance</strong> are retained for governed activity; deterministic calculations are never delegated to a model.
+          </li>
+          <li>
+            <strong>Governed actions fail closed;</strong> a false success is never shown.
+          </li>
+          <li>
+            <strong>No fund term is invented.</strong> Check size, ownership, reserves, pace, closing dates and LP totals appear only once you entered them — on Thesis, Fund strategy or LP — and a figure the record does not hold reads as not recorded, never as a guess.
+          </li>
+        </ul>
+        <Where path="docs/AI_GOVERNANCE.md · scripts/validate/one-lever-not-four.mjs · scripts/validate/free-lanes-cannot-see-confidential.mjs · src/shared/fund/pace.ts (no clock, nothing guessed)" />
+      </>
     ),
   },
   {
@@ -284,15 +377,19 @@ const TOPICS: Topic[] = [
     body: (
       <dl className="help-glossary">
         <dt>Work card</dt>
-        <dd>A unit of tracked work.</dd>
+        <dd>A unit of tracked work, with an owner and a next action.</dd>
         <dt>Reserved action</dt>
         <dd>An action that may only proceed with a Managing Partner approval.</dd>
         <dt>Receipt</dt>
         <dd>The durable record of who approved what, when, on what evidence.</dd>
+        <dt>Face</dt>
+        <dd>One of the tabs a record has — a meeting's Before, During and After; a deal's five.</dd>
+        <dt>Band</dt>
+        <dd>One horizontal section of a page, with a heading and one question it answers.</dd>
+        <dt>Host</dt>
+        <dd>The AI employee responsible for a page, whose card sits at the top and who answers questions about it.</dd>
         <dt>Machine</dt>
         <dd>An internal execution surface work can be routed to. Administration only.</dd>
-        <dt>Capability</dt>
-        <dd>A specific thing an employee is permitted to do.</dd>
         <dt>Data class</dt>
         <dd>The sensitivity label that governs where data may travel.</dd>
         <dt>Provider</dt>
@@ -304,18 +401,20 @@ const TOPICS: Topic[] = [
     id: "blocked",
     title: "Why something is blocked",
     maturity: "IMPLEMENTED",
+    keywords: "stuck refused waiting",
     body: (
       <>
         <p>Blocked is a designed state, not an error. Common causes:</p>
         <ul>
           <li>An approval is required and has not been given.</li>
-          <li>No employee is active for the work, or the activation cap is reached.</li>
+          <li>No employee is employed for the work.</li>
           <li>A capability, integration or provider is not configured.</li>
           <li>A credential is missing, or two credentials conflict and the choice is yours.</li>
           <li>OAuth is required and has not been completed.</li>
-          <li>An external provider is unavailable.</li>
+          <li>An external provider is unavailable, and the lane has been stood down.</li>
         </ul>
-        <p>The surface that blocked the work names the specific cause and the action that clears it.</p>
+        <p>The surface that blocked the work names the specific cause and the door that clears it.</p>
+        <Where path="src/shared/work/blocks.ts · scripts/validate/a-stopped-card-says-why.mjs" />
       </>
     ),
   },
@@ -323,150 +422,27 @@ const TOPICS: Topic[] = [
     id: "integrations",
     title: "Integrations and provider readiness",
     maturity: "DEPENDS_ON_LIVE_STATE",
+    keywords: "provider connected google cloudflare openrouter credential",
     body: (
       <>
         <p>
           <strong>This topic will not tell you an integration is working.</strong> That is a live
-          fact; the readiness surface under <em>More / System → Integrations</em> is authoritative.
+          fact; <em>Admin → Integrations</em> and <em>Admin → Diagnostics</em> are authoritative, and
+          they read the system rather than its settings.
         </p>
-        <p>What the P26 audit established, and what it did not:</p>
         <ul>
           <li>
-            <strong>Cloudflare (Worker, D1, KV, R2) — connected and externally verified.</strong> A
-            real production deploy succeeded with all three bindings verified, and{" "}
-            <code>os.joinwestpeek.com</code> is live behind Cloudflare Access.
+            <strong>Providers</strong> are turned on and off on Cockpit; which of them may see which data class is fixed at the router, not in a prompt.
           </li>
           <li>
-            <strong>All AI work flows through OpenRouter.</strong> It is the one enabled provider and
-            its credential is bound in production. It is <em>configured, not externally verified</em>{" "}
-            — no model call has been made yet, so the first real run is the proof.
+            <strong>Google</strong> — each partner connects their own mailbox and calendar; the firm's Meet calls are read by the calendar and Meet jobs once the firm default is on.
           </li>
           <li>
-            <strong>Sensitive material still cannot reach it.</strong> Enabling the lane did not widen
-            egress: only <code>PUBLIC</code> and <code>INTERNAL</code> may go to OpenRouter.{" "}
-            <code>CONFIDENTIAL</code>, <code>RESTRICTED</code>, <code>LP_PRIVATE</code>,{" "}
-            <code>MNPI_SENSITIVE</code> and <code>BANKING_RESTRICTED</code> are denied.
-          </li>
-          <li>
-            <strong>Fireworks is unconfigured</strong> (no credential exists), and the other model
-            vendors are deliberately disabled — one lane, on purpose.
-          </li>
-          <li>
-            <strong>Harvey and Norm are configuration only.</strong> Registered, disabled, with no
-            data-class allowance and no vendor account. Their adapters are explicitly unproven.
-          </li>
-          <li>
-            <strong>Connectors ship <code>NOT_CONFIGURED</code>.</strong> A connector row is
-            configuration, not a working integration.
+            <strong>Credentials</strong> live only in the vault. A missing or conflicting one is shown to you as a choice, never resolved on your behalf.
           </li>
         </ul>
-        <p>
-          Credentials exist in the vault for a primary model provider, but several plausible ones
-          across different vendors compete and none has been chosen — a conflict is shown to you
-          rather than resolved on your behalf. See{" "}
-          <code>docs/PROVIDER_READINESS_AUDIT.md</code> for the full mapping.
-        </p>
+        <Where path="src/worker/ai/routing.ts · src/worker/services/health.ts · docs/ENVIRONMENT_CONTRACT.md" />
       </>
-    ),
-  },
-  {
-    id: "intelligence",
-    title: "Intelligence and research",
-    maturity: "IMPLEMENTED_LOCAL_ONLY",
-    body: (
-      <>
-        <p>
-          The boundary that matters here is <strong>research versus evidence</strong>. A finding
-          stays research — useful, but not something a decision may rest on — until it is explicitly
-          promoted. Promotion is what turns it into governed evidence with provenance attached.
-        </p>
-        <p>
-          That promotion step is proven end to end by the browser suite, not merely coded. What is{" "}
-          <em>not</em> established is freshness or coverage from any external source: research
-          quality depends on providers, and only the OpenRouter lane is configured, unverified.
-        </p>
-      </>
-    ),
-  },
-  {
-    id: "investing",
-    title: "Investing, diligence and IC",
-    maturity: "IMPLEMENTED_LOCAL_ONLY",
-    body: (
-      <>
-        <p>
-          The full path is implemented and proven end to end:{" "}
-          <strong>opportunity → deal math → IC packet → receipted decision</strong>. The decision
-          carries a receipt, so what was decided, by whom, and on what evidence stays auditable.
-        </p>
-        <p>
-          Allocation is enforced against <strong>pinned policy versions</strong>: a breach is made
-          visible and clearing it takes a receipted human decision rather than an override.
-        </p>
-        <p>
-          Meetings gate on <strong>consent and recording</strong> before anything is captured, and a
-          commitment made in a meeting becomes a work card rather than a note someone must remember.
-        </p>
-      </>
-    ),
-  },
-  {
-    id: "lp",
-    title: "LP and fundraising",
-    maturity: "IMPLEMENTED_LOCAL_ONLY",
-    body: (
-      <>
-        <p>
-          The LP path is implemented and proven end to end:{" "}
-          <strong>evidence gate → compliance receipt → publish → recorded share → revocation</strong>.
-          Material cannot be published without passing the evidence gate, every share is recorded,
-          and access can be revoked afterwards.
-        </p>
-        <p>
-          Reporting works the same way: review gates, then receipted distribution. A reconciliation
-          exception is raised rather than resolved by overwriting — the system will not quietly make
-          two numbers agree.
-        </p>
-        <p>
-          Fund I is a $30M target and the firm is earliest-stage / pre-seed oriented.{" "}
-          <strong>No other fund term is asserted anywhere in this product</strong> — not check size,
-          ownership target, reserve policy, deployment pace, closing dates or current LP totals —
-          unless you entered it.
-        </p>
-      </>
-    ),
-  },
-  {
-    id: "portfolio",
-    title: "Portfolio",
-    maturity: "IMPLEMENTED_LOCAL_ONLY",
-    body: (
-      <>
-        <p>
-          Proven end to end:{" "}
-          <strong>dated metrics → deterioration alert → support request → match → MP introduction gate</strong>.
-          An introduction to a portfolio company is gated on a Managing Partner, not sent because a
-          match looked good.
-        </p>
-        <p>
-          Deterioration is a <strong>deterministic, direction-aware comparison of dated values</strong>,
-          not a model judgement. Two details worth knowing, both asserted by tests: an improvement
-          raises nothing, and if you have not configured severity bands the alert still fires but
-          reports its severity as <em>unconfigured</em> rather than inventing one.
-        </p>
-      </>
-    ),
-  },
-  {
-    id: "notifications",
-    title: "Notifications",
-    maturity: "IMPLEMENTED_LOCAL_ONLY",
-    body: (
-      <p>
-        Notifications surface changes that need your attention. Delivery to any external channel
-        depends on that channel being configured; in-product notification is what this build
-        validates.
-      </p>
     ),
   },
   {
@@ -484,38 +460,123 @@ const TOPICS: Topic[] = [
           missing authority.
         </li>
         <li>
-          <strong>A job will not run.</strong> Open the job; its blocker is listed explicitly.
+          <strong>A job will not run.</strong> Open it on Work → Machinery; its blocker is listed explicitly.
         </li>
         <li>
-          <strong>An integration looks wrong.</strong> Trust <em>More / System → Integrations</em>,
-          not this Help Center.
+          <strong>An integration looks wrong.</strong> Trust <em>Admin → Integrations</em>,
+          not this Help tab.
+        </li>
+        <li>
+          <strong>A host says something the page does not have.</strong> Ask again with "how does this page work" — that answer is the page's guide, verbatim, and a build check holds it to the page.
         </li>
       </ul>
     ),
   },
 ];
 
-export function HelpCenterPage(): JSX.Element {
+/** Words the search may match on a page's section: its title, purpose, bands and controls. */
+function pageSearchText(g: PageGuide): string {
+  return [g.title, g.navKey, g.purpose, ...g.youCan, ...g.bands.map((b) => `${b.name} ${b.shows}`), ...g.acts.map((a) => `${a.label} ${a.does}`)]
+    .join(" ")
+    .toLowerCase();
+}
+
+/** The nav groups when App.tsx does not hand them over (Help before sign-in) — the same keys. */
+const FALLBACK_GROUPS: readonly HelpGroup[] = [
+  { group: "", keys: ["home", "intent", "capture"] },
+  { group: "Now", keys: ["approvals", "work", "notifications"] },
+  { group: "Deals", keys: ["thesis", "dealflow", "companies", "meetings", "secondaries", "portfolio", "fund-strategy"] },
+  { group: "Firm", keys: ["lp", "rooms", "community", "employees", "record"] },
+  { group: "Learn", keys: ["research", "university", "documents"] },
+  {
+    group: "Admin",
+    keys: ["cockpit", "ai-controls", "sources-and-sweeps", "machines", "governance", "contradictions", "cross-office", "activity", "integrations", "network", "diagnostics"],
+  },
+];
+
+function PageSection({ navKey, onNavigate }: { navKey: string; onNavigate?: (key: string) => void }): JSX.Element | null {
+  const guide = PAGE_GUIDES[navKey];
+  const purpose = pagePurpose(navKey);
+  const host = pageHost(navKey);
+  if (!guide && !purpose) return null;
+  return (
+    <section id={`help-page-${navKey}`} className="help-topic help-page" data-testid={`help-page-${navKey}`}>
+      <h3>
+        {titleOf(navKey)}
+        {onNavigate && (
+          <button type="button" className="link-button help-page-open" data-testid={`help-page-open-${navKey}`} onClick={() => onNavigate(navKey)}>
+            Open {titleOf(navKey)} →
+          </button>
+        )}
+      </h3>
+      {host && (
+        <p className="muted small" data-testid={`help-page-host-${navKey}`}>
+          Hosted by <strong>{host.name}</strong>, {host.role} — ask {host.name} on the page itself.
+        </p>
+      )}
+      {guide ? (
+        <MarkdownLite text={renderGuideMarkdown(guide)} className="md-lite" />
+      ) : (
+        <>
+          <p>{purpose!.purpose}</p>
+          <ul>
+            {purpose!.youCan.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+export function HelpCenterPage({ groups, onNavigate }: { groups?: readonly HelpGroup[]; onNavigate?: (key: string) => void } = {}): JSX.Element {
   const [query, setQuery] = useState("");
   const needle = query.trim().toLowerCase();
-  const shown = needle
-    ? TOPICS.filter((t) => t.title.toLowerCase().includes(needle) || t.id.includes(needle))
+  const navGroups = (groups ?? FALLBACK_GROUPS).filter((g) => g.keys.length > 0 && !g.keys.includes("help"));
+  const orderedKeys = navGroups.flatMap((g) => g.keys);
+  // Every page with a guide is listed even if the nav handed over does not carry it (a route that
+  // is off the nav still has a section, so a bookmark's page is explained).
+  const guidedExtras = pageGuidesInOrder(orderedKeys).map((g) => g.navKey).filter((k) => !orderedKeys.includes(k));
+
+  const pageMatches = (k: string): boolean => {
+    if (!needle) return true;
+    const g = PAGE_GUIDES[k];
+    if (g) return pageSearchText(g).includes(needle);
+    const p = pagePurpose(k);
+    return Boolean(p && `${titleOf(k)} ${k} ${p.purpose} ${p.youCan.join(" ")}`.toLowerCase().includes(needle));
+  };
+  const shownTopics = needle
+    ? TOPICS.filter((t) => t.title.toLowerCase().includes(needle) || t.id.includes(needle) || (t.keywords ?? "").includes(needle))
     : TOPICS;
+  const shownGroups = navGroups
+    .map((g) => ({ group: g.group, keys: g.keys.filter(pageMatches) }))
+    .filter((g) => g.keys.length > 0);
+  const shownExtras = guidedExtras.filter(pageMatches);
+  const nothing = shownTopics.length === 0 && shownGroups.length === 0 && shownExtras.length === 0;
+
+  // Arrived from a page's "How everything works →": land on that page's section.
+  useEffect(() => {
+    let key: string | null = null;
+    try {
+      key = sessionStorage.getItem(HELP_FOCUS_KEY);
+      if (key) sessionStorage.removeItem(HELP_FOCUS_KEY);
+    } catch {
+      key = null;
+    }
+    if (!key) return;
+    const el = document.getElementById(`help-page-${key}`);
+    if (el) el.scrollIntoView({ block: "start" });
+  }, []);
 
   return (
     <div data-testid="help-center-page">
       <p className="surface-lede">
-        How West Peek OS works, what it does for you, and what still needs a Managing Partner. Every
-        topic is marked with how far it has actually been proven.
+        Every page, in the same shape — what it is for, what you see top to bottom, what you can do,
+        what runs on its own, and where the rest lives — then how the firm works around them. A
+        page's section is the same text its host speaks when asked how the page works; a build check
+        holds it to the page.
       </p>
-
-      <div className="help-legend" data-testid="help-legend">
-        {(Object.keys(MATURITY_COPY) as Maturity[]).map((m) => (
-          <span key={m} className={`help-tag help-tag-${MATURITY_COPY[m].tone}`}>
-            {MATURITY_COPY[m].label}
-          </span>
-        ))}
-      </div>
 
       <label className="help-search">
         <span>Search help</span>
@@ -523,28 +584,67 @@ export function HelpCenterPage(): JSX.Element {
           type="search"
           value={query}
           data-testid="help-search"
-          placeholder="approvals, employees, blocked…"
+          placeholder="meetings, approvals, employees, blocked…"
           onChange={(e) => setQuery(e.target.value)}
         />
       </label>
 
       <nav aria-label="Help topics" className="help-toc" data-testid="help-toc">
-        <ul>
-          {shown.map((t) => (
-            <li key={t.id}>
-              <a href={`#help-${t.id}`}>{t.title}</a>
-            </li>
-          ))}
-        </ul>
+        {shownGroups.map((g) => (
+          <div key={g.group || "pinned"} className="help-toc-group">
+            <span className="help-toc-label">{g.group || "Pinned"}</span>
+            <ul>
+              {g.keys.map((k) => (
+                <li key={k}>
+                  <a href={`#help-page-${k}`}>{titleOf(k)}</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+        {shownTopics.length > 0 && (
+          <div className="help-toc-group">
+            <span className="help-toc-label">How the firm works</span>
+            <ul>
+              {shownTopics.map((t) => (
+                <li key={t.id}>
+                  <a href={`#help-${t.id}`}>{t.title}</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </nav>
 
-      {shown.length === 0 && (
+      {nothing && (
         <p className="notice" data-testid="help-no-results">
-          No help topic matches “{query}”. Try “approvals”, “employees”, “blocked” or “glossary”.
+          No page or topic matches “{query}”. Try “meetings”, “approvals”, “employees”, “blocked” or “glossary”.
         </p>
       )}
 
-      {shown.map((t) => (
+      {(shownGroups.length > 0 || shownExtras.length > 0) && (
+        <h3 className="help-part" data-testid="help-pages">
+          The pages
+        </h3>
+      )}
+      {shownGroups.map((g) => g.keys.map((k) => <PageSection key={k} navKey={k} onNavigate={onNavigate} />))}
+      {shownExtras.map((k) => (
+        <PageSection key={k} navKey={k} onNavigate={onNavigate} />
+      ))}
+
+      {shownTopics.length > 0 && (
+        <h3 className="help-part" data-testid="help-firm">
+          How the firm works
+        </h3>
+      )}
+      <div className="help-legend" data-testid="help-legend">
+        {(Object.keys(MATURITY_COPY) as Maturity[]).map((m) => (
+          <span key={m} className={`help-tag help-tag-${MATURITY_COPY[m].tone}`}>
+            {MATURITY_COPY[m].label}
+          </span>
+        ))}
+      </div>
+      {shownTopics.map((t) => (
         <section key={t.id} id={`help-${t.id}`} className="help-topic" data-testid={`help-topic-${t.id}`}>
           <h3>
             {t.title} <MaturityTag maturity={t.maturity} />

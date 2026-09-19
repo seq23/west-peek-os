@@ -1595,6 +1595,48 @@ details h3 {
   padding: 0;
 }
 .help-toc a { color: var(--wp-orange-deep); font-size: var(--text-sm); }
+
+/* The contents, grouped as the rail groups the pages — a phone reader scans one
+   group's row of links rather than one long alphabet of them. */
+.help-toc-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs) var(--space-md);
+  padding: var(--space-2xs) 0;
+}
+
+.help-toc-label {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--wp-muted);
+  min-width: 6rem;
+}
+
+/* The two halves of Help: the pages, then how the firm works. */
+.help-part {
+  margin: var(--space-xl) 0 var(--space-md);
+  font-size: var(--text-xl);
+}
+
+/* A page's section carries the guide at prose size — it is read, not skimmed
+   past — and its door to the page rides on the heading's right. */
+.help-page .md-lite { font-size: var(--text-base); }
+
+.help-page h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.help-page-open { font-size: var(--text-base); font-weight: 400; }
+
+.help-where { margin-top: var(--space-sm); }
+.help-where code { font-size: var(--text-xs); }
 .help-toc a:hover { color: var(--wp-orange-deeper); }
 .help-topic {
   max-width: 72ch;
@@ -3547,6 +3589,48 @@ details.card > summary,
   line-height: var(--lh-normal);
   max-width: 62ch;
 }
+
+/* One turn: who said it, then what they said. A host's turn is Markdown — the
+   guide's numbered bands and bulleted acts — so the turn is a block, never a
+   single <p> that would flatten a list into a paragraph (owner, 19 Sep 2026:
+   "it's all jumbled"). */
+.host-chat-turn {
+  min-width: 0;
+  max-width: 62ch;
+}
+
+/* The little Markdown a host speaks, at the thread's own size. Headings are one
+   weight up, not one size up: a 22px heading inside a chat turn is a poster. */
+.md-lite,
+.host-chat-md {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+}
+
+.md-lite p,
+.host-chat-md p { margin: 0; }
+
+.md-lite-head {
+  margin: var(--space-xs) 0 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--wp-ink);
+}
+
+.md-lite-list {
+  margin: 0;
+  padding-left: var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.md-lite-list li { padding-left: var(--space-2xs); }
 
 /* Who said it, on its own line and quiet — a transcript reads badly when the
    attribution competes with the words. */
