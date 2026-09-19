@@ -115,7 +115,15 @@ function measureTargets(rootId: string): Array<{ label: string; w: number; h: nu
   });
 }
 
-/** Elements whose right edge is past the viewport, excluding declared inner scrollers. */
+/**
+ * Elements whose right edge is past the viewport.
+ *
+ * Two inner scrollers are DECLARED by the design (§10): `.faces` (the tab strip scrolls inside
+ * itself on a phone) and `.table-wrap` (a wide table scrolls inside its box, with edge shadows).
+ * Their descendants are what scrolls, so they are not overflow. Any OTHER scroller's children are
+ * still measured — an address parked off-screen inside an undeclared scroller is a lost address,
+ * whether or not its parent can be dragged (the hole the Work tab strip fell into on 18 Sep).
+ */
 function measureOverflow(rootId: string, w: number): string[] {
   const root = document.querySelector(`[data-testid="${rootId}"]`);
   if (!root) return [`${rootId} did not render`];
@@ -124,6 +132,7 @@ function measureOverflow(rootId: string, w: number): string[] {
       const r = el.getBoundingClientRect();
       const ox = getComputedStyle(el).overflowX;
       if (ox === "auto" || ox === "scroll") return false;
+      if (el.closest(".faces, .table-wrap")) return false;
       return r.width > 0 && Math.round(r.right) > w + 1;
     })
     .map(
@@ -387,8 +396,20 @@ test.describe("Dealflow", () => {
         (d) => d.company_name === seed.proposed,
       )?.status;
     await expect.poll(board).toBe("DILIGENCE");
-    // With the proposal gone the act is at the committee: the orange node moved, in words.
-    await expect(page.getByTestId("stage-node-SCREENING")).not.toHaveAttribute("aria-label", /the act is here/);
+    /*
+     * THE ORANGE NODE FOLLOWS THE ACT. Every spec drives one local D1, so another journey's
+     * proposal may still be waiting; the rail's one orange node is wherever the FIRST remaining
+     * proposal sits, and with none left it is the committee (a packet is in front of nobody yet,
+     * so it is New for the emailed arrival). Read the board and hold the rail to exactly that.
+     */
+    const left = (await (await request.get("/api/dealflow/board", { headers: MP })).json()) as {
+      proposals: Array<{ from_status: string }>;
+    };
+    const actAt = left.proposals[0]?.from_status ?? "NEW";
+    await expect(page.getByTestId(`stage-node-${actAt}`)).toHaveAttribute("aria-label", /the act is here/);
+    for (const key of ["NEW", "SCREENING", "DILIGENCE", "IC_READY", "IC_DECIDED", "CLOSED"].filter((k) => k !== actAt)) {
+      await expect(page.getByTestId(`stage-node-${key}`), "one orange node at most").not.toHaveAttribute("aria-label", /the act is here/);
+    }
     // The proposal is ACCEPTED on the meeting's own record, decided by a person — the click was
     // `decideStageProposal`, not a second write path.
     const after = (await (await request.get(`/api/meetings/${seed.meetingId}/after`, { headers: MP })).json()) as {

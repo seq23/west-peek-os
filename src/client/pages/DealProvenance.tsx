@@ -151,9 +151,12 @@ export function DealProvenance(): JSX.Element {
             )}
 
             {recorded.length > 0 && (
-              /* A wide table scrolls inside its own box rather than pushing the page sideways —
-                 the same wrapper every other table in the product uses. */
-              <div className="tablewrap">
+              /* A wide table scrolls inside its own box rather than pushing the page sideways.
+                 `.table-wrap` is one of the two declared inner scrollers of the Deals section
+                 (design/DEALS_SECTION_DESIGN.md §10, with `.faces`): it carries the edge shadows
+                 that say there is more to the side, and the measured spec excludes its children
+                 from the overflow sweep because scrolling INSIDE it is the design. */
+              <div className="table-wrap">
                 <table className="surface-body small">
                   <thead>
                     <tr><th>Where we met them</th><th className="num">Deals</th><th>How long we knew them first</th></tr>

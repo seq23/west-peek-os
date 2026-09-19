@@ -1591,6 +1591,7 @@ function CompanyDealRecord({
   boardDeals,
   initialFace,
   initialDealId,
+  focusNonce,
   me,
   onChanged,
   onClose,
@@ -1602,6 +1603,8 @@ function CompanyDealRecord({
   boardDeals: Deal[];
   initialFace: RecordFace;
   initialDealId: string | null;
+  /** Bumped by every door that opens the record, so a second door on an already-open record still lands on its face. */
+  focusNonce: number;
   me: MeResponse;
   onChanged: () => void;
   onClose: () => void;
@@ -1610,6 +1613,18 @@ function CompanyDealRecord({
   const deals = useApi<{ opportunities: DealRecordRow[] }>(`/api/opportunities?company_id=${companyId}`, [companyId]);
   const [dealId, setDealId] = useState<string | null>(initialDealId);
   const [face, setFace] = useState<RecordFace>(initialFace);
+  /*
+   * A DOOR OPENS THE FACE IT NAMES, EVEN ON A RECORD THAT IS ALREADY OPEN. The record is keyed on
+   * the company, so pressing "Record what the committee decided" on the band while this company's
+   * record is open on another face does not remount it — and a `useState` initial value is read
+   * once. Caught by p60 on 19 Sep: the record opened on the terms face after "Add a company", the
+   * band's button then landed on that same face, and the committee controls were not on screen.
+   */
+  useEffect(() => {
+    setFace(initialFace);
+    if (initialDealId) setDealId(initialDealId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce]);
   const detail = useApi<DealDetail>(dealId ? `/api/opportunities/${dealId}` : null, [dealId]);
   const intel = useApi<CompanyIntelligence>(`/api/companies/${companyId}/intelligence`, [companyId]);
   const questions = useApi<{ contradictions: OpenQuestion[] }>(`/api/contradictions?company_id=${companyId}`, [companyId]);
@@ -2713,7 +2728,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
    * comes out." One value, set from any door — a row, a proposal, the committee band — and the
    * record is what comes out.
    */
-  const [openCompany, setOpenCompany] = useState<{ id: string; name: string; face: RecordFace; dealId: string | null } | null>(null);
+  const [openCompany, setOpenCompany] = useState<{ id: string; name: string; face: RecordFace; dealId: string | null; nonce: number } | null>(null);
   /*
    * The sector list, derived from the fund's written mandate on the server and fetched whole.
    * Amending the thesis changes what a company can be filed under, so the two cannot drift — and
@@ -2839,7 +2854,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
 
   /** Open the record. The scroll is an effect below, once the record actually exists in the page. */
   function openRecord(id: string, name: string, face: RecordFace = "standing", dealId: string | null = null) {
-    setOpenCompany({ id, name, face, dealId });
+    setOpenCompany((current) => ({ id, name, face, dealId, nonce: (current?.nonce ?? 0) + 1 }));
   }
 
   function reloadBoard() {
@@ -3193,6 +3208,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             boardDeals={deals.filter((dd) => dd.company_id === openCompany.id)}
             initialFace={openCompany.face}
             initialDealId={openCompany.dealId}
+            focusNonce={openCompany.nonce}
             me={me}
             onChanged={reloadBoard}
             onClose={() => setOpenCompany(null)}
