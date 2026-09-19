@@ -75,11 +75,11 @@ test.describe("Home", () => {
       expect(box, `${name} did not render`).not.toBeNull();
       expect(box!.y + box!.height, `${name} is not whole above the 390×844 fold (bottom=${Math.round(box!.y + box!.height)})`).toBeLessThanOrEqual(fold);
     }
-    const rows = await page.locator('[data-testid^="home-waiting-card-"]').count();
     const arrivedHead = (await page.getByTestId("home-arrived-pill").boundingBox())!;
-    const lastCard = (await page.locator('[data-testid^="home-waiting-card-"]').last().boundingBox())!;
-    if (rows === 1) expect(arrivedHead.y, `one thing waiting: the Arrived head must be above the fold (y=${Math.round(arrivedHead.y)})`).toBeLessThan(fold);
-    else expect(arrivedHead.y - (lastCard.y + lastCard.height), `${rows} waiting: Arrived is the first thing under the rows, within one row-height`).toBeLessThan(lastCard.height);
+    const waitingBand = (await page.getByTestId("home-waiting").boundingBox())!;
+    if (n === 1) expect(arrivedHead.y, `one thing waiting: the Arrived head must be above the fold (y=${Math.round(arrivedHead.y)})`).toBeLessThan(fold);
+    // Nothing sits between the Waiting band and the Arrived head: a band margin, no more.
+    expect(arrivedHead.y - (waitingBand.y + waitingBand.height), `${n} waiting: Arrived is the first thing under the Waiting band`).toBeLessThan(64);
     mkdirSync("test-results/home-screens", { recursive: true });
     await page.screenshot({ path: "test-results/home-screens/after-390.png", fullPage: false });
 

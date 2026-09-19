@@ -72,8 +72,9 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
    * Ask left the masthead for the foot line and stays in the nav; "One thing to watch" stays gone.
    * A module with something new is a row in Arrived; a quiet one is a row under the Quiet chip.
    */
+  await expect(page.getByTestId("home-answer")).toBeVisible();
   const module = page.getByTestId("home-module-intelligence");
-  if (!(await module.isVisible().catch(() => false))) await page.getByTestId("home-rail-quiet").click();
+  if (!(await module.isVisible())) await page.getByTestId("home-rail-quiet").click();
   await expect(module).toBeVisible();
   await expect(page.getByTestId("home-questions")).toHaveCount(0);
   await expect(page.getByTestId("one-thing-to-watch")).toHaveCount(0);
@@ -87,8 +88,14 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   await expect(page.getByTestId("intent-page")).toBeVisible();
   await page.getByRole("button", { name: "Home", exact: true }).click();
 
-  // Drilling from a module lands on the surface that owns the records.
-  if (!(await page.getByTestId("home-module-intelligence").isVisible().catch(() => false))) await page.getByTestId("home-rail-quiet").click();
+  // Drilling from a module lands on the surface that owns the records. Home has re-mounted, so
+  // wait for its answer before asking where the module sits: a fresh one is a row in Arrived, a
+  // quiet one is under the Quiet chip — checked in that order, never guessed while loading.
+  await expect(page.getByTestId("home-answer")).toBeVisible();
+  const rail = page.getByTestId("home-rail");
+  await expect(rail).toHaveAttribute("data-filter", "all");
+  if (!(await page.getByTestId("home-module-intelligence").isVisible())) await page.getByTestId("home-rail-quiet").click();
+  await expect(page.getByTestId("home-module-intelligence")).toBeVisible();
   await page.getByTestId("home-open-intelligence").click();
   await expect(page.getByTestId("intelligence-page")).toBeVisible();
 });
@@ -182,7 +189,9 @@ test("pressing Open quiets a colleague until something new arrives, and the coun
   // because signing in lands on Home and reads the modules once.
   const made = await request.post("/api/work-cards", {
     headers: { "x-wpos-dev-user": "scooter@westpeek.ventures" },
-    data: { title: "Read the Sensori memo before Thursday", description: "Opened by the e2e suite.", owner_type: "HUMAN", owner_id: "fu_scooter_taylor", priority: "NORMAL" },
+    // URGENT, so it heads the row's two headline items whatever earlier specs (or earlier runs of
+    // this file against the same D1) left open in his name; the row shows the top two by priority.
+    data: { title: "Read the Sensori memo before Thursday", description: "Opened by the e2e suite.", owner_type: "HUMAN", owner_id: "fu_scooter_taylor", priority: "URGENT" },
   });
   expect(made.status(), await made.text()).toBe(201);
 

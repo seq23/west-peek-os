@@ -173,7 +173,9 @@ function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => 
   const prefs = useApi<PreferenceResponse>("/api/mp-home/preferences");
   const [selected, setSelected] = useState<string[]>(home.enabled_modules);
   const [message, setMessage] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+  // Mounted only when the foot's "Choose what Home shows" opens it, so it opens OPEN: a second
+  // "Configure" press to reach the toggles was the clunk the design removed (§3.7).
+  const [open, setOpen] = useState(true);
 
   useEffect(() => {
     setSelected(home.enabled_modules);
@@ -183,7 +185,7 @@ function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => 
     <section className="card" data-testid="home-settings">
       <header className="module-card-head">
         <h4>Home layout</h4>
-        <button type="button" className="link-button" data-testid="home-settings-toggle" onClick={() => setOpen((o) => !o)}>
+        <button type="button" className="link-button" data-testid="home-settings-done" onClick={() => setOpen((o) => !o)}>
           {open ? "Done" : "Configure"}
         </button>
       </header>
