@@ -2,9 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
-import { pageHost } from "@shared/help/pageHosts";
+import { PAGE_HOSTS, pageHost } from "@shared/help/pageHosts";
 import { pageGuide } from "@shared/help/pageGuide";
-import { parseMarkdown } from "@shared/help/markdownLite";
+import { renderIntentAnswer, type GuideIntent } from "@shared/help/pageGuide/render";
+import { parseMarkdown, plainText } from "@shared/help/markdownLite";
 
 /**
  * Item 14 — the panel that lets a partner ask whoever runs the page they are on.
@@ -25,6 +26,11 @@ import { parseMarkdown } from "@shared/help/markdownLite";
  *    2026, after Walter described the Meetings page as it was a week earlier, in one paragraph: the
  *    answer is now the guide verbatim — structured, current, no run behind it — and the retired
  *    trio can never come back through this door.
+ * 6. **So are "walk me through it" and "explain the buttons".** Same day, after Walter walked her
+ *    through a fake meeting from memory and "skipped over the screen I get to when I open the room
+ *    and can seat AI employees": the walkthrough and the buttons-by-band are the guide's, served
+ *    verbatim for EVERY hosted page, with no AI run behind them. `validate:page-guides` reads this
+ *    file for that pin.
  */
 
 let t: TestDb;
@@ -164,6 +170,72 @@ describe("how does this page work", () => {
     expect(host.body).toBe(reply);
     const row = await t.db.prepare("SELECT ai_run_id FROM page_turn WHERE nav_key = 'meetings' AND role = 'HOST'").first<{ ai_run_id: string | null }>();
     expect(row?.ai_run_id).toBeNull();
+  });
+
+  it("Walter walks her through a real meeting from the guide — Seat, Join on Meet and what it does not do, the transcript after the call, Draft, Approve, Move it", async () => {
+    const asked = await call<{ ok: boolean; reply: string | null; source?: string; shape?: string }>("/api/pages/meetings/reply", SCOOTER, "POST", {
+      message: "walk me through a real meeting",
+    });
+    expect(asked.status).toBe(200);
+    expect(asked.body.source).toBe("guide");
+    expect(asked.body.shape).toBe("walkthrough");
+    const reply = asked.body.reply!;
+    expect(reply).toBe(renderIntentAnswer(pageGuide("meetings")!, "walkthrough"));
+    const blocks = parseMarkdown(reply);
+    // Two scenarios, each a numbered list under its own heading; the second is the in-person one.
+    expect(blocks.filter((b) => b.kind === "heading").length).toBe(2);
+    expect(blocks.filter((b) => b.kind === "ordered").length).toBe(2);
+    for (const control of ["**Go to this meeting**", "**Seat**", "**Join on Meet**", "**Use my laptop mic for this Meet call**", "**Done — open the record**", "**Draft what came out of it**", "**Approve — make these the record**", "**Move it**", "**They said yes — record**", "**Record meeting**"]) {
+      expect(reply, control).toContain(control);
+    }
+    // What Join on Meet does NOT do is said, and the transcript's arrival after the call is said.
+    expect(reply).toMatch(/What does not happen: nothing joins for you/);
+    expect(reply).toMatch(/no employee is in the call/);
+    expect(reply).toMatch(/one room, several doors/);
+    expect(reply).toMatch(/Within the hour Google's transcript/);
+    expect(reply).toMatch(/laptop microphone/);
+    for (const phrase of RETIRED_MEETINGS_TRIO) expect(reply).not.toContain(phrase);
+    const row = await t.db.prepare("SELECT ai_run_id, detail FROM page_turn WHERE nav_key = 'meetings' AND role = 'HOST' ORDER BY turn_no DESC LIMIT 1").first<{ ai_run_id: string | null; detail: string | null }>();
+    expect(row?.detail).toBe("WALKTHROUGH");
+    expect(row?.ai_run_id).toBeNull();
+  });
+
+  it("explain what all of the buttons do — every act, grouped by face, from the guide", async () => {
+    const asked = await call<{ ok: boolean; reply: string | null; shape?: string }>("/api/pages/meetings/reply", SCOOTER, "POST", {
+      message: "explain what all of the buttons do",
+    });
+    expect(asked.body.shape).toBe("buttons");
+    const reply = asked.body.reply!;
+    expect(reply).toBe(renderIntentAnswer(pageGuide("meetings")!, "buttons"));
+    const headings = parseMarkdown(reply).filter((b) => b.kind === "heading").map((b) => plainText([b]));
+    for (const face of ["Before", "During", "After", "Coming up", "Google Meet"]) expect(headings, face).toContain(face);
+    for (const a of pageGuide("meetings")!.acts) expect(reply).toContain(`**${a.label}**`);
+    const row = await t.db.prepare("SELECT ai_run_id, detail FROM page_turn WHERE nav_key = 'meetings' AND role = 'HOST' ORDER BY turn_no DESC LIMIT 1").first<{ ai_run_id: string | null; detail: string | null }>();
+    expect(row?.detail).toBe("BUTTONS");
+    expect(row?.ai_run_id).toBeNull();
+  });
+
+  it("every hosted page answers all three shapes verbatim, with no AI run behind any of them", async () => {
+    const asks: Record<GuideIntent, string> = { how: "how does this page work?", walkthrough: "walk me through it, step by step", buttons: "what does each button do?" };
+    let pinned = 0;
+    for (const navKey of Object.keys(PAGE_HOSTS)) {
+      const guide = pageGuide(navKey);
+      if (!guide) continue;
+      const host = pageHost(navKey)!;
+      await t.db.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE name = ?1").bind(host.name).run();
+      for (const shape of ["how", "walkthrough", "buttons"] as const) {
+        const asked = await call<{ ok: boolean; reply: string | null; source?: string; shape?: string }>(`/api/pages/${navKey}/reply`, SEQUOIA, "POST", { message: asks[shape] });
+        expect(asked.status, `${navKey} ${shape}`).toBe(200);
+        expect(asked.body.source, `${navKey} ${shape}`).toBe("guide");
+        expect(asked.body.shape, `${navKey} ${shape}`).toBe(shape);
+        expect(asked.body.reply, `${navKey} ${shape}`).toBe(renderIntentAnswer(guide, shape));
+        const row = await t.db.prepare("SELECT ai_run_id FROM page_turn WHERE nav_key = ?1 AND firm_user_id = 'fu_sequoia_taylor' AND role = 'HOST' ORDER BY turn_no DESC LIMIT 1").bind(navKey).first<{ ai_run_id: string | null }>();
+        expect(row?.ai_run_id, `${navKey} ${shape}`).toBeNull();
+        pinned += 1;
+      }
+    }
+    // Rule 0: a loop over no pages proves nothing.
+    expect(pinned).toBeGreaterThanOrEqual(3 * 15);
   });
 
   it("a question about one control still goes to the host, with a run behind it", async () => {

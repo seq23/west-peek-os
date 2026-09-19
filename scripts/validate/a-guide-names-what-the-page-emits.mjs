@@ -28,6 +28,20 @@
  *       and the shape is a numbered band list and bulleted acts — never one paragraph.
  *   6 · NO STALE PROSE ELSEWHERE. `pagePurpose.ts` and `HelpCenterPage.tsx` must not carry the
  *       retired Meetings trio, or any act label that no guide names on a page that has a guide.
+ *   7 · EVERY GUIDE HAS A WALKTHROUGH, AND IT WALKS THE PAGE. Owner, 19 Sep 2026, after asking
+ *       Walter to walk her through a fake meeting: "He skipped over the screen I get to when I open
+ *       the room and can seat AI employees … these responses are not enough." Every guide carries
+ *       at least one `walkthroughs[]` scenario of two or more steps; every **bold** span in a step
+ *       is an act's label or a band's name of THAT guide; every scenario names at least one act;
+ *       every `act.band` names a band the guide has. A walkthrough that names a control the page
+ *       does not render is Walter's memory again.
+ *   8 · THE THREE SHAPES ARE VERBATIM, AND TESTED SO. The walkthrough answer is numbered lists
+ *       under a heading per scenario; the buttons answer carries every act in bold under a band
+ *       heading; and `tests/pageChat.test.ts` asserts, for every hosted page and each of the three
+ *       shapes, that the reply is the guide's rendering with NO AI run behind it.
+ *   9 · THE INTENT MATCHER HEARS THE OWNER. Her phrasings from 19 Sep 2026 — "walk me through a
+ *       real meeting", "explain what all of the buttons do", "how does this page work" — resolve
+ *       to the right shape, and a question about one control or the firm's data resolves to none.
  *
  * HARD-FAILS ON ZERO: zero guides, zero source files, zero acts across the registry, zero route
  * keys — each exits 1. An empty loop reporting success is Rule 0.
@@ -52,9 +66,37 @@ const APP = path.join(ROOT, "src", "client", "App.tsx");
 const MIGRATIONS = path.join(ROOT, "migrations");
 const PURPOSE = path.join(ROOT, "src", "shared", "help", "pagePurpose.ts");
 const HELP = path.join(ROOT, "src", "client", "pages", "HelpCenterPage.tsx");
+const CHAT_TEST = path.join(ROOT, "tests", "pageChat.test.ts");
+
+/**
+ * The owner's own words (19 Sep 2026) and the shape each must resolve to. `null` is a question
+ * that belongs to the host with the guide as context, never to a verbatim answer.
+ */
+export const OWNER_PHRASINGS = [
+  ["walk me through a real meeting", "walkthrough"],
+  ["can you walk me through a fake meeting", "walkthrough"],
+  ["show me how I'd use this", "walkthrough"],
+  ["give me a scenario", "walkthrough"],
+  ["explain what all of the buttons do", "buttons"],
+  ["what does each button do", "buttons"],
+  ["explain the buttons", "buttons"],
+  ["how does this page work", "how"],
+  ["I still don't know fully the capabilities of the room — what can I do here?", "how"],
+  ["what does Move it actually do to the deal?", null],
+  ["If I push Join on Meet what happens?", null],
+  ["which of these is worth a second cheque?", null],
+];
 
 /** The page as she was told it worked, on 19 Sep 2026. Must never come back, anywhere. */
 export const RETIRED_MEETINGS_TRIO = ["Prepare for a meeting", "Confer with an AI employee", "Run a close-out"];
+
+/**
+ * Controls the owner retired, by label, per page. A source the guide names may not render them
+ * (comments stripped). "It is happening now" — "wtf is that button" (19 Sep 2026): it chose a face
+ * and changed nothing; in progress is derived now. "Bring it in" — the Fireflies import, retired
+ * the same day ("we will use Whisper in lieu of Fireflies — it's better").
+ */
+export const RETIRED_CONTROLS = { meetings: ["It is happening now", "Bring it in"] };
 
 /** Every route key App.tsx renders — the same read `tests/pagePurpose.test.ts` makes. */
 export function routeKeys(appSource) {
@@ -189,6 +231,10 @@ export function checkGuide(guide, { readSource, routes, jobs }) {
     if (!source.includes(a.label)) v.push(`${key}: act "${a.label}" is not a label the page renders`);
   }
 
+  for (const label of RETIRED_CONTROLS[key] ?? []) {
+    if (new RegExp(`>\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*<|"${label}"`).test(source)) v.push(`${key}: the page renders "${label}", a control the owner retired`);
+  }
+
   const notActs = guide.notActs ?? {};
   for (const id of primaryTestids(source)) {
     if (actIds.has(id) || Object.prototype.hasOwnProperty.call(notActs, id)) continue;
@@ -219,6 +265,71 @@ export function checkRendered(guide, render) {
   if ((guide.acts ?? []).length > 0 && !/^- \*\*/m.test(md)) v.push(`${guide.navKey}: rendered answer has no bulleted acts`);
   const longest = Math.max(...md.split("\n").map((l) => l.length));
   if (longest > 260) v.push(`${guide.navKey}: a line of the rendered answer runs ${longest} characters — that is a paragraph`);
+  return v;
+}
+
+/** 7 · the walkthrough walks the page: every bold span is an act or a band of this guide. */
+export function checkWalkthrough(guide, render) {
+  const v = [];
+  const key = guide.navKey;
+  const labels = new Set((guide.acts ?? []).map((a) => a.label));
+  const bands = new Set((guide.bands ?? []).map((b) => b.name));
+  const walks = guide.walkthroughs ?? [];
+  if (walks.length === 0) v.push(`${key}: has no walkthrough`);
+  let steps = 0;
+  for (const w of walks) {
+    if (!w.scenario || w.scenario.length < 12) v.push(`${key}: a walkthrough has no scenario line`);
+    if ((w.steps ?? []).length < 2) v.push(`${key}: walkthrough "${w.scenario}" has fewer than two steps`);
+    let namesAnAct = false;
+    for (const st of w.steps ?? []) {
+      steps += 1;
+      if (!st.do || st.do.length < 8) v.push(`${key}: a step of "${w.scenario}" says nothing`);
+      for (const span of render.boldSpans([st.do, st.then ?? "", st.not ?? ""].join(" "))) {
+        if (labels.has(span)) namesAnAct = true;
+        else if (!bands.has(span)) v.push(`${key}: walkthrough "${w.scenario}" names **${span}**, which is neither an act nor a band of this page`);
+      }
+    }
+    if (!namesAnAct) v.push(`${key}: walkthrough "${w.scenario}" names no act of this page in bold`);
+  }
+  for (const a of guide.acts ?? []) {
+    if (a.band && !bands.has(a.band)) v.push(`${key}: act "${a.label}" names band "${a.band}", which the guide does not have`);
+  }
+  return { violations: v, steps };
+}
+
+/** 8 · the three shapes render as lists with every act, and the chat test pins them with no run. */
+export function checkShapes(guide, render) {
+  const v = [];
+  const key = guide.navKey;
+  const walk = render.renderWalkthroughAnswer(guide);
+  if (!/^## /m.test(walk)) v.push(`${key}: the walkthrough answer has no scenario heading`);
+  if (!/^1\. /m.test(walk)) v.push(`${key}: the walkthrough answer has no numbered steps`);
+  const buttons = render.renderButtonsAnswer(guide);
+  if (!/^## /m.test(buttons)) v.push(`${key}: the buttons answer has no band heading`);
+  for (const a of guide.acts ?? []) if (!buttons.includes(`**${a.label}**`)) v.push(`${key}: the buttons answer does not carry act "${a.label}" in bold`);
+  for (const md of [walk, buttons]) {
+    const longest = Math.max(...md.split("\n").map((l) => l.length));
+    if (longest > 520) v.push(`${key}: a line of a verbatim answer runs ${longest} characters — that is a paragraph`);
+  }
+  return v;
+}
+
+export function checkChatTestPinsShapes(testSource) {
+  const v = [];
+  const src = stripTsComments(testSource);
+  if (!/\["how", "walkthrough", "buttons"\]/.test(src)) v.push("tests/pageChat.test.ts does not walk the three shapes (how, walkthrough, buttons)");
+  if (!/ai_run_id\)\.toBeNull\(\)/.test(src)) v.push("tests/pageChat.test.ts does not assert a verbatim shape has no AI run behind it");
+  if (!/Object\.keys\(PAGE_HOSTS\)|PAGE_HOSTS\)/.test(src)) v.push("tests/pageChat.test.ts does not walk every hosted page");
+  return v;
+}
+
+/** 9 · the matcher hears the owner. */
+export function checkIntents(render, phrasings = OWNER_PHRASINGS) {
+  const v = [];
+  for (const [q, want] of phrasings) {
+    const got = render.guideIntent(q);
+    if (got !== want) v.push(`"${q}" resolves to ${got ?? "the host"}, expected ${want ?? "the host"}`);
+  }
   return v;
 }
 
@@ -266,15 +377,20 @@ async function main() {
   let violations = [];
   let files = 0;
   let acts = 0;
+  let steps = 0;
   for (const g of guides) {
     const r = checkGuide(g, deps);
-    violations.push(...r.violations, ...checkRendered(g, render));
+    const w = checkWalkthrough(g, render);
+    violations.push(...r.violations, ...checkRendered(g, render), ...w.violations, ...checkShapes(g, render));
     files += r.files;
     acts += r.acts;
+    steps += w.steps;
   }
   violations.push(...checkStaleProse(stripTsComments(readFileSync(PURPOSE, "utf8")), stripTsComments(readFileSync(HELP, "utf8"))));
-  if (files === 0 || acts === 0) {
-    console.error(`validate:page-guides — examined ${files} source files and ${acts} acts. Rule 0.`);
+  violations.push(...checkChatTestPinsShapes(stripTsComments(readFileSync(CHAT_TEST, "utf8"))));
+  violations.push(...checkIntents(render));
+  if (files === 0 || acts === 0 || steps === 0 || OWNER_PHRASINGS.length === 0) {
+    console.error(`validate:page-guides — examined ${files} source files, ${acts} acts, ${steps} walkthrough steps, ${OWNER_PHRASINGS.length} phrasings. Rule 0.`);
     process.exit(1);
   }
   if (violations.length > 0) {
@@ -282,7 +398,7 @@ async function main() {
     for (const x of violations) console.error(`  ✗ ${x}`);
     process.exit(1);
   }
-  console.log(`validate:page-guides — ${guides.length} guides, ${files} source files, ${acts} acts: every band and act the guides name is emitted, every primary act is in a guide, no stale prose.`);
+  console.log(`validate:page-guides — ${guides.length} guides, ${files} source files, ${acts} acts, ${steps} walkthrough steps: every band and act the guides name is emitted, every primary act is in a guide, every walkthrough walks the page, the three shapes are verbatim and pinned, the matcher hears the owner, no stale prose.`);
 }
 
 async function selfTest() {
@@ -311,6 +427,11 @@ async function selfTest() {
   );
   say(staleResult.violations.some((v) => /primary act .* the guide does not mention/.test(v)), "a guide that omits the page's primary acts is caught");
 
+  // The retired control planted back on the page: caught by label, whatever its testid.
+  const planted = { ...deps, readSource: (rel) => { const t = deps.readSource(rel); return t === null ? null : `${t}\n<button type="button" data-testid={\`start-${"$"}{m.id}\`}>\n  It is happening now\n</button>`; } };
+  say(checkGuide(meetings, planted).violations.some((v) => /"It is happening now", a control the owner retired/.test(v)), "the retired \"It is happening now\" planted back on the page is caught");
+  say(checkGuide(meetings, deps).violations.every((v) => !/retired/.test(v)), "the shipped page renders no retired control");
+
   const ghostTestid = { ...meetings, acts: [...meetings.acts, { label: meetings.acts[0].label, testid: "meeting-ghost-button", does: "x" }] };
   say(checkGuide(ghostTestid, deps).violations.some((v) => /meeting-ghost-button/.test(v)), "a testid the page does not emit is caught");
 
@@ -336,6 +457,22 @@ async function selfTest() {
   say(checkStaleProse(stalePurpose, "").length === 1, "the retired trio in pagePurpose.ts is caught");
   say(checkStaleProse(`// ${RETIRED_MEETINGS_TRIO[0]}`, "").length === 0, "the retired trio in a comment is not a violation");
 
+  // 19 Sep 2026, the walkthrough: Walter's memory of a control the page does not have.
+  const ghostWalk = { ...meetings, walkthroughs: [{ scenario: "A meeting, as remembered", steps: [{ do: "Press **Confer with an AI employee**" }, { do: "Press **Run a close-out**" }] }] };
+  say(checkWalkthrough(ghostWalk, render).violations.some((v) => /\*\*Confer with an AI employee\*\*, which is neither an act nor a band/.test(v)), "a walkthrough naming a control the page does not render is caught");
+  say(checkWalkthrough({ ...meetings, walkthroughs: [] }, render).violations.some((v) => /has no walkthrough/.test(v)), "a guide with no walkthrough is caught");
+  const noAct = { ...meetings, walkthroughs: [{ scenario: "Reading only, nothing pressed", steps: [{ do: "Read **Coming up**" }, { do: "Read **On the record**" }] }] };
+  say(checkWalkthrough(noAct, render).violations.some((v) => /names no act of this page/.test(v)), "a walkthrough that presses nothing is caught");
+  const ghostBand = { ...meetings, acts: [{ ...meetings.acts[0], band: "The committee" }, ...meetings.acts.slice(1)] };
+  say(checkWalkthrough(ghostBand, render).violations.some((v) => /names band "The committee", which the guide does not have/.test(v)), "an act filed under a band the guide does not have is caught");
+  say(checkWalkthrough(meetings, render).violations.length === 0 && checkShapes(meetings, render).length === 0, `the shipped Meetings walkthrough walks the page: ${[...checkWalkthrough(meetings, render).violations, ...checkShapes(meetings, render)].join("; ")}`);
+  say(checkShapes(meetings, { ...render, renderButtonsAnswer: () => "Every control. Move it does a thing, Ask does another." }).some((v) => /no band heading|does not carry act/.test(v)), "a buttons answer without band headings or acts is caught");
+  say(checkChatTestPinsShapes("it('x', () => {})").length === 3, "a chat test that does not pin the three shapes with no run is caught");
+  say(checkChatTestPinsShapes(stripTsComments(readFileSync(CHAT_TEST, "utf8"))).length === 0, "the shipped chat test pins the three shapes for every hosted page with no run");
+  say(checkIntents(render).length === 0, `the matcher hears the owner's phrasings: ${checkIntents(render).join("; ")}`);
+  say(checkIntents({ guideIntent: () => "how" }).length > 0, "a matcher that answers every question with the guide is caught");
+  say(checkIntents({ guideIntent: () => null }).length > 0, "a matcher that hears nothing is caught");
+
   say(primaryTestids(`<button className="btn-strong" onClick={() => go()} data-testid="x-go">Go</button>`).has("x-go"), "a primary button with an arrow handler is read to its real end");
   say(primaryTestids(`<button className="btn-ghost" data-testid="x-quiet">Quiet</button>`).size === 0, "a ghost button is not a primary act");
   say(primaryTestids("<a className={`btn-primary btn-lg`} data-testid={`door-${id}`}>Open</a>").has("door-"), "a primary link with a template testid yields its prefix");
@@ -346,7 +483,7 @@ async function selfTest() {
   let acts = 0;
   for (const g of Object.values(registry.PAGE_GUIDES)) {
     const r = checkGuide(g, deps);
-    shipped.push(...r.violations, ...checkRendered(g, render));
+    shipped.push(...r.violations, ...checkRendered(g, render), ...checkWalkthrough(g, render).violations, ...checkShapes(g, render));
     files += r.files;
     acts += r.acts;
   }

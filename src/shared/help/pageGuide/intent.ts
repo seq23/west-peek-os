@@ -31,4 +31,16 @@ export const intentGuide: PageGuide = {
     { page: "work", why: "the card Ask opened." },
     { page: "documents", why: "every brief, filed." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Something you need, without knowing which page owns it",
+      steps: [
+        { do: "Type what you need under **What do you need?** and press **Ask**", then: "the plan appears: a page that already has it, an answer, a card to add, or a brief to write.", not: "nothing is created until you press the second button." },
+        { do: "Press **Take me there** when a page already has it", then: "that page opens." },
+        { do: "Press **Add to Work** when it is work somebody should carry", then: "the card opens on Work, owned by the employee it named; the sweep picks it up within five minutes." },
+        { do: "Press **Write it** when it is a brief", then: "the brief is written, signed, filed in Documents and put on your Home." },
+        { do: "Under **What checks it before it runs**, press **Put it under the checks**, **Record it** on each check, then **Run it**", then: "the work is held until every check that can stop it has been looked at, then runs; the card it opens is on Work." },
+      ],
+    },
+  ],
 };

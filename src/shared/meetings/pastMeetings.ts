@@ -29,7 +29,21 @@ export interface SplittableMeeting {
   status: string;
   scheduled_at: string | null;
   occurred_at: string | null;
+  /** Migration 0214: set the moment something started it. Null until then. */
+  started_at?: string | null;
 }
+
+/**
+ * IN PROGRESS IS DERIVED, NEVER PRESSED (19 Sep 2026). Owner, on "It is happening now": "wtf is
+ * that button". A SCHEDULED meeting with a `started_at` is happening now — a partner joined the
+ * call from the app, capture began with their yes, or Google reported the conference started
+ * (`markMeetingStarted`, one place). It is off Coming up and on the record with that reading.
+ */
+export function isInProgress(m: SplittableMeeting): boolean {
+  return m.status === "SCHEDULED" && Boolean(m.started_at);
+}
+
+export const HAPPENING_NOW = "happening now";
 
 /** True when the meeting's time, plus the settle window, is behind `now`. Unknown times are never past. */
 export function isPastMeeting(m: SplittableMeeting, now: Date): boolean {
@@ -39,9 +53,9 @@ export function isPastMeeting(m: SplittableMeeting, now: Date): boolean {
   return t + MEETING_SETTLES_AFTER_MINUTES * 60_000 < now.getTime();
 }
 
-/** "Coming up" is SCHEDULED and not past. Everything else is on the record. */
+/** "Coming up" is SCHEDULED, not past, and not started. Everything else is on the record. */
 export function isUpcoming(m: SplittableMeeting, now: Date): boolean {
-  return m.status === "SCHEDULED" && !isPastMeeting(m, now);
+  return m.status === "SCHEDULED" && !isPastMeeting(m, now) && !isInProgress(m);
 }
 
 /** The reading a past SCHEDULED row carries on the record, since nothing was captured from it. */

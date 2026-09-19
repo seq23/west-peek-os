@@ -1635,6 +1635,11 @@ details h3 {
 
 .help-page-open { font-size: var(--text-base); font-weight: 400; }
 
+/* The walkthrough under a page's guide: a rule above, the same prose size, the scenario headings
+   one step down from the guide's own. */
+.help-walkthrough { margin-top: var(--space-md); padding-top: var(--space-md); border-top: 1px solid var(--wp-line); }
+.help-walkthrough h4 { margin: 0 0 var(--space-xs); }
+
 .help-where { margin-top: var(--space-sm); }
 .help-where code { font-size: var(--text-xs); }
 .help-toc a:hover { color: var(--wp-orange-deeper); }
@@ -5395,7 +5400,6 @@ body {
 
 /* ── Phase C: the live room (RoomPanel.tsx). Functional and on-token; Phase D redesigns. ── */
 .room { display: flex; flex-direction: column; gap: var(--space-md); }
-.room-standalone { max-width: 720px; margin: 0 auto; padding: var(--space-lg); }
 .room-head h3 { margin: 0; font-size: var(--text-xl); }
 .room-line { display: flex; flex-direction: column; gap: var(--space-xs); }
 .room-status { font-size: var(--text-sm); }
@@ -5443,6 +5447,74 @@ body {
 .room-seated { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; }
 .room-seated .help-tag { display: inline-flex; align-items: center; gap: var(--space-xs); }
 .room-standalone-shell { min-height: 100vh; background: var(--wp-surface); }
+
+/* ── THE NARROW ROOM (owner, 19 Sep 2026: "if inside, it loads a new layout"). 320–400px, the width
+   of Meet's side panel: one column; the hearing chip at the top; the head with the call's doors
+   and the way back; the draft first; the stream; seats as avatars with a count; the ask box pinned
+   to the bottom with hold-to-talk as the biggest target. No shell, no nav. ── */
+.room-standalone { max-width: 720px; margin: 0 auto; padding: var(--space-sm); gap: var(--space-sm); min-height: 100vh; }
+.room-standalone .room-head { display: flex; flex-direction: column; gap: var(--space-xs); }
+.room-standalone .room-head h3 { font-size: var(--text-lg); }
+.room-standalone .rec-line { margin-bottom: 0; }
+.room-scroll { flex: 1 1 auto; min-height: 0; }
+.room-dock {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) 0 var(--space-xs);
+  background: var(--wp-surface);
+  border-top: 1px solid var(--wp-line);
+}
+.room-dock .card { margin: 0; }
+.room-dock .ask { flex-wrap: wrap; }
+.room-dock .ask input { flex: 1 1 100%; }
+.room-dock .ask .btn-strong { flex: 1 1 30%; }
+.room-dock .ask .ptt { flex: 1 1 60%; min-height: 56px; font-size: var(--text-md); }
+.room-dock > button { min-height: var(--touch-min); }
+.hears-chip { padding: 0; border-left: 0; background: transparent; margin: 0; }
+.hears-chip-button {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  max-width: 100%;
+  white-space: normal;
+  min-height: var(--touch-min);
+  padding: var(--space-2xs) var(--space-sm);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-pill);
+  background: var(--wp-surface-2);
+  color: var(--wp-ink);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+.hears-chip-button:hover { border-color: var(--wp-line-strong); }
+.hears-chip-button:focus-visible { outline: var(--focus-width) solid var(--focus-color); outline-offset: var(--focus-offset); }
+.hears-chip[data-state="MEET_LIVE_HERE"] .hears-chip-button,
+.hears-chip[data-state="MANUAL_LIVE"] .hears-chip-button { border-color: var(--wp-good); }
+.hears-chip[data-state="MEET_DEFAULT_OFF"] .hears-chip-button,
+.hears-chip[data-state="MEET_REFUSED_DEFAULT_OFF"] .hears-chip-button,
+.hears-chip[data-state="MANUAL_POLICY_OFF"] .hears-chip-button,
+.hears-chip[data-state="MANUAL_NO_SERVICE"] .hears-chip-button,
+.hears-chip[data-state="MANUAL_CONSENT_DENIED"] .hears-chip-button { border-color: var(--wp-warn); }
+.hears-chip > .stack { margin-top: var(--space-xs); font-size: var(--text-sm); }
+.seats-collapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--touch-min);
+  padding: var(--space-2xs) var(--space-sm);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-pill);
+  background: var(--wp-surface);
+  color: var(--wp-ink-2);
+  font-size: var(--text-sm);
+}
+.seats-collapsed:hover { border-color: var(--wp-line-strong); color: var(--wp-ink); }
+.seats-collapsed:focus-visible { outline: var(--focus-width) solid var(--focus-color); outline-offset: var(--focus-offset); }
+.seats-avatars { display: inline-flex; gap: var(--space-3xs); }
 /* Touch targets on the two controls a partner presses mid-call. */
 .room-ptt,
 .room-line .btn-strong { min-height: 44px; min-width: 44px; }
@@ -5799,6 +5871,64 @@ body {
 }
 .rec-text { display: flex; flex-direction: column; gap: var(--space-3xs); min-width: 0; }
 .rec-text span { font-size: var(--text-xs); color: var(--wp-muted); }
+
+/* How this room hears: the eyebrow, the sentence, and the way to follow live — one block under
+   the recording line, in the record's own voice. Also "Where this came from" on After. Each state
+   is a data-state from howTheRoomHears.ts; the text is the cue, the tint is decoration. */
+.hears {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  margin: 0 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 3px solid var(--wp-line-strong);
+  background: var(--wp-surface-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+.hears[data-state="MEET_LIVE_HERE"],
+.hears[data-state="MANUAL_LIVE"] { border-left-color: var(--wp-good); }
+.hears[data-state="MEET_DEFAULT_OFF"],
+.hears[data-state="MEET_REFUSED_DEFAULT_OFF"],
+.hears[data-state="MEET_NO_TRANSCRIPT"],
+.hears[data-state="MEET_READ_FAILED"],
+.hears[data-state="MANUAL_NO_SERVICE"],
+.hears[data-state="MANUAL_POLICY_OFF"],
+.hears[data-state="MANUAL_CONSENT_DENIED"],
+.hears[data-state="error"] { border-left-color: var(--wp-warn); }
+.hears .card-list { margin: var(--space-3xs) 0 0; }
+
+/* ── The doors onto a call (CallDoors.tsx): Join on Meet with its two-way choice, the laptop-mic
+   path with its note, each with the line that says what it does. One room, several doors. ── */
+.call-doors { display: flex; flex-direction: column; gap: var(--space-xs); max-width: 60ch; }
+.call-doors-compact { max-width: none; }
+.call-doors-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+/* A label may wrap at 320px (CI's fonts run wider than a Mac's): the button grows down, never sideways. */
+.call-doors-row > button { min-height: var(--touch-min); max-width: 100%; min-width: 0; white-space: normal; text-align: left; }
+.room-standalone .call-doors-row > button { flex: 1 1 100%; }
+.join-mode { display: inline-flex; flex-wrap: wrap; gap: var(--space-2xs); margin: 0; padding: 0; border: 0; }
+.join-mode label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-height: var(--touch-min);
+  padding: 0 var(--space-sm);
+  border: 1px solid var(--wp-line-control);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  color: var(--wp-ink-2);
+  background: var(--wp-surface);
+  cursor: pointer;
+}
+.join-mode label:hover { border-color: var(--wp-line-strong); color: var(--wp-ink); }
+.join-mode label:focus-within { outline: var(--focus-width) solid var(--focus-color); outline-offset: var(--focus-offset); }
+/* The radio fills its pill, so the finger's target is the whole 44px label and the input is what
+   the keyboard and the measurer both find. Opacity, not display: it stays focusable and checkable. */
+.surface-body .join-mode input[type="radio"],
+.join-mode input[type="radio"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.join-mode .join-mode-on { border-color: var(--wp-orange); background: var(--wp-tint); color: var(--wp-orange-deep); }
+.deal-actions-doors { flex-direction: column; align-items: stretch; gap: var(--space-xs); }
 
 /* The switch, eight states. role=switch + aria-checked; the 44px hit area is the ::before inset so
    the control itself stays 44×24. The knob slides on the one duration; the global reduced-motion

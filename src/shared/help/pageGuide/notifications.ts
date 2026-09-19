@@ -29,4 +29,15 @@ export const notificationsGuide: PageGuide = {
     { page: "approvals", why: "the card behind an approval notification." },
     { page: "work", why: "the card behind a block nag." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Something serious arrives",
+      steps: [
+        { do: "Read **Needs you** first", then: "**The count** at the top says how many." },
+        { do: "Press **Take responsibility** on a serious one", then: "your name and the time go against it, on the record." },
+        { do: "Press **Dismiss** on the rest, or **Dismiss all**", then: "they leave your list; nothing is recorded beyond your having seen them." },
+        { do: "Under **When you hear from us**, set quiet hours and press **Save**", then: "everything except critical is held until they end." },
+      ],
+    },
+  ],
 };

@@ -1,9 +1,12 @@
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { MEETING_TYPES, meetingType } from "@shared/meetings/meetingTypes";
-import { HELD_NOTHING_ON_THE_RECORD, isPastMeeting, splitMeetings } from "@shared/meetings/pastMeetings";
+import { HAPPENING_NOW, HELD_NOTHING_ON_THE_RECORD, isInProgress, isPastMeeting, splitMeetings } from "@shared/meetings/pastMeetings";
 import { LiveHelpPanel } from "./LiveHelpPanel";
 import { RoomPanel } from "./RoomPanel";
+import { STANDALONE_ROOM_LINE } from "@shared/meetings/howTheRoomHears";
+import { meetingFaceFromHash, roomHash } from "@shared/meetings/meetJoin";
+import { CallDoors, ONE_ROOM_LINE } from "./CallDoors";
 import { CloseoutPanel } from "./CloseoutPanel";
 import { AfterPanel, BeforePanel } from "./MeetingFacesPanel";
 import { MeetBand } from "./MeetBand";
@@ -54,6 +57,9 @@ interface MeetingRow {
   archived_at?: string | null;
   archived_by?: string | null;
   archive_reason?: string | null;
+  /** Migration 0214: when something started it. In progress while SCHEDULED with this set. */
+  started_at?: string | null;
+  started_via?: string | null;
   /** Phase Meet (migration 0202). Present on a meeting the calendar sync created. */
   meet_link?: string | null;
   source?: "manual" | "google_calendar";
@@ -168,7 +174,9 @@ function whenOnMasthead(value: string | null, now: Date): string {
 }
 
 /** Where a meeting stands, in words. Lower-casing a stored value is still printing it. */
-function statusInWords(status: string | null, m?: { scheduled_at: string | null; occurred_at: string | null }): string {
+function statusInWords(status: string | null, m?: { scheduled_at: string | null; occurred_at: string | null; started_at?: string | null }): string {
+  // In progress is derived from what started it (0214), never from a button that chose a face.
+  if (status === "SCHEDULED" && m && isInProgress({ status, scheduled_at: m.scheduled_at, occurred_at: m.occurred_at, started_at: m.started_at ?? null })) return HAPPENING_NOW;
   switch (status) {
     // A SCHEDULED row whose time has passed is on the record with nothing captured — the calendar
     // says it happened, no transcript says what came of it. Never "on the calendar".
@@ -340,89 +348,21 @@ function Faces({ meetingId, face, onFace, badges }: { meetingId: string; face: F
 }
 
 /**
- * A transcript somebody else recorded.
- *
- * Operator, 22 Aug 2026: "i sometimes have fireflies meeting notes so the meetings should have
- * fireflies and whisper capabilities to transfer those notes and transcripts."
- *
- * PASTE OR UPLOAD, NOT AN INTEGRATION. Reaching Fireflies' API needs a credential, a declared
- * network boundary and a vendor decision; an export already in your hand needs none of those and
- * works today. The API route is designed and deferred — see ADR-019.
- *
- * IT REPORTS WHAT IT COULD NOT READ. Exports vary, and a line the file did not attribute to anybody
- * is kept and said to be unattributed rather than handed to the nearest name above it. Close-out
- * assigns commitments out of these turns, so an invented attribution becomes a task assigned to
- * somebody who never agreed to it.
+ * Where the Fireflies import used to be. Owner, 19 Sep 2026: "we will use Whisper in lieu of
+ * Fireflies — it's better." The paste-or-upload door (operator, 22 Aug 2026) is retired; its route
+ * answers 410 with the two real paths named (`liveTranscription.ts`, FIREFLIES_RETIRED). What is
+ * left is said here so nobody goes looking for the box: the room's recording switch above (this
+ * laptop's microphone → Nova-3, Whisper as the fallback, a yes every session, live) and Google
+ * Meet's own transcription read in after the call. A transcript row that already says Fireflies is
+ * history and still renders as what it was.
  */
-function FirefliesImport({ meetingId, onImported }: { meetingId: string; onImported: () => void }): JSX.Element {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  async function send(raw: string) {
-    if (!raw.trim()) return;
-    setBusy(true);
-    setMessage(null);
-    const res = await api<{ turns?: number; unattributed?: number; summary_captured?: boolean; error?: string; detail?: string }>(
-      `/api/meetings/${meetingId}/transcript/fireflies`,
-      { method: "POST", body: { text: raw } },
-    );
-    setBusy(false);
-    if (res.status !== 201) {
-      setMessage(res.data?.detail ?? res.data?.error ?? `Not brought in (HTTP ${res.status}).`);
-      return;
-    }
-    const turns = res.data?.turns ?? 0;
-    const unnamed = res.data?.unattributed ?? 0;
-    setMessage(
-      `${turns} turn${turns === 1 ? "" : "s"} brought in` +
-        (unnamed > 0 ? `, ${unnamed} of which the export did not say who said` : "") +
-        (res.data?.summary_captured ? ". Their own summary is filed separately from what was said." : "."),
-    );
-    setText("");
-    onImported();
-  }
-
+function FirefliesRetired(): JSX.Element {
   return (
-    <div data-testid="fireflies-import">
-      <div className="section-head">
-        <h4>Bring in a Fireflies transcript</h4>
-        <span className="muted small">paste the export, or open the file</span>
-      </div>
-      <p className="muted small">
-        Nothing here talks to Fireflies — this reads what you already have. It still needs the same
-        permission as anything else recorded on this meeting, and bringing it in is not the same as
-        having asked: somebody else made this recording.
-      </p>
-      <textarea
-        aria-label="The Fireflies export"
-        data-testid="fireflies-text"
-        rows={4}
-        value={text}
-        placeholder="Deana Oliver: we can get you the data room by Friday"
-        onChange={(e) => setText(e.target.value)}
-      />
-      <div className="form-row">
-        <button type="button" className="btn-strong" disabled={busy || !text.trim()} data-testid="fireflies-submit" onClick={() => void send(text)}>
-          {busy ? "Reading it…" : "Bring it in"}
-        </button>
-        <label>
-          Or open a file{" "}
-          <input
-            type="file"
-            accept=".txt,.md,.vtt,.srt,text/plain"
-            data-testid="fireflies-file"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              await send(await file.text());
-              e.target.value = "";
-            }}
-          />
-        </label>
-      </div>
-      {message && <p className="notice small" data-testid="fireflies-message" role="status">{message}</p>}
-    </div>
+    <p className="muted small" data-testid="fireflies-retired">
+      Fireflies exports are no longer brought in — <q>we will use Whisper in lieu of Fireflies — it's better</q> (19 Sep 2026).
+      A meeting is written down two ways: the recording switch above, which hears this laptop's microphone with their yes,
+      live; and Google Meet's own transcription, read into the record after the call ends.
+    </p>
   );
 }
 
@@ -549,7 +489,7 @@ function WrittenRecord({ meetingId, m, onChanged }: { meetingId: string; m: Meet
         )}
       </ul>
 
-      <FirefliesImport meetingId={meetingId} onImported={onChanged} />
+      <FirefliesRetired />
       <ul className="card-list small" data-testid="transcript-list">
         {(m?.transcript_imports ?? []).map((tr) => (
           <li key={tr.id} data-testid={`transcript-${tr.id}`}>
@@ -625,17 +565,26 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
             <span data-testid="meeting-status">{statusInWords(m?.status ?? row.status, m ?? row)}</span> · {sourceInWordsRow(row)}
           </p>
         </div>
-        {row.meet_link && <JoinOnMeet meeting={row} />}
         <button type="button" className="btn-ghost" data-testid="record-back" onClick={onBack}>
           ← All meetings
         </button>
       </div>
+      {/*
+        ONE ROOM, SEVERAL DOORS (owner, 19 Sep 2026: "I don't understand what Open the room does
+        anymore"). You are in the room now — these are the doors onto the call, from here.
+      */}
+      {row.meet_link && (
+        <div className="stack" data-testid={`record-doors-${meetingId}`}>
+          <p className="field-help" data-testid={`one-room-line-${meetingId}`}>{ONE_ROOM_LINE}</p>
+          <CallDoors meeting={{ id: meetingId, meet_link: row.meet_link }} />
+        </div>
+      )}
 
       <Faces meetingId={meetingId} face={face} onFace={onFace} badges={badges} />
 
       <div role="tabpanel" id={`face-panel-${face}-${meetingId}`} aria-labelledby={`face-${face}-${meetingId}`} data-testid={`face-panel-${face}`}>
         {face === "before" && (
-          <BeforePanel meetingId={meetingId} onChanged={changed} seating={seating} onOpenRoom={() => onFace("during")} onNavigate={onNavigate} />
+          <BeforePanel meetingId={meetingId} meetLink={row.meet_link ?? null} onChanged={changed} seating={seating} onOpenRoom={() => onFace("during")} onNavigate={onNavigate} />
         )}
         {face === "during" && (
           <div className="stack">
@@ -648,6 +597,17 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
                   <button type="button" className="btn-strong btn-lg" data-testid="live-finish" onClick={() => onFace("after")}>
                     Done — open the record
                   </button>
+                  {/*
+                    THE SAME ROOM, WITHOUT THE SHELL. `#/room/<id>` renders this During face alone
+                    (App.tsx, RoomStandalone) — the second window a partner keeps beside the call. The
+                    owner asked whether it was "a real room"; it is this one, and the line says so.
+                  */}
+                  <div className="stack">
+                    <button type="button" className="btn-ghost" data-testid={`room-standalone-link-${meetingId}`} aria-describedby={`room-standalone-line-${meetingId}`} onClick={() => window.open(roomHash(meetingId), "_blank", "noopener,noreferrer")}>
+                      The same room, in its own window ↗
+                    </button>
+                    <span className="field-help" id={`room-standalone-line-${meetingId}`} data-testid={`room-standalone-line-${meetingId}`}>{STANDALONE_ROOM_LINE}</span>
+                  </div>
                 </>
               }
             />
@@ -689,26 +649,6 @@ function QuestionChecklist({ meetingId }: { meetingId: string }): JSX.Element {
   );
 }
 
-/**
- * The Meet link the calendar carries, so joining is one press. A button rather than a bare link
- * because the row's other acts are buttons and the design system has no anchor-as-button rule;
- * the label says where it goes and that it opens elsewhere.
- */
-function JoinOnMeet({ meeting }: { meeting: MeetingRow }): JSX.Element {
-  return (
-    <button
-      type="button"
-      data-testid={`join-${meeting.id}`}
-      aria-label="Join on Meet — opens Google Meet in a new tab"
-      title={meeting.meet_link ?? undefined}
-      onClick={() => window.open(meeting.meet_link ?? "", "_blank", "noopener,noreferrer")}
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6" /></svg>
-      Join on Meet
-    </button>
-  );
-}
-
 // ── The page ──────────────────────────────────────────────────────────────────
 
 export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }): JSX.Element {
@@ -718,9 +658,23 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const [type, setType] = useState("FOUNDER");
   const [companyId, setCompanyId] = useState("");
   const [startsNow, setStartsNow] = useState(true);
-  const [open, setOpen] = useState<string | null>(null);
-  const [face, setFace] = useState<Face>("before");
+  // Arrived by address — `#/meetings?open=<id>&face=after` is the way back from the standalone
+  // room when the call is over (owner, 19 Sep 2026: "we can return when it's over").
+  const arrived = typeof window === "undefined" ? null : meetingFaceFromHash(window.location.hash);
+  const [open, setOpen] = useState<string | null>(arrived?.open ?? null);
+  const [face, setFace] = useState<Face>(arrived?.face ?? "before");
   const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => {
+    const onHash = () => {
+      const at = meetingFaceFromHash(window.location.hash);
+      if (at) {
+        setOpen(at.open);
+        setFace(at.face);
+      }
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   /**
    * TAKING A MEETING OFF THE RECORD. Operator, 22 Aug 2026: "the call with scooter meeting has no
    * way to delete it. it was a test and some meetings i want to delete….we need a way to delete them
@@ -859,14 +813,17 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
                 </div>
               </div>
               <ReadinessLine parts={readinessInWords(m)} testid={`readiness-${m.id}`} />
-              <div className="deal-actions">
-                {m.meet_link && <JoinOnMeet meeting={m} />}
-                <button type="button" data-testid={`start-${m.id}`} onClick={() => openRecord(m.id, "during")}>
-                  It is happening now
+              {/*
+                ONE PRIMARY DOOR, then the call's doors beneath it (owner, 19 Sep 2026). "It is
+                happening now" is retired — "wtf is that button" — in progress is derived from the
+                events that start a meeting (0214), never pressed.
+              */}
+              <div className="deal-actions deal-actions-doors">
+                <button type="button" className="btn-strong" data-testid={`upcoming-open-${m.id}`} aria-describedby={`one-room-line-${m.id}`} onClick={() => openRecord(m.id, "before")}>
+                  Go to this meeting
                 </button>
-                <button type="button" className="btn-strong" data-testid={`upcoming-open-${m.id}`} onClick={() => openRecord(m.id, "before")}>
-                  Open the room
-                </button>
+                <span className="field-help" id={`one-room-line-${m.id}`} data-testid={`one-room-line-${m.id}`}>{ONE_ROOM_LINE}</span>
+                {m.meet_link && <CallDoors meeting={{ id: m.id, meet_link: m.meet_link }} compact />}
               </div>
             </li>
           ))}
@@ -1024,7 +981,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             <label>
               When{" "}
               <select data-testid="meeting-when" value={startsNow ? "now" : "later"} onChange={(e) => setStartsNow(e.target.value === "now")}>
-                <option value="now">It is happening now</option>
+                <option value="now">Right now — it is in progress</option>
                 <option value="later">Put it on the calendar</option>
               </select>
             </label>

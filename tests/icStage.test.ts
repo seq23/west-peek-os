@@ -315,105 +315,37 @@ describe("nothing is written down before permission is", () => {
   });
 });
 
-describe("a Fireflies export goes through the same gates, and importing is never consent", () => {
-  const EXPORT = [
-    "Fireflies.ai",
-    "Summary",
-    "They want a decision in two weeks.",
-    "Transcript",
-    "Deana Oliver: we can send the data room by Friday",
-    // A new turn (its own timestamp) that the export never put a name on. A line directly under a
-    // speaker with nothing between them is a wrapped line and is joined on instead — the only place
-    // a line is allowed to inherit a speaker.
-    "00:31",
-    "someone talked over the top here",
-  ].join("\n");
-
-  async function meetingWithPolicy(title: string): Promise<string> {
-    const created = await call<{ id: string }>("/api/meetings", MP, "POST", {
-      title,
-      meeting_type: "FOUNDER",
-      occurred_at: new Date().toISOString(),
-    });
+describe("the Fireflies import is retired: the door answers with the reason and the two real paths, and writes nothing", () => {
+  /*
+   * Owner, 19 Sep 2026: "we will use Whisper in lieu of Fireflies — it's better." The route stays
+   * addressable so a client built against it hears why (the 0198 precedent) — a 410 with the two
+   * paths named, never a 404 that reads as a typo — and nothing reaches the record.
+   */
+  it("answers 410 fireflies_import_retired in her words, naming the laptop microphone and Google Meet, and records no import and no consent", async () => {
+    const created = await call<{ id: string }>("/api/meetings", MP, "POST", { title: "ADR019 fireflies retired", meeting_type: "FOUNDER", occurred_at: new Date().toISOString() });
     const meetingId = created.body.id;
-    // The recording policy is a named human gate with its own approved receipt.
-    const card = await call<{ id: string }>("/api/approvals", MP, "POST", {
-      action_key: "meeting.recording_policy.activate",
-      object_type: "meeting",
-      object_id: meetingId,
-      title: `policy ${meetingId}`,
-      submit: true,
+    const res = await call<{ error: string; detail: string; paths: string[] }>(`/api/meetings/${meetingId}/transcript/fireflies`, MP, "POST", {
+      text: "Deana Oliver: we can send the data room by Friday",
     });
-    await call(`/api/approvals/${card.body.id}/decide`, MP, "POST", { decision: "approved" });
-    const activated = await call(`/api/meetings/${meetingId}/recording-policy`, MP, "POST", { approval_receipt_id: card.body.id });
-    expect(activated.status).toBe(200);
-    return meetingId;
-  }
-
-  it("is refused, and the refusal recorded, when nobody has given permission", async () => {
-    const meetingId = await meetingWithPolicy("ADR019 fireflies ungranted");
-    const res = await call<{ error: string }>(`/api/meetings/${meetingId}/transcript/fireflies`, MP, "POST", { text: EXPORT });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toBe("consent_not_granted");
-    const refusal = await t.db
-      .prepare("SELECT status, refusal_reason FROM transcript_import WHERE meeting_id = ?1 ORDER BY created_at DESC LIMIT 1")
-      .bind(meetingId)
-      .first<{ status: string; refusal_reason: string }>();
-    expect(refusal?.status).toBe("REFUSED");
+    expect(res.status).toBe(410);
+    expect(res.body.error).toBe("fireflies_import_retired");
+    expect(res.body.detail).toContain("we will use Whisper in lieu of Fireflies — it's better");
+    expect(res.body.detail).toMatch(/laptop's microphone/);
+    expect(res.body.detail).toMatch(/Google Meet's own transcription/);
+    expect(res.body.paths).toContain("POST /api/meetings/:id/capture/chunk");
+    const imports = await t.db.prepare("SELECT COUNT(*) AS n FROM transcript_import WHERE meeting_id = ?1").bind(meetingId).first<{ n: number }>();
+    expect(Number(imports?.n)).toBe(0);
+    const consent = await t.db.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(meetingId).first<{ n: number }>();
+    expect(Number(consent?.n)).toBe(0);
+    const notes = await t.db.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1").bind(meetingId).first<{ n: number }>();
+    expect(Number(notes?.n)).toBe(0);
   });
 
-  it("lands the turns, stamps the vendor on the import, and never writes a consent row of its own", async () => {
-    const meetingId = await meetingWithPolicy("ADR019 fireflies granted");
-    await call(`/api/meetings/${meetingId}/capture/consent`, MP, "POST", {
-      answer: "GRANTED",
-      granted_by: "Deana Oliver",
-      basis: "asked out loud at the start of the call",
-    });
-    const before = await t.db.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(meetingId).first<{ n: number }>();
-
-    const res = await call<{ turns: number; unattributed: number; summary_captured: boolean; transcript_import_id: string }>(
-      `/api/meetings/${meetingId}/transcript/fireflies`, MP, "POST", { text: EXPORT },
-    );
-    expect(res.status).toBe(201);
-    expect(res.body.turns).toBe(2);
-    // The export did not say who spoke the second line. Reported, never guessed at.
-    expect(res.body.unattributed).toBe(1);
-    expect(res.body.summary_captured).toBe(true);
-
-    // THE SOURCE TRAVELS WITH IT. "PROVIDER" does not tell a reader who made the recording.
-    const imported = await t.db
-      .prepare("SELECT source, provider_name, status FROM transcript_import WHERE id = ?1")
-      .bind(res.body.transcript_import_id)
-      .first<{ source: string; provider_name: string; status: string }>();
-    expect(imported?.status).toBe("IMPORTED");
-    expect(imported?.source).toBe("PROVIDER");
-    expect(imported?.provider_name).toBe("FIREFLIES");
-
-    // Turns landed as transcript-derived notes, carrying the import they came from — which is what
-    // lets a close-out commitment quote the line it was read out of.
-    const notes = await t.db
-      .prepare("SELECT body FROM meeting_note WHERE transcript_import_id = ?1 ORDER BY created_at, id")
-      .bind(res.body.transcript_import_id)
-      .all<{ body: string }>();
-    const bodies = (notes.results ?? []).map((n) => n.body);
-    expect(bodies.some((b) => b.startsWith("Deana Oliver:"))).toBe(true);
-    // The timestamp the export carried sits between the marker and the words, verbatim.
-    expect(bodies.some((b) => b.startsWith("Speaker not named in the export [00:31]:"))).toBe(true);
-    // Fireflies' own summary is filed as theirs, not as something somebody said.
-    expect(bodies.some((b) => b.includes("Fireflies' own summary"))).toBe(true);
-
-    // IMPORTING IS NOT CONSENT. The firm did not ask anybody anything by pressing this.
-    const after = await t.db.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(meetingId).first<{ n: number }>();
-    expect(Number(after?.n)).toBe(Number(before?.n));
-  });
-
-  it("refuses an export with nothing readable in it rather than filing an empty transcript", async () => {
-    const meetingId = await meetingWithPolicy("ADR019 fireflies empty");
-    await call(`/api/meetings/${meetingId}/capture/consent`, MP, "POST", {
-      answer: "GRANTED", granted_by: "Deana Oliver", basis: "asked out loud",
-    });
-    const res = await call<{ error: string }>(`/api/meetings/${meetingId}/transcript/fireflies`, MP, "POST", { text: "   \n  \n" });
-    expect(res.status).toBe(400);
+  it("answers the same with no body at all — the refusal does not depend on what was pasted", async () => {
+    const created = await call<{ id: string }>("/api/meetings", MP, "POST", { title: "ADR019 fireflies retired empty", meeting_type: "FOUNDER" });
+    const res = await call<{ error: string }>(`/api/meetings/${created.body.id}/transcript/fireflies`, MP, "POST", {});
+    expect(res.status).toBe(410);
+    expect(res.body.error).toBe("fireflies_import_retired");
   });
 });
 

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { meetingType, seatableFor } from "@shared/meetings/meetingTypes";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
+import { SEATED_EMPLOYEE_LINE } from "@shared/meetings/howTheRoomHears";
 
 /**
  * Who is in the room — the one seating card, on the Before and During faces (Phase D, §3).
@@ -83,6 +84,13 @@ export function LiveHelpPanel({ meeting, me }: { meeting: { id: string; meeting_
         <h3>Who is in the room</h3>
         <span className="muted small">seating grants no authority</span>
       </div>
+      {/*
+        WHAT A SEAT IS, SAID ONCE BESIDE THE BUTTON (owner, 19 Sep 2026: "Are my AI employees there
+        from Join on Meet alone?"). No. A seat is a name the room answers to and a task that returns
+        here; what they read is the record, and they are never in the Meet call. One sentence, from
+        `howTheRoomHears.ts`, so the host's guide and this card say the same thing.
+      */}
+      <p className="field-help" data-testid="seat-line">{SEATED_EMPLOYEE_LINE}</p>
 
       {revoked ? (
         <div className="notice notice-bad" data-testid="live-help-revoked">

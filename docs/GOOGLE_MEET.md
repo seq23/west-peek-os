@@ -146,6 +146,30 @@ only path.
 - **Not built** because it is a live room, which is Phase C's, and it depends on a preview API whose
   terms should be read before the firm joins calls with it.
 
+## The doors onto a call, and the hooks the live path wires (19 Sep 2026, PR #130)
+
+- **One room per meeting, several doors.** `CallDoors.tsx` renders, beneath "Go to this meeting":
+  `Join on Meet` two ways remembered per viewer — *Inside the call* (the Tier 3 add-on; until
+  `meetAddonInstalled()` is true it says so and falls back) and *Beside the call* (the Meet in a new
+  tab, the narrow room `#/room/<id>` in this one) — and `Use my laptop mic for this Meet call`
+  (`#/room/<id>?mic=1`: the room's own consent prompt opens on arrival; chunks are stamped
+  `provider_name = 'LAPTOP_MIC'`). Every press posts `POST /api/meetings/:id/started` so the row is
+  in progress from the event (migration 0214, `markMeetingStarted`).
+- **Named hooks in `src/shared/meetings/meetJoin.ts`** for `feat/meet-media-live`:
+  `meetAddonInstalled()`, `liveMeetPathAvailable(meeting)` (the laptop-mic control yields to it and
+  says so), and `CALL_ENDED_SIGNAL = meeting.call_ended_at` — #131's column (ISO, null until the
+  call ends; first writer wins between the live listener's ENDED report and the ended-call ingest
+  from Google's end time), served as `facts.call_ended_at` by `GET /api/meetings/:id/hearing`. On
+  this head the column does not exist, so the field is served null and Google's end time on the
+  inbox row (`facts.meet.conference_ended_at`) stands in — `callIsOver` reads both. The narrow room
+  shows "Open what came out of it" (back to `#/meetings?open=<id>&face=after`; an unknown `face`
+  lands on Before) once the call is over or the meeting is HELD. The live path calls
+  `markMeetingStarted(env, actor, id, "conference_started", at)` when it sees it start. The add-on
+  panel renders `<RoomPanel meetingId standalone />` — the same component as `#/room/<id>` — so the
+  narrow layout applies inside its 360px shell with no further wiring.
+- **`howTheRoomHears.ts` keeps its shape** — facts in, one named state with one sentence and one
+  chip out — so the live path's `MEET_LIVE_*` states are added as rows, not as a rewrite.
+
 ## What Phase C should call
 
 - `meeting.meet_conference_id` / `meeting.meet_link` — the space the During face is inside.

@@ -43,4 +43,16 @@ export const workGuide: PageGuide = {
     { page: "documents", why: "viewing a deck version." },
     { page: "employees", why: "who is employed to carry cards at all." },
   ],
+  walkthroughs: [
+    {
+      scenario: "A card from Desk to Record",
+      steps: [
+        { do: "Press **Add a card** under **Waiting on you** — what needs doing, who carries it, who it is for", then: "the card is on the Desk; an employee owner is worked by the sweep on its next tick." },
+        { do: "When a card stops under **A deck is waiting on your decision** or with a block, press **Answer it**, **Give it to them** or **Try it again now**", then: "the block clears and the card restarts; **Send it** carries your answer." },
+        { do: "Press **Send it over** to tell the employee something mid-work", then: "they pick it up on their next step." },
+        { do: "Press **Done** when it is finished", then: "the card goes to **The record**; **Reopen** brings it back." },
+        { do: "Under **The machinery**, press **Run it now** on a job, or **Run everything due now**", then: "the job runs by hand; Preview it to me runs it and emails only you." },
+      ],
+    },
+  ],
 };

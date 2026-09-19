@@ -59,4 +59,16 @@ export const fundStrategyGuide: PageGuide = {
   notActs: {
     "sector-": "the sector chips inside Amend toggle a field of the form; the act is Save as a new version.",
   },
+  walkthroughs: [
+    {
+      scenario: "Modelling the next cheque and deciding the deck",
+      steps: [
+        { do: "Under **Model it**, press **Copy these six figures**, then **Open the dashboards ↗**", then: "the dashboards open in a new tab with the mandate's figures to paste in.", not: "nothing entered there comes back." },
+        { do: "Under **Where the fund is against its plan**, press **Record first close**", then: "Amend opens with the first-close date, which starts the pace clock." },
+        { do: "Under **How the fund is built**, press **Amend the construction**, then **Save as a new version**", then: "new mandate, sleeve and reserve versions are written with your reason.", not: "nothing is overwritten." },
+        { do: "When Preston proposes a deck under **The deck — what the firm sends**, press **Approve** or **Send it back**", then: "the version becomes the current deck, or goes back to Preston with your reason word for word; **Add a version of the deck** records a PDF as a proposal." },
+        { do: "Under **Scenarios**, press **Open a scenario**, **Add option**, then **Record APPROVED**", then: "the scenario pins the current policy versions; each option is checked against the constraints; the decision is recorded against its approval." },
+      ],
+    },
+  ],
 };

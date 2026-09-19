@@ -159,6 +159,7 @@ import {
   handleMatchConsent, handleRecordSignal, handleRetireSignal, handleRunMatching,
 } from "./services/matching";
 import { handleGetRoomCloseout, handleRunRoomCloseout } from "./services/roomCloseout";
+import { handleHearing } from "./services/howTheRoomHears";
 import { handleCommunityPopulation, handleUpsertMember } from "./services/communityOs";
 import {
   handleAddFollowup,
@@ -428,6 +429,7 @@ import {
   handleRecordConsent,
   handleTransitionMeeting,
   handleArchiveMeeting,
+  handleMeetingStarted,
 } from "./services/meetings";
 import {
   handleAssembleIcPacket,
@@ -448,7 +450,7 @@ import {
   handleCaptureChunk,
   handleCaptureConsent,
   handleCaptureReadiness,
-  handleImportFireflies,
+  handleFirefliesRetired,
 } from "./services/liveTranscription";
 import {
   handleAddWatchlist,
@@ -984,7 +986,9 @@ const router = new Router()
   .post("/api/meetings/:id/capture/consent", handleCaptureConsent)
   .post("/api/meetings/:id/capture/chunk", handleCaptureChunk)
   // A transcript somebody else recorded. Same two gates, and importing is never consent.
-  .post("/api/meetings/:id/transcript/fireflies", handleImportFireflies)
+  // Retired 19 Sep 2026 ("we will use Whisper in lieu of Fireflies — it's better"): answers 410 with
+  // the two real paths named, never a silent 404.
+  .post("/api/meetings/:id/transcript/fireflies", handleFirefliesRetired)
   // === Phase Meet: Google Meet integration ===
   // Tier 1: the firm calendar becomes meetings. Tier 2: an ended Meet is read once, through the
   // governed import. The one reserved decision — recording on by default for every firm-hosted
@@ -1152,6 +1156,16 @@ const router = new Router()
   .post("/api/meetings/:id/room/roll", handleRoomRoll)
   .post("/api/meetings/:id/room/ask", handleRoomAsk)
   // === end Phase C ====
+  // === How the room hears ===
+  // Owner, 19 Sep 2026: "If I push Join on Meet what happens? Is it recording? Are my AI employees
+  // there?" One read: the facts the During face's "How this room hears" line is chosen from — the
+  // meeting's source, the firm default, the ingest cadence from its job row, the Meet inbox row,
+  // the capture gates — and, for After, where its material came from with times.
+  .get("/api/meetings/:id/hearing", handleHearing)
+  // A partner joined the call from the app (Join on Meet, Beside the call, the laptop-mic path): the
+  // meeting is in progress from that moment (0214). Idempotent; the first start wins.
+  .post("/api/meetings/:id/started", handleMeetingStarted)
+  // === end How the room hears ===
   // P8 — portfolio monitoring: dated metrics, deterministic alerts, support.
   .post("/api/portfolio/metric-definitions", handleCreateMetricDefinition)
   .get("/api/portfolio/metric-definitions", handleListMetricDefinitions)

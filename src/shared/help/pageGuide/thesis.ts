@@ -72,4 +72,16 @@ export const thesisGuide: PageGuide = {
     { page: "fund-strategy", why: "the sleeves, the fee estimate and the plan ring — amend those there." },
     { page: "dealflow", why: "where companies are screened against this thesis." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Amending what the firm looks for",
+      steps: [
+        { do: "Read **The thesis** and **What a company must be** — the sentence and the six numbers", then: "**Versions** shows every earlier one." },
+        { do: "Press **Amend the thesis**", then: "the sentence opens for editing; **Write it for me** drafts it from the numbers." },
+        { do: "Press **Save as new version**", then: "a new version is written with your reason; **Never mind** closes without saving.", not: "nothing is ever overwritten." },
+        { do: "Under **Construction**, press **Amend**, then **Save as new versions**", then: "the six numbers move together, as new versions." },
+        { do: "Press **Print or save as PDF** when you want it on paper", then: "the document prints." },
+      ],
+    },
+  ],
 };

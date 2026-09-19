@@ -59,6 +59,9 @@ export interface MeetingRow {
   meeting_type: string;
   scheduled_at: string | null;
   occurred_at: string | null;
+  /** Migration 0214: when something started it, and what. Null until then. */
+  started_at?: string | null;
+  started_via?: string | null;
   location: string | null;
   status: string;
   recording_enabled: number;
@@ -218,6 +221,53 @@ export async function transitionMeeting(env: Env, actor: Actor, meetingId: strin
     payload: { from: meeting.status, to },
   });
   return (await getMeeting(env, meetingId))!;
+}
+
+export const MEETING_STARTED_VIA = ["join_on_meet", "laptop_mic", "capture", "conference_started"] as const;
+export type MeetingStartedVia = (typeof MEETING_STARTED_VIA)[number];
+
+/**
+ * A MEETING IS IN PROGRESS BECAUSE SOMETHING STARTED IT, NEVER BECAUSE A BUTTON SAID SO (19 Sep 2026).
+ *
+ * Owner, on "It is happening now": "wtf is that button". It opened the During face and changed
+ * nothing on the row. Retired. This is the ONE place the row learns it started (migration 0214):
+ * a partner joined the call from the app (`join_on_meet`, `laptop_mic`), capture began with their
+ * yes (`capture`), or Google reported the conference started (`conference_started` — the live path
+ * on feat/meet-media-live calls this with that name). First start wins; a second caller of any kind
+ * leaves the row as it was, so the moment is the real first one. A CANCELLED or HELD meeting is not
+ * started — it is over, and the caller is told nothing changed.
+ */
+export async function markMeetingStarted(env: Env, actor: Actor, meetingId: string, via: MeetingStartedVia, at?: string): Promise<{ started_at: string | null; started_via: string | null; changed: boolean }> {
+  const meeting = await requireMeeting(env, meetingId);
+  const row = await env.WP_OS_DB.prepare("SELECT started_at, started_via FROM meeting WHERE id = ?1").bind(meetingId).first<{ started_at: string | null; started_via: string | null }>();
+  if (meeting.status !== "SCHEDULED" || row?.started_at) return { started_at: row?.started_at ?? null, started_via: row?.started_via ?? null, changed: false };
+  await mustAuthorize(env, actor, "meeting.update", "meeting", meetingId, meeting.firm_scope);
+  const startedAt = at ?? new Date().toISOString();
+  await env.WP_OS_DB.prepare("UPDATE meeting SET started_at = ?2, started_via = ?3 WHERE id = ?1 AND started_at IS NULL").bind(meetingId, startedAt, via).run();
+  const { actorType, actorId } = eventActor(actor);
+  await appendEvent(env, {
+    eventType: "meeting.started",
+    actorType,
+    actorId,
+    objectType: "meeting",
+    objectId: meetingId,
+    firmScope: meeting.firm_scope,
+    payload: { via, started_at: startedAt },
+  });
+  return { started_at: startedAt, started_via: via, changed: true };
+}
+
+const startedSchema = z.object({ via: z.enum(["join_on_meet", "laptop_mic"]) });
+
+/** POST /api/meetings/:id/started — a partner joined the call from the app. Idempotent. */
+export async function handleMeetingStarted(ctx: RouteContext): Promise<Response> {
+  const parsed = startedSchema.safeParse(await parseJsonBody(ctx.request));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  try {
+    return json(await markMeetingStarted(ctx.env, actorFromIdentity(ctx.identity!), ctx.params.id!, parsed.data.via), { status: 200 });
+  } catch (err) {
+    return errorResponse(err);
+  }
 }
 
 /**

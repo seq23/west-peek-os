@@ -31,4 +31,15 @@ export const documentsGuide: PageGuide = {
     { page: "home", why: "the morning brief — deliberately not filed here." },
   ],
   notActs: {},
+  walkthroughs: [
+    {
+      scenario: "A file onto the shelf, and the deck to its decision",
+      steps: [
+        { do: "Under **Put a document on the shelf**, press **Upload**", then: "the file is on **The shelf**, grouped by type; a deck becomes a proposed version." },
+        { do: "Press **View here** or **Download**", then: "it opens in **The viewer** at the top, or saves to your machine." },
+        { do: "Press **Decide on Fund strategy** on a proposed deck", then: "the deck decision opens on Fund strategy.", not: "a deck is never approved here." },
+        { do: "Press **Archive** with a reason, or **Archive everything here**", then: "it moves to **Archived**; Restore puts it back.", not: "nothing is ever destroyed." },
+      ],
+    },
+  ],
 };

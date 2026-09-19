@@ -33,4 +33,16 @@ export const communityGuide: PageGuide = {
     { page: "network", why: "what is synced from Network OS and where the two disagree." },
     { page: "rooms", why: "the gatherings these people are invited to." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Who should meet whom",
+      steps: [
+        { do: "Under **What we know about people**, press **Note it** for what someone needs or can help with", then: "the signal is on file and expires on its own." },
+        { do: "Under **Introductions**, press **Look for matches**", then: "suggested introductions come from the signals on file." },
+        { do: "Press **Worth doing — ask them both**", then: "the suggestion is approved.", not: "nothing is sent — you ask each side yourself." },
+        { do: "Press **said yes** for each person as they agree, then **I made the introduction**", then: "consent is recorded per person, and the introduction against both." },
+        { do: "Under **Add or update a member**, press **Save member**", then: "the member is added or updated; who is a member is owned by Network OS." },
+      ],
+    },
+  ],
 };

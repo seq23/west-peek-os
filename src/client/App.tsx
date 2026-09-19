@@ -2654,7 +2654,9 @@ const MERGED_ROUTES: Readonly<Record<string, string>> = {
 };
 
 function keyFromHash(known: (key: string) => boolean): string {
-  const raw = window.location.hash.replace(/^#\/?/, "").trim();
+  // `#/meetings?open=<id>&face=after` is Meetings with a record to open (the way back from the
+  // standalone room, `shared/meetings/meetJoin.ts`); the page reads the query, the shell the key.
+  const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0]!.trim();
   const resolved = MERGED_ROUTES[raw] ?? raw;
   return resolved && known(resolved) ? resolved : "home";
 }
@@ -2667,17 +2669,23 @@ function keyFromHash(known: (key: string) => boolean): string {
  * same component.
  */
 function roomIdFromHash(): string | null {
-  const m = window.location.hash.match(/^#\/room\/([A-Za-z0-9_-]+)$/);
+  const m = window.location.hash.match(/^#\/room\/([A-Za-z0-9_-]+)(\?.*)?$/);
   return m ? m[1]! : null;
+}
+
+/** `#/room/<id>?mic=1` — arrived by "Use my laptop mic for this Meet call": the consent prompt opens on arrival. */
+function roomArrivedArmed(): boolean {
+  return /^#\/room\/[A-Za-z0-9_-]+\?(.*&)?mic=1(&|$)/.test(window.location.hash);
 }
 
 export function RoomStandalone({ meetingId }: { meetingId: string }): JSX.Element {
   const me = useApi<MeResponse>("/api/me");
   const authed = me.status === 200 && me.data;
+  const armed = typeof window !== "undefined" && roomArrivedArmed();
   return (
     <main className="surface-body room-standalone-shell" id="wp-surface" data-testid="room-standalone">
       {authed ? (
-        <RoomPanel meetingId={meetingId} standalone />
+        <RoomPanel meetingId={meetingId} standalone armLaptopMic={armed} />
       ) : me.loading ? (
         <p className="muted small">Signing you in…</p>
       ) : (

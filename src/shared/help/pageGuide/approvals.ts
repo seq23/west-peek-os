@@ -46,4 +46,16 @@ export const approvalsGuide: PageGuide = {
     { page: "work", why: "the card that asked, when the request came from work." },
     { page: "home", why: "the same waiting cards, decided inline." },
   ],
+  walkthroughs: [
+    {
+      scenario: "A card arrives",
+      steps: [
+        { do: "Read the card under **The cards** — what it asks, the evidence, the history", then: "**The filter** narrows the queue to a kind or a state." },
+        { do: "Press **Approve**, **Send back for changes** or **Reject**", then: "the decision is on the record at once.", not: "nothing leaves the firm without one of these; silence is never approval." },
+        { do: "Press **Approve, and don't ask again** when the same ask keeps coming", then: "the rest is delegated with a reason — until this task is done, today, or this week — and shows under **What you have delegated**; **Stop this** revokes it at once.", not: "reserved actions come back to you every time regardless." },
+        { do: "Press **Block until that is resolved** when the answer is not yet", then: "the card is held, saying what it waits on; **Release the block** lifts it." },
+        { do: "Press **Change this decision** if you were wrong", then: "the card reopens with your reason; the old decision stays on the record as superseded." },
+      ],
+    },
+  ],
 };

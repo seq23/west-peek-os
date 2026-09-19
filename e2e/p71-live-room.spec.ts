@@ -46,8 +46,12 @@ test("Phase C: start recording → consent → ask the room by text → a block 
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
 
-  // "It is happening now" opens the record ON the During face — the tab strip says so (Phase D).
-  await page.getByTestId(`start-${meetingId}`).click();
+  // ONE ROOM, SEVERAL DOORS (19 Sep 2026). "It is happening now" is retired — "wtf is that button" —
+  // so the door is Go to this meeting, then Open the room from Before (no call on this meeting).
+  await expect(page.getByTestId(`start-${meetingId}`)).toHaveCount(0);
+  await page.getByTestId(`upcoming-open-${meetingId}`).click();
+  await expect(page.getByTestId("face-before")).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("brief-open-room").click();
   await expect(page.getByTestId("face-during")).toHaveAttribute("aria-selected", "true");
   const room = page.getByTestId(`room-${meetingId}`);
   await expect(room).toBeVisible();

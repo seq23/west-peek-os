@@ -130,4 +130,17 @@ export const dealflowGuide: PageGuide = {
     { page: "meetings", why: "where the stage proposals come from." },
     { page: "work", why: "the facilitator's card when it is holding a packet." },
   ],
+  walkthroughs: [
+    {
+      scenario: "A deal from the inbox to the committee",
+      steps: [
+        { do: "A deal arrives by email and sits under **Waiting on you** — press **Look at it**", then: "the record opens: what the deck said, what it did not, and the seven numbers." },
+        { do: "Or press **Add a company** for one that came another way", then: "it enters at the top of **The pipeline** like every company does." },
+        { do: "Press **Move it** on the answer line, or **Move to** on the record", then: "the deal moves a stage; **Leave it where it is** declines; **Pass on this** ends it with a reason." },
+        { do: "Press **Work it out** on the record", then: "the arithmetic runs from the seven numbers — ownership, dilution, what it takes to return the fund." },
+        { do: "Press **Put it in front of the partners**", then: "the packet goes to **The committee**; **Save answer** fills what it does not yet know." },
+        { do: "Press **Record what the committee decided** — **The firm is investing** or **The firm passes**", then: "the decision and the reason are on the record; **Record that you disagreed with this** keeps a dissent, permanently." },
+      ],
+    },
+  ],
 };

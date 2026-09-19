@@ -41,4 +41,18 @@ export const researchGuide: PageGuide = {
     { page: "documents", why: "every packet ever filed." },
     { page: "record", why: "the claims a promoted finding becomes." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Getting up to speed on a market",
+      steps: [
+        { do: "Under **Open a project**, say what you want to know and press **Launch research**", then: "the project opens below with Wyatt ready to scope it." },
+        { do: "Press **What do we need to find out?**", then: "Wyatt proposes the questions; keep it records each one." },
+        { do: "Press **Go and research this**", then: "Wyatt searches and grounds the answers; findings and sources come back onto the project." },
+        { do: "Press **Add source** or **Record finding** for what you find yourself; press **Ask** to talk to Wyatt about it", then: "each is on the project; a finding is research only until it is promoted." },
+        { do: "Press **Promote into evidence** on a finding worth relying on", then: "it becomes a governed claim on the Record." },
+        { do: "Press **Gather what we already have**", then: "a packet is assembled and filed in Documents; under **Delivered research**, **Mark as read** and **Send it to** pass your verdict back." },
+        { do: "Under **Who else is already doing this?**, press **Build map**", then: "the sector is mapped — incumbents, challengers, who is funded by whom, which are ours." },
+      ],
+    },
+  ],
 };

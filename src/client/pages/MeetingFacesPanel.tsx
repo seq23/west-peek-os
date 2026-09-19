@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
+import type { MaterialSource } from "@shared/meetings/howTheRoomHears";
+import { CallDoors, ONE_ROOM_LINE } from "./CallDoors";
 
 /**
  * The BEFORE and AFTER faces of a meeting on its record (Phase B data, Phase D shape — §3, C1/C3).
@@ -77,6 +79,26 @@ function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+/**
+ * The owner asked whether the second "Open the room" was "a real room". It is the During face of
+ * this same meeting — the tab above — and the line under the button says so, rather than leaving a
+ * button at the end of the brief to be guessed at.
+ */
+const OPEN_THE_ROOM_LINE = "Goes to During — the same room, not a second one: the recording switch, ask the room, who is seated. For a meeting with a call, the call's doors are here instead.";
+
+/** "Meet transcript · read Thu 18 Sep 11:04 · 212 turns" — where After's material came from. */
+function sourceInWords(s: MaterialSource): string {
+  const when = s.first_at && s.last_at && s.first_at !== s.last_at ? `${whenInWords(s.first_at)} → ${whenInWords(s.last_at)}` : whenInWords(s.last_at ?? s.first_at ?? "");
+  const what =
+    s.kind === "laptop_capture" ? `${count(s.count, "minute", "minutes")} captured` :
+    s.kind === "meet_transcript" ? "read from Google" :
+    s.kind === "typed_notes" ? count(s.count, "note", "notes") :
+    s.kind === "room_blocks" ? count(s.count, "block", "blocks") :
+    count(s.count, "import", "imports");
+  const turns = s.turns !== null && s.kind !== "typed_notes" && s.kind !== "room_blocks" ? ` · ${count(s.turns, "turn", "turns")}` : "";
+  return `${what}${turns} · ${when}`;
+}
+
 /** A "we said" / "they said" line with its standing beside it. */
 function CommitmentLine({ c }: { c: BriefCommitmentLine }): JSX.Element {
   return (
@@ -120,8 +142,10 @@ function DiligenceScorecard({ packetId }: { packetId: string }): JSX.Element {
 }
 
 /** BEFORE: the brief, with its one model-written line at rank 0, or a named absence and the button that builds one. */
-export function BeforePanel({ meetingId, onChanged, seating, onOpenRoom, onNavigate }: {
+export function BeforePanel({ meetingId, meetLink = null, onChanged, seating, onOpenRoom, onNavigate }: {
   meetingId: string;
+  /** The Meet link, when the calendar brought one: the doors onto the call replace Open the room. */
+  meetLink?: string | null;
   onChanged: () => void;
   seating: ReactNode;
   onOpenRoom: () => void;
@@ -262,12 +286,30 @@ export function BeforePanel({ meetingId, onChanged, seating, onOpenRoom, onNavig
 
             {seating}
 
-            <div className="row">
-              <button type="button" className="btn-strong btn-lg" data-testid="brief-open-room" onClick={onOpenRoom}>Open the room</button>
-              <button type="button" className="btn-ghost" disabled={busy} data-testid="brief-build" onClick={() => void build()}>
-                {busy ? "Building…" : "Build the brief again"}
-              </button>
-            </div>
+            {/*
+              ONE ROOM, SEVERAL DOORS. With a call, the doors onto it stand here (Join on Meet inside
+              or beside, the laptop mic) and she never presses Open the room after choosing one.
+              Without a call — reading the brief, in person — Open the room goes to During.
+            */}
+            {meetLink ? (
+              <div className="stack">
+                <p className="field-help">{ONE_ROOM_LINE}</p>
+                <CallDoors meeting={{ id: meetingId, meet_link: meetLink }} />
+                <button type="button" className="btn-ghost" disabled={busy} data-testid="brief-build" onClick={() => void build()}>
+                  {busy ? "Building…" : "Build the brief again"}
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="row">
+                  <button type="button" className="btn-strong btn-lg" data-testid="brief-open-room" onClick={onOpenRoom}>Open the room</button>
+                  <button type="button" className="btn-ghost" disabled={busy} data-testid="brief-build" onClick={() => void build()}>
+                    {busy ? "Building…" : "Build the brief again"}
+                  </button>
+                </div>
+                <p className="field-help" data-testid="brief-open-room-line">{OPEN_THE_ROOM_LINE}</p>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -279,8 +321,16 @@ export function BeforePanel({ meetingId, onChanged, seating, onOpenRoom, onNavig
             <button type="button" className="btn-strong btn-lg" disabled={busy || (state.loading && !state.data)} data-testid="brief-build" onClick={() => void build()}>
               {busy ? "Building…" : "Prepare for it"}
             </button>
-            <button type="button" data-testid="brief-open-room" onClick={onOpenRoom}>Open the room</button>
+            {!meetLink && <button type="button" data-testid="brief-open-room" onClick={onOpenRoom}>Open the room</button>}
           </div>
+          {meetLink ? (
+            <div className="stack">
+              <p className="field-help">{ONE_ROOM_LINE}</p>
+              <CallDoors meeting={{ id: meetingId, meet_link: meetLink }} />
+            </div>
+          ) : (
+            <p className="field-help" data-testid="brief-open-room-line">{OPEN_THE_ROOM_LINE}</p>
+          )}
         </div>
       )}
       {message && <p className="notice small" data-testid="brief-message" role="status">{message}</p>}
@@ -326,6 +376,7 @@ function sentenceOf(decisions: number, commitments: number, questions: number, m
 /** AFTER: the four objects, the artifacts, who is holding what, and the draft with the partner's button on it. */
 export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: string; onChanged: () => void; closeout: ReactNode }): JSX.Element {
   const state = useApi<AfterResponse>(`/api/meetings/${meetingId}/after`, [meetingId]);
+  const hearing = useApi<{ sources: MaterialSource[] }>(`/api/meetings/${meetingId}/hearing`, [meetingId]);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [answering, setAnswering] = useState<string | null>(null);
@@ -340,6 +391,7 @@ export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: stri
     setBusy(null);
     setMessage(ok.includes(res.status) ? `${label}.` : `${label} refused: ${res.data?.detail ?? res.data?.error ?? res.status}`);
     state.reload();
+    hearing.reload();
     onChanged();
   }
 
@@ -383,6 +435,27 @@ export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: stri
         <p className="masthead-date">{eyebrow}</p>
         <h2 data-testid="after-answer">{answerLine}</h2>
         {detail && <p className="masthead-second">{detail}</p>}
+      </div>
+
+      {/*
+        WHERE THE MATERIAL CAME FROM (owner, 19 Sep 2026). A draft written from Google's transcript
+        of the call, from the laptop's minute-by-minute capture, or from three typed lines reads the
+        same on the page; the eyebrow above says how many notes were read, not what they were. This
+        says it, by origin, with the times, from `/hearing` — one route the During face shares.
+      */}
+      <div className="hears" data-testid="after-sources" data-state={hearing.data ? (hearing.data.sources.length === 0 ? "empty" : "ready") : hearing.loading ? "loading" : "error"}>
+        <span className="eyebrow">Where this came from</span>
+        {!hearing.data ? (
+          <span className="muted small">{hearing.loading ? "Reading where the material came from…" : `Could not read where the material came from (HTTP ${hearing.status ?? "—"}).`}</span>
+        ) : hearing.data.sources.length === 0 ? (
+          <span className="muted small" data-testid="after-sources-empty">Nothing has reached this record yet — no Meet transcript, no laptop capture, no typed notes.</span>
+        ) : (
+          <ul className="card-list small" data-testid="after-sources-list">
+            {hearing.data.sources.map((src) => (
+              <li key={src.kind} data-testid={`after-source-${src.kind}`}><strong>{src.label}</strong> · {sourceInWords(src)}</li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {a?.latest_draft && a.latest_draft.state !== "DRAFTED" && a.latest_draft.state !== "APPROVED" && (

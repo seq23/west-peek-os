@@ -3,11 +3,10 @@ import type { Env } from "../env";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity } from "./authorize";
-import { CONSENT_TYPES, currentConsent, recordConsent, type ConsentType } from "./meetings";
+import { CONSENT_TYPES, currentConsent, markMeetingStarted, recordConsent, type ConsentType } from "./meetings";
 import { ingestTranscript } from "./captureAdapter";
 import { transcribeChunk, transcriptionAvailable, TranscriptionUnavailable } from "../ai/providers/workersAiWhisper";
 import { DiarisationUnavailable, diarisedLine, transcribeDiarised } from "../ai/providers/workersAiNova3";
-import { parseFireflies, turnLine } from "../../shared/meetings/firefliesTranscript";
 
 /**
  * Recording a meeting from the browser it is being held in (ADR-019).
@@ -156,6 +155,8 @@ export async function answerConsentPrompt(
       granted_by: input.answer === "GRANTED" ? input.granted_by!.trim() : undefined,
     });
   }
+  // Their yes is the moment capture begins, and the moment the meeting is in progress (0214).
+  if (input.answer === "GRANTED") await markMeetingStarted(env, actor, meetingId, "capture");
   return captureReadiness(env, meetingId);
 }
 
@@ -166,9 +167,20 @@ const chunkSchema = z.object({
   sequence: z.number().int().min(0).max(10_000),
   /** The recorder's MIME type. Nova-3 reads the container from it; Whisper ignores it. Audio only. */
   content_type: z.string().trim().max(80).regex(/^audio\/[a-z0-9.+-]{1,40}(;\s*codecs=[a-z0-9.,+ -]{1,60})?$/i, "content_type must be an audio type").optional(),
+  /**
+   * What captured the slice. The browser's recorder is this laptop's microphone and nothing else,
+   * so the only value is `laptop_mic` — sent explicitly so the row can never be mistaken for the
+   * Media API path the sibling adds later, which will name itself.
+   */
+  via: z.enum(["laptop_mic"]).optional(),
 });
 
+/** The provider stamped on every native chunk: the laptop microphone, named on the import row. */
+export const LAPTOP_MIC_PROVIDER = "LAPTOP_MIC" as const;
+
 export interface ChunkResult {
+  /** What captured it. Always the laptop microphone from this route. */
+  via?: "laptop_mic";
   sequence: number;
   /** The words. Empty is legitimate — a slice in which nobody spoke. */
   text: string;
@@ -249,87 +261,43 @@ export async function captureChunk(
     { source: "NATIVE", text },
     importTranscript as never,
   );
-  return { sequence: input.sequence, text, turns_written: out.notes_created, engine: heard.engine, speakers: heard.speakers, fallback_reason: heard.fallback_reason };
+  // THE SOURCE TRAVELS WITH IT (owner, 19 Sep 2026: the laptop mic is a first-class path onto a
+  // Meet call). A NATIVE row is this laptop's microphone; the row says so by name, so After's
+  // "where this came from" and the sibling's live-Meet rows can never be confused.
+  await env.WP_OS_DB.prepare("UPDATE transcript_import SET provider_name = ?2 WHERE id = ?1 AND status = 'IMPORTED' AND provider_name IS NULL")
+    .bind(out.transcript_import_id, LAPTOP_MIC_PROVIDER)
+    .run();
+  return { sequence: input.sequence, text, turns_written: out.notes_created, engine: heard.engine, speakers: heard.speakers, fallback_reason: heard.fallback_reason, via: "laptop_mic" };
 }
 
-// ── A transcript somebody else recorded ──────────────────────────────────────
-
-const firefliesSchema = z.object({
-  /** The export, pasted or read out of a file by the browser. */
-  text: z.string().min(1).max(500_000),
-});
-
-export interface FirefliesImportResult {
-  transcript_import_id: string;
-  turns: number;
-  /** Turns the export did not attribute to anybody. Reported, never guessed at. */
-  unattributed: number;
-  summary_captured: boolean;
-}
+// ── A transcript somebody else recorded: RETIRED ─────────────────────────────
 
 /**
- * Bring in a Fireflies export.
+ * THE FIREFLIES IMPORT IS RETIRED. Owner, 19 Sep 2026: "we will use Whisper in lieu of Fireflies —
+ * it's better."
  *
- * IT GOES THROUGH THE SAME TWO GATES AS EVERYTHING ELSE, and that is the important part. The firm
- * taking custody of a recording of a conversation is the governed act, not the button that was
- * pressed to do it — so an activated recording policy and granted consent are still required, and a
- * refusal is still recorded. What importing does NOT do is create consent: nothing here writes a
- * GRANTED row, because the firm did not ask anybody anything. Somebody else recorded this.
+ * Two capture paths remain, and they are the only two: the room's recording switch (this laptop's
+ * microphone → Nova-3, Whisper as the fallback; a yes asked for every session; live, a minute at a
+ * time — `captureChunk` above) and Google Meet's own transcription, read into the record after the
+ * call ends (`meetIngest.ts`). A transcript somebody else recorded under conditions nobody here
+ * witnessed was always the weakest evidence on the record; it is no longer a door.
  *
- * THE SOURCE TRAVELS WITH IT. `provider_name` is stamped on the import row so every turn can be
- * traced back to an export the firm did not witness, which is a different kind of evidence from a
- * turn this system captured under permission it asked for itself.
+ * WHAT STAYS. `shared/meetings/firefliesTranscript.ts` is NOT removed: `meetTranscript.ts` renders
+ * Meet's turns through its `turnLine` and `TranscriptTurn` shape, and Nova-3's `diarisedLine` keeps
+ * the same line so one reader serves every turn on the record. The parser is a shape now, not a door.
  *
- * FIREFLIES' OWN SUMMARY IS FILED AS THEIR SUMMARY. It arrives as one clearly-labelled turn rather
- * than as speech, and its action items are NOT turned into commitments here. Close-out reads the
- * notes and PROPOSES commitments a person accepts — a second path that assigned work straight out
- * of a vendor's bullet list would go around the only step that has a human in it.
+ * THE ROUTE ANSWERS, IT DOES NOT VANISH (the 0198 precedent). A client built against the old door
+ * gets a 410 with the reason in the owner's words and the two real paths named — never a 404 that
+ * reads as a typo.
  */
-export async function importFireflies(
-  env: Env,
-  ctx: RouteContext,
-  meetingId: string,
-  input: z.infer<typeof firefliesSchema>,
-): Promise<FirefliesImportResult> {
-  const actor = actorFromIdentity(ctx.identity!);
-  const parsed = parseFireflies(input.text);
-  if (parsed.turns.length === 0 && !parsed.summary) {
-    throw new CaptureRefused(
-      400,
-      "nothing_readable",
-      "Nothing in that looked like a transcript. Paste the export with its speaker lines, or the whole file.",
-    );
-  }
-
-  const blocks = parsed.turns.map(turnLine);
-  if (parsed.summary) {
-    blocks.push(
-      `Fireflies' own summary of this meeting, written by their model and not said by anybody in the room:\n${parsed.summary}`,
-    );
-  }
-
-  const { importTranscript } = await import("./meetings");
-  const out = await ingestTranscript(
-    env,
-    actor,
-    meetingId,
-    // PROVIDER: §33's word for a transcript another system produced. The vendor's name goes on the
-    // import row below, because "PROVIDER" does not tell a reader who recorded this.
-    { source: "PROVIDER", text: blocks.join("\n\n") },
-    importTranscript as never,
-  );
-
-  await env.WP_OS_DB.prepare("UPDATE transcript_import SET provider_name = 'FIREFLIES' WHERE id = ?1")
-    .bind(out.transcript_import_id)
-    .run();
-
-  return {
-    transcript_import_id: out.transcript_import_id,
-    turns: parsed.turns.length,
-    unattributed: parsed.unattributed,
-    summary_captured: Boolean(parsed.summary),
-  };
-}
+export const FIREFLIES_RETIRED = {
+  error: "fireflies_import_retired",
+  detail:
+    "The Fireflies import was retired on 19 Sep 2026 — \"we will use Whisper in lieu of Fireflies — it's better.\" " +
+    "Two paths capture a meeting now: the room's recording switch (this laptop's microphone, with a yes asked every session, transcribed live) " +
+    "and Google Meet's own transcription, read into the record after the call ends. Nothing was imported.",
+  paths: ["POST /api/meetings/:id/capture/chunk", "meet_ingest (scheduled_job) → GET /api/meetings/:id/hearing"],
+} as const;
 
 // ── Route handlers ───────────────────────────────────────────────────────────
 
@@ -365,18 +333,9 @@ export async function handleCaptureConsent(ctx: RouteContext): Promise<Response>
   }
 }
 
-/** POST /api/meetings/:id/transcript/fireflies — an export the operator already has in her hand. */
-export async function handleImportFireflies(ctx: RouteContext): Promise<Response> {
-  const id = ctx.params.id;
-  const parsed = firefliesSchema.safeParse(await ctx.request.json().catch(() => null));
-  if (!id || !parsed.success) {
-    return json({ error: "invalid_input", issues: parsed.success ? undefined : parsed.error.issues }, { status: 400 });
-  }
-  try {
-    return json(await importFireflies(ctx.env, ctx, id, parsed.data), { status: 201 });
-  } catch (err) {
-    return errorResponse(err);
-  }
+/** POST /api/meetings/:id/transcript/fireflies — retired; answers 410 with the reason and the two real paths. */
+export async function handleFirefliesRetired(): Promise<Response> {
+  return json(FIREFLIES_RETIRED, { status: 410 });
 }
 
 /** POST /api/meetings/:id/capture/chunk — one slice of audio becomes transcript turns. */

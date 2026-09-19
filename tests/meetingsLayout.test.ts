@@ -102,8 +102,9 @@ describe("Meetings reads the order a partner asks in", () => {
     expect(shared).toMatch(/!isUpcoming\(m, now\)\)[\s\S]{0,40}\.sort\(\(a, b\) => timeOf\(b\.occurred_at \?\? b\.scheduled_at, -Infinity\) - timeOf\(a\.occurred_at \?\? a\.scheduled_at, -Infinity\)\)/);
     // A row with no time goes LAST in both bands — the fallbacks are the ends of the number line.
     expect(shared).toContain("function timeOf(value: string | null, fallback: number): number");
-    // And "upcoming" is SCHEDULED *and not past*, never SCHEDULED alone.
-    expect(shared).toMatch(/return m\.status === "SCHEDULED" && !isPastMeeting\(m, now\);/);
+    // And "upcoming" is SCHEDULED, *not past* and *not started* — never SCHEDULED alone (0214:
+    // a meeting something started is happening now, off Coming up).
+    expect(shared).toMatch(/return m\.status === "SCHEDULED" && !isPastMeeting\(m, now\) && !isInProgress\(m\);/);
   });
 
   it("sends the reader to Dealflow for the committee, and carries none of it here", () => {
@@ -221,7 +222,7 @@ describe("Live Help and Close-out are faces of the meeting, not panels under it"
     const during = c.slice(c.indexOf('{face === "during" && ('), c.indexOf('{face === "after" && ('));
     expect(during).toContain("<RoomPanel");
     expect(during).toContain("<WrittenRecord");
-    for (const hook of ["meeting-recording", "meeting-consent", "consent-grant", "consent-revoke", "transcript-import", "note-form", "note-list", "fireflies-import", "transcript-list"]) {
+    for (const hook of ["meeting-recording", "meeting-consent", "consent-grant", "consent-revoke", "transcript-import", "note-form", "note-list", "fireflies-retired", "transcript-list"]) {
       expect(MEETINGS, `${hook} left the record`).toContain(`data-testid="${hook}"`);
     }
   });
@@ -314,12 +315,26 @@ describe("the room hears only while the button is held, and nothing here writes 
   it("renders standalone behind the same gate, for a Meet Add-on side panel later", () => {
     expect(APP).toContain("export function RoomStandalone");
     expect(APP).toMatch(/#\\\/room\\\//);
-    expect(APP).toContain("<RoomPanel meetingId={meetingId} standalone />");
+    expect(APP).toContain("<RoomPanel meetingId={meetingId} standalone armLaptopMic={armed} />");
     expect(APP).toContain('useApi<MeResponse>("/api/me")');
-    // Standalone is one column with the seats as chips (artboard D); in the app the aside is the page's.
-    expect(ROOM).toContain("standalone || !aside ? (");
+    // `#/room/<id>?mic=1` arrives armed: the laptop-mic path opens the consent prompt on arrival.
+    expect(APP).toContain("function roomArrivedArmed()");
+    // THE NARROW ROOM (19 Sep 2026): standalone is its own one-column layout — the hearing chip at
+    // the top, the head with the call's doors and the way back, the draft first, the stream, the
+    // seats as avatars with a count, the ask box docked at the bottom. In the app the aside is the page's.
+    const standalone = ROOM.slice(ROOM.indexOf("if (standalone) {"), ROOM.indexOf("const left = ("));
+    expect(standalone).toContain('className="room room-standalone"');
+    expect(standalone).toMatch(/<HearingLine[^>]*chip \/>/);
+    expect(standalone).toContain("<CallDoors");
+    expect(standalone).toContain("room-return-${meetingId}");
+    expect(standalone).toContain('className="room-dock"');
+    expect(standalone).toContain("<SeatedRow seated={state?.seated ?? []} tasks={state?.tasks ?? []} compact />");
+    expect(standalone.indexOf("{summary}")).toBeLessThan(standalone.indexOf("{stream}"));
+    expect(standalone.indexOf("{stream}")).toBeLessThan(standalone.indexOf("<SeatedRow"));
+    expect(standalone.indexOf("<SeatedRow")).toBeLessThan(standalone.indexOf("{ask}"));
     expect(ROOM).toContain("<SeatedRow");
     expect(ROOM).toContain('className="chips"');
+    expect(ROOM).toContain('className="seats-collapsed"');
   });
 });
 
@@ -350,11 +365,20 @@ describe("the stage move from a meeting is a click, not a card (owner, Q2, 18 Se
   });
 });
 
-describe("a transcript somebody else recorded is offered, and marked as theirs", () => {
-  it("takes a Fireflies export by paste or by file", () => {
-    expect(MEETINGS).toContain('data-testid="fireflies-text"');
-    expect(MEETINGS).toContain('data-testid="fireflies-file"');
-    expect(MEETINGS).toContain('data-testid="fireflies-submit"');
+describe("a transcript somebody else recorded is no longer offered; one already on the record is still marked as theirs", () => {
+  /*
+   * Owner, 19 Sep 2026: "we will use Whisper in lieu of Fireflies — it's better." The paste-or-upload
+   * door is gone and her words stand where it was; the two remaining paths are named there.
+   */
+  it("offers no Fireflies import — no paste box, no file input, no Bring it in — and says why, in her words", () => {
+    const c = code(MEETINGS);
+    for (const hook of ["fireflies-text", "fireflies-file", "fireflies-submit", "fireflies-import"]) expect(c, hook).not.toContain(`data-testid="${hook}"`);
+    expect(c).not.toContain("/transcript/fireflies");
+    expect(c).not.toContain("Bring it in");
+    expect(c).toContain('data-testid="fireflies-retired"');
+    expect(c).toContain("we will use Whisper in lieu of Fireflies — it's better");
+    expect(c).toMatch(/recording switch above/);
+    expect(c).toMatch(/Google Meet's own transcription/);
   });
 
   it("says on the record that the firm did not make that recording", () => {
@@ -442,10 +466,28 @@ describe("the firm default has a door on the page, and the reserved act stays th
 });
 
 describe("joining a Meet call is one press that says where it goes", () => {
-  it("names Meet in the accessible name and opens with no opener", () => {
-    expect(MEETINGS).toContain('aria-label="Join on Meet — opens Google Meet in a new tab"');
-    expect(MEETINGS).toContain('"_blank", "noopener,noreferrer"');
-    expect(MEETINGS).toContain("m.meet_link && <JoinOnMeet");
+  it("names Meet in the accessible name, says nothing joins for you, offers the two ways remembered, the laptop mic, and opens with no opener", () => {
+    // 19 Sep 2026: "If I push Join on Meet what happens?" The name says it opens a tab and that
+    // nothing joins; the tooltip and the line under it are the one sentence from howTheRoomHears.
+    // The doors live in CallDoors.tsx — one component on the row, the record head, Before, and the
+    // narrow room — and every press tells the row it started (0214).
+    const DOORS = readFileSync(new URL("../src/client/pages/CallDoors.tsx", import.meta.url), "utf8");
+    expect(DOORS).toContain("opens Google Meet in a new tab; nothing joins for you");
+    expect(DOORS).toContain("title={JOIN_ON_MEET_LINE}");
+    expect(DOORS).toContain("data-testid={`join-line-${meeting.id}`}");
+    expect(DOORS).toContain('"_blank", "noopener,noreferrer"');
+    expect(DOORS).toContain("JOIN_MODES.map");
+    expect(DOORS).toContain("data-testid={`join-mode-${m}-${meeting.id}`}");
+    expect(DOORS).toContain("window.localStorage.setItem(JOIN_MODE_KEY, mode)");
+    expect(DOORS).toContain("Use my laptop mic for this Meet call");
+    expect(DOORS).toContain("data-testid={`laptop-mic-note-${meeting.id}`}");
+    expect(DOORS).toContain("liveMeetPathAvailable(meeting)");
+    expect(DOORS).toContain("/started`, { method: \"POST\"");
+    expect(DOORS).toMatch(/if \(mode === "inside" && !meetAddonInstalled\(\)\)/);
+    expect(MEETINGS).toContain("m.meet_link && <CallDoors");
+    expect(MEETINGS).toContain("row.meet_link && (");
+    expect(MEETINGS).toContain("Go to this meeting");
+    expect(MEETINGS).not.toContain("JoinOnMeet");
   });
 });
 
@@ -468,12 +510,16 @@ describe("ADR-019 says what was decided and what was deliberately not built", ()
     expect(adr).toMatch(/recording bot/i);
   });
 
-  it("states that the Fireflies API route is designed and deferred, and why paste is enough", () => {
+  it("states that the Fireflies import was retired on 19 Sep 2026, in the owner's words, with the two paths that remain", () => {
     const adr = ADRS.slice(ADRS.indexOf("### ADR-019"));
     expect(adr).toMatch(/Fireflies/);
     expect(adr).toMatch(/validate:network-boundary/);
     expect(adr).toMatch(/Importing is never consent/);
     expect(adr).toMatch(/never guesses who spoke/);
+    expect(adr).toMatch(/the Fireflies import is retired/);
+    expect(adr).toMatch(/we will use Whisper in lieu of Fireflies/);
+    expect(adr).toMatch(/410 `fireflies_import_retired`/);
+    expect(adr).toMatch(/validate:whisper-not-fireflies/);
   });
 
   it("states that consent is prompted and logged every time, and names the two-party problem", () => {
