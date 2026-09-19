@@ -60,9 +60,9 @@ WHERE c.status <> 'MERGED'
      WHERE o.company_id = c.id AND o.archived_at IS NULL
   );
 
--- WHY, ON THE SPINE, ONE EVENT PER ROW OPENED. The id is derived from the opportunity id so a
--- re-apply cannot write the event twice (INSERT would collide on the primary key rather than
--- duplicate — and the opportunity insert above will not match a company twice either).
+-- WHY, ON THE SPINE, ONE EVENT PER ROW OPENED. The id is derived from the opportunity id, and the
+-- NOT EXISTS makes a re-apply write nothing rather than collide — the opportunity insert above is
+-- already a no-op the second time, since every company it matched now has a row on the board.
 INSERT INTO event_record (id, event_type, actor_type, actor_id, object_type, object_id, firm_scope, payload_json)
 SELECT
   'evt_0197_' || substr(o.id, 10),
@@ -80,6 +80,7 @@ SELECT
     'why', 'Every company in the system is in the pipeline (owner, 18 Sep 2026). This company was on record with no opportunity on the board, so one was opened at the top of the funnel, dated to when the company arrived.'
   )
 FROM investment_opportunity o
-WHERE o.created_by = 'migration:0197';
+WHERE o.created_by = 'migration:0197'
+  AND NOT EXISTS (SELECT 1 FROM event_record e WHERE e.id = 'evt_0197_' || substr(o.id, 10));
 
 INSERT OR IGNORE INTO schema_version (migration) VALUES ('0197_every_company_is_in_the_pipeline');
