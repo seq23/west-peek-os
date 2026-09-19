@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface, openDisclosure } from "./support/nav";
+import { gotoSurface, openDealFace, openDisclosure } from "./support/nav";
 
 /**
  * P6 browser journey against local `wrangler dev`:
