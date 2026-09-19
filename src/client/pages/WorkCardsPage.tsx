@@ -9,6 +9,7 @@ import { previewStartsTicked } from "@shared/work/previewLane";
 import { PARTNERS, partnerFor } from "@shared/registry/partners";
 import { portraitFor } from "../lib/employeePortraits";
 import { WorkRecordView } from "./WorkRecordView";
+import { ArtifactShelf } from "./ArtifactShelf";
 
 /**
  * Work cards — what the firm is actually doing, who owns it, and what happens next.
@@ -1036,6 +1037,15 @@ export function WorkCardsPage({
                     <p className="card-failing-line small" data-testid={`work-card-failure-${c.id}`}>
                       {c.work_last_failure} It is being tried again; if it fails again it stops and asks you.
                     </p>
+                  )}
+
+                  {/* AN ARTIFACT CARD'S DELIVERABLE IS THE ARTIFACT (19 Sep 2026): the row names what
+                      was built, its state in words while it moves, and opens it under Documents. */}
+                  {c.kind === "ARTIFACT" && (
+                    <div className="card-block" data-testid={`work-card-artifact-${c.id}`}>
+                      <p className="lbl">What it builds</p>
+                      <ArtifactShelf card={c.id} showObject emptyNote="Nothing has been built yet — the next run opens the build; the row fills in from there." testId={`work-card-artifact-rows-${c.id}`} />
+                    </div>
                   )}
 
                   {c.block && (

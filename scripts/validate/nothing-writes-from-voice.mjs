@@ -17,6 +17,10 @@
  *   (b) a WORK CARD, preview-first       createWorkCardInternal (the ordinary door; instruction.ts
  *                                       reads card.prompt before any stage runs)
  *   (c) the After DRAFT                  draftMeetingAfter (a proposal, never a record)
+ *   (d) an ARTIFACT REQUEST              requestArtifactBuild (artifacts on demand, 19 Sep 2026: the
+ *                                       ONE producer in artifacts.ts builds a dashboard, deck or
+ *                                       document from the record — a proposal she opens — and the
+ *                                       room keeps a LINK BLOCK to it under (a))
  *
  * plus the append-only event spine, seating (which grants no authority), and the model call.
  *
@@ -33,6 +37,11 @@
  *       and `captureChunk` reaches the record only through `ingestTranscript` — the two gates.
  *   7 · the During face (RoomPanel.tsx) POSTs only to consent, chunk, roll and ask. No approve, no
  *       decision, no transition is reachable from the panel.
+ *   8 · THE BUILD INTENT MAKES AN ARTIFACT REQUEST AND A LINK BLOCK AND NOTHING ELSE. From
+ *       "./artifacts" the room imports only the request door and the status reads; `buildFromRoom`
+ *       calls `requestArtifactBuild(` exactly once and `saveRoomArtifact(`, and never the producer's
+ *       own stages (`advanceArtifact`, `rebuildArtifact`, `runArtifactCard`), which are forbidden
+ *       names here like every other write.
  *
  * HARD-FAILS ON ZERO: zero routes, zero imports read, zero calls examined, zero SQL statements,
  * zero returns in askRoom, zero client POSTs — each exits 1. An empty loop reporting success is the
@@ -67,7 +76,12 @@ export const FORBIDDEN_CALLS = [
   "revokeAllAiAccess", "restoreAiAccess", "deliver", "sendOrPreview", "executeEffect", "sendEmail",
   // close-out assigns work out of prose; the room must not
   "runCloseout",
+  // artifacts on demand: the room may REQUEST a build through the one door and nothing more
+  "advanceArtifact", "rebuildArtifact", "runArtifactCard", "serveArtifactsOnTick",
 ];
+
+/** What the room may take from the producer: the request door and the status reads. */
+const ARTIFACT_IMPORTS_ALLOWED = ["requestArtifactBuild", "artifactStatuses", "ArtifactError", "ArtifactStatus"];
 
 /** The only table the room may write with its own SQL. */
 const OWN_TABLE = "meeting_artifact";
@@ -131,7 +145,7 @@ export function checkRoutes(indexSrc, roomSrc) {
 
 export function checkRoomService(src) {
   const violations = [];
-  const counts = { imports: 0, calls: 0, sql: 0, returns: 0 };
+  const counts = { imports: 0, calls: 0, sql: 0, returns: 0, builds: 0 };
 
   // 2 · imports, by name
   for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*"[^"]+"/g)) {
@@ -166,6 +180,27 @@ export function checkRoomService(src) {
       if (!/\bartifact\b/.test(m[1])) violations.push(`askRoom returns without an artifact (\`return {${m[1].trim().slice(0, 60)}…}\`) — a question that ends in no saved block ends in nothing`);
     }
     if (!/throw new RoomError\(\s*400,\s*"invalid_input"/.test(ask)) violations.push("askRoom does not refuse an empty question — a blank ask would cost a model run and save a block about nothing");
+  }
+
+  // 8 · the build intent: the request door once, the block writer, nothing else from the producer
+  const artifactImport = /import\s*\{([^}]*)\}\s*from\s*"\.\/artifacts"/.exec(src);
+  if (!artifactImport) violations.push('meetingRoom.ts does not import from "./artifacts" — the build intent has no door to the producer');
+  else {
+    for (const raw of artifactImport[1].split(",")) {
+      const name = raw.replace(/^\s*type\s+/, "").trim().split(/\s+as\s+/).pop();
+      if (name && !ARTIFACT_IMPORTS_ALLOWED.includes(name)) violations.push(`meetingRoom.ts imports ${name} from the producer — the room may request a build and read its state, nothing more`);
+    }
+  }
+  const build = fnBody(src, "buildFromRoom");
+  if (!build) violations.push("buildFromRoom is missing from meetingRoom.ts — the build intent has no branch");
+  else {
+    counts.builds = 1;
+    const requests = (build.match(/(?<![A-Za-z0-9_.])requestArtifactBuild\s*\(/g) ?? []).length;
+    if (requests !== 1) violations.push(`buildFromRoom calls requestArtifactBuild ${requests} times; the room asks the one producer exactly once`);
+    if (!/saveRoomArtifact\s*\(/.test(build)) violations.push("buildFromRoom saves no link block — a build asked for in the room would leave no trace on the meeting");
+    for (const name of ["createWorkCardInternal", "draftMeetingAfter", "deliver", "sendOrPreview"]) {
+      if (new RegExp(`(?<![A-Za-z0-9_.])${name}\\s*\\(`).test(build)) violations.push(`buildFromRoom calls ${name}( — the build intent may request an artifact and keep a link block, nothing else`);
+    }
   }
 
   return { violations, counts };
@@ -223,7 +258,7 @@ async function selfTest() {
 
   const room = readTs(ROOM);
   const good = checkRoomService(room);
-  say(good.violations.length === 0 && good.counts.returns >= 5 && good.counts.sql >= 1, `the shipped meetingRoom.ts passes (${good.counts.imports} imports, ${good.counts.calls} names checked, ${good.counts.sql} SQL writes, ${good.counts.returns} returns in askRoom): ${good.violations.join("; ")}`);
+  say(good.violations.length === 0 && good.counts.returns >= 5 && good.counts.sql >= 1 && good.counts.builds === 1, `the shipped meetingRoom.ts passes (${good.counts.imports} imports, ${good.counts.calls} names checked, ${good.counts.sql} SQL writes, ${good.counts.returns} returns in askRoom): ${good.violations.join("; ")}`);
 
   const withDecision = room.replace("const artifact = await save(\"answer\", text.slice", "await recordDecision(env, actor, meetingId, { decision_text: text });\n  const artifact = await save(\"answer\", text.slice");
   say(checkRoomService(withDecision).violations.some((v) => /calls recordDecision\(/.test(v)), "a room that records a decision from an answer is caught");
@@ -239,6 +274,15 @@ async function selfTest() {
 
   const silentReturn = room.replace("return { asked: question, via, answered_by: who, artifact, work_card_id: null };", "return { asked: question, via, answered_by: who, work_card_id: null };");
   say(checkRoomService(silentReturn).violations.some((v) => /returns without an artifact/.test(v)), "an ask that can end without a saved block is caught");
+
+  const advancing = room.replace("status = (await artifactStatuses(env, [row.id]))[row.id] ?? null;", "await advanceArtifact(env, row.id, { allowModel: true });\n    status = (await artifactStatuses(env, [row.id]))[row.id] ?? null;");
+  say(checkRoomService(advancing).violations.some((v) => /calls advanceArtifact\(/.test(v)), "a room that runs the producer's stages itself is caught");
+  const importsStages = room.replace('import { artifactStatuses, requestArtifactBuild, ArtifactError, type ArtifactStatus } from "./artifacts";', 'import { artifactStatuses, requestArtifactBuild, rebuildArtifact, ArtifactError, type ArtifactStatus } from "./artifacts";');
+  say(checkRoomService(importsStages).violations.some((v) => /imports rebuildArtifact/.test(v)), "a room that imports more than the request door is caught");
+  const buildOpensCard = room.replace("  const artifact = await saveRoomArtifact(env, actor, meeting.id, {\n    kind: \"artifact\",", "  await createWorkCardInternal(env, identity, { title: input.brief });\n  const artifact = await saveRoomArtifact(env, actor, meeting.id, {\n    kind: \"artifact\",");
+  say(checkRoomService(buildOpensCard).violations.some((v) => /buildFromRoom calls createWorkCardInternal/.test(v)), "a build intent that also opens a card is caught");
+  const noLink = room.replace(/saveRoomArtifact\(/g, "appendEventOnly(");
+  say(checkRoomService(noLink).violations.some((v) => /saves no link block/.test(v)), "a build intent that keeps no link block is caught");
 
   const index = readIndexKeepingFences(INDEX);
   const routes = checkRoutes(index, room);
@@ -260,7 +304,7 @@ async function selfTest() {
   say(checkPanel(panel.replace("/room/roll`", "/after-draft/${meetingId}/approve`")).violations.some((v) => /approve/.test(v)), "a During face that can approve the draft is caught");
 
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: a decision written from an answer, an imported deal transition, a raw write to another table, an INSERT into commitments, a silent return, a missing or mis-handled route, a writing voice path, a gate-skipping chunk and an approving panel are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: a decision written from an answer, an imported deal transition, a raw write to another table, an INSERT into commitments, a silent return, a room that advances or imports the producer's stages, a build intent that opens a card or keeps no link block, a missing or mis-handled route, a writing voice path, a gate-skipping chunk and an approving panel are each caught; the shipped source passes.");
 }
 
 // ── Run ───────────────────────────────────────────────────────────────────────────────────────
@@ -280,6 +324,7 @@ if (process.argv.includes("--self-test")) {
     service.counts.calls === 0 && "checked 0 forbidden names",
     service.counts.sql === 0 && "found 0 SQL writes in meetingRoom.ts (the block's own provenance UPDATE should be there)",
     service.counts.returns === 0 && "found 0 returns in askRoom",
+    service.counts.builds === 0 && "found no build intent branch (buildFromRoom) to examine",
     voice.examined === 0 && "examined 0 functions on the voice path",
     panel.examined === 0 && "found 0 POSTs in RoomPanel.tsx",
   ].filter(Boolean);
@@ -297,7 +342,7 @@ if (process.argv.includes("--self-test")) {
   }
   console.log(
     `VOICE-IS-READ-ONLY SCAN PASSED: ${routes.examined} room routes all handled by meetingRoom.ts; ${service.counts.imports} imports and ${service.counts.calls} record-writing names checked, none reachable; ` +
-      `${service.counts.sql} SQL write(s), all on ${OWN_TABLE}; ${service.counts.returns} returns in askRoom each carry a saved block; the voice path writes nothing and captureChunk keeps the gates; ` +
+      `${service.counts.sql} SQL write(s), all on ${OWN_TABLE}; ${service.counts.returns} returns in askRoom each carry a saved block; the build intent asks the one producer once and keeps a link block; the voice path writes nothing and captureChunk keeps the gates; ` +
       `the During face POSTs to ${panel.examined} routes, all its own.`,
   );
 }

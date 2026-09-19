@@ -6,6 +6,7 @@ import { FundConstruction, type MandateDoc } from "./FundConstruction";
 import { DeckPanel } from "./DeckPanel";
 import { ReservesBand } from "./ReservesBand";
 import { ScenariosBand } from "./ScenariosBand";
+import { ArtifactShelf } from "./ArtifactShelf";
 import { usd, type SleeveDoc } from "@shared/fund/sleeveMath";
 
 /**
@@ -98,6 +99,15 @@ export function FundStrategyPage({ onNavigate }: { onNavigate?: (key: string) =>
       </section>
       <ReservesBand fundId={fundId} onNavigate={onNavigate} />
       <ScenariosBand fundId={fundId} investableDefault={typeof sleeveDoc.estimated_investable_usd === "number" ? sleeveDoc.estimated_investable_usd : null} />
+      {fundId && (
+        <section className="band" data-testid="fund-built">
+          <div className="band-head">
+            <h3>Built about the fund</h3>
+            <span className="band-when">dashboards, decks and documents from the record — kept here, opened under Documents</span>
+          </div>
+          <ArtifactShelf about={fundId} showObject={false} emptyNote="Nothing has been built about the fund yet. Ask the room for a dashboard, a deck or a document, or give an employee a card that asks for one." testId="fund-built-rows" />
+        </section>
+      )}
     </section>
   );
 }

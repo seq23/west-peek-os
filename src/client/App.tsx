@@ -51,6 +51,8 @@ import { HelpCenterPage, type HelpGroup } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
 import { SetupPage } from "./pages/SetupPage";
+import { ArtifactPage } from "./pages/ArtifactPage";
+import { BuiltOnDemand } from "./pages/ArtifactShelf";
 import { enqueueCapture, flushCaptures, isOnline, queuedCaptures } from "./lib/offlineQueue";
 
 /**
@@ -1857,6 +1859,26 @@ function CompaniesPage({ me }: { me: MeResponse }) {
 }
 
 function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
+  /*
+   * AN ARTIFACT OPENS INSIDE DOCUMENTS (19 Sep 2026). `#/documents/a/<id>` renders the artifact's
+   * own page — the in-app dashboard, deck or document with its exports and versions — in place of
+   * the shelf, and "Back to Documents" is the shelf's own address. The shelf's band for what was
+   * built on demand is `BuiltOnDemand`, below the upload form, so a built thing and an uploaded
+   * thing sit on the same page.
+   */
+  const [artifactId, setArtifactId] = useState<string | null>(() => (typeof window === "undefined" ? null : artifactIdFromHash()));
+  useEffect(() => {
+    const onHash = () => setArtifactId(artifactIdFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  if (artifactId) {
+    return <ArtifactPage artifactId={artifactId} onNavigate={onNavigate} onBack={() => { window.location.hash = "#/documents"; }} />;
+  }
+  return <DocumentsShelf onNavigate={onNavigate} />;
+}
+
+function DocumentsShelf({ onNavigate }: { onNavigate: (page: string) => void }) {
   const documents = useApi<{ documents: DocumentRow[]; types: DocumentTypeChoice[] }>("/api/documents");
   const archived = useApi<{ documents: DocumentRow[] }>("/api/documents?archived=1");
   /*
@@ -2100,6 +2122,8 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
           Upload
         </button>
       </form>
+
+      <BuiltOnDemand />
 
       <div className="home-section-head">
         <h3>The shelf</h3>
@@ -2656,10 +2680,18 @@ const MERGED_ROUTES: Readonly<Record<string, string>> = {
 
 function keyFromHash(known: (key: string) => boolean): string {
   // `#/meetings?open=<id>&face=after` is Meetings with a record to open (the way back from the
-  // standalone room, `shared/meetings/meetJoin.ts`); the page reads the query, the shell the key.
-  const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0]!.trim();
+  // standalone room, `shared/meetings/meetJoin.ts`) and `#/documents/a/<artifact id>` opens an
+  // artifact inside Documents: the page is the first segment before any `?` or `/`, and the rest —
+  // query or sub-address — is the page's own to read.
+  const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0]!.trim().split("/")[0] ?? "";
   const resolved = MERGED_ROUTES[raw] ?? raw;
   return resolved && known(resolved) ? resolved : "home";
+}
+
+/** `#/documents/a/<id>` — the artifact open inside Documents, or null when the shelf itself is showing. */
+function artifactIdFromHash(): string | null {
+  const m = window.location.hash.match(/^#\/documents\/a\/([A-Za-z0-9_-]+)$/);
+  return m ? m[1]! : null;
 }
 
 /**

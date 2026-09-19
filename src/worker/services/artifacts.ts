@@ -930,6 +930,8 @@ export async function handleListBuiltArtifacts(ctx: RouteContext): Promise<Respo
     conds.push(`a.${col} = ?${params.push(about)}`);
   }
   if (kind && (ARTIFACT_KINDS as readonly string[]).includes(kind)) conds.push(`a.kind = ?${params.push(kind)}`);
+  const card = url.searchParams.get("card")?.trim() || null;
+  if (card) conds.push(`a.work_card_id = ?${params.push(card)}`);
   if (q) conds.push(`lower(a.title) LIKE ?${params.push(`%${q.replace(/[%_]/g, "")}%`)}`);
   const rows = (
     await ctx.env.WP_OS_DB.prepare(
