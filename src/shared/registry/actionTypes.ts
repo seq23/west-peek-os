@@ -309,6 +309,17 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // whole system already agrees on is the safe direction.
   { key: "duty_override.set", name: "Change who is on duty", description: "Put an employee on or off a named shift, or give them explicit working hours that supersede the shift model for them. Stored as a difference from the firm's default rota, never as a copy of it, and always with who changed it and why.", isExternalEffect: false },
   { key: "duty_override.clear", name: "Put a duty change back to default", description: "Remove a duty override so the employee follows the firm's default rota again. The change and its removal both stay on the event spine.", isExternalEffect: false },
+  // Phase B: meeting model (migrations 0199/0200). A meeting has three faces — BEFORE (the brief),
+  // DURING (capture) and AFTER (what came out). Every key here is internal: recording what was
+  // settled, what is owed, what is still unknown, and PROPOSING a stage move. Nothing here moves a
+  // deal — accepting a stage proposal calls `opportunity.transition`, which is the only path that
+  // does, and approving an After draft is human-only in code. `meeting.commitment.create` (P7)
+  // already covers a commitment on either side and is reused rather than duplicated.
+  { key: "meeting.decision.record", name: "Record a meeting decision", description: "Record that something was settled in a meeting: what, by whom, and the note or transcript line it came from.", isExternalEffect: false },
+  { key: "meeting.open_question.record", name: "Record a meeting open question", description: "Record a question a meeting left open and who owes the answer. Rolls forward into the next brief for the same company or LP until resolved.", isExternalEffect: false },
+  { key: "meeting.stage_change.propose", name: "Propose a stage change from a meeting", description: "Propose that a deal move stage because of what a meeting produced. A proposal only — a partner accepts it, and acceptance runs the ordinary opportunity transition.", isExternalEffect: false },
+  { key: "meeting.brief.assemble", name: "Assemble a meeting brief", description: "Assemble the BEFORE face of a meeting: why it exists, what we need to find out, what both sides said last time, the record, and (for founder and diligence meetings) the diligence framework marked answered or not. AI may draft; an empty brief says what it examined.", isExternalEffect: false },
+  { key: "meeting.after.approve", name: "Approve a meeting's After draft", description: "A partner approves the AI-drafted decisions, commitments, open questions and stage proposal from a meeting, which is the moment they become records. Human only in code; nothing is a record until this.", isExternalEffect: false },
 ] as const;
 
 /**
