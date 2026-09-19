@@ -77,6 +77,8 @@ questions answered, nine cross-system journeys.
 | `npx playwright test` (47 specs, 145 tests) | the operator journeys in a real browser, including 9 cross-system journeys, a 390×844 mobile pass, and Home and Work both measured at 320/375/414/768 | a physical device, an installed PWA, or a delivered push |
 | `POST /api/jobs/tick` | the scheduled-work code path end to end | that Cloudflare's cron trigger fired it |
 | connector / provider `check` routes | configuration coherence, stamped LOCAL_FIXTURE | that any external system is reachable |
+| `npm run validate:companies-in-pipeline` | every intake route opens an opportunity at arrival (no switch in the route table, non-nullable return, exactly-one pin per route, no calm "Not in the pipeline" label, 0197 backfill shape) | that production's two stranded companies were backfilled — that is migration 0197 running remotely |
+| `npm run validate:weekly-review-archived` | `weekly_mp_review` is RETIRED after 0198 and nothing later re-enables it; the nav does not list the page; the tick cannot reach the generator; the archived kind is hidden from the shelf by default | that the remote cron never fires it — the dispatcher's refusal is what is proven |
 
 ## Formula verification is not formula acceptance
 
