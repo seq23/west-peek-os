@@ -366,7 +366,10 @@ export async function pullPubsub(
   const res = await fetchWithTimeout(fetchImpl, url, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ maxMessages }),
+    // returnImmediately: without it Pub/Sub holds an empty pull open for up to a minute and a half,
+    // which is a 15s timeout on every quiet tick. Google marks the flag deprecated; it still works,
+    // and a quiet tick that answers in 200ms is worth more than a full page of messages.
+    body: JSON.stringify({ maxMessages, returnImmediately: true }),
   });
   const body = await readJson<{ receivedMessages?: Array<{ ackId: string; message: { data?: string; attributes?: Record<string, string>; messageId: string; publishTime?: string } }> }>(res, url);
   return (body.receivedMessages ?? []).map((m) => {

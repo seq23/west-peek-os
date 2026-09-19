@@ -139,8 +139,11 @@ export function eventsFromIcs(ics: string): CalendarMeetEvent[] {
   const out: CalendarMeetEvent[] = [];
   for (const ev of icsEvents(ics)) {
     const first = (k: string) => ev.get(k)?.[0];
-    const uid = first("UID")?.value;
-    if (!uid) continue;
+    const rawUid = first("UID")?.value;
+    if (!rawUid) continue;
+    // Google's iCal UID is the API event id with "@google.com" appended. Stripping it is what makes
+    // the two doors agree on a single event's identity, so a switch between them cannot duplicate.
+    const uid = rawUid.replace(/@google\.com$/i, "");
     const recurrenceId = first("RECURRENCE-ID")?.value;
     const description = icsUnescape(first("DESCRIPTION")?.value ?? "");
     const location = icsUnescape(first("LOCATION")?.value ?? "");

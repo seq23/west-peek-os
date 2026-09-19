@@ -81,15 +81,15 @@ describe("the pure half", () => {
       "ATTENDEE;CN=Olive Oak:mailto:olive@oakfo.com", "ORGANIZER:mailto:sequoia@westpeek.ventures",
       "X-GOOGLE-CONFERENCE:https://meet.google.com/ddd-eeee-fff", "END:VEVENT", "END:VCALENDAR",
     ].join("\r\n");
-    const [e] = eventsFromIcs(ics);
-    expect(e).toMatchObject({ googleEventId: "uid-1@google.com", title: "Oak catch-up", startsAt: "2026-09-19T16:00:00Z", meetingCode: "ddd-eeee-fff", organizerEmail: "sequoia@westpeek.ventures" });
-    expect(e!.attendees).toEqual([{ email: "olive@oakfo.com", displayName: "Olive Oak", self: false }]);
+    const e = eventsFromIcs(ics)[0]!;
+    expect(e).toMatchObject({ googleEventId: "uid-1", title: "Oak catch-up", startsAt: "2026-09-19T16:00:00Z", meetingCode: "ddd-eeee-fff", organizerEmail: "sequoia@westpeek.ventures" });
+    expect(e.attendees).toEqual([{ email: "olive@oakfo.com", displayName: "Olive Oak", self: false }]);
   });
 });
 
 describe("the sync", () => {
   it("creates exactly one meeting per Meet event, typed by the rule, and none for an event without a link", async () => {
-    const [out] = await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW });
+    const out = (await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW }))[0]!;
     expect(out).toMatchObject({ ok: true, via: "api", eventsSeen: 5, created: 4, skippedNoLink: 1, checkIt: 1 });
     const rows = (await env.WP_OS_DB.prepare("SELECT google_event_id, meeting_type, type_inference, privacy_label, company_id, meet_conference_id, meet_link, source, firm_scope FROM meeting WHERE calendar_key = ?1 ORDER BY google_event_id").bind(src.key).all<any>()).results;
     expect(rows.map((r) => [r.google_event_id, r.meeting_type, r.type_inference, r.privacy_label, r.company_id])).toEqual([
@@ -111,7 +111,7 @@ describe("the sync", () => {
   });
 
   it("is idempotent: a second run creates nothing and the count per event stays one", async () => {
-    const [again] = await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW });
+    const again = (await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW }))[0]!;
     expect(again).toMatchObject({ ok: true, created: 0, updated: 0, unchanged: 4 });
     const dup = await env.WP_OS_DB.prepare("SELECT google_event_id, COUNT(*) AS n FROM meeting WHERE calendar_key = ?1 GROUP BY google_event_id HAVING n > 1").bind(src.key).all();
     expect(dup.results).toEqual([]);
@@ -120,7 +120,7 @@ describe("the sync", () => {
   it("follows the calendar for title and time, but never flips a type a person corrected", async () => {
     await env.WP_OS_DB.prepare("UPDATE meeting SET meeting_type = 'LP', privacy_label = 'LP_PRIVATE' WHERE google_event_id = 'ev_unknown'").run();
     g.calendarItems[3] = calendarItem({ id: "ev_unknown", summary: "Coffee with a prospective LP", start: "2026-09-21T16:00:00.000Z", code: "jjj-kkkk-lll", attendees: [{ email: "sequoia@westpeek.ventures", self: true }, { email: "someone@gmail.com" }] });
-    const [out] = await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW });
+    const out = (await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW }))[0]!;
     expect(out).toMatchObject({ updated: 1, created: 0 });
     const row = await env.WP_OS_DB.prepare("SELECT title, scheduled_at, meeting_type FROM meeting WHERE google_event_id = 'ev_unknown'").first<any>();
     expect(row).toEqual({ title: "Coffee with a prospective LP", scheduled_at: "2026-09-21T16:00:00.000Z", meeting_type: "LP" });
@@ -128,7 +128,7 @@ describe("the sync", () => {
 
   it("cancels the meeting when the event is cancelled", async () => {
     g.calendarItems[2] = { ...g.calendarItems[2]!, status: "cancelled" };
-    const [out] = await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW });
+    const out = (await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW }))[0]!;
     expect(out.cancelled).toBe(1);
     expect((await env.WP_OS_DB.prepare("SELECT status FROM meeting WHERE google_event_id = 'ev_founder'").first<any>())!.status).toBe("CANCELLED");
   });
