@@ -3,12 +3,14 @@ import { api, useApi, type MeResponse } from "../lib/api";
 import { operatorAttention, type JobHealth } from "@shared/setup/operatorAttention";
 import { attentionSignature } from "@shared/setup/attentionKey";
 import { deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
-import { answerLine as answerLineFor, secondLine as secondLineFor } from "@shared/home/answerLine";
+import { answerLine as answerLineFor, needsHer, secondLine as secondLineFor } from "@shared/home/answerLine";
 import { DeliverableList } from "./DeliverableList";
 import { PreviewApprovals, usePreviewApprovals } from "./PreviewApprovals";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 import { DailyBriefPanel } from "./DailyBriefPanel";
-import { readBriefCollapsed, writeBriefCollapsed } from "../lib/briefCollapse";
+import { bandsFor, effectiveFilter, readHomeFilter, writeHomeFilter, type HomeFilter } from "../lib/homeFilter";
+import type { BriefStatusResponse } from "../lib/briefBand";
+import { actionName } from "@shared/help/actionNames";
 import { chiefOfStaffFor } from "@shared/work/chiefOfStaff";
 import { ConnectPanel } from "./ConnectPanel";
 
@@ -39,6 +41,19 @@ interface HomeModule {
   has_new?: boolean;
 }
 
+/** An approval card as the Waiting band decides it — the fields `/api/mp-home` carries on the row. */
+interface ApprovalItem {
+  id: string;
+  title: string;
+  action_key: string;
+  created_at: string;
+  risk_level: string;
+  impact_note: string | null;
+  expires_at: string | null;
+  requested_by_type: string;
+  requested_by_id: string;
+}
+
 /** New since the reader last looked — never opened counts as new, an empty module never does. */
 const hasNew = (m: HomeModule): boolean => (typeof m.has_new === "boolean" ? m.has_new : m.items.length > 0);
 
@@ -59,21 +74,6 @@ interface HomeResponse {
 interface PreferenceResponse {
   preference: { version_no: number; modules_json: string; briefing_json: string; created_at: string } | null;
   history: Array<{ id: string; version_no: number; created_at: string; set_by: string }>;
-}
-
-interface PersonalProfile {
-  profile: { enabled: number; calculation_state: string; calculation_source: string } | null;
-  calculation_note: string;
-}
-
-interface PersonalEntry {
-  id: string;
-  entry_date: string;
-  kind: string;
-  headline: string;
-  body: string;
-  calculation_state: string;
-  source_note: string;
 }
 
 const MODULE_LABELS: Record<string, string> = {
@@ -118,87 +118,6 @@ function Face({ name, role, size = 36 }: { name: string; role: string; size?: nu
         (e.currentTarget as HTMLImageElement).style.display = "none";
       }}
     />
-  );
-}
-
-/**
- * One delivery: the same records the module always held, now from somebody.
- *
- * The byline is the whole change. "Portfolio risk: 0" is a number; "Winter — no open alerts on
- * anything you own" is a colleague telling you something, and it is answerable, because you can go
- * and ask her. Attribution names whose AREA this is — these panels are assembled from records by a
- * query, not written — and the one genuinely authored thing on this page is the brief, which says
- * so itself.
- *
- * An empty delivery keeps its byline and says what silence means. Twelve panels reading "Nothing
- * here." is what made this product feel broken when it was merely unloaded.
- */
-function DeliveryCard({ module, onNavigate, onOpened }: { module: HomeModule; onNavigate: (key: string) => void; onOpened: (key: string) => Promise<void> }) {
-  const delivery = deliveryFor(module.key);
-  const role = delivery ? roleFor(delivery.by) : null;
-  const empty = module.items.length === 0;
-  const fresh = hasNew(module);
-  /*
-   * THREE STATES, NOT TWO. Empty: the colleague has nothing. Quiet: they have things, you have seen
-   * them, nothing has arrived since — greyed, and it says since when. New: something arrived after
-   * you last looked. Only the third is "has something for you"; the other two used to look the same
-   * as it did, which is why Open never quieted a module (operator, 15 Sep 2026).
-   */
-  const quiet = !empty && !fresh;
-
-  return (
-    <li
-      className={empty || quiet ? "delivery delivery-quiet" : "delivery"}
-      data-testid={`home-module-${module.key}`}
-      data-fresh={fresh ? "new" : quiet ? "quiet" : "empty"}
-    >
-      {delivery && <Face name={delivery.by} role={role ?? ""} size={fresh ? 36 : 28} />}
-
-      <div className="delivery-what">
-        {delivery && (
-          <div className="delivery-who" data-testid={`home-delivery-by-${module.key}`}>
-            <strong>{delivery.by}</strong>
-            {role && <span className="muted small"> {role}</span>}
-          </div>
-        )}
-
-        {empty ? (
-          <div className="muted small" data-testid={`home-module-empty-${module.key}`}>
-            {delivery?.whenEmpty ?? module.note ?? "Nothing to report."}
-          </div>
-        ) : quiet ? (
-          <div className="muted small" data-testid={`home-module-quiet-${module.key}`}>
-            nothing new since {module.seen_at ? sinceWhen(module.seen_at) : "you last looked"}
-            {" · "}
-            <button type="button" className="link-button" data-testid={`home-open-${module.key}`} onClick={() => void onOpened(module.key).then(() => onNavigate(module.link))}>
-              Open anyway
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="delivery-headline">
-              {delivery?.headline ?? module.title}
-              {typeof module.new_count === "number" && module.seen_at && (
-                <span className="muted small" data-testid={`home-module-new-${module.key}`}>
-                  {" "}· {module.new_count} new since {sinceWhen(module.seen_at)}
-                </span>
-              )}
-            </div>
-            <ul className="module-items">
-              {module.items.slice(0, 2).map((item, i) => (
-                <li key={String(item.id ?? i)}>{summarize(module.key, item)}</li>
-              ))}
-            </ul>
-          </>
-        )}
-      </div>
-
-      {fresh && (
-        <button type="button" data-testid={`home-open-${module.key}`} onClick={() => void onOpened(module.key).then(() => onNavigate(module.link))}>
-          Open
-        </button>
-      )}
-    </li>
   );
 }
 
@@ -248,106 +167,6 @@ function summarize(moduleKey: string, item: Record<string, unknown>): string {
     default:
       return JSON.stringify(item);
   }
-}
-
-function PersonalIntelligencePanel() {
-  const [open, setOpen] = useState(false);
-  const profile = useApi<PersonalProfile>(open ? "/api/personal-intelligence/profile" : null);
-  const entries = useApi<{ entries: PersonalEntry[]; disclaimer: string }>(open ? "/api/personal-intelligence/entries" : null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [headline, setHeadline] = useState("");
-  const [kind, setKind] = useState("TIMING_WINDOW");
-
-  const enabled = profile.data?.profile?.enabled === 1;
-
-  return (
-    <section className="card private-panel" data-testid="personal-intelligence">
-      <header className="module-card-head">
-        <h4>Private layer</h4>
-        <button type="button" className="link-button" data-testid="personal-toggle" onClick={() => setOpen((o) => !o)}>
-          {open ? "Hide" : "Show"}
-        </button>
-      </header>
-      <p className="muted small">
-        Personal timing overlays, visible only to you. Not institutional truth, never firm evidence, and never a
-        justification for an investment, LP, or compliance decision.
-      </p>
-      {open && (
-        <>
-          {profile.loading && <p>Loading…</p>}
-          {profile.data && (
-            <p className="muted small" data-testid="personal-calculation-note">
-              {profile.data.calculation_note}
-            </p>
-          )}
-          {!enabled ? (
-            <button
-              type="button"
-              data-testid="personal-enable"
-              onClick={async () => {
-                const res = await api("/api/personal-intelligence/profile", {
-                  method: "POST",
-                  body: { enabled: true, config: { overlays: ["TRANSIT", "LUNAR", "TIMING_WINDOW"] }, calculation_source: "NONE" },
-                });
-                setMessage(res.status === 201 ? "Private layer enabled for you only." : `Could not enable (HTTP ${res.status}).`);
-                profile.reload();
-              }}
-            >
-              Enable my private layer
-            </button>
-          ) : (
-            <form
-              className="form-row"
-              data-testid="personal-entry-form"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const res = await api<{ error?: string }>("/api/personal-intelligence/entries", {
-                  method: "POST",
-                  body: {
-                    entry_date: new Date().toISOString().slice(0, 10),
-                    kind,
-                    headline,
-                    body: "",
-                  },
-                });
-                setMessage(res.status === 201 ? "Recorded (manual entry)." : `Refused: ${res.data?.error ?? res.status}`);
-                setHeadline("");
-                entries.reload();
-              }}
-            >
-              <select data-testid="personal-kind" aria-label="Kind of entry" value={kind} onChange={(e) => setKind(e.target.value)}>
-                {["TRANSIT", "LUNAR", "TIMING_WINDOW", "NOTE"].map((k) => (
-                  <option key={k} value={k}>
-                    {k}
-                  </option>
-                ))}
-              </select>
-              <input
-                data-testid="personal-headline" aria-label="Headline"
-                value={headline}
-                onChange={(e) => setHeadline(e.target.value)}
-                placeholder="What are you watching for yourself?"
-              />
-              <button type="submit" className="btn-strong" data-testid="personal-submit">
-                Record
-              </button>
-            </form>
-          )}
-          {message && <p className="notice" data-testid="personal-message">{message}</p>}
-          <ul className="card-list" data-testid="personal-entries">
-            {(entries.data?.entries ?? []).map((e) => (
-              <li key={e.id}>
-                <strong>{e.entry_date}</strong> · {e.kind} — {e.headline} <code>{e.calculation_state}</code>
-              </li>
-            ))}
-            {/* Loading is a state, not a gap — see the note on `room-list` in EmployeesPage.tsx. */}
-            {open && entries.loading && <li className="state-empty">Reading the entries…</li>}
-            {open && !entries.loading && (entries.data?.entries ?? []).length === 0 && <li className="state-empty">No entries.</li>}
-          </ul>
-        </>
-      )}
-    </section>
-  );
 }
 
 function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => void }) {
@@ -417,459 +236,424 @@ function ModuleSettings({ home, onSaved }: { home: HomeResponse; onSaved: () => 
 }
 
 export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
-  // Read once, for THIS viewer. Two partners share the application and, on a shared laptop, the
-  // store; the id in the key is what stops one of them folding the other's brief away.
-  const [briefCollapsed, setBriefCollapsed] = useState(() => readBriefCollapsed(me.id));
-  /* EVERY HOOK ABOVE EVERY EARLY RETURN — see the note below; these two are here for that reason
-     and not because they belong at the top of the component. */
-  const [showQuiet, setShowQuiet] = useState(false);
-  const [questionsOpen, setQuestionsOpen] = useState(false);
-  const home = useApi<HomeResponse>("/api/mp-home");
   /*
-   * WHAT IS WAITING ON *YOU* TO SAY YES (18 Sep 2026).
+   * HOME, REBUILT (design/HOME_DESIGN.md, approved 19 Sep 2026). The owner: "the Home page UX is
+   * annoying, not intuitive and clunky. The show / put away is stupid and clunky and should be some
+   * kind of filter that is easy to return to home state. The open things below have to be opened
+   * one by one and can't all be dismissed. And obviously the brief section and its UX is wrong —
+   * we need to see completion state and progress."
    *
-   * Fetched HERE rather than inside the panel because the "Waiting on you" band does not render
-   * when it is empty, and a preview drawn inside a band that never rendered is the exact
-   * disappearance this change exists to end. Endpoint added 17 Sep; until today no client file
-   * called it, so the lane had never run once.
+   * At 7 AM on her phone it answers WHAT IS WAITING ON ME and WHAT ARRIVED OVERNIGHT above the
+   * fold at 390px. One masthead answer from one count; one filter rail instead of four toggles;
+   * Waiting with inline Approve / Reject / Open and select-many for quieting; Arrived with Mark all
+   * read and select-many; the brief as one band with its named states; Quiet as one line; Ask,
+   * Home layout and Setup on a foot line. Every hook sits above every early return.
    */
+  const home = useApi<HomeResponse>("/api/mp-home");
   const previews = usePreviewApprovals();
-  // §8 — the four operator questions Home's modules do not answer: what is blocked, is scheduled
-  // work healthy, is AI failing, is setup incomplete. Derived from live endpoints only.
   const jobs = useApi<{ jobs: JobHealth[] }>("/api/jobs");
   const providers = useApi<{ providers: Array<{ enabled: number; kill_switched: number }> }>("/api/ai/providers");
-  /*
-   * EVERY HOOK ABOVE EVERY EARLY RETURN. This one was written next to the code that uses it, which
-   * sits below `if (home.loading) return …` — so the first render ran three hooks and the second
-   * ran four, React threw "rendered more hooks than during the previous render", and Home went
-   * blank. Typecheck cannot see it; only opening the page can.
-   *
-   * Silencing is matched on the item's key AND the words it was showing, so an item whose headline
-   * changes comes back — see the attention service. Nothing is filtered while this is still
-   * loading: hiding an alert on the strength of data you do not have yet is the wrong way round.
-   */
   const silenced = useApi<{ silenced: Array<{ item_key: string; signature: string }> }>("/api/attention/silenced");
+  const connections = useApi<{ connections: Array<{ status: string }> }>("/api/me/connections");
+  const brief = useApi<BriefStatusResponse>("/api/daily-intelligence/status");
+  const [remembered] = useState<HomeFilter>(() => readHomeFilter(me.id));
+  const [chosen, setChosen] = useState<HomeFilter | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [waitingSelect, setWaitingSelect] = useState<Set<string> | null>(null);
+  const [arrivedSelect, setArrivedSelect] = useState<Set<string> | null>(null);
+  const [arrivedRows, setArrivedRows] = useState<Array<{ id: string; acknowledged_at: string | null }>>([]);
+  const [arrivedReload, setArrivedReload] = useState(0);
+  const [undo, setUndo] = useState<{ ids: string[]; what: string } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState<string | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
+  const [decided, setDecided] = useState<Record<string, string>>({});
 
-  // Mark the visit AFTER the first read, so "what changed" is a diff against the
-  // previous visit rather than against this one.
+  // Mark the visit AFTER the first read, so "what changed" is a diff against the previous visit.
   useEffect(() => {
     if (home.status === 200) void api("/api/mp-home/seen", { method: "POST" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [home.status]);
+  // The rail answers Esc with All — the one-tap return, from the keyboard.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setChosen("all"); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
-  // Only the FIRST load blanks the page. A refresh after saving preferences keeps the
-  // rendered surface (and the settings panel's own state) in place.
   if (home.loading && !home.data) return <p data-testid="home-loading">Loading your command surface…</p>;
   if (home.status !== 200 || !home.data) {
     return <p data-testid="home-error">Could not load the command surface (HTTP {home.status ?? "?"}).</p>;
   }
-
   const data = home.data;
 
-  // Approvals are pulled out of the grid; everything else is a delivery.
+  // ── The counts every band and the masthead share ──
   const waiting = data.modules.find((m) => m.key === "approvals") ?? null;
   const deliveries = data.modules.filter((m) => m.key !== "approvals");
-  const waitingItems = waiting?.items ?? [];
-  /* NEW gets a card; everyone else gets a name in the roll. The three-way sort this replaced —
-     new, then quiet, then empty — put nine cards on the page to report silence nine times. */
+  const waitingItems = (waiting?.items ?? []) as unknown as ApprovalItem[];
   const freshDeliveries = deliveries.filter(hasNew);
   const quietDeliveries = deliveries.filter((m) => !hasNew(m));
-  // Open leaves the mark BEFORE navigating, so the module is quiet the next time Home is read.
-  const markOpened = async (key: string): Promise<void> => {
-    await api(`/api/mp-home/modules/${encodeURIComponent(key)}/seen`, { method: "POST", body: {} });
-  };
+  const chiefOfStaff = (() => { const mine = chiefOfStaffFor(me.fullName); return { name: mine, role: roleFor(mine) ?? "Chief of Staff" }; })();
 
-  /**
-   * Who signs the morning off. The reader's own Chief of Staff — Wren for Sequoia, Walker for
-   * Scooter — because a delivery from "the system" is the anonymity this page exists to fix.
-   * Matched on first name so a retitle in the roster reaches the byline; falls back to the
-   * firm-wide chief rather than leaving the page unsigned.
-   */
-  const chiefOfStaff = (() => {
-    const mine = chiefOfStaffFor(me.fullName);
-    return { name: mine, role: roleFor(mine) ?? "Chief of Staff" };
-  })();
-
-  // `undefined` where a source has not answered, so the strip stays silent rather than guessing.
   const attention = operatorAttention({
     ...(jobs.data ? { jobs: jobs.data.jobs } : {}),
-    ...(typeof home.data?.unrouted_emails === "number" ? { unroutedEmails: home.data.unrouted_emails } : {}),
-    ...(providers.data
-      ? {
-          aiProviderConfigured: providers.data.providers.some(
-            (x) => x.enabled === 1 && x.kill_switched === 0,
-          ),
-        }
-      : {}),
+    ...(typeof data.unrouted_emails === "number" ? { unroutedEmails: data.unrouted_emails } : {}),
+    ...(providers.data ? { aiProviderConfigured: providers.data.providers.some((x) => x.enabled === 1 && x.kill_switched === 0) } : {}),
   });
-
   const silencedKeys = new Set((silenced.data?.silenced ?? []).map((r) => attentionSignature(r.item_key, r.signature)));
-  const visibleAttention = attention.filter((a) => !silencedKeys.has(attentionSignature(a.key, a.headline)));
-  const silencedCount = attention.length - visibleAttention.length;
-
-  async function silence(key: string, signature: string, kind: "ACKNOWLEDGED" | "DISMISSED") {
-    await api(`/api/attention/${encodeURIComponent(key)}/dismiss`, { method: "POST", body: { signature, kind } });
-    silenced.reload();
-  }
-
-  async function unsilence() {
-    await api("/api/attention/silenced/clear", { method: "POST", body: {} });
-    silenced.reload();
-  }
-
   /*
-   * RANK 0. Everything below is already on this page somewhere; the change is that it is now said
-   * ONCE, at the top, in the largest type, instead of five times at five weights. The sentences
-   * themselves are in `@shared/home/answerLine` so the grammar is testable.
+   * THE VIEWER'S OWN BRIEF IS SAID ONCE. Its health fault used to be a blocker here AND the brief
+   * band's failed state under it (audit #7). The brief band owns it; the blocker for the OTHER
+   * partner's brief stays, because that is news.
    */
-  const freshCount = freshDeliveries.length + (waiting && hasNew(waiting) ? 1 : 0);
-  const needsHer = waitingItems.length + visibleAttention.length + previews.previews.length;
+  const myBriefKey = `daily_brief_${me.id}`;
+  const visibleAttention = attention.filter((a) => !silencedKeys.has(attentionSignature(a.key, a.headline)) && !a.key.includes(myBriefKey));
+  const silencedCount = attention.length - visibleAttention.length;
+  const undecided = waitingItems.filter((c) => !decided[c.id]);
   const counts = {
-    decisions: waitingItems.length,
+    decisions: undecided.length,
     blockers: visibleAttention.length,
     firstBlocker: visibleAttention[0]?.headline ?? null,
-    fresh: freshCount,
-    quiet: quietDeliveries.length,
+    previews: previews.previews.length,
+    fresh: arrivedRows.filter((r) => !r.acknowledged_at).length + freshDeliveries.length,
+    quiet: new Set(quietDeliveries.map((m) => deliveryFor(m.key)?.by ?? m.title)).size,
+    brief: brief.data?.line ?? null,
   };
-  const answerLine = answerLineFor(counts);
-  const secondLine = secondLineFor(counts);
+  const waitingCount = needsHer(counts);
+  const arrivedCount = counts.fresh;
+  const quietCount = counts.quiet;
+  const filter = effectiveFilter(chosen ?? remembered, { waiting: waitingCount, arrived: arrivedCount, quiet: quietCount });
+  const bands = bandsFor(filter);
+  const pick = (f: HomeFilter) => { setChosen(f); writeHomeFilter(me.id, f); };
 
-  /* The roll names PEOPLE, because that is what makes silence answerable — you can go and ask
-     Winter why there is nothing. A module with no colleague behind it falls back to its own
-     title rather than being dropped from the count. */
-  const quietNames = quietDeliveries
-    .map((m) => deliveryFor(m.key)?.by ?? m.title)
-    .join(", ")
-    .replace(/, ([^,]*)$/, " and $1");
+  async function silenceMany(items: Array<{ key: string; signature: string }>, kind: "ACKNOWLEDGED" | "DISMISSED") {
+    if (items.length === 0) return;
+    const res = await api<{ ok?: boolean; error?: string; detail?: string }>("/api/attention/dismiss-many", { method: "POST", body: { items, kind } });
+    setNotice(res.status === 200 ? (kind === "ACKNOWLEDGED" ? `Quiet for a week: ${items.length}.` : `Stopped for good: ${items.length}.`) : `Could not quiet them: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    setWaitingSelect(null);
+    silenced.reload();
+  }
+  async function markMany(ids: string[], kind: "acknowledge" | "dismiss") {
+    if (ids.length === 0) return;
+    const res = await api<{ done?: string[]; missing?: string[]; note?: string | null }>(`/api/deliverables/${kind}-many`, { method: "POST", body: { ids } });
+    if (res.status === 200 || res.status === 207) {
+      setNotice(kind === "acknowledge" ? `Marked ${res.data?.done?.length ?? ids.length} as read.${res.data?.note ? ` ${res.data.note}` : ""}` : `Put ${res.data?.done?.length ?? ids.length} away.${res.data?.note ? ` ${res.data.note}` : ""}`);
+      setUndo(kind === "dismiss" ? { ids: res.data?.done ?? ids, what: "put away" } : null);
+    } else setNotice(`Could not do that (HTTP ${res.status}).`);
+    setArrivedSelect(null);
+    setArrivedReload((n) => n + 1);
+  }
+  async function undoPutAway() {
+    if (!undo) return;
+    for (const id of undo.ids) await api(`/api/deliverables/${id}/dismiss?restore=1`, { method: "POST", body: {} });
+    setNotice(`Back on the page: ${undo.ids.length}.`);
+    setUndo(null);
+    setArrivedReload((n) => n + 1);
+  }
+  async function decide(card: ApprovalItem, decision: "approved" | "rejected") {
+    setDeciding(card.id);
+    const res = await api<{ error?: string; detail?: string; state?: string }>(`/api/approvals/${card.id}/decide`, { method: "POST", body: { decision, ...(decision === "rejected" && rejectNote.trim() ? { note: rejectNote.trim() } : {}) } });
+    setDeciding(null);
+    const at = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    if (res.status === 200) {
+      setDecided((d) => ({ ...d, [card.id]: `${decision} ${at}` }));
+      setRejecting(null);
+      setRejectNote("");
+      setNotice(decision === "approved" ? `Approved at ${at}. It runs now.` : `Rejected at ${at}.`);
+    } else {
+      setNotice(res.status === 409 ? `Not ${decision} — it is no longer pending (somebody decided it first).` : `Not ${decision}: ${res.data?.detail ?? res.data?.error ?? `HTTP ${res.status}`}`);
+    }
+    home.reload();
+  }
+
+  const answer = answerLineFor(counts);
+  const second = secondLineFor(counts);
+  const connected = (connections.data?.connections ?? []).filter((c) => c.status === "CONNECTED").length;
+  const connTotal = connections.data?.connections.length ?? 0;
+  const quietNames = Array.from(new Set(quietDeliveries.map((m) => deliveryFor(m.key)?.by ?? m.title)));
+  const chip = (key: HomeFilter, label: string, n: number | null) => (
+    <button
+      type="button"
+      className="rail-chip"
+      role="tab"
+      aria-pressed={filter === key}
+      aria-selected={filter === key}
+      aria-label={n === null ? label : `${label}, ${n}`}
+      data-testid={`home-rail-${key}`}
+      onClick={() => pick(key)}
+    >
+      {label}{n !== null && <span className="rail-count" aria-hidden="true">{n}</span>}
+    </button>
+  );
 
   return (
     <section data-testid="home-page">
-      {/* SETUP SITS ABOVE THE ANSWER, folded to one line. It was a full screen of settings between
-          the partner and the briefing they came for, every morning — so it now states what is on
-          and what is not, and opens only when asked. Above rather than below because a status strip
-          is a header, not an interruption: read it or ignore it before the day starts.
-
-          Its height is RESERVED (see `.connect-strip` in styles.css): `/api/me/connections` answers
-          at roughly 2.5s and the strip then inserts at the very top of Home, pushing the whole page
-          down. That was Home's one measurable layout shift. */}
-      <ConnectPanel me={me} />
-
-      {/* ══ RANK 0 · THE ANSWER LINE ═══════════════════════════════════════════════════════════
-          The largest type on the page states the page's ANSWER, not a greeting. "What needs me
-          right now" was previously spelled out across five separate places at five different
-          weights; a partner on her second hundred visit reads one line and knows.
-
-          The greeting and the date are the eyebrow ABOVE it, in one column. They used to be the
-          headline, with the actual status floated to the far right in grey — the two halves of one
-          sentence, as far apart as the layout allowed. */}
-      <header className="home-masthead" data-testid="home-masthead">
-        <p className="home-date" data-testid="home-greeting">
+      {/* ══ RANK 0 · THE MASTHEAD — one count, in words ══════════════════════════════════════ */}
+      <header className="masthead" data-testid="home-masthead">
+        <p className="masthead-date" data-testid="home-greeting">
           {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
           {" · "}
           {greetingFor(new Date().getHours())}, {me.fullName.split(" ")[0]}
         </p>
-
-        {/* h2, not h1: the shell already sets the page title, and a second h1 competed with the
-            wordmark. The stylesheet's heading scale targets THIS tag — it targeted `h1` until
-            17 Sep 2026 and therefore targeted nothing, which is why the headings on this page had
-            no weight. `scripts/validate/heading-scale-applies.mjs` now fails the build if a
-            heading-scale selector stops matching what the page emits. */}
-        <h2 data-testid="home-answer">{answerLine}</h2>
-
-        <p className="home-answer-second" data-testid="home-team-count">{secondLine}</p>
-
-        {/* ASK, DEMOTED FROM THE ONLY TINTED CARD ON THE PAGE to one docked affordance under the
-            answer. Operator direction (17 Aug 2026) was that Ask must be findable on Home, and it
-            still is — but a tint is the strongest signal this page has, and spending it on an
-            invitation meant the decision actually waiting on her was the plainest thing on screen.
-            The tint is now spent on a decision and nowhere else. */}
-        <div className="ask-dock" data-testid="home-ask">
-          <button type="button" className="ask-open" data-testid="home-ask-open" onClick={() => onNavigate("intent")}>
-            <span className="ask-label">Ask for anything</span>
-          </button>
-          <span className="ask-note">
-            Describe what you need in your own words — “what changed in the portfolio this week?” ·
-            “prep me for the Acme call”. Ask shows you the plan first and does nothing consequential
-            without your approval.
-          </span>
-        </div>
+        <h2 data-testid="home-answer">{answer}</h2>
+        <p className="masthead-second" data-testid="home-team-count">{second}</p>
       </header>
 
-      {/* ══ BAND ONE · WAITING ON YOU ══════════════════════════════════════════════════════════
-          Decisions blocked on her signature, then anything blocking the firm. Two separate
-          sections until now — "Waiting on you (0)" and "Needs your attention" — which meant the
-          page could carry two headed, near-identical blocks between her and the thing she came for.
+      {/* ══ THE RAIL — one filter instead of four toggles; ← Home is the one-tap return ═══════ */}
+      <nav className="rail" aria-label="Show on Home" role="tablist" data-testid="home-rail" data-filter={filter}>
+        {filter !== "all" && (
+          <button type="button" className="rail-chip rail-home" data-testid="home-rail-home" onClick={() => pick("all")}>← Home</button>
+        )}
+        {chip("all", "All", null)}
+        {chip("waiting", "Waiting on me", waitingCount)}
+        {chip("arrived", "Arrived", arrivedCount)}
+        {chip("quiet", "Quiet", quietCount)}
+      </nav>
 
-          IT DOES NOT RENDER WHEN IT IS EMPTY. A full section that exists to say "nothing" is the
-          single worst use of the top of this page; the answer line above has already said so, in
-          the one slot she actually reads. */}
-      {(waitingItems.length > 0 ||
-        visibleAttention.length > 0 ||
-        silencedCount > 0 ||
-        previews.previews.length > 0) && (
-        <section className="home-band" data-testid="home-waiting">
-          <div className="home-band-head">
-            <h3>Waiting on you</h3>
-            {needsHer > 0 && <span className="count-pill">{needsHer}</span>}
-            <span className="home-band-when">
-              {(() => {
-                const n = waitingItems.length + previews.previews.length;
-                return n === 0
-                  ? "no decision is blocked on your signature"
-                  : n === 1
-                    ? "one decision is blocked on your signature"
-                    : `${n} decisions are blocked on your signature`;
-              })()}
+      {notice && (
+        <p className="notice" role="status" data-testid="home-notice">
+          {notice}
+          {undo && <> <button type="button" className="link-button" data-testid="home-undo" onClick={() => void undoPutAway()}>Undo</button></>}
+        </p>
+      )}
+
+      {/* ══ WAITING ON YOU — always renders; one line when empty ═════════════════════════════ */}
+      {bands.waiting && (
+        <section className="band" data-testid="home-waiting" aria-labelledby="home-waiting-head">
+          <div className="band-head">
+            <h3 id="home-waiting-head">Waiting on you</h3>
+            {waitingCount > 0 && <span className="count-pill" data-testid="home-waiting-pill">{waitingCount}</span>}
+            {waitingCount > 0 && visibleAttention.length > 0 && (
+              <button type="button" className="band-act" data-testid="home-waiting-select" aria-pressed={waitingSelect !== null} onClick={() => setWaitingSelect(waitingSelect ? null : new Set())}>
+                {waitingSelect ? "Cancel" : "Select…"}
+              </button>
+            )}
+            <span className="band-when" data-testid="home-waiting-when">
+              {waitingCount === 0
+                ? "no decision is blocked on your signature"
+                : undecided.length + previews.previews.length === 0
+                  ? "nothing needs a signature — these are blockers"
+                  : `${undecided.length + previews.previews.length === 1 ? "one decision is" : `${undecided.length + previews.previews.length} decisions are`} blocked on your signature`}
             </span>
           </div>
 
-          {/* FIRST IN THE BAND, ABOVE EVERY OTHER APPROVAL. A preview holds finished work an
-              employee cannot deliver and an unspent credential that expires — it is the only
-              thing on this page that DECAYS if she does not answer it. */}
+          {waitingSelect && (
+            <div className="select-bar" role="toolbar" aria-label="Selected blockers" data-testid="home-waiting-select-bar">
+              <span className="muted small">{waitingSelect.size} selected</span>
+              <button type="button" className="btn-strong" disabled={waitingSelect.size === 0} data-testid="home-waiting-quiet-selected"
+                onClick={() => void silenceMany(visibleAttention.filter((a) => waitingSelect.has(a.key)).map((a) => ({ key: a.key, signature: a.headline })), "ACKNOWLEDGED")}>
+                I know — quiet selected for a week
+              </button>
+              <button type="button" className="btn-ghost" disabled={waitingSelect.size === 0} data-testid="home-waiting-stop-selected"
+                onClick={() => void silenceMany(visibleAttention.filter((a) => waitingSelect.has(a.key)).map((a) => ({ key: a.key, signature: a.headline })), "DISMISSED")}>
+                Stop telling me
+              </button>
+              <span className="muted small" id="home-approvals-one-at-a-time">Decided one at a time — a human-reserved action is never approved in a batch.</span>
+            </div>
+          )}
+
+          {/* FIRST IN THE BAND: a preview decays if she does not answer it; its Approve and send is the page's one primary. */}
           <PreviewApprovals previews={previews.previews} onDecided={previews.reload} />
 
-          {waitingItems.length > 0 && (
-            <ul className="card-list waiting-list">
-              {waitingItems.slice(0, 5).map((item, i) => (
-                <li key={String(item.id ?? i)}>
-                  <span>{summarize("approvals", item)}</span>
-                  <button
-                    type="button"
-                    className="btn-strong"
-                    data-testid={`home-waiting-open-${i}`}
-                    onClick={() => onNavigate("approvals")}
-                  >
-                    Decide
-                  </button>
+          {waitingCount === 0 && previews.previews.length === 0 ? (
+            <p className="muted small" data-testid="home-waiting-empty">Nothing is blocked on you{silencedCount > 0 ? ` — ${silencedCount} ${silencedCount === 1 ? "item is" : "items are"} silenced` : ""}.</p>
+          ) : (
+            <ul className="deal-list" data-testid="home-waiting-list">
+              {waitingItems.map((c, i) => {
+                const outcome = decided[c.id];
+                const risk = c.risk_level === "RESERVED" ? "badge badge-bad" : c.risk_level === "HIGH" || c.risk_level === "MEDIUM" ? "badge badge-gate" : "badge";
+                return (
+                  <li key={c.id} className="deal-row deal-row-3" data-testid={`home-waiting-card-${c.id}`}>
+                    <div>
+                      {waitingSelect && (
+                        <label className="check row-select">
+                          <input type="checkbox" disabled aria-describedby="home-approvals-one-at-a-time" aria-label={`Approvals are decided one at a time: ${c.title}`} />
+                        </label>
+                      )}
+                      <span className={risk}>{c.risk_level === "RESERVED" ? "Human-reserved" : c.risk_level === "UNCLASSIFIED" ? "Approval" : c.risk_level.charAt(0) + c.risk_level.slice(1).toLowerCase()}</span>{" "}
+                      <strong>{c.title}</strong>
+                      <div className="muted small">
+                        {actionName(c.action_key)}{c.impact_note ? ` — ${c.impact_note}` : ""}
+                      </div>
+                      <div className="muted small">
+                        {c.requested_by_type === "AI" ? "An employee" : c.requested_by_type === "SYSTEM" ? "The system" : "A partner"} raised it · {new Date(c.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+                        {c.expires_at ? ` · expires ${new Date(c.expires_at).toLocaleDateString()}` : ""}
+                      </div>
+                      {rejecting === c.id && (
+                        <div className="form-row" data-testid={`home-reject-form-${c.id}`}>
+                          <input aria-label="Why it is rejected (optional)" placeholder="Why, in a line (optional)" value={rejectNote} autoFocus onChange={(e) => setRejectNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setRejecting(null); }} />
+                          <button type="button" className="btn-danger" disabled={deciding === c.id} data-testid={`home-reject-confirm-${c.id}`} onClick={() => void decide(c, "rejected")}>{deciding === c.id ? "Rejecting…" : "Reject it"}</button>
+                          <button type="button" data-testid={`home-reject-cancel-${c.id}`} onClick={() => setRejecting(null)}>Never mind</button>
+                        </div>
+                      )}
+                    </div>
+                    <span className="readiness">{outcome ? <span className="badge badge-ok" data-testid={`home-decided-${c.id}`}>{outcome}</span> : <span className="badge badge-gate">waiting on you</span>}</span>
+                    <div className="deal-actions">
+                      {!outcome && (
+                        <>
+                          <button type="button" className="btn-strong" disabled={deciding === c.id} aria-busy={deciding === c.id} data-testid={`home-approve-${c.id}`} onClick={() => void decide(c, "approved")}>{deciding === c.id ? "Approving…" : "Approve"}</button>
+                          <button type="button" className="btn-danger" aria-expanded={rejecting === c.id} data-testid={`home-reject-${c.id}`} onClick={() => setRejecting(rejecting === c.id ? null : c.id)}>Reject</button>
+                        </>
+                      )}
+                      <button type="button" data-testid={`home-waiting-open-${i}`} onClick={() => onNavigate("approvals")}>Open</button>
+                    </div>
+                  </li>
+                );
+              })}
+              {visibleAttention.map((a) => (
+                <li key={a.key} className="deal-row deal-row-3 blocker" data-testid={`home-attention-${a.key}`}>
+                  <div>
+                    {waitingSelect && (
+                      <label className="check row-select">
+                        <input type="checkbox" data-testid={`home-attention-select-${a.key}`} aria-label={`Select ${a.headline}`} checked={waitingSelect.has(a.key)}
+                          onChange={(e) => setWaitingSelect((s) => { const n = new Set(s ?? []); if (e.target.checked) n.add(a.key); else n.delete(a.key); return n; })} />
+                      </label>
+                    )}
+                    <span className={a.severity === "BLOCKING" ? "badge badge-bad" : a.severity === "DEGRADED" ? "badge badge-gate" : "badge"}>
+                      {a.severity === "BLOCKING" ? "Blocked" : a.severity === "DEGRADED" ? "Degraded" : "Setup"}
+                    </span>{" "}
+                    <strong>{a.headline}</strong>
+                    <div className="muted small">{a.action}</div>
+                  </div>
+                  <span className="readiness"><span className="badge">not a signature</span></span>
+                  <div className="deal-actions">
+                    <button type="button" onClick={() => onNavigate(a.link)}>Open</button>
+                    <button type="button" className="btn-ghost" data-testid={`home-attention-ack-${a.key}`} title="Seen, still true. Quiet for a week."
+                      onClick={() => void silenceMany([{ key: a.key, signature: a.headline }], "ACKNOWLEDGED")}>
+                      I know — quiet for a week
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
           )}
-
-          {/* §8 — what is blocked: a dead-lettered job or an unconfigured provider makes everything
-              below it unreliable. It keeps its own semantic colour; orange never carries safety
-              meaning on this page. */}
-          <div data-testid="home-attention">
-            {visibleAttention.length === 0 && silencedCount > 0 && (
-              <p className="muted small">
-                Nothing outstanding. {silencedCount} {silencedCount === 1 ? "item is" : "items are"} silenced.
-              </p>
-            )}
-            {visibleAttention.length > 0 && (
-              <ul className="card-list small blocker-list">
-                {visibleAttention.map((a) => (
-                  <li key={a.key} className="blocker" data-testid={`home-attention-${a.key}`}>
-                    <span
-                      className={
-                        a.severity === "BLOCKING" || a.severity === "DEGRADED"
-                          ? "help-tag help-tag-warn"
-                          : "help-tag help-tag-muted"
-                      }
-                    >
-                      {a.severity === "BLOCKING" ? "Blocked" : a.severity === "DEGRADED" ? "Degraded" : "Setup"}
-                    </span>{" "}
-                    <strong>{a.headline}</strong> {a.action}{" "}
-                    <button type="button" className="link-button" onClick={() => onNavigate(a.link)}>
-                      Open
-                    </button>{" "}
-                    {/* TWO DIFFERENT ACTS, and until 21 Aug 2026 they were the same one: both wrote
-                        the same row and both lapsed after a week, which the operator noticed and
-                        asked to be fixed. "I know" means seen, still true, living with it — quiet
-                        for a week. "Stop telling me" is permanent. Both are keyed to the exact
-                        wording, so the same problem described differently is said again. */}
-                    <button
-                      type="button"
-                      className="link-button"
-                      data-testid={`home-attention-ack-${a.key}`}
-                      title="Seen, still true. Quiet for a week."
-                      onClick={() => void silence(a.key, a.headline, "ACKNOWLEDGED")}
-                    >
-                      I know
-                    </button>{" "}
-                    <button
-                      type="button"
-                      className="link-button"
-                      data-testid={`home-attention-dismiss-${a.key}`}
-                      title="Permanent. This exact item will not come back."
-                      onClick={() => void silence(a.key, a.headline, "DISMISSED")}
-                    >
-                      Stop telling me, for good
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {silencedCount > 0 && (
-              <p className="muted small">
-                {silencedCount} silenced — acknowledged ones return after a week, dismissed ones do not.{" "}
-                <button
-                  type="button"
-                  className="link-button"
-                  data-testid="home-attention-unsilence"
-                  onClick={() => void unsilence()}
-                >
-                  Bring them back
-                </button>
-              </p>
-            )}
-          </div>
+          {silencedCount > 0 && waitingCount > 0 && (
+            <p className="muted small">
+              {silencedCount} silenced — acknowledged ones return after a week, dismissed ones do not.{" "}
+              <button type="button" className="link-button" data-testid="home-attention-unsilence" onClick={async () => { await api("/api/attention/silenced/clear", { method: "POST", body: {} }); silenced.reload(); }}>Bring them back</button>
+            </p>
+          )}
         </section>
       )}
 
-      {/* ══ BAND TWO · SINCE YOU LAST LOOKED ═══════════════════════════════════════════════════
-        ONE SECTION, NOT THREE. Operator, 22 Aug 2026: "why is prepared for you and from your team
-        different?" The distinction WAS real and it was the wrong cut — two headings splitting one
-        question, *what is new for me*, along an implementation seam rather than anything a partner
-        would think. Ordered by how finished the thing is: the brief that arrived this morning, then
-        everything else produced for you, then the colleagues who have something but no document.
-      */}
-      <section className="home-band" data-testid="home-deliverables">
-        <div className="home-band-head">
-          <h3>Since you last looked</h3>
-          {freshCount > 0 && <span className="count-pill">{freshCount}</span>}
-          <span className="home-band-when" data-testid="home-deliveries-count">
-            {freshCount === 0
-              ? "nothing new since you last looked"
-              : `${freshCount} ${freshCount === 1 ? "has" : "have"} something new`}
-          </span>
-        </div>
-
-        <section className="card brief-delivery" data-testid="home-brief-delivery">
-          <header className="brief-byline">
-            <Face name={chiefOfStaff.name} role={chiefOfStaff.role} size={40} />
-            <div className="brief-byline-who">
-              {/* SAYS WHAT IS TRUE, not what usually is. Home does not hold the brief (the panel
-                  below fetches it), so the line is written to be honest either way: whose briefing
-                  it is, not a claim that it arrived. */}
-              <div className="brief-byline-line">
-                <strong>{chiefOfStaff.name}</strong> — your morning briefing
-              </div>
-              <div className="muted small">
-                {chiefOfStaff.role} ·{" "}
-                {new Date(data.generated_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-              </div>
-            </div>
-          </header>
-          {/*
-            A SUMMARY CARD *AND* A COLLAPSE, which are two different controls and both are hers.
-
-            `compact` is the summary: the one-minute version — the numbered summary, the traffic
-            lights and the market read — with the remaining ten sections behind "Read the full
-            report". The designer argued that should be the whole answer and the collapse should
-            go; she overruled that on 18 Sep 2026 ("just make the exec brief collapsable and run
-            it"), so BOTH stand. Short by default, foldable away entirely, depth on request.
-
-            The collapse is the mechanism that shipped in PR #92 and is not duplicated here: the
-            state is owned by Home and remembered per viewer in `client/lib/briefCollapse.ts`,
-            keyed on `firm_user.id`, because two partners share this application and, on a shared
-            laptop, the store. A collapsed panel still says the date and whether today's brief
-            arrived — hiding whether the thing ran is worse than not showing it at all.
-          */}
-          <DailyBriefPanel
-            compact
-            viewerId={me.id}
-            preparedBy={chiefOfStaff.name}
-            collapsed={briefCollapsed}
-            onToggleCollapsed={(next) => {
-              setBriefCollapsed(next);
-              writeBriefCollapsed(me.id, next);
-            }}
-          />
-        </section>
-
-        <DeliverableList
-          limit={4}
-          onNavigate={onNavigate}
-          // "Prepared for you" means for YOU. It used to list both partners' briefs, and because
-          // the other partner's is often generated later in the day it sat on top, signed by their
-          // chief of staff — under a heading promising these were yours.
-          mine
-          meId={me.id}
-          emptyNote="Nothing else has been prepared for you yet. Research packets and the weekly review arrive here once somebody produces one."
-        />
-
-        {/* Anyone with something NEW gets a card. Nobody else does. */}
-        {freshDeliveries.length > 0 && (
-          <ul className="delivery-list">
-            {freshDeliveries.map((m) => (
-              <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} onOpened={markOpened} />
-            ))}
-          </ul>
-        )}
-
-        {/* NINE QUIET COLLEAGUES ARE ONE LINE, NOT NINE CARDS. Silence from a named colleague is
-            still information and is still reported — it is just no longer the largest visual mass
-            on a page whose job is to show what needs her. Each of them is one click away. */}
-        {quietDeliveries.length > 0 && (
-          <>
-            <p className="quiet-roll" data-testid="home-quiet-roll">
-              <span>
-                {quietNames} — <b>nothing new since you last looked</b>.
-              </span>
-              <button
-                type="button"
-                className="link-button"
-                data-testid="home-quiet-roll-toggle"
-                aria-expanded={showQuiet}
-                onClick={() => setShowQuiet((q) => !q)}
-              >
-                {showQuiet ? "Hide them" : "Show each"}
+      {/* ══ ARRIVED — everything for her except the brief, which is the band below ═══════════ */}
+      {bands.arrived && (
+        <section className="band" data-testid="home-deliverables" aria-labelledby="home-arrived-head">
+          <div className="band-head">
+            <h3 id="home-arrived-head">Arrived</h3>
+            {arrivedCount > 0 && <span className="count-pill" data-testid="home-arrived-pill">{arrivedCount}</span>}
+            {arrivedRows.some((r) => !r.acknowledged_at) && (
+              <button type="button" className="band-act btn-ghost" data-testid="home-mark-all-read" onClick={() => void markMany(arrivedRows.filter((r) => !r.acknowledged_at).map((r) => r.id), "acknowledge")}>
+                Mark all read
               </button>
-            </p>
-            {showQuiet && (
-              <ul className="delivery-list">
-                {quietDeliveries.map((m) => (
-                  <DeliveryCard key={m.key} module={m} onNavigate={onNavigate} onOpened={markOpened} />
-                ))}
-              </ul>
             )}
-          </>
-        )}
-      </section>
-
-      {/* ══ BAND THREE · THE REST ══════════════════════════════════════════════════════════════
-          Configuration and reference. Nothing here changes on its own, and nothing here is read
-          more than once in two hundred visits — so it is a shelf of closed drawers rather than
-          three more open cards competing with the brief. */}
-      <section className="home-band" data-testid="home-rest">
-        <div className="home-band-head">
-          <h3>The rest</h3>
-          <span className="home-band-when">configuration and reference — nothing here changes on its own</span>
-        </div>
-
-        <section className="card" data-testid="home-questions">
-          <header className="module-card-head">
-            <h4>What this page answers</h4>
-            <button
-              type="button"
-              className="link-button"
-              data-testid="home-questions-toggle"
-              aria-expanded={questionsOpen}
-              onClick={() => setQuestionsOpen((o) => !o)}
-            >
-              {questionsOpen ? "Hide" : "Open"}
-            </button>
-          </header>
-          <p className="muted small">the ten questions, and which module answers each</p>
-          {questionsOpen && (
-            <ul className="question-list">
-              {data.questions.map((q) => (
-                <li key={q.question} data-testid={`home-question-${q.module ?? "none"}`}>
-                  {q.question}{" "}
-                  {q.module ? (
-                    <code>{MODULE_LABELS[q.module] ?? q.module}</code>
-                  ) : (
-                    <span className="muted small">no module enabled for this yet</span>
-                  )}
-                </li>
-              ))}
+            {arrivedRows.length > 0 && (
+              <button type="button" className="band-act" data-testid="home-arrived-select" aria-pressed={arrivedSelect !== null} onClick={() => setArrivedSelect(arrivedSelect ? null : new Set())}>
+                {arrivedSelect ? "Cancel" : "Select…"}
+              </button>
+            )}
+            <span className="band-when" data-testid="home-deliveries-count">
+              {arrivedCount === 0 ? "nothing new since you last looked" : `${arrivedCount} since you last looked`}
+            </span>
+          </div>
+          {arrivedSelect && (
+            <div className="select-bar" role="toolbar" aria-label="Selected arrivals" data-testid="home-arrived-select-bar">
+              <span className="muted small">{arrivedSelect.size} selected</span>
+              <button type="button" className="btn-strong" disabled={arrivedSelect.size === 0} data-testid="home-arrived-read-selected" onClick={() => void markMany(Array.from(arrivedSelect), "acknowledge")}>Mark read</button>
+              <button type="button" className="btn-ghost" disabled={arrivedSelect.size === 0} data-testid="home-arrived-put-away-selected" onClick={() => void markMany(Array.from(arrivedSelect), "dismiss")}>Put away</button>
+            </div>
+          )}
+          <DeliverableList
+            limit={6}
+            onNavigate={onNavigate}
+            mine
+            meId={me.id}
+            excludeKind="daily_brief"
+            selectable={arrivedSelect !== null}
+            selected={arrivedSelect ?? undefined}
+            onSelect={(id, on) => setArrivedSelect((s) => { const n = new Set(s ?? []); if (on) n.add(id); else n.delete(id); return n; })}
+            reloadKey={arrivedReload}
+            onRows={setArrivedRows}
+            emptyNote="Nothing arrived since you last looked. Research packets, meeting preps and a colleague's findings land here."
+          />
+          {freshDeliveries.length > 0 && (
+            <ul className="deal-list" data-testid="home-fresh-modules">
+              {freshDeliveries.map((m) => {
+                const delivery = deliveryFor(m.key);
+                return (
+                  <li key={m.key} className="deal-row deal-row-2" data-testid={`home-module-${m.key}`} data-fresh="new">
+                    <div>
+                      {delivery && <Face name={delivery.by} role={roleFor(delivery.by) ?? ""} size={28} />}
+                      <strong>{delivery?.by ?? m.title}</strong>
+                      <div className="muted small">{delivery?.headline ?? m.title}{typeof m.new_count === "number" && m.seen_at ? ` · ${m.new_count} new since ${sinceWhen(m.seen_at)}` : ""}</div>
+                      <ul className="module-items">{m.items.slice(0, 2).map((item, i) => <li key={String(item.id ?? i)}>{summarize(m.key, item)}</li>)}</ul>
+                    </div>
+                    <button type="button" data-testid={`home-open-${m.key}`} onClick={() => void api(`/api/mp-home/modules/${encodeURIComponent(m.key)}/seen`, { method: "POST", body: {} }).then(() => onNavigate(m.link))}>Open</button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>
+      )}
 
-        <ModuleSettings home={data} onSaved={home.reload} />
-        <PersonalIntelligencePanel />
+      {/* ══ TODAY'S BRIEF — on every filter; the one thing built on request ══════════════════ */}
+      <section className="band" data-testid="home-brief-delivery" aria-labelledby="home-brief-head">
+        <div className="band-head">
+          <h3 id="home-brief-head">Today's brief</h3>
+          <span className="band-when"><strong>{chiefOfStaff.name}</strong> · {chiefOfStaff.role} · on demand, on claude-sonnet-5</span>
+        </div>
+        <DailyBriefPanel compact viewerId={me.id} preparedBy={chiefOfStaff.name} />
       </section>
+
+      {/* ══ QUIET — one line, and the rows only under the Quiet chip ═════════════════════════ */}
+      {bands.quiet && quietNames.length > 0 && (
+        <section className="band" data-testid="home-quiet" aria-labelledby="home-quiet-head">
+          <div className="band-head">
+            <h3 id="home-quiet-head">Quiet</h3>
+            <span className="band-when">{quietNames.length} {quietNames.length === 1 ? "colleague has" : "colleagues have"} nothing new</span>
+          </div>
+          {filter !== "quiet" ? (
+            <p className="quiet-roll" data-testid="home-quiet-roll">
+              {quietNames.join(", ").replace(/, ([^,]*)$/, " and $1")} — <b>nothing new since you last looked</b>.{" "}
+              <button type="button" className="link-button" data-testid="home-quiet-roll-toggle" onClick={() => pick("quiet")}>Filter by Quiet to see each</button>
+            </p>
+          ) : (
+            <ul className="deal-list" data-testid="home-quiet-list">
+              {quietDeliveries.map((m) => {
+                const delivery = deliveryFor(m.key);
+                return (
+                  <li key={m.key} className="deal-row deal-row-2 deal-row-out" data-testid={`home-module-${m.key}`} data-fresh={m.items.length === 0 ? "empty" : "quiet"}>
+                    <div>
+                      {delivery && <Face name={delivery.by} role={roleFor(delivery.by) ?? ""} size={28} />}
+                      <strong>{delivery?.by ?? m.title}</strong>
+                      <div className="muted small">{m.items.length === 0 ? (delivery?.whenEmpty ?? m.note ?? "Nothing to report.") : `nothing new since ${m.seen_at ? sinceWhen(m.seen_at) : "you last looked"}`}</div>
+                    </div>
+                    <button type="button" data-testid={`home-open-${m.key}`} onClick={() => void api(`/api/mp-home/modules/${encodeURIComponent(m.key)}/seen`, { method: "POST", body: {} }).then(() => onNavigate(m.link))}>Open {m.title}</button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* ══ THE FOOT — Ask, Home layout, Setup: findable, never above the answer ═════════════ */}
+      <p className="rail-note" data-testid="home-foot">
+        <button type="button" className="link-button" data-testid="home-ask-open" onClick={() => onNavigate("intent")}>Ask for anything →</button>
+        {" · "}
+        <button type="button" className="link-button" data-testid="home-settings-toggle" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((o) => !o)}>Choose what Home shows</button>
+        {" · "}
+        <button type="button" className="link-button" data-testid="home-setup-toggle" aria-expanded={setupOpen} onClick={() => setSetupOpen((o) => !o)}>
+          Setup — {connections.data ? `${connected} of ${connTotal} connected` : "checking"}
+        </button>
+        {" · "}
+        <button type="button" className="link-button" data-testid="home-private-link" onClick={() => onNavigate("private")}>Private layer</button>
+      </p>
+      {settingsOpen && <ModuleSettings home={data} onSaved={home.reload} />}
+      {setupOpen && <ConnectPanel me={me} />}
     </section>
   );
 }

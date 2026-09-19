@@ -113,7 +113,7 @@ describe("only a readable brief may claim to have arrived", () => {
  * AND THE PANEL ACTUALLY RENDERS IT.
  *
  * There is no DOM renderer in this suite, so the wiring is asserted at the source — the same
- * narrow, deliberate check `briefCollapse.test.ts` makes about the fold. It catches the failure
+ * narrow, deliberate check the brief-arrives validator makes about the band. It catches the failure
  * that actually happened: a well-tested pure function that nothing on the page calls.
  */
 describe("the panel is wired to it", () => {

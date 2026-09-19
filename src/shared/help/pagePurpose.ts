@@ -34,8 +34,8 @@ export interface PagePurpose {
 
 export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
   home: {
-    purpose: "Your starting point each morning — what needs attention, what the firm knows, and what you asked to keep an eye on.",
-    youCan: ["See what is blocked or waiting on you", "Read the day's intelligence", "Ask for anything in your own words", "Choose which modules appear here"],
+    purpose: "What is waiting on you, what arrived since you last looked, and today's brief — on demand.",
+    youCan: ["Approve, reject or open what is waiting on you, from the row", "Mark what arrived as read, one or all at once", "Build today's brief and watch it arrive", "Filter Home to what is waiting, what arrived, or who is quiet"],
   },
   intent: {
     purpose: "Describe what you need in plain language. Ask works out which part of the firm owns it and shows you the plan before anything happens.",

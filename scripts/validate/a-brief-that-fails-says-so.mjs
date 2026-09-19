@@ -68,7 +68,7 @@ const TIMEOUT_FILE = path.join(ADAPTER_DIR, "timeout.ts");
 const BUDGET_FILE = path.join(ROOT, "src", "worker", "ai", "chainBudget.ts");
 const BRIEF_SERVICE = path.join(SERVICES_DIR, "dailyIntelligence.ts");
 const PANEL = path.join(ROOT, "src", "client", "pages", "DailyBriefPanel.tsx");
-const COLLAPSE = path.join(ROOT, "src", "client", "lib", "briefCollapse.ts");
+const BAND = path.join(ROOT, "src", "client", "lib", "briefBand.ts");
 const STATE_MODULE = path.join(ROOT, "src", "client", "lib", "briefState.ts");
 const SCHEMA = path.join(ROOT, "migrations", "0035_daily_intelligence_pipeline.sql");
 
@@ -403,13 +403,21 @@ export function checkSurfacesUseIt({ panel, collapse }) {
     violations.push("DailyBriefPanel does not declare error_message, so the reason on the row cannot reach the screen");
   }
 
+  /*
+   * THE SECOND SURFACE IS THE BAND, NOT A COLLAPSED LINE (design/HOME_DESIGN.md §2, 19 Sep 2026).
+   * The fold — and `collapsedBriefLine` with it — is retired: Home's filter rail is the fold. What
+   * must hold instead is that the band's state comes from the server's named state and never from
+   * the client deciding for itself: `toneClassFor` and the moving-kinds set are the only client
+   * vocabulary, and neither computes an arrival. STRICTER: a client-side "arrived" decision, in any
+   * file the band reads, is what this now catches.
+   */
   examined += 1;
-  const collapseBody = stripComments(collapse);
-  if (!/briefArrival\(/.test(collapseBody)) {
-    violations.push(
-      "collapsedBriefLine decides for itself whether a brief arrived. It used to call any non-null row " +
-        "an arrival, which told both partners their brief had arrived on a morning neither had one",
-    );
+  const bandBody = stripComments(collapse);
+  if (!/export function toneClassFor/.test(bandBody) || !/MOVING_KINDS/.test(bandBody)) {
+    violations.push("briefBand.ts does not carry the tone and moving-kind vocabulary the band renders from");
+  }
+  if (/arrived\s*=\s*(?!state\.|s\.)[^;]*(status|report)/.test(bandBody) || /kind\s*=\s*["']arrived["']/.test(bandBody)) {
+    violations.push("briefBand.ts decides for itself that a brief arrived — that is the server's named state to say");
   }
   return { violations, examined };
 }
@@ -556,7 +564,7 @@ async function selfTest() {
   // The real pre-fix panel: no not-arrived branch at all.
   const brokenPanel = checkSurfacesUseIt({
     panel: "const report = state.data?.report ?? null;\n{shown.map((s) => renderSection(s))}",
-    collapse: "return `${s.report.report_date} — today's brief arrived`;",
+    collapse: "export const x = 1; const arrived = report.status === 'READY'; kind = \"arrived\";",
   });
   say(brokenPanel.violations.length >= 2, "the real pre-fix panel and collapsed line passed");
 
@@ -604,7 +612,7 @@ if (process.argv.includes("--self-test")) {
   const statuses = statusesFromSchema(read(SCHEMA));
   const { briefArrival } = await import(pathToFileUrl(STATE_MODULE));
   const says = checkEveryStatusSaysSomething(briefArrival, statuses);
-  const surfaces = checkSurfacesUseIt({ panel: read(PANEL), collapse: read(COLLAPSE) });
+  const surfaces = checkSurfacesUseIt({ panel: read(PANEL), collapse: read(BAND) });
 
   // THE EMPTY-LOOP GUARDS. Every one counts something that must exist: this firm calls model
   // providers, its callers ask for replies of a stated size, its briefs have statuses, and two
@@ -615,7 +623,7 @@ if (process.argv.includes("--self-test")) {
     deadline.examined === 0 && "could not read the deadline or the stage lease it must fit inside",
     statuses.length === 0 && "read 0 report statuses out of the schema",
     says.examined === 0 && "ran briefArrival over 0 statuses",
-    surfaces.examined === 0 && "read neither the panel nor the collapsed line",
+    surfaces.examined === 0 && "read neither the panel nor the band",
   ].filter(Boolean);
   if (empty.length > 0) {
     console.error(`BRIEF-ARRIVES SCAN FAILED — ${empty.join("; ")}.`);

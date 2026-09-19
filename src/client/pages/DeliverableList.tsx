@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, useApi } from "../lib/api";
 import { kindDef } from "@shared/deliverables/deliverable";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
@@ -44,13 +44,21 @@ const VERDICTS: { value: string; label: string }[] = [
 
 export function DeliverableList({
   kind,
+  excludeKind,
   limit = 5,
   emptyNote,
   onNavigate,
   mine = false,
   meId,
+  selectable = false,
+  selected,
+  onSelect,
+  reloadKey = 0,
+  onRows,
 }: {
   kind?: string;
+  /** A kind the list must NOT carry — Home's Arrived band excludes `daily_brief`, which the brief band above it is. */
+  excludeKind?: string;
   limit?: number;
   emptyNote: string;
   onNavigate?: (k: string) => void;
@@ -58,13 +66,26 @@ export function DeliverableList({
   mine?: boolean;
   /** The reader, so a shared list can mark the rows that are somebody else's. */
   meId?: string;
+  /** SELECT-MANY (design/HOME_DESIGN.md §3.4): a checkbox per row, owned by the host's select bar. */
+  selectable?: boolean;
+  selected?: ReadonlySet<string>;
+  onSelect?: (id: string, on: boolean) => void;
+  /** Bumped by the host after a batch act, so the list re-reads. */
+  reloadKey?: number;
+  /** The rows as read, so a host can count them and offer `Mark all read` over exactly these. */
+  onRows?: (rows: Array<{ id: string; acknowledged_at: string | null }>) => void;
 }): JSX.Element {
   // The default view is what still wants attention. Dismissed pieces are one toggle away, never
   // more than that, because "where did it go" is the question dismissing usually creates.
   const [showDismissed, setShowDismissed] = useState(false);
   const list = useApi<{ deliverables: Deliverable[]; put_away_after_days?: number }>(
-    `/api/deliverables?limit=${limit}${kind ? `&kind=${kind}` : ""}${showDismissed ? "&dismissed=1" : ""}${mine ? "&mine=1" : ""}`,
+    `/api/deliverables?limit=${limit}${kind ? `&kind=${kind}` : ""}${excludeKind ? `&exclude_kind=${excludeKind}` : ""}${showDismissed ? "&dismissed=1" : ""}${mine ? "&mine=1" : ""}`,
+    [reloadKey, showDismissed],
   );
+  useEffect(() => {
+    if (list.data) onRows?.(list.data.deliverables.map((d) => ({ id: d.id, acknowledged_at: d.acknowledged_at })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list.data]);
   const [open, setOpen] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -159,6 +180,17 @@ export function DeliverableList({
               data-testid={`deliverable-${d.id}`}
             >
               <div className="deliverable-head">
+                {selectable && (
+                  <label className="check row-select">
+                    <input
+                      type="checkbox"
+                      data-testid={`deliverable-select-${d.id}`}
+                      aria-label={`Select ${d.title}`}
+                      checked={selected?.has(d.id) ?? false}
+                      onChange={(e) => onSelect?.(d.id, e.target.checked)}
+                    />
+                  </label>
+                )}
                 {/* SIGNED. Everything the firm produces arrives from somebody, with their face on
                     it — the whole point of the delivery model. */}
                 <span className="owner-chip">

@@ -286,7 +286,15 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
    * a kind is one field on its definition and never a second list here.
    */
   const archived = archivedDeliverableKinds();
-  const archivedClause = archived.length > 0 ? `d.kind NOT IN (${archived.map((k) => `'${k}'`).join(", ")})` : "1=1";
+  /*
+   * `?exclude_kind=daily_brief` (design/HOME_DESIGN.md §2, 19 Sep 2026): Home's Arrived band shows
+   * everything prepared for the reader EXCEPT the brief, because the brief band above it IS the
+   * brief — 39 of 57 deliverables she put away by hand were a copy of the panel above them. Excluded
+   * in the query so `limit` still means rows she will see, not rows minus copies.
+   */
+  const excludeKind = url.searchParams.get("exclude_kind");
+  const excluded = excludeKind && /^[a-z_]+$/.test(excludeKind) ? [...archived, excludeKind] : archived;
+  const archivedClause = excluded.length > 0 ? `d.kind NOT IN (${excluded.map((k) => `'${k}'`).join(", ")})` : "1=1";
 
   // BOTH PARTNERS SEE EACH OTHER'S. Research is INTERNAL by default, and the operator's question was
   // explicitly "if scooter requests research i can find it". Anything labelled more sensitive is

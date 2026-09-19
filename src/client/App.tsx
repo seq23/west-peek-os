@@ -18,6 +18,7 @@ import { CrossOfficePage } from "./pages/CrossOfficePage";
 import { SecondariesPage } from "./pages/SecondariesPage";
 import { PagePurposeBlock } from "./pages/PagePurposeBlock";
 import { FundStrategyPage } from "./pages/FundStrategyPage";
+import { PrivateLayerPage } from "./pages/PrivateLayerPage";
 import { actionName, actorName } from "@shared/help/actionNames";
 import { stateMeaning } from "@shared/work/workCards";
 import { SignInCard, SignedOutPage } from "./pages/AuthSurfaces";
@@ -399,6 +400,8 @@ const ALL_NAV_KEYS: ReadonlySet<string> = new Set([
   ...NAV_ITEMS.map((n) => n.key),
   // Merged destinations whose addresses still work, so an old link or bookmark lands somewhere real.
   "allocation",
+  // The private layer: reachable by URL and from Home's foot, never in the nav (design/HOME_DESIGN.md §2).
+  "private",
   "follow-on",
   "market-map",
   "jobs",
@@ -2997,6 +3000,7 @@ function Shell() {
           {authed && active === "today" && <HomePage me={me.data!} onNavigate={navigate} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} onNavigate={navigate} />}
           {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={navigate} />}
+          {authed && active === "private" && <PrivateLayerPage />}
           {/*
             THE MACHINERY IS HANDED IN, NOT STACKED UNDERNEATH.
 
