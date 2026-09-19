@@ -128,7 +128,7 @@ export function LiveHelpPanel({ meeting, me }: { meeting: { id: string; meeting_
                 {on ? (
                   <>
                     <span className="badge badge-ok" data-testid={`live-help-seat-${on.ai_employee_id}`}>seated</span>
-                    <button type="button" className="link-button" disabled={busy === s.name} aria-label={`Release ${s.name} from this meeting`} data-testid={`release-${s.name}`} onClick={() => void release(on)}>
+                    <button type="button" className="btn-ghost" disabled={busy === s.name} aria-label={`Release ${s.name} from this meeting`} data-testid={`release-${s.name}`} onClick={() => void release(on)}>
                       Release
                     </button>
                   </>

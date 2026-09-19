@@ -227,7 +227,7 @@ export function BeforePanel({ meetingId, onChanged, seating, onOpenRoom, onNavig
               <div className="panel-head">
                 <h3>The record</h3>
                 {b.record.about === "COMPANY" && (
-                  <button type="button" className="link-button" onClick={() => onNavigate("dealflow")}>Open the deal on Dealflow</button>
+                  <button type="button" className="btn-ghost" onClick={() => onNavigate("dealflow")}>Open the deal on Dealflow</button>
                 )}
               </div>
               {b.record.about === "NOBODY" ? (
@@ -464,7 +464,7 @@ export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: stri
                     <button type="button" onClick={() => { setAnswering(null); setAnswer(""); }}>Not now</button>
                   </span>
                 ) : (
-                  <button type="button" className="link-button" data-testid={`answer-${q.id}`} onClick={() => { setAnswering(q.id); setAnswer(""); }}>
+                  <button type="button" className="btn-ghost" data-testid={`answer-${q.id}`} onClick={() => { setAnswering(q.id); setAnswer(""); }}>
                     Answer it
                   </button>
                 )}
@@ -595,11 +595,11 @@ function OwedLine({ c, busy, post }: { c: AfterCommitment; busy: string | null; 
         <span className="badge">dropped</span>
       ) : (
         <>
-          <button type="button" className="link-button" disabled={busy === c.id} data-testid={`honour-${c.id}`} onClick={() => void post(`/api/meeting-commitments/${c.id}/honour`, {}, [200], "Marked as delivered", c.id)}>
+          <button type="button" className="btn-ghost" disabled={busy === c.id} data-testid={`honour-${c.id}`} onClick={() => void post(`/api/meeting-commitments/${c.id}/honour`, {}, [200], "Marked as delivered", c.id)}>
             It was delivered
           </button>
           {c.owner_side === "FIRM" && (
-            <button type="button" className="link-button" disabled={busy === c.id} data-testid={`commitment-convert-${c.id}`} onClick={() => void post(`/api/meeting-commitments/${c.id}/convert`, {}, [200], "Made into a work card", c.id)}>
+            <button type="button" className="btn-ghost" disabled={busy === c.id} data-testid={`commitment-convert-${c.id}`} onClick={() => void post(`/api/meeting-commitments/${c.id}/convert`, {}, [200], "Made into a work card", c.id)}>
               Make it a work card
             </button>
           )}

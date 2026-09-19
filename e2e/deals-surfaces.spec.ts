@@ -75,6 +75,9 @@ test.describe("Meetings", () => {
   async function openMeetings(page: Page): Promise<void> {
     await gotoSurface(page, "Meetings");
     await expect(page.getByTestId("meetings-page")).toBeVisible();
+    // A record left open from the previous width is closed the way a partner closes it.
+    const back = page.getByTestId("record-back");
+    if (await back.isVisible().catch(() => false)) await back.click();
     await expect(page.getByTestId("meetings-answer")).not.toContainText("Reading the calendar");
   }
 

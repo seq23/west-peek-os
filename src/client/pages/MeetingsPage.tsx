@@ -622,7 +622,7 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
           </p>
         </div>
         {row.meet_link && <JoinOnMeet meeting={row} />}
-        <button type="button" className="link-button" data-testid="record-back" onClick={onBack}>
+        <button type="button" className="btn-ghost" data-testid="record-back" onClick={onBack}>
           ← All meetings
         </button>
       </div>
@@ -904,7 +904,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
                 {archiving !== m.id && (
                   <button
                     type="button"
-                    className="link-button"
+                    className="btn-ghost"
                     data-testid={`archive-${m.id}`}
                     onClick={() => { setArchiving(m.id); setArchiveReason(""); }}
                   >
@@ -958,7 +958,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         <p className="muted small">
           <button
             type="button"
-            className="link-button"
+            className="btn-ghost"
             data-testid="meetings-archived-toggle"
             aria-expanded={showArchived}
             onClick={() => setShowArchived((v) => !v)}
@@ -1037,7 +1037,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       {/* The committee moved to Dealflow with the design pass (§1.1 #1): one object per page. */}
       <p className="muted small hairline" data-testid="committee-pointer">
         The committee lives on Dealflow — packets, what they do not know, who decided and who disagreed.{" "}
-        <button type="button" className="link-button" data-testid="meetings-ic-open" onClick={() => onNavigate("dealflow")}>
+        <button type="button" className="btn-ghost" data-testid="meetings-ic-open" onClick={() => onNavigate("dealflow")}>
           Open Dealflow
         </button>
       </p>

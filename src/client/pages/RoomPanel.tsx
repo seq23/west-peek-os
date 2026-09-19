@@ -366,7 +366,7 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
             <button type="button" disabled={busy} data-testid="consent-no" onClick={() => void answerPrompt("DENIED")}>
               They said no
             </button>
-            <button type="button" className="link-button" disabled={busy} onClick={() => setPrompting(false)}>
+            <button type="button" className="btn-ghost" disabled={busy} onClick={() => setPrompting(false)}>
               Not now
             </button>
           </div>
@@ -426,7 +426,7 @@ function SummaryBlock({ meetingId, summary, turns, rollEveryMs, onRolled, compac
         <span className="muted small">
           {summary && <><span className="badge" data-testid="room-summary-state">{summary.state === "APPROVED" ? "APPROVED" : "DRAFT"}</span> by {summary.drafted_by} · </>}
           rolls every {minutes} minute{minutes === 1 ? "" : "s"} ·{" "}
-          <button type="button" className="link-button" data-testid="room-roll" disabled={busy} onClick={() => void roll()}>
+          <button type="button" className="btn-ghost" data-testid="room-roll" disabled={busy} onClick={() => void roll()}>
             {busy ? "Writing…" : "refresh now"}
           </button>
         </span>

@@ -70,6 +70,9 @@ test("Phase C: start recording → consent → ask the room by text → a block 
     await expect(room.getByTestId("consent-script")).toContainText("Is that alright with you");
     await room.getByTestId("consent-who").fill("Deana Oliver");
     await room.getByTestId("consent-yes").click();
+    // The page says the yes landed BEFORE the record is read back — reading the API while the
+    // request is still in flight proves nothing about the prompt.
+    await expect(room.getByTestId("capture-message")).toContainText(/on the file/);
     // The yes is on the file — and the recorder either runs, or the line says why not.
     const after = (await (await request.get(`/api/meetings/${meetingId}/capture`, { headers: MP })).json()) as { consent: Record<string, string>; can_capture: boolean };
     expect(after.consent.RECORDING).toBe("GRANTED");

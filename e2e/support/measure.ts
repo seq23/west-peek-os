@@ -178,8 +178,19 @@ export async function measureSurface(page: Page, rootTestId: string, label: stri
     { sel: rootSelector, w: vp.width },
   );
   expect(overflow, `${label}: horizontal overflow at ${vp.name}`).toEqual([]);
-  const docWide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(docWide, `${label}: the document itself scrolls sideways at ${vp.name}`).toBeLessThanOrEqual(1);
+  // The document as a whole, with the widest offenders named so a failure says what pushed it.
+  const doc = await page.evaluate((w) => {
+    const wide = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+    const offenders = wide > 1
+      ? [...document.body.querySelectorAll("*")]
+          .filter((el) => Math.round(el.getBoundingClientRect().right) > w + 1 && el.getBoundingClientRect().width > 0)
+          .map((el) => `${el.tagName.toLowerCase()}.${(el.className || "").toString().split(" ")[0]}[${el.getAttribute("data-testid") || ""}] → ${Math.round(el.getBoundingClientRect().right)}px`)
+          .slice(0, 6)
+      : [];
+    return { wide, offenders };
+  }, vp.width);
+  expect(doc.offenders, `${label}: the document scrolls sideways by ${doc.wide}px at ${vp.name}`).toEqual([]);
+  expect(doc.wide, `${label}: the document itself scrolls sideways at ${vp.name}`).toBeLessThanOrEqual(1);
 
   // ── 2 · CONTRAST ────────────────────────────────────────────────────────────────────────────
   const nodes = await page.evaluate(measureContrast, rootSelector);
