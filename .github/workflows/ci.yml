@@ -318,6 +318,15 @@ jobs:
       - name: A brief exists before every meeting
         run: npm run validate:meeting-brief
 
+      # The DURING face (Phase C): nothing asked in the live room — typed or spoken — can become a
+      # decision, commitment, question or stage move without a person; and a table or chart built
+      # in the room comes from the record, cites its rows, and refuses anything off the allowlist.
+      - name: Nothing writes from voice
+        run: npm run validate:voice-is-read-only
+
+      - name: A room question is answered from the record
+        run: npm run validate:room-answers
+
       - name: Build client
         run: npm run build
 
