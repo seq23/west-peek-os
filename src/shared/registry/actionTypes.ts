@@ -315,6 +315,17 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "calendar.sync", name: "Sync a partner calendar", description: "Read a partner's Google Calendar and create or update one meeting per event with a Meet link. Internal record only; reads nothing it cannot see and writes nothing to Google.", isExternalEffect: false },
   { key: "meet.ingest", name: "Read an ended Google Meet", description: "Read the participants, transcript entries and recording pointer of a conference that ended, and ingest the transcript through the governed import. Never runs a model.", isExternalEffect: false },
   { key: "meet.consent.platform_announced", name: "Record platform-announced consent", description: "Record TRANSCRIPTION and RECORDING consent as GRANTED for a Meet-native transcript, on the basis that Google Meet announced both to every participant. Never for a transcript uploaded by hand.", isExternalEffect: false },
+  // Phase B: meeting model (migrations 0199/0200). A meeting has three faces — BEFORE (the brief),
+  // DURING (capture) and AFTER (what came out). Every key here is internal: recording what was
+  // settled, what is owed, what is still unknown, and PROPOSING a stage move. Nothing here moves a
+  // deal — accepting a stage proposal calls `opportunity.transition`, which is the only path that
+  // does, and approving an After draft is human-only in code. `meeting.commitment.create` (P7)
+  // already covers a commitment on either side and is reused rather than duplicated.
+  { key: "meeting.decision.record", name: "Record a meeting decision", description: "Record that something was settled in a meeting: what, by whom, and the note or transcript line it came from.", isExternalEffect: false },
+  { key: "meeting.open_question.record", name: "Record a meeting open question", description: "Record a question a meeting left open and who owes the answer. Rolls forward into the next brief for the same company or LP until resolved.", isExternalEffect: false },
+  { key: "meeting.stage_change.propose", name: "Propose a stage change from a meeting", description: "Propose that a deal move stage because of what a meeting produced. A proposal only — a partner accepts it, and acceptance runs the ordinary opportunity transition.", isExternalEffect: false },
+  { key: "meeting.brief.assemble", name: "Assemble a meeting brief", description: "Assemble the BEFORE face of a meeting: why it exists, what we need to find out, what both sides said last time, the record, and (for founder and diligence meetings) the diligence framework marked answered or not. AI may draft; an empty brief says what it examined.", isExternalEffect: false },
+  { key: "meeting.after.approve", name: "Approve a meeting's After draft", description: "A partner approves the AI-drafted decisions, commitments, open questions and stage proposal from a meeting, which is the moment they become records. Human only in code; nothing is a record until this.", isExternalEffect: false },
 ] as const;
 
 /**

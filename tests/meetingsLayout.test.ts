@@ -50,19 +50,52 @@ describe("Meetings keeps the ranks the shell expects", () => {
 });
 
 describe("Meetings reads the order a partner asks in", () => {
-  it("is five sections, flat, in the decided order", () => {
+  it("is four sections, flat, in the decided order", () => {
     expect(sections(MEETINGS)).toEqual([
       "What is coming up",
       "What happened, and what came out of it",
       "Start a meeting now",
       "Where a deal stands with the committee",
-      "How a meeting becomes work",
     ]);
   });
 
-  it("puts the explainer last, because a page you must read before using is not self-explanatory", () => {
-    const order = sections(MEETINGS);
-    expect(order[order.length - 1]).toBe("How a meeting becomes work");
+  it("carries no static explainer of how a meeting becomes work — the record shows it instead (Phase B)", () => {
+    // The chain used to be described in the abstract at the foot of the page. Every record now
+    // renders its three faces, so the prose would describe what the page already shows. Read off
+    // the code, not the comments: the file is allowed to SAY why the heading went.
+    const code = MEETINGS.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toContain("<h3>How a meeting becomes work</h3>");
+    expect(code).not.toContain('data-testid="meeting-chain"');
+    // …and the committee's own sequence stayed, inside the committee section, not moved anywhere.
+    const committee = MEETINGS.indexOf("Where a deal stands with the committee");
+    const flow = MEETINGS.indexOf('data-testid="ic-flow"');
+    expect(committee).toBeGreaterThan(0);
+    expect(flow).toBeGreaterThan(committee);
+    expect(MEETINGS.slice(committee, flow)).not.toMatch(/<h3>/);
+  });
+
+  it("renders the three faces on the record: the brief before, capture during, and what came out after", () => {
+    expect(MEETINGS).toContain("<BeforePanel");
+    expect(MEETINGS).toContain("<AfterPanel");
+    const record = MEETINGS.slice(MEETINGS.indexOf("function MeetingRecord("));
+    // Before comes before the notes; After comes after close-out — the order a meeting happens in.
+    expect(record.indexOf("<BeforePanel")).toBeLessThan(record.indexOf('data-testid="note-form"'));
+    expect(record.indexOf("<AfterPanel")).toBeGreaterThan(record.indexOf("<CloseoutPanel"));
+  });
+
+  it("says on every list row what the meeting is walking into, or what it produced — from server counts", () => {
+    expect(MEETINGS).toContain("readinessInWords(m)");
+    expect(MEETINGS).toContain("outputsInWords(m)");
+    for (const field of ["brief_ready", "carried_open_questions", "we_owe_them", "decision_count", "commitment_overdue_count"]) {
+      expect(MEETINGS, `${field} is not read off the row`).toContain(`m.${field}`);
+    }
+  });
+
+  it("seats any employee on any type and WARNS about an internal-only seat in an external room", () => {
+    // The owner's rule, 18 Sep 2026: "all AI employees can be added to any meeting."
+    expect(MEETINGS).toContain("s.warning");
+    expect(MEETINGS).toContain("seat-warning-");
+    expect(MEETINGS).not.toContain("Internal-only employees are not offered");
   });
 
   it("gives every section an empty state, so nothing-yet never reads as broken", () => {

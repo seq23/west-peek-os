@@ -5723,3 +5723,46 @@ Provider layers: Calendar read, iCal read, Meet scopes, Workspace Events subscri
 are **PROVEN live** (read-only probe plus two real subscriptions); reading participants / transcript
 entries / recordings of an ended call is **UNPROVEN live** (no conference record exists yet under
 the grant) and proven against the fake; Pub/Sub push is **CONFIRMED impossible** behind Access.
+## 18 Sep 2026 — Phase B: a meeting is one object with three faces
+
+**The design, owner-approved 18 Sep 2026.** A meeting has a BEFORE (the brief), a DURING (capture and
+the live room — Phase C) and an AFTER (what came out). P7 built the record and the during-face; P33
+extracted firm-side follow-ups; nothing ever wrote down what was SETTLED, what was still UNKNOWN,
+what the OTHER side owed us, or what a deal meeting meant for the deal's stage. This phase is the
+data model and the Before/After halves, for EVERY meeting type — not only IC.
+
+| Where | What |
+|---|---|
+| `migrations/0199_a_meeting_has_three_faces.sql` | `meeting_decision`, `meeting_open_question`, `meeting_stage_proposal`, `meeting_artifact`, `meeting_after_draft`; `meeting_commitment` extended (`owed_by`, `honoured_at`, `honoured_note`, `after_draft_id`) rather than superseded; `meeting_prep_packet` generalised into the brief (`brief_json`, `body_md`, `coverage_json`, `prepared_by`); `meeting.lp_record_id`; `work_card.meeting_id`. Artifacts get their own table because `deliverable.kind` is a CHECK D1 cannot widen. |
+| `migrations/0200_the_brief_is_written_the_night_before.sql` | The five action keys (P4 compensating block) and `sjb_meeting_brief` — DAILY_AT 22:00 UTC, seeded **ENABLED** at the owner's ask, the loud way. |
+| `src/worker/services/meetingAfter.ts` | The AFTER face. `draftMeetingAfter` (idempotent over a fingerprint of the notes; `opts.text` for a rolling caller; every outcome a row), `parseAfterDraft`/`afterDraftPrompt`/`recordAfterDraft` (pure, for Phase C), `approveMeetingAfter` (human-only in code; each object through its own key; the P33 assignment policy for firm commitments), `proposeStageChange`/`decideStageProposal` (ACCEPT calls `transitionOpportunity` under `opportunity.transition` — nothing moves a deal on its own), `saveMeetingArtifact`, `askOfferLedger`. |
+| `src/worker/services/meetingBrief.ts` | The BEFORE face. `buildMeetingBrief` (deterministic; throws on zero coverage), `writeWhyLine` (the one model-written line, or a stated reason there is none), `assembleMeetingBrief` (stores on the P7 packet row), `runMeetingBriefs` (the job: CRITICAL on a failure; says how many it examined). LP conversations are declared `confidential` where `runAi` reads it — at the router, not in a prompt. |
+| `src/worker/services/meetings.ts` | `assemblePrepPacket` now builds the brief (generalised, not duplicated); the list carries readiness (`brief_ready`, `carried_open_questions`, `we_owe_them`, `they_owe_us`) and outputs (`decision_count`, `commitment_overdue_count`, …); `lp_record_id` on create; `convertCommitment` stamps `meeting_id` on the card. |
+| `src/worker/services/jobs.ts` | `job_key === "meeting_brief"` dispatched on the `wednesday_prep` pattern. |
+| `src/worker/index.ts` | One contiguous `// === Phase B: meeting model ===` block: `GET …/brief`, `GET …/after`, decisions, open questions (+resolve), commitments honour, stage proposals (+decide), artifacts (list + save), after-draft (+approve/discard), `GET /api/meeting-ledger/ask-offer`. |
+| `src/shared/meetings/meetingTypes.ts` | `seatableFor` offers every ACTIVE employee for every type (owner's rule) and carries a `warning` for an internal-only seat in an external room — a warning, never a lock. |
+| `src/client/pages/MeetingFacesPanel.tsx`, `MeetingsPage.tsx` | Before and After panels on the record (four objects, artifacts, the draft with the partner's button), readiness/outputs on the lists, the seat warning, the static "How a meeting becomes work" section removed (the committee sequence stays in its section). Phase D redesigns the visuals. |
+
+**Proof.** `tests/meetingModel.test.ts`, 35 tests: the draft refuses an empty page and an off-record
+note, is idempotent over its input, and is stored FAILED/REFUSED with a reason; an AI actor cannot
+approve or decide; approval writes all four objects, dedupes against hand-typed rows, and moves
+nothing; ACCEPT moves the deal through the pipeline's own event; the brief carries both sides'
+commitments and open questions forward by company and by LP, marks a resolved question gone, builds
+the diligence framework for FOUNDER/DILIGENCE, and lands on the P7 row through the P7 route; the job
+briefs the meeting in the window, skips next week's and the archived one, and does not brief twice;
+the lists carry the counts; a converted card returns to its meeting; Willow can be seated on a founder
+meeting. `tests/meetingTypes.test.ts` and `tests/meetingsLayout.test.ts` rewritten stricter where the
+change made them false.
+
+**Two validators, registered, hard-failing on zero, with negative proofs run on the real files:**
+`validate:meeting-yield` (approve dropping the stage proposal → caught, restored) and
+`validate:meeting-brief` (the job seeded PAUSED → caught; the dispatch key mistyped → "found 0 dispatch
+branches", restored). `validate:deliverable-kinds` was reading ANY column called `kind` and took
+`meeting_artifact.kind` as the deliverable CHECK; scoped to the deliverable table with a fixture
+planting the real 0196+0199 shape.
+
+**Extension points for Phase C (the live room):** `recordAfterDraft`, `draftMeetingAfter(env, actor,
+id, { text })`, `afterDraftPrompt`, `parseAfterDraft`, `saveMeetingArtifact` /
+`POST /api/meetings/:id/artifacts`, `readMeetingAfter`, `latestBrief` / `GET /api/meetings/:id/brief`;
+tables `meeting_artifact` and `meeting_after_draft`. The Google Meet columns on `meeting` belong to
+the sibling phase's migrations (0202/0203) and are not touched here.
