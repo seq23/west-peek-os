@@ -215,7 +215,10 @@ test.describe("Portfolio", () => {
       await gotoSurface(page, "Portfolio");
       await expect(page.getByTestId("portfolio-page")).toBeVisible();
       await expect(page.getByTestId(`holding-row-${companyId}`)).toBeVisible();
-      await page.waitForTimeout(600);
+      // The last two inserts on the page: the concentration line under the rows and the two hosted
+      // drawings. Waiting on them, not on a clock, is what makes the measurement mean something.
+      await expect(page.getByTestId("concentration-line")).toBeVisible();
+      await expect(page.getByTestId("composition").or(page.getByTestId("composition-empty"))).toBeVisible();
       report.push(await measureSurface(page, "portfolio-page", vp));
 
       // The form open under the row: the six fields and two buttons at this width.
