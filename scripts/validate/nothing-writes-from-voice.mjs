@@ -96,15 +96,26 @@ function fnBody(src, name) {
 
 // ── 1 · the route block ───────────────────────────────────────────────────────────────────────
 
-/** `indexSrc` is the RAW file: the block's fences are comments, and the stripper would eat them. */
+const FENCE_START = "// === Phase C: the live room ===";
+const FENCE_END = "// === end Phase C ====";
+
+/**
+ * index.ts with its comments stripped BUT the two Phase C fences kept: they are comments, so the
+ * stripper would eat them, and they are the only thing that says where the block is. Each fence is
+ * turned into a string statement before stripping and matched as that afterwards.
+ */
+function readIndexKeepingFences(file) {
+  return stripTsComments(readFileSync(file, "utf8").replace(FENCE_START, '"PHASE_C_FENCE_START";').replace(FENCE_END, '"PHASE_C_FENCE_END";'));
+}
+
 export function checkRoutes(indexSrc, roomSrc) {
   const violations = [];
-  const start = indexSrc.indexOf("// === Phase C: the live room ===");
-  const end = indexSrc.indexOf("// === end Phase C ====");
+  const start = indexSrc.indexOf('"PHASE_C_FENCE_START";');
+  const end = indexSrc.indexOf('"PHASE_C_FENCE_END";');
   if (start === -1 || end === -1 || end < start) {
-    return { violations: ["index.ts has no contiguous `// === Phase C: the live room ===` … `// === end Phase C ====` block — the room's routes are not where the scan (and the next phase) expects them"], examined: 0 };
+    return { violations: [`index.ts has no contiguous \`${FENCE_START}\` … \`${FENCE_END}\` block — the room's routes are not where the scan (and the next phase) expects them`], examined: 0 };
   }
-  const block = stripTsComments(indexSrc.slice(start, end));
+  const block = indexSrc.slice(start, end);
   const routes = [...block.matchAll(/\.(get|post)\("([^"]+)",\s*(\w+)\)/g)].map((m) => ({ method: m[1], path: m[2], handler: m[3] }));
   for (const r of routes) {
     if (!r.path.includes("/room")) violations.push(`${r.method.toUpperCase()} ${r.path} sits in the Phase C block but is not a room route`);
@@ -229,10 +240,10 @@ async function selfTest() {
   const silentReturn = room.replace("return { asked: question, via, answered_by: who, artifact, work_card_id: null };", "return { asked: question, via, answered_by: who, work_card_id: null };");
   say(checkRoomService(silentReturn).violations.some((v) => /returns without an artifact/.test(v)), "an ask that can end without a saved block is caught");
 
-  const index = readFileSync(INDEX, "utf8");
+  const index = readIndexKeepingFences(INDEX);
   const routes = checkRoutes(index, room);
   say(routes.violations.length === 0 && routes.examined >= 3, `the Phase C route block holds ${routes.examined} room routes, every one handled by meetingRoom.ts`);
-  say(checkRoutes(index.replace("// === Phase C: the live room ===", "// === Phase C ==="), room).examined === 0, "a missing route block is a zero, not a pass");
+  say(checkRoutes(index.replace('"PHASE_C_FENCE_START";', ""), room).examined === 0, "a missing route block is a zero, not a pass");
   say(checkRoutes(index.replace('.post("/api/meetings/:id/room/ask", handleRoomAsk)', '.post("/api/meetings/:id/room/ask", handleApproveMeetingAfter)'), room).violations.some((v) => /handleApproveMeetingAfter/.test(v)), "a room route handled outside meetingRoom.ts is caught");
 
   const live = readTs(LIVE);
@@ -258,7 +269,7 @@ if (process.argv.includes("--self-test")) {
   await selfTest();
 } else {
   const room = readTs(ROOM);
-  const routes = checkRoutes(readFileSync(INDEX, "utf8"), room);
+  const routes = checkRoutes(readIndexKeepingFences(INDEX), room);
   const service = checkRoomService(room);
   const voice = checkVoicePath(readTs(LIVE));
   const panel = checkPanel(readTs(PANEL));
