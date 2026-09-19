@@ -24,6 +24,14 @@ import { fetchMacroReadings, type MacroFailure, type MacroReading } from "../eff
 import { deliver } from "./deliverables";
 import { machineForKey } from "./attribution";
 import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
+import { CHAIN_BUDGET_MS } from "../ai/chainBudget";
+import {
+  STALLED_AFTER_MINUTES,
+  briefRunState,
+  type BriefExpectations,
+  type BriefRunRow,
+  type BriefSchedule,
+} from "../../shared/intelligence/briefRunState";
 import { recentFeedbackFor } from "./deliverables";
 import { z } from "zod";
 import {
@@ -73,6 +81,20 @@ export class DailyIntelError extends Error {
 /** How many candidates reach synthesis. The brief asks for 20–50 from hundreds. */
 const MAX_CANDIDATES = 30;
 
+/**
+ * The output the write stage declares to the router. Measured from production (see the call site
+ * in `defaultSynthesise`); exported so `validate:brief-lands` can hold it against the measured
+ * floor rather than restating either number.
+ */
+export const BRIEF_EXPECTED_OUTPUT_TOKENS = 24_000;
+
+/**
+ * How long a FAILED brief with attempts left waits before the clock tries again. Twenty minutes:
+ * long enough for a provider blip to clear, short enough that three attempts fit in a morning.
+ * Written onto the row as `retry_after` so the card can say "retrying at 07:05" as a fact.
+ */
+export const RETRY_AFTER_MINUTES = 20;
+
 interface ProfileRow {
   firm_user_id: string;
   timezone: string;
@@ -102,7 +124,7 @@ export async function loadProfile(env: Env, firmUserId: string): Promise<Profile
     .first<ProfileRow>();
   return (
     row ?? {
-      firm_user_id: firmUserId, timezone: "America/Chicago", weekends: 0, enabled: 1,
+      firm_user_id: firmUserId, timezone: "America/Chicago", weekends: 1, enabled: 1,
       sectors_json: "[]", companies_json: "[]", themes_json: "[]", depth_json: "{}", lens: DEFAULT_LENS,
     }
   );
@@ -258,10 +280,29 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
     // A brief assembled from public sources is PUBLIC. Never raised, so it cannot be blocked by a
     // policy meant for confidential material — and never lowered either.
     sensitivity: "PUBLIC" as never,
-    // v3 asks for a report several times longer than v2's, so the estimate has to say so. This
-    // number is what the affordability check and the cost centre reason about; leaving it at the
-    // old 2000 would have understated every brief by a factor of four.
-    budgetContext: { judgement: true, expectedOutputTokens: 8000 },
+    /*
+     * MEASURED, NOT DECLARED. Fifty-one accepted briefs written by claude-sonnet-5 between 20 Aug
+     * and 17 Sep 2026 returned 8,669–27,536 output tokens: median 17,415, p90 22,969, mean 17,668.
+     * The old declaration of 8,000 understated every one of them — the affordability check and the
+     * cost centre reasoned about a brief a third the size of the one that was written. 24,000 sits
+     * at the p90 with a margin and under the 32,768 wire ceiling; the deadline is no longer derived
+     * from this number (chainBudget.ts sizes it on the ceiling at the slowest measured rate), so
+     * correcting it moves the cost estimate and nothing else. $0.12–$0.30 a brief, mean $0.20.
+     */
+    budgetContext: {
+      judgement: true,
+      expectedOutputTokens: BRIEF_EXPECTED_OUTPUT_TOKENS,
+      /*
+       * THE FREE LANES HAVE NEVER WRITTEN ONE. Thirteen attempts on 18–19 Sep 2026 — twelve to a
+       * Workers AI micro model that answered in exactly 256 tokens, one to an OpenRouter :free lane
+       * that was still running fifteen minutes later — against 38 of 38 accepted on the pinned
+       * lane. A twenty-thousand-token, eleven-section, every-claim-cited report is the one call in
+       * this firm the free tier is unfit for, and the chain cannot see that: a truncated reply is a
+       * completed run. So the brief leads on the lane its routing policy pins. The spend lever
+       * still governs it — FREE_ONLY stops it with a named reason rather than writing it thin.
+       */
+      leadOnPolicy: true,
+    },
     /*
      * THE BRIEF IS BUILT FROM OTHER PEOPLE'S WORDS, so a credential-shaped span in it is somebody
      * else's URL slug, not a mistake this firm can correct. On 19 August one such span blocked the
@@ -298,8 +339,17 @@ export interface BriefDeps {
   market?: (env: Env, actor: Actor, watchlist: readonly string[]) => Promise<MarketRead>;
 }
 
-/** How long one stage may hold the row. A stage that writes the brief is one model call, ~3 min. */
+/** How long one of the cheap stages may hold the row: gather, or the market read. */
 export const STAGE_LEASE_MINUTES = 10;
+
+/**
+ * How long the WRITE stage may hold the row. It is one model call and possibly one retry, each of
+ * which may walk the whole provider chain — so the lease is two chain budgets plus the stage's own
+ * parsing and persisting, derived from chainBudget.ts rather than typed here. With the ten-minute
+ * lease a write whose first lane hung to its 450s deadline and whose retry then took the usual
+ * three minutes would have been re-claimed by the next tick mid-write and paid for twice.
+ */
+export const WRITE_LEASE_MINUTES = Math.ceil((2 * CHAIN_BUDGET_MS) / 60_000) + 4;
 
 interface ReportRow {
   id: string;
@@ -332,9 +382,18 @@ async function stamp(env: Env, id: string, status: string, extra: Record<string,
   await env.WP_OS_DB.prepare(`UPDATE intelligence_report SET ${sets.join(", ")} WHERE id = ?1`).bind(...binds).run();
 }
 
+/**
+ * The SQL for "when will the clock try this again", shared by every path that closes a row FAILED.
+ * NULL when the attempts are spent — the card then says "nothing more is tried today" as a fact.
+ */
+export const RETRY_AFTER_SQL = `CASE WHEN attempts < ${MAX_BRIEF_ATTEMPTS} THEN strftime('%Y-%m-%dT%H:%M:%fZ','now','+${RETRY_AFTER_MINUTES} minutes') ELSE NULL END`;
+
 async function failReport(env: Env, id: string, code: string, message: string, runId: string | null): Promise<GenerateResult> {
   await env.WP_OS_DB.prepare(
-    "UPDATE intelligence_report SET status = 'FAILED', error_code = ?2, error_message = ?3, ai_run_id = ?4, stage_lease_until = NULL, stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+    `UPDATE intelligence_report SET status = 'FAILED', error_code = ?2, error_message = ?3, ai_run_id = ?4, stage_lease_until = NULL,
+            stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            retry_after = ${RETRY_AFTER_SQL}
+      WHERE id = ?1`,
   )
     .bind(id, code, message.slice(0, 600), runId)
     .run();
@@ -363,17 +422,25 @@ export async function startReport(
    * at three, which is the number she asked for.
    */
   trigger: "scheduled" | "requested" = "scheduled",
+  /** Who pressed the button, when `trigger` is "requested". Recorded on the row, shown on the card. */
+  requestedBy: string | null = null,
 ): Promise<{ id: string; reportDate: string }> {
   const profile = await loadProfile(env, firmUserId);
   const reportDate = localReportDate(now, profile.timezone);
   const reportId = `dir_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
-    `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope, stage_at)
-     VALUES (?1, ?2, ?3, 'GATHERING', ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope, stage_at, requested_at, requested_by)
+     VALUES (?1, ?2, ?3, 'GATHERING', ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+             CASE WHEN ?6 = 'requested' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END,
+             CASE WHEN ?6 = 'requested' THEN ?7 ELSE NULL END)
      ON CONFLICT (firm_scope, firm_user_id, report_date)
        DO UPDATE SET status = 'GATHERING', started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
                      stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), stage_lease_until = NULL,
-                     candidates_json = NULL, market_json = NULL, completed_at = NULL,
+                     candidates_json = NULL, market_json = NULL, completed_at = NULL, retry_after = NULL,
+                     -- THE REQUEST IS A FACT ON THE ROW. The card reads it back as "requested by you
+                     -- at 09:29"; a scheduled restart leaves whatever was there.
+                     requested_at = CASE WHEN ?6 = 'requested' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE intelligence_report.requested_at END,
+                     requested_by = CASE WHEN ?6 = 'requested' THEN ?7 ELSE intelligence_report.requested_by END,
                      error_code = NULL, error_message = NULL, prompt_version = excluded.prompt_version,
                      -- Counted on the way IN, so a run that dies mid-flight still spends its
                      -- attempt. Counting on success would let a crash loop retry for ever.
@@ -381,7 +448,7 @@ export async function startReport(
                      -- see the trigger parameter on this function.
                      attempts = CASE WHEN ?6 = 'requested' THEN 1 ELSE intelligence_report.attempts + 1 END`,
   )
-    .bind(reportId, firmUserId, reportDate, PROMPT_VERSION, firmScope, trigger)
+    .bind(reportId, firmUserId, reportDate, PROMPT_VERSION, firmScope, trigger, requestedBy)
     .run();
   const row = (await env.WP_OS_DB.prepare(
     "SELECT id FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
@@ -621,12 +688,14 @@ export async function advanceBrief(
   const profile = await loadProfile(env, firmUserId);
   const reportDate = localReportDate(now, profile.timezone);
   const lease = new Date(now.getTime() + STAGE_LEASE_MINUTES * 60_000).toISOString();
+  const writeLease = new Date(now.getTime() + WRITE_LEASE_MINUTES * 60_000).toISOString();
   const claimed = await env.WP_OS_DB.prepare(
-    `UPDATE intelligence_report SET stage_lease_until = ?4
+    `UPDATE intelligence_report
+        SET stage_lease_until = CASE WHEN status IN ('GENERATING', 'VERIFYING') THEN ?6 ELSE ?4 END
       WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3
         AND status NOT IN ('READY', 'FAILED')
         AND (stage_lease_until IS NULL OR stage_lease_until < ?5)`,
-  ).bind(firmScope, firmUserId, reportDate, lease, now.toISOString()).run();
+  ).bind(firmScope, firmUserId, reportDate, lease, now.toISOString(), writeLease).run();
   if ((claimed.meta?.changes ?? 0) !== 1) {
     const existing = await env.WP_OS_DB.prepare(
       "SELECT id, status FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
@@ -810,42 +879,6 @@ export { MAX_BRIEF_ATTEMPTS };
  * `limit` exists so the manual path can still do everyone in one go: a human pressing the button is
  * not on the cron's CPU budget, and making them press it once per partner would be absurd.
  */
-/**
- * Is any partner's brief still owed today? The scheduled tick asks this first: a tick that owes a
- * brief builds only the brief; otherwise it reads one source. (A dry-run of `runDailyForAll`'s own
- * "due" filter, with none of the work.)
- */
-export async function briefsOwedToday(env: Env, now: Date, firmScope = "west-peek"): Promise<boolean> {
-  const partners = await env.WP_OS_DB.prepare(
-    `SELECT u.id, COALESCE(p.enabled, 1) AS enabled, COALESCE(p.timezone,'America/Chicago') AS timezone,
-            COALESCE(p.weekends, 0) AS weekends, COALESCE(p.earliest_start_local,'06:15') AS earliest_start_local
-       FROM firm_user u
-       LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
-       JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
-      WHERE u.status = 'ACTIVE'`,
-  ).all<{ id: string; enabled: number; timezone: string; weekends: number; earliest_start_local: string }>();
-  const done = new Set(
-    (
-      (
-        await env.WP_OS_DB.prepare(
-          `SELECT firm_user_id, report_date FROM intelligence_report
-            WHERE firm_scope = ?1 AND report_date >= ?2
-              AND ${TERMINAL_SQL}`,
-        )
-          .bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10))
-          .all<{ firm_user_id: string; report_date: string }>()
-      ).results ?? []
-    ).map((r) => `${r.firm_user_id}:${r.report_date}`),
-  );
-  return (partners.results ?? []).some(
-    (p) =>
-      p.enabled === 1 &&
-      (p.weekends === 1 || !isWeekend(now, p.timezone)) &&
-      isAfterLocalTime(now, p.timezone, p.earliest_start_local) &&
-      !done.has(`${p.id}:${localReportDate(now, p.timezone)}`),
-  );
-}
-
 export async function runDailyForAll(
   env: Env,
   actor: Actor,
@@ -857,7 +890,7 @@ export async function runDailyForAll(
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const partners = await env.WP_OS_DB.prepare(
     `SELECT u.id, COALESCE(p.enabled, 1) AS enabled, COALESCE(p.timezone,'America/Chicago') AS timezone,
-            COALESCE(p.weekends, 0) AS weekends, COALESCE(p.earliest_start_local,'06:15') AS earliest_start_local
+            COALESCE(p.weekends, 1) AS weekends, COALESCE(p.earliest_start_local,'06:15') AS earliest_start_local
        FROM firm_user u
        LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
        JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
@@ -972,13 +1005,91 @@ export async function runDailyForAll(
   return { generated, failed, remaining: Math.max(0, due.length - (generated + failed)) };
 }
 
+interface PartnerSchedule {
+  id: string;
+  enabled: number;
+  timezone: string;
+  weekends: number;
+  earliest_start_local: string;
+}
+
+async function partnerSchedules(env: Env): Promise<PartnerSchedule[]> {
+  return (
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT u.id, COALESCE(p.enabled, 1) AS enabled, COALESCE(p.timezone,'America/Chicago') AS timezone,
+                COALESCE(p.weekends, 1) AS weekends, COALESCE(p.earliest_start_local,'06:15') AS earliest_start_local
+           FROM firm_user u
+           LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
+           JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
+          WHERE u.status = 'ACTIVE' ORDER BY u.id`,
+      ).all<PartnerSchedule>()
+    ).results ?? []
+  );
+}
+
+/** Is the schedule allowed to START a brief for this partner right now? (A request needs no permission.) */
+function scheduleMayStart(p: PartnerSchedule, now: Date): boolean {
+  if (p.enabled !== 1) return false;
+  if (p.weekends !== 1 && isWeekend(now, p.timezone)) return false;
+  return isAfterLocalTime(now, p.timezone, p.earliest_start_local);
+}
+
 /**
- * ONE STAGE OF ONE PARTNER'S BRIEF — what a scheduled tick does when a brief is owed.
+ * THE NEXT INSTANT THE CLOCK WILL START A BRIEF for this partner, or null when it never will.
+ * Today's earliest start if it has not passed (and today is a day the schedule builds on), else
+ * the first following day that is. The card says it as "the clock starts it at 6:15 AM".
+ */
+export function nextScheduledStart(p: PartnerSchedule, now: Date): string | null {
+  if (p.enabled !== 1) return null;
+  const m = /^(\d{2}):(\d{2})$/.exec(p.earliest_start_local.trim());
+  const [hh, mm] = m ? [Number(m[1]), Number(m[2])] : [6, 15];
+  for (let day = 0; day < 8; day++) {
+    const probe = new Date(now.getTime() + day * 86_400_000);
+    if (p.weekends !== 1 && isWeekend(probe, p.timezone)) continue;
+    // The wall-clock instant hh:mm in the partner's zone on `probe`'s local date.
+    const date = localReportDate(probe, p.timezone);
+    const at = zonedInstant(date, hh, mm, p.timezone);
+    if (at && at.getTime() > now.getTime()) return at.toISOString();
+  }
+  return null;
+}
+
+/** The UTC instant of a wall-clock time in a zone, by the platform's own timezone tables. */
+function zonedInstant(date: string, hh: number, mm: number, timeZone: string): Date | null {
+  const guess = new Date(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`);
+  if (Number.isNaN(guess.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone, hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(guess);
+    const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? "0");
+    const asIfUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"));
+    const offset = asIfUtc - guess.getTime();
+    return new Date(guess.getTime() - offset);
+  } catch {
+    return guess;
+  }
+}
+
+/**
+ * ONE STAGE OF ONE PARTNER'S BRIEF — the unit of work.
  *
  * Production, 15 Sep 2026: seven ticks in a row died building Sequoia's brief before the model was
- * called — gather → dedupe → rank over 462 items on a 10 ms budget. A brief is now three ticks:
- * gathered, market read, written. Fifteen minutes apart that is three quarters of an hour after
- * the partner's earliest start, which is why the schedule starts when it does.
+ * called — gather → dedupe → rank over 462 items on a 10 ms budget. A brief is three stages:
+ * gathered, market read, written. `serveBrief` below walks them inside one invocation now that
+ * the account is on the Paid plan; this function is still the unit so a stage that dies leaves
+ * the row saying which one.
+ *
+ * ── WHO GETS ADVANCED, AND IN WHAT ORDER (19 Sep 2026) ──────────────────────────────────────
+ *
+ *   1. A row that is MOVING (any non-terminal status) is advanced whether or not the schedule
+ *      would have started it — a request she made on a Saturday, or before 06:15, is served. The
+ *      old loop applied the weekend and earliest-start gates before looking at the row, so a
+ *      requested brief on a day the schedule skipped would never have been advanced by anyone.
+ *   2. A row that is FAILED with attempts left is restarted once `retry_after` has passed.
+ *   3. A partner with no row is started only when the schedule says so.
+ *
+ * Terminal rows (READY, or FAILED with the attempts spent) are skipped — one definition of
+ * terminal, `briefTerminality`, shared with the closers.
  */
 export async function runBriefTick(
   env: Env,
@@ -991,41 +1102,41 @@ export async function runBriefTick(
     await recordSwallowed(env, "dailyIntelligence.closeAbandonedReports", err);
     return 0;
   });
-  const partners = await env.WP_OS_DB.prepare(
-    `SELECT u.id, COALESCE(p.enabled, 1) AS enabled, COALESCE(p.timezone,'America/Chicago') AS timezone,
-            COALESCE(p.weekends, 0) AS weekends, COALESCE(p.earliest_start_local,'06:15') AS earliest_start_local
-       FROM firm_user u
-       LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
-       JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
-      WHERE u.status = 'ACTIVE' ORDER BY u.id`,
-  ).all<{ id: string; enabled: number; timezone: string; weekends: number; earliest_start_local: string }>();
+  await closeUnfinishableReports(env, now).catch(async (err) => {
+    await recordSwallowed(env, "dailyIntelligence.closeUnfinishableReports", err);
+    return 0;
+  });
+  const partners = await partnerSchedules(env);
   const rows = (
     await env.WP_OS_DB.prepare(
-      `SELECT firm_user_id, report_date, status, attempts, stage_lease_until FROM intelligence_report
+      `SELECT firm_user_id, report_date, status, attempts, stage_lease_until, retry_after, requested_at FROM intelligence_report
         WHERE firm_scope = ?1 AND report_date >= ?2`,
-    ).bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10)).all<{ firm_user_id: string; report_date: string; status: string; attempts: number; stage_lease_until: string | null }>()
+    ).bind(firmScope, new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10)).all<{ firm_user_id: string; report_date: string; status: string; attempts: number; stage_lease_until: string | null; retry_after: string | null; requested_at: string | null }>()
   ).results ?? [];
   const byKey = new Map(rows.map((r) => [`${r.firm_user_id}:${r.report_date}`, r]));
+  const nowIso = now.toISOString();
 
-  for (const p of partners.results ?? []) {
-    if (p.enabled !== 1) continue;
-    if (p.weekends !== 1 && isWeekend(now, p.timezone)) continue;
-    if (!isAfterLocalTime(now, p.timezone, p.earliest_start_local)) continue;
+  // A requested brief is served before a scheduled one: a person is waiting on it.
+  const ordered = [...partners].sort((a, b) => {
+    const ra = byKey.get(`${a.id}:${localReportDate(now, a.timezone)}`)?.requested_at ? 0 : 1;
+    const rb = byKey.get(`${b.id}:${localReportDate(now, b.timezone)}`)?.requested_at ? 0 : 1;
+    return ra - rb;
+  });
+
+  for (const p of ordered) {
     const date = localReportDate(now, p.timezone);
     const row = byKey.get(`${p.id}:${date}`);
-    /*
-     * ONE ANSWER TO "IS THIS FINISHED?", shared with the done-queries above and with the recovery.
-     * This used to be two hand-written lines — READY, and FAILED-with-the-budget-spent — and a row
-     * that was mid-pipeline with the budget ALREADY spent matched neither. It was therefore
-     * advanced by every tick, spending two model calls a time against a budget of nothing, and
-     * never charged an attempt (attempts is incremented in `startReport`, which is not called for a
-     * non-terminal row). That is how Sequoia's brief took six model calls against a three-attempt
-     * cap on 18 Sep 2026 and still ended the morning blank.
-     */
     if (row && briefTerminality(row.status, row.attempts).terminal) continue;
-    if (row && row.status !== "FAILED" && row.stage_lease_until && row.stage_lease_until > now.toISOString()) continue;
-
-    if (!row || row.status === "FAILED") await startReport(env, firmScope, p.id, now);
+    if (row && row.status !== "FAILED") {
+      // Moving. Advance it unless another invocation holds the stage.
+      if (row.stage_lease_until && row.stage_lease_until > nowIso) continue;
+    } else {
+      // Absent, or FAILED with attempts left: only the schedule (or a request, which re-opens the
+      // row itself and therefore never lands here) may start it.
+      if (!scheduleMayStart(p, now)) continue;
+      if (row && row.retry_after && row.retry_after > nowIso) continue;
+      await startReport(env, firmScope, p.id, now);
+    }
     const step = await advanceBrief(env, actor, p.id, now, deps);
     if (step.status === "READY" && step.report_id) {
       await deliverReport(env, step.report_id).catch(async (err) => {
@@ -1034,15 +1145,158 @@ export async function runBriefTick(
         ).bind(`did_${crypto.randomUUID()}`, step.report_id, String(err).slice(0, 400)).run();
       });
     }
+    if (step.stage === "failed" && step.report_id) await noticeOfFailure(env, step.report_id, p, now);
     const detail =
-      step.stage === "gathered" ? (step.status === "READY" ? "nothing reached the bar; an empty-day brief was written" : "gathered and ranked; the next tick reads the numbers")
-      : step.stage === "market_read" ? "the numbers were fetched and read; the next tick writes the brief"
+      step.stage === "gathered" ? (step.status === "READY" ? "nothing reached the bar; an empty-day brief was written" : "gathered and ranked; next it reads the numbers")
+      : step.stage === "market_read" ? "the numbers were fetched and read; next it writes the brief"
       : step.stage === "written" ? "written, verified and delivered"
       : step.stage === "failed" ? "failed — the brief's own row says why"
       : "another tick holds it";
     return { partner: p.id, report_id: step.report_id, stage: step.stage, status: step.status, detail };
   }
   return { partner: null, report_id: null, stage: "none", status: "NONE", detail: "no brief is owed right now" };
+}
+
+/**
+ * A BRIEF THAT FAILED SAYS SO WHERE SHE READS — a notification, addressed to her, with the reason
+ * and what happens next. Two dedupe keys per day: the first failure ("retrying at 07:05") and the
+ * last ("nothing more today"), so she hears each fact once and neither drowns the other.
+ */
+async function noticeOfFailure(env: Env, reportId: string, p: PartnerSchedule, now: Date): Promise<void> {
+  const row = await env.WP_OS_DB.prepare(
+    "SELECT firm_user_id, report_date, attempts, error_message, retry_after, firm_scope FROM intelligence_report WHERE id = ?1",
+  ).bind(reportId).first<{ firm_user_id: string; report_date: string; attempts: number; error_message: string | null; retry_after: string | null; firm_scope: string }>();
+  if (!row) return;
+  const terminal = briefTerminality("FAILED", row.attempts).terminal;
+  const why = (row.error_message ?? "").trim() || "the run did not record why";
+  const clock = (iso: string) => {
+    try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: p.timezone }); } catch { return new Date(iso).toISOString(); }
+  };
+  const next = terminal
+    ? (() => { const at = nextScheduledStart(p, now); return `Nothing more is tried automatically today${at ? `; the clock tries again tomorrow at ${clock(at)}` : ""}. Press "Try again now" on Home to build it now.`; })()
+    : row.retry_after ? `The clock tries again at ${clock(row.retry_after)}.` : "The clock tries again on its next tick.";
+  await notifyQuietly(env, {
+    firmUserId: row.firm_user_id,
+    kind: "INTELLIGENCE_BRIEF",
+    severity: terminal ? "WARNING" : "INFO",
+    dedupeKey: `daily_intelligence_failed:${row.firm_user_id}:${row.report_date}:${terminal ? "final" : "retrying"}`,
+    title: terminal ? `No brief this morning (${row.report_date})` : `Your ${row.report_date} brief is being retried`,
+    body: `Attempt ${row.attempts} of ${MAX_BRIEF_ATTEMPTS} failed: ${why} ${next}`.slice(0, 600),
+    objectType: "intelligence_report",
+    objectId: reportId,
+    firmScope: row.firm_scope,
+  });
+}
+
+/**
+ * SERVE THE BRIEF ON EVERY TICK — the structural guarantee (19 Sep 2026).
+ *
+ * The brief used to ride inside the `daily_intelligence` INTERVAL-15 job: one stage per job run,
+ * so a three-stage brief took 31–36 minutes (measured, 15–17 Sep) and a request from the button
+ * had to wait for the job's next quarter-hour or run the model inside her HTTP request. It also
+ * meant the job's own history said "10 duplicate" on the mornings the brief failed.
+ *
+ * Now the tick — which fires every minute and has fifteen minutes of wall time on the Paid plan —
+ * serves brief work directly before it looks at any job: one partner, every stage that is ready,
+ * until the row is terminal or a stage is held elsewhere. A brief owed at 06:15 is READY by about
+ * 06:20 (gather ~2s, market ~10s, write 98–281s measured); a button press is picked up within a
+ * minute and finishes on the same clock. When nothing is owed this does one indexed read and
+ * writes nothing — the tick reports `_morning_brief` only when it did something.
+ *
+ * `limit` bounds the loop: four stages is a whole brief with a stage to spare, per partner.
+ */
+export async function serveBrief(
+  env: Env,
+  now: Date,
+  deps: BriefDeps = {},
+  firmScope = "west-peek",
+): Promise<{ served: boolean; partner: string | null; report_id: string | null; status: string; steps: string[]; summary: string }> {
+  const actor: Actor = { type: "SYSTEM", roles: [], firmScopes: [firmScope] };
+  const steps: string[] = [];
+  let partner: string | null = null;
+  let reportId: string | null = null;
+  let status = "NONE";
+  for (let i = 0; i < 4; i++) {
+    const step = await runBriefTick(env, actor, now, deps);
+    if (step.stage === "none") break;
+    partner = step.partner;
+    reportId = step.report_id ?? reportId;
+    status = step.status;
+    steps.push(step.stage);
+    if (step.stage === "busy" || step.stage === "failed" || step.stage === "written" || step.status === "READY" || step.status === "FAILED") break;
+  }
+  if (steps.length === 0) return { served: false, partner: null, report_id: null, status, steps, summary: "no brief is owed right now" };
+  return {
+    served: true, partner, report_id: reportId, status, steps,
+    summary: `Morning brief for ${partner}: ${steps.join(" → ")} — now ${status}.`,
+  };
+}
+
+/**
+ * WHAT A BUILD USUALLY TAKES, measured from this firm's own completed runs rather than typed in.
+ *
+ * The figure is the write stage's model call (`ai_run` created → completed) over the last thirty
+ * completed briefs, plus the measured overhead of the two cheap stages and one tick of waiting.
+ * The write call is the honest unit: whole-row durations from 15–17 Sep read 31–36 minutes only
+ * because a stage then waited a quarter of an hour for the next job run, which is the very thing
+ * this change removes. Production to 17 Sep: 98–281s, median 189s, p90 238s.
+ */
+export const PRE_WRITE_OVERHEAD_SECONDS = 75;
+export const FALLBACK_EXPECTATIONS: BriefExpectations = { usualSeconds: 189 + PRE_WRITE_OVERHEAD_SECONDS, slowSeconds: 238 + PRE_WRITE_OVERHEAD_SECONDS, measuredFrom: 0 };
+
+export async function measuredExpectations(env: Env): Promise<BriefExpectations> {
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT (julianday(completed_at) - julianday(created_at)) * 86400 AS secs
+         FROM ai_run
+        WHERE purpose LIKE 'daily intelligence report%' AND status = 'COMPLETED' AND completed_at IS NOT NULL
+          AND output_text IS NOT NULL AND length(output_text) > 4000
+        ORDER BY completed_at DESC LIMIT 30`,
+    ).all<{ secs: number }>().catch(() => ({ results: [] as Array<{ secs: number }> }))
+  ).results ?? [];
+  const secs = rows.map((r) => Number(r.secs)).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+  if (secs.length < 3) return FALLBACK_EXPECTATIONS;
+  const at = (q: number) => secs[Math.min(secs.length - 1, Math.floor(q * secs.length))]!;
+  return {
+    usualSeconds: Math.round(at(0.5)) + PRE_WRITE_OVERHEAD_SECONDS,
+    slowSeconds: Math.round(at(0.9)) + PRE_WRITE_OVERHEAD_SECONDS,
+    measuredFrom: secs.length,
+  };
+}
+
+/** Today's row for a partner, with the section count, as the state function wants it. */
+async function todaysRow(env: Env, firmScope: string, firmUserId: string, date: string): Promise<BriefRunRow | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT r.id, r.status, r.report_date, r.attempts, r.started_at, r.stage_at, r.stage_lease_until, r.completed_at,
+            r.requested_at, r.requested_by, r.retry_after, r.error_code, r.error_message,
+            (SELECT COUNT(*) FROM intelligence_report_section s WHERE s.report_id = r.id AND s.section_key != 'citations') AS section_count
+       FROM intelligence_report r WHERE r.firm_scope = ?1 AND r.firm_user_id = ?2 AND r.report_date = ?3`,
+  ).bind(firmScope, firmUserId, date).first<BriefRunRow & { id: string }>();
+  return row ?? null;
+}
+
+async function scheduleFor(env: Env, firmUserId: string, now: Date): Promise<{ schedule: BriefSchedule; timezone: string }> {
+  const p = (await partnerSchedules(env)).find((x) => x.id === firmUserId) ?? {
+    id: firmUserId, enabled: 1, timezone: "America/Chicago", weekends: 1, earliest_start_local: "06:15",
+  };
+  return {
+    timezone: p.timezone,
+    schedule: {
+      enabled: p.enabled === 1,
+      weekendOff: p.weekends !== 1 && isWeekend(now, p.timezone),
+      nextStartAt: nextScheduledStart(p, now),
+      earliestStartLocal: p.earliest_start_local,
+    },
+  };
+}
+
+/** The named state of a partner's brief today — what the status route returns and the band renders. */
+export async function briefStateFor(env: Env, firmScope: string, firmUserId: string, now: Date) {
+  const { schedule, timezone } = await scheduleFor(env, firmUserId, now);
+  const date = localReportDate(now, timezone);
+  const [row, expectations] = await Promise.all([todaysRow(env, firmScope, firmUserId, date), measuredExpectations(env)]);
+  const state = briefRunState(row, schedule, expectations, now, timezone);
+  return { date, row, state, expectations, schedule };
 }
 
 /**
@@ -1058,7 +1312,7 @@ export async function runBriefTick(
  * retry be told apart from a run still in progress. `abandoned` is a distinct error code precisely
  * so it is never confused with a run that got far enough to fail on its merits.
  */
-export const STALE_AFTER_MINUTES = 30;
+export const STALE_AFTER_MINUTES = STALLED_AFTER_MINUTES;
 
 export async function closeAbandonedReports(env: Env, now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - STALE_AFTER_MINUTES * 60_000).toISOString();
@@ -1067,9 +1321,10 @@ export async function closeAbandonedReports(env: Env, now: Date = new Date()): P
   const res = await env.WP_OS_DB.prepare(
     `UPDATE intelligence_report
         SET status = 'FAILED', error_code = 'abandoned',
-            error_message = 'The run stopped part-way through and never finished. Build it again.',
+            error_message = 'The run stopped part-way through and never finished.',
             stage_lease_until = NULL,
-            completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            retry_after = ${RETRY_AFTER_SQL}
       WHERE status NOT IN ('READY','FAILED') AND COALESCE(stage_at, started_at) < ?1`,
   )
     .bind(cutoff)
@@ -1200,16 +1455,24 @@ export async function handleGetDailyReport(ctx: RouteContext): Promise<Response>
 }
 
 /**
- * POST /api/daily-intelligence/generate — build (or rebuild) today's report.
+ * POST /api/daily-intelligence/generate — ASK for today's brief. The clock builds it.
  *
- * `for_firm_user_id` builds another partner's brief. The operator's question was "can you run his
- * brief without him being logged in", and until now the answer was no: this only ever built for
- * the caller, so a failing brief could not be diagnosed or re-run by the partner sitting next to
- * the one it belongs to.
+ * WHAT THIS USED TO DO, AND WHY IT COULD NOT WORK (19 Sep 2026). It advanced the brief one stage
+ * per request and the page called it again until done — which put the write stage's model call
+ * inside an HTTP request. Her press at 13:29:30Z opened that call at 13:29:37Z; the request was
+ * cut, no code of ours ran afterwards, and the `ai_run` was still RUNNING at 13:45 with the row
+ * at GENERATING holding a lease. Her second press met the lease and was told "Another run holds
+ * it". A model call that takes 98–281 seconds (measured) does not belong inside a request.
  *
- * MANAGING PARTNER TO MANAGING PARTNER ONLY. The two partners are peers and the brief is firm work,
- * so one re-running the other's is ordinary. Anything else is refused — this must not become a way
- * for a role-less identity to generate, read, or spend against somebody else's profile.
+ * NOW: the press is recorded on the row (`requested_at`, `requested_by`), the row is (re)opened
+ * from the top with a fresh attempt budget, and the tick — every minute — walks every stage
+ * inside one invocation with fifteen minutes of wall time. This returns at once with the named
+ * state, and the page polls `/status` until the state is terminal.
+ *
+ * A SECOND PRESS WHILE IT IS MOVING DOES NOTHING and says so: `already: true` with the state,
+ * which carries "started 1m 20s ago". The row decides, never the client.
+ *
+ * `for_firm_user_id` builds another partner's brief — Managing Partner to Managing Partner only.
  */
 export async function handleGenerateDailyReport(ctx: RouteContext): Promise<Response> {
   const actor = actorFromIdentity(ctx.identity!);
@@ -1233,35 +1496,49 @@ export async function handleGenerateDailyReport(ctx: RouteContext): Promise<Resp
     target = other.id;
   }
 
-  /*
-   * ONE STAGE PER REQUEST, and the page calls again until it is done. An HTTP request has the same
-   * ten milliseconds of CPU as a cron tick, so the button cannot do in one request what the tick
-   * could not do in one invocation. A READY or FAILED row is started again from the top; a row
-   * mid-flight is advanced one stage.
-   */
   try {
     const now = new Date();
     const firmScope = actor.firmScopes[0] ?? "west-peek";
-    const profile = await loadProfile(ctx.env, target);
-    const reportDate = localReportDate(now, profile.timezone);
-    const existing = await ctx.env.WP_OS_DB.prepare(
-      "SELECT status FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
-    ).bind(firmScope, target, reportDate).first<{ status: string }>();
-    const fresh = !existing || existing.status === "READY" || existing.status === "FAILED";
-    if (fresh) await startReport(ctx.env, firmScope, target, now, "requested");
-    const step = await advanceBrief(ctx.env, actor, target, now, {});
-    if (step.status === "READY" && step.report_id) await deliverReport(ctx.env, step.report_id).catch(() => undefined);
-    const done = step.status === "READY" || step.status === "FAILED";
-    const row = step.report_id
-      ? await ctx.env.WP_OS_DB.prepare("SELECT status, error_message, candidate_count FROM intelligence_report WHERE id = ?1").bind(step.report_id).first<{ status: string; error_message: string | null; candidate_count: number }>()
-      : null;
-    return json({
-      report_id: step.report_id, status: row?.status ?? step.status, stage: step.stage, done,
-      candidates: row?.candidate_count ?? 0, detail: row?.error_message ?? null,
-    }, { status: 201 });
+    const before = await briefStateFor(ctx.env, firmScope, target, now);
+    if (!before.state.button.enabled) {
+      // Moving under a live lease, or freshly requested. Nothing is started twice.
+      return json({ already: true, ...before.state, date: before.date, report_id: (before.row as { id?: string } | null)?.id ?? null }, { status: 200 });
+    }
+    await startReport(ctx.env, firmScope, target, now, "requested", actor.firmUserId ?? null);
+    await appendEvent(ctx.env, {
+      eventType: "daily_intelligence.requested",
+      actorType: "firm_user", actorId: actor.firmUserId ?? "unknown",
+      objectType: "intelligence_report", objectId: target, firmScope,
+      payload: { for: target, report_date: before.date },
+    });
+    const after = await briefStateFor(ctx.env, firmScope, target, now);
+    return json({ already: false, ...after.state, date: after.date, report_id: (after.row as { id?: string } | null)?.id ?? null }, { status: 202 });
   } catch (err) {
     return errorResponse(err);
   }
+}
+
+/**
+ * GET /api/daily-intelligence/status — the named state of today's brief, for the band to poll.
+ * Cheap: one row, one profile read, one measured-durations read. Never infers from silence.
+ */
+export async function handleBriefStatus(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const { date, row, state, expectations, schedule } = await briefStateFor(ctx.env, firmScope, actor.firmUserId!, new Date());
+  return json({
+    date,
+    ...state,
+    report_id: (row as { id?: string } | null)?.id ?? null,
+    status: row?.status ?? null,
+    attempts: row?.attempts ?? 0,
+    requested_at: row?.requested_at ?? null,
+    requested_by: row?.requested_by ?? null,
+    started_at: row?.started_at ?? null,
+    completed_at: row?.completed_at ?? null,
+    expectations,
+    schedule,
+  });
 }
 
 // ── Interests: what this partner has added to their own briefing ──

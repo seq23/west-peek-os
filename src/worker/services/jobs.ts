@@ -628,28 +628,14 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   if (job.kind === "INTELLIGENCE") {
-    // A BRIEF OWED TODAY IS THE WHOLE TICK. Building it reads what earlier ticks gathered; it does
-    // not also gather. When no brief is owed, the tick reads one source.
-    // SCHEDULED ticks only: a person pressing "Run it now" expects the sweep, and gets it below.
-    const { runBriefTick, briefsOwedToday } = await import("./dailyIntelligence");
-    if (trigger === "SCHEDULED" && (await briefsOwedToday(env, now))) {
-      /*
-       * ONE STAGE, NOT ONE BRIEF. On 15 Sep 2026 seven consecutive ticks died building Sequoia's
-       * brief before the model was called — the whole build in one invocation is more than 10 ms of
-       * CPU once the 48-hour window holds a few hundred items. A tick now gathers, or reads the
-       * numbers, or writes; the row carries the work between ticks.
-       */
-      const step = await runBriefTick(env, actor, now);
-      if (step.report_id) artifacts.push({ kind: "DAILY_BRIEFING", ref_type: "intelligence_report", ref_id: step.report_id, note: `${step.partner}: ${step.stage}` });
-      // A failed brief does not fail the tick: the brief keeps its own attempts and its own notice
-      // ("Sequoia's brief is down" says why), and a job dead-lettered for a model outage would stop
-      // reading sources too. The summary says what happened.
-      return {
-        status: "SUCCEEDED",
-        summary: `Briefing tick${step.partner ? ` for ${step.partner}` : ""}: ${step.detail}. Sources are read on the next tick.`,
-        artifacts,
-      };
-    }
+    /*
+     * THIS JOB READS SOURCES AND NOTHING ELSE (19 Sep 2026). The morning brief used to ride inside
+     * it — one stage per fifteen-minute run — so a brief took half an hour, a button press waited
+     * for the next quarter-hour, and on the mornings it failed this job's history read "10
+     * duplicate". The brief is now served by the tick itself, every minute, in
+     * `dailyIntelligence.serveBrief` (see `runDueJobs`). `validate:brief-lands` fails if a brief
+     * call ever comes back into this branch.
+     */
     /*
      * A BOUNDED SWEEP, because this tick has ten milliseconds of CPU.
      *
@@ -1159,6 +1145,7 @@ export async function runDueJobs(
   if (dueFirst.length === 0) return runDueJobsAll(env, now);
   const systemActor: Actor = { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] };
   const results: Array<{ job_key: string; status: string; summary: string }> = [];
+  await serveBriefOnTick(env, now, results);
   for (const job of dueFirst) {
     try {
       const { run } = await runJob(env, systemActor, job.id, { trigger: "SCHEDULED", now });
@@ -1168,6 +1155,26 @@ export async function runDueJobs(
     }
   }
   return results;
+}
+
+/**
+ * THE MORNING BRIEF IS SERVED BEFORE ANY JOB, ON EVERY TICK (19 Sep 2026).
+ *
+ * One call, one indexed read when nothing is owed, and a `_morning_brief` line in the tick's
+ * results only when it did something — so the Jobs page never fills with 1,440 inert rows a day
+ * (the deck lane's lesson, 0193) and a tick that built a brief says so. Never throws: a brief that
+ * cannot be built is a FAILED row with a reason and a notice, and the rest of the tick still runs.
+ */
+async function serveBriefOnTick(env: Env, now: Date, results: Array<{ job_key: string; status: string; summary: string }>): Promise<void> {
+  try {
+    const { serveBrief } = await import("./dailyIntelligence");
+    const brief = await serveBrief(env, now);
+    if (brief.served) results.push({ job_key: "_morning_brief", status: brief.status, summary: brief.summary });
+  } catch (err) {
+    const { recordSwallowed } = await import("./swallowed");
+    await recordSwallowed(env, "jobs.serveBriefOnTick", err).catch(() => undefined);
+    results.push({ job_key: "_morning_brief", status: "ERROR", summary: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 /** The whole-tick behaviour this replaced: sweeps, then every due job. The manual route keeps it. */
@@ -1201,6 +1208,8 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
   // module, and a top-level import here would close that cycle at load time.
   const { closeAbandonedReports } = await import("./dailyIntelligence");
   const sweptReports = await closeAbandonedReports(env, now);
+  const results: Array<{ job_key: string; status: string; summary: string }> = [];
+  await serveBriefOnTick(env, now, results);
 
   const due = (
     await env.WP_OS_DB.prepare(
@@ -1211,7 +1220,6 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
   ).results ?? [];
 
   const systemActor: Actor = { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] };
-  const results: Array<{ job_key: string; status: string; summary: string }> = [];
 
   // Reported rather than done quietly: a tick that closed abandoned work is a fact the operator
   // wants, and a tick that closes some every time is a symptom rather than housekeeping.

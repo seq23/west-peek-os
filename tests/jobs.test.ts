@@ -261,29 +261,48 @@ describe("the scheduled tick is idempotent and produces artifacts", () => {
     expect(detail.body.artifacts.some((a) => a.kind === "INTELLIGENCE_RUN")).toBe(true);
   });
 
-  it("a tick that owes a partner's brief builds ONLY the brief; the next tick reads one source", async () => {
+  it("the sweep job never builds a brief; the tick serves it, and says so only when it did", async () => {
     /*
-     * ONE THING PER TICK. CONFIRMED 15 Sep 2026 by wrangler tail: two feeds parsed plus a brief in
-     * one invocation was 37 ms of CPU against the Free plan's 10 ms, and the platform killed the
-     * tick every run for seventeen hours — 53 abandoned runs, no morning brief. 06:30 UTC is 01:30
-     * in Chicago, before a partner's earliest start, so no brief is owed and the tick reads a
-     * source; 13:00 UTC is 08:00, a brief is owed, and the tick does nothing else.
+     * CONTRACT CHANGE, 19 Sep 2026 — strengthened, not loosened. The brief used to ride inside
+     * this job one stage per fifteen-minute run, so a brief took half an hour and a button press
+     * waited for the next quarter-hour. The tick now serves brief work directly, every minute,
+     * before it looks at any job (`serveBriefOnTick` in jobs.ts → `serveBrief`). So:
+     *   · this job's runs must never mention the brief, SCHEDULED or MANUAL, owed or not;
+     *   · a tick at an hour a brief is owed carries a `_morning_brief` line that names the
+     *     partner and the stages it walked, and lands the row in a TERMINAL state (READY, or
+     *     FAILED with a reason — no model is wired here, so FAILED with the reason is expected);
+     *   · a tick at an hour nothing is owed carries no `_morning_brief` line at all — the tick
+     *     never fills the Jobs page with inert rows.
      */
-    const { briefsOwedToday } = await import("../src/worker/services/dailyIntelligence");
-    const early = new Date("2026-08-13T06:30:00.000Z");
-    expect(await briefsOwedToday(env, early)).toBe(false);
+    const { runDueJobs } = await import("../src/worker/services/jobs");
+    await env.WP_OS_DB.prepare("UPDATE partner_intelligence_profile SET timezone = 'America/Chicago', earliest_start_local = '06:15', enabled = 1, weekends = 1").run();
+    const early = new Date("2026-08-13T06:30:00.000Z"); // 01:30 Chicago — nothing owed
     const read = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "SCHEDULED", now: early });
-    expect(read.run.outcome_summary).not.toMatch(/Briefing tick/);
-    const later = new Date("2026-08-13T13:00:00.000Z");
-    expect(await briefsOwedToday(env, later)).toBe(true);
+    expect(read.run.outcome_summary).not.toMatch(/Briefing tick|Morning brief/);
+    const quiet = await runDueJobs(env, early, { limit: 0 });
+    expect(quiet.some((r) => r.job_key === "_morning_brief"), "a tick that owes nothing says nothing about the brief").toBe(false);
+
+    const later = new Date("2026-08-13T13:00:00.000Z"); // 08:00 Chicago — owed
     const brief = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "SCHEDULED", now: later });
-    expect(brief.run.outcome_summary).toMatch(/^Briefing tick/);
-    expect(brief.run.status, "a brief that cannot be built (no model here) does not fail the tick; the brief's own notice says why").toBe("SUCCEEDED");
+    expect(brief.run.outcome_summary, "the sweep job reads sources and nothing else").not.toMatch(/Briefing tick|Morning brief/);
     const detail = await call<{ artifacts: Array<{ kind: string }> }>(`/api/jobs/runs/${brief.run.id}`, MP);
-    expect(detail.body.artifacts.some((a) => a.kind === "INTELLIGENCE_RUN"), "a briefing tick gathers nothing").toBe(false);
-    // A person pressing "Run it now" at the same hour gets the sweep they asked for.
+    expect(detail.body.artifacts.some((a) => a.kind === "INTELLIGENCE_RUN"), "a sweep run gathers").toBe(true);
+
+    const served = await runDueJobs(env, later, { limit: 0 });
+    const line = served.find((r) => r.job_key === "_morning_brief");
+    expect(line, "a tick at an owed hour serves the brief and says so").toBeTruthy();
+    expect(line!.summary).toMatch(/^Morning brief for fu_/);
+    expect(["READY", "FAILED"]).toContain(line!.status);
+    const row = await env.WP_OS_DB.prepare(
+      "SELECT status, error_message FROM intelligence_report WHERE report_date = '2026-08-13' ORDER BY started_at DESC LIMIT 1",
+    ).first<{ status: string; error_message: string | null }>();
+    expect(row, "the tick left a row").toBeTruthy();
+    expect(["READY", "FAILED"], "and walked it to a terminal state inside one tick").toContain(row!.status);
+    if (row!.status === "FAILED") expect(row!.error_message, "a FAILED row carries its reason").toBeTruthy();
+
+    // A person pressing "Run it now" gets the sweep they asked for, and no brief either.
     const byHand = await runJob(env, MP_ACTOR, "daily_intelligence", { trigger: "MANUAL", now: later });
-    expect(byHand.run.outcome_summary).not.toMatch(/^Briefing tick/);
+    expect(byHand.run.outcome_summary).not.toMatch(/Briefing tick|Morning brief/);
   });
 
   it("a second tick inside the same window replays instead of running twice", async () => {

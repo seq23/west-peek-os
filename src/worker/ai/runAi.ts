@@ -160,6 +160,25 @@ export interface RunAiBudgetContext {
    */
   judgement?: boolean;
   /**
+   * THIS CALL LEADS ON THE LANE ITS ROUTING POLICY PINS, NOT ON A FREE LANE (19 Sep 2026).
+   *
+   * The free-first path puts a $0 reasoning lane in front of the pinned model for judgement work
+   * on public content, with the pinned model behind it as an OUTAGE fallback. That is right for a
+   * two-thousand-token packet and wrong for the one call in this firm that writes twenty thousand:
+   * the morning brief. Production, 18–19 Sep 2026: thirteen brief attempts on free lanes, zero
+   * accepted — twelve answered in exactly 256 tokens (a "success" to the chain, "incomplete" to the
+   * brief's verifier), one hung past its deadline — against 38 of 38 accepted on the pinned lane.
+   * A reply that is short and wrong is not an outage, so the chain never walked down.
+   *
+   * With this set the free lanes are not assembled for the call; the head the policy chose leads,
+   * and every other fallback stands behind it exactly as before. It changes WHO LEADS and nothing
+   * about what may be spent: the affordability checks still run against the head, FREE_ONLY still
+   * stops the call with a named reason, and a confidential call still never sees a free lane.
+   * Reserved for long-form work with a verifier behind it; a caller that sets it on a short call
+   * is paying for nothing and `validate:brief-lands` names the callers allowed to.
+   */
+  leadOnPolicy?: boolean;
+  /**
    * THIS CALL IS READING WHAT THE OWNER ASKED FOR (16 Sep 2026). Stricter than `judgement`, and
    * the difference is worth stating because `judgement` was not enough.
    *
@@ -2306,6 +2325,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
 
   const freeFirstEligible =
     isJudgement &&
+    // Long-form work with a verifier behind it leads on its pin; see `leadOnPolicy`.
+    input.budgetContext?.leadOnPolicy !== true &&
     /*
      * THE NORMAL CASE, and the owner's instruction is that it should be: "MOST WORK IS INTERNAL AND
      * NOT-CONFIDENTIAL SO CAN USE FREE TRAINING MODELS WITH REASONING AND CLOSE TO $0." A card that

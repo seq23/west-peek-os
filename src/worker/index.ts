@@ -215,7 +215,7 @@ import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/de
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
 import { handleIngestTranscript } from "./services/captureAdapter";
-import { handleGenerateDailyReport, handleGetDailyReport, handleGetInterests, handleSetInterests } from "./services/dailyIntelligence";
+import { handleBriefStatus, handleGenerateDailyReport, handleGetDailyReport, handleGetInterests, handleSetInterests } from "./services/dailyIntelligence";
 import { handleBuildPacket, handleExportPacket } from "./services/researchPacket";
 import { handleBuildMap, handleGetMap, handleListMaps } from "./services/marketMap";
 import {
@@ -1052,6 +1052,8 @@ const router = new Router()
   .get("/api/secondaries", handleSecondaries)
   .get("/api/daily-intelligence", handleGetDailyReport)
   .post("/api/daily-intelligence/generate", handleGenerateDailyReport)
+  // === Brief overhaul ===
+  .get("/api/daily-intelligence/status", handleBriefStatus)
   .get("/api/daily-intelligence/interests", handleGetInterests)
   .post("/api/daily-intelligence/interests", handleSetInterests)
   .post("/api/research/packets", handleBuildPacket)
