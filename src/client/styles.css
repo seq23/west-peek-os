@@ -5903,7 +5903,9 @@ body {
 .call-doors { display: flex; flex-direction: column; gap: var(--space-xs); max-width: 60ch; }
 .call-doors-compact { max-width: none; }
 .call-doors-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
-.call-doors-row > button { min-height: var(--touch-min); }
+/* A label may wrap at 320px (CI's fonts run wider than a Mac's): the button grows down, never sideways. */
+.call-doors-row > button { min-height: var(--touch-min); max-width: 100%; min-width: 0; white-space: normal; text-align: left; }
+.room-standalone .call-doors-row > button { flex: 1 1 100%; }
 .join-mode { display: inline-flex; flex-wrap: wrap; gap: var(--space-2xs); margin: 0; padding: 0; border: 0; }
 .join-mode label {
   position: relative;
