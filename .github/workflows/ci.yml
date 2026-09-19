@@ -306,6 +306,18 @@ jobs:
       - name: A scan reads code, not prose
         run: npm run validate:scans-read-code
 
+      # Phase B (18 Sep 2026): a meeting is one object with three faces. The AFTER face — what was
+      # settled, what is owed on both sides, what is still unknown, what it means for the deal — is
+      # drafted by an employee and becomes a record only when a partner approves. This fails if any
+      # of the four outputs can be dropped, written without its key, or moved without a person.
+      - name: A meeting produces something, and nothing becomes a record without a person
+        run: npm run validate:meeting-yield
+
+      # The BEFORE face: a brief for every meeting the night before, by a job that starts ENABLED,
+      # is dispatched, reports FAILED on a failure, and whose builder cannot hand over a blank.
+      - name: A brief exists before every meeting
+        run: npm run validate:meeting-brief
+
       - name: Build client
         run: npm run build
 
