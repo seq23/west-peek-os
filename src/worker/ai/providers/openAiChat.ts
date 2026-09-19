@@ -2,6 +2,7 @@ import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
 import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
+import { finishReasonFrom } from "./finishReason";
 
 /**
  * OpenAI chat-completions adapter — a DIRECT vendor lane for OpenAI, and for Perplexity, which
@@ -79,7 +80,7 @@ export function createOpenAiChatAdapter(options: OpenAiChatOptions): ProviderAda
 
       const body = (await res.json()) as {
         model?: string;
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
       const text = body.choices?.[0]?.message?.content;
@@ -87,6 +88,7 @@ export function createOpenAiChatAdapter(options: OpenAiChatOptions): ProviderAda
 
       return {
         text,
+        finishReason: finishReasonFrom(body.choices?.[0]?.finish_reason),
         model: body.model ?? model,
         usage: {
           inputTokens: body.usage?.prompt_tokens ?? 0,

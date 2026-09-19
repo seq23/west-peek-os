@@ -2,6 +2,7 @@ import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
 import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
+import { finishReasonFrom } from "./finishReason";
 
 /**
  * Google Gemini adapter — a DIRECT vendor lane, used only when OpenRouter cannot serve a call
@@ -59,7 +60,7 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
       if (!res.ok) throw await providerHttpError(res);
 
       const body = (await res.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
         usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
       };
       const text = (body.candidates?.[0]?.content?.parts ?? [])
@@ -70,6 +71,8 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
 
       return {
         text,
+        // Gemini's finishReason: MAX_TOKENS is the cap; STOP is a stop.
+        finishReason: finishReasonFrom(body.candidates?.[0]?.finishReason),
         model,
         usage: {
           inputTokens: body.usageMetadata?.promptTokenCount ?? 0,

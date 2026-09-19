@@ -2353,7 +2353,14 @@ details h3 {
  * `margin-left: auto` keeps it right-aligned when the edition line is short and lets it wrap under
  * on a narrow screen rather than crushing the date.
  */
-.brief-fold { margin-left: auto; white-space: nowrap; }
+/* A pointer's floor is 24px and a finger's is 44 (the measured contract, e2e/support/measure.ts).
+   `.surface-body button.link-button` sets `min-height: auto` at a higher specificity, so this matches it. */
+.brief-fold,
+.surface-body button.link-button.brief-fold { margin-left: auto; white-space: nowrap; min-height: var(--space-xl); }
+@media (max-width: 899px) {
+  .brief-fold,
+  .surface-body button.link-button.brief-fold { min-height: var(--touch-min); }
+}
 
 /*
  * COLLAPSED: one line, and it still says whether today's brief arrived. Padded down from the full
@@ -2372,7 +2379,19 @@ details h3 {
 .brief-numbered li { margin-bottom: var(--space-sm); line-height: var(--lh-normal); }
 
 /* v5 citations: [n] in the prose links to the numbered source in the footer. */
-.brief-cite { color: var(--wp-orange-deep); text-decoration: none; font-size: var(--text-xs); vertical-align: super; }
+/* A [n] is a tap target like any other: 24px square at minimum, however small its type, so the
+   measured contract (e2e/deals-surfaces.home-brief.spec.ts) holds on a real brief with sixty of them. */
+.brief-cite {
+  color: var(--wp-orange-deep);
+  text-decoration: none;
+  font-size: var(--text-xs);
+  vertical-align: super;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--space-xl);
+  min-height: var(--space-xl);
+}
 .brief-cite:hover { color: var(--wp-orange-deeper); text-decoration: underline; }
 .brief-sources-list { margin: 0 0 var(--space-md); padding-left: var(--space-xl); }
 .brief-sources-list li { margin-bottom: var(--space-2xs); line-height: var(--lh-normal); overflow-wrap: anywhere; }
@@ -6164,3 +6183,22 @@ body {
   .face-tab,
   .ptt { transition: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE MORNING BRIEF'S STATE LINE (19 Sep 2026).
+   The band's notice carries the named state from the row — arrived, requested,
+   running, queued, retrying, failed out, scheduled, off, stalled — as one strong
+   line with the live dot beside it while a stage is moving, a muted "what next"
+   under it, and the existing `.progress-track` for elapsed against the measured
+   usual. Tones are the existing notice tones; nothing here declares colour.
+   ══════════════════════════════════════════════════════════════════════════ */
+.brief-state-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: 0;
+}
+.brief-state-line strong { font-weight: 600; }
+.notice > .brief-state-line + .muted { margin: var(--space-2xs) 0 0; }
+.notice > .progress-track { margin-top: var(--space-sm); }
+.notice[data-kind="running"] .progress-fill { background: var(--wp-ink-2); }

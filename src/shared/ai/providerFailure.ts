@@ -213,8 +213,30 @@ export function isProviderOutage(reason: string): boolean {
   return TIMEOUT_OR_NETWORK.test(reason);
 }
 
+/**
+ * A REPLY THAT DID NOT SERVE THE CALL, and hands the work on exactly as an outage does (19 Sep 2026).
+ *
+ * Two kinds, both learnt from the morning brief:
+ *
+ *   `truncated_reply:`   — the model stopped at its output cap. Twelve briefs on 18 Sep came back
+ *                          at exactly 256 tokens, each recorded COMPLETED, each rejected by the
+ *                          brief's verifier, none walked to a lane that could have written them.
+ *   `verifier_rejected:` — the caller's own verifier (passed to runAi as `verify`) refused the
+ *                          reply: a section missing, a citation to nothing. The lane answered and
+ *                          the answer is unusable, which for the ladder is the same fact.
+ *
+ * Neither is an OUTAGE in `isProviderOutage`'s sense — the vendor is up — so neither arms a
+ * back-off. They are a third class: the lane is healthy and this reply is not, so try the next rung
+ * and record why. `executeAttempt` engages every fallback for them, the paid head included.
+ */
+export function isUnservedReply(reason: string): boolean {
+  return /^(truncated_reply|verifier_rejected):/.test(reason);
+}
+
 /** A short, stable label for the routing record, so "why did we fail over?" reads at a glance. */
 export function outageKind(reason: string): string {
+  if (/^truncated_reply:/.test(reason)) return "TRUNCATED";
+  if (/^verifier_rejected:/.test(reason)) return "VERIFIER_REJECTED";
   if (/^credential_missing:/.test(reason)) return "NO_CREDENTIAL";
   if (/^workers_ai_binding_absent/.test(reason)) return "BINDING_ABSENT";
   /*

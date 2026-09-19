@@ -42,7 +42,7 @@ import { directVendorRouteFor } from "../../shared/ai/directVendorRoute";
 import { credentialConfigured } from "../../shared/ai/providerCredentials";
 import { classifyContent, type ContentClassVerdict } from "../../shared/ai/contentClass";
 import { MACHINE_REGISTRY } from "../../shared/registry/machines";
-import { isProviderOutage, outageKind, shouldBackOff } from "../../shared/ai/providerFailure";
+import { isProviderOutage, isUnservedReply, outageKind, shouldBackOff } from "../../shared/ai/providerFailure";
 import {
   isCoolingDown,
   laneHealth,
@@ -160,6 +160,26 @@ export interface RunAiBudgetContext {
    */
   judgement?: boolean;
   /**
+   * THIS CALL RUNS ON ONE NAMED MODEL AND NOTHING ELSE (19 Sep 2026) — the owner's decision for
+   * the morning brief: "Make the briefs on demand and make them use Sonnet — that is the new
+   * solution. On demand + Sonnet for briefs only."
+   *
+   * WHY A PIN AND NOT A PREFERENCE. `preferredModel` yields to a cost posture and a free-first
+   * lead; the routing policy's pin yields to the free lanes for public judgement work. Both were
+   * right for everything else and wrong for the one twenty-thousand-token, eleven-section,
+   * every-claim-cited call in this firm: thirteen attempts on free lanes 18–19 Sep wrote zero
+   * acceptable briefs, twelve of them stopping at exactly 256 tokens, against 38 of 38 on Sonnet.
+   *
+   * WHAT IT DOES, precisely: the candidate set is reduced to lanes serving this model — at
+   * OpenRouter, and at the vendor directly as the outage fallback — before any ordering, so the
+   * head, every policy fallback and every last resort are that model or nothing. No free lane is
+   * assembled. If no lane serves it (disabled, unpriced, egress-denied, or the lever at FREE_ONLY)
+   * the run STOPS with a named reason rather than taking anything else. The affordability checks
+   * run unchanged against it. `validate:brief-lands` names the one caller allowed to set this and
+   * proves no other lane's routing changed.
+   */
+  requireModel?: string;
+  /**
    * THIS CALL IS READING WHAT THE OWNER ASKED FOR (16 Sep 2026). Stricter than `judgement`, and
    * the difference is worth stating because `judgement` was not enough.
    *
@@ -276,6 +296,14 @@ export interface RunAiInput {
   purpose: string;
   actor: Actor;
   inputs: string[];
+  /**
+   * THE CALLER'S OWN VERIFIER, RUN INSIDE THE WALK (19 Sep 2026). Returns null when the reply is
+   * usable, or a sentence saying what is wrong. A rejection is recorded on the attempt as
+   * `verifier_rejected:<why>` and the chain moves to the NEXT rung instead of leaving the caller to
+   * ask the same lane again — which is what the brief did on 18 Sep: six calls, one lane, no brief.
+   * Kept out of `budgetContext` because it is a function, not a fact about the money.
+   */
+  verify?: (text: string) => string | null;
   /**
    * Images for vision work. Optional, and deliberately routed through this boundary rather than
    * around it — see the gate in the pipeline below for why that is not a formality.
@@ -395,6 +423,13 @@ export interface RunAiDeps {
   fetchImpl?: typeof fetch;
   /** Clock override for surge-expiry testing. */
   now?: Date;
+  /**
+   * TESTS ONLY: the per-attempt deadline handed to every adapter, in place of the one
+   * `chainBudget.attemptDeadlineMs` derives. It exists so a test can prove that a lane which never
+   * answers is abandoned on its deadline and the walk moves on, without waiting 450 seconds for
+   * it. Production never sets it; `validate:brief-lands` fails if any caller outside tests does.
+   */
+  attemptDeadlineMsForTests?: number;
 }
 
 export interface AIRunResult {
@@ -730,6 +765,7 @@ async function executeRun(
   quarantine: boolean,
   fallbacks: FallbackOption[] = [],
   attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
+  attemptDeadlineMsForTests?: number,
 ): Promise<AIRunRow> {
   const running = await insertRun(env, { ...rec, status: "RUNNING" });
   /*
@@ -741,6 +777,7 @@ async function executeRun(
   return executeAttempt(env, rec, running.id, adapter, quarantine, fallbacks, attempts, {
     startedAtMs: Date.now(),
     budgetMs: CHAIN_BUDGET_MS,
+    ...(attemptDeadlineMsForTests !== undefined ? { attemptDeadlineMsForTests } : {}),
   });
 }
 
@@ -748,6 +785,8 @@ async function executeRun(
 interface ChainClock {
   startedAtMs: number;
   budgetMs: number;
+  /** See `RunAiDeps.attemptDeadlineMsForTests`. */
+  attemptDeadlineMsForTests?: number;
 }
 
 /** One provider attempt against an ai_run row that already exists. */
@@ -770,7 +809,7 @@ async function executeAttempt(
    * See `chainBudget.ts` for the production sample every one of those numbers comes from.
    */
   const remaining = remainingBudgetMs(chain.startedAtMs, Date.now(), chain.budgetMs);
-  const deadlineMs = attemptDeadlineMs(rec.estimate.output_tokens, remaining);
+  const deadlineMs = chain.attemptDeadlineMsForTests ?? attemptDeadlineMs(rec.estimate.output_tokens, remaining);
   try {
     const response = await adapter.complete({
       purpose: rec.input.purpose,
@@ -793,6 +832,30 @@ async function executeAttempt(
       maxOutputTokens: wireOutputCeiling(rec.estimate.output_tokens),
       deadlineMs,
     });
+    /*
+     * ── A REPLY THAT STOPPED AT ITS CAP IS NOT A COMPLETION (19 Sep 2026) ────────────────────────
+     *
+     * Twelve briefs on 18 Sep came back from a Workers AI lane at exactly 256 tokens — the platform's
+     * default when no cap is sent — and every one was recorded COMPLETED here, failed the brief's
+     * verifier upstairs, and never walked the chain to Sonnet standing behind the free lanes as the
+     * outage fallback, because nothing here called a cut-off answer a failure. Two tests, either
+     * one enough: the vendor said "length" (or its own word for it — see finishReason.ts), or the
+     * tokens used reached the cap this adapter was sent. The attempt is FAILED with
+     * `truncated_reply:` and the catch below hands the work to the next rung.
+     */
+    const capSent = wireOutputCeiling(rec.estimate.output_tokens);
+    if (response.finishReason === "length" || (response.usage.outputTokens > 0 && response.usage.outputTokens >= capSent)) {
+      throw new Error(`truncated_reply:the lane stopped at its output cap (${response.usage.outputTokens} tokens of ${capSent} allowed) and the answer is cut off`);
+    }
+    /*
+     * ── AND A REPLY THE CALLER'S VERIFIER REFUSES DID NOT SERVE THE CALL EITHER ──────────────────
+     * The caller knows the shape it needs; the router knows the next rung. Joining the two here is
+     * what turns "retry the same lane" into "walk on".
+     */
+    if (rec.input.verify) {
+      const why = rec.input.verify(response.text);
+      if (why) throw new Error(`verifier_rejected:${why.slice(0, 500)}`);
+    }
     // WHAT THE RUN ACTUALLY COST, priced locally when the provider will not say.
     //
     // Every completed run was recording cost_usd: 0, because OpenRouter only returns a cost when
@@ -868,6 +931,8 @@ async function executeAttempt(
      * passed to a second vendor that will answer it without the attachment.
      */
     const outage = isProviderOutage(reason);
+    // A cut-off or verifier-refused reply is a lane that did not serve: every rung may engage.
+    const handsOn = outage || isUnservedReply(reason);
     /*
      * ARM THE BACK-OFF, but only for a failure back-off can actually help with. A capability
      * refusal or a genuinely malformed request is OUR fault and would follow us to the next vendor.
@@ -896,7 +961,7 @@ async function executeAttempt(
     const health = await laneHealth(env);
     const notCooling = (f: FallbackOption): boolean =>
       !isCoolingDown(health.get(`${f.candidate.providerId} ${f.candidate.model}`), new Date());
-    const engaging = fallbacks.filter((f) => f.engageOn === "ANY" || outage);
+    const engaging = fallbacks.filter((f) => f.engageOn === "ANY" || handsOn);
     const warm = engaging.filter(notCooling);
     const eligible = warm.length > 0 ? warm : engaging;
     /*
@@ -1732,6 +1797,22 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       ` The lever is set to Free only, so only models costing nothing were candidates` +
       (isProtected ? `, and this protected call found one — had it not, the run would have stopped rather than been downgraded.` : `.`);
   }
+  const requiredModel = input.budgetContext?.requireModel;
+  let requiredNote = "";
+  if (requiredModel) {
+    const serving = routingCandidates.filter((c) => c.model === requiredModel);
+    if (serving.length === 0) {
+      const lever = behaviour.freeOnly ? " The lever is set to FREE_ONLY, which admits no paid lane; move it to MODERATE to let this run." : "";
+      return {
+        run: await blocked(
+          "PREFLIGHT_BLOCKED",
+          `required_model_unavailable:this call runs on ${requiredModel} and nothing else, and no enabled, priced lane serves it right now.${lever} Purpose: ${input.purpose}.`,
+        ),
+      };
+    }
+    routingCandidates = serving;
+    requiredNote = ` This call runs on ${requiredModel} and nothing else, by the owner's decision; no other lane was a candidate and no free lane was assembled.`;
+  }
   const interpretationNote = !isInterpretation
     ? ""
     : reasoningFilterApplied
@@ -2306,6 +2387,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
 
   const freeFirstEligible =
     isJudgement &&
+    // A call pinned to one model is that model or nothing; see `requireModel`.
+    !input.budgetContext?.requireModel &&
     /*
      * THE NORMAL CASE, and the owner's instruction is that it should be: "MOST WORK IS INTERNAL AND
      * NOT-CONFIDENTIAL SO CAN USE FREE TRAINING MODELS WITH REASONING AND CLOSE TO $0." A card that
@@ -2576,7 +2659,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * the mornings it happens to be awake reads as an intermittent bug rather than as a design, and
    * "why did this cost money today" becomes unanswerable on exactly the days it matters.
    */
-  explanation += seatNote;
+  explanation += seatNote + requiredNote;
   if (seatLanes.length > 0 && lead === seatLanes[0]) {
     const behind = seatLanes.length > 1 ? `the other seat, then ` : "";
     explanation +=
@@ -2604,6 +2687,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     true,
     fallbacks,
     attempts,
+    deps.attemptDeadlineMsForTests,
   );
 
   await recordAttribution(env, run.id, attribution);

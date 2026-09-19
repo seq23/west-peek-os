@@ -74,6 +74,17 @@ export interface ProviderResponse {
   text: string;
   model: string;
   usage: ProviderUsage;
+  /**
+   * WHY THE MODEL STOPPED, in three words the router can act on (19 Sep 2026).
+   *
+   * "length" means the reply hit its output cap. That reply is not a completion — it is the front
+   * of an answer with the rest cut off — and treating it as one is how twelve 256-token briefs on
+   * 18 Sep were recorded COMPLETED, failed the verifier, and never walked the chain to a lane that
+   * could have written them. Every adapter maps its vendor's field (finish_reason, stop_reason,
+   * finishReason) here; an adapter whose vendor says nothing leaves it undefined and the router
+   * falls back to comparing the tokens used against the cap it sent.
+   */
+  finishReason?: "stop" | "length" | "other";
 }
 
 export interface ProviderAdapter {

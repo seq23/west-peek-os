@@ -2,6 +2,7 @@ import { providerHttpError } from "./httpError";
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_TIMEOUT_MS } from "./timeout";
 import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
+import { finishReasonFrom } from "./finishReason";
 
 /**
  * OpenRouter adapter (P16, GAP-03).
@@ -153,7 +154,7 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
 
       const body = (await res.json()) as {
         model?: string;
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{ message?: { content?: string }; finish_reason?: string | null; native_finish_reason?: string | null }>;
         usage?: { prompt_tokens?: number; completion_tokens?: number; total_cost?: number; cost?: number };
       };
       const text = body.choices?.[0]?.message?.content;
@@ -161,6 +162,7 @@ export function createOpenRouterAdapter(options: OpenRouterOptions): ProviderAda
 
       return {
         text,
+        finishReason: finishReasonFrom(body.choices?.[0]?.finish_reason ?? body.choices?.[0]?.native_finish_reason),
         model: body.model ?? req.model ?? options.model,
         usage: {
           inputTokens: body.usage?.prompt_tokens ?? 0,

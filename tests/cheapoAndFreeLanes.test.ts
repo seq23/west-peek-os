@@ -244,6 +244,51 @@ describe("free frontier capacity carries the important, public-facing work", () 
     expect(routing.attempts.some((a) => a.outcome === "COMPLETED")).toBe(true);
   });
 
+  it("a call pinned to one model (the morning brief) runs on that model and nothing else, and the run says so", async () => {
+    /*
+     * The owner, 19 Sep 2026: "Sonnet for briefs only." Thirteen brief attempts on free lanes wrote
+     * zero acceptable briefs against 38 of 38 on Sonnet. `requireModel` reduces the candidates to
+     * lanes serving that model before anything is ordered: no free lane is assembled, no other
+     * model is a fallback. The identical PUBLIC judgement call without the pin leads on a :free lane.
+     */
+    const { fetchImpl } = hostRouter({ "openrouter.ai": () => OK_OPENAI_SHAPE("===SECTION executive_summary\nfine [1]\n===END") });
+    const { run } = await runAi(
+      env(),
+      {
+        purpose: "daily intelligence report 2026-09-19 for Sequoia Taylor",
+        actor: MP_ACTOR,
+        inputs: ["write the brief"],
+        sensitivity: "PUBLIC",
+        budgetContext: { judgement: true, expectedOutputTokens: 24_000, requireModel: "anthropic/claude-sonnet-5" },
+      },
+      { fetchImpl },
+    );
+    expect(run.status).toBe("COMPLETED");
+    expect(run.model).toBe("anthropic/claude-sonnet-5");
+    const routing = await routingFor(run.id);
+    expect(routing.explanation).toContain("runs on anthropic/claude-sonnet-5 and nothing else");
+    expect(routing.explanation, "a free lane led a pinned call").not.toContain("Free frontier capacity is tried first");
+    expect(routing.attempts.every((a) => a.model === "anthropic/claude-sonnet-5"), `another model was attempted: ${JSON.stringify(routing.attempts)}`).toBe(true);
+    // Control: the identical call WITHOUT the pin leads on the free lane — the pin is the difference.
+    const control = await runAi(
+      env(),
+      { purpose: "daily intelligence report 2026-09-19 for Sequoia Taylor", actor: MP_ACTOR, inputs: ["write the brief"], sensitivity: "PUBLIC", budgetContext: { judgement: true, expectedOutputTokens: 24_000 } },
+      { fetchImpl },
+    );
+    expect((await routingFor(control.run.id)).explanation).toContain("Free frontier capacity is tried first");
+  });
+
+  it("a pinned model nobody serves STOPS the run with a named reason rather than taking another model", async () => {
+    const { fetchImpl } = hostRouter({ "openrouter.ai": () => OK_OPENAI_SHAPE("anything") });
+    const { run } = await runAi(
+      env(),
+      { purpose: "daily intelligence report", actor: MP_ACTOR, inputs: ["write"], sensitivity: "PUBLIC", budgetContext: { judgement: true, requireModel: "vendor/model-that-does-not-exist" } },
+      { fetchImpl },
+    );
+    expect(run.status).toBe("PREFLIGHT_BLOCKED");
+    expect(run.failure_reason).toMatch(/^required_model_unavailable:this call runs on vendor\/model-that-does-not-exist and nothing else/);
+  });
+
   it("says on the run, before anything happens, that free capacity is being tried", async () => {
     const { fetchImpl } = hostRouter({ "openrouter.ai": () => OK_OPENAI_SHAPE("done") });
     const { run } = await runAi(

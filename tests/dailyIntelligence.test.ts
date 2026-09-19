@@ -4,7 +4,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import {
-  MAX_BRIEF_ATTEMPTS, deliverReport, generateForPartner, loadProfile, runDailyForAll, type Synthesise,
+  MAX_BRIEF_ATTEMPTS, deliverReport, generateForPartner, loadProfile, serveBrief, startReport, type Synthesise,
 } from "../src/worker/services/dailyIntelligence";
 
 /**
@@ -43,6 +43,17 @@ const DEPS = {
   }),
   market: async () => ({ ok: true, levels: [], calendar: [], citations: [], aiRunId: null, detail: "offline" }),
 };
+
+
+/**
+ * THE ONLY WAY A BRIEF STARTS (19 Sep 2026): a partner's request, then the clock. `runDailyForAll`
+ * — every partner, every morning, gated by earliest start and weekends — is retired with the
+ * schedule (migration 0211). These tests ask the way the button asks.
+ */
+async function requestAndServe(partnerId: string, now: Date, synthesise: Synthesise) {
+  await startReport(env, "west-peek", partnerId, now, "requested", partnerId);
+  return serveBrief(env, now, { ...DEPS, synthesise });
+}
 
 /**
  * Daily Intelligence, end to end against a real database (P41).
@@ -194,12 +205,33 @@ describe("quiet days and weekends", () => {
     expect(s!.body_md).toMatch(/nothing reached the bar/i);
   });
 
-  it("skips weekends unless a partner asked for them", async () => {
-    const saturday = new Date("2026-08-15T12:00:00Z");
-    const before = await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report").first<{ n: number }>();
-    await runDailyForAll(env, MP, saturday, fakeModel, undefined, DEPS);
-    const after = await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report").first<{ n: number }>();
-    expect(after!.n).toBe(before!.n);
+  it("nothing starts on its own on any day; a request on a Saturday is served whatever the profile says", async () => {
+    /*
+     * CONTRACT CHANGE, 19 Sep 2026 — the owner's decision: "On demand any day of the week!" The
+     * schedule is retired (0211), so the tick starts nothing by itself, on a weekday or a weekend,
+     * before or after any hour — and a partner's request is served on a Saturday with weekends
+     * turned OFF on her profile, because that column no longer bears on a brief at all.
+     */
+    const saturday = new Date("2026-08-15T09:00:00Z"); // 05:00 New York
+    const partners = (await env.WP_OS_DB.prepare(
+      `SELECT u.id FROM firm_user u JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner' WHERE u.status = 'ACTIVE' ORDER BY u.id`,
+    ).all<{ id: string }>()).results!;
+    expect(partners.length).toBeGreaterThanOrEqual(2);
+    const before = (await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report WHERE report_date = '2026-08-15'").first<{ n: number }>())!.n;
+    const idle = await serveBrief(env, saturday, { ...DEPS, synthesise: fakeModel });
+    expect(idle.served, "the clock started a brief nobody asked for").toBe(false);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report WHERE report_date = '2026-08-15'").first<{ n: number }>())!.n).toBe(before);
+
+    const asker = partners[0]!.id;
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO partner_intelligence_profile (firm_user_id, timezone, weekends, earliest_start_local) VALUES (?1, 'America/New_York', 0, '06:15') ON CONFLICT (firm_user_id) DO UPDATE SET weekends = 0, timezone = 'America/New_York', earliest_start_local = '06:15'",
+    ).bind(asker).run();
+    const served = await requestAndServe(asker, saturday, fakeModel);
+    expect(served.partner).toBe(asker);
+    expect(served.status).toBe("READY");
+    const others = partners.filter((p) => p.id !== asker).map((p) => p.id);
+    const rows = (await env.WP_OS_DB.prepare("SELECT firm_user_id FROM intelligence_report WHERE report_date = '2026-08-15'").all<{ firm_user_id: string }>()).results!.map((r) => r.firm_user_id);
+    for (const o of others) expect(rows, `${o} got a brief nobody requested`).not.toContain(o);
   });
 });
 
@@ -300,7 +332,7 @@ describe("a run that stopped part-way through", () => {
       if (calls === 1) return { output: "not a report at all", aiRunId: null, model: "fake-test-model" };
       throw new Error("provider exploded mid-retry");
     };
-    await runDailyForAll(env, MP, new Date("2026-08-18T18:00:00Z"), explodes, undefined, DEPS);
+    await requestAndServe("fu_sequoia_taylor", new Date("2026-08-18T18:00:00Z"), explodes);
 
     const stranded = await env.WP_OS_DB.prepare(
       "SELECT COUNT(*) AS n FROM intelligence_report WHERE status NOT IN ('READY','FAILED') AND report_date = '2026-08-18'",
@@ -315,75 +347,48 @@ describe("a run that stopped part-way through", () => {
 });
 
 /*
- * WHY THE BRIEF IS CHUNKED.
+ * ONE REQUEST AT A TIME, AND ONLY REQUESTS (19 Sep 2026).
  *
- * A Cron Trigger gets 10 ms of CPU on the Workers Free plan; the Paid plan gets 30 seconds. Sweeping
- * every source and then building a brief for every partner in one invocation is far past that, so
- * the invocation was killed mid-flight — which is why four of the last eight briefs failed, all of
- * them the scheduled ones, and every brief that succeeded was a human pressing the button. That
- * button runs a different path which generates for ONE partner.
- *
- * So the job now fires on the tick and takes one partner at a time. Two things have to hold: a
- * partner who already has today's brief is skipped, and a partner whose local morning has not
- * arrived is not briefed early.
+ * Two partners press within the same minute: the tick serves the earlier press whole, the next tick
+ * serves the other, and a third tick has nothing to do. A partner who has not pressed is never
+ * touched — there is no "due", no local morning, no weekend: the brief is on demand.
  */
-describe("the brief is built one partner at a time, across ticks", () => {
-  it("takes at most the limit it is given and says how many are left", async () => {
-    const partners = await t.db
-      .prepare(
-        `SELECT u.id FROM firm_user u
-           JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
-          WHERE u.status = 'ACTIVE'`,
-      )
-      .all<{ id: string }>();
-    const count = (partners.results ?? []).length;
-    expect(count).toBeGreaterThan(1); // otherwise this test proves nothing
-
-    // A weekday nothing else in this suite has touched, so every partner is naturally due and no
-    // report has to be deleted — the rows have children and deleting them trips a foreign key.
+describe("requested briefs are served one press at a time", () => {
+  it("serves the earlier request first, the other on the next tick, and then nothing", async () => {
+    const partners = (await t.db.prepare(
+      `SELECT u.id FROM firm_user u JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner' WHERE u.status = 'ACTIVE' ORDER BY u.id`,
+    ).all<{ id: string }>()).results!;
+    expect(partners.length).toBeGreaterThan(1);
     const now = new Date("2026-09-16T16:00:00.000Z");
+    const [first, second] = [partners[1]!.id, partners[0]!.id];
+    await startReport(env, "west-peek", first, now, "requested", first);
+    await startReport(env, "west-peek", second, new Date(now.getTime() + 20_000), "requested", second);
 
-    const first = await runDailyForAll(env, MP, now, fakeModel, 1, DEPS);
-    expect(first.generated + first.failed).toBe(1);
-    expect(first.remaining).toBe(count - 1);
-
-    // The next tick picks up whoever is left rather than repeating the first.
-    const second = await runDailyForAll(env, MP, now, fakeModel, 1, DEPS);
-    expect(second.generated + second.failed).toBe(1);
-    expect(second.remaining).toBe(count - 2);
-
-    // And once everybody has one, a later tick does nothing at all.
-    const third = await runDailyForAll(env, MP, now, fakeModel, 1, DEPS);
-    expect(third.generated + third.failed).toBe(0);
-    expect(third.remaining).toBe(0);
+    const one = await serveBrief(env, new Date(now.getTime() + 60_000), { ...DEPS, synthesise: fakeModel });
+    expect(one.partner, "the earlier press is served first").toBe(first);
+    expect(one.status).toBe("READY");
+    const two = await serveBrief(env, new Date(now.getTime() + 120_000), { ...DEPS, synthesise: fakeModel });
+    expect(two.partner).toBe(second);
+    expect(two.status).toBe("READY");
+    const three = await serveBrief(env, new Date(now.getTime() + 180_000), { ...DEPS, synthesise: fakeModel });
+    expect(three.served).toBe(false);
+    expect(three.summary).toBe("no brief has been requested");
   });
 
-  it("does not brief a partner before their own local morning", async () => {
-    const partner = await t.db
-      .prepare(
-        `SELECT u.id FROM firm_user u
-           JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner'
-          WHERE u.status = 'ACTIVE' LIMIT 1`,
-      )
-      .first<{ id: string }>();
-
-    await t.db
-      .prepare(
-        `INSERT INTO partner_intelligence_profile (firm_user_id, timezone, earliest_start_local, weekends)
-         VALUES (?1, 'America/New_York', '07:00', 1)
-         ON CONFLICT (firm_user_id) DO UPDATE SET timezone = 'America/New_York', earliest_start_local = '07:00', weekends = 1`,
-      )
-      .bind(partner!.id)
-      .run();
-
-    // 09:00 UTC is 05:00 in New York — before their 07:00. The job fires all day now, so without
-    // this gate a brief would be built at five in the morning and be stale by breakfast.
-    const tooEarly = await runDailyForAll(env, MP, new Date("2026-09-17T09:00:00.000Z"), fakeModel, 1, DEPS);
-    expect(tooEarly.generated).toBe(0);
-
-    // 12:00 UTC is 08:00 in New York, which is past it.
-    const due = await runDailyForAll(env, MP, new Date("2026-09-17T12:00:00.000Z"), fakeModel, 1, DEPS);
-    expect(due.generated + due.failed).toBe(1);
+  it("does not build for a partner who has not pressed, at any hour of their day", async () => {
+    const partner = (await t.db.prepare(
+      `SELECT u.id FROM firm_user u JOIN firm_user_role r ON r.firm_user_id = u.id AND r.role_id = 'role_managing_partner' WHERE u.status = 'ACTIVE' LIMIT 1`,
+    ).first<{ id: string }>())!;
+    await t.db.prepare(
+      `INSERT INTO partner_intelligence_profile (firm_user_id, timezone, earliest_start_local, weekends)
+       VALUES (?1, 'America/New_York', '07:00', 1)
+       ON CONFLICT (firm_user_id) DO UPDATE SET timezone = 'America/New_York', earliest_start_local = '07:00', weekends = 1`,
+    ).bind(partner.id).run();
+    for (const at of ["2026-09-17T09:00:00.000Z", "2026-09-17T12:00:00.000Z", "2026-09-17T23:00:00.000Z"]) {
+      const out = await serveBrief(env, new Date(at), { ...DEPS, synthesise: fakeModel });
+      expect(out.served, `${at}: the clock started a brief nobody asked for`).toBe(false);
+    }
+    expect((await t.db.prepare("SELECT COUNT(*) n FROM intelligence_report WHERE report_date = '2026-09-17'").first<{ n: number }>())!.n).toBe(0);
   });
 });
 
@@ -403,7 +408,7 @@ describe("a failed brief is tried again, but not for ever", () => {
   }
 
   it("counts the attempt on the way in, so a run that dies still spends one", async () => {
-    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 1, DEPS);
+    await requestAndServe("fu_scooter_taylor", TZ_DAY, fakeModel);
     const first = await reportFor("fu_scooter_taylor");
     expect(first?.attempts).toBeGreaterThanOrEqual(1);
   });
@@ -415,9 +420,9 @@ describe("a failed brief is tried again, but not for ever", () => {
       )
       .run();
 
-    const out = await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5, DEPS);
-    // He was retried rather than skipped for the day.
-    expect(out.generated + out.failed).toBeGreaterThan(0);
+    // The clock retries the SAME press once its retry time has passed — no new press needed.
+    const out = await serveBrief(env, new Date(TZ_DAY.getTime() + 25 * 60_000), { ...DEPS, synthesise: fakeModel });
+    expect(out.partner, "he was retried rather than skipped").toBe("fu_scooter_taylor");
     expect((await reportFor("fu_scooter_taylor"))?.attempts).toBeGreaterThan(1);
   });
 
@@ -431,7 +436,8 @@ describe("a failed brief is tried again, but not for ever", () => {
       .run();
 
     const before = await reportFor("fu_scooter_taylor");
-    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5, DEPS);
+    const out = await serveBrief(env, new Date(TZ_DAY.getTime() + 60 * 60_000), { ...DEPS, synthesise: fakeModel });
+    expect(out.partner, "a spent budget was tried again").not.toBe("fu_scooter_taylor");
     const after = await reportFor("fu_scooter_taylor");
     expect(after?.attempts).toBe(before?.attempts);
     expect(after?.status).toBe("FAILED");
@@ -445,7 +451,7 @@ describe("a failed brief is tried again, but not for ever", () => {
       .first<{ firm_user_id: string; attempts: number }>();
     if (!ready) return; // nothing succeeded in this fixture; the other cases carry the meaning
 
-    await runDailyForAll(env, MP, TZ_DAY, fakeModel, 5, DEPS);
+    await serveBrief(env, new Date(TZ_DAY.getTime() + 90 * 60_000), { ...DEPS, synthesise: fakeModel });
     const after = await t.db
       .prepare("SELECT attempts FROM intelligence_report WHERE firm_user_id = ?1 AND report_date = '2026-10-07'")
       .bind(ready.firm_user_id)

@@ -1,7 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, useApi } from "../lib/api";
 import { collapsedBriefLine } from "../lib/briefCollapse";
 import { briefArrival } from "../lib/briefState";
+import {
+  MOVING_KINDS, POLL_EVERY_MS, answerLine, examinedLine, pressOutcomeLine, progressFraction, showsLiveDot, toneClassFor,
+  type BriefStatusResponse,
+} from "../lib/briefBand";
+import { elapsedWords } from "../../shared/intelligence/briefRunState";
 
 /**
  * The expanded Daily Intelligence report (P41), rendered on the Sweeps page directly under the
@@ -430,49 +435,53 @@ export function DailyBriefPanel({
   compact = false,
   collapsed = false,
   onToggleCollapsed,
-}: { compact?: boolean; collapsed?: boolean; onToggleCollapsed?: (next: boolean) => void } = {}): JSX.Element {
+  viewerId = null,
+  preparedBy = null,
+}: { compact?: boolean; collapsed?: boolean; onToggleCollapsed?: (next: boolean) => void; viewerId?: string | null; preparedBy?: string | null } = {}): JSX.Element {
   const state = useApi<{ report: Report | null; sections: Section[]; citations: Citation[]; date: string; no_brief_because?: string | null }>("/api/daily-intelligence");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  /*
+   * THE NAMED STATE, FROM THE ROW, EVERY FEW SECONDS WHILE IT MOVES (19 Sep 2026).
+   *
+   * "I pushed the button to build a brief and I don't know if it's coming or not or how long it
+   * takes — there is no progress bar — and I pushed the button again and some other message came
+   * up." The button used to run the model call inside her request and show one of five words. Now
+   * the server owns every state (`shared/intelligence/briefRunState.ts`), this panel asks for it,
+   * and while the state is one of the moving ones it asks again every ${POLL_EVERY_MS / 1000}s. When
+   * the state stops moving the report itself is reloaded, so "arrived" is followed by the brief.
+   */
+  const status = useApi<BriefStatusResponse>("/api/daily-intelligence/status");
+  const [pressed, setPressed] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const run = status.data ?? null;
+  const moving = Boolean(run && MOVING_KINDS.has(run.kind));
+  useEffect(() => {
+    if (!moving) return;
+    const t = window.setInterval(() => status.reload(), POLL_EVERY_MS);
+    return () => window.clearInterval(t);
+  }, [moving, status.reload]);
+  const [lastKind, setLastKind] = useState<string | null>(null);
+  useEffect(() => {
+    if (!run) return;
+    if (lastKind !== null && lastKind !== run.kind && !MOVING_KINDS.has(run.kind)) state.reload();
+    if (lastKind !== run.kind) setLastKind(run.kind);
+  }, [run?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const report = state.data?.report ?? null;
   const sections = state.data?.sections ?? [];
   const citations = new Map((state.data?.citations ?? []).map((c) => [c.id, c]));
 
   /*
-   * THE BUTTON WALKS THE STAGES. Each request advances the brief one stage — gathered, numbers
-   * read, written — because a request has the same CPU budget as a cron tick and the one-shot
-   * build is what died in production on 15 Sep 2026. The page keeps calling until it is done.
+   * THE BUTTON IS A REQUEST. One POST, answered at once with the named state; the clock does the
+   * work on its next tick and the poll above shows each stage as the row reaches it. A press while
+   * the row is moving is answered `already: true` with "started 1m 20s ago" and changes nothing.
    */
   async function generate() {
-    setBusy(true);
-    setMessage(null);
-    const STAGE_WORDS: Record<string, string> = {
-      gathered: "Gathered and ranked the last 48 hours…",
-      market_read: "Fetched the numbers and read the market…",
-      written: "Written and verified.",
-      failed: "Failed.",
-      busy: "Another run holds it…",
-    };
-    for (let i = 0; i < 6; i++) {
-      const res = await api<{ status?: string; stage?: string; done?: boolean; detail?: string | null; error?: string }>(
-        "/api/daily-intelligence/generate", { method: "POST", body: {} },
-      );
-      if (res.status !== 201) {
-        setMessage(res.data?.detail ?? res.data?.error ?? `Could not build the brief (HTTP ${res.status}).`);
-        break;
-      }
-      setMessage(STAGE_WORDS[res.data?.stage ?? ""] ?? `Stage: ${res.data?.stage ?? "?"}`);
-      if (res.data?.done) {
-        if (res.data.status !== "READY") setMessage(`Brief FAILED: ${res.data.detail ?? res.data.status}. It was not delivered thin.`);
-        else setMessage(null);
-        break;
-      }
-      if (res.data?.stage === "busy" || res.data?.stage === "none") break;
-    }
-    setBusy(false);
-    state.reload();
+    setPressed(null);
+    const res = await api<BriefStatusResponse & { already?: boolean; detail?: string; error?: string }>(
+      "/api/daily-intelligence/generate", { method: "POST", body: {} },
+    );
+    setPressed(pressOutcomeLine(res));
+    status.reload();
   }
 
   // What survives the fold on Home: the one-minute version, and the ten-second version under it.
@@ -495,18 +504,24 @@ export function DailyBriefPanel({
   }
 
   const collapsible = Boolean(onToggleCollapsed);
+  const examined = examinedLine({
+    completedAt: report?.status === "READY" ? report.completed_at : null,
+    preparedBy,
+    rawCount: report?.raw_count ?? null,
+    dedupedCount: report?.deduped_count ?? null,
+    candidateCount: report?.candidate_count ?? null,
+    model: report?.model ?? null,
+    requestedBy: run?.requested_by ?? null,
+    requestedAt: run?.requested_at ?? null,
+    viewerId,
+  });
   const masthead = (
     <header className="brief-masthead">
       <h3>Executive Intelligence Report</h3>
-      {report && (
-        <span className="brief-edition" data-testid="daily-brief-edition">
-          {report.edition ? `${report.edition} · ` : ""}
-          {report.report_date}
-          {report.completed_at
-            ? ` · delivered ${new Date(report.completed_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
-            : ""}
-        </span>
-      )}
+      <span className="brief-edition" data-testid="daily-brief-edition">
+        {report?.edition ? `${report.edition} · ` : ""}
+        {state.data?.date ?? run?.date ?? ""}
+      </span>
       {collapsible && (
         <button
           type="button"
@@ -548,47 +563,71 @@ export function DailyBriefPanel({
     <section className="card daily-brief" data-testid="daily-brief" id="daily-brief-contents">
       {masthead}
       <p className="muted small">
-        Written from what the sweep gathered overnight and the levels read this morning. Every
-        figure carries the source it came from; where a level could not be read, the report says so
-        rather than estimating.
+        Built when you ask, any day, on claude-sonnet-5, from what the sweeps gathered in the last
+        48 hours and the levels read at that moment. Every figure carries the source it came from;
+        where a level could not be read, the report says so rather than estimating.
       </p>
 
+      {/*
+        * THE STATE OF TODAY'S BRIEF, FIRST — the answer she opens the page for, from the row.
+        * One line names the state ("arrived at 6:21", "building — writing it, started 1m 20s ago;
+        * usually 4–5 minutes", "no brief this morning: <why>; retrying at 7:05"), the second says
+        * what happens next, and the track under a moving one shows elapsed against the measured
+        * usual. Nothing here is inferred from silence: the server computed every word from the row.
+        */}
+      {run && (
+        <div className={toneClassFor(run.kind)} data-testid="daily-brief-state" data-kind={run.kind} role="status" aria-live="polite">
+          <p className="brief-state-line">
+            {showsLiveDot(run.kind) && <span className="live-dot" aria-hidden="true" />}
+            <strong data-testid="daily-brief-state-line">{answerLine(run)}</strong>
+          </p>
+          {run.next && <p className="muted small" data-testid="daily-brief-state-next">{run.next}</p>}
+          {progressFraction(run) !== null && (
+            <div className="progress-track" role="progressbar" aria-label="How far the build has got" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((progressFraction(run) ?? 0) * 100)}>
+              <div className="progress-fill" style={{ width: `${Math.round((progressFraction(run) ?? 0) * 100)}%` }} />
+            </div>
+          )}
+          {run.elapsedSeconds !== null && MOVING_KINDS.has(run.kind) && (
+            <p className="muted small" data-testid="daily-brief-elapsed">
+              {elapsedWords(run.elapsedSeconds)} elapsed
+              {run.usualSeconds ? ` · usually about ${Math.max(1, Math.round(run.usualSeconds / 60))} min` : ""}
+              {run.expectations?.measuredFrom ? ` (measured over ${run.expectations.measuredFrom} recent builds)` : ""}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="form-row">
-        <button type="button" className="btn-strong" disabled={busy} data-testid="daily-brief-generate" onClick={generate}>
-          {busy ? "Reading everything…" : report ? "Rebuild today's brief" : "Build today's brief"}
+        <button
+          type="button"
+          className="btn-strong"
+          disabled={!run || !run.button.enabled}
+          data-testid="daily-brief-generate"
+          onClick={generate}
+          aria-disabled={!run || !run.button.enabled}
+        >
+          {run ? run.button.label : "Build today's brief"}
         </button>
-        {report && (
-          <span className="muted small" data-testid="daily-brief-meta">
-            {report.report_date} · {report.raw_count} items → {report.deduped_count} events →{" "}
-            {report.candidate_count} considered
-            {report.model ? ` · ${report.model}` : ""}
-          </span>
+        {examined && (
+          <span className="muted small" data-testid="daily-brief-meta">{examined}</span>
         )}
       </div>
 
-      {message && <p className="notice" data-testid="daily-brief-message">{message}</p>}
+      {pressed && <p className="notice" data-testid="daily-brief-message">{pressed}</p>}
 
-      {!report && !state.loading && (
+      {!report && !state.loading && !run && (
         <p className="state-empty" data-testid="daily-brief-empty">
-          {/* The reason the schedule gives, not a blank. A partner who cannot tell "nothing today"
-              from "this is broken" stops trusting the thing she reads first every morning. */}
-          {state.data?.no_brief_because ?? "No brief for today yet. Run a sweep first so there is something to read, then build it."}
+          {state.data?.no_brief_because ?? "No brief for today yet."}
         </p>
       )}
 
       {/*
-        * A BRIEF THAT DID NOT ARRIVE SAYS SO — the defect this whole panel was rewritten for.
-        *
-        * Before this block, `report` being non-null was treated as "there is a brief": the masthead
-        * rendered, the counts rendered, and then `shown.map` over zero sections rendered nothing. On
-        * 18 Sep 2026 that produced exactly what both partners saw — a header, a button, the line
-        * "2026-09-18 · 300 items → 283 events → 30 considered", and no brief and no explanation.
-        *
-        * It is rendered BEFORE the sections rather than after, because the question it answers
-        * ("is there a brief?") is the one she has on opening the page, and an answer below an empty
-        * space is an answer she has to go looking for.
+        * UNTIL THE STATUS ROUTE HAS ANSWERED, the report's own row still says whether a brief
+        * arrived — the same `briefArrival` answer the collapsed line reads, so a not-READY row is
+        * never rendered as a masthead over zero sections (18 Sep 2026). Once the named state is on
+        * screen it carries this and more, and this line steps aside rather than saying it twice.
         */}
-      {report && !arrival.arrived && !state.loading && (
+      {report && !arrival.arrived && !state.loading && !run && (
         <p
           className={arrival.tone === "failed" ? "notice notice-bad" : "notice"}
           data-testid="daily-brief-not-arrived"

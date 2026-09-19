@@ -253,7 +253,18 @@ describe("one job per tick", () => {
       ).bind(id, key, due).run();
     }
     const results = await runDueJobs(env, NOW);
-    expect(results.map((r) => r.job_key)).toEqual(["t_a"]);
+    /*
+     * STRICTER SINCE 19 Sep 2026: the tick serves the morning brief BEFORE it picks a job, and says
+     * so with a `_morning_brief` line whenever a brief was owed — so the job list is still exactly
+     * one job, and the brief line, when present, must name a partner and land in a terminal state.
+     * A tick that quietly built a brief, or that ran two jobs, both fail here.
+     */
+    const jobs = results.filter((r) => r.job_key !== "_morning_brief");
+    expect(jobs.map((r) => r.job_key)).toEqual(["t_a"]);
+    for (const b of results.filter((r) => r.job_key === "_morning_brief")) {
+      expect(b.summary).toMatch(/^Morning brief for fu_/);
+      expect(["READY", "FAILED"]).toContain(b.status);
+    }
     const still = (await env.WP_OS_DB.prepare("SELECT job_key FROM scheduled_job WHERE status = 'ACTIVE' AND next_run_at <= ?1 ORDER BY next_run_at").bind(NOW.toISOString()).all<{ job_key: string }>()).results ?? [];
     expect(still.map((r) => r.job_key)).toEqual(["t_c", "t_b"]);
   });

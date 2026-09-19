@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Env } from "../env";
+import { HELD_NOTHING_ON_THE_RECORD, MEETING_SETTLES_AFTER_MINUTES } from "../../shared/meetings/pastMeetings";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import type { FirmUserIdentity } from "../auth";
@@ -217,6 +218,54 @@ export async function transitionMeeting(env: Env, actor: Actor, meetingId: strin
     payload: { from: meeting.status, to },
   });
   return (await getMeeting(env, meetingId))!;
+}
+
+/**
+ * A SYNCED MEETING WHOSE TIME HAS PASSED IS HELD, WITH NOTHING ON THE RECORD (19 Sep 2026).
+ *
+ * The calendar sync reaches a week back and writes every event SCHEDULED; nothing moved a row on
+ * unless a person opened the room or a transcript arrived, so the Meetings page listed the 16th
+ * and the 18th under "Coming up" on the 19th and the masthead's "next one" was three days gone.
+ *
+ * The calendar is the record that it happened; the absence of a capture is the record that
+ * nothing was taken from it. Both are stated: the row becomes HELD at its scheduled time and the
+ * transition is on the event spine with `settled_from: "calendar"`, so it is never mistaken for a
+ * meeting somebody closed out. Synced rows only — a person's own SCHEDULED row is theirs to move.
+ * The page applies the same rule to what it shows, so a row this has not reached yet is still
+ * never listed as upcoming (`shared/meetings/pastMeetings.ts`).
+ *
+ * Called from the calendar sync after each plan, and from the list route so the page is right on
+ * the first read after a quiet night. Never throws: a settle that cannot run is a stale reading,
+ * not a broken page.
+ */
+export async function settlePastMeetings(env: Env, now: Date = new Date(), firmScope = "west-peek"): Promise<{ settled: string[] }> {
+  const cutoff = new Date(now.getTime() - MEETING_SETTLES_AFTER_MINUTES * 60_000).toISOString();
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT id, scheduled_at FROM meeting
+        WHERE status = 'SCHEDULED' AND source = 'google_calendar' AND archived_at IS NULL
+          AND firm_scope = ?1 AND scheduled_at IS NOT NULL AND scheduled_at < ?2
+        ORDER BY scheduled_at LIMIT 200`,
+    ).bind(firmScope, cutoff).all<{ id: string; scheduled_at: string }>()
+  ).results ?? [];
+  const settled: string[] = [];
+  for (const m of rows) {
+    const res = await env.WP_OS_DB.prepare(
+      "UPDATE meeting SET status = 'HELD', occurred_at = COALESCE(occurred_at, scheduled_at) WHERE id = ?1 AND status = 'SCHEDULED'",
+    ).bind(m.id).run();
+    if ((res.meta?.changes ?? 0) !== 1) continue;
+    await appendEvent(env, {
+      eventType: "meeting.transitioned",
+      actorType: "system",
+      actorId: "system",
+      objectType: "meeting",
+      objectId: m.id,
+      firmScope,
+      payload: { from: "SCHEDULED", to: "HELD", settled_from: "calendar", scheduled_at: m.scheduled_at, note: HELD_NOTHING_ON_THE_RECORD },
+    });
+    settled.push(m.id);
+  }
+  return { settled };
 }
 
 // ── Consent (append-only; current state = latest row per type) ──
@@ -709,6 +758,8 @@ export async function handleCreateMeeting(ctx: RouteContext): Promise<Response> 
 
 export async function handleListMeetings(ctx: RouteContext): Promise<Response> {
   const url = new URL(ctx.request.url);
+  // The list is right on first read after a quiet night, not only after the next sync runs.
+  await settlePastMeetings(ctx.env).catch(() => ({ settled: [] }));
   const companyId = url.searchParams.get("company_id");
   const visibility = privacyVisibilityClause(ctx.identity!, "m.privacy_label");
   /*

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
-import { MAX_BRIEF_ATTEMPTS, runBriefTick, type BriefDeps } from "../src/worker/services/dailyIntelligence";
+import { MAX_BRIEF_ATTEMPTS, RETRY_AFTER_MINUTES, retryAfterIso, runBriefTick, startReport, type BriefDeps } from "../src/worker/services/dailyIntelligence";
 import { fredUrl, parseCoinbaseSpot, parseFredCsv } from "../src/worker/effects/macroClient";
 
 /**
@@ -81,9 +81,18 @@ describe("the fetched figures", () => {
 });
 
 describe("one stage per tick", () => {
-  it("tick 1 gathers and ranks; tick 2 reads the numbers; tick 3 writes, verifies and delivers", async () => {
+  it("tick 1 gathers and ranks; tick 2 reads the numbers; tick 3 writes, verifies and delivers — for a REQUESTED brief; an unrequested tick does nothing", async () => {
     const d = deps(V5());
+    // ON DEMAND ONLY (19 Sep 2026): with no request the tick starts nothing, on any day at any hour.
+    const idle = await runBriefTick(env, MP, at(0), d);
+    expect(idle.partner).toBeNull();
+    expect(idle.detail).toBe("no brief has been requested");
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) n FROM intelligence_report").first<{ n: number }>())!.n).toBe(0);
+
+    await startReport(env, "west-peek", "fu_scooter_taylor", at(0), "requested", "fu_scooter_taylor");
+    await startReport(env, "west-peek", "fu_sequoia_taylor", at(1), "requested", "fu_sequoia_taylor");
     const one = await runBriefTick(env, MP, at(0), d);
+    expect(one.partner, "the earlier press is served first").toBe("fu_scooter_taylor");
     expect(one.stage).toBe("gathered");
     expect((await report(one.partner!)).status).toBe("RANKING");
 
@@ -115,9 +124,9 @@ describe("one stage per tick", () => {
     const delivered = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM intelligence_delivery WHERE report_id = ?1 AND status = 'DELIVERED'").bind(done.id).first<{ n: number }>();
     expect(delivered!.n).toBe(1);
 
-    // The next tick moves to the OTHER partner rather than touching a READY brief.
+    // The next tick moves to the OTHER partner's request rather than touching a READY brief.
     const four = await runBriefTick(env, MP, at(45), d);
-    expect(four.partner).not.toBe(one.partner);
+    expect(four.partner).toBe("fu_sequoia_taylor");
     expect(four.stage).toBe("gathered");
   });
 
@@ -128,7 +137,7 @@ describe("one stage per tick", () => {
     await env.WP_OS_DB.prepare("UPDATE intelligence_report SET stage_lease_until = ?2 WHERE firm_user_id = ?1 AND status = 'RANKING'").bind(partner, at(60).toISOString()).run();
     const busy = await runBriefTick(env, MP, at(46), deps(V5()));
     expect(busy.partner).toBeNull();
-    expect(busy.detail).toMatch(/no brief is owed right now/);
+    expect(busy.detail).toMatch(/no brief has been requested/);
     await env.WP_OS_DB.prepare("UPDATE intelligence_report SET stage_lease_until = NULL WHERE firm_user_id = ?1").bind(partner).run();
   });
 
@@ -147,13 +156,30 @@ describe("one stage per tick", () => {
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM intelligence_report_section WHERE report_id = ?1").bind(row.id).first<{ n: number }>())!.n).toBe(0);
   });
 
-  it("a failed brief is started again from the top on the next tick, spending an attempt", async () => {
+  it("a failed brief waits RETRY_AFTER_MINUTES — written on the row — and is then started again from the top, spending an attempt", async () => {
+    /*
+     * STRICTER THAN "THE NEXT TICK" (19 Sep 2026). The old rule retried on the very next tick, so
+     * three attempts could burn in fifteen minutes against a provider having a bad quarter-hour.
+     * The row now carries `retry_after` (failure + RETRY_AFTER_MINUTES, from the caller's clock),
+     * the tick honours it, and the card reads it back as "retrying at 07:35" — a fact, not a hope.
+     */
     const partner = (await env.WP_OS_DB.prepare("SELECT firm_user_id FROM intelligence_report WHERE status = 'FAILED'").first<{ firm_user_id: string }>())!.firm_user_id;
-    const before = (await report(partner)).attempts;
-    const again = await runBriefTick(env, MP, at(90), deps(V5()));
+    const failed = await env.WP_OS_DB.prepare("SELECT attempts, retry_after FROM intelligence_report WHERE firm_user_id = ?1 AND status = 'FAILED'").bind(partner).first<{ attempts: number; retry_after: string | null }>();
+    expect(failed!.retry_after, "a FAILED row with attempts left says when the clock tries again").toBe(retryAfterIso(at(75)));
+    expect(RETRY_AFTER_MINUTES).toBe(20);
+
+    // Fifteen minutes later: not yet. Nobody is served, and the row is untouched.
+    const tooSoon = await runBriefTick(env, MP, at(90), deps(V5()));
+    expect(tooSoon.partner, "a failed brief was retried before its retry_after").toBeNull();
+    expect((await report(partner)).attempts).toBe(failed!.attempts);
+
+    // Twenty-one minutes later: started again from the top, and the attempt is spent on the way in.
+    const again = await runBriefTick(env, MP, at(96), deps(V5()));
     expect(again.partner).toBe(partner);
     expect(again.stage).toBe("gathered");
-    expect((await report(partner)).attempts).toBe(before + 1);
-    expect(before + 1).toBeLessThanOrEqual(MAX_BRIEF_ATTEMPTS);
+    expect((await report(partner)).attempts).toBe(failed!.attempts + 1);
+    expect(failed!.attempts + 1).toBeLessThanOrEqual(MAX_BRIEF_ATTEMPTS);
+    const restarted = await env.WP_OS_DB.prepare("SELECT retry_after FROM intelligence_report WHERE firm_user_id = ?1 AND report_date = '2026-09-15'").bind(partner).first<{ retry_after: string | null }>();
+    expect(restarted!.retry_after, "a restarted row no longer claims a retry time").toBeNull();
   });
 });

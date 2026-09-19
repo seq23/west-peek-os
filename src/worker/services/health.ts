@@ -74,15 +74,13 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
   });
 
   /*
-   * ── The morning brief, PER PARTNER ──
+   * ── The morning brief, PER PARTNER — ON DEMAND (19 Sep 2026) ──
    *
-   * The first cut of this read one global "Morning brief" and turned red because three runs had
-   * failed in three days. Both facts were true and the conclusion was wrong: the failures were
-   * spread across two partners with entirely independent briefs, and on most of those days one
-   * partner's brief landed perfectly well. The operator had been reading her brief while this page
-   * called the brief broken.
-   *
-   * There are two briefs. A board that averages them tells neither partner what happened to theirs.
+   * There are two briefs and no schedule: a partner presses for one, any day. So a morning with no
+   * row is not a fault and is never red — the reading is "last brief N days ago · requested by
+   * her at HH:MM", which is what the board can truthfully say. What IS a fault: a requested brief
+   * that FAILED (the reason is on the row and shown here), a requested brief that stopped moving
+   * past the sweeper's threshold, or a FAILED row that recorded no reason at all.
    */
   const briefs = ((await env.WP_OS_DB.prepare(
     `SELECT u.id, u.full_name,
@@ -94,13 +92,19 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
               WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS error_message,
             (SELECT started_at FROM intelligence_report r
               WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS started_at,
+            (SELECT requested_at FROM intelligence_report r
+              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS requested_at,
+            (SELECT requested_by FROM intelligence_report r
+              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS requested_by,
+            (SELECT completed_at FROM intelligence_report r
+              WHERE r.firm_user_id = u.id AND r.status = 'READY' ORDER BY r.completed_at DESC LIMIT 1) AS last_ready_at,
             (SELECT COUNT(*) FROM intelligence_report r
               WHERE r.firm_user_id = u.id AND r.status = 'FAILED' AND r.report_date >= date('now','-7 day')) AS fails
        FROM firm_user u
        JOIN firm_user_role fr ON fr.firm_user_id = u.id AND fr.role_id = 'role_managing_partner'
       WHERE u.status = 'ACTIVE'
       ORDER BY u.full_name`,
-  ).all<{ id: string; full_name: string; status: string | null; report_date: string | null; error_message: string | null; started_at: string | null; fails: number }>()
+  ).all<{ id: string; full_name: string; status: string | null; report_date: string | null; error_message: string | null; started_at: string | null; requested_at: string | null; requested_by: string | null; last_ready_at: string | null; fails: number }>()
     .catch(() => {
       unreadable.push("intelligence_report");
       return { results: [] };
@@ -116,27 +120,36 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
      */
     const ageMinutes = b.started_at ? (Date.now() - new Date(b.started_at).getTime()) / 60_000 : 0;
     const stuck = b.status !== null && !TERMINAL.has(b.status) && ageMinutes > STALE_AFTER_MINUTES;
+    const unstated = b.status === "FAILED" && !(b.error_message ?? "").trim();
+    const daysSince = b.last_ready_at ? Math.floor((Date.now() - new Date(b.last_ready_at).getTime()) / 86_400_000) : null;
+    const lastLine = b.last_ready_at
+      ? `last brief ${daysSince === 0 ? "today" : daysSince === 1 ? "yesterday" : `${daysSince} days ago`}`
+      : "no brief has been built yet";
+    const who = b.requested_by ? (b.requested_by === b.id ? `requested by ${firstName}` : "requested by a partner") : "not requested";
+    const when = b.requested_at ? ` at ${new Date(b.requested_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : "";
     checks.push({
       key: `daily_brief_${b.id}`,
       label: `${firstName}'s brief`,
       state:
-        !b.status ? "DEGRADED"
+        !b.status ? "OK"
         : b.status === "READY" ? "OK"
         : b.status === "FAILED" || stuck ? "DOWN"
         : "DEGRADED",
-      reading: b.status
-        ? `${b.report_date} · ${
+      reading: !b.status
+        ? `${lastLine} · on demand — press Build on Home`
+        : `${b.report_date} · ${
             b.status === "READY" ? "delivered"
             : stuck ? `stopped part-way, ${ago(b.started_at)}`
             : b.status.toLowerCase()
-          }${b.fails > 0 ? ` · ${b.fails} failed this week` : ""}`
-        : "none has ever been built",
+          } · ${who}${when} · ${lastLine}${b.fails > 0 ? ` · ${b.fails} failed this week` : ""}`,
       remedy:
-        b.status === "FAILED"
-          ? (b.error_message ?? "It failed. Build it again from Home.")
-          : stuck
-            ? "It stopped part-way through and never finished. Build it again from Home."
-            : undefined,
+        unstated
+          ? "It failed and the run did not record why. Build it again from Home; if it fails the same way, the lane that wrote it is the thing to look at."
+          : b.status === "FAILED"
+            ? (b.error_message ?? "It failed. Build it again from Home.")
+            : stuck
+              ? "It stopped part-way through and never finished. Build it again from Home."
+              : undefined,
       page: "home",
     });
   }

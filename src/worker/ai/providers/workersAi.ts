@@ -1,5 +1,6 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import { PROVIDER_MAX_OUTPUT_TOKENS } from "./outputCeiling";
+import { finishReasonFrom } from "./finishReason";
 
 /**
  * Cloudflare Workers AI — the cheap tier, and the only one that is ever actually free.
@@ -53,6 +54,12 @@ export interface WorkersAiBinding {
  * model said nothing" have different causes and different fixes, and collapsing them into one
  * message is what made the original failure take a production database query to diagnose.
  */
+function finishReasonOf(result: {
+  choices?: Array<{ finish_reason?: string | null } | null> | null;
+}): string | null | undefined {
+  return result?.choices?.[0]?.finish_reason;
+}
+
 function generatedText(result: {
   response?: string;
   choices?: Array<{ message?: { content?: string | null } | null } | null> | null;
@@ -167,6 +174,9 @@ export function createWorkersAiAdapter(options: WorkersAiOptions): ProviderAdapt
 
       return {
         text,
+        // The binding's chat shape carries finish_reason; its plain-text shape carries nothing, and
+        // the router then compares the tokens used against the cap this adapter sent.
+        finishReason: finishReasonFrom(finishReasonOf(result as { choices?: Array<{ finish_reason?: string | null } | null> | null })),
         model,
         usage: {
           inputTokens: Number(result.usage?.prompt_tokens ?? 0),
