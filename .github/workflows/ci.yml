@@ -371,6 +371,17 @@ jobs:
       - name: A position is opened only by approval
         run: npm run validate:booking
 
+      # 19 Sep 2026: the owner asked Walter on Meetings how the page works and was told about the
+      # page as it was a week earlier, in one paragraph. The description was prose in
+      # `pagePurpose.ts` that nothing read against the page. Every page now carries a guide in
+      # `src/shared/help/pageGuide/` naming its bands and controls by the strings the page emits;
+      # the host's answer, the purpose block and the Help tab all render from it. This fails when a
+      # guide names a control the page no longer renders, when a page grows a primary act its guide
+      # does not mention, when a rendered answer collapses into a paragraph, or when the retired
+      # Meetings trio comes back anywhere.
+      - name: A page guide names what the page emits
+        run: npm run validate:page-guides
+
       - name: Build client
         run: npm run build
 

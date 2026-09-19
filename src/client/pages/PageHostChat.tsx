@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
+import { MarkdownLite } from "../components/MarkdownLite";
 
 /**
  * The box where you ask the person who runs this page.
@@ -28,6 +29,13 @@ import { api, useApi } from "../lib/api";
  * switched off, or the provider fell over, that is part of the conversation and stays in it. The
  * pattern is University's and Research's, deliberately identical — three chat surfaces that each
  * invented their own error handling would leave two of them wrong.
+ *
+ * A HOST'S TURN IS PAINTED AS MARKDOWN, not dropped into a `<p>`. Owner, 19 Sep 2026, on Walter's
+ * answer to "how does this page work": "I can't understand anything he said — it's all jumbled."
+ * The answer had been composed as a numbered list with the controls in bold and this component
+ * flattened it into one paragraph, so the structure the reader needed was written and then thrown
+ * away on the way to the screen. `MarkdownLite` keeps the list a list. The partner's own turns stay
+ * plain — they typed a sentence, not a document.
  */
 
 interface Turn {
@@ -88,14 +96,19 @@ export function PageHostChat({ navKey, hostName }: { navKey: string; hostName: s
               </p>
             )}
             {turns.map((t) => (
-              <p
+              <div
                 key={t.id}
-                className={t.state === "OK" ? (t.role === "PARTNER" ? "host-chat-you" : "host-chat-them") : "host-chat-broke"}
+                className={`host-chat-turn ${t.state === "OK" ? (t.role === "PARTNER" ? "host-chat-you" : "host-chat-them") : "host-chat-broke"}`}
                 data-testid={`page-chat-turn-${t.id}`}
+                data-role={t.role}
               >
                 <span className="host-chat-who">{t.role === "PARTNER" ? "You" : t.role === "HOST" ? hostName : "West Peek OS"}</span>
-                {t.body}
-              </p>
+                {t.role === "HOST" && t.state === "OK" ? (
+                  <MarkdownLite text={t.body} className="host-chat-md" />
+                ) : (
+                  <p>{t.body}</p>
+                )}
+              </div>
             ))}
           </div>
 

@@ -1,4 +1,5 @@
 import { pagePurpose } from "@shared/help/pagePurpose";
+import { HELP_FOCUS_KEY } from "./HelpCenterPage";
 
 /**
  * The plain-English orientation block at the top of every page (P40).
@@ -74,7 +75,16 @@ export function PagePurposeBlock({
             type="button"
             className="link-button page-purpose-help"
             data-testid={`page-purpose-help-${navKey}`}
-            onClick={() => onNavigate("help")}
+            onClick={() => {
+              // Land on THIS page's section of Help, not the top of it. The same mechanism as
+              // Documents' focus: the key is left for the Help tab to read once on arrival.
+              try {
+                sessionStorage.setItem(HELP_FOCUS_KEY, navKey);
+              } catch {
+                /* a private window may refuse; the top of Help is still a fine place to land */
+              }
+              onNavigate("help");
+            }}
           >
             How everything works →
           </button>

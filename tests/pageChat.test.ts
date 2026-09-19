@@ -3,6 +3,8 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
 import { pageHost } from "@shared/help/pageHosts";
+import { pageGuide } from "@shared/help/pageGuide";
+import { parseMarkdown } from "@shared/help/markdownLite";
 
 /**
  * Item 14 — the panel that lets a partner ask whoever runs the page they are on.
@@ -19,6 +21,10 @@ import { pageHost } from "@shared/help/pageHosts";
  *    needs presence and ordering across clients. What Sequoia asks Preston is not in Scooter's panel.
  * 4. **A failed turn keeps its number.** Turn numbers count every turn including the failures, or
  *    the next reply collides with a failed one on the UNIQUE constraint and the thread jams.
+ * 5. **"How does this page work" is answered from the page's guide, not the model.** Owner, 19 Sep
+ *    2026, after Walter described the Meetings page as it was a week earlier, in one paragraph: the
+ *    answer is now the guide verbatim — structured, current, no run behind it — and the retired
+ *    trio can never come back through this door.
  */
 
 let t: TestDb;
@@ -118,5 +124,58 @@ describe("a partner can ask whoever runs the page", () => {
     const essay = await call<{ detail: string }>("/api/pages/lp/reply", SEQUOIA, "POST", { message: "x".repeat(1201) });
     expect(essay.status).toBe(400);
     expect(essay.body.detail).toMatch(/shorter/i);
+  });
+});
+
+describe("how does this page work", () => {
+  const RETIRED_MEETINGS_TRIO = ["Prepare for a meeting", "Confer with an AI employee", "Run a close-out"];
+
+  it("Walter answers on Meetings with the page's guide — numbered bands, bulleted acts, no model run, no old trio", async () => {
+    const meetingsHost = pageHost("meetings")!;
+    await t.db.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE name = ?1").bind(meetingsHost.name).run();
+
+    const asked = await call<{ ok: boolean; reply: string | null; source?: string }>("/api/pages/meetings/reply", SCOOTER, "POST", {
+      message: "how does this page work now?",
+    });
+    expect(asked.status).toBe(200);
+    expect(asked.body.ok).toBe(true);
+    expect(asked.body.source).toBe("guide");
+
+    const reply = asked.body.reply!;
+    const guide = pageGuide("meetings")!;
+    // Every act in the spec is in the answer, in bold, and the shape is lists rather than a paragraph.
+    for (const a of guide.acts) expect(reply).toContain(`**${a.label}**`);
+    const blocks = parseMarkdown(reply);
+    expect(blocks.some((b) => b.kind === "ordered" && b.items.length === guide.bands.length)).toBe(true);
+    expect(blocks.some((b) => b.kind === "bulleted" && b.items.length === guide.acts.length)).toBe(true);
+    for (const phrase of RETIRED_MEETINGS_TRIO) expect(reply).not.toContain(phrase);
+    for (const current of ["Open the room", "They said yes — record", "Ask", "Approve — make these the record", "Move it", "Google Meet"]) {
+      expect(reply).toContain(current);
+    }
+
+    // Recorded as a HOST turn with no run behind it, and marked as the guide so the thread says so.
+    const thread = await call<{ turns: Array<{ role: string; state: string; detail: string | null; body: string }> }>(
+      "/api/pages/meetings/thread",
+      SCOOTER,
+    );
+    const host = thread.body.turns.find((x) => x.role === "HOST")!;
+    expect(host.state).toBe("OK");
+    expect(host.detail).toBe("GUIDE");
+    expect(host.body).toBe(reply);
+    const row = await t.db.prepare("SELECT ai_run_id FROM page_turn WHERE nav_key = 'meetings' AND role = 'HOST'").first<{ ai_run_id: string | null }>();
+    expect(row?.ai_run_id).toBeNull();
+  });
+
+  it("a question about one control still goes to the host, with a run behind it", async () => {
+    const asked = await call<{ ok: boolean; source?: string }>("/api/pages/meetings/reply", SCOOTER, "POST", {
+      message: "what does Move it actually do to the deal?",
+    });
+    expect(asked.status).toBe(200);
+    expect(asked.body.source).toBeUndefined();
+    const rows = await t.db
+      .prepare("SELECT ai_run_id, detail FROM page_turn WHERE nav_key = 'meetings' AND role = 'HOST' ORDER BY turn_no DESC LIMIT 1")
+      .first<{ ai_run_id: string | null; detail: string | null }>();
+    expect(rows?.detail).not.toBe("GUIDE");
+    expect(rows?.ai_run_id).not.toBeNull();
   });
 });

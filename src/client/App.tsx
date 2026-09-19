@@ -44,7 +44,7 @@ import { BrowserTasksPage } from "./pages/BrowserTasksPage";
 import { WorkCardsPage as WorkSurface } from "./pages/WorkCardsPage";
 import { GOVERNANCE_UPDATE_TYPES, RECOMMENDED_GOVERNANCE, governanceType } from "@shared/governance/updateTypes";
 import { useSelectedFund } from "./lib/selectedFund";
-import { HelpCenterPage } from "./pages/HelpCenterPage";
+import { HelpCenterPage, type HelpGroup } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
 import { SetupPage } from "./pages/SetupPage";
@@ -387,6 +387,12 @@ const NAV_ITEMS: Array<{ key: string; label: string; group: string; secondary: b
       secondary: "secondary" in g && g.secondary === true,
     })),
   );
+
+/** The nav as the Help tab lists it — one section per page, in the order the rail shows them. */
+const HELP_GROUPS: readonly HelpGroup[] = NAV_GROUPS.map((g) => ({
+  group: "footer" in g && g.footer ? "" : g.group,
+  keys: g.items.map((i) => i.key).filter((k) => k !== "help" && k !== "setup"),
+}));
 
 /**
  * Every destination the URL may name.
@@ -2968,7 +2974,7 @@ function Shell() {
           )}
           {/* Help is reachable signed-out too: an operator who cannot get in still deserves to
               learn what this is and how to get started. */}
-          {active === "help" && <HelpCenterPage />}
+          {active === "help" && <HelpCenterPage groups={HELP_GROUPS} onNavigate={authed ? navigate : undefined} />}
           {authed && active === "home" && <HomePage me={me.data!} onNavigate={navigate} />}
           {authed && active === "setup" && <SetupPage me={me.data!} />}
           {authed && active === "sources-and-sweeps" && <IntelligencePage me={me.data!} />}
