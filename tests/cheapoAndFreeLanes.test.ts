@@ -244,6 +244,39 @@ describe("free frontier capacity carries the important, public-facing work", () 
     expect(routing.attempts.some((a) => a.outcome === "COMPLETED")).toBe(true);
   });
 
+  it("a call that leads on its policy (the morning brief) never assembles a free lane, and the run says why it did not", async () => {
+    /*
+     * 18–19 Sep 2026: thirteen brief attempts on free lanes, zero accepted — twelve answered in
+     * exactly 256 tokens, one hung — against 38 of 38 accepted on the pinned lane. A short wrong
+     * reply is a COMPLETED run to the chain, so it never walked down. `leadOnPolicy` is the caller
+     * saying "the pin leads"; the same PUBLIC judgement call without it leads on a :free lane.
+     */
+    const { fetchImpl } = hostRouter({ "openrouter.ai": () => OK_OPENAI_SHAPE("===SECTION executive_summary\nfine [1]\n===END") });
+    const { run } = await runAi(
+      env(),
+      {
+        purpose: "daily intelligence report 2026-09-19 for Sequoia Taylor",
+        actor: MP_ACTOR,
+        inputs: ["write the brief"],
+        sensitivity: "PUBLIC",
+        budgetContext: { judgement: true, expectedOutputTokens: 24_000, leadOnPolicy: true },
+      },
+      { fetchImpl },
+    );
+    expect(run.status).toBe("COMPLETED");
+    const routing = await routingFor(run.id);
+    expect(routing.explanation, "a free lane led a call that asked to lead on its pin").not.toContain("Free frontier capacity is tried first");
+    expect(routing.attempts.every((a) => !String(a.model).includes(":free")), "a :free lane was attempted").toBe(true);
+    expect(routing.attempts.find((a) => a.outcome === "COMPLETED")!.model).not.toContain(":free");
+    // Control: the identical call WITHOUT the flag leads on the free lane — the flag is the difference.
+    const control = await runAi(
+      env(),
+      { purpose: "daily intelligence report 2026-09-19 for Sequoia Taylor", actor: MP_ACTOR, inputs: ["write the brief"], sensitivity: "PUBLIC", budgetContext: { judgement: true, expectedOutputTokens: 24_000 } },
+      { fetchImpl },
+    );
+    expect((await routingFor(control.run.id)).explanation).toContain("Free frontier capacity is tried first");
+  });
+
   it("says on the run, before anything happens, that free capacity is being tried", async () => {
     const { fetchImpl } = hostRouter({ "openrouter.ai": () => OK_OPENAI_SHAPE("done") });
     const { run } = await runAi(
