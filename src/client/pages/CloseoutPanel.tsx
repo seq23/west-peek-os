@@ -2,7 +2,11 @@ import { useState } from "react";
 import { api, useApi } from "../lib/api";
 
 /**
- * Meeting close-out — what came out of the meeting and who is holding it (P33).
+ * Who is holding each piece — the close-out, as a card on the After face (P33; Phase D §3).
+ *
+ * It used to be a panel of its own under the record. What came out of a meeting is one face now,
+ * and this is the part of it that answers "who was given which task": the After face's four objects
+ * say what was decided, owed and left open; this says who is carrying the firm's side of it.
  *
  * The panel answers one question the operator asked for directly: "what deliverables were gathered
  * and who was given which task". So the ASSIGNEE leads every row, not the task text — you scan a
@@ -45,12 +49,13 @@ interface CloseoutResponse {
   commitments: Commitment[];
 }
 
+/** The assignee leads the row: green when an employee holds it, amber when a person must, grey when nobody does. */
 function kindClass(kind: Commitment["assignee_kind"]): string {
   switch (kind) {
-    case "AI_EMPLOYEE": return "help-tag help-tag-good";
-    case "AI_WITH_HUMAN_TOUCH": return "help-tag help-tag-warn";
-    case "HUMAN_RECOMMENDED": return "help-tag help-tag-warn";
-    case "UNASSIGNED": return "help-tag help-tag-muted";
+    case "AI_EMPLOYEE": return "badge badge-ok";
+    case "AI_WITH_HUMAN_TOUCH": return "badge badge-gate";
+    case "HUMAN_RECOMMENDED": return "badge badge-gate";
+    case "UNASSIGNED": return "badge";
   }
 }
 
@@ -103,7 +108,22 @@ export function CloseoutPanel({ meetingId }: { meetingId: string }): JSX.Element
 
   return (
     <section className="card" data-testid={`closeout-${meetingId}`}>
-      <h4>Close-out</h4>
+      <div className="panel-head">
+        <h3>Who is holding each piece</h3>
+        <span className="muted small">
+          {closeout && closeout.state === "READY" ? (
+            <span data-testid="closeout-counts">
+              {closeout.assigned_count} assigned
+              {closeout.recommended_count > 0 && `, ${closeout.recommended_count} recommended for you`}
+              {closeout.unresolved_count > 0 && `, ${closeout.unresolved_count} need an owner`}
+              {" · "}
+              {new Date(closeout.created_at).toLocaleString()}
+            </span>
+          ) : (
+            "the firm's side, with a name on each"
+          )}
+        </span>
+      </div>
 
       {!closeout && (
         <p className="muted small" data-testid="closeout-none">
@@ -118,26 +138,16 @@ export function CloseoutPanel({ meetingId }: { meetingId: string }): JSX.Element
         </p>
       )}
 
-      {closeout && closeout.state === "READY" && (
-        <p className="muted small" data-testid="closeout-counts">
-          {closeout.assigned_count} assigned
-          {closeout.recommended_count > 0 && `, ${closeout.recommended_count} recommended for you`}
-          {closeout.unresolved_count > 0 && `, ${closeout.unresolved_count} need an owner`}
-          {" · "}
-          {new Date(closeout.created_at).toLocaleString()}
-        </p>
-      )}
-
       {assigned.length > 0 && (
         <>
-          <p className="small"><strong>Assigned</strong></p>
+          <p className="eyebrow">Assigned</p>
           <ul className="card-list small" data-testid="closeout-assigned">{assigned.map(row)}</ul>
         </>
       )}
 
       {recommended.length > 0 && (
         <>
-          <p className="small"><strong>Recommended for you</strong></p>
+          <p className="eyebrow">Recommended for you</p>
           <p className="muted small">Not assigned to anyone — these need a person.</p>
           <ul className="card-list small" data-testid="closeout-recommended">{recommended.map(row)}</ul>
         </>
@@ -145,14 +155,14 @@ export function CloseoutPanel({ meetingId }: { meetingId: string }): JSX.Element
 
       {unowned.length > 0 && (
         <>
-          <p className="small"><strong>Needs an owner</strong></p>
+          <p className="eyebrow">Needs an owner</p>
           <ul className="card-list small" data-testid="closeout-unowned">{unowned.map(row)}</ul>
         </>
       )}
 
       {theirs.length > 0 && (
         <>
-          <p className="small"><strong>They owe us</strong></p>
+          <p className="eyebrow">They owe us</p>
           <p className="muted small">Tracked, not assigned to anyone here.</p>
           <ul className="card-list small" data-testid="closeout-counterparty">{theirs.map(row)}</ul>
         </>

@@ -358,6 +358,13 @@ jobs:
       - name: A room question is answered from the record
         run: npm run validate:room-answers
 
+      # Phase D (18 Sep 2026): a position is opened only by a partner's approval. Save on the
+      # Portfolio row composes the existing draft-and-card path and stops; approving the card
+      # executes through the one writer, receipt-verified. This fails if Save reaches position, if a
+      # second writer appears, or if approval stops being wired to execute (Rule 0).
+      - name: A position is opened only by approval
+        run: npm run validate:booking
+
       - name: Build client
         run: npm run build
 

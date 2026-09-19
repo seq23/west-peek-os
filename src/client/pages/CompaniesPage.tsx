@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
-import { originLabel, stage } from "@shared/investment/pipeline";
+import { SPINE, originLabel, stage, stallRead } from "@shared/investment/pipeline";
 
 /**
  * Which company the register should open on, handed over from another page.
@@ -68,6 +68,25 @@ interface RegisterCompany {
   exit_reason: string | null;
   /** When it left. Null where the deal never moved — the register does not invent a date. */
   left_pipeline_at: string | null;
+  /**
+   * The stage clock, the board's reading: the last transition-or-backfill on the spine, else the
+   * deal's creation. Null only where there is no deal.
+   */
+  in_stage_since: string | null;
+  /** The last time the deal moved; null where it never has. */
+  deal_moved_at: string | null;
+  /**
+   * Whether a partner has looked at the latest deal — the inverse of the board's `unreviewed`
+   * badge, derived by the same function (shared/investment/lookedAt.ts). Null where there is no
+   * deal to have looked at.
+   */
+  looked_at: boolean | null;
+  /** An open position exists for the company — the fund's money is actually in. */
+  booked: boolean;
+  /** Contradictions still open or under investigation on the record. */
+  open_contradictions: number;
+  /** The next scheduled meeting, if one is on the calendar. */
+  next_meeting_at: string | null;
 }
 
 /** Passed or withdrawn: out of the working list, still in the register. */
@@ -82,6 +101,53 @@ const usd = (n: number | null): string =>
         ? `$${Math.round(n / 1_000)}K`
         : `$${Math.round(n)}`;
 
+const shortDate = (iso: string): string =>
+  new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
+/**
+ * The compact rail: six dots for the six stages on the spine, the clock beside them.
+ *
+ * Never interactive — the full rail on Dealflow filters the board; this one only says where the
+ * deal is and how long it has been there. Ink = passed through, orange = here, green = invested.
+ * The words beside the dots carry the same fact for a reader who cannot see the colour, and the
+ * `aria-label` on the list names the stage so a screen reader is not read six empty bullets.
+ */
+function CompactRail({ statusKey, since }: { statusKey: string; since: string | null }) {
+  const s = stage(statusKey);
+  if (!s || s.order === null) return null;
+  const clock = stallRead(statusKey, since);
+  const closed = s.key === "CLOSED";
+  const words = closed
+    ? `Invested${since ? ` · since ${shortDate(since)}` : ""}`
+    : clock
+      ? `${s.label} · ${clock.label}${clock.stalled ? ", stalled" : ""}`
+      : s.label;
+  return (
+    <ul className="stage-rail-compact" aria-label={`Stage: ${words}`} data-testid="stage-rail-compact">
+      {SPINE.map((n, i) => {
+        const dot =
+          n.order! < s.order!
+            ? "stage-dot stage-dot-done"
+            : n.order === s.order
+              ? closed
+                ? "stage-dot stage-dot-closed"
+                : "stage-dot stage-dot-current"
+              : "stage-dot";
+        return (
+          <li key={n.key} aria-hidden="true">
+            <span className={dot} />
+            {i < SPINE.length - 1 && <span className="stage-seg" />}
+          </li>
+        );
+      })}
+      <li>
+        <span className={clock?.stalled ? "small deal-sub-stalled" : "small muted"} data-testid="stage-clock">
+          {words}
+        </span>
+      </li>
+    </ul>
+  );
+}
 
 interface HistoryEntry {
   id: string;
@@ -104,10 +170,12 @@ interface HistoryEntry {
  * SECTOR IS A LIST NOW, not free text — see item 10. Typing it was how "Ed tech" and "ED_TECH" came
  * to be two sectors.
  */
-function CompanyEditor({ company, sectors, onSaved, arrivedHere }: {
+function CompanyEditor({ company, sectors, onSaved, arrivedHere, leading }: {
   company: RegisterCompany;
   sectors: Array<{ key: string; label: string }>;
   onSaved: () => void;
+  /** The card's other acts — the deal, the missing reason — so every act sits on the one row. */
+  leading?: ReactNode;
   /**
    * Somebody clicked this company's name on a deal and was sent here. Open the record rather than
    * landing them on a closed card they have to find and click again — the click already said what
@@ -139,6 +207,7 @@ function CompanyEditor({ company, sectors, onSaved, arrivedHere }: {
 
   return (
     <div className="company-edit">
+      {leading}
       <button type="button" className="link-button" data-testid={`company-edit-${company.id}`} onClick={() => setOpen((v) => !v)}>
         {open ? "never mind" : "Edit"}
       </button>{" "}
@@ -194,34 +263,61 @@ function CompanyEditor({ company, sectors, onSaved, arrivedHere }: {
   );
 }
 
-/** One company, the same four facts in the same places whether it is live or passed. */
-function CompanyCard({ company: c, sectors, arrivedHere, onSaved }: {
+/**
+ * One company, the same four facts in the same places whether it is live or passed.
+ *
+ * THE RAIL IS THE FIFTH THING, and it is the thing the card was missing (§1.3 #1): "Stage" was a
+ * word in the facts, with no clock and no sense of how far along the funnel the deal was. The
+ * compact rail sits under the one-liner with days-in-stage, so the four facts can carry what the
+ * rail cannot — money, origin, meetings, and one contextual slot that changes with the stage.
+ */
+function CompanyCard({ company: c, sectors, arrivedHere, onSaved, onNavigate }: {
   company: RegisterCompany;
   sectors: Array<{ key: string; label: string }>;
   arrivedHere: boolean;
   onSaved: () => void;
+  onNavigate: (key: string) => void;
 }) {
   const s = c.deal_status ? stage(c.deal_status) : null;
   const left = hasLeft(c);
+
+  /*
+   * THE FOURTH FACT IS CONTEXTUAL. Invested: is the position booked. Arrived by email and nobody
+   * has acted: has a partner looked at it — the board's own "not yet looked at", read from the same
+   * function, never a second flag. Otherwise: what is open on the record.
+   */
+  const fourth: { dt: string; dd: ReactNode; testid: string } | null =
+    !s || left
+      ? null
+      : s.key === "CLOSED"
+        ? { dt: "Booked", dd: c.booked ? "yes" : <span className="badge badge-gate">not yet</span>, testid: "booked" }
+        : c.looked_at === false
+          ? { dt: "Looked at", dd: <span className="badge badge-attention">not yet</span>, testid: "looked-at" }
+          : {
+              dt: "Open",
+              dd: c.open_contradictions === 0 ? "nothing" : `${c.open_contradictions} contradiction${c.open_contradictions === 1 ? "" : "s"}`,
+              testid: "open",
+            };
+
   return (
-    <article
-      /* `deal-row-out` is the dimming the pipeline already uses for a deal that has left it, reused
-         rather than duplicated: the two lists are showing the same fact and should read the same. */
-      className={left ? "card company-card deal-row-out" : "card company-card"}
-      data-testid={`company-${c.id}`}
-    >
+    <article className="card company-card" data-testid={`company-${c.id}`} data-passed={left ? "true" : undefined}>
       <header className="company-card-head">
         <h4>{c.canonical_name}</h4>
         {c.sector ? <span className="badge">{c.sector}</span> : <span className="muted small">no sector</span>}
       </header>
 
+      {/* Passed: the facts recede (`deal-row-out` — the pipeline's own dimming for a deal that has
+          left it), the one-liner and the reason do not. The reason is the point of keeping the card
+          (§1.3 #3), and it was being dimmed with everything else. */}
       <p className="company-oneliner">
         {c.one_liner ?? <span className="muted">Nothing recorded about what they do.</span>}
       </p>
 
-      {/* THE REASON, ON THE CARD. A passed company whose card looks like every other card is the
-          thing the operator asked to be able to see at a glance, and the reason is what makes the
-          pile worth keeping — a list of names the firm declined answers nothing. */}
+      {s && !left && <CompactRail statusKey={s.key} since={c.in_stage_since} />}
+
+      {/* THE REASON, ON THE CARD, AT FULL INK. A passed company whose card looks like every other
+          card is the thing the operator asked to be able to see at a glance, and the reason is what
+          makes the pile worth keeping — a list of names the firm declined answers nothing. */}
       {left && (
         <p className="company-oneliner" data-testid={`company-passed-${c.id}`}>
           <strong>{s?.key === "WITHDRAWN" ? "It went away" : "We said no"}</strong>
@@ -236,38 +332,73 @@ function CompanyCard({ company: c, sectors, arrivedHere, onSaved }: {
         system." Every intake route opens the opportunity at arrival and migration 0197 backfilled
         the register, so this row should never render — and when it does, it says so in those
         terms rather than as the calm "Not in the pipeline" that let Northwind Robotics and Vynlo
-        sit unseen for a month. `validate:companies-in-pipeline` fails the build if the calm label
-        comes back.
+        sit unseen for a month. The page-level strip above the grid names the company too; this is
+        the card's own copy, so the fault travels with the row when the grid is filtered.
+        `validate:companies-in-pipeline` fails the build if either goes missing.
       */}
       {!s && (
-        <p className="notice notice-bad small" data-testid={`company-no-deal-${c.id}`}>
+        <p className="fault" data-testid={`company-no-deal-${c.id}`}>
           <strong>Not on the board, and it should be.</strong> Every company in the system is meant to be at the
           top of the funnel; this one has no deal, which is a fault in how it came in. Open it from Dealflow.
         </p>
       )}
 
+      {/* Passed: the VALUES recede — `deal-row-out` on each dd, not on the list. Measured, not
+          chosen by eye (e2e/deals-surfaces.spec.ts composites opacity): ink at .72 on white is
+          7.5:1, but the 11px muted labels would be 3.2:1, so the labels keep their strength. */}
       <dl className="company-facts">
-        <div>
-          <dt>Stage</dt>
-          <dd>{s?.label ?? "—"}</dd>
-        </div>
-        <div>
-          <dt>In it</dt>
-          <dd data-testid={`company-amount-${c.id}`}>
-            {usd(c.amount_usd)}
-            {c.amount_is_provisional && c.amount_usd !== null && <span className="muted small"> · placeholder</span>}
-          </dd>
-        </div>
+        {!left && (
+          <div>
+            <dt>In it</dt>
+            <dd data-testid={`company-amount-${c.id}`}>
+              {usd(c.amount_usd)}
+              {c.amount_is_provisional && c.amount_usd !== null && <span className="muted small"> · placeholder</span>}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Met via</dt>
-          <dd>{c.origin ? originLabel(c.origin) : "—"}</dd>
+          <dd className={left ? "deal-row-out" : undefined}>{c.origin ? originLabel(c.origin) : "—"}</dd>
         </div>
         <div>
           <dt>Meetings</dt>
-          <dd>{c.meetings}</dd>
+          <dd className={left ? "deal-row-out" : undefined}>
+            {c.meetings}
+            {!left && c.next_meeting_at && <span className="muted small"> · next {shortDate(c.next_meeting_at)}</span>}
+          </dd>
         </div>
+        {fourth && (
+          <div data-testid={`company-fourth-${fourth.testid}-${c.id}`}>
+            <dt>{fourth.dt}</dt>
+            <dd>{fourth.dd}</dd>
+          </div>
+        )}
       </dl>
-      <CompanyEditor company={c} sectors={sectors} onSaved={onSaved} arrivedHere={arrivedHere} />
+
+      <CompanyEditor
+        company={c}
+        sectors={sectors}
+        onSaved={onSaved}
+        arrivedHere={arrivedHere}
+        leading={
+          <>
+            {s && (
+              <>
+                <button type="button" className="link-button" data-testid={`company-deal-${c.id}`} onClick={() => onNavigate("dealflow")}>
+                  {left ? "Look at it again" : "The deal"}
+                </button>{" "}
+              </>
+            )}
+            {left && c.exit_reason === null && (
+              <>
+                <button type="button" className="link-button" data-testid={`company-add-reason-${c.id}`} onClick={() => onNavigate("dealflow")}>
+                  Add the reason
+                </button>{" "}
+              </>
+            )}
+          </>
+        }
+      />
     </article>
   );
 }
@@ -325,51 +456,89 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
 
   if (register.loading && !register.data) return <p data-testid="companies-loading">Loading the register…</p>;
 
-  return (
-    <section data-testid="companies-page">
-      <p className="muted small">
-        Every company the firm has a record of, {me.fullName.split(" ")[0]} — {all.length} in all,{" "}
-        {owned.length} the fund has money in
-        {passedInAll.length > 0 && `, ${passedInAll.length} it turned down`}.
-      </p>
+  /* A register that did not load is said in those words, with the status, never a blank grid
+     that reads as "no companies". */
+  if (!register.data) {
+    return (
+      <section data-testid="companies-register">
+        <p className="state-message" data-testid="companies-error">
+          The register did not load{register.status ? ` (HTTP ${register.status})` : ""}.{" "}
+          <button type="button" className="link-button" onClick={() => register.reload()}>
+            Try again
+          </button>
+        </p>
+      </section>
+    );
+  }
 
-      <div className="form-row">
-        <label>
-          Sector{" "}
-          <select data-testid="companies-sector" value={sector} onChange={(e) => setSector(e.target.value)}>
-            <option value="ALL">All ({all.length})</option>
-            {(register.data?.sectors ?? []).map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Find{" "}
-          <input data-testid="companies-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="name, sector or what they do" />
-        </label>
+  /*
+   * THE FAULT STRIP, AT PAGE LEVEL AND NAMED. Phase A put the fault inside the card as a small
+   * notice, the same size as the one-liner — easy to read as a caption (§1.3 #2). A company with no
+   * deal is the one thing on this page that must not be missable, so the strip sits above the grid
+   * and says which company, before any filter can hide the card. It reads `all`, not `shown`: a
+   * search that happens not to match Ghost Co must not make the fault disappear.
+   */
+  const faulted = all.filter((c) => !c.deal_status);
+  const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  const answer =
+    all.length === 0
+      ? "No companies on the record yet."
+      : `${n(all.length, "company", "companies")} on the record, ${owned.length} the fund has money in` +
+        (passedInAll.length > 0 ? `, ${passedInAll.length} it turned down.` : ".");
+
+  return (
+    <section data-testid="companies-register">
+      <div className="masthead" data-testid="companies-masthead">
+        <p className="masthead-date">
+          The register · {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+        </p>
+        <h2 data-testid="companies-answer">{answer}</h2>
+        {/* THE DOOR IS ON DEALFLOW, and this is the one line that says so. Both this page and
+            Dealflow once carried "Add a company", doing different things; then this page carried a
+            button-shaped signpost that read as the same button. It is a sentence now, in the
+            masthead's detail, and the one link beside the search field. */}
+        <p className="masthead-second" data-testid="companies-register-note">
+          Every company has a deal, because every company enters on Dealflow at the top of the funnel. Nothing is
+          created here; a row with no deal is a fault, and says so.
+        </p>
       </div>
 
-      {/* THE DOOR MOVED, AND LEAVING A BUTTON BEHIND WAS THE MISTAKE.
-
-          Both this page and Dealflow carried "Add a company", doing different things — this one
-          made a company record and no deal, that one attached a deal to a company that had to
-          already exist. So the top of the funnel had two openings and neither was complete.
-
-          The first fix left a button here labelled "Add a company →" that navigated to Dealflow.
-          Same place, same words, still button-shaped: the operator read the page as unchanged, and
-          fairly. A signpost must not be shaped like the thing it replaced. It is a sentence now,
-          in the register's own explanation, where it reads as information rather than as an action. */}
-      <p className="muted small" data-testid="companies-register-note">
-        This is the register — everything the firm has recorded, whether or not it is a live deal.
-        Nothing is created here. A company enters the firm in one place, on{" "}
+      <div className="row between">
+        <div className="form-row">
+          <label className="find-field">
+            Find{" "}
+            <input type="search" data-testid="companies-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="name, sector or what they do" />
+          </label>
+          <label>
+            Sector{" "}
+            <select data-testid="companies-sector" value={sector} onChange={(e) => setSector(e.target.value)}>
+              <option value="ALL">All ({all.length})</option>
+              {(register.data?.sectors ?? []).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </label>
+        </div>
         <button type="button" className="link-button" data-testid="companies-add-toggle" onClick={() => onNavigate("dealflow")}>
-          Dealflow
+          Add one on Dealflow →
         </button>
-        , because a company worth recording is almost always one you are already looking at.
-      </p>
+      </div>
+
+      {faulted.length > 0 && (
+        <p className="fault" data-testid="companies-fault">
+          <strong>
+            {faulted.map((c) => c.canonical_name).join(", ")} {faulted.length === 1 ? "is" : "are"} not on the board, and{" "}
+            {faulted.length === 1 ? "it" : "they"} should be.
+          </strong>{" "}
+          Every company in the system is meant to be at the top of the funnel; {faulted.length === 1 ? "this one has" : "these have"} no
+          deal, which is a fault in how {faulted.length === 1 ? "it" : "they"} came in.{" "}
+          <button type="button" className="link-button" onClick={() => onNavigate("dealflow")}>
+            Open {faulted.length === 1 ? "it" : "them"} from Dealflow
+          </button>
+        </p>
+      )}
 
       {message && <p className="notice" data-testid="companies-message">{message}</p>}
-
 
       <div className="company-grid" data-testid="company-grid">
         {working.map((c) => (
@@ -379,6 +548,7 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
             sectors={sectors}
             arrivedHere={c.id === openOn}
             onSaved={() => register.reload()}
+            onNavigate={onNavigate}
           />
         ))}
         {working.length === 0 && (
@@ -392,22 +562,17 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
         )}
       </div>
 
-      <button type="button" className="link-button" onClick={() => onNavigate("dealflow")}>
-        See where these stand in the pipeline →
-      </button>
-
       {/* WHAT THE FIRM TURNED DOWN, kept and readable.
           A pass is one of the more valuable things a fund owns — it is the only record of the
           judgement, and it is the first thing you want when the same founder comes back raising.
-          Below the live register and dimmed, so it never competes with the working list; open by
-          default and headed with a count, so it is never something you have to know to look for. */}
+          Below the live register in its own band, so it never competes with the working list; open
+          by default and headed with a count, so it is never something you have to know to look for. */}
       {passedInAll.length > 0 && (
-        <section data-testid="companies-passed">
-          <div className="home-section-head">
+        <section className="band" data-testid="companies-passed">
+          <div className="band-head">
             <h3>Who did we turn down, and why?</h3>
-            <span className="muted small">
-              {passedInAll.length} {passedInAll.length === 1 ? "company" : "companies"} · out of the pipeline,
-              still on the record
+            <span className="band-when">
+              {n(passedInAll.length, "company", "companies")} · out of the pipeline, still on the record
             </span>
           </div>
           <div className="company-grid">
@@ -418,6 +583,7 @@ export function CompaniesPage({ me, onNavigate }: { me: MeResponse; onNavigate: 
                 sectors={sectors}
                 arrivedHere={c.id === openOn}
                 onSaved={() => register.reload()}
+                onNavigate={onNavigate}
               />
             ))}
             {passed.length === 0 && (

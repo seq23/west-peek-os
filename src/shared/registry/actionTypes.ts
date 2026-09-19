@@ -333,6 +333,11 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // room becomes a record without Phase B's approve route, and validate:voice-is-read-only reads
   // the services to keep it so.
   { key: "meeting.room.ask", name: "Ask the live room", description: "Ask a question in a live meeting, typed or spoken (push-to-talk). Read-only: the answer, table or chart is saved as a block on the meeting, an employee may be handed a preview-first work card, and the After draft may be refreshed. Nothing asked here becomes a decision, commitment, question or stage move without a partner approving it.", isExternalEffect: false },
+  // Phase D: portfolio
+  // The per-company reserve (migration 0210). An MP write, not a card: earmarking is intent, not
+  // money moving. Booking a holding needs no new key — it is `transaction.create` and the existing
+  // `investment.approve` card, whose approval now executes (design §6, decision Q1).
+  { key: "position.reserve", name: "Reserve for a holding", description: "Earmark follow-on capital for one company, as of a date, with a note. Append-only; a reserve is superseded, never edited. The fund-level reserve stays the plan.", isExternalEffect: false },
 ] as const;
 
 /**

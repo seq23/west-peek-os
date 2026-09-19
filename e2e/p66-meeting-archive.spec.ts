@@ -43,13 +43,15 @@ test("a meeting is taken off the record with a reason, and the work it produced 
   const meetingId = /mtg_[0-9a-f-]+/.exec((await page.getByTestId("meetings-message").textContent()) ?? "")?.[0];
   expect(meetingId, "the meeting id is needed to prove the archived row still resolves").toBeTruthy();
 
-  // A promise made in the meeting, converted into work somebody carries.
-  await page.getByTestId(`meeting-open-${meetingId}`).click();
+  // A promise made in the meeting, converted into work somebody carries. Starting a meeting now
+  // opens its record on the During face (Phase D); what is owed lives on After.
   await expect(page.getByTestId("meeting-detail")).toBeVisible();
+  await expect(page.getByTestId("face-during")).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("face-after").click();
   await page.getByTestId("commitment-text").fill(promise);
   await page.getByTestId("commitment-submit").click();
   await page.locator('button[data-testid^="commitment-convert-"]').first().click();
-  await expect(page.getByTestId("commitment-list")).toContainText("CONVERTED");
+  await expect(page.getByTestId("commitment-list")).toContainText("on a work card");
 
   const workCard = page.locator('li[data-testid^="work-card-"]').filter({ hasText: promise }).first();
   await gotoSurface(page, "Work");

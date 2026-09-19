@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { stage } from "@shared/investment/pipeline";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openDealFace } from "./support/nav";
 import { deliverMail } from "./support/mail";
 import { provisionLocalD1 } from "./support/provision";
 
@@ -289,18 +289,28 @@ test("a pass is recorded with its reason, keeps its history, and the pass pile i
    * is the property — the sentence explaining why can be reworded, and a deal that quietly left the
    * funnel on a one-word reason cannot be talked back into it.
    */
-  let dialogs = 0;
+  /*
+   * NO BROWSER DIALOG. The reason is taken in an inline field under the row (design §1.2 #6) with
+   * a visible label and an error slot; a dialog opening here would be the old `window.prompt`
+   * coming back, and the listener below turns that into a failure rather than an accepted prompt.
+   */
   page.on("dialog", (d) => {
-    dialogs += 1;
-    void d.accept(dialogs === 1 ? "no" : reason);
+    void d.dismiss();
+    throw new Error(`a browser dialog opened (${d.type()}: ${d.message()}) — the pass reason is an inline field, not a prompt`);
   });
 
   await page.getByTestId(`deal-pass-${dealId}`).click();
+  const reasonField = page.getByTestId(`deal-pass-reason-${dealId}-text`);
+  await expect(reasonField).toBeFocused();
+  await reasonField.fill("no");
+  await page.getByTestId(`deal-pass-reason-${dealId}-confirm`).click();
   await expect(page.getByTestId(`deal-${dealId}`)).toContainText("Say why in a sentence");
+  await expect(reasonField, "the refused field says so to a screen reader too").toHaveAttribute("aria-invalid", "true");
   expect(await statusOf(request, dealId), "a pass with no reason must not move the deal").toBe("DILIGENCE");
 
   // Said properly, it passes.
-  await page.getByTestId(`deal-pass-${dealId}`).click();
+  await reasonField.fill(reason);
+  await page.getByTestId(`deal-pass-reason-${dealId}-confirm`).click();
   await expect.poll(async () => await statusOf(request, dealId)).toBe("PASS");
 
   // It is off the live board — a passed deal is not somebody's problem any more.
@@ -340,6 +350,7 @@ test("a pass is recorded with its reason, keeps its history, and the pass pile i
   await page.reload();
   await page.getByTestId("dealflow-filter-PASSED").click();
   await page.getByTestId(`deal-company-${dealId}`).click();
+  await openDealFace(page, "history");
   const history = page.getByTestId("deal-history");
   await expect(history).toBeVisible();
   await expect(history, "a partner must be able to read why the firm said no").toContainText(reason);

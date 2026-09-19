@@ -98,8 +98,14 @@ export function DealProvenance(): JSX.Element {
   );
 
   return (
-    <>
-      <h3>Where deals come from</h3>
+    /* The last band on Dealflow (design/DEALS_SECTION_DESIGN.md §4): the same `.band` shape as the
+       bands above it, so the page ends on a section that looks like the others rather than on a
+       heading of a different rank. */
+    <section className="band">
+      <div className="band-head">
+        <h3>Where deals come from</h3>
+        <span className="band-when">the community is the thesis; this is the proof</span>
+      </div>
       <section className="card" data-testid="deal-provenance">
         <p className="muted small">
           Not how busy the community is — how early it puts us in the room. The number that matters
@@ -145,9 +151,12 @@ export function DealProvenance(): JSX.Element {
             )}
 
             {recorded.length > 0 && (
-              /* A wide table scrolls inside its own box rather than pushing the page sideways —
-                 the same wrapper every other table in the product uses. */
-              <div className="tablewrap">
+              /* A wide table scrolls inside its own box rather than pushing the page sideways.
+                 `.table-wrap` is one of the two declared inner scrollers of the Deals section
+                 (design/DEALS_SECTION_DESIGN.md §10, with `.faces`): it carries the edge shadows
+                 that say there is more to the side, and the measured spec excludes its children
+                 from the overflow sweep because scrolling INSIDE it is the design. */
+              <div className="table-wrap">
                 <table className="surface-body small">
                   <thead>
                     <tr><th>Where we met them</th><th className="num">Deals</th><th>How long we knew them first</th></tr>
@@ -188,7 +197,7 @@ export function DealProvenance(): JSX.Element {
           </>
         )}
       </section>
-    </>
+    </section>
   );
 }
 

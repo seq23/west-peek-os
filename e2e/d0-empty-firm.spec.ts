@@ -81,3 +81,31 @@ test("no empty slot is a bare placeholder — every one of them is a stated fact
   expect(stated, "no empty slot was found at all — the design system's own classes stopped matching").toBeGreaterThan(5);
   expect(tokens, "an empty slot must be a sentence a reader can act on, never a bare token").toEqual([]);
 });
+
+/**
+ * THE FUND-SHAPED PAGES ON A FIRM WITH NO FUND. Thesis and Secondaries read a fund's policy
+ * versions; before any fund exists they must say so in words rather than draw a rail from nothing
+ * or a sleeve of $0. Asserted HERE because this is the one file that runs on a provably empty firm
+ * — the Deals journeys later in the suite each make a fund and cannot reach this state.
+ */
+test("Thesis and Secondaries say there is no fund, and draw nothing from nothing", async ({ page, request }) => {
+  const funds = (await (await request.get("/api/funds", { headers: { "x-wpos-dev-user": "scooter@westpeek.ventures" } })).json()) as {
+    funds: unknown[];
+  };
+  expect(funds.funds, "the empty-firm journey found a fund — the suite no longer starts from a clean database").toHaveLength(0);
+
+  await page.goto("/");
+  await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
+  await page.getByTestId("dev-login-submit").click();
+  await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
+
+  expect(await visitSurface(page, "Thesis")).toBe(true);
+  await expect(page.getByTestId("thesis-no-fund")).toContainText("No fund exists yet");
+  await expect(page.getByTestId("thesis-rail")).toHaveCount(0);
+
+  expect(await visitSurface(page, "Secondaries")).toBe(true);
+  await expect(page.getByTestId("secondaries-budget")).toContainText("sleeve budget to confirm");
+  await expect(page.getByTestId("secondaries-budget")).toContainText("MISSING — no fund exists");
+  await expect(page.getByTestId("secondaries-eyebrow")).toContainText("sleeve budget to confirm");
+  await expect(page.getByTestId("secondaries-budget")).not.toContainText("$0 of $0");
+});

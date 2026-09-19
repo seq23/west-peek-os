@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openDealFace, openDealRecord } from "./support/nav";
 
 /**
  * THE FUND ACTUALLY BUYS SOMETHING, and a `position` exists afterwards.
@@ -14,10 +14,12 @@ import { gotoSurface } from "./support/nav";
  * "owns nothing" on the same afternoon.
  *
  * WHAT THIS PROVES, RUNG BY RUNG, AND IN THE BROWSER:
- *   a share class → a draft that commits nothing → submission, which raises the MP-reserved card →
- *   pressing "Book it" BEFORE the decision, and being refused → a partner's decision on Approvals →
- *   pressing it again with the receipt → a position that exists, for the right quantity and the
- *   right cost basis → and a receipt that cannot be spent twice.
+ *   a share class → a draft that commits nothing, naming the fund → submission, which raises the
+ *   MP-reserved card → the explicit execute route BEFORE the decision, refused → a partner's
+ *   decision on Approvals, WHICH IS THE BOOKING (Phase D, design §6, Q1: approval executes through
+ *   `executeTransaction` with the card as the receipt; the "paste the receipt, press Book it" rung
+ *   is gone from the page) → a position that exists, for the right quantity and the right cost
+ *   basis → and a receipt that cannot be spent twice.
  *
  * THE REFUSAL IS ASSERTED BEFORE THE APPROVAL, deliberately. A booking that succeeds after a
  * decision proves the happy path; only a booking REFUSED before one proves the decision was load
@@ -41,13 +43,13 @@ test("a partner books an investment end to end, and the fund holds a position af
   const companyName = `${marker} Robotics`;
 
   /*
-   * A FUND HAS TO EXIST, and the panel reads the FIRST one rather than asking.
+   * A FUND HAS TO EXIST, and the panel names the FIRST one on the draft rather than asking.
    *
-   * `RecordInvestment` posts `funds[0].id` — "the partner should not have to know an id" — so the
-   * fund this books against is whichever is oldest in this database, not necessarily one this spec
-   * made. That is the product's behaviour and this asserts against it rather than around it: read
-   * the list, create one only if the firm has none, and expect the position on whichever the panel
-   * would have picked.
+   * `RecordInvestment` drafts with `funds[0].id` — "the partner should not have to know an id" — so
+   * the fund this books against is whichever is oldest in this database, not necessarily one this
+   * spec made. That is the product's behaviour and this asserts against it rather than around it:
+   * read the list, create one only if the firm has none, and expect the position on whichever the
+   * panel would have picked.
    */
   const fundsBefore = (await (await request.get("/api/funds", { headers: MP })).json()) as {
     funds: Array<{ id: string; name: string }>;
@@ -75,8 +77,9 @@ test("a partner books an investment end to end, and the fund holds a position af
   await page.getByTestId("dealflow-add-submit").click();
   await expect(page.getByTestId("dealflow-message")).toContainText(companyName);
 
-  await page.getByTestId("deal-record-company").selectOption({ label: companyName });
+  // Adding the company opened its record on the terms face, where the ladder is.
   await expect(page.getByTestId("deal-record")).toBeVisible();
+  await expect(page.getByTestId("deal-face-deal")).toHaveAttribute("aria-selected", "true");
   const panel = page.getByTestId("record-investment");
   await expect(panel).toBeVisible();
 
@@ -103,9 +106,15 @@ test("a partner books an investment end to end, and the fund holds a position af
   // A DRAFT BOOKS NOTHING. Asserted against the table, not against the sentence above it.
   expect(await positionsFor(request, companyId), "a draft must never create a position").toHaveLength(0);
 
+  // The draft names the fund it will be booked to (0209) — that is what lets approval be the booking.
+  const drafted = (await (await request.get(`/api/transactions/${txnId}`, { headers: MP })).json()) as { fund_id: string | null; vehicle: string | null };
+  expect(drafted.fund_id, "the panel's draft names the fund").toBe(bookingFund.id);
+  expect(drafted.vehicle, "the panel's draft names the vehicle").toBe("Fund I direct");
+
   // ── Rung 3: submission, which raises the reserved card. ─────────────────────────────────────
   await panel.getByTestId(`txn-submit-${txnId}`).click();
   await expect(panel.getByTestId(`txn-status-${txnId}`)).toContainText("waiting on a partner");
+  await expect(panel.getByTestId(`txn-pending-${txnId}`)).toContainText("Approving it books the position");
 
   /*
    * The card is found BY THE TRANSACTION it was raised about. Every spec in this suite drives the
@@ -120,37 +129,41 @@ test("a partner books an investment end to end, and the fund holds a position af
   const cardId = (await reservedCardFor(request, txnId))!;
 
   /*
-   * ── THE REFUSAL, PRESSED IN THE BROWSER BEFORE ANYBODY HAS DECIDED ────────────────────────────
+   * ── THE REFUSAL, BEFORE ANYBODY HAS DECIDED ──────────────────────────────────────────────────
    *
-   * The receipt id is real and it names the right card; the card simply has not been approved yet.
-   * `verifyAuthorizationReceipt` requires state `approved`, so this is refused — and the property
-   * being proved is not the wording of the refusal but that NOTHING WAS BOOKED by it.
+   * The page no longer offers an execute button — approval is the booking — so the refusal is
+   * pressed on the route itself. The receipt id is real and it names the right card; the card
+   * simply has not been approved yet. `verifyAuthorizationReceipt` requires state `approved`, so
+   * this is refused — and the property being proved is not the wording of the refusal but that
+   * NOTHING WAS BOOKED by it. The page has no such control at all: asserted, so the rung cannot
+   * grow back unnoticed.
    */
-  await panel.getByTestId(`txn-receipt-${txnId}`).fill(cardId);
-  await panel.getByTestId(`txn-execute-${txnId}`).click();
-  await expect(panel.getByTestId("record-investment-message")).toContainText("409");
+  await expect(panel.getByTestId(`txn-execute-${txnId}`), "the receipt-paste rung is gone from the page").toHaveCount(0);
+  const early = await request.post(`/api/transactions/${txnId}/execute`, { headers: MP, data: { approval_receipt_id: cardId } });
+  expect(early.status(), await early.text()).toBe(409);
   expect(
     await positionsFor(request, companyId),
     "an undecided card must not book a position, however real its id looks",
   ).toHaveLength(0);
 
-  // ── Rung 4: a partner decides it, personally, on Approvals. ─────────────────────────────────
+  // ── Rung 4, WHICH IS THE LAST: a partner decides it, personally, on Approvals — and that books it. ──
   await gotoSurface(page, "Approvals");
   const card = page.getByTestId(`approval-card-${cardId}`);
   await expect(card).toBeVisible();
+  await expect(card, "the card says what approving it does").toContainText("Approving books the position");
   await card.getByTestId(`decision-note-${cardId}`).fill(`${marker}: committee approved, terms as drafted`);
   await card.getByTestId(`approve-${cardId}`).click();
+  // `executed`, not `approved`: the booking consumed the card the moment the partner said yes.
   await expect
-    .poll(async () => ((await (await request.get(`/api/approvals/${cardId}`, { headers: MP })).json()) as { state: string }).state)
-    .toBe("approved");
+    .poll(async () => ((await (await request.get(`/api/approvals/${cardId}`, { headers: MP })).json()) as { state: string }).state, {
+      message: "approving must execute the booking, which consumes the card",
+    })
+    .toBe("executed");
 
-  // ── Rung 5: BOOK IT. This is the step that creates the position, and the only one that does. ──
   await gotoSurface(page, "Dealflow");
-  await page.getByTestId("deal-record-company").selectOption({ label: companyName });
+  await openDealRecord(page, companyName);
+  await openDealFace(page, "deal");
   const booked = page.getByTestId("record-investment");
-  await booked.getByTestId(`txn-receipt-${txnId}`).fill(cardId);
-  await booked.getByTestId(`txn-execute-${txnId}`).click();
-  await expect(booked.getByTestId("record-investment-message")).toContainText("Executed");
   await expect(booked.getByTestId(`txn-status-${txnId}`)).toContainText("booked");
 
   /*
@@ -194,7 +207,8 @@ test("a partner books an investment end to end, and the fund holds a position af
    * absent from a screen with nothing booked on it, which is correct behaviour.
    */
   await gotoSurface(page, "Dealflow");
-  await page.getByTestId("deal-record-company").selectOption({ label: companyName });
+  await openDealRecord(page, companyName);
+  await openDealFace(page, "deal");
   const panelAfter = page.getByTestId("record-investment");
   const undo = panelAfter.getByTestId(`txn-void-${txnId}`);
   await expect(undo, "a booking must be reversible from the screen that made it").toBeVisible();
@@ -245,9 +259,12 @@ test("a booked deal cannot have its record quietly removed, and voiding it rever
   expect((await request.post(`/api/transactions/${txn.id}/submit`, { headers: MP, data: {} })).status()).toBe(200);
   const cardId = (await reservedCardFor(request, txn.id))!;
   expect(cardId, "submission raises the reserved card").toBeTruthy();
+  // This draft named no fund (the older API shape), so approval decides it and does not book it:
+  // the explicit route books it with the fund named. Both shapes are pinned in tests/portfolioBooking.test.ts.
   expect(
     (await request.post(`/api/approvals/${cardId}/decide`, { headers: MP, data: { decision: "approved" } })).status(),
   ).toBe(200);
+  expect(await positionsFor(request, company.id), "a draft with no fund is approved, not booked").toHaveLength(0);
   const executed = await request.post(`/api/transactions/${txn.id}/execute`, {
     headers: MP,
     data: { approval_receipt_id: cardId, fund_id: fund.id },

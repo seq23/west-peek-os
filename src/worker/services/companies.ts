@@ -6,6 +6,7 @@ import { appendEvent } from "../events";
 import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy";
 import { actorFromIdentity, authorize, getApprovalCard, privacyVisibilityClause, type AuthorizationDecision } from "./authorize";
 import { consumeApprovalCard } from "./approvals";
+import { isUnreviewed } from "../../shared/investment/lookedAt";
 
 /**
  * Canonical-company identity service (D3: CanonicalCompany-first).
@@ -874,6 +875,15 @@ export async function handleReverseMerge(ctx: RouteContext): Promise<Response> {
  * ARCHIVED DEALS ARE NOT THE LATEST DEAL. A record removed as a duplicate or a typo (0098) is not a
  * fact about the company, and letting one win the "latest" race made the register describe a row
  * somebody had already taken off the board.
+ *
+ * THE STAGE CLOCK AND "LOOKED AT" ARE THE BOARD'S, NOT A SECOND COPY (Phase D, §5). The register
+ * card now carries a compact rail with days-in-stage and a chip saying whether a partner has looked
+ * at the deal. Both are derived exactly as `handleDealflowBoard` derives them — `in_stage_since` is
+ * the last transition-or-backfill on the spine, else creation; `looked_at` is the inverse of the
+ * board's `unreviewed` (arrived by email, still NEW, never moved) — through the one shared function
+ * in shared/investment/lookedAt.ts. Two pages computing one fact two ways is how a chip on one page
+ * comes to contradict a badge on the other; `tests/companyRegisterClock.test.ts` pins that the two
+ * routes agree on the same deal.
  */
 export async function handleCompanyRegister(ctx: RouteContext): Promise<Response> {
   const visibility = privacyVisibilityClause(ctx.identity!, "c.privacy_label");
@@ -885,12 +895,20 @@ export async function handleCompanyRegister(ctx: RouteContext): Promise<Response
             d.relationship_origin AS origin,
             d.exit_reason,
             d.placeholder_fields,
+            d.source_channel,
+            d.created_at AS deal_created_at,
             CASE WHEN d.price_per_share IS NOT NULL AND d.quantity IS NOT NULL
                  THEN d.price_per_share * d.quantity END AS amount_usd,
             (SELECT MAX(e.created_at) FROM event_record e
-              WHERE e.object_type = 'investment_opportunity' AND e.object_id = d.id
-                AND e.event_type = 'investment.opportunity_transitioned') AS deal_moved_at,
-            (SELECT COUNT(*) FROM meeting m WHERE m.company_id = c.id) AS meetings
+              WHERE e.object_id = d.id
+                AND e.event_type IN ('investment.opportunity_transitioned', 'investment.opportunity_backfilled')) AS deal_moved_at,
+            (SELECT COUNT(*) FROM meeting m WHERE m.company_id = c.id) AS meetings,
+            (SELECT MIN(m.scheduled_at) FROM meeting m
+              WHERE m.company_id = c.id AND m.status = 'SCHEDULED'
+                AND m.scheduled_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now')) AS next_meeting_at,
+            (SELECT COUNT(*) FROM contradiction_record x
+              WHERE x.company_id = c.id AND x.status IN ('OPEN', 'INVESTIGATING')) AS open_contradictions,
+            EXISTS (SELECT 1 FROM position p WHERE p.company_id = c.id AND p.status = 'OPEN') AS booked
        FROM canonical_company c
        LEFT JOIN investment_opportunity d
               ON d.id = (SELECT o.id FROM investment_opportunity o
@@ -921,7 +939,24 @@ export async function handleCompanyRegister(ctx: RouteContext): Promise<Response
        * honest answer — a date invented from `created_at` would read as the day of the decision.
        */
       left_pipeline_at: r.deal_status === "PASS" || r.deal_status === "WITHDRAWN" ? r.deal_moved_at ?? null : null,
-      deal_moved_at: undefined,
+      /*
+       * The stage clock. Never moved means it is still where it started, and creation is when that
+       * began — the board's reading, so the "9 days" on a register card is the board's "9 days".
+       */
+      in_stage_since: r.deal_id ? ((r.deal_moved_at as string | null) ?? (r.deal_created_at as string)) : null,
+      deal_moved_at: r.deal_id ? ((r.deal_moved_at as string | null) ?? null) : null,
+      deal_created_at: undefined,
+      source_channel: undefined,
+      /* Null where there is no deal to have looked at; that row is a fault the page names. */
+      looked_at: r.deal_id
+        ? !isUnreviewed({
+            source_channel: r.source_channel as string | null,
+            status: String(r.deal_status),
+            last_moved_at: (r.deal_moved_at as string | null) ?? null,
+          })
+        : null,
+      booked: Boolean(r.booked),
+      open_contradictions: Number(r.open_contradictions ?? 0),
     };
   });
 

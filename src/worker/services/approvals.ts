@@ -358,13 +358,16 @@ function requireReason(value: string | undefined, whatFor: string): string {
   return reason;
 }
 
+/** What a decision did beyond recording itself: for a transaction card, whether it booked (Phase D). */
+export type DecidedCard = ApprovalCardRow & { booking?: import("./investment").BookingOnApproval };
+
 export async function decideApproval(
   env: Env,
   actor: Actor,
   cardId: string,
   decision: ApprovalDecisionKind,
   note?: string,
-): Promise<ApprovalCardRow> {
+): Promise<DecidedCard> {
   const card = await getApprovalCard(env, cardId);
   if (!card) throw new ApprovalError(404, "not_found");
 
@@ -416,7 +419,30 @@ export async function decideApproval(
     firmScope: card.firm_scope,
     payload: { decision, action_key: card.action_key, object_type: card.object_type, object_id: card.object_id },
   });
-  return (await getApprovalCard(env, cardId))!;
+  const decided = (await getApprovalCard(env, cardId))!;
+
+  /*
+   * APPROVING A BOOKING BOOKS IT (Phase D: portfolio, design §6, decision Q1). A card whose object
+   * is a transaction is the one human act between a draft and a position; when the partner says
+   * yes, the position opens here — through `executeTransaction`, with this card as the receipt,
+   * which re-verifies it through `authorize()` and consumes it. The decision above is already
+   * committed; if the booking itself is refused (a sale larger than the holding, say) the refusal
+   * is returned with the decision intact, so the partner sees both facts rather than a rollback of
+   * a decision she made. Imported lazily: investment.ts imports this module.
+   */
+  if (decision === "approved" && decided.object_type === "transaction") {
+    const { bookOnApproval, InvestmentError } = await import("./investment");
+    try {
+      const booking = await bookOnApproval(env, actor, decided);
+      if (booking) return { ...(await getApprovalCard(env, cardId))!, booking };
+    } catch (err) {
+      if (err instanceof InvestmentError) {
+        throw new ApprovalError(err.status, "approved_not_booked", `Approved, but the booking was refused: ${err.message}`);
+      }
+      throw err;
+    }
+  }
+  return decided;
 }
 
 /**

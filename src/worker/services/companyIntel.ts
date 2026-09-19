@@ -1,5 +1,7 @@
 import { json } from "../router";
 import type { RouteContext } from "../router";
+import { sleeveTargetUsd, type SleeveDoc } from "../../shared/fund/sleeveMath";
+import { privacyVisibilityClause } from "./authorize";
 
 /**
  * Company Intelligence and the Follow-On Decision Centre (P35, V1 #32 and #39).
@@ -169,24 +171,136 @@ export async function handleFollowOnCentre(ctx: RouteContext): Promise<Response>
  * (`secondary_purchase.approve`, `capital_allocation_cross_sleeve.approve`) and different sleeve
  * policy. This surface makes it VISIBLE, which is the missing half: a rule nobody can see being
  * applied is a rule people assume has lapsed.
+ *
+ * THE SLEEVE BUDGET (design/DEALS_SECTION_DESIGN.md §8). The page states what the sleeve is and
+ * what has gone out of it, and both figures are READ, never typed:
+ *
+ *   target   — `sleeveTargetUsd(sleeve_policy_version.current, SECONDARY_PURCHASE)`, the same
+ *              arithmetic Fund strategy and Portfolio draw (src/shared/fund/allocation.ts). Where no
+ *              sleeve policy exists the target is null and `target_source` says MISSING — a sleeve
+ *              of $0 would read as "spent", which is the opposite of "never decided".
+ *   deployed — `position` carries no sleeve column, so the sleeve is INFERRED from the transaction
+ *              that opened the position: `"transaction".transaction_type = 'PURCHASE'` is a
+ *              secondary purchase (PRIMARY_INVESTMENT and FOLLOW_ON are the primary sleeve). DERIVED
+ *              even at zero: a sleeve nothing has been bought into has genuinely deployed nothing.
+ *
+ * `fund_id` is optional. Without it the firm's first fund is read, which is the single-fund case
+ * this firm is in; the client passes the fund it is looking at so a second fund does not silently
+ * read the first one's policy.
+ *
+ * THE LAST ROUND. Each row carries the latest `pricing_observation` of type PRIMARY_ROUND against
+ * its company — price and date — so the page can put the block's price beside what the company
+ * last raised at. No writer exists for that table on this surface yet; where there is no
+ * observation the fields are null and the page says "to confirm" rather than computing a discount
+ * against nothing.
  */
 export async function handleSecondaries(ctx: RouteContext): Promise<Response> {
+  const url = new URL(ctx.request.url);
+  const requestedFund = url.searchParams.get("fund_id");
+
+  // A REMOVED RECORD IS OFF THIS PAGE TOO. The board learnt to read `archived_at` (0098); this
+  // list had not, so a secondary removed on Dealflow came straight back here. Same clause, and the
+  // same privacy visibility the board applies — a LOCKDOWN deal is not made visible by being a block.
+  const visibility = privacyVisibilityClause(ctx.identity!, "o.privacy_label");
   const rows = await ctx.env.WP_OS_DB.prepare(
     `SELECT o.id, o.title, o.opportunity_type, o.status, o.seller_name, o.broker_name,
-            o.price_per_share, o.discount_premium, o.quantity, o.created_at,
-            c.canonical_name AS company_name
+            o.price_per_share, o.discount_premium, o.quantity, o.created_at, o.company_id,
+            o.exit_reason,
+            c.canonical_name AS company_name,
+            lr.price_per_share AS last_round_price,
+            lr.observed_at     AS last_round_observed_at,
+            (SELECT MAX(e.created_at)
+               FROM event_record e
+              WHERE e.object_id = o.id
+                AND e.event_type IN ('investment.opportunity_transitioned', 'investment.opportunity_backfilled')
+            ) AS last_moved_at
        FROM investment_opportunity o
        LEFT JOIN canonical_company c ON c.id = o.company_id
+       LEFT JOIN pricing_observation lr
+              ON lr.id = (SELECT p.id FROM pricing_observation p
+                           WHERE p.company_id = o.company_id AND p.observation_type = 'PRIMARY_ROUND'
+                           ORDER BY p.observed_at DESC, p.created_at DESC LIMIT 1)
       WHERE o.opportunity_type IN ('SECONDARY_PURCHASE','SECONDARY_SALE')
+        AND ${visibility} AND o.archived_at IS NULL
       ORDER BY o.created_at DESC
       LIMIT 200`,
   ).all<Record<string, unknown>>();
 
-  const list = rows.results ?? [];
+  const fund = requestedFund
+    ? await ctx.env.WP_OS_DB.prepare("SELECT id, name FROM fund WHERE id = ?1").bind(requestedFund).first<{ id: string; name: string }>()
+    : await ctx.env.WP_OS_DB.prepare("SELECT id, name FROM fund ORDER BY created_at LIMIT 1").first<{ id: string; name: string }>();
+
+  let sleeve: {
+    fund_id: string | null;
+    fund_name: string | null;
+    target_usd: number | null;
+    target_source: string;
+    deployed_usd: number;
+    deployed_source: string;
+    positions: number;
+  } = {
+    fund_id: null,
+    fund_name: null,
+    target_usd: null,
+    target_source: "MISSING — no fund exists, so no sleeve policy can",
+    deployed_usd: 0,
+    deployed_source: "DERIVED — positions opened by a PURCHASE transaction",
+    positions: 0,
+  };
+
+  if (fund) {
+    const policy = await ctx.env.WP_OS_DB.prepare(
+      "SELECT version_no, sleeve_json FROM sleeve_policy_version WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1",
+    )
+      .bind(fund.id)
+      .first<{ version_no: number; sleeve_json: string }>();
+    let doc: SleeveDoc = {};
+    try {
+      doc = policy?.sleeve_json ? (JSON.parse(policy.sleeve_json) as SleeveDoc) : {};
+    } catch {
+      doc = {};
+    }
+    const secondary = (doc.sleeves ?? []).find((s) => s.key === "SECONDARY_PURCHASE");
+    const held = await ctx.env.WP_OS_DB.prepare(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(p.cost_basis), 0) AS deployed
+         FROM position p
+         JOIN "transaction" t ON t.id = p.acquired_via_transaction_id
+        WHERE p.fund_id = ?1 AND p.status = 'OPEN' AND t.transaction_type = 'PURCHASE'`,
+    )
+      .bind(fund.id)
+      .first<{ n: number; deployed: number }>();
+    sleeve = {
+      fund_id: fund.id,
+      fund_name: fund.name,
+      target_usd: policy && secondary ? sleeveTargetUsd(doc, secondary) : null,
+      target_source: !policy
+        ? "MISSING — no sleeve policy version on this fund"
+        : !secondary
+          ? `MISSING — sleeve_policy_version v${policy.version_no} names no SECONDARY_PURCHASE sleeve`
+          : `sleeve_policy_version v${policy.version_no} · ${secondary.target_pct ?? "—"}% of the investable base`,
+      deployed_usd: held?.deployed ?? 0,
+      deployed_source: "DERIVED — positions opened by a PURCHASE transaction",
+      positions: held?.n ?? 0,
+    };
+  }
+
+  const list: Array<Record<string, unknown>> = (rows.results ?? []).map((r) => ({
+    ...r,
+    // Never moved means it is still where it started, and creation is when that began.
+    in_stage_since: (r.last_moved_at as string | null) ?? (r.created_at as string),
+  }));
+  const stage_counts: Record<string, number> = {};
+  for (const o of list) {
+    const k = String(o.status);
+    stage_counts[k] = (stage_counts[k] ?? 0) + 1;
+  }
+
   return json({
     opportunities: list,
     purchases: list.filter((o) => o.opportunity_type === "SECONDARY_PURCHASE").length,
     sales: list.filter((o) => o.opportunity_type === "SECONDARY_SALE").length,
+    stage_counts,
+    sleeve,
     // Stated on the response so the page cannot render the pipeline without the rule beside it.
     separation_rule:
       "Secondaries run as a separate sleeve from early-stage primaries. They use their own approval action keys and their own sleeve policy; a secondary is never approved through the primary path.",

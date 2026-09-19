@@ -14,10 +14,18 @@
  * page sideways on the very surface held up as the layout standard.
  *
  * A misspelt class is the one front-end mistake with no symptom. This turns it into a build failure.
+ *
+ * THE OTHER DIRECTION, for classes declared ahead of their pages. The Deals section was built
+ * tokens-first (design/DEALS_SECTION_DESIGN.md §12.1): every class six tabs would need went into
+ * the stylesheet on one branch before any page wore one, so the tab branches could not disagree.
+ * This scan cannot see a rule nobody uses, so those classes are listed in
+ * `design/DEALS_SECTION_CLASSES.json` with the tab that owns each, and the register is checked
+ * here from both sides — see lib/declared-ahead.mjs. It hard-fails on an empty register.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { stripCssComments, stripTsComments } from "./lib/strip-comments.mjs";
+import { REGISTER, checkRegister, parseRegister, readRegister, registerSummary } from "./lib/declared-ahead.mjs";
 
 const CSS = "src/client/styles.css";
 const ROOT = "src/client";
@@ -60,13 +68,7 @@ export function usedClasses(src) {
   const add = (cls, ok) => {
     if (ok && cls) found.set(cls, true);
   };
-  for (const m of src.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\})/g)) {
-    const literal = m[1] ?? m[3];
-    if (literal !== undefined) {
-      for (const c of literal.split(/\s+/)) add(c, true);
-      continue;
-    }
-    const tpl = m[2] ?? "";
+  const addTemplate = (tpl) => {
     // Split on interpolations; a fragment adjacent to one may be a prefix or a suffix.
     const parts = tpl.split(/\$\{[^}]*\}/);
     parts.forEach((part, i) => {
@@ -78,6 +80,109 @@ export function usedClasses(src) {
         add(tok, !touchesLeft && !touchesRight);
       });
     });
+  };
+  for (const m of src.matchAll(/className="([^"]*)"/g)) for (const c of m[1].split(/\s+/)) add(c, true);
+
+  /*
+   * A CLASS CHOSEN BY AN EXPRESSION IS STILL A CLASS. `className={open ? "deal-row-selected" : ""}`
+   * and `className={["stage-node", done ? "stage-node-done" : ""].join(" ")}` were invisible to
+   * the first version of this scan, which read only a bare string or a whole template literal —
+   * so a misspelt class inside a ternary had no symptom, and, in the other direction, a class the
+   * Dealflow rail applied through a ternary counted as worn by nothing (18 Sep 2026). The whole
+   * expression is walked to its closing brace and every string literal and template fragment in
+   * it is a class. A literal that is not a class does not occur inside `className={…}`: the
+   * expression evaluates to the attribute, and there is nothing else for a string there to be.
+   */
+  /*
+   * A CLASS COMPUTED INTO A VARIABLE IS STILL A CLASS. `const dot = closed ? "stage-dot-closed" :
+   * "stage-dot-current"; … className={dot}` is how both the Dealflow and the Companies compact
+   * rails choose a dot, and the expression walk below sees only `dot`. On 19 Sep 2026 the two
+   * branches each passed the declared-ahead register alone — the other tab was still pending —
+   * and the merged head failed with `.stage-dot-current is worn by nothing`, which was false.
+   * So every bare identifier inside a className expression is followed ONE step to a `const`,
+   * `let` or `var` declaration in the same file, and that initializer is read with the same
+   * literal rules. One step, not a data-flow analysis: a class that arrives through a second
+   * variable or a function return is a shape this scan does not claim to see, and the register
+   * will say so rather than the scan guessing.
+   */
+  const declOf = (name) => {
+    const d = src.match(new RegExp(`\\b(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*`));
+    if (!d) return null;
+    let i = d.index + d[0].length;
+    let depth = 0;
+    const start = i;
+    for (; i < src.length; i += 1) {
+      const ch = src[i];
+      if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+      else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
+      else if (ch === ";" && depth === 0) break;
+      else if (ch === "\n" && depth === 0 && /^\s*(?:const|let|var|return|for|if|while|\}|<)/.test(src.slice(i + 1, i + 12))) break;
+    }
+    return src.slice(start, i);
+  };
+  const readExpr = (expr) => {
+    const interpolations = [];
+    for (const t of expr.matchAll(/`([^`]*)`/g)) {
+      addTemplate(t[1]);
+      for (const inner of t[1].matchAll(/\$\{([^}]*)\}/g)) interpolations.push(inner[1]);
+    }
+    const plain = [expr.replace(/`[^`]*`/g, " "), ...interpolations].join(" ; ");
+    for (const q of plain.matchAll(/"([^"]*)"|'([^']*)'/g)) {
+      const before = plain.slice(0, q.index).replace(/\s+$/, "");
+      const after = plain.slice(q.index + q[0].length).replace(/^\s+/, "");
+      if (/[=!]=$/.test(before) || /^[=!]=/.test(after)) continue;
+      if (/\.(includes|has|startsWith|endsWith|get|indexOf|test)\($/.test(before)) continue;
+      for (const c of (q[1] ?? q[2] ?? "").split(/\s+/)) add(c, true);
+    }
+  };
+  for (const m of src.matchAll(/className=\{/g)) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    const start = i;
+    while (i < src.length && depth > 0) {
+      const ch = src[i];
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      i += 1;
+    }
+    const expr = src.slice(start, i - 1);
+    // Only an identifier in a VALUE position is followed — the whole expression, an array element,
+    // a ternary branch — never a condition (`open ? …`), a property (`item.kind`) or a call. And
+    // its initializer is read only when every literal in it is class-shaped (lowercase kebab):
+    // `const cls = closed ? "stage-dot-closed" : "stage-dot-current"` is a class variable;
+    // `const status = "SCREENING"` and `const path = "/api/x"` are values that merely pass
+    // through a className expression somewhere else.
+    const bare = expr.replace(/"[^"]*"|'[^']*'|`[^`]*`/g, (q) => " ".repeat(q.length));
+    for (const m2 of bare.matchAll(/\b([A-Za-z_$][\w$]*)\b/g)) {
+      const id = m2[1];
+      if (["true", "false", "undefined", "null", "join", "filter", "Boolean", "map", "cx", "clsx"].includes(id)) continue;
+      const before = bare.slice(0, m2.index).replace(/\s+$/, "").slice(-1);
+      const after = bare.slice(m2.index + id.length).replace(/^\s+/, "").slice(0, 1);
+      if (!(before === "" || "[,?:(".includes(before))) continue;
+      if ("?.(=&|".includes(after) && after !== "") continue;
+      const init = declOf(id);
+      if (!init) continue;
+      const lits = [...init.matchAll(/"([^"]*)"|'([^']*)'/g)].map((q) => q[1] ?? q[2] ?? "");
+      if (lits.length === 0 || !lits.every((l) => l.trim() === "" || /^[a-z][a-z0-9-]*(\s+[a-z][a-z0-9-]*)*$/.test(l))) continue;
+      readExpr(init);
+    }
+    const interpolations = [];
+    for (const t of expr.matchAll(/`([^`]*)`/g)) {
+      addTemplate(t[1]);
+      // A literal INSIDE an interpolation — `${done ? "on" : ""}` — is a plain literal and is read
+      // as one, below, with the same comparison rule.
+      for (const inner of t[1].matchAll(/\$\{([^}]*)\}/g)) interpolations.push(inner[1]);
+    }
+    const plain = [expr.replace(/`[^`]*`/g, " "), ...interpolations].join(" ; ");
+    for (const q of plain.matchAll(/"([^"]*)"|'([^']*)'/g)) {
+      // A literal being COMPARED is a value, not a class: `status === "OPEN" ? "badge-ok" : …`.
+      // So is the argument of a membership test: `LIVE.includes("SCREENING")`.
+      const before = plain.slice(0, q.index).replace(/\s+$/, "");
+      const after = plain.slice(q.index + q[0].length).replace(/^\s+/, "");
+      if (/[=!]=$/.test(before) || /^[=!]=/.test(after)) continue;
+      if (/\.(includes|has|startsWith|endsWith|get|indexOf|test)\($/.test(before)) continue;
+      for (const c of (q[1] ?? q[2] ?? "").split(/\s+/)) add(c, true);
+    }
   }
   return found;
 }
@@ -106,6 +211,18 @@ function selfTest() {
     ["<div className={`ghost ${x}`} />", 1, "…and caught when undefined"],
     ["<div className={`pre-${x}`} />", 0, "a prefix cut by an interpolation is not a class"],
     ["<div className={`${x}-suf`} />", 0, "a suffix cut by an interpolation is not a class"],
+    ['<div className={open ? "real" : "ghost"} />', 1, "a class chosen by a ternary is checked"],
+    ['<div className={["real", done ? "ghost" : ""].filter(Boolean).join(" ")} />', 1, "a class inside an array join is checked"],
+    ['<div className={busy ? "real" : undefined} />', 0, "a ternary with no bad literal passes"],
+    ['<div className={state === "OPEN" ? "real" : "real"} />', 0, "a literal being compared is a value, not a class"],
+    ['<div className={LIVE.includes("OPEN") ? "real" : "real"} />', 0, "the argument of a membership test is a value, not a class"],
+    ["<div className={`real ${done ? \"ghost\" : \"\"}`} />", 1, "a literal inside a template interpolation is checked"],
+    ['const dot = closed ? "real" : "ghost";\n<li className={dot} />', 1, "a class computed into a const and worn by name is checked"],
+    ['const dot = ["real", done ? "ghost" : ""].filter(Boolean).join(" ");\n<li className={dot} />', 1, "…through an array join too"],
+    ['const dot = closed ? "real" : "real";\n<li className={dot} />', 0, "…and passes when every literal is defined"],
+    ['const other = "ghost";\n<li className="real" />', 0, "a const nobody wears is not a class"],
+    ['const status = "GHOST";\n<li className={status === "GHOST" ? "real" : "real"} />', 0, "a value const in a condition is not followed"],
+    ['const path = "/api/ghost";\n<li className={real ? "real" : "real"} />', 0, "a const with a non-class literal is not followed"],
   ];
   const defined = definedClasses(css);
   let failed = 0;
@@ -117,7 +234,35 @@ function selfTest() {
     }
   }
   if (failed) process.exit(1);
-  console.log(`SELF-TEST PASSED: ${cases.length}/${cases.length} cases, including the two interpolation traps.`);
+
+  // The declared-ahead register, both directions. Fixture-driven: each case is a register, what
+  // the stylesheet defines, what the client emits, and how many problems that must produce.
+  const reg = (landed, classes) =>
+    parseRegister({ tabs: { meetings: { landed }, dealflow: { landed: false } }, classes }, "fixture");
+  const registerCases = [
+    ["a declared-ahead class with a rule, unworn, tab pending — allowed", reg(false, { masthead: ["meetings"] }), ["masthead"], [], 0],
+    ["a declared-ahead class with NO rule is caught even while its tab is pending", reg(false, { masthead: ["meetings"] }), [], [], 1],
+    ["the tab landed and the class is worn — allowed", reg(true, { masthead: ["meetings"] }), ["masthead"], ["masthead"], 0],
+    ["the tab landed and nothing wears the class — dead on arrival, caught", reg(true, { masthead: ["meetings"] }), ["masthead"], [], 1],
+    ["the class is worn but the register still says pending — stale register, caught", reg(false, { masthead: ["meetings"] }), ["masthead"], ["masthead"], 1],
+    ["shared class: one owner landed, one pending, unworn — allowed until the last owner lands", reg(true, { band: ["meetings", "dealflow"] }), ["band"], [], 0],
+    ["an empty register is a failure, not a pass", parseRegister({ tabs: { meetings: { landed: false } }, classes: {} }, "fixture"), [], [], 1],
+    ["an owner that is not a tab is a failure", reg(false, { masthead: ["portfolio"] }), ["masthead"], [], 1],
+    ["a class with no owner is a failure", reg(false, { masthead: [] }), ["masthead"], [], 1],
+  ];
+  let regFailed = 0;
+  for (const [why, r, defined, emitted, want] of registerCases) {
+    const got = checkRegister(r, new Set(defined), new Set(emitted)).length;
+    if (got !== want) {
+      console.error(`SELF-TEST FAILED (register: ${why}): expected ${want} problem(s), got ${got}`);
+      regFailed += 1;
+    }
+  }
+  if (regFailed) process.exit(1);
+  console.log(
+    `SELF-TEST PASSED: ${cases.length}/${cases.length} cases, including the two interpolation traps;` +
+      ` ${registerCases.length}/${registerCases.length} declared-ahead register cases.`,
+  );
 }
 
 /**
@@ -174,4 +319,22 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log(`CSS CLASS SCAN PASSED: every className in ${ROOT} has a rule in ${CSS}.`);
+
+// ── The other direction: classes declared ahead of their pages ─────────────────────────────────
+{
+  const register = readRegister();
+  const defined = definedClasses(stripCssComments(readFileSync(CSS, "utf8")));
+  const emitted = new Set();
+  for (const f of tsxFiles) for (const cls of usedClasses(stripTsComments(readFileSync(f, "utf8"))).keys()) emitted.add(cls);
+  const problems = checkRegister(register, defined, emitted);
+  if (problems.length > 0) {
+    console.error(`DECLARED-AHEAD REGISTER FAILED — ${REGISTER} and the product disagree:\n`);
+    for (const p of problems) console.error(`  ${p}`);
+    console.error("\nA class declared before its page is allowed to be unworn only while the tab that owns it");
+    console.error("is still marked pending. Flip `landed` in the PR that emits the classes; drop an entry (and");
+    console.error("its rule) when the page it was named for turned out not to need it.");
+    process.exit(1);
+  }
+  console.log(`DECLARED-AHEAD REGISTER PASSED: ${registerSummary(register, emitted)}.`);
+}
 selfTest();

@@ -1,0 +1,352 @@
+{
+  "spec": "design/DEALS_SECTION_DESIGN.md \u00a712.1 \u2014 tokens and classes first, pages after",
+  "why": "These classes were added to src/client/styles.css BEFORE any page wears them, so that five tab branches start from one rule set. validate:css-classes proves every className used has a rule; it cannot see a rule nobody uses. This register is the other direction: every class here must have a rule now, must be emitted once every tab that owns it has landed, and a tab is marked landed the moment anything emits one of its classes. Read by scripts/validate/css-classes.mjs and scripts/validate/heading-scale-applies.mjs; a tab agent flips its `landed` flag in the PR that emits the classes, and edits `owners` when the page it built does not use a class the spec named for it.",
+  "tabs": {
+    "meetings": {
+      "landed": true,
+      "spec": "\u00a73 \u2014 the list, the room's three faces, the standalone panel"
+    },
+    "dealflow": {
+      "landed": true,
+      "spec": "\u00a74 \u2014 the rail is the page; the committee lives here"
+    },
+    "companies": {
+      "landed": true,
+      "spec": "\u00a75 \u2014 the register"
+    },
+    "portfolio": {
+      "landed": true,
+      "spec": "\u00a76 \u2014 holdings, the deployment ring, Book it"
+    },
+    "thesis": {
+      "landed": true,
+      "spec": "\u00a77 \u2014 one sentence and its numbers"
+    },
+    "secondaries": {
+      "landed": true,
+      "spec": "\u00a78 \u2014 the sleeve, on the same rail"
+    }
+  },
+  "classes": {
+    "masthead": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "companies",
+      "thesis",
+      "secondaries"
+    ],
+    "masthead-date": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "companies",
+      "thesis",
+      "secondaries"
+    ],
+    "masthead-second": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "companies",
+      "thesis",
+      "secondaries"
+    ],
+    "band": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "companies",
+      "secondaries"
+    ],
+    "band-head": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "companies",
+      "secondaries"
+    ],
+    "band-when": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "companies",
+      "secondaries"
+    ],
+    "section-head": [
+      "meetings",
+      "portfolio",
+      "thesis"
+    ],
+    "stage-rail": [
+      "dealflow",
+      "thesis",
+      "secondaries"
+    ],
+    "stage-rail-line": [
+      "dealflow",
+      "thesis",
+      "secondaries"
+    ],
+    "stage-node": [
+      "dealflow",
+      "thesis",
+      "secondaries"
+    ],
+    "stage-node-filled": [
+      "dealflow",
+      "thesis",
+      "secondaries"
+    ],
+    "stage-node-current": [
+      "dealflow",
+      "thesis",
+      "secondaries"
+    ],
+    "stage-node-done": [
+      "dealflow",
+      "secondaries"
+    ],
+    "stage-label": [
+      "dealflow",
+      "thesis",
+      "secondaries"
+    ],
+    "stage-q": [
+      "dealflow",
+      "thesis",
+      "secondaries"
+    ],
+    "stage-rail-exits": [
+      "dealflow",
+      "secondaries"
+    ],
+    "stage-rail-compact": [
+      "dealflow",
+      "companies"
+    ],
+    "stage-dot": [
+      "dealflow",
+      "companies"
+    ],
+    "stage-dot-done": [
+      "dealflow",
+      "companies"
+    ],
+    "stage-dot-current": [
+      "dealflow",
+      "companies"
+    ],
+    "stage-dot-closed": [
+      "dealflow",
+      "companies"
+    ],
+    "stage-seg": [
+      "dealflow",
+      "companies"
+    ],
+    "faces": [
+      "meetings",
+      "dealflow"
+    ],
+    "face-tab": [
+      "meetings",
+      "dealflow"
+    ],
+    "deal-row-3": [
+      "meetings"
+    ],
+    "deal-row-2": [
+      "meetings",
+      "dealflow",
+      "secondaries"
+    ],
+    "deal-row-selected": [
+      "dealflow"
+    ],
+    "deal-sub": [
+      "meetings",
+      "dealflow",
+      "secondaries"
+    ],
+    "deal-sub-stalled": [
+      "dealflow"
+    ],
+    "readiness": [
+      "meetings",
+      "secondaries"
+    ],
+    "dot": [
+      "meetings",
+      "secondaries"
+    ],
+    "stage-chip-live": [
+      "dealflow"
+    ],
+    "task-chip": [
+      "meetings"
+    ],
+    "task-chip-live": [
+      "meetings"
+    ],
+    "chips": [
+      "meetings",
+      "dealflow"
+    ],
+    "fault": [
+      "companies"
+    ],
+    "room-grid": [
+      "meetings"
+    ],
+    "rec-line": [
+      "meetings"
+    ],
+    "rec-text": [
+      "meetings"
+    ],
+    "switch": [
+      "meetings"
+    ],
+    "live-dot": [
+      "meetings"
+    ],
+    "transcript": [
+      "meetings"
+    ],
+    "ask": [
+      "meetings"
+    ],
+    "ptt": [
+      "meetings"
+    ],
+    "artifact": [
+      "meetings"
+    ],
+    "artifact-kind": [
+      "meetings"
+    ],
+    "seat": [
+      "meetings"
+    ],
+    "who": [
+      "meetings"
+    ],
+    "ic-seat": [
+      "dealflow"
+    ],
+    "dl": [
+      "meetings"
+    ],
+    "two-col": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "thesis"
+    ],
+    "scorecard": [
+      "meetings",
+      "dealflow"
+    ],
+    "check": [
+      "meetings",
+      "dealflow"
+    ],
+    "on": [
+      "meetings",
+      "dealflow"
+    ],
+    "field": [
+      "dealflow",
+      "portfolio"
+    ],
+    "field-help": [
+      "meetings",
+      "dealflow",
+      "portfolio"
+    ],
+    "err": [
+      "meetings",
+      "dealflow",
+      "portfolio"
+    ],
+    "in-error": [
+      "portfolio"
+    ],
+    "in-success": [
+      "portfolio"
+    ],
+    "find-field": [
+      "companies"
+    ],
+    "holding-row": [
+      "portfolio"
+    ],
+    "holding-form": [
+      "portfolio"
+    ],
+    "book-grid": [
+      "portfolio"
+    ],
+    "kv": [
+      "portfolio"
+    ],
+    "viz-row": [
+      "portfolio"
+    ],
+    "legend": [
+      "portfolio"
+    ],
+    "legend-val": [
+      "portfolio"
+    ],
+    "sw": [
+      "portfolio"
+    ],
+    "bar": [
+      "portfolio"
+    ],
+    "version-rail": [
+      "thesis"
+    ],
+    "v": [
+      "thesis"
+    ],
+    "v-current": [
+      "thesis"
+    ],
+    "eyebrow": [
+      "meetings",
+      "dealflow",
+      "thesis"
+    ],
+    "stack": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "thesis",
+      "secondaries"
+    ],
+    "between": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "companies",
+      "thesis",
+      "secondaries"
+    ],
+    "grow": [
+      "meetings",
+      "dealflow",
+      "portfolio",
+      "thesis",
+      "secondaries"
+    ],
+    "hairline": [
+      "meetings",
+      "portfolio",
+      "thesis",
+      "secondaries"
+    ]
+  }
+}

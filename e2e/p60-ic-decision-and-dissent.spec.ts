@@ -30,6 +30,10 @@ test("a packet is assembled, a question is answered, the committee passes, and a
   page,
   request,
 }) => {
+  /* The journey crosses the Dealflow record now — the committee face loads the packet, its
+     framework and its questions on top of the board — so it is the length of p6's, which runs
+     under the same allowance. Nothing here waits on a duration. */
+  test.slow();
   const marker = `E2E-P60-${Date.now()}`;
   const companyName = `${marker} Co`;
   const rationale = "Two of the three named customers turned out to be unpaid pilots";
@@ -77,17 +81,28 @@ test("a packet is assembled, a question is answered, the committee passes, and a
   expect(question.status(), await question.text()).toBe(201);
   const questionId = await openQuestionFor(request, packetId);
 
-  await gotoSurface(page, "Meetings");
+  /*
+   * THE COMMITTEE LIVES ON DEALFLOW (design/DEALS_SECTION_DESIGN.md §4, moved from Meetings). The
+   * band lists the deal, and its row opens the record on the committee face — where every control
+   * below is. The deal also shows on the Waiting-on-you band only once it is in front of the
+   * partners, which is asserted further down.
+   */
+  await gotoSurface(page, "Dealflow");
+  const icRow = page.getByTestId(`ic-row-${deal.id}`);
+  await expect(icRow).toBeVisible();
+  await expect(icRow).toContainText(companyName);
+  await page.getByTestId(`ic-open-${deal.id}`).click();
+  await expect(page.getByTestId("deal-face-committee")).toHaveAttribute("aria-selected", "true");
   const icDeal = page.getByTestId(`ic-deal-${deal.id}`);
   await expect(icDeal).toBeVisible();
-  await expect(icDeal).toContainText(companyName);
+  await expect(page.getByTestId("deal-record-company-name")).toContainText(companyName);
 
   /*
    * THE FACILITATOR IS AN EMPLOYEE AND SHE DECIDES NOTHING. "AI prepares the decision; the Managing
    * Partners make the decision" is the governing law of this system, and the committee is where a
    * violation of it would be most expensive.
    */
-  await expect(page.getByTestId("meetings-page")).toContainText("never decides anything");
+  await expect(page.getByTestId("ic-how-it-works")).toContainText("never decides anything");
   await expect(icDeal.getByTestId(`ic-card-${deal.id}`), "an employee is holding the card to assemble it").toContainText(
     "work card to assemble it",
   );
@@ -103,6 +118,14 @@ test("a packet is assembled, a question is answered, the committee passes, and a
   // Put it in front of the partners, then record what they decided.
   await icDeal.getByTestId(`ic-submit-${deal.id}`).click();
   await expect(icDeal.getByTestId(`ic-decide-${deal.id}`)).toBeVisible();
+  /*
+   * AND NOW IT IS WAITING ON A PERSON, and the page says so above everything else: the
+   * Waiting-on-you band carries the deal, the count pill says one, and the masthead answers with it.
+   * The band's own control opens the same committee face — one act, reachable from the top.
+   */
+  await expect(page.getByTestId(`waiting-committee-${deal.id}`)).toContainText("in front of the partners");
+  await expect(page.getByTestId("dealflow-waiting-count")).toHaveText(/^[1-9]\d*$/);
+  await expect(page.getByTestId("dealflow-answer")).toContainText(/waiting on you/);
   await icDeal.getByTestId(`ic-decide-${deal.id}`).click();
 
   /*

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface, openDisclosure } from "./support/nav";
+import { gotoSurface, openDealFace, openDisclosure } from "./support/nav";
 
 /**
  * P6 browser journey against local `wrangler dev`:
@@ -88,10 +88,11 @@ test("P6 investment journey: deal record → deal math → committee packet → 
   await page.getByTestId("dealflow-add-submit").click();
   await expect(page.getByTestId("dealflow-message")).toContainText(`${marker} Co`);
 
-  // The record opens from the pipeline itself — one company, one record, everything under it.
-  await page.getByTestId("deal-record-company").selectOption({ label: `${marker} Co` });
+  // The record opens from the pipeline itself — one company, one record, everything under it —
+  // and adding a company opens its record on the terms face, which is the thing you came to fill in.
   await expect(page.getByTestId("deal-record")).toBeVisible();
   await expect(page.getByTestId("deal-record-company-name")).toContainText(`${marker} Co`);
+  await expect(page.getByTestId("deal-face-deal")).toHaveAttribute("aria-selected", "true");
 
   // Deal math: typed by a person first (D6), then recomputed with the verified formulas only.
   for (const [testId, value] of MATH_INPUTS) await page.getByTestId(testId).fill(value);
@@ -120,11 +121,18 @@ test("P6 investment journey: deal record → deal math → committee packet → 
     "the deal must be at the committee stage — that stage move is what opens the packet (ADR-019)",
   ).toBe("IC_READY");
 
-  // The committee. A packet opened by itself when the deal reached the committee stage (ADR-019).
-  await gotoSurface(page, "Meetings");
+  /*
+   * THE COMMITTEE LIVES ON DEALFLOW NOW (design/DEALS_SECTION_DESIGN.md §4): the band lists every
+   * deal at the committee, and its row opens the record on the committee face. A packet opened by
+   * itself when the deal reached the committee stage (ADR-019).
+   */
+  await gotoSurface(page, "Dealflow");
+  await expect(page.getByTestId(`ic-row-${opportunityId}`)).toContainText(`${marker} Co`);
+  await page.getByTestId(`ic-open-${opportunityId}`).click();
+  await openDealFace(page, "committee");
   const icDeal = page.getByTestId(`ic-deal-${opportunityId}`);
   await expect(icDeal).toBeVisible();
-  await expect(icDeal).toContainText(`${marker} Co`);
+  await expect(page.getByTestId("deal-record-company-name")).toContainText(`${marker} Co`);
 
   /*
    * THE UNRESOLVED MATERIAL CONTRADICTION IS ON THE PACKET.

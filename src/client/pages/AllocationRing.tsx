@@ -99,7 +99,12 @@ export function AllocationRing({
 
       {/* The table view, always present: a chart nobody can read is not a fallback, it is a wall. */}
       <details className="allocation-table">
-        <summary>The same numbers as a table</summary>
+        {/* A DISCLOSURE IS A CONTROL, AND A THUMB NEEDS A THUMB-SIZED BOX: measured at 320px by
+            e2e/deals-surfaces on a CI runner, this summary stood 22px tall in the Linux fallback
+            face. Home's summaries got the same floor in styles.css (`details.card > summary`); this
+            one is not a card, and the stylesheet is another branch's on the Deals base, so the
+            floor is carried here as tokens — the same three declarations, not a new value. */}
+        <summary style={{ minHeight: "var(--touch-min)", display: "flex", alignItems: "center" }}>The same numbers as a table</summary>
         <div className="table-scroll">
           <table>
             <thead>

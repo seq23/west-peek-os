@@ -46,10 +46,14 @@ test("Phase C: start recording → consent → ask the room by text → a block 
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
 
-  // "It is happening now" opens the During face.
+  // "It is happening now" opens the record ON the During face — the tab strip says so (Phase D).
   await page.getByTestId(`start-${meetingId}`).click();
+  await expect(page.getByTestId("face-during")).toHaveAttribute("aria-selected", "true");
   const room = page.getByTestId(`room-${meetingId}`);
   await expect(room).toBeVisible();
+  // The recorder is one switch on one line, and it says what it is.
+  await expect(room.getByTestId("capture-start")).toHaveAttribute("role", "switch");
+  await expect(room.getByTestId("capture-start")).toHaveAttribute("aria-checked", "false");
   await expect(room.getByTestId("room-status")).toContainText(/Not recording|Reading the room/);
   await expect(room.getByTestId("room-artifacts-empty")).toBeVisible();
 
@@ -66,6 +70,19 @@ test("Phase C: start recording → consent → ask the room by text → a block 
     await expect(room.getByTestId("consent-script")).toContainText("Is that alright with you");
     await room.getByTestId("consent-who").fill("Deana Oliver");
     await room.getByTestId("consent-yes").click();
+    // The page says the yes landed BEFORE the record is read back — reading the API while the
+    // request is still in flight proves nothing about the prompt.
+    await expect
+      .poll(
+        async () => {
+          const checked = await room.getByTestId("capture-start").getAttribute("aria-checked");
+          // `count()` first: `textContent()` on an absent element waits for it, and would hold the poll.
+          const msg = (await room.getByTestId("capture-message").count()) > 0 ? await room.getByTestId("capture-message").textContent() : null;
+          return checked === "true" || /on the file|nothing is recording|microphone/.test(msg ?? "");
+        },
+        { message: "the switch turns on, or the line says why it did not", timeout: 15_000 },
+      )
+      .toBe(true);
     // The yes is on the file — and the recorder either runs, or the line says why not.
     const after = (await (await request.get(`/api/meetings/${meetingId}/capture`, { headers: MP })).json()) as { consent: Record<string, string>; can_capture: boolean };
     expect(after.consent.RECORDING).toBe("GRANTED");
@@ -128,10 +145,14 @@ test("Phase C: start recording → consent → ask the room by text → a block 
   await room.getByTestId("room-roll").click();
   await expect(room.getByTestId("room-roll-note")).toContainText(/Nothing on the record|Nothing new/);
 
-  // Tier 3 prep: the same face, alone, behind the same gate.
+  // Tier 3 prep: the same face, alone, behind the same gate — and at 360px, the width a Meet side
+  // panel gives it (artboard D), with nothing pushed off the right edge.
+  await page.setViewportSize({ width: 360, height: 900 });
   await page.goto(`/#/room/${meetingId}`);
   await expect(page.getByTestId("room-standalone")).toBeVisible();
   await expect(page.getByTestId(`room-${meetingId}`)).toBeVisible();
   await expect(page.locator('[data-testid^="room-artifact-mar_"]')).toHaveCount(1);
   await expect(page.getByTestId("nav-toggle")).toHaveCount(0);
+  const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(wide, "the standalone room scrolls sideways at 360px").toBeLessThanOrEqual(1);
 });
