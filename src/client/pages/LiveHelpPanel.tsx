@@ -1,16 +1,27 @@
-import { useState } from "react";
-import { api, useApi } from "../lib/api";
+import { useMemo, useState } from "react";
+import { api, useApi, type MeResponse } from "../lib/api";
+import { meetingType, seatableFor } from "@shared/meetings/meetingTypes";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
 /**
- * Live Help — the meeting workspace's chat with AI employees (canon §3, §28.5).
+ * Who is in the room — the one seating card, on the Before and During faces (Phase D, §3).
  *
- * "The Live Help tab is where Walter lives." Designed for use DURING a meeting, which drives every
- * choice here: quick actions before the text box (you are half-listening, not composing), newest
- * turn last, short answers, and refusals shown in the transcript rather than swallowed.
+ * "The Live Help tab is where Walter lives" (canon §3, §28.5). It was two panels keeping two lists
+ * of the same seats: `SeatingPanel` on the record (suggestions by meeting type, with the warning
+ * for an internal-only seat in an external room) and `LiveHelpPanel` under it (the same seats
+ * again, a release button, a chat thread the live room has since replaced with saved blocks, and
+ * the revoke-all switch). One list now, with everything a seat can do on its row.
  *
- * It seats employees; it never activates them. An INACTIVE employee cannot be seated, and the
- * refusal says where to go — the ≤5 cap and the approval receipt stay where they are.
+ * WHAT STAYED. Suggestions ordered by meeting type, because "add an employee" on an empty meeting
+ * is a question with no obvious answer unless you already know the roster; the WARNING, never a
+ * lock, for an internal-only seat in a room with outsiders (owner's rule, 18 Sep 2026: any employee
+ * can be seated anywhere); release; and revoke-all / restore, which is destructive enough to
+ * confirm first (canon §9.6.2E). Only an ACTIVE employee can be seated and only a person can seat
+ * one — the server enforces both; this card offers what can happen and nothing else.
+ *
+ * WHAT WENT. The chat thread and its quick actions: the room's own ask box answers and SAVES the
+ * answer on the meeting (`RoomPanel.tsx`), where the thread evaporated. The name is kept so the
+ * shell's import still resolves; what it names is the seating card.
  */
 
 interface SeatedEmployee {
@@ -20,83 +31,70 @@ interface SeatedEmployee {
   status: string;
 }
 
-interface ChatTurn {
-  id: string;
-  turn_no: number;
-  role: string;
-  ai_employee_id: string | null;
-  body: string;
-  state: string;
-  detail: string | null;
-  created_at: string;
-}
-
-interface QuickAction {
-  key: string;
-  label: string;
-  prompt: string;
-}
-
 interface LiveHelpResponse {
   seated: SeatedEmployee[];
-  turns: ChatTurn[];
-  quick_actions: QuickAction[];
   ai_access_state: string;
   ai_access_note: string | null;
 }
 
-interface RosterEmployee {
-  id: string;
-  name: string;
-  role: string;
-  status: string;
-}
-
-export function LiveHelpPanel({ meetingId }: { meetingId: string }): JSX.Element {
-  const state = useApi<LiveHelpResponse>(`/api/meetings/${meetingId}/live-help`);
-  const roster = useApi<{ employees: RosterEmployee[] }>("/api/ai/employees");
-  const [question, setQuestion] = useState("");
-  const [busy, setBusy] = useState(false);
+export function LiveHelpPanel({ meeting, me }: { meeting: { id: string; meeting_type: string }; me: MeResponse }): JSX.Element {
+  const state = useApi<LiveHelpResponse>(`/api/meetings/${meeting.id}/live-help`, [meeting.id]);
+  const lounge = useApi<{ employees: Array<{ id: string; name: string; status: string }> }>("/api/workforce/lounge");
   const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const seated = state.data?.seated ?? [];
   const revoked = state.data?.ai_access_state === "REVOKED";
-  const seatedIds = new Set(seated.map((s) => s.ai_employee_id));
-  // Only ACTIVE employees can be seated, so only they are offered. Showing the other 26 as
-  // disabled options would be a menu of things that cannot happen.
-  const available = (roster.data?.employees ?? []).filter(
-    (e) => e.status === "ACTIVE" && !seatedIds.has(e.id),
-  );
+  const seatedByName = new Map(seated.map((s) => [s.name, s]));
+  const employed = useMemo(() => (lounge.data?.employees ?? []).filter((e) => e.status === "ACTIVE"), [lounge.data]);
+  const byName = useMemo(() => new Map(employed.map((e) => [e.name, e.id])), [employed]);
+  // Suggested first, then the rest of the roster, each in roster order.
+  const seats = useMemo(() => {
+    const all = seatableFor(meeting.meeting_type, employed.map((e) => e.name));
+    return [...all.filter((s) => s.suggested), ...all.filter((s) => !s.suggested)];
+  }, [meeting.meeting_type, employed]);
+  const type = meetingType(meeting.meeting_type);
 
-  async function ask(text: string) {
-    if (!text.trim() || busy) return;
-    setBusy(true);
+  async function seat(name: string) {
+    const id = byName.get(name);
+    if (!id) return;
+    setBusy(name);
     setMessage(null);
-    const res = await api<{ error?: string; detail?: string }>(`/api/meetings/${meetingId}/live-help`, {
-      method: "POST",
-      body: { question: text },
-    });
-    if (res.status !== 201) setMessage(res.data?.detail ?? res.data?.error ?? `Failed (HTTP ${res.status}).`);
-    setQuestion("");
-    setBusy(false);
+    const res = await api<{ error?: string; detail?: string }>(`/api/meetings/${meeting.id}/employees`, { method: "POST", body: { ai_employee_id: id } });
+    setBusy(null);
+    if (res.status >= 400) setMessage(res.data?.detail ?? res.data?.error ?? `Could not seat ${name}.`);
+    else setMessage(`${name} is in the room.`);
+    state.reload();
+  }
+
+  async function release(s: SeatedEmployee) {
+    setBusy(s.name);
+    setMessage(null);
+    const res = await api<{ error?: string; detail?: string }>(`/api/meetings/${meeting.id}/employees/release`, { method: "POST", body: { ai_employee_id: s.ai_employee_id } });
+    setBusy(null);
+    if (res.status >= 400) setMessage(res.data?.detail ?? res.data?.error ?? `Could not release ${s.name}.`);
+    else setMessage(`${s.name} has left the room.`);
     state.reload();
   }
 
   return (
-    <section className="live-help" data-testid={`live-help-${meetingId}`}>
-      <h4>Live Help</h4>
+    <section className="card" data-testid={`seating-${meeting.id}`}>
+      <div className="panel-head">
+        <h3>Who is in the room</h3>
+        <span className="muted small">seating grants no authority</span>
+      </div>
 
       {revoked ? (
-        <div className="notice" data-testid="live-help-revoked">
-          <strong>AI access to this room is revoked.</strong> No AI employee can read the notes,
-          answer here, or process follow-up. You can keep taking notes yourself.
+        <div className="notice notice-bad" data-testid="live-help-revoked">
+          <strong>AI access to this room is revoked.</strong> No employee can read the notes, answer
+          here, or process follow-up. You can keep taking notes yourself.
           {state.data?.ai_access_note && <div className="muted small">{state.data.ai_access_note}</div>}
           <div className="form-row">
             <button
               type="button"
               data-testid="live-help-restore"
               onClick={async () => {
-                await api(`/api/meetings/${meetingId}/ai-access/restore`, { method: "POST", body: {} });
+                await api(`/api/meetings/${meeting.id}/ai-access/restore`, { method: "POST", body: {} });
                 state.reload();
               }}
             >
@@ -104,7 +102,63 @@ export function LiveHelpPanel({ meetingId }: { meetingId: string }): JSX.Element
             </button>
           </div>
         </div>
+      ) : employed.length === 0 ? (
+        <p className="state-empty" data-testid="seating-nobody-employed">
+          Nobody is employed yet, so there is nobody to seat. Turn someone on from Employees.
+        </p>
       ) : (
+        <div data-testid="live-help-seats">
+          {seats.map((s) => {
+            const on = seatedByName.get(s.name) ?? null;
+            return (
+              <div key={s.name} className="seat" data-testid={`seat-row-${s.name}`}>
+                {portraitFor(s.name) ? (
+                  <img className="employee-portrait" src={portraitFor(s.name)!} alt={portraitAlt(s.name, s.role)} width={22} height={22} loading="lazy" onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                ) : (
+                  <span className="avatar" aria-hidden="true">{s.name.slice(0, 2).toUpperCase()}</span>
+                )}
+                <div className="who">
+                  {s.name}
+                  <span>
+                    {s.role} · {s.because}
+                    {/* A WARNING, NOT A LOCK. The owner's rule: any employee can be seated anywhere. */}
+                    {s.warning && (
+                      <span data-testid={`seat-warning-${s.name}`}>
+                        {" "}<span className="badge badge-gate">internal-only seat</span> {s.warning}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {on ? (
+                  <>
+                    <span className="badge badge-ok" data-testid={`live-help-seat-${on.ai_employee_id}`}>seated</span>
+                    <button type="button" className="btn-ghost" disabled={busy === s.name} aria-label={`Release ${s.name} from this meeting`} data-testid={`release-${s.name}`} onClick={() => void release(on)}>
+                      Release
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" disabled={busy === s.name} data-testid={`seat-${s.name}`} onClick={() => void seat(s.name)}>
+                    {busy === s.name ? "…" : "Seat"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {seated.length === 0 && (
+            <p className="muted small" data-testid="live-help-nobody">
+              No one is seated yet. Seat someone here, or say a name in the room and they join.
+            </p>
+          )}
+        </div>
+      )}
+
+      {type?.external && !revoked && (
+        <p className="muted small">
+          An internal-only seat in a room with outsiders is a warning, not a lock: what they say is
+          meant for the firm.
+        </p>
+      )}
+      {!revoked && (
         <div className="form-row">
           {/* Prominent, per canon §9.6.2E — and destructive enough to confirm first. */}
           <button
@@ -113,7 +167,7 @@ export function LiveHelpPanel({ meetingId }: { meetingId: string }): JSX.Element
             data-testid="live-help-revoke-all"
             onClick={async () => {
               if (!confirm("Revoke all AI access to this room? Everyone seated is removed and nobody can be seated again until you restore access.")) return;
-              await api(`/api/meetings/${meetingId}/ai-access/revoke`, { method: "POST", body: {} });
+              await api(`/api/meetings/${meeting.id}/ai-access/revoke`, { method: "POST", body: {} });
               state.reload();
             }}
           >
@@ -121,150 +175,8 @@ export function LiveHelpPanel({ meetingId }: { meetingId: string }): JSX.Element
           </button>
         </div>
       )}
-
-      {/* Who is in the room. */}
-      <div className="live-help-seats" data-testid="live-help-seats">
-        {seated.length === 0 ? (
-          <p className="muted small" data-testid="live-help-nobody">
-            No one is helping yet. Add an active employee to confer with during this meeting.
-          </p>
-        ) : (
-          seated.map((s) => (
-            <span key={s.ai_employee_id} className="help-tag help-tag-good" data-testid={`live-help-seat-${s.ai_employee_id}`}>
-              {portraitFor(s.name) && (
-                <img
-                  className="employee-portrait"
-                  src={portraitFor(s.name)!}
-                  alt={portraitAlt(s.name, s.role)}
-                  width={22}
-                  height={22}
-                  loading="lazy"
-                  onError={(ev) => {
-                    (ev.currentTarget as HTMLImageElement).style.display = "none";
-                  }}
-                />
-              )}
-              {s.name} · {s.role}{" "}
-              <button
-                type="button"
-                className="link-button"
-                aria-label={`Remove ${s.name} from this meeting`}
-                onClick={async () => {
-                  await api(`/api/meetings/${meetingId}/employees/release`, {
-                    method: "POST",
-                    body: { ai_employee_id: s.ai_employee_id },
-                  });
-                  state.reload();
-                }}
-              >
-                ×
-              </button>
-            </span>
-          ))
-        )}
-      </div>
-
-      {available.length > 0 ? (
-        <div className="form-row">
-          <label>
-            Add helper{" "}
-            <select
-              data-testid="live-help-add"
-              defaultValue=""
-              onChange={async (e) => {
-                if (!e.target.value) return;
-                const res = await api<{ detail?: string; error?: string }>(`/api/meetings/${meetingId}/employees`, {
-                  method: "POST",
-                  body: { ai_employee_id: e.target.value },
-                });
-                if (res.status !== 201) setMessage(res.data?.detail ?? `Could not add (HTTP ${res.status}).`);
-                e.target.value = "";
-                state.reload();
-              }}
-            >
-              <option value="">Choose…</option>
-              {available.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name} — {e.role}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      ) : (
-        seated.length === 0 && (
-          <p className="notice" data-testid="live-help-none-active">
-            No AI employee is active yet, so no one can help in this meeting. Activate someone on{" "}
-            <strong>Team → Employees</strong> — it needs a Managing Partner approval receipt.
-          </p>
-        )
-      )}
-
-      {/* The conversation. */}
-      <ul className="live-help-thread" data-testid="live-help-thread">
-        {(state.data?.turns ?? []).map((t) => (
-          <li
-            key={t.id}
-            className={t.role === "OPERATOR" ? "turn turn-mp" : t.state === "OK" ? "turn turn-ai" : "turn turn-blocked"}
-            data-testid={`live-help-turn-${t.turn_no}`}
-          >
-            <span className="turn-who">
-              {t.role === "OPERATOR"
-                ? "You"
-                : seated.find((s) => s.ai_employee_id === t.ai_employee_id)?.name ?? "Assistant"}
-            </span>
-            <span className="turn-body">{t.body}</span>
-            {t.state !== "OK" && t.detail && (
-              <span className="turn-detail" data-testid={`live-help-blocked-${t.turn_no}`}>
-                {t.detail}
-              </span>
-            )}
-          </li>
-        ))}
-        {(state.data?.turns ?? []).length === 0 && (
-          <li className="state-empty">Nothing asked yet.</li>
-        )}
-      </ul>
-
-      {/* Quick actions come BEFORE the text box: mid-meeting you tap, you do not compose. */}
-      <div className="live-help-quick" data-testid="live-help-quick">
-        {(state.data?.quick_actions ?? []).map((q) => (
-          <button
-            key={q.key}
-            type="button"
-            disabled={busy || seated.length === 0}
-            data-testid={`live-help-quick-${q.key}`}
-            onClick={() => ask(q.prompt)}
-          >
-            {q.label}
-          </button>
-        ))}
-      </div>
-
-      <form
-        className="form-row"
-        data-testid="live-help-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void ask(question);
-        }}
-      >
-        <input
-          data-testid="live-help-input" aria-label="Ask the employees in this meeting"
-          value={question}
-          placeholder="Ask the room…"
-          disabled={busy || seated.length === 0}
-          onChange={(e) => setQuestion(e.target.value)}
-        />
-        <button type="submit" className="btn-strong" disabled={busy || seated.length === 0} data-testid="live-help-send">
-          {busy ? "Asking…" : "Ask"}
-        </button>
-      </form>
-
-      {message && <p className="notice" data-testid="live-help-message">{message}</p>}
-      <p className="muted small">
-        Internal only. Anything drafted here is a draft — nothing is sent without your approval.
-      </p>
+      {message && <p className="notice small" data-testid="seating-message" role="status">{message}</p>}
+      <p className="muted small">Signed in as {me.fullName}. Only a person can seat an employee.</p>
     </section>
   );
 }

@@ -25,8 +25,14 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   await page.getByTestId("meeting-title").fill(`${marker} founder call`);
   await page.getByTestId("meeting-create-submit").click();
   await expect(page.getByTestId("meetings-message")).toContainText("Recorded as mtg_");
-  await page.locator('button[data-testid^="meeting-open-"]', { hasText: `${marker} founder call` }).click();
+  /*
+   * Phase D: a meeting started now opens its own record on the During face — the room, and under it
+   * what was written down. The record replaces the list while it is open (one object at a time), so
+   * the consent and transcript controls are reached through the face, not by scrolling past three
+   * bands. The strip is a real tablist and the face it opened on is asserted, not assumed.
+   */
   await expect(page.getByTestId("meeting-detail")).toBeVisible();
+  await expect(page.getByTestId("face-during")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("meeting-recording")).toHaveText("NOT ACTIVATED");
   await expect(page.getByTestId("meeting-consent")).toHaveText("NOT RECORDED");
 
@@ -82,9 +88,12 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   const activated = await request.post(`/api/meetings/${meetingId}/recording-policy`, { headers: MP, data: { approval_receipt_id: cardId } });
   expect(activated.status()).toBe(200);
 
-  // Both gates satisfied: the transcript imports.
+  // Both gates satisfied: the transcript imports. Opening a past meeting by its name lands on the
+  // After face; what was written down is one face over.
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await page.locator('button[data-testid^="meeting-open-"]', { hasText: `${marker} founder call` }).click();
+  await expect(page.getByTestId("face-after")).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("face-during").click();
   await expect(page.getByTestId("meeting-recording")).toHaveText("ACTIVE");
   await page.getByTestId("transcript-import").click();
   await expect(page.getByTestId("meeting-message")).toContainText("Transcript import ok");
@@ -95,10 +104,13 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   await page.getByTestId("note-submit").click();
   await expect(page.getByTestId("note-list")).toContainText("MANUAL");
 
+  // A promise is owed — that is the After face — and converting it is its row's own act.
+  await page.getByTestId("face-after").click();
   await page.getByTestId("commitment-text").fill(`${marker}: send the diligence question list`);
   await page.getByTestId("commitment-submit").click();
   await page.locator('button[data-testid^="commitment-convert-"]').first().click();
-  await expect(page.getByTestId("commitment-list")).toContainText("CONVERTED");
+  await expect(page.getByTestId("commitment-list")).toContainText("on a work card");
+  await expect(page.locator('button[data-testid^="commitment-convert-"]'), "a converted promise offers no second conversion").toHaveCount(0);
 
   await gotoSurface(page, "Work");
   // The board is a list of card ROWS; there is no single list container to assert against, and the
@@ -159,6 +171,7 @@ test("P7 meeting journey: consent + recording gates, then commitment → work ca
   // Revoking consent re-closes the gate for any further import.
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await page.locator('button[data-testid^="meeting-open-"]', { hasText: `${marker} founder call` }).click();
+  await page.getByTestId("face-during").click();
   await page.getByTestId("consent-revoke").click();
   await expect(page.getByTestId("meeting-consent")).toHaveText("REVOKED");
   await page.getByTestId("transcript-import").click();

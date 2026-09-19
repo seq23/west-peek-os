@@ -128,6 +128,11 @@ describe("the firm recording default", () => {
   });
 
   it("is reserved: no receipt is approval_required, and a receipt for the wrong object is refused", async () => {
+    // Before anything is raised, the status route says the switch has nothing to carry.
+    const before = await call("/api/meet/status");
+    expect(before.status).toBe(200);
+    expect(before.body.approval).toEqual({ approved_card_id: null, pending_card_id: null });
+    expect(before.body.recording_policy.active).toBe(0);
     const bare = await call("/api/meet/recording-policy", "POST", { action: "activate" });
     expect(bare.status).toBe(409);
     expect(bare.body.error).toBe("approval_required");
@@ -137,11 +142,39 @@ describe("the firm recording default", () => {
     expect((await env.WP_OS_DB.prepare("SELECT active FROM meet_recording_policy WHERE firm_scope = 'west-peek'").first<any>())).toBeNull();
   });
 
-  it("turns on with an approved receipt, once, and the receipt cannot be replayed", async () => {
-    const receipt = await approvedReceipt("meet.recording_policy.firm_default", "meet_recording_policy", "west-peek");
-    const on = await call("/api/meet/recording-policy", "POST", { action: "activate", approval_receipt_id: receipt, note: "owner approved 18 Sep 2026" });
+  it("turns on with an approved receipt, once, and the receipt cannot be replayed — the switch's journey, raise → approve → activate", async () => {
+    /*
+     * THE DOOR ON THE MEETINGS PAGE (owner's addition, 19 Sep 2026). The switch raises the card the
+     * way the page does, reads where it stands off `/api/meet/status`, and activates with the id the
+     * status route hands back — so this is the journey the band runs, step by step, against the
+     * same routes. The wrong-object card from the test above must NOT be offered: it is for another
+     * firm's scope.
+     */
+    const raised = await call<{ id: string; state: string }>("/api/approvals", "POST", {
+      action_key: "meet.recording_policy.firm_default", object_type: "meet_recording_policy", object_id: "west-peek",
+      title: "Turn on the firm default: transcribe every firm-hosted Google Meet", submit: true,
+    });
+    expect(raised.status).toBe(201);
+    expect(raised.body.state).toBe("pending_review");
+    const pending = await call("/api/meet/status");
+    expect(pending.body.approval, "a raised card is pending, not approved").toEqual({ approved_card_id: null, pending_card_id: raised.body.id });
+    // Still off, and still refused: a pending card is not a receipt.
+    const early = await call("/api/meet/recording-policy", "POST", { action: "activate", approval_receipt_id: raised.body.id });
+    expect(early.status).toBe(409);
+
+    const decided = await call(`/api/approvals/${raised.body.id}/decide`, "POST", { decision: "approved" });
+    expect(decided.status).toBe(200);
+    const ready = await call("/api/meet/status");
+    expect(ready.body.approval, "an approved card is the receipt the switch offers").toEqual({ approved_card_id: raised.body.id, pending_card_id: null });
+    expect(ready.body.recording_policy.active).toBe(0);
+
+    const receipt = ready.body.approval.approved_card_id as string;
+    const on = await call("/api/meet/recording-policy", "POST", { action: "activate", approval_receipt_id: receipt, note: "turned on from the Meetings page" });
     expect(on.status).toBe(200);
     expect(on.body).toMatchObject({ firm_scope: "west-peek", active: 1, receipt_id: receipt, activated_by: "fu_scooter_taylor" });
+    const after = await call("/api/meet/status");
+    expect(after.body.recording_policy.active).toBe(1);
+    expect(after.body.approval, "a consumed receipt is not offered again").toEqual({ approved_card_id: null, pending_card_id: null });
     const replay = await call("/api/meet/recording-policy", "POST", { action: "activate", approval_receipt_id: receipt });
     expect(replay.status).toBe(409);
   });
