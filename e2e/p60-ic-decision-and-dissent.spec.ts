@@ -30,6 +30,10 @@ test("a packet is assembled, a question is answered, the committee passes, and a
   page,
   request,
 }) => {
+  /* The journey crosses the Dealflow record now — the committee face loads the packet, its
+     framework and its questions on top of the board — so it is the length of p6's, which runs
+     under the same allowance. Nothing here waits on a duration. */
+  test.slow();
   const marker = `E2E-P60-${Date.now()}`;
   const companyName = `${marker} Co`;
   const rationale = "Two of the three named customers turned out to be unpaid pilots";

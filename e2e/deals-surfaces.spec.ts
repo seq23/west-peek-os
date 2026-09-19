@@ -277,7 +277,10 @@ async function openDealflow(page: Page): Promise<void> {
 
 test.describe("Dealflow", () => {
   test("holds its measured numbers on the pipeline and on the record's five faces, at five widths", async ({ page, request }) => {
-    test.slow();
+    // Nine rendered states at five widths is forty-five sweeps, each waiting on fonts and two
+    // painted frames; the Work equivalent (twelve sweeps) runs under `test.slow()`. This one is
+    // given the time its arithmetic needs rather than a multiplier.
+    test.setTimeout(300_000);
     await installMeasurers(page);
     await signIn(page);
     const seed = await seedDealflow(request);
@@ -306,7 +309,7 @@ test.describe("Dealflow", () => {
 
       // The inline reason field, open on a row, then closed without a pass.
       await page.getByTestId("dealflow-filter-LIVE").click();
-      const row = page.locator('[data-testid^="deal-"]', { hasText: seed.proposed }).first();
+      const row = page.locator("li.deal-row", { hasText: seed.proposed }).first();
       const dealId = (await row.getAttribute("data-testid"))!.replace("deal-", "");
       await page.getByTestId(`deal-pass-${dealId}`).click();
       await expect(page.getByTestId(`deal-pass-reason-${dealId}-text`)).toBeFocused();
