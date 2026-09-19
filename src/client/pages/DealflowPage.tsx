@@ -843,7 +843,7 @@ function DealRow({ deal, open, onChanged, onOpen }: {
             */}
             <button
               type="button"
-              className="link-button"
+              className="btn-ghost"
               data-testid={`deal-placeholders-${deal.id}`}
               onClick={() => onOpen(deal.company_id, deal.company_name)}
             >
@@ -936,7 +936,7 @@ function DealRow({ deal, open, onChanged, onOpen }: {
           {deal.recommendation_note ? <span className="muted"> {deal.recommendation_note}</span> : null}{" "}
           <button
             type="button"
-            className="link-button"
+            className="btn-ghost"
             disabled={busy}
             data-testid={`deal-recommendation-clear-${deal.id}`}
             onClick={async () => {
@@ -1239,7 +1239,7 @@ function CommitteeFace({
                     {q.answer && <div className="closeout-quote">{q.answer}</div>}
                     {q.withdrawn_reason && <div className="muted small">Not needed because {q.withdrawn_reason}</div>}
                     {q.state === "OPEN" && answering !== q.id && (
-                      <button type="button" className="link-button" data-testid={`ic-answer-${q.id}`} onClick={() => { setAnswering(q.id); setAnswer(""); }}>
+                      <button type="button" className="btn-ghost" data-testid={`ic-answer-${q.id}`} onClick={() => { setAnswering(q.id); setAnswer(""); }}>
                         Answer it
                       </button>
                     )}
@@ -1321,7 +1321,7 @@ function CommitteeFace({
               <div className="row">
                 <button
                   type="button"
-                  className="link-button"
+                  className="btn-ghost"
                   aria-expanded={packetOpen}
                   data-testid={`ic-open-packet-${d.opportunity_id}`}
                   onClick={() => setPacketOpen((o) => !o)}
@@ -1994,7 +1994,7 @@ function CompanyDealRecord({
           </span>
           <button
             type="button"
-            className="link-button"
+            className="btn-ghost"
             data-testid="deal-record-open-register"
             onClick={() => {
               openOnRegister(companyId);
@@ -2003,7 +2003,7 @@ function CompanyDealRecord({
           >
             Its register entry →
           </button>
-          <button type="button" className="link-button" data-testid="deal-record-close" onClick={onClose}>
+          <button type="button" className="btn-ghost" data-testid="deal-record-close" onClick={onClose}>
             ↑ Close this record
           </button>
         </div>
