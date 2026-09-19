@@ -47,7 +47,22 @@ test("journey 1 — MP Home → intelligence item → its source → follow-up r
    * lands on the surface that owns the records, where the item and its provenance are.
    */
   await page.getByRole("button", { name: "Home", exact: true }).click();
+  await expect(page.getByTestId("home-page")).toBeVisible();
+  /*
+   * THE MODULE MAY BE QUIET, AND A QUIET MODULE IS ONE PRESS AWAY. Home shows a module as a card
+   * only when something in its top eight is newer than the partner's last look; the rest sit in
+   * the quiet roll behind "Show each". The item this journey added is real and on the record, but
+   * whether it is in the top eight depends on what every spec before this one gathered — on 19 Sep
+   * three branches that added a data-heavy spec earlier in the alphabet failed here, and the base
+   * without one passed. The journey is about the DRILL, so it walks the path a person walks: open
+   * the quiet roll if that is where the module is, and press Open on it.
+   */
   const module = page.getByTestId("home-module-intelligence");
+  if (!(await module.isVisible().catch(() => false))) {
+    const roll = page.getByTestId("home-quiet-roll");
+    await expect(roll, "the module is neither a card nor in the quiet roll — it is missing from Home").toContainText("nothing new since you last looked");
+    await page.getByTestId("home-quiet-roll-toggle").click();
+  }
   await expect(module).toBeVisible();
   await expect(module).toContainText("What moved overnight");
 
