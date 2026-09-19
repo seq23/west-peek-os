@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useRef, useState } from "react";
+import { FollowOnCandidates } from "./FollowOnCandidates";
 import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 import { useSelectedFund } from "../lib/selectedFund";
 import { MANAGING_PARTNERS } from "@shared/registry/managingPartners";
@@ -573,6 +574,10 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
               <li className="state-empty">Nothing has two figures to compare yet. Record what a company reported, below.</li>
             )}
           </ul>
+          {/* THE ACT LIVES WITH THE COMPANY (design/FUND_STRATEGY_DESIGN.md §2): a company pulling
+              ahead is reviewed from here; the review itself, and the reserves it draws on, are on
+              Fund strategy. */}
+          <FollowOnCandidates />
         </div>
       </section>
 

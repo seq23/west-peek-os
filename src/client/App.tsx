@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { readableDate, shortDate } from "./lib/dates";
 import { api, getDevUser, mutationError, onNotificationsChanged, signOut, useApi, type MeResponse } from "./lib/api";
-import { DeckPanel } from "./pages/DeckPanel";
 import { DocumentPreview } from "./components/DocumentPreview";
-import { FundConstruction } from "./pages/FundConstruction";
 import { LpPage } from "./pages/LpPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { PageHostCard } from "./pages/PageHostCard";
@@ -15,11 +13,11 @@ import { RoomsPage } from "./pages/RoomsPage";
 import { IntroductionsPage } from "./pages/IntroductionsPage";
 import { CommunityPage } from "./pages/CommunityPage";
 import { LedgersPage } from "./pages/LedgersPage";
-import { FollowOnPage } from "./pages/FollowOnPage";
 import { WeeklyReviewPage } from "./pages/WeeklyReviewPage";
 import { CrossOfficePage } from "./pages/CrossOfficePage";
 import { SecondariesPage } from "./pages/SecondariesPage";
 import { PagePurposeBlock } from "./pages/PagePurposeBlock";
+import { FundStrategyPage } from "./pages/FundStrategyPage";
 import { actionName, actorName } from "@shared/help/actionNames";
 import { stateMeaning } from "@shared/work/workCards";
 import { SignInCard, SignedOutPage } from "./pages/AuthSurfaces";
@@ -36,15 +34,12 @@ import { JobsPage } from "./pages/JobsPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { ResearchPage } from "./pages/ResearchPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
-import { CockpitPage } from "./pages/CockpitPage";
 import { DutyRosterPanel } from "./pages/DutyRosterPanel";
 import { ThesisPage } from "./pages/ThesisPage";
-import { ModelingPage } from "./pages/ModelingPage";
 import { DealflowPage } from "./pages/DealflowPage";
 import { MeetingsPage as MeetingsSurface } from "./pages/MeetingsPage";
 import { RoomPanel } from "./pages/RoomPanel";
 import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
-import { FundAllocation, Composition } from "./pages/FundAllocation";
 import { BrowserTasksPage } from "./pages/BrowserTasksPage";
 import { WorkCardsPage as WorkSurface } from "./pages/WorkCardsPage";
 import { GOVERNANCE_UPDATE_TYPES, RECOMMENDED_GOVERNANCE, governanceType } from "@shared/governance/updateTypes";
@@ -2486,352 +2481,6 @@ interface AccessRow {
 
 // ── P11: fund construction and cross-sleeve allocation ──
 
-interface FundRow {
-  id: string;
-  name: string;
-}
-
-interface ScenarioRow {
-  id: string;
-  name: string;
-  status: string;
-  model_version: string;
-}
-
-interface AllocationOptionRow {
-  id: string;
-  option_type: string;
-  label: string;
-  capital: number;
-  decision: string;
-  proposed_by_type: string;
-}
-
-interface RunResultRow {
-  option_id: string;
-  sleeve_remaining_after: number;
-  concentration_pct_after: number;
-  reserve_uncommitted_after: number;
-  breach_count: number;
-}
-
-interface ViolationRow {
-  id: string;
-  option_id: string;
-  kind: string;
-  severity: string;
-  detail: string;
-}
-
-function AllocationPage({ me }: { me: MeResponse }) {
-  const [nonce, setNonce] = useState(0);
-  const funds = useApi<{ funds: FundRow[] }>("/api/funds");
-  const scenarios = useApi<{ scenarios: ScenarioRow[] }>("/api/allocation/scenarios", [nonce]);
-  const [scenarioId, setScenarioId] = useState("");
-  const detail = useApi<{
-    name: string;
-    model_version: string;
-    outcome_label: string;
-    mandate_version_id: string;
-    sleeve_version_id: string;
-    reserve_version_id: string;
-    concentration_version_id: string;
-    options: AllocationOptionRow[];
-    assumptions: Array<{ id: string; assumption_key: string; assumption_value: string; basis: string }>;
-  }>(scenarioId ? `/api/allocation/scenarios/${scenarioId}` : null, [scenarioId, nonce]);
-  const [runId, setRunId] = useState("");
-  const run = useApi<{ results: RunResultRow[]; violations: ViolationRow[]; breach_count: number }>(runId ? `/api/allocation/runs/${runId}` : null, [runId]);
-  const [optionType, setOptionType] = useState("FOLLOW_ON");
-  const [optionLabel, setOptionLabel] = useState("");
-  const [capital, setCapital] = useState("2100000");
-  const [existingCost, setExistingCost] = useState("1500000");
-  const [receipt, setReceipt] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-  void me;
-
-  const post = async <T,>(path: string, body: unknown, okStatus: number, label: string): Promise<{ status: number; data: (T & { error?: string }) | null }> => {
-    const { status, data } = await api<T & { error?: string }>(path, { method: "POST", body });
-    setMessage(status === okStatus ? `${label} ok.` : `${label} refused: ${data?.error ?? status}`);
-    setNonce((n) => n + 1);
-    return { status, data };
-  };
-
-  return (
-    <section data-testid="allocation-page">
-      <h4>Scenarios (each pins its policy versions)</h4>
-      <form
-        className="form-row"
-        data-testid="scenario-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          // Read the form BEFORE any await: currentTarget is gone by the time the
-          // policy lookups below resolve.
-          const form = new FormData(e.currentTarget);
-          const scenarioName = (form.get("name") as string) || "scenario";
-          const fundId = (form.get("fund") as string) || funds.data?.funds[0]?.id;
-          if (!fundId) {
-            setMessage("Scenario refused: no fund exists yet.");
-            return;
-          }
-          // Pin the CURRENT latest version of each policy at scenario-open time.
-          const pins: Record<string, string> = {};
-          for (const kind of ["mandate", "sleeve", "reserve", "concentration"]) {
-            const { data } = await api<{ versions: Array<{ id: string }>; current: { id: string } | null }>(`/api/funds/${fundId}/policies/${kind}`);
-            // `current` from the API. This was the ONE call site that took `.at(-1)` while six
-            // others took `[0]`, so the allocation model pinned a different policy version from
-            // the one every display showed.
-            const latest = data?.current;
-            if (!latest) {
-              setMessage(`Scenario refused: fund has no ${kind} policy version yet.`);
-              return;
-            }
-            pins[kind] = latest.id;
-          }
-
-          // THE FUND'S OWN NUMBERS, READ RATHER THAN INVENTED. What stood here was
-          // `fund_size: 30000000, investable: 24000000, fund_deployed: 10000000` — hardcoded, in
-          // the request body, where no partner ever saw them. The constraint engine then answered
-          // "does the sleeve fit" and "is the reserve sufficient" against a thirty-million-dollar
-          // fund the firm does not have, and printed the answers as arithmetic. This page already
-          // refused to open a scenario without a pinned policy version; it had no business being
-          // stricter about a policy id than about the size of the fund.
-          /*
-           * Read BEFORE any await, like the rest of this handler: `currentTarget` is gone by the
-           * time the policy lookups resolve, and reading it afterwards is how this form lost fields
-           * silently once already.
-           */
-          const investableGiven = Number(form.get("investable"));
-          if (!Number.isFinite(investableGiven) || investableGiven <= 0) {
-            setMessage(
-              "Scenario refused: say how much of the fund is actually investable after fees. Nobody has recorded a fee model, so this is the one number the system cannot work out for you.",
-            );
-            return;
-          }
-
-          const { data: basis } = await api<{
-            fund_size: number | null;
-            fund_deployed: number;
-            ready: boolean;
-            blocked_because: string | null;
-          }>(`/api/funds/${fundId}/basis`);
-          if (!basis?.ready) {
-            setMessage(`Scenario refused: ${basis?.blocked_because ?? "the fund's own numbers could not be read."}`);
-            return;
-          }
-
-          const { status, data } = await post<{ id: string }>(
-            "/api/allocation/scenarios",
-            {
-              fund_id: fundId,
-              name: scenarioName,
-              mandate_version_id: pins.mandate,
-              sleeve_version_id: pins.sleeve,
-              reserve_version_id: pins.reserve,
-              concentration_version_id: pins.concentration,
-              fund_size: basis.fund_size,
-              investable: investableGiven,
-              fund_deployed: basis.fund_deployed,
-              // Investable and the modelled reserve need are OMITTED, not zeroed. Nobody has
-              // recorded a fee model or a reserve plan, and a zero would be read as "the fund has
-              // nothing set aside" rather than "we were never told" — which is how the last set of
-              // invented numbers came to look like facts.
-            },
-            201,
-            "Scenario",
-          );
-          if (status === 201 && data) setScenarioId(data.id);
-        }}
-      >
-        <label>
-          Fund{" "}
-          <select name="fund" data-testid="scenario-fund">
-            {(funds.data?.funds ?? []).map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Name <input name="name" data-testid="scenario-name" defaultValue="" />
-        </label>
-        {/*
-          ASKED FOR, BECAUSE NOBODY HAS RECORDED IT. `investable` is NOT NULL and the firm has no fee
-          model on file, so there are only three options: invent a number, refuse to open scenarios
-          at all, or ask. Inventing is what put a $30M fund into every scenario in the first place,
-          and refusing would take Fund strategy away entirely — so the form asks for the one figure
-          the system genuinely does not know, and the answer is recorded rather than assumed.
-        */}
-        <label>
-          Investable after fees{" "}
-          <input
-            name="investable"
-            data-testid="scenario-investable"
-            inputMode="decimal"
-            placeholder="what is actually deployable"
-          />
-        </label>
-        <button type="submit" className="btn-strong" data-testid="scenario-create">
-          Open scenario (pins current policy versions)
-        </button>
-      </form>
-
-      <label>
-        Working scenario{" "}
-        <select data-testid="scenario-select" value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
-          <option value="">— select —</option>
-          {(scenarios.data?.scenarios ?? []).map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} ({s.status})
-            </option>
-          ))}
-        </select>
-      </label>
-      {detail.data && (
-        <div className="card" data-testid="scenario-detail">
-          <p data-testid="scenario-pins">
-            model <code>{detail.data.model_version}</code> · mandate <code>{detail.data.mandate_version_id}</code> · sleeve{" "}
-            <code>{detail.data.sleeve_version_id}</code> · reserve <code>{detail.data.reserve_version_id}</code> · concentration{" "}
-            <code>{detail.data.concentration_version_id}</code>
-          </p>
-          <p data-testid="scenario-outcome-label">{detail.data.outcome_label}</p>
-          <h4>Assumptions (stated, append-only)</h4>
-          <ul data-testid="assumption-list">
-            {detail.data.assumptions.map((a) => (
-              <li key={a.id} data-testid={`assumption-${a.id}`}>
-                <code>{a.assumption_key}</code> = {a.assumption_value} — {a.basis}
-              </li>
-            ))}
-            {detail.data.assumptions.length === 0 && <li className="state-empty" data-testid="no-assumptions">No assumptions stated yet. An allocation scenario cannot run until its assumptions are on the record.</li>}
-          </ul>
-          <button
-            type="button"
-            data-testid="assumption-add"
-            onClick={() =>
-              post(
-                `/api/allocation/scenarios/${scenarioId}/assumptions`,
-                { assumption_key: "graduation_rate", assumption_value: "35%", basis: "operator-stated planning figure, not an observed rate" },
-                201,
-                "Assumption",
-              )
-            }
-          >
-            State graduation-rate assumption
-          </button>
-        </div>
-      )}
-
-      <h4>Capital options (initial, follow-on, reserve, secondary, exit — one framework)</h4>
-      <form
-        className="form-row"
-        data-testid="option-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await post(
-            `/api/allocation/scenarios/${scenarioId}/options`,
-            {
-              option_type: optionType,
-              label: optionLabel,
-              sleeve_key: "early",
-              sleeve_target_pct: 60,
-              sleeve_deployed: 10000000,
-              capital: Number(capital),
-              reserve_draw: optionType === "RESERVE" ? Number(capital) : 0,
-              existing_company_cost: Number(existingCost),
-            },
-            201,
-            "Option",
-          );
-        }}
-      >
-        <label>
-          Type{" "}
-          <select data-testid="option-type" value={optionType} onChange={(e) => setOptionType(e.target.value)}>
-            {["INITIAL", "FOLLOW_ON", "RESERVE", "SECONDARY_PURCHASE", "SECONDARY_SALE", "EXIT"].map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Label <input data-testid="option-label" value={optionLabel} onChange={(e) => setOptionLabel(e.target.value)} />
-        </label>
-        <label>
-          Capital <input data-testid="option-capital" value={capital} onChange={(e) => setCapital(e.target.value)} />
-        </label>
-        <label>
-          Existing cost <input data-testid="option-existing-cost" value={existingCost} onChange={(e) => setExistingCost(e.target.value)} />
-        </label>
-        <button type="submit" className="btn-strong" data-testid="option-create">
-          Add option
-        </button>
-      </form>
-
-      <button
-        type="button"
-        data-testid="run-comparison"
-        onClick={async () => {
-          const { status, data } = await post<{ run: { id: string } }>(`/api/allocation/scenarios/${scenarioId}/compare`, {}, 201, "Comparison");
-          if (status === 201 && data) setRunId(data.run.id);
-        }}
-      >
-        Run cross-sleeve comparison
-      </button>
-      {message && <p className="notice" data-testid="allocation-message">{message}</p>}
-
-      {run.data && (
-        <div className="card" data-testid="run-detail">
-          <p data-testid="run-breaches">{run.data.violations.filter((v) => v.severity === "BREACH").length} constraint breach(es)</p>
-          <ul data-testid="violation-list">
-            {run.data.violations.map((v) => (
-              <li key={v.id} data-testid={`violation-${v.kind}`}>
-                <code>{v.severity}</code> <code>{v.kind}</code> — {v.detail}
-              </li>
-            ))}
-            {run.data.violations.length === 0 && <li className="state-empty" data-testid="no-violations">No constraint violations.</li>}
-          </ul>
-        </div>
-      )}
-
-      <h4>Options — humans decide</h4>
-      {/* The receipt is typed in, not remembered for you: an approval card is
-          presented deliberately, and it survives leaving this page to approve it. */}
-      <label>
-        Approval receipt <input data-testid="option-receipt" value={receipt} onChange={(e) => setReceipt(e.target.value)} />
-      </label>
-      <ul className="card-list" data-testid="option-list">
-        {(detail.data?.options ?? []).map((o) => (
-          <li key={o.id} className="card" data-testid={`option-${o.id}`}>
-            <code>{o.option_type}</code> {o.label} · {o.capital} · <code data-testid={`option-decision-${o.id}`}>{o.decision}</code> · proposed by{" "}
-            {o.proposed_by_type}
-            <div className="form-row">
-              <button
-                type="button"
-                data-testid={`option-request-${o.id}`}
-                onClick={async () => {
-                  const { status, data } = await post<{ id: string }>(`/api/allocation/options/${o.id}/request-approval`, {}, 201, "Approval request");
-                  if (status === 201 && data) setReceipt(data.id);
-                }}
-              >
-                Request the reserved approval
-              </button>
-              <button
-                type="button"
-                data-testid={`option-approve-${o.id}`}
-                onClick={() => post(`/api/allocation/options/${o.id}/decide`, { decision: "APPROVED", ...(receipt ? { approval_receipt_id: receipt } : {}) }, 200, "Decision")}
-              >
-                Record APPROVED
-              </button>
-            </div>
-          </li>
-        ))}
-        {(detail.data?.options ?? []).length === 0 && <li className="state-empty" data-testid="no-options">No options in this scenario.</li>}
-      </ul>
-    </section>
-  );
-}
-
 // ── P12: LP reporting and fund-admin reconciliation ──
 
 interface PeriodRow {
@@ -2953,108 +2602,6 @@ function StatusBar({ onNavigate, refreshNonce }: { onNavigate: (key: string) => 
       )}
       {message && <span className="muted small">{message}</span>}
     </p>
-  );
-}
-
-/** What the portfolio is actually made of — needs no fund, it reads the closed holdings. */
-function PortfolioComposition(): JSX.Element {
-  return <Composition />;
-}
-
-/** Resolves the selected fund for the allocation ring; renders nothing before one exists. */
-function PortfolioAllocation(): JSX.Element | null {
-  const selected = useSelectedFund();
-  if (selected.loading || !selected.fund) return null;
-  return <FundAllocation fundId={selected.fund.id} />;
-}
-
-/**
- * Fund strategy — the allocation decision, start to finish.
- *
- * TWO TABS ANSWERED ONE QUESTION. Allocation carried "What the portfolio is made of" and "Where the
- * fund goes"; Fund strategy carried "Allocation decision view". Each duplicated a heading the other
- * owned, so being sure you had seen everything meant visiting both — the same failure that merged
- * Scheduled Work into Work.
- *
- * ORDERED AS THE DECISION RUNS, not as the components happened to be written. The question a
- * partner arrives with is "can we write this cheque, and what does it cost us later", and that is
- * answered in a sequence: what the thesis promised, what has gone out, what is left, what this
- * cheque does to the shape, and what it costs the reserves. Five panels of numbers in an arbitrary
- * order is a dashboard; the same five in that order is a method.
- */
-const STRATEGY_STEPS: readonly { q: string; where: string }[] = [
-  { q: "What did we say we would build?", where: "The thesis — target positions, ownership and cheque size." },
-  { q: "What have we actually got?", where: "Composition: where the money has gone so far." },
-  { q: "What is left, and what is at risk?", where: "Alerts and the companies moving the wrong way." },
-  { q: "What would this next cheque do?", where: "Scenarios: model it before you commit to it." },
-  { q: "What does it cost us later?", where: "Reserves and follow-on capacity after the cheque." },
-  { q: "And the companies we already own?", where: "Follow-on: which of them earns the next cheque." },
-];
-
-function FundStrategyPage({ me, onNavigate }: { me: MeResponse; onNavigate?: (key: string) => void }): JSX.Element {
-  /*
-   * The deck and the construction editor sit at the TOP of this page, above the analysis, because
-   * they are the two things the operator asked for by name — "we should have our deck displayed
-   * prominently in the OS" and "we need to be able to adjust this ourselves in the OS UI". A
-   * document that lives only in Canva and a construction that needs a migration to change are the
-   * two gaps that produced every discrepancy found on 9 Sep 2026.
-   */
-  const funds = useApi<{ funds: Array<{ id: string }> }>("/api/funds");
-  const fundId = funds.data?.funds?.[0]?.id ?? null;
-
-  return (
-    <section data-testid="fund-strategy-page">
-      <DeckPanel onNavigate={onNavigate} />
-      <FundConstruction fundId={fundId} />
-
-      {/* The sequence, stated once at the top. It teaches the order rather than assuming it. */}
-      <details className="card" data-testid="strategy-how">
-        <summary className="muted small">How this decision runs</summary>
-        <ol className="card-list small">
-          {STRATEGY_STEPS.map((s) => (
-            <li key={s.q}>
-              <strong>{s.q}</strong> — {s.where}
-            </li>
-          ))}
-        </ol>
-      </details>
-
-      <CockpitPage me={me} />
-
-      <div className="home-section-head">
-        <h3>What the portfolio is made of</h3>
-        <span className="muted small">read from closed holdings, not projected</span>
-      </div>
-      <PortfolioComposition />
-      <PortfolioAllocation />
-
-      {/* DEAL MATH, FOLDED IN (item 13). Before the scenarios, because you size a cheque by what it
-          buys: what this round does to ownership, and what an exit would have to be for it to
-          return the fund. The scenarios below then ask whether the fund can afford it. */}
-      <div className="home-section-head">
-        <h3>What this cheque actually buys</h3>
-        <span className="muted small">ownership, dilution, and what it takes to return the fund</span>
-      </div>
-      <ModelingPage me={me} />
-
-      <div className="home-section-head">
-        <h3>Modelling the next cheque</h3>
-        <span className="muted small">scenarios, and what each one breaks</span>
-      </div>
-      <AllocationPage me={me} />
-
-      {/* FOLLOW-ON IS THE SAME DECISION, SEEN LATER.
-          It had its own tab, which meant "should we write this cheque" and "should we write ANOTHER
-          cheque into a company we already own" were answered on different pages — while sharing the
-          reserves they both draw from. Deciding a follow-on without the allocation picture in front
-          of you is deciding it blind, and the reserve consequence is the last step of the sequence
-          this page already walks. */}
-      <div className="home-section-head">
-        <h3>Following on</h3>
-        <span className="muted small">the companies we already own, and what a second cheque costs</span>
-      </div>
-      <FollowOnPage />
-    </section>
   );
 }
 
@@ -3431,7 +2978,7 @@ function Shell() {
           {authed && active === "community" && <CommunityPage />}
           {authed && active === "record" && <LedgersPage />}
           {/* Follow-on merged into Fund strategy. The route stays live. */}
-          {authed && active === "follow-on" && <FundStrategyPage me={me.data!} onNavigate={navigate} />}
+          {authed && active === "follow-on" && <FundStrategyPage onNavigate={navigate} />}
           {authed && active === "weekly-review" && <WeeklyReviewPage onNavigate={navigate} />}
           {authed && active === "cross-office" && <CrossOfficePage />}
           {authed && active === "secondaries" && <SecondariesPage onNavigate={navigate} />}
@@ -3483,7 +3030,7 @@ function Shell() {
           {authed && active === "thesis" && <ThesisPage me={me.data!} />}
           {/* The old Deal Math address, kept working. `MERGED_ROUTES` normally resolves it to
               fund-strategy before it gets here; this stays so a direct jump cannot land nowhere. */}
-          {authed && active === "deal-math" && <FundStrategyPage me={me.data!} onNavigate={navigate} />}
+          {authed && active === "deal-math" && <FundStrategyPage onNavigate={navigate} />}
           {/*
             THE PIPELINE AND THE DEAL RECORD ARE ONE PAGE AND ONE COMPONENT.
 
@@ -3509,12 +3056,12 @@ function Shell() {
               composition also counts closed opportunities while the holdings list counts booked
               positions, so the two could print different portfolios on one screen. */}
           {authed && active === "portfolio" && <PortfolioPage me={me.data!} />}
-          {authed && active === "fund-strategy" && <FundStrategyPage me={me.data!} onNavigate={navigate} />}
+          {authed && active === "fund-strategy" && <FundStrategyPage onNavigate={navigate} />}
           {authed && active === "network" && <NetworkPage me={me.data!} />}
           {authed && active === "integrations" && <IntegrationsPage me={me.data!} />}
           {authed && active === "lp" && <LpPage me={me.data!} />}
           {/* The old address still works and lands in the same place. */}
-          {authed && active === "allocation" && <FundStrategyPage me={me.data!} onNavigate={navigate} />}
+          {authed && active === "allocation" && <FundStrategyPage onNavigate={navigate} />}
           {/* Reporting folded into LP (item 16): an LP is somebody who gave the fund money and
               whom the fund owes an account of it, and two tabs for one relationship meant
               answering "what has Cedar been told?" required knowing packets lived elsewhere.

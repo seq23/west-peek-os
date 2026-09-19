@@ -6202,3 +6202,118 @@ body {
 .notice > .brief-state-line + .muted { margin: var(--space-2xs) 0 0; }
 .notice > .progress-track { margin-top: var(--space-sm); }
 .notice[data-kind="running"] .progress-fill { background: var(--wp-ink-2); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FUND STRATEGY (design/FUND_STRATEGY_DESIGN.md §5, approved 19 Sep 2026).
+   Tokens only. The shared Deals vocabulary — .masthead*, .band*, .section-head,
+   .kv, .bar, .version-rail, .deal-row-2, .notice*, .count-pill, .chip — is
+   reused as-is; what follows is only what that vocabulary did not have:
+   a link styled as a button, the dashboard door, the pace chart, the gap rows,
+   the policy read as prose, the Amend tray and the reserves' headroom.
+   Registered in design/DEALS_SECTION_CLASSES.json under `fund-strategy`.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── A link that is a button. The button hierarchy existed only on <button>; the
+   dashboard door is an <a href> (a new tab), so the same chrome is declared for it. ── */
+.surface-body a.btn-primary,
+.surface-body a.btn-strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-height: 34px;
+  padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--wp-line-control);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.surface-body a.btn-primary { background: var(--wp-orange); border-color: var(--wp-orange); color: var(--wp-orange-ink); }
+.surface-body a.btn-primary:hover { background: var(--wp-orange-strong); border-color: var(--wp-orange-strong); color: var(--wp-orange-ink); }
+.surface-body a.btn-primary:active { background: var(--wp-orange-deep); border-color: var(--wp-orange-deep); }
+.surface-body a.btn-strong { background: var(--wp-ink); border-color: var(--wp-ink); color: var(--wp-shell-ink); }
+.surface-body a.btn-strong:hover { background: var(--wp-ink-2); border-color: var(--wp-ink-2); color: var(--wp-shell-ink); }
+.surface-body a.btn-primary[aria-disabled="true"],
+.surface-body a.btn-strong[aria-disabled="true"] {
+  background: var(--wp-surface-3);
+  border-color: var(--wp-line);
+  color: var(--wp-muted);
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.surface-body a.btn-lg { font-size: var(--text-md); padding: var(--space-md) var(--space-xl); }
+
+/* ── The door: what the dashboards answer on the left, the six figures on the right. ── */
+.door {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: var(--space-xl);
+  align-items: start;
+}
+.door-head { margin: 0 0 var(--space-sm); font-size: var(--text-xl); font-weight: 700; letter-spacing: var(--tracking-tight); }
+.door-lede { margin: 0 0 var(--space-md); color: var(--wp-ink-2); max-width: var(--measure); }
+.door-answers { list-style: none; margin: 0 0 var(--space-lg); padding: 0; display: grid; gap: var(--space-2xs); }
+.door-answers li { display: flex; gap: var(--space-sm); align-items: baseline; }
+.door-answers li::before { content: ""; width: var(--space-xs); height: var(--space-xs); border-radius: var(--radius-pill); background: var(--wp-orange); flex-shrink: 0; transform: translateY(calc(-1 * var(--space-3xs))); }
+.door-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); align-items: center; }
+.door-actions > .muted { flex-basis: 100%; }
+.figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-md) var(--space-lg); margin: 0; }
+.figures .kv { font-size: var(--text-md); font-weight: 600; font-variant-numeric: tabular-nums; }
+.figures .kv b { margin-bottom: var(--space-3xs); }
+.figures .kv .muted { font-weight: 400; }
+
+/* ── The pace chart: one axis, the plan as a reference line, actual as the one series. ── */
+.pace { width: 100%; height: auto; display: block; overflow: visible; }
+.pace .axis { stroke: var(--wp-line-strong); stroke-width: 1; }
+.pace .grid { stroke: var(--wp-line); stroke-width: 1; }
+.pace .plan { stroke: var(--wp-line-control); stroke-width: 2; stroke-dasharray: 6 5; fill: none; }
+.pace .actual { stroke: var(--viz-1); stroke-width: 2; fill: none; }
+.pace .mark { fill: var(--viz-1); }
+.pace .mark-plan { fill: var(--wp-surface); stroke: var(--wp-line-control); stroke-width: 2; }
+/* design-token-exempt: text drawn inside an SVG, sized in its own 340-unit geometry */
+.pace text { font-size: 12px; fill: var(--wp-ink-2); font-family: var(--font-ui); }
+.pace .lbl-strong { fill: var(--wp-ink); font-weight: 600; }
+.pace-key { display: flex; flex-wrap: wrap; gap: var(--space-md); margin: var(--space-sm) 0 0; padding: 0; list-style: none; font-size: var(--text-xs); color: var(--wp-ink-2); }
+.pace-key li { display: flex; align-items: center; gap: var(--space-xs); }
+.pace-key i { display: inline-block; width: var(--space-lg); height: 2px; background: var(--viz-1); }
+.pace-key i.plan { background: repeating-linear-gradient(90deg, var(--wp-line-control) 0 6px, transparent 6px 11px); }
+
+/* ── The gap, pool by pool: label · bar · figure · delta in words. ── */
+.gap-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-md); }
+.gap-rows li { display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) auto; grid-template-areas: "label bar figure" "label delta delta"; gap: var(--space-2xs) var(--space-md); align-items: center; }
+.gap-label { grid-area: label; font-weight: 600; }
+.gap-rows .bar { grid-area: bar; }
+.gap-figure { grid-area: figure; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.gap-delta { grid-area: delta; font-size: var(--text-xs); color: var(--wp-muted); }
+.to-confirm { display: inline-block; padding: var(--space-3xs) var(--space-sm); border: 1px dashed var(--wp-line-strong); border-radius: var(--radius-xs); color: var(--wp-muted); font-size: var(--text-xs); }
+
+/* ── The policy, in one breath: three sentences with the figures bold. ── */
+.policy-lines { margin: 0 0 var(--space-md); padding: 0; list-style: none; display: grid; gap: var(--space-sm); max-width: var(--measure); }
+.construct-line { margin: 0; line-height: var(--lh-normal); }
+.construct-line strong { font-variant-numeric: tabular-nums; }
+.amend-tray { margin-top: var(--space-lg); padding-top: var(--space-lg); border-top: 1px solid var(--wp-line); }
+.sector-chips { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin: 0 0 var(--space-md); }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); align-items: center; }
+
+/* ── Reserves: three figures and the bar they draw on. ── */
+.headroom { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-lg); margin: 0 0 var(--space-md); }
+.headroom .kv { font-size: var(--text-xl); font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: var(--tracking-tight); }
+
+/* ── The deck row: title · badges · who · when · acts. ── */
+.deck-row { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-md); align-items: center; }
+.deck-title { font-weight: 600; margin-right: auto; }
+
+/* ── Phone: one column, the figures two-up, the gap rows stacked label → delta → bar. ── */
+@media (max-width: 40rem) {
+  .door { grid-template-columns: minmax(0, 1fr); }
+  .figures { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm) var(--space-md); }
+  .headroom { grid-template-columns: minmax(0, 1fr); gap: var(--space-sm); }
+  .gap-rows li { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label figure" "delta delta" "bar bar"; }
+  .deck-row { flex-direction: column; align-items: flex-start; }
+  .deck-title { margin-right: 0; }
+  .surface-body a.btn-primary,
+  .surface-body a.btn-strong { min-height: var(--touch-min); }
+}
