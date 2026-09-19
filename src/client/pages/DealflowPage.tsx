@@ -4,57 +4,48 @@ import { DEAL_FILTERS, EXITS, SPINE, dealTypeLabel, originLabel, stage, stallRea
 import { openOnRegister } from "./CompaniesPage";
 import { RecordInvestment } from "./RecordInvestment";
 import { DealProvenance } from "./DealProvenance";
+import { DealPacket } from "./DealPacket";
+import { FacePanel, Faces, type Face } from "./Faces";
 // Read from the intake registry rather than retyped: the tags and the mailbox are enforced by the
 // email handler, and a page that names them from its own string literal drifts the first time one
 // changes and then quietly tells partners the wrong address.
 import { DEAL_INTAKE_EMPLOYEE, EMAIL_TRIGGERS, INTAKE_MAILBOX } from "@shared/intake/emailTriggers";
 
 /**
- * Dealflow — where every company stands, and the one record that opens when you pick one.
+ * Dealflow — where every company stands and what is stopping the next decision; the committee
+ * lives here now. design/DEALS_SECTION_DESIGN.md §4 (artboards E1, E2), approved 18 Sep 2026.
  *
- * WHAT WAS WRONG. The page showed `EARLY_STAGE_PRIMARY` and `SCREENING` in code badges beside
- * "share classes: 0 · pricing observations: 0", and offered "Create deal math packet" and
- * "Assemble IC packet" as its primary actions. Every word of that is the database talking. A
- * partner opening this page is asking one question — what needs me — and nothing on it answered.
+ * THE RAIL IS THE PAGE. A deal only ever moves forward or drops out, so the pipeline is drawn as
+ * one line: six stages left to right with a count on each node, and the two exits on a line
+ * beneath, because a pass is something the pipeline PRODUCES rather than a place anything waits.
+ * The nodes are buttons that narrow the list. Ink = has companies, orange = the ONE node where a
+ * person's act is waiting, green = done — and the words beside the node say the same thing, so
+ * colour is never the only cue.
  *
- * THE SHAPE IS A LINE, NOT A GRID. A deal only ever moves forward or drops out, so the spine is
- * drawn as one: stages left to right with counts on them, and the two exits hanging below, because
- * a pass is something the pipeline PRODUCES rather than a place anything waits.
+ * THE HUMAN ACT IS THE FIRST BAND. Until this pass nothing on the page said "one thing is waiting
+ * on you": a stage move proposed in a meeting (Phase B, `meeting_stage_proposal`) surfaced only on
+ * the meeting's After face, and a packet in front of the partners surfaced only on Meetings. Both
+ * are now the *Waiting on you* band, above the pipeline, holding the page's one primary button.
+ * Accepting a proposal is ONE CLICK (the owner's answer to approval question 2): it is
+ * `transitionOpportunity`, already a person's decision, and it does not become a card.
  *
  * STALENESS IS THE POINT. Deals die of neglect rather than of judgement, so every row leads with
  * how long it has sat where it is, against that stage's own clock — a week unscreened and a week
  * in diligence are different problems and one global timer would be useless. The clocks live in
  * `shared/investment/pipeline.ts` where they can be argued with.
  *
- * ── THE COMPANY RECORD, REBUILT 22 Aug 2026 ─────────────────────────────────────────────────────
+ * THE RECORD HAS FIVE FACES. Picking a company opens its record under the pipeline, as one object
+ * with five faces — Where this stands · The deal itself · What we know · The committee · History —
+ * rather than the seven always-open sections it was (1,100 lines rendered as one scroll). Every
+ * face says on its tab what it holds, and a face with nothing in it says so in words. The
+ * committee face is section 4 of the old Meetings page, moved here whole: the packet, what it does
+ * not know and who owes each answer, who is seated, the decision, and the dissent — and, behind
+ * "Open the packet", the packet's own faces (Diligence · Memo · Market · People · Audit), which were
+ * the IC Portal's tabs and had been dead-mounted since the Investment page was superseded.
  *
- * Operator: "the deal flow tab is still not good enough UI and UX wise. you need to fix it once we
- * pick a company and all the stuff comes out", and before that: "there should be 1 deal record for
- * every company with all fields in it — price per share and # of shares should be in the deal
- * record and it should open once u select a company", and "i dont underestand why it cant be
- * simple like the lp page. everything is there and its easy to follow."
- *
- * WHAT THE OLD RECORD DID. Picking a company revealed a company picker, then a list of deals, then
- * a click to pick one of them, then three unlabelled blocks — one of which was a bare row of
- * inputs with no heading at all. The company's own 360 was rendered twice, once openly and once
- * inside a `<details>` reading "Everything else on record for this company". Price per share and
- * the number of shares existed nowhere on the deal at all: they were only reachable through the
- * transaction ladder, or through a placeholder warning if somebody had happened to mark them.
- *
- * WHAT IT IS NOW. One record per company, opening the moment a company is picked, laid out as a
- * FLAT SEQUENCE of h3 sections in the order a partner actually asks the questions:
- *
- *   1. Where this stands            — stage, how long, what is stopping it, who is carrying it
- *   2. The deal itself              — every field, visible, editable, nothing behind a toggle
- *   3. What we know, and how we know it — the unverified first, because that is the work
- *   4. What is still open           — the questions, and who owes each answer
- *   5. Where this deal stands with the committee — placeholder; see the comment on it
- *   6. Its history                  — every change, attributed
- *   7. Add a second deal            — the ONE thing that nests, because it is the rare case
- *
- * EVERY SECTION ALWAYS RENDERS. A section that disappears when it is empty teaches a reader that
- * the page is unreliable rather than that the fact is absent, so each one states the fact and says
- * what would fill it.
+ * NO `window.prompt`. A pass, a removal and a declined proposal each take their reason in an inline
+ * field with a visible label and an error slot that reads as an instruction — the prompt had no
+ * label, no error, no focus ring and was invisible on a phone keyboard.
  */
 
 interface Deal {
@@ -81,9 +72,26 @@ interface Deal {
   unreviewed: boolean;
 }
 
+/** A stage move a meeting proposed and nobody has clicked on yet (`meeting_stage_proposal`, PROPOSED). */
+interface Proposal {
+  id: string;
+  meeting_id: string;
+  meeting_title: string;
+  meeting_at: string | null;
+  opportunity_id: string;
+  company_id: string;
+  company_name: string;
+  from_status: string;
+  to_status: string;
+  rationale: string;
+  proposed_by: string;
+  created_at: string;
+}
+
 interface Board {
   deals: Deal[];
   counts: Record<string, number>;
+  proposals: Proposal[];
   how_staleness_works: string;
 }
 
@@ -177,10 +185,10 @@ interface HistoryEntry {
   said: string | null;
 }
 
-/* ── The committee's view of this deal ────────────────────────────────────────────────────────
-      Shapes mirror `GET /api/ic/deals/:opportunityId`, which is the same read the Meetings surface
-      renders. Two surfaces, one query — they cannot disagree about a deal, which for a decision
-      record matters more than either of them being convenient. ─────────────────────────────── */
+/* ── The committee's view of a deal ───────────────────────────────────────────────────────────
+      Shapes mirror `GET /api/ic/deals` and `GET /api/ic/deals/:opportunityId` — one query, so the
+      band and the record's committee face cannot disagree about a deal, which for a decision
+      record matters more than either of them being convenient. ──────────────────────────── */
 
 interface CommitteeQuestion {
   id: string;
@@ -195,10 +203,14 @@ interface CommitteeQuestion {
 
 interface CommitteeDeal {
   opportunity_id: string;
+  title: string;
+  company_name: string | null;
+  company_id: string | null;
   stage: string;
   packet_id: string | null;
   packet_state: string;
   questions: CommitteeQuestion[];
+  open_question_count: number;
   seats: Array<{ name: string; role: string; decides: boolean }>;
   decision: { id: string; decision: string; rationale: string | null; created_at: string; decided_by: string } | null;
   packet_evidence: {
@@ -212,6 +224,12 @@ interface CommitteeDeal {
   } | null;
   dissents: Array<{ id: string; decision: string; dissenter: string; dissent_text: string; created_at: string }>;
   facilitator_card: { id: string; state: string; title: string } | null;
+  approval_card: { id: string; state: string } | null;
+}
+
+interface CommitteeSurface {
+  deals: CommitteeDeal[];
+  facilitator: { name: string; status: string } | null;
 }
 
 /** Who owes an answer, in words. The stored marker is never printed at a partner. */
@@ -261,6 +279,12 @@ function day(iso: string | null | undefined): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();
   return Number.isFinite(t) ? new Date(t).toLocaleDateString() : "—";
+}
+
+function whenInWords(iso: string | null | undefined): string {
+  if (!iso) return "no time recorded";
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? new Date(t).toLocaleString() : "no time recorded";
 }
 
 /** A label above a value. The record's only repeated shape, so the eye learns it once. */
@@ -427,55 +451,6 @@ function placeholderList(json: string | null | undefined): string[] {
   }
 }
 
-/** The spine. Filled where deals are, hollow where none. */
-function Spine({ counts, onShowExit }: { counts: Record<string, number>; onShowExit: (key: string) => void }) {
-  return (
-    <section className="card spine" data-testid="dealflow-spine">
-      <div className="spine-track">
-        {SPINE.map((s, i) => {
-          const n = counts[s.key] ?? 0;
-          const first = i === 0;
-          const last = i === SPINE.length - 1;
-          return (
-            <div className="spine-stage" key={s.key} data-testid={`spine-${s.key}`}>
-              <div className="spine-rail">
-                <span className={first ? "spine-line spine-line-end" : "spine-line"} />
-                <span className={n > 0 ? "spine-node spine-node-filled" : "spine-node"}>{n}</span>
-                <span className={last ? "spine-line spine-line-end" : "spine-line"} />
-              </div>
-              <div className="spine-label">{s.label}</div>
-              <div className="spine-question">{s.question}</div>
-            </div>
-          );
-        })}
-      </div>
-      {/*
-        THE PASS PILE IS A DOOR, NOT A FOOTNOTE.
-        Operator: "as long as the pass pile is clearly visible and easy to get to." It was grey text
-        under the spine stating a number — you could see that a deal had been passed and had nowhere
-        to click. What the firm turned away is one of the more useful things it owns, especially when
-        a company comes back raising, so each exit is now the way into its own list.
-      */}
-      <div className="spine-exits">
-        Left the pipeline
-        {EXITS.map((e) => (
-          <span key={e.key}>
-            {" · "}
-            <button
-              type="button"
-              className="link-button"
-              data-testid={`spine-exit-${e.key}`}
-              onClick={() => onShowExit(e.key)}
-            >
-              <strong>{counts[e.key] ?? 0}</strong> {e.label.toLowerCase()}
-            </button>
-          </span>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 /*
  * The stages a deal can still be passed on, mirroring OPPORTUNITY_TRANSITIONS on the server.
  *
@@ -489,6 +464,229 @@ function Spine({ counts, onShowExit }: { counts: Record<string, number>; onShowE
  */
 const PASSABLE: readonly string[] = ["NEW", "SCREENING", "DILIGENCE", "IC_READY"];
 
+/**
+ * The stages the firm is ACTING in. One chip carries orange — `.stage-chip-live` — and it is the
+ * stage where the firm's own work happens: screening, diligence, the decision. New is arrival and
+ * Decided is paperwork; neither is a status that earns a colour. Invested is green because it is
+ * done. `.stage-chip-screening/-diligence/-ic_ready` painted three stages orange, which made orange
+ * a status — against §2 of the design system — and they are retired.
+ */
+const LIVE_STAGES: readonly string[] = ["SCREENING", "DILIGENCE", "IC_READY"];
+
+function stageChipClass(status: string): string {
+  if (status === "CLOSED") return "stage-chip stage-chip-closed";
+  return LIVE_STAGES.includes(status) ? "stage-chip stage-chip-live" : "stage-chip";
+}
+
+/** What the stage clock says on a row: how long here, and the clock it is running against. */
+function clockInWords(status: string, since: string): { text: string; stalled: boolean } | null {
+  const s = stage(status);
+  const stall = stallRead(status, since);
+  if (!s || !stall) return null;
+  if (s.isExit) return { text: `left ${day(since)}`, stalled: false };
+  if (stall.stalled) return { text: `${stall.label} — stalled`, stalled: true };
+  if (s.stallAfterDays === null) return { text: `${stall.label} here`, stalled: false };
+  return { text: `${stall.label} here · clock is ${s.stallAfterDays}`, stalled: false };
+}
+
+/* ── An inline reason field ──────────────────────────────────────────────────────────────────
+      The replacement for `window.prompt()`: a visible label, a helper line that becomes the error
+      in place (the slot reserves a line, so nothing shifts), the global focus ring, and a phone
+      keyboard that can actually reach it. The error is written as an instruction. ─────────── */
+
+function ReasonField({
+  id,
+  label,
+  help,
+  minLength,
+  tooShort,
+  confirmLabel,
+  confirmClass,
+  busy,
+  onConfirm,
+  onCancel,
+  testId,
+}: {
+  id: string;
+  label: string;
+  help: string;
+  minLength: number;
+  /** The instruction shown when the reason is too thin — never "invalid". */
+  tooShort: string;
+  confirmLabel: string;
+  confirmClass: string;
+  busy: boolean;
+  onConfirm: (reason: string) => void;
+  onCancel: () => void;
+  testId: string;
+}): JSX.Element {
+  const [value, setValue] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  function confirm() {
+    if (value.trim().length < minLength) {
+      setErr(tooShort);
+      return;
+    }
+    onConfirm(value.trim());
+  }
+
+  return (
+    <div className="stack" data-testid={testId}>
+      <label className="field" htmlFor={id}>
+        {label}
+        <input
+          id={id}
+          data-testid={`${testId}-text`}
+          value={value}
+          autoFocus
+          aria-invalid={err ? true : undefined}
+          aria-describedby={`${id}-help`}
+          onChange={(e) => {
+            setValue(e.target.value);
+            if (err) setErr(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              confirm();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+        <span id={`${id}-help`} className={err ? "field-help err" : "field-help"} role={err ? "alert" : undefined}>
+          {err ?? help}
+        </span>
+      </label>
+      <div className="row">
+        <button type="button" className={confirmClass} disabled={busy} aria-busy={busy || undefined} data-testid={`${testId}-confirm`} onClick={confirm}>
+          {busy ? "…" : confirmLabel}
+        </button>
+        <button type="button" className="btn-ghost" disabled={busy} data-testid={`${testId}-cancel`} onClick={onCancel}>
+          Never mind
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ── The stage rail ──────────────────────────────────────────────────────────────────────────
+      The pipeline drawn as a line. Nodes are BUTTONS that narrow the list; the exits line carries
+      Phase A's rule — every company enters at New, however it arrived — and the two exits as the
+      doors into their own lists. ────────────────────────────────────────────────────────────── */
+
+function StageRail({
+  counts,
+  actStage,
+  filter,
+  onFilter,
+}: {
+  counts: Record<string, number>;
+  /** The one stage where a person's act is waiting, if any. Orange, and said in words. */
+  actStage: string | null;
+  filter: string;
+  onFilter: (key: string) => void;
+}): JSX.Element {
+  return (
+    <section className="card" data-testid="stage-rail">
+      <ul className="stage-rail" aria-label="The pipeline, left to right">
+        {SPINE.map((s) => {
+          const n = counts[s.key] ?? 0;
+          const isAct = actStage === s.key;
+          const done = s.key === "CLOSED" && n > 0;
+          const cls = ["stage-node", isAct ? "stage-node-current" : done ? "stage-node-done" : n > 0 ? "stage-node-filled" : ""]
+            .filter(Boolean)
+            .join(" ");
+          const pressed = filter === `stage:${s.key}`;
+          return (
+            <li key={s.key}>
+              <div className="stage-rail-line">
+                <i />
+                <button
+                  type="button"
+                  className={cls}
+                  aria-label={`${s.label}, ${n === 0 ? "none" : `${n} compan${n === 1 ? "y" : "ies"}`}${isAct ? " — the act is here" : ""}`}
+                  aria-pressed={pressed}
+                  data-testid={`stage-node-${s.key}`}
+                  onClick={() => onFilter(pressed ? "LIVE" : `stage:${s.key}`)}
+                >
+                  {n}
+                </button>
+                <i />
+              </div>
+              <span className="stage-label">{s.label}</span>
+              <span className="stage-q">
+                {s.question}
+                {s.stallAfterDays !== null ? ` · ${s.stallAfterDays} days` : ""}
+                {isAct ? " · the act is here" : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {/*
+        THE PASS PILE IS A DOOR, NOT A FOOTNOTE. Operator: "as long as the pass pile is clearly
+        visible and easy to get to." What the firm turned away is one of the more useful things it
+        owns, especially when a company comes back raising, so each exit is the way into its list.
+        The sentence after them is Phase A's rule, stated once, where the rail ends.
+      */}
+      <p className="stage-rail-exits" data-testid="stage-rail-exits">
+        Left the pipeline
+        {EXITS.map((e) => (
+          <span key={e.key}>
+            {" · "}
+            <button type="button" className="link-button" data-testid={`stage-exit-${e.key}`} aria-pressed={filter === "PASSED"} onClick={() => onFilter("PASSED")}>
+              <strong>{counts[e.key] ?? 0}</strong> {e.label.toLowerCase()}
+            </button>
+          </span>
+        ))}
+        {" · "}every company the firm records enters at New, however it arrived
+      </p>
+    </section>
+  );
+}
+
+/** The compact rail on the record head. Never interactive; the stage word carries the meaning. */
+function CompactRail({ status, since, name }: { status: string; since: string | null; name: string }): JSX.Element {
+  const s = stage(status);
+  const here = s?.order ?? null;
+  const exit = Boolean(s?.isExit);
+  const stall = stallRead(status, since);
+  return (
+    <ul className="stage-rail-compact" aria-label={`Where ${name} is`}>
+      {SPINE.map((x, i) => {
+        const order = x.order ?? 0;
+        const current = !exit && here === order;
+        const done = !exit && here !== null && order < here;
+        const closed = x.key === "CLOSED" && status === "CLOSED";
+        const dot = ["stage-dot", closed ? "stage-dot-closed" : current ? "stage-dot-current" : done ? "stage-dot-done" : ""].filter(Boolean).join(" ");
+        return (
+          <li key={x.key}>
+            <span className={dot} aria-hidden="true" />
+            {current ? (
+              <strong className="small">
+                {x.label}
+                {stall ? ` · ${stall.label}` : ""}
+              </strong>
+            ) : (
+              <span className="small muted">{x.label}</span>
+            )}
+            {i < SPINE.length - 1 && <span className="stage-seg" aria-hidden="true" />}
+          </li>
+        );
+      })}
+      {exit && (
+        <li>
+          <span className="stage-dot stage-dot-done" aria-hidden="true" />
+          <strong className="small">{s?.label}</strong>
+        </li>
+      )}
+    </ul>
+  );
+}
+
 /** One deal on the board. Every row answers the same four things in the same places. */
 function DealRow({ deal, open, onChanged, onOpen }: {
   deal: Deal;
@@ -500,9 +698,12 @@ function DealRow({ deal, open, onChanged, onOpen }: {
 }) {
   const s = stage(deal.status);
   const left = Boolean(s?.isExit);
-  const stall = stallRead(deal.status, deal.in_stage_since);
+  const clock = clockInWords(deal.status, deal.in_stage_since);
+  const stalled = Boolean(clock?.stalled);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  /** Which inline reason field is open on this row, if any. */
+  const [asking, setAsking] = useState<"pass" | "remove" | null>(null);
 
   /*
    * A MOVE IS NOT OVER WHEN THE REQUEST RETURNS — IT IS OVER WHEN THE ROW SAYS SO.
@@ -546,11 +747,12 @@ function DealRow({ deal, open, onChanged, onOpen }: {
     if (res.status !== 200) setMessage(res.data?.detail ?? res.data?.error ?? `Could not move it (HTTP ${res.status}).`);
     else {
       setMovedFrom(deal.status);
+      setAsking(null);
       onChanged();
     }
   }
 
-  const rowClass = ["deal-row", left ? "deal-row-out" : "", open ? "deal-row-open" : ""].filter(Boolean).join(" ");
+  const rowClass = ["deal-row", left ? "deal-row-out" : "", open ? "deal-row-selected" : ""].filter(Boolean).join(" ");
 
   return (
     <li className={rowClass} data-testid={`deal-${deal.id}`}>
@@ -559,7 +761,8 @@ function DealRow({ deal, open, onChanged, onOpen }: {
           THE NAME OPENS THE RECORD, ON THIS PAGE. Until 22 Aug 2026 it navigated to the company
           register instead — so the answer to "what are this deal's terms" was on a different
           surface from the deal, and the record that holds them opened only after picking the same
-          company a second time out of a dropdown further down. One press now opens everything.
+          company a second time out of a dropdown further down. One press now opens everything;
+          the dropdown is gone, because the row's name is the door.
         */}
         <div className="deal-name">
           <button
@@ -573,43 +776,64 @@ function DealRow({ deal, open, onChanged, onOpen }: {
             {deal.company_name}
           </button>
         </div>
-        <div className="muted small">{dealTypeLabel(deal.opportunity_type)}</div>
+        <div className="deal-sub">
+          {dealTypeLabel(deal.opportunity_type)}
+          {deal.backfilled && (
+            <>
+              {" · "}
+              <span className="badge" title="Status was entered as history, not decided here">history</span>
+            </>
+          )}
+          {/*
+            ARRIVED BY EMAIL AND NOBODY HAS LOOKED AT IT. The badge is derived from the deal having
+            never moved off NEW, so it clears itself the moment anybody acts.
+          */}
+          {deal.unreviewed && (
+            <>
+              {" · "}
+              <span className="badge badge-attention" data-testid={`deal-unreviewed-${deal.id}`} title={`Filed from ${deal.source_channel}. Nobody has looked at it yet.`}>
+                by email · not yet looked at
+              </span>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="deal-stage">
-        <span className={`stage-chip stage-chip-${deal.status.toLowerCase()}`}>{s?.label ?? "Off the spine"}</span>
-        {stall && (
-          <div className={stall.stalled ? "deal-age deal-age-stalled" : "deal-age"} data-testid={`deal-age-${deal.id}`}>
-            {stall.label}
-            {stall.stalled ? " — stalled" : " here"}
+        <span className={stageChipClass(deal.status)}>{s?.label ?? "Off the rail"}</span>
+        {clock && (
+          <div className={stalled ? "deal-sub deal-sub-stalled" : "deal-sub"} data-testid={`deal-age-${deal.id}`}>
+            {clock.text}
           </div>
         )}
       </div>
 
-      <div className="deal-blocker">
+      <div className={stalled || deal.placeholder_fields.length > 0 ? "deal-blocker warn" : "deal-blocker"}>
         {/* WHY IT LEFT, WHERE THE BLOCKER WOULD BE. A deal out of the pipeline has no blocker, and
             this column was showing it where we met them — true, and not the question anybody asks
             about a company the firm declined. The reason was recorded, required, and then never
             shown anywhere, which made every pass in the pile read as a bare "no". */}
         {left ? (
           <>
-            <div className="lbl">{deal.status === "WITHDRAWN" ? "Why it went away" : "Why we said no"}</div>
-            <div className="deal-blocker-text" data-testid={`deal-exit-reason-${deal.id}`}>
+            <span className="eyebrow">{deal.status === "WITHDRAWN" ? "Why it went away" : "Why we said no"}</span>
+            <br />
+            <span data-testid={`deal-exit-reason-${deal.id}`}>
               {deal.exit_reason ?? "No reason was recorded — which is the part that would have been worth keeping."}
-            </div>
+            </span>
           </>
         ) : deal.placeholder_fields.length > 0 ? (
           <>
-            <div className="lbl">Needs from you</div>
+            <span className="eyebrow">Needs from you</span>
+            <br />
             {/*
               THE WARNING IS THE WAY IN. Operator: "i never realised it was the way to enter real
               numbers for sensori — this is a ui problem." It said a deal was carrying stand-in
               figures and offered no route to the one place they can be replaced. Now it opens the
-              record, where those fields are the second thing on it.
+              record, where those fields are on the second face.
             */}
             <button
               type="button"
-              className="link-button deal-blocker-text warn"
+              className="link-button"
               data-testid={`deal-placeholders-${deal.id}`}
               onClick={() => onOpen(deal.company_id, deal.company_name)}
             >
@@ -617,15 +841,17 @@ function DealRow({ deal, open, onChanged, onOpen }: {
               {deal.placeholder_fields.length === 1 ? "" : "s"} — put the real ones in
             </button>
           </>
-        ) : stall?.stalled ? (
+        ) : stalled ? (
           <>
-            <div className="lbl">Blocked</div>
-            <div className="deal-blocker-text">Nothing has happened for {stall.label}</div>
+            <span className="eyebrow">Blocked</span>
+            <br />
+            Nothing has happened for {stallRead(deal.status, deal.in_stage_since)?.label}
           </>
         ) : (
           <>
-            <div className="lbl">Where it came from</div>
-            <div className="deal-blocker-text">{originLabel(deal.relationship_origin)}</div>
+            <span className="eyebrow">Where it came from</span>
+            <br />
+            {originLabel(deal.relationship_origin)}
           </>
         )}
       </div>
@@ -636,58 +862,21 @@ function DealRow({ deal, open, onChanged, onOpen }: {
             type="button"
             className="btn-strong"
             disabled={busy || settling}
+            aria-busy={busy || settling || undefined}
             data-testid={`deal-advance-${deal.id}`}
             onClick={() => void moveTo(next.key)}
           >
             {busy || settling ? "…" : `Move to ${next.label.toLowerCase()}`}
           </button>
         )}
-        {/*
-          AN EMPLOYEE'S VIEW, IN FRONT OF THE PARTNER RATHER THAN INSTEAD OF THEM.
-          Operator rule: "every arrival survives until i've seen it but it comes with a
-          recommendation to scrap it... never scrap our inbound stuff without our input." Letting the
-          analyst pass it outright would have been one line of code and would have moved the deal out
-          of the funnel — and what leaves the funnel is what you have to remember to go and look for.
-        */}
-        {deal.recommendation && (
-          <div className="deal-recommendation" data-testid={`deal-recommendation-${deal.id}`}>
-            <strong>
-              {deal.recommended_by ?? "An employee"} says{" "}
-              {deal.recommendation === "PASS" ? "pass on this" : "look closer"}.
-            </strong>
-            {deal.recommendation_note ? <span className="muted"> {deal.recommendation_note}</span> : null}{" "}
-            <button
-              type="button"
-              className="link-button"
-              disabled={busy}
-              data-testid={`deal-recommendation-clear-${deal.id}`}
-              onClick={async () => {
-                setBusy(true);
-                await api(`/api/opportunities/${deal.id}/recommend`, { method: "POST", body: { recommendation: null } });
-                setBusy(false);
-                onChanged();
-              }}
-            >
-              keep it, ignore this
-            </button>
-          </div>
-        )}
-
         {PASSABLE.includes(deal.status) && (
           <button
             type="button"
             className="btn-ghost"
             disabled={busy || settling}
+            aria-expanded={asking === "pass"}
             data-testid={`deal-pass-${deal.id}`}
-            onClick={() => {
-              const reason = window.prompt(`Why is the firm passing on ${deal.company_name}?`);
-              if (reason === null) return;
-              if (reason.trim().length < 12) {
-                setMessage("Say why in a sentence — a pass with no reason is worth nothing when they come back.");
-                return;
-              }
-              void moveTo("PASS", reason.trim());
-            }}
+            onClick={() => setAsking(asking === "pass" ? null : "pass")}
           >
             Pass on this
           </button>
@@ -699,23 +888,9 @@ function DealRow({ deal, open, onChanged, onOpen }: {
           type="button"
           className="btn-ghost"
           disabled={busy}
+          aria-expanded={asking === "remove"}
           data-testid={`deal-archive-${deal.id}`}
-          onClick={async () => {
-            const reason = window.prompt(`Why should the record for ${deal.company_name} not exist? (a duplicate, a typo — this is not a pass)`);
-            if (reason === null) return;
-            if (reason.trim().length < 8) {
-              setMessage("Say why in a few words — the reason is the only part that still helps later.");
-              return;
-            }
-            setBusy(true);
-            const failed = mutationError(
-              await api(`/api/opportunities/${deal.id}/archive`, { method: "POST", body: { reason: reason.trim() } }),
-              200,
-            );
-            setBusy(false);
-            setMessage(failed ?? "Off the board. Nothing was destroyed — the record keeps who removed it and why.");
-            if (!failed) onChanged();
-          }}
+          onClick={() => setAsking(asking === "remove" ? null : "remove")}
         >
           Remove this record
         </button>
@@ -733,20 +908,87 @@ function DealRow({ deal, open, onChanged, onOpen }: {
             {busy ? "…" : "Look at it again"}
           </button>
         )}
-        {deal.backfilled && <span className="badge" title="Status was entered as history, not decided here">history</span>}
-
-        {/*
-          ARRIVED BY EMAIL AND NOBODY HAS LOOKED AT IT. The badge is derived from the deal having
-          never moved off NEW, so it clears itself the moment anybody acts.
-        */}
-        {deal.unreviewed && (
-          <span className="badge badge-attention" data-testid={`deal-unreviewed-${deal.id}`} title={`Filed from ${deal.source_channel}. Nobody has looked at it yet.`}>
-            by email · not yet looked at
-          </span>
-        )}
       </div>
 
-      {message && <div className="notice small deal-message">{message}</div>}
+      {/*
+        AN EMPLOYEE'S VIEW, IN FRONT OF THE PARTNER RATHER THAN INSTEAD OF THEM.
+        Operator rule: "every arrival survives until i've seen it but it comes with a
+        recommendation to scrap it... never scrap our inbound stuff without our input." Letting the
+        analyst pass it outright would have been one line of code and would have moved the deal out
+        of the funnel — and what leaves the funnel is what you have to remember to go and look for.
+      */}
+      {deal.recommendation && (
+        <div className="deal-recommendation deal-message" data-testid={`deal-recommendation-${deal.id}`}>
+          <strong>
+            {deal.recommended_by ?? "An employee"} says{" "}
+            {deal.recommendation === "PASS" ? "pass on this" : "look closer"}.
+          </strong>
+          {deal.recommendation_note ? <span className="muted"> {deal.recommendation_note}</span> : null}{" "}
+          <button
+            type="button"
+            className="link-button"
+            disabled={busy}
+            data-testid={`deal-recommendation-clear-${deal.id}`}
+            onClick={async () => {
+              setBusy(true);
+              await api(`/api/opportunities/${deal.id}/recommend`, { method: "POST", body: { recommendation: null } });
+              setBusy(false);
+              onChanged();
+            }}
+          >
+            keep it, ignore this
+          </button>
+        </div>
+      )}
+
+      {asking === "pass" && (
+        <div className="deal-message">
+          <ReasonField
+            id={`deal-pass-reason-${deal.id}`}
+            label={`Why is the firm passing on ${deal.company_name}?`}
+            help="A sentence. It is what you will want in front of you the day they come back raising."
+            minLength={12}
+            tooShort="Say why in a sentence — a pass with no reason is worth nothing when they come back."
+            confirmLabel="Pass on it"
+            confirmClass="btn-danger"
+            busy={busy}
+            onConfirm={(reason) => void moveTo("PASS", reason)}
+            onCancel={() => setAsking(null)}
+            testId={`deal-pass-reason-${deal.id}`}
+          />
+        </div>
+      )}
+      {asking === "remove" && (
+        <div className="deal-message">
+          <ReasonField
+            id={`deal-archive-reason-${deal.id}`}
+            label={`Why should the record for ${deal.company_name} not exist?`}
+            help="A duplicate, a typo — this is not a pass. Nothing is destroyed; the record keeps who removed it and why."
+            minLength={8}
+            tooShort="Say why in a few words — the reason is the only part that still helps later."
+            confirmLabel="Remove it"
+            confirmClass="btn-danger"
+            busy={busy}
+            onConfirm={async (reason) => {
+              setBusy(true);
+              const failed = mutationError(
+                await api(`/api/opportunities/${deal.id}/archive`, { method: "POST", body: { reason } }),
+                200,
+              );
+              setBusy(false);
+              setMessage(failed ?? "Off the board. Nothing was destroyed — the record keeps who removed it and why.");
+              if (!failed) {
+                setAsking(null);
+                onChanged();
+              }
+            }}
+            onCancel={() => setAsking(null)}
+            testId={`deal-archive-reason-${deal.id}`}
+          />
+        </div>
+      )}
+
+      {message && <div className="notice small deal-message" role="status">{message}</div>}
     </li>
   );
 }
@@ -813,17 +1055,469 @@ const SECOND_DEAL_KINDS = [
   { key: "OTHER", label: "Something else" },
 ] as const;
 
+/* ── The committee face ──────────────────────────────────────────────────────────────────────
+      Section 4 of the old Meetings page, moved here whole (design §1.1 #1: two objects on one
+      page). The packet, what it does not know and who owes each answer, who is seated, the
+      decision, and the dissent — and behind "Open the packet", the packet's own faces. ────── */
+
+function CommitteeFace({
+  companyName,
+  deal,
+  loading,
+  me,
+  onChanged,
+  onNavigate,
+}: {
+  companyName: string;
+  deal: CommitteeDeal | null;
+  loading: boolean;
+  me: MeResponse;
+  onChanged: () => void;
+  onNavigate: (key: string) => void;
+}): JSX.Element {
+  const [message, setMessage] = useState<string | null>(null);
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [answer, setAnswer] = useState("");
+  const [deciding, setDeciding] = useState(false);
+  const [rationale, setRationale] = useState("");
+  const [dissenting, setDissenting] = useState(false);
+  const [dissent, setDissent] = useState("");
+  const [packetOpen, setPacketOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function resolveQuestion(id: string, state: "ANSWERED" | "WITHDRAWN") {
+    setBusy(true);
+    const res = await api<{ error?: string; detail?: string }>(`/api/ic/questions/${id}/resolve`, {
+      method: "POST",
+      body: state === "ANSWERED" ? { state, answer } : { state, withdrawn_reason: answer },
+    });
+    setBusy(false);
+    if (res.status >= 400) {
+      setMessage(res.data?.detail ?? res.data?.error ?? `Could not record that (HTTP ${res.status}).`);
+      return;
+    }
+    setAnswering(null);
+    setAnswer("");
+    onChanged();
+  }
+
+  /**
+   * Put the packet in front of the partners.
+   *
+   * This does not decide anything. It raises the human-reserved approval card that an APPROVE has
+   * to be recorded against, which is why the decision buttons only appear once it exists.
+   */
+  async function submitPacket(packetId: string) {
+    setBusy(true);
+    const res = await api<{ error?: string; detail?: string }>(`/api/ic/packets/${packetId}/submit`, { method: "POST", body: {} });
+    setBusy(false);
+    setMessage(
+      res.status === 200
+        ? "It is in front of both partners now. Approving the capital is a separate signature in Approvals."
+        : res.data?.detail ?? res.data?.error ?? `Could not put it forward (HTTP ${res.status}).`,
+    );
+    onChanged();
+  }
+
+  async function decide(decision: "APPROVE" | "REJECT" | "DEFER") {
+    if (!deal?.packet_id) return;
+    setBusy(true);
+    const res = await api<{ error?: string; detail?: string }>(`/api/ic/packets/${deal.packet_id}/decide`, {
+      method: "POST",
+      body: { decision, rationale, receipt_id: deal.approval_card ? deal.approval_card.id : undefined },
+    });
+    setBusy(false);
+    if (res.status !== 201) {
+      setMessage(res.data?.detail ?? res.data?.error ?? `Not recorded (HTTP ${res.status}).`);
+      return;
+    }
+    setMessage(
+      decision === "APPROVE"
+        ? "Recorded. The deal is marked decided."
+        : decision === "REJECT"
+          ? "Recorded as a pass, with your reason, and the deal is on the pass pile. Nothing is deleted."
+          : "Recorded as not yet. The deal stays where it is.",
+    );
+    setDeciding(false);
+    setRationale("");
+    onChanged();
+  }
+
+  /**
+   * A partner disagreeing, in her own words, against the decision she disagreed with.
+   *
+   * The rule this exists to keep is the one `ic.ts` already holds: dissent is append-only and is
+   * never folded into the rationale. Without a control it was a rule about a table nobody could
+   * write to — a committee record that could only ever record agreement.
+   */
+  async function recordDissent(decisionId: string) {
+    setBusy(true);
+    const res = await api<{ error?: string; detail?: string }>(`/api/ic/decisions/${decisionId}/dissent`, {
+      method: "POST",
+      body: { dissent_text: dissent.trim() },
+    });
+    setBusy(false);
+    if (res.status !== 201) {
+      setMessage(res.data?.detail ?? res.data?.error ?? `Not recorded (HTTP ${res.status}).`);
+      return;
+    }
+    setMessage("Recorded, in your words, against that decision. It cannot be edited or removed by anybody.");
+    setDissenting(false);
+    setDissent("");
+    onChanged();
+  }
+
+  if (deal === null) {
+    return (
+      <p className="state-empty" data-testid="deal-committee-none">
+        {loading
+          ? "Reading the committee's file…"
+          : `${companyName} has not been to the committee on this deal. Move it to Ready to decide on the first face and a packet opens on its own, with a card for the facilitator to assemble it.`}
+      </p>
+    );
+  }
+
+  const d = deal;
+  const openCount = d.questions.filter((q) => q.state === "OPEN").length;
+  const answeredCount = d.questions.filter((q) => q.state === "ANSWERED").length;
+
+  return (
+    <div className="stack" data-testid={`ic-deal-${d.opportunity_id}`}>
+      {d.facilitator_card && (
+        <p className="muted small" data-testid={`ic-card-${d.opportunity_id}`}>
+          {d.seats.find((s) => !s.decides)?.name ?? "The facilitator"} is holding a work card to assemble it — {cardStateInWords(d.facilitator_card.state)}.{" "}
+          <button type="button" className="link-button" onClick={() => onNavigate("work")}>
+            Open Work cards
+          </button>
+        </p>
+      )}
+
+      <div className="two-col">
+        <div className="stack">
+          {/* ── What the packet does not know ──────────────────────────────────────────── */}
+          <section className="card">
+            <div className="panel-head">
+              <h4>What the packet does not know</h4>
+              <span className="muted small">
+                {d.questions.length === 0
+                  ? "nothing named yet"
+                  : `${openCount} open · ${answeredCount} answered · who owes each answer`}
+              </span>
+            </div>
+            {d.questions.length === 0 ? (
+              <p className="state-empty">
+                No gaps have been named yet. A packet with nothing open is either finished or
+                unassembled — the packet state below says which.
+              </p>
+            ) : (
+              <ul className="card-list small" data-testid={`ic-questions-${d.opportunity_id}`}>
+                {d.questions.map((q) => (
+                  <li key={q.id} className="ic-question" data-testid={`ic-question-${q.id}`}>
+                    <span className={q.state === "OPEN" ? "badge badge-gate" : q.state === "ANSWERED" ? "badge badge-ok" : "badge"}>
+                      {q.state === "OPEN" ? "open" : q.state === "ANSWERED" ? "answered" : "not needed"}
+                    </span>{" "}
+                    <strong>{q.question}</strong>
+                    <div className="muted small">{q.because}</div>
+                    <div className="ic-owes">Owed by {owedInWords(q)}</div>
+                    {q.answer && <div className="closeout-quote">{q.answer}</div>}
+                    {q.withdrawn_reason && <div className="muted small">Not needed because {q.withdrawn_reason}</div>}
+                    {q.state === "OPEN" && answering !== q.id && (
+                      <button type="button" className="link-button" data-testid={`ic-answer-${q.id}`} onClick={() => { setAnswering(q.id); setAnswer(""); }}>
+                        Answer it
+                      </button>
+                    )}
+                    {answering === q.id && (
+                      <div className="stack">
+                        <label className="field" htmlFor={`ic-answer-text-${q.id}`}>
+                          The answer, or why it is not needed
+                          <input id={`ic-answer-text-${q.id}`} value={answer} onChange={(e) => setAnswer(e.target.value)} data-testid={`ic-answer-text-${q.id}`} autoFocus />
+                          <span className="field-help">What we found, in the words it was found in.</span>
+                        </label>
+                        <div className="row">
+                          <button type="button" className="btn-strong" disabled={busy || !answer.trim()} data-testid={`ic-answer-save-${q.id}`} onClick={() => void resolveQuestion(q.id, "ANSWERED")}>
+                            Save
+                          </button>
+                          <button type="button" disabled={busy || !answer.trim()} data-testid={`ic-withdraw-${q.id}`} onClick={() => void resolveQuestion(q.id, "WITHDRAWN")}>
+                            We do not need this
+                          </button>
+                          <button type="button" className="btn-ghost" onClick={() => { setAnswering(null); setAnswer(""); }}>
+                            Never mind
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {/* ── What the committee has seen, and the packet behind it ──────────────────── */}
+          <section className="card">
+            <div className="panel-head">
+              <h4>The packet</h4>
+              <span className="muted small" data-testid={`ic-packet-state-${d.opportunity_id}`}>{d.packet_state}</span>
+            </div>
+            <ul className="card-list small" data-testid="deal-committee-packet">
+              {d.packet_evidence ? (
+                <>
+                  <li data-testid="deal-committee-evidence">
+                    <strong>
+                      {count(d.packet_evidence.claims_seen)} claim
+                      {d.packet_evidence.claims_seen === 1 ? "" : "s"} were in front of them
+                      {d.packet_evidence.claims_unsourced > 0
+                        ? `, ${count(d.packet_evidence.claims_unsourced)} of them with nothing under them`
+                        : ", all of them with a source attached"}
+                      .
+                    </strong>
+                    <div className="muted">
+                      Put together by {d.packet_evidence.drafted_by} on {day(d.packet_evidence.assembled_at)} ·{" "}
+                      {d.packet_evidence.deal_math_attached ? "the arithmetic is attached" : "no arithmetic is attached"}
+                    </div>
+                  </li>
+                  <li data-testid="deal-committee-contradictions">
+                    <strong>
+                      {d.packet_evidence.contradictions_now === 0
+                        ? "The record does not contradict itself in any material place."
+                        : `The record contradicts itself in ${count(d.packet_evidence.contradictions_now)} material place${d.packet_evidence.contradictions_now === 1 ? "" : "s"} right now.`}
+                    </strong>
+                    {/* THE TWO COUNTS TRAVEL SEPARATELY ON PURPOSE. A contradiction opened after the
+                        packet was written is the one nobody in the room knows about. */}
+                    <div className="muted">
+                      {d.packet_evidence.contradictions_at_assembly === 1
+                        ? "One was open when the packet was put together"
+                        : `${count(d.packet_evidence.contradictions_at_assembly)} were open when the packet was put together`}
+                      {d.packet_evidence.contradictions_now > d.packet_evidence.contradictions_at_assembly
+                        ? " — the rest were raised since, so nobody in the room has seen them"
+                        : ""}
+                    </div>
+                  </li>
+                </>
+              ) : (
+                <li className="state-empty">
+                  No packet has been assembled, so the committee has seen nothing yet. It is assembled
+                  by the facilitator from what the firm already holds; nothing is written to fill a hole.
+                </li>
+              )}
+            </ul>
+            {d.packet_id && (
+              <div className="row">
+                <button
+                  type="button"
+                  className="link-button"
+                  aria-expanded={packetOpen}
+                  data-testid={`ic-open-packet-${d.opportunity_id}`}
+                  onClick={() => setPacketOpen((o) => !o)}
+                >
+                  {packetOpen ? "Close the packet" : "Open the packet"}
+                </button>
+                <span className="muted small">diligence · memo · market · people · audit</span>
+              </div>
+            )}
+            {packetOpen && d.packet_id && <DealPacket packetId={d.packet_id} me={me} />}
+          </section>
+
+          {/* ── Who disagreed ──────────────────────────────────────────────────────────── */}
+          <section className="card">
+            <div className="panel-head">
+              <h4>Who disagreed</h4>
+              <span className="muted small">append-only</span>
+            </div>
+            <ul className="card-list small" data-testid={`ic-dissents-${d.opportunity_id}`}>
+              {d.dissents.map((ds) => (
+                <li key={ds.id} data-testid={`ic-dissent-${ds.id}`}>
+                  <strong>{ds.dissenter}</strong> <span className="muted small">· disagreed with “{ds.decision.toLowerCase()}” · {whenInWords(ds.created_at)}</span>
+                  {/* Printed in their own words, never condensed. A committee that records "we
+                      agreed" over somebody who did not is wrong about the one thing worth going
+                      back for. */}
+                  <div className="closeout-quote">{ds.dissent_text}</div>
+                </li>
+              ))}
+              {d.dissents.length === 0 && (
+                <li className="state-empty">
+                  {d.decision
+                    ? "Nobody has written down a disagreement. That is not the same as everybody agreeing — it is only the same as nobody having said so here."
+                    : "There is no decision to disagree with yet. Once one is recorded, a partner can write down here that they disagreed, and it cannot be edited or removed."}
+                </li>
+              )}
+            </ul>
+            {d.decision && (dissenting ? (
+              <div className="stack">
+                <label className="field" htmlFor={`ic-dissent-text-${d.opportunity_id}`}>
+                  What you disagreed with
+                  <input
+                    id={`ic-dissent-text-${d.opportunity_id}`}
+                    value={dissent}
+                    data-testid={`ic-dissent-text-${d.opportunity_id}`}
+                    onChange={(e) => setDissent(e.target.value)}
+                    autoFocus
+                  />
+                  <span className="field-help">In your words — “the churn figure came from the founder and nothing else”.</span>
+                </label>
+                <div className="row">
+                  <button
+                    type="button"
+                    className="btn-strong"
+                    disabled={busy || dissent.trim().length < 4}
+                    data-testid={`ic-dissent-save-${d.opportunity_id}`}
+                    onClick={() => void recordDissent(d.decision!.id)}
+                  >
+                    Record it
+                  </button>
+                  <button type="button" className="btn-ghost" data-testid={`ic-dissent-cancel-${d.opportunity_id}`} onClick={() => { setDissenting(false); setDissent(""); }}>
+                    Never mind
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn-ghost"
+                data-testid={`ic-dissent-open-${d.opportunity_id}`}
+                onClick={() => { setDissenting(true); setDissent(""); }}
+              >
+                Record that you disagreed with this
+              </button>
+            ))}
+          </section>
+        </div>
+
+        <div className="stack">
+          {/* ── Who is in the room ─────────────────────────────────────────────────────── */}
+          <section className="card">
+            <div className="panel-head">
+              <h4>Who is in the room</h4>
+            </div>
+            <div data-testid={`ic-seats-${d.opportunity_id}`}>
+              {d.seats.map((s) => (
+                <div key={s.name} className="ic-seat">
+                  <span className="avatar" aria-hidden="true">
+                    {s.name.split(/\s+/).map((w) => w.charAt(0)).join("").slice(0, 2).toUpperCase()}
+                  </span>
+                  <span className="grow">
+                    <strong>{s.name}</strong> · {s.role}
+                  </span>
+                  {s.decides ? <span className="badge badge-gate">decides</span> : <span className="badge">facilitates</span>}
+                </div>
+              ))}
+              {d.seats.length === 0 && (
+                <p className="state-empty">
+                  Nobody is seated. A committee with no named members is one nobody has agreed to sit on.
+                </p>
+              )}
+            </div>
+            <p className="muted small">
+              The committee is the partners. Investing needs the approval signed off in Approvals first; passing and deferring do not.
+            </p>
+          </section>
+
+          {/* ── Record what the committee decided ──────────────────────────────────────── */}
+          <section className="card">
+            <div className="panel-head">
+              <h4>{d.decision ? "What the committee decided" : "Record what the committee decided"}</h4>
+            </div>
+            {d.decision ? (
+              <p className="notice small" data-testid={`ic-decision-${d.opportunity_id}`}>
+                <strong>
+                  {d.decision.decision === "APPROVE" ? "The firm is investing." : d.decision.decision === "REJECT" ? "The firm passed." : "Not yet — deferred."}
+                </strong>{" "}
+                {d.decision.rationale ?? "No reason was written down."}
+                <span className="muted small"> · {d.decision.decided_by} · {whenInWords(d.decision.created_at)}</span>
+              </p>
+            ) : (
+              <>
+                {!d.packet_id && (
+                  <p className="state-empty">
+                    Nothing to decide against yet: the packet has not been assembled. The decision is
+                    made against the packet, by the partners, with an approval receipt behind it.
+                  </p>
+                )}
+                {d.packet_id && !d.approval_card && (
+                  <>
+                    <p className="muted small">
+                      No decision recorded. Putting the packet in front of the partners raises the
+                      approval an investment needs — it decides nothing by itself.
+                    </p>
+                    <button type="button" className="btn-strong" disabled={busy} data-testid={`ic-submit-${d.opportunity_id}`} onClick={() => void submitPacket(d.packet_id!)}>
+                      Put it in front of the partners
+                    </button>
+                  </>
+                )}
+                {d.packet_id && d.approval_card && !deciding && (
+                  <div className="stack">
+                    <span className="muted small">
+                      In front of both partners. Investing needs the approval signed off in Approvals
+                      first; passing and deferring do not.
+                    </span>
+                    <div className="row">
+                      <button type="button" className="btn-strong" data-testid={`ic-decide-${d.opportunity_id}`} onClick={() => { setDeciding(true); setRationale(""); }}>
+                        Record what the committee decided
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {deciding && (
+                  <div className="stack">
+                    <label className="field" htmlFor={`ic-rationale-${d.opportunity_id}`}>
+                      Why
+                      <input
+                        id={`ic-rationale-${d.opportunity_id}`}
+                        value={rationale}
+                        data-testid={`ic-rationale-${d.opportunity_id}`}
+                        onChange={(e) => setRationale(e.target.value)}
+                        autoFocus
+                      />
+                      {/* A pass needs a sentence. "We passed in August" is a fact; the reason is
+                          what you want in front of you when they come back raising. */}
+                      <span className={rationale.trim().length > 0 && rationale.trim().length < 12 ? "field-help err" : "field-help"}>
+                        A sentence — a pass with fewer than twelve characters of reason is refused.
+                      </span>
+                    </label>
+                    <div className="row">
+                      <button type="button" className="btn-primary" disabled={busy} data-testid={`ic-invest-${d.opportunity_id}`} onClick={() => void decide("APPROVE")}>
+                        The firm is investing
+                      </button>
+                      <button type="button" className="btn-danger" disabled={busy || rationale.trim().length < 12} data-testid={`ic-pass-${d.opportunity_id}`} onClick={() => void decide("REJECT")}>
+                        The firm passes
+                      </button>
+                      <button type="button" disabled={busy} data-testid={`ic-defer-${d.opportunity_id}`} onClick={() => void decide("DEFER")}>
+                        Not yet
+                      </button>
+                      <button type="button" className="btn-ghost" onClick={() => { setDeciding(false); setRationale(""); }}>
+                        Never mind
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            <p className="muted small">
+              Append-only. A decision cannot be edited after the fact; a change of mind is a new decision with its own reason.
+            </p>
+          </section>
+        </div>
+      </div>
+
+      {message && <p className="notice small" role="status" data-testid={`ic-message-${d.opportunity_id}`}>{message}</p>}
+    </div>
+  );
+}
+
+type RecordFace = "standing" | "deal" | "known" | "committee" | "history";
+
 /**
  * ONE DEAL RECORD FOR ONE COMPANY, opened by picking the company and nothing else.
  *
- * The order of the sections is the order of the questions. Where does it stand; what are the terms;
- * what do we know and how; what is still unanswered; what has the committee said; what has happened
- * to it; and — nested, because it is rare — is there a second deal to add.
+ * Five faces, in the order of the questions a partner asks: where does it stand; what are the
+ * terms; what do we know and how, and what is still unanswered; what has the committee said; what
+ * has happened to it. Adding a second deal — the rare act — nests on the terms face.
  */
 function CompanyDealRecord({
   companyId,
   companyName,
   boardDeals,
+  initialFace,
+  initialDealId,
   me,
   onChanged,
   onClose,
@@ -833,13 +1527,16 @@ function CompanyDealRecord({
   companyName: string;
   /** The pipeline's own rows for this company: they carry the stage clock, which the deal row does not. */
   boardDeals: Deal[];
+  initialFace: RecordFace;
+  initialDealId: string | null;
   me: MeResponse;
   onChanged: () => void;
   onClose: () => void;
   onNavigate: (key: string) => void;
 }) {
   const deals = useApi<{ opportunities: DealRecordRow[] }>(`/api/opportunities?company_id=${companyId}`, [companyId]);
-  const [dealId, setDealId] = useState<string | null>(null);
+  const [dealId, setDealId] = useState<string | null>(initialDealId);
+  const [face, setFace] = useState<RecordFace>(initialFace);
   const detail = useApi<DealDetail>(dealId ? `/api/opportunities/${dealId}` : null, [dealId]);
   const intel = useApi<CompanyIntelligence>(`/api/companies/${companyId}/intelligence`, [companyId]);
   const questions = useApi<{ contradictions: OpenQuestion[] }>(`/api/contradictions?company_id=${companyId}`, [companyId]);
@@ -857,6 +1554,7 @@ function CompanyDealRecord({
   const [second, setSecond] = useState({ kind: "FOLLOW_ON", title: "", origin: "UNRECORDED", knownSince: "" });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [askingPass, setAskingPass] = useState(false);
 
   const rows = deals.data?.opportunities ?? [];
   const d = detail.data && detail.data.id === dealId ? detail.data : null;
@@ -924,7 +1622,8 @@ function CompanyDealRecord({
 
   const board = boardDeals.find((b) => b.id === dealId) ?? null;
   const s = d ? stage(d.status) : null;
-  const stall = d ? stallRead(d.status, board?.in_stage_since ?? d.created_at) : null;
+  const since = board?.in_stage_since ?? d?.created_at ?? null;
+  const stall = d ? stallRead(d.status, since) : null;
   const provisional = placeholderList(d?.placeholder_fields);
   const securityClasses = classes.data?.security_classes ?? [];
   const instrument = securityClasses.find((c) => c.id === d?.security_class_id)?.class_name ?? null;
@@ -959,6 +1658,7 @@ function CompanyDealRecord({
     questions.reload();
     history.reload();
     classes.reload();
+    committee.reload();
     onChanged();
   }
 
@@ -1107,6 +1807,7 @@ function CompanyDealRecord({
     setMessage(failed ?? `${companyName} is now at ${(stage(to)?.label ?? "its new stage").toLowerCase()}.`);
     if (!failed) {
       setMovedFrom(from);
+      setAskingPass(false);
       reloadAll();
     }
   }
@@ -1151,7 +1852,7 @@ function CompanyDealRecord({
     if (provisional.length > 0) {
       return {
         value: `${provisional.length} figure${provisional.length === 1 ? "" : "s"} still a stand-in`,
-        note: `${provisional.map((f) => PLACEHOLDER_WORDS[f] ?? f).join(", ")} — the fields are in the next section.`,
+        note: `${provisional.map((f) => PLACEHOLDER_WORDS[f] ?? f).join(", ")} — the fields are on the next face.`,
       };
     }
     if (openQuestions.length > 0) {
@@ -1168,10 +1869,35 @@ function CompanyDealRecord({
 
   const next = s && s.order !== null ? SPINE.find((x) => (x.order ?? 0) === (s.order ?? 0) + 1) : null;
 
+  /* What each face holds, said on its tab so nobody opens one to find it blank. */
+  const faces: Face[] = [
+    { key: "standing", label: "Where this stands", badge: d ? { text: (s?.label ?? "off the rail").toLowerCase(), tone: stall?.stalled ? "bad" : undefined } : { text: "no deal" } },
+    {
+      key: "deal",
+      label: "The deal itself",
+      badge: !d ? { text: "empty" } : provisional.length > 0 ? { text: `${provisional.length} stand-in${provisional.length === 1 ? "" : "s"}`, tone: "gate" } : { text: "recorded" },
+    },
+    {
+      key: "known",
+      label: "What we know",
+      badge: claims.length === 0 ? { text: "empty" } : unchecked.length > 0 ? { text: `${unchecked.length} unchecked`, tone: "gate" } : { text: `${claims.length} on record`, tone: "ok" },
+    },
+    {
+      key: "committee",
+      label: "The committee",
+      badge: committeeDeal
+        ? committeeDeal.decision
+          ? { text: "decided", tone: "ok" }
+          : committeeDeal.approval_card
+            ? { text: "in front of the partners", tone: "gate" }
+            : { text: "packet open" }
+        : { text: "not yet" },
+    },
+    { key: "history", label: "History", badge: { text: entries.length === 0 ? "empty" : String(entries.length) } },
+  ];
+
   return (
     <div className="deal-record" data-testid="deal-record">
-      {/* ── 1 · WHERE THIS STANDS ──────────────────────────────────────────────────────────── */}
-      <h3>Where this stands</h3>
       <section className="card">
         <div className="record-head">
           <h4 data-testid="deal-record-company-name">{companyName}</h4>
@@ -1190,19 +1916,21 @@ function CompanyDealRecord({
             Its register entry →
           </button>
           <button type="button" className="link-button" data-testid="deal-record-close" onClick={onClose}>
-            Close this record
+            ↑ Close this record
           </button>
         </div>
+
+        {d && <CompactRail status={d.status} since={since} name={companyName} />}
 
         {/* A company with more than one deal is a real question, so it is asked. One is not, so it
             is not: the record opens on the live deal without anybody choosing it. */}
         {rows.length > 1 && (
-          <div className="record-deals" role="group" aria-label={`Which deal for ${companyName}`}>
+          <div className="chips" role="group" aria-label={`Which deal for ${companyName}`}>
             {rows.map((r) => (
               <button
                 key={r.id}
                 type="button"
-                className={r.id === dealId ? "chip chip-on" : "chip"}
+                className="chip"
                 aria-pressed={r.id === dealId}
                 data-testid={`deal-record-pick-${r.id}`}
                 onClick={() => setDealId(r.id)}
@@ -1213,239 +1941,385 @@ function CompanyDealRecord({
           </div>
         )}
 
-        {d ? (
-          <>
-            <div className="fact-grid" data-testid="deal-record-standing">
-              <Fact label="Where it is" value={s?.label ?? "Not on the spine"} note={s?.question} />
-              <Fact
-                label="In this stage"
-                value={stall ? stall.label : "not recorded"}
-                note={
-                  stall && s?.stallAfterDays
-                    ? stall.stalled
-                      ? `past the ${s.stallAfterDays} days this stage is given`
-                      : `the clock here is ${s.stallAfterDays} days`
-                    : "waiting here is not a failure"
-                }
-              />
-              <Fact label="What is stopping it" value={blocker?.value ?? "—"} note={blocker?.note} />
-              <Fact
-                label="Who is carrying it"
-                value={lastTouched?.by ?? opened?.by ?? "Nobody yet"}
-                /* Said plainly rather than dressed up: there is no owner field on a deal, so this is
-                   the last person who acted on it and the record says so. */
-                note={
-                  lastTouched
-                    ? `no owner is recorded on a deal — this is who last acted on it, ${day(lastTouched.at)}`
-                    : "nothing has been done to it since it was added"
-                }
-              />
-            </div>
-
-            <div className="record-actions">
-              {next && (
-                <button type="button" className="btn-strong" disabled={busy || settling} data-testid="deal-record-advance" onClick={() => void moveTo(next.key)}>
-                  {busy || settling ? "…" : `Move to ${next.label.toLowerCase()}`}
-                </button>
-              )}
-              {PASSABLE.includes(d.status) && (
-                <button
-                  type="button"
-                  className="btn-ghost"
-                  disabled={busy || settling}
-                  data-testid="deal-record-pass"
-                  onClick={() => {
-                    const reason = window.prompt(`Why is the firm passing on ${companyName}?`);
-                    if (reason === null) return;
-                    if (reason.trim().length < 12) {
-                      setMessage("Say why in a sentence — a pass with no reason is worth nothing when they come back.");
-                      return;
-                    }
-                    void moveTo("PASS", reason.trim());
-                  }}
-                >
-                  Pass on this
-                </button>
-              )}
-              {(d.status === "PASS" || d.status === "WITHDRAWN") && (
-                <button
-                  type="button"
-                  className="btn-ghost"
-                  disabled={busy}
-                  data-testid="deal-record-reopen"
-                  title="Brings it back at screening — the earlier work is not carried forward"
-                  onClick={() => void moveTo("SCREENING")}
-                >
-                  Look at it again
-                </button>
-              )}
-              {d.backfilled_at && (
-                <span className="badge" title="Status was entered as history, not decided here">
-                  entered as history
-                </span>
-              )}
-            </div>
-          </>
-        ) : (
+        {!d && (
           <p className="state-empty" data-testid="deal-record-none">
             {deals.loading
               ? "Opening the record…"
-              : `No deal has been recorded against ${companyName} yet. Everything below is empty for that reason, not because it failed to load — add a deal at the bottom of this record and it will fill in.`}
+              : `No deal has been recorded against ${companyName} yet. Every face below is empty for that reason, not because it failed to load — add a deal on “The deal itself” and it will fill in.`}
           </p>
         )}
       </section>
+
+      <Faces label={`${companyName}'s deal record`} faces={faces} active={face} onPick={(k) => setFace(k as RecordFace)} idPrefix="deal" testId="deal-face" />
+
+      {/* ── 1 · WHERE THIS STANDS ──────────────────────────────────────────────────────────── */}
+      <FacePanel idPrefix="deal" face="standing" active={face}>
+        <section className="card" data-testid="deal-record-standing">
+          {d ? (
+            <>
+              <div className="fact-grid">
+                <Fact
+                  label="In this stage"
+                  value={stall ? stall.label : "not recorded"}
+                  note={
+                    stall && s?.stallAfterDays
+                      ? stall.stalled
+                        ? `past the ${s.stallAfterDays} days this stage is given — stalled`
+                        : `the clock here is ${s.stallAfterDays} days`
+                      : "waiting here is not a failure"
+                  }
+                />
+                <Fact label="What is stopping it" value={blocker?.value ?? "—"} note={blocker?.note} />
+                <Fact
+                  label="Who is carrying it"
+                  value={lastTouched?.by ?? opened?.by ?? "Nobody yet"}
+                  /* Said plainly rather than dressed up: there is no owner field on a deal, so this is
+                     the last person who acted on it and the record says so. */
+                  note={
+                    lastTouched
+                      ? `no owner is recorded on a deal — this is who last acted on it, ${day(lastTouched.at)}`
+                      : "nothing has been done to it since it was added"
+                  }
+                />
+                <Fact label="The question at this stage" value={s?.question ?? "—"} note={s?.isExit ? "it has left the pipeline" : undefined} />
+              </div>
+
+              <div className="record-actions">
+                {next && (
+                  <button type="button" className="btn-strong" disabled={busy || settling} aria-busy={busy || settling || undefined} data-testid="deal-record-advance" onClick={() => void moveTo(next.key)}>
+                    {busy || settling ? "…" : `Move to ${next.label.toLowerCase()}`}
+                  </button>
+                )}
+                {PASSABLE.includes(d.status) && (
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    disabled={busy || settling}
+                    aria-expanded={askingPass}
+                    data-testid="deal-record-pass"
+                    onClick={() => setAskingPass((a) => !a)}
+                  >
+                    Pass on this
+                  </button>
+                )}
+                {(d.status === "PASS" || d.status === "WITHDRAWN") && (
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    disabled={busy}
+                    data-testid="deal-record-reopen"
+                    title="Brings it back at screening — the earlier work is not carried forward"
+                    onClick={() => void moveTo("SCREENING")}
+                  >
+                    Look at it again
+                  </button>
+                )}
+                {d.backfilled_at && (
+                  <span className="badge" title="Status was entered as history, not decided here">
+                    entered as history
+                  </span>
+                )}
+              </div>
+              {askingPass && (
+                <ReasonField
+                  id="deal-record-pass-reason"
+                  label={`Why is the firm passing on ${companyName}?`}
+                  help="A sentence. It is what you will want in front of you the day they come back raising."
+                  minLength={12}
+                  tooShort="Say why in a sentence — a pass with no reason is worth nothing when they come back."
+                  confirmLabel="Pass on it"
+                  confirmClass="btn-danger"
+                  busy={busy}
+                  onConfirm={(reason) => void moveTo("PASS", reason)}
+                  onCancel={() => setAskingPass(false)}
+                  testId="deal-record-pass-reason"
+                />
+              )}
+            </>
+          ) : (
+            <p className="state-empty">There is no deal, so there is no stage. Add one on “The deal itself”.</p>
+          )}
+        </section>
+      </FacePanel>
 
       {/* ── 2 · THE DEAL ITSELF ────────────────────────────────────────────────────────────── */}
       {/*
         THE FIELDS ARE THE POINT AND THEY ARE ALL VISIBLE. Operator: "price per share and # of
         shares should be in the deal record". They were on no surface at all — the only route to
         either was the transaction ladder, which books a position and is a different act from
-        recording what a round is priced at. Nothing here is behind a toggle.
+        recording what a round is priced at. Nothing on this face is behind a toggle except the
+        rare act of adding a second deal.
       */}
-      <h3>The deal itself</h3>
-      <section className="card" data-testid="deal-terms">
-        {d ? (
-          <>
-            <p className="muted small record-lede">
-              What we would be buying, at what price, and what that adds up to. Every figure is typed
-              by a person; anything still a stand-in is marked as one.
+      <FacePanel idPrefix="deal" face="deal" active={face}>
+        <section className="card" data-testid="deal-terms">
+          {d ? (
+            <>
+              <p className="muted small record-lede">
+                What we would be buying, at what price, and what that adds up to. Every figure is typed
+                by a person; anything still a stand-in is marked as one.
+              </p>
+              <div className="fact-grid">
+                <Fact
+                  label="Instrument"
+                  value={instrument ?? "Not chosen yet"}
+                  note={`${dealTypeLabel(d.opportunity_type)}${instrument ? "" : " — pick or add a share class below"}`}
+                />
+                <Fact
+                  label="Price per share"
+                  value={money(pricePerShare)}
+                  note={provisional.includes("price_per_share") ? <span className="fact-provisional">a stand-in, not a fact</span> : undefined}
+                />
+                <Fact
+                  label="Number of shares"
+                  value={count(shares)}
+                  note={provisional.includes("quantity") ? <span className="fact-provisional">a stand-in, not a fact</span> : undefined}
+                />
+                <Fact label="What that costs" value={money(amount)} note={amount === null ? "needs both a price and a share count" : "price per share × number of shares"} />
+                <Fact
+                  label="Ownership at close"
+                  value={percent(packet?.ownership_at_close)}
+                  note={packet ? "from the arithmetic below" : "the arithmetic below has not been worked out"}
+                />
+                <Fact
+                  label="Valuation"
+                  value={money(packet?.valuation)}
+                  note={packet ? "from the arithmetic below" : "the arithmetic below has not been worked out"}
+                />
+                <Fact label="Terms as of" value={day(d.as_of_date ?? d.created_at)} note={d.as_of_date ? "as entered on the record" : "the day the deal record was opened"} />
+                <Fact label="Known since" value={day(d.relationship_started_at)} note={originLabel(d.relationship_origin)} />
+                <Fact label="Fees" value={money(d.fees)} />
+                <Fact label="Carry" value={money(d.carry)} />
+                <Fact label="Discount or premium" value={percent(d.discount_premium)} note="against the last round's price" />
+                <Fact label="Seller" value={d.seller_name ?? "—"} note={d.broker_name ? `broker: ${d.broker_name}` : "no broker recorded"} />
+              </div>
+
+              {d.placeholder_note && <p className="notice small" data-testid="deal-placeholder-note">{d.placeholder_note}</p>}
+
+              <h4>Put the real numbers in</h4>
+              <p className="muted small">
+                Saving writes to the deal record and appears in its history with your name against it.
+                A figure marked as a stand-in loses the mark the moment you replace it.
+              </p>
+              <div className="form-row" data-testid="deal-terms-form">
+                <label>
+                  Share class{" "}
+                  <select
+                    data-testid="deal-terms-class"
+                    value={terms.security_class_id}
+                    onChange={(e) => setTerms((f) => ({ ...f, security_class_id: e.target.value }))}
+                  >
+                    <option value="">— not chosen —</option>
+                    {securityClasses.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.class_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {/* Shares are shares OF something, and a company with no class recorded has nothing
+                    to pick. Saying where the class is added beats an empty dropdown with no reason. */}
+                {securityClasses.length === 0 && (
+                  <span className="muted small">No share class is recorded yet — add one further down this face.</span>
+                )}
+                <label>
+                  Price per share{" "}
+                  <input
+                    className="input-money"
+                    inputMode="decimal"
+                    data-testid="deal-terms-price"
+                    value={terms.price_per_share}
+                    onChange={(e) => setTerms((f) => ({ ...f, price_per_share: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Number of shares{" "}
+                  <input
+                    className="input-money"
+                    inputMode="decimal"
+                    data-testid="deal-terms-quantity"
+                    value={terms.quantity}
+                    onChange={(e) => setTerms((f) => ({ ...f, quantity: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Fees{" "}
+                  <input
+                    className="input-money"
+                    inputMode="decimal"
+                    data-testid="deal-terms-fees"
+                    value={terms.fees}
+                    onChange={(e) => setTerms((f) => ({ ...f, fees: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Carry{" "}
+                  <input
+                    className="input-money"
+                    inputMode="decimal"
+                    data-testid="deal-terms-carry"
+                    value={terms.carry}
+                    onChange={(e) => setTerms((f) => ({ ...f, carry: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Discount or premium{" "}
+                  <input
+                    className="input-money"
+                    inputMode="decimal"
+                    data-testid="deal-terms-discount"
+                    value={terms.discount_premium}
+                    onChange={(e) => setTerms((f) => ({ ...f, discount_premium: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Seller{" "}
+                  <input
+                    data-testid="deal-terms-seller"
+                    value={terms.seller_name}
+                    onChange={(e) => setTerms((f) => ({ ...f, seller_name: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Broker{" "}
+                  <input
+                    data-testid="deal-terms-broker"
+                    value={terms.broker_name}
+                    onChange={(e) => setTerms((f) => ({ ...f, broker_name: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  How we met them{" "}
+                  <select
+                    data-testid="deal-terms-origin"
+                    value={terms.relationship_origin}
+                    onChange={(e) => setTerms((f) => ({ ...f, relationship_origin: e.target.value }))}
+                  >
+                    {ORIGIN_KEYS.map((o) => (
+                      <option key={o} value={o}>
+                        {originLabel(o)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Known since{" "}
+                  <input
+                    type="date"
+                    data-testid="deal-terms-known-since"
+                    value={terms.relationship_started_at}
+                    onChange={(e) => setTerms((f) => ({ ...f, relationship_started_at: e.target.value }))}
+                  />
+                </label>
+                <button type="button" className="btn-strong" disabled={busy} data-testid="deal-terms-save" onClick={() => void saveTerms()}>
+                  Save the deal record
+                </button>
+              </div>
+
+              {/* THE ARITHMETIC, where the ownership and the valuation above come from. It used to be
+                  a bare row of inputs with no heading and no sentence saying what pressing anything
+                  would do. */}
+              <h4>The arithmetic behind those two figures</h4>
+              <p className="muted small">
+                What the cheque buys and what it is worth if it works. Every number is typed by a
+                person; nothing here is assumed, and a figure with no verified formula is never
+                machine-filled.
+              </p>
+              <div className="form-row" data-testid="deal-math-inputs">
+                {MATH_FIELDS.map(([key, label]) => (
+                  <label key={key}>
+                    {label}{" "}
+                    <input
+                      className="input-money"
+                      inputMode="decimal"
+                      data-testid={"deal-math-" + key.split("_").join("-")}
+                      value={math[key]}
+                      onChange={(e) => setMath((m) => ({ ...m, [key]: e.target.value }))}
+                    />
+                  </label>
+                ))}
+                <button type="button" className="btn-strong" disabled={busy} data-testid="deal-math-create" onClick={() => void workOutMath()}>
+                  Work it out
+                </button>
+                <button type="button" disabled={busy || !packet} data-testid="deal-math-calculate" onClick={() => void calculate()}>
+                  Recompute with the verified formulas
+                </button>
+              </div>
+
+              {packet ? (
+                <div className="fact-grid" data-testid="deal-math-packet">
+                  <Fact
+                    label="How it was arrived at"
+                    value={packet.entry_mode === "CALCULATED" ? "Verified formulas" : "Typed by a person"}
+                    note={<span data-testid="deal-math-entry-mode">{packet.entry_mode === "CALCULATED" ? "recomputed, not hand-entered" : "manual entry, which is always allowed"}</span>}
+                  />
+                  <Fact label="Where it stands" value={<span data-testid="deal-math-status">{mathStanding(packet.math_quality_status)}</span>} note={day(packet.created_at)} />
+                  <Fact label="Ownership at close" value={percent(packet.ownership_at_close)} />
+                  <Fact label="Valuation" value={money(packet.valuation)} />
+                  <Fact label="Money back on the cheque" value={packet.moic === null ? "—" : `${packet.moic}×`} note="if the exit value above happens" />
+                  <Fact label="Against the whole fund" value={packet.tvpi === null ? "—" : `${packet.tvpi}×`} note={packet.tvpi === null ? "no verified formula — entered by hand only" : undefined} />
+                </div>
+              ) : (
+                <p className="state-empty" data-testid="deal-math-empty">
+                  The arithmetic has not been worked out. Fill in the seven numbers above and press
+                  “Work it out”; until then the ownership and valuation on this record are blank
+                  because nobody has computed them, not because they are zero.
+                </p>
+              )}
+
+              {/* THE ONLY WAY A POSITION IS EVER CREATED. Draft, approve, execute — and the fund
+                  holds nothing until the last of those, whatever the pipeline says. */}
+              <RecordInvestment
+                companyId={companyId}
+                companyName={companyName}
+                opportunityId={d.id}
+                me={me}
+                onRecorded={reloadAll}
+              />
+            </>
+          ) : (
+            <p className="state-empty">
+              There are no terms because there is no deal. Once one exists, the price per share, the
+              number of shares, what that costs, the ownership it buys and the valuation it implies
+              are all recorded and edited here.
             </p>
-            <div className="fact-grid">
-              <Fact
-                label="Instrument"
-                value={instrument ?? "Not chosen yet"}
-                note={`${dealTypeLabel(d.opportunity_type)}${instrument ? "" : " — pick or add a share class below"}`}
-              />
-              <Fact
-                label="Price per share"
-                value={money(pricePerShare)}
-                note={provisional.includes("price_per_share") ? <span className="fact-provisional">a stand-in, not a fact</span> : undefined}
-              />
-              <Fact
-                label="Number of shares"
-                value={count(shares)}
-                note={provisional.includes("quantity") ? <span className="fact-provisional">a stand-in, not a fact</span> : undefined}
-              />
-              <Fact label="What that costs" value={money(amount)} note={amount === null ? "needs both a price and a share count" : "price per share × number of shares"} />
-              <Fact
-                label="Ownership at close"
-                value={percent(packet?.ownership_at_close)}
-                note={packet ? "from the arithmetic below" : "the arithmetic below has not been worked out"}
-              />
-              <Fact
-                label="Valuation"
-                value={money(packet?.valuation)}
-                note={packet ? "from the arithmetic below" : "the arithmetic below has not been worked out"}
-              />
-              <Fact label="Terms as of" value={day(d.as_of_date ?? d.created_at)} note={d.as_of_date ? "as entered on the record" : "the day the deal record was opened"} />
-              <Fact label="Known since" value={day(d.relationship_started_at)} note={originLabel(d.relationship_origin)} />
-              <Fact label="Fees" value={money(d.fees)} />
-              <Fact label="Carry" value={money(d.carry)} />
-              <Fact label="Discount or premium" value={percent(d.discount_premium)} note="against the last round's price" />
-              <Fact label="Seller" value={d.seller_name ?? "—"} note={d.broker_name ? `broker: ${d.broker_name}` : "no broker recorded"} />
-            </div>
+          )}
 
-            {d.placeholder_note && <p className="notice small" data-testid="deal-placeholder-note">{d.placeholder_note}</p>}
-
-            <h4>Put the real numbers in</h4>
+          {/*
+            THE ONE THING ON THIS RECORD THAT NESTS, and it nests because the operator said it could:
+            "yes and the add a second deal to this company part can be neested i guess." A company with
+            a follow-on beside a secondary is real and rare; the ordinary case is one deal, and a form
+            for the rare case sitting open above the work is what made this page feel like a form rather
+            than a record.
+          */}
+          <details className="card deal-record-new" data-testid="deal-second-details">
+            <summary>{rows.length === 0 ? `Add a deal for ${companyName}` : `Another deal for ${companyName} — a follow-on, or a secondary`}</summary>
             <p className="muted small">
-              Saving writes to the deal record and appears in its history with your name against it.
-              A figure marked as a stand-in loses the mark the moment you replace it.
+              Only for a company already on the board. A company new to the firm goes in
+              through “Add a company” on the pipeline.
             </p>
-            <div className="form-row" data-testid="deal-terms-form">
+            <form className="form-row" data-testid="deal-second-form" onSubmit={addSecondDeal}>
               <label>
-                Share class{" "}
-                <select
-                  data-testid="deal-terms-class"
-                  value={terms.security_class_id}
-                  onChange={(e) => setTerms((f) => ({ ...f, security_class_id: e.target.value }))}
-                >
-                  <option value="">— not chosen —</option>
-                  {securityClasses.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.class_name}
+                What kind{" "}
+                <select data-testid="deal-second-kind" value={second.kind} onChange={(e) => setSecond((f) => ({ ...f, kind: e.target.value }))}>
+                  {SECOND_DEAL_KINDS.map((k) => (
+                    <option key={k.key} value={k.key}>
+                      {k.label}
                     </option>
                   ))}
                 </select>
               </label>
-              {/* Shares are shares OF something, and a company with no class recorded has nothing
-                  to pick. Saying where the class is added beats an empty dropdown with no reason. */}
-              {securityClasses.length === 0 && (
-                <span className="muted small">No share class is recorded yet — add one further down this section.</span>
-              )}
               <label>
-                Price per share{" "}
+                What to call it{" "}
                 <input
-                  className="input-money"
-                  inputMode="decimal"
-                  data-testid="deal-terms-price"
-                  value={terms.price_per_share}
-                  onChange={(e) => setTerms((f) => ({ ...f, price_per_share: e.target.value }))}
-                />
-              </label>
-              <label>
-                Number of shares{" "}
-                <input
-                  className="input-money"
-                  inputMode="decimal"
-                  data-testid="deal-terms-quantity"
-                  value={terms.quantity}
-                  onChange={(e) => setTerms((f) => ({ ...f, quantity: e.target.value }))}
-                />
-              </label>
-              <label>
-                Fees{" "}
-                <input
-                  className="input-money"
-                  inputMode="decimal"
-                  data-testid="deal-terms-fees"
-                  value={terms.fees}
-                  onChange={(e) => setTerms((f) => ({ ...f, fees: e.target.value }))}
-                />
-              </label>
-              <label>
-                Carry{" "}
-                <input
-                  className="input-money"
-                  inputMode="decimal"
-                  data-testid="deal-terms-carry"
-                  value={terms.carry}
-                  onChange={(e) => setTerms((f) => ({ ...f, carry: e.target.value }))}
-                />
-              </label>
-              <label>
-                Discount or premium{" "}
-                <input
-                  className="input-money"
-                  inputMode="decimal"
-                  data-testid="deal-terms-discount"
-                  value={terms.discount_premium}
-                  onChange={(e) => setTerms((f) => ({ ...f, discount_premium: e.target.value }))}
-                />
-              </label>
-              <label>
-                Seller{" "}
-                <input
-                  data-testid="deal-terms-seller"
-                  value={terms.seller_name}
-                  onChange={(e) => setTerms((f) => ({ ...f, seller_name: e.target.value }))}
-                />
-              </label>
-              <label>
-                Broker{" "}
-                <input
-                  data-testid="deal-terms-broker"
-                  value={terms.broker_name}
-                  onChange={(e) => setTerms((f) => ({ ...f, broker_name: e.target.value }))}
+                  data-testid="deal-second-title"
+                  value={second.title}
+                  onChange={(e) => setSecond((f) => ({ ...f, title: e.target.value }))}
+                  placeholder="Series A follow-on"
                 />
               </label>
               <label>
                 How we met them{" "}
-                <select
-                  data-testid="deal-terms-origin"
-                  value={terms.relationship_origin}
-                  onChange={(e) => setTerms((f) => ({ ...f, relationship_origin: e.target.value }))}
-                >
+                <select data-testid="deal-second-origin" value={second.origin} onChange={(e) => setSecond((f) => ({ ...f, origin: e.target.value }))}>
                   {ORIGIN_KEYS.map((o) => (
                     <option key={o} value={o}>
                       {originLabel(o)}
@@ -1457,489 +2331,202 @@ function CompanyDealRecord({
                 Known since{" "}
                 <input
                   type="date"
-                  data-testid="deal-terms-known-since"
-                  value={terms.relationship_started_at}
-                  onChange={(e) => setTerms((f) => ({ ...f, relationship_started_at: e.target.value }))}
+                  data-testid="deal-second-known-since"
+                  value={second.knownSince}
+                  onChange={(e) => setSecond((f) => ({ ...f, knownSince: e.target.value }))}
                 />
               </label>
-              <button type="button" className="btn-strong" disabled={busy} data-testid="deal-terms-save" onClick={() => void saveTerms()}>
-                Save the deal record
+              <button type="submit" className="btn-strong" disabled={busy} data-testid="deal-second-submit">
+                Add it
               </button>
-            </div>
+            </form>
+          </details>
+        </section>
+      </FacePanel>
 
-            {/* THE ARITHMETIC, where the ownership and the valuation above come from. It used to be
-                a bare row of inputs with no heading and no sentence saying what pressing anything
-                would do. */}
-            <h4>The arithmetic behind those two figures</h4>
-            <p className="muted small">
-              What the cheque buys and what it is worth if it works. Every number is typed by a
-              person; nothing here is assumed, and a figure with no verified formula is never
-              machine-filled.
-            </p>
-            <div className="form-row" data-testid="deal-math-inputs">
-              {MATH_FIELDS.map(([key, label]) => (
-                <label key={key}>
-                  {label}{" "}
-                  <input
-                    className="input-money"
-                    inputMode="decimal"
-                    data-testid={"deal-math-" + key.split("_").join("-")}
-                    value={math[key]}
-                    onChange={(e) => setMath((m) => ({ ...m, [key]: e.target.value }))}
-                  />
-                </label>
-              ))}
-              <button type="button" className="btn-strong" disabled={busy} data-testid="deal-math-create" onClick={() => void workOutMath()}>
-                Work it out
-              </button>
-              <button type="button" disabled={busy || !packet} data-testid="deal-math-calculate" onClick={() => void calculate()}>
-                Recompute with the verified formulas
-              </button>
-            </div>
-
-            {packet ? (
-              <div className="fact-grid" data-testid="deal-math-packet">
-                <Fact
-                  label="How it was arrived at"
-                  value={packet.entry_mode === "CALCULATED" ? "Verified formulas" : "Typed by a person"}
-                  note={<span data-testid="deal-math-entry-mode">{packet.entry_mode === "CALCULATED" ? "recomputed, not hand-entered" : "manual entry, which is always allowed"}</span>}
-                />
-                <Fact label="Where it stands" value={<span data-testid="deal-math-status">{mathStanding(packet.math_quality_status)}</span>} note={day(packet.created_at)} />
-                <Fact label="Ownership at close" value={percent(packet.ownership_at_close)} />
-                <Fact label="Valuation" value={money(packet.valuation)} />
-                <Fact label="Money back on the cheque" value={packet.moic === null ? "—" : `${packet.moic}×`} note="if the exit value above happens" />
-                <Fact label="Against the whole fund" value={packet.tvpi === null ? "—" : `${packet.tvpi}×`} note={packet.tvpi === null ? "no verified formula — entered by hand only" : undefined} />
-              </div>
-            ) : (
-              <p className="state-empty" data-testid="deal-math-empty">
-                The arithmetic has not been worked out. Fill in the seven numbers above and press
-                “Work it out”; until then the ownership and valuation on this record are blank
-                because nobody has computed them, not because they are zero.
-              </p>
-            )}
-
-            {/* THE ONLY WAY A POSITION IS EVER CREATED. Draft, approve, execute — and the fund
-                holds nothing until the last of those, whatever the pipeline says. */}
-            <RecordInvestment
-              companyId={companyId}
-              companyName={companyName}
-              opportunityId={d.id}
-              me={me}
-              onRecorded={reloadAll}
-            />
-          </>
-        ) : (
-          <p className="state-empty">
-            There are no terms because there is no deal. Once one exists, the price per share, the
-            number of shares, what that costs, the ownership it buys and the valuation it implies
-            are all recorded and edited here.
-          </p>
-        )}
-      </section>
-
-      {/* ── 3 · WHAT WE KNOW, AND HOW WE KNOW IT ───────────────────────────────────────────── */}
+      {/* ── 3 · WHAT WE KNOW, AND HOW WE KNOW IT — and what is still open ─────────────────── */}
       {/*
         RETHOUGHT RATHER THAN MOVED. Operator: "what the firm knows about them / its deals — these
         sections need to be rethought and figure out how to make this easy to work through."
-
-        What was there was a count: "opportunities: 3 · transactions: 0 · positions: 0 · share
-        classes: 1 · pricing observations: 0 · IC packets: 1", printed twice on the same screen. A
-        tally of rows is not knowledge and there is nothing to work through in it.
 
         What a partner is actually doing here is separating what somebody CHECKED from what somebody
         SAID. So the unchecked come first, because they are the work, and every line carries how
         many sources stand behind it. The count that leads is the only honest headline: a page of
         claims with no sources should say so before anybody reads one.
       */}
-      <h3>What we know, and how we know it</h3>
-      <section className="card" data-testid="deal-knowledge">
-        <p className="muted small record-lede" data-testid="deal-knowledge-lede">
-          {claims.length === 0
-            ? `Nothing has been written down about ${companyName} yet.`
-            : `${claims.length - unchecked.length} of ${claims.length} thing${claims.length === 1 ? "" : "s"} on record ${claims.length - unchecked.length === 1 ? "has" : "have"} a source behind ${claims.length - unchecked.length === 1 ? "it" : "them"}. The rest is what somebody told us.`}
-        </p>
+      <FacePanel idPrefix="deal" face="known" active={face}>
+        <section className="card" data-testid="deal-knowledge">
+          <p className="muted small record-lede" data-testid="deal-knowledge-lede">
+            {claims.length === 0
+              ? `Nothing has been written down about ${companyName} yet.`
+              : `${claims.length - unchecked.length} of ${claims.length} thing${claims.length === 1 ? "" : "s"} on record ${claims.length - unchecked.length === 1 ? "has" : "have"} a source behind ${claims.length - unchecked.length === 1 ? "it" : "them"}. The rest is what somebody told us.`}
+          </p>
 
-        <h4>Still unchecked — this is the work</h4>
-        <ul className="card-list small" data-testid="deal-claims-unchecked">
-          {unchecked.map((c) => (
-            <li key={c.id} data-testid={`deal-claim-${c.id}`}>
-              <strong>{c.claim_text}</strong>
-              <div className="muted">
-                {claimStanding(c.claim_status)} ·{" "}
-                {c.source_count === 0 ? "nothing attached to back it up" : `${c.source_count} source${c.source_count === 1 ? "" : "s"} attached`} ·
-                recorded {day(c.created_at)}
-              </div>
-            </li>
-          ))}
-          {unchecked.length === 0 && (
-            <li className="state-empty">
-              {claims.length === 0
-                ? `Nothing is on record, so nothing is unchecked. Claims arrive from a meeting, a document, or an employee reading the deck.`
-                : `Everything written down about ${companyName} has a source behind it.`}
-            </li>
-          )}
-        </ul>
+          <h4>Still unchecked — this is the work</h4>
+          <ul className="card-list small" data-testid="deal-claims-unchecked">
+            {unchecked.map((c) => (
+              <li key={c.id} data-testid={`deal-claim-${c.id}`}>
+                <strong>{c.claim_text}</strong>
+                <div className="muted">
+                  {claimStanding(c.claim_status)} ·{" "}
+                  {c.source_count === 0 ? "nothing attached to back it up" : `${c.source_count} source${c.source_count === 1 ? "" : "s"} attached`} ·
+                  recorded {day(c.created_at)}
+                </div>
+              </li>
+            ))}
+            {unchecked.length === 0 && (
+              <li className="state-empty">
+                {claims.length === 0
+                  ? `Nothing is on record, so nothing is unchecked. Claims arrive from a meeting, a document, or an employee reading the deck.`
+                  : `Everything written down about ${companyName} has a source behind it.`}
+              </li>
+            )}
+          </ul>
 
-        <h4>Checked, and where it came from</h4>
-        <ul className="card-list small" data-testid="deal-claims-checked">
-          {checked.map((c) => (
-            <li key={c.id} data-testid={`deal-claim-${c.id}`}>
-              <strong>{c.claim_text}</strong>
-              <div className="muted">
-                {claimStanding(c.claim_status)} · {c.source_count} source{c.source_count === 1 ? "" : "s"} · recorded {day(c.created_at)}
-              </div>
-            </li>
-          ))}
-          {checked.length === 0 && (
-            <li className="state-empty">
-              Nothing has been checked yet. A claim becomes checked when somebody attaches the
-              document or the conversation it came from.
-            </li>
-          )}
-        </ul>
+          <h4>Checked, and where it came from</h4>
+          <ul className="card-list small" data-testid="deal-claims-checked">
+            {checked.map((c) => (
+              <li key={c.id} data-testid={`deal-claim-${c.id}`}>
+                <strong>{c.claim_text}</strong>
+                <div className="muted">
+                  {claimStanding(c.claim_status)} · {c.source_count} source{c.source_count === 1 ? "" : "s"} · recorded {day(c.created_at)}
+                </div>
+              </li>
+            ))}
+            {checked.length === 0 && (
+              <li className="state-empty">
+                Nothing has been checked yet. A claim becomes checked when somebody attaches the
+                document or the conversation it came from.
+              </li>
+            )}
+          </ul>
 
-        <h4>The numbers we hold</h4>
-        <ul className="card-list small" data-testid="deal-metrics">
-          {intel.data?.ownership && (
-            <li data-testid="deal-ownership-reading">
-              <strong>Ownership {percent(intel.data.ownership.ownership_pct)}</strong>
-              <div className="muted">
-                as of {day(intel.data.ownership.as_of_date)}
-                {intel.data.ownership.fully_diluted_shares === null
-                  ? ""
-                  : ` · ${count(intel.data.ownership.fully_diluted_shares)} shares fully diluted`}
-                {intel.data.ownership.source ? ` · ${intel.data.ownership.source}` : ""}
-              </div>
-            </li>
-          )}
-          {metrics.map((m) => (
-            <li key={`${m.metric_key}-${m.as_of_date}`} data-testid={`deal-metric-${m.metric_key}`}>
-              <strong>
-                {metricLabel(m.metric_key)} {count(m.value)}
-              </strong>
-              <div className="muted">
-                as of {day(m.as_of_date)}
-                {m.period_label ? ` · ${m.period_label}` : ""}
-                {m.source ? ` · ${m.source}` : " · no source recorded"}
-              </div>
-            </li>
-          ))}
-          {metrics.length === 0 && !intel.data?.ownership && (
-            <li className="state-empty">
-              No figure has been recorded for {companyName}. They arrive with a portfolio update, or
-              are entered by hand against the company on Portfolio.
-            </li>
-          )}
-        </ul>
-      </section>
+          <h4>The numbers we hold</h4>
+          <ul className="card-list small" data-testid="deal-metrics">
+            {intel.data?.ownership && (
+              <li data-testid="deal-ownership-reading">
+                <strong>Ownership {percent(intel.data.ownership.ownership_pct)}</strong>
+                <div className="muted">
+                  as of {day(intel.data.ownership.as_of_date)}
+                  {intel.data.ownership.fully_diluted_shares === null
+                    ? ""
+                    : ` · ${count(intel.data.ownership.fully_diluted_shares)} shares fully diluted`}
+                  {intel.data.ownership.source ? ` · ${intel.data.ownership.source}` : ""}
+                </div>
+              </li>
+            )}
+            {metrics.map((m) => (
+              <li key={`${m.metric_key}-${m.as_of_date}`} data-testid={`deal-metric-${m.metric_key}`}>
+                <strong>
+                  {metricLabel(m.metric_key)} {count(m.value)}
+                </strong>
+                <div className="muted">
+                  as of {day(m.as_of_date)}
+                  {m.period_label ? ` · ${m.period_label}` : ""}
+                  {m.source ? ` · ${m.source}` : " · no source recorded"}
+                </div>
+              </li>
+            ))}
+            {metrics.length === 0 && !intel.data?.ownership && (
+              <li className="state-empty">
+                No figure has been recorded for {companyName}. They arrive with a portfolio update, or
+                are entered by hand against the company on Portfolio.
+              </li>
+            )}
+          </ul>
+        </section>
 
-      {/* ── 4 · WHAT IS STILL OPEN ─────────────────────────────────────────────────────────── */}
-      <h3>What is still open</h3>
-      <section className="card" data-testid="deal-open-questions">
-        <p className="muted small record-lede">
-          The questions nobody has answered, and who owes each answer. A question appears here when
-          two sources disagree, or when somebody raises one in diligence.
-        </p>
-        <ul className="card-list small">
-          {openQuestions.map((q) => (
-            <li key={q.id} data-testid={`deal-question-${q.id}`}>
-              <strong>{q.required_question ?? `Two sources disagree about ${q.topic}.`}</strong>
-              <div className="muted">
-                {questionWeight(q.materiality)} · owed by{" "}
-                {q.assigned_owner ?? "nobody — it has not been given to anybody"} · {questionState(q.status)} · raised{" "}
-                {day(q.created_at)}
-              </div>
-            </li>
-          ))}
-          {missingMath.length > 0 && (
-            <li data-testid="deal-question-math">
-              <strong>The arithmetic is missing {missingMath.length} number{missingMath.length === 1 ? "" : "s"}.</strong>
-              <div className="muted">
-                Important · owed by whoever is working the deal · the fields are in “The deal itself” above
-              </div>
-            </li>
-          )}
-          {openQuestions.length === 0 && missingMath.length === 0 && (
-            <li className="state-empty">
-              Nothing is outstanding on {companyName}. That is a real answer rather than a gap: no
-              contradiction is open and the arithmetic is not missing anything.
-            </li>
-          )}
-        </ul>
-      </section>
+        <section className="card" data-testid="deal-open-questions">
+          <h4>What is still open</h4>
+          <p className="muted small record-lede">
+            The questions nobody has answered, and who owes each answer. A question appears here when
+            two sources disagree, or when somebody raises one in diligence.
+          </p>
+          <ul className="card-list small">
+            {openQuestions.map((q) => (
+              <li key={q.id} data-testid={`deal-question-${q.id}`}>
+                <strong>{q.required_question ?? `Two sources disagree about ${q.topic}.`}</strong>
+                <div className="muted">
+                  {questionWeight(q.materiality)} · owed by{" "}
+                  {q.assigned_owner ?? "nobody — it has not been given to anybody"} · {questionState(q.status)} · raised{" "}
+                  {day(q.created_at)}
+                </div>
+              </li>
+            ))}
+            {missingMath.length > 0 && (
+              <li data-testid="deal-question-math">
+                <strong>The arithmetic is missing {missingMath.length} number{missingMath.length === 1 ? "" : "s"}.</strong>
+                <div className="muted">
+                  Important · owed by whoever is working the deal · the fields are on “The deal itself”
+                </div>
+              </li>
+            )}
+            {openQuestions.length === 0 && missingMath.length === 0 && (
+              <li className="state-empty">
+                Nothing is outstanding on {companyName}. That is a real answer rather than a gap: no
+                contradiction is open and the arithmetic is not missing anything.
+              </li>
+            )}
+          </ul>
+        </section>
+      </FacePanel>
 
+      {/* ── 4 · THE COMMITTEE ──────────────────────────────────────────────────────────────── */}
       {/*
-        ── 5 · THE COMMITTEE ───────────────────────────────────────────────────────────────────
-        It belongs exactly here: after the open questions, because the committee is what happens once
-        they are answered, and before the history, because a decision is a thing that HAS happened
-        rather than a thing that is happening.
-
         WHY THIS IS NOT READ OUT OF `d.ic_packets`. The detail response carries `{ id, status }` per
         packet and nothing else — not the questions, not the seats, not the decision, and above all
-        not the dissent. A section built on that would have had to invent the rest on the client,
-        and a committee record that disagrees with the committee's own surface is worse than no
-        record. `GET /api/ic/deals/:opportunityId` returns the SAME read Meetings renders, so the
-        two surfaces cannot drift; `d.ic_packets` is now only how this page knows whether to ask.
+        not the dissent. A face built on that would have had to invent the rest on the client, and a
+        committee record that disagrees with the committee's own read is worse than no record.
+        `GET /api/ic/deals/:opportunityId` is the SAME read the committee band renders.
 
         DISSENT IS NOT SUMMARISED, ANYWHERE. It is printed whole, beside the decision it was
         recorded against, and a decision with none says so — because "nobody disagreed" and "nobody
         wrote down that they disagreed" are different facts and only one of them is in the database.
       */}
-      <h3>Where this deal stands with the committee</h3>
-      <section className="card" data-testid="deal-committee">
-        <p className="muted small record-lede">
-          What the committee has seen, what it asked for and who owes each answer, who sits in the
-          room, what it decided and who disagreed. A deal arrives here by moving to the committee
-          stage above — nothing else puts it in front of them.
-        </p>
-
-        {committeeDeal === null ? (
-          <p className="state-empty" data-testid="deal-committee-none">
-            {committee.loading
-              ? "Reading the committee's file…"
-              : `${companyName} has not been to the committee on this deal. Move it to the committee stage above and a packet opens on its own, with a card for the facilitator to assemble it.`}
+      <FacePanel idPrefix="deal" face="committee" active={face}>
+        <div data-testid="deal-committee">
+          <p className="muted small record-lede">
+            What the committee has seen, what it asked for and who owes each answer, who sits in the
+            room, what it decided and who disagreed. A deal arrives here by moving to Ready to decide —
+            nothing else puts it in front of them.
           </p>
-        ) : (
-          <>
-            <h4>What the committee has seen</h4>
-            <ul className="card-list small" data-testid="deal-committee-packet">
-              <li>
-                <strong>{committeeDeal.packet_state}</strong>
-                <div className="muted">
-                  {committeeDeal.stage}
-                  {committeeDeal.facilitator_card
-                    ? ` · the card to assemble it is ${cardStateInWords(committeeDeal.facilitator_card.state)}`
-                    : ""}
-                </div>
+          <CommitteeFace
+            companyName={companyName}
+            deal={committeeDeal}
+            loading={committee.loading}
+            me={me}
+            onChanged={reloadAll}
+            onNavigate={onNavigate}
+          />
+        </div>
+      </FacePanel>
+
+      {/* ── 5 · HISTORY ────────────────────────────────────────────────────────────────────── */}
+      <FacePanel idPrefix="deal" face="history" active={face}>
+        <section className="card" data-testid="deal-history">
+          <p className="muted small record-lede">
+            Every change to {companyName} and to its deals, most recent first, with whoever made it.
+          </p>
+          <ul className="card-list small">
+            {entries.map((e) => (
+              <li key={e.id} data-testid={`deal-history-${e.id}`}>
+                <strong>{eventSentence(e.what)}</strong>{" "}
+                <span className="muted">
+                  · {e.by} · {day(e.at)}
+                </span>
+                {e.said && <div className="muted">{e.said}</div>}
               </li>
-              {committeeDeal.packet_evidence && (
-                <li data-testid="deal-committee-evidence">
-                  <strong>
-                    {count(committeeDeal.packet_evidence.claims_seen)} claim
-                    {committeeDeal.packet_evidence.claims_seen === 1 ? "" : "s"} were in front of them
-                    {committeeDeal.packet_evidence.claims_unsourced > 0
-                      ? `, ${count(committeeDeal.packet_evidence.claims_unsourced)} of them with nothing under them`
-                      : ", all of them with a source attached"}
-                    .
-                  </strong>
-                  <div className="muted">
-                    Put together by {committeeDeal.packet_evidence.drafted_by} on{" "}
-                    {day(committeeDeal.packet_evidence.assembled_at)} ·{" "}
-                    {committeeDeal.packet_evidence.deal_math_attached
-                      ? "the arithmetic is attached"
-                      : "no arithmetic is attached"}
-                  </div>
-                </li>
-              )}
-              {committeeDeal.packet_evidence && (
-                <li data-testid="deal-committee-contradictions">
-                  <strong>
-                    {committeeDeal.packet_evidence.contradictions_now === 0
-                      ? "The record does not contradict itself in any material place."
-                      : `The record contradicts itself in ${count(committeeDeal.packet_evidence.contradictions_now)} material place${committeeDeal.packet_evidence.contradictions_now === 1 ? "" : "s"} right now.`}
-                  </strong>
-                  {/* THE TWO COUNTS TRAVEL SEPARATELY ON PURPOSE. A contradiction opened after the
-                      packet was written is the one nobody in the room knows about. */}
-                  <div className="muted">
-                    {committeeDeal.packet_evidence.contradictions_at_assembly === 1
-                      ? "One was open when the packet was put together"
-                      : `${count(committeeDeal.packet_evidence.contradictions_at_assembly)} were open when the packet was put together`}
-                    {committeeDeal.packet_evidence.contradictions_now >
-                    committeeDeal.packet_evidence.contradictions_at_assembly
-                      ? " — the rest were raised since, so nobody in the room has seen them"
-                      : ""}
-                  </div>
-                </li>
-              )}
-            </ul>
-
-            <h4>What it asked for, and who owes each answer</h4>
-            <ul className="card-list small" data-testid="deal-committee-questions">
-              {committeeDeal.questions.map((q) => (
-                <li key={q.id} className="ic-question" data-testid={`deal-committee-question-${q.id}`}>
-                  <span
-                    className={
-                      q.state === "OPEN"
-                        ? "help-tag help-tag-warn"
-                        : q.state === "ANSWERED"
-                          ? "help-tag help-tag-good"
-                          : "help-tag help-tag-muted"
-                    }
-                  >
-                    {q.state === "OPEN" ? "open" : q.state === "ANSWERED" ? "answered" : "not needed"}
-                  </span>{" "}
-                  <strong>{q.question}</strong>
-                  <div className="muted">{q.because}</div>
-                  <div className="ic-owes">Owed by {owedInWords(q)}</div>
-                  {q.answer && <div className="closeout-quote">{q.answer}</div>}
-                  {q.withdrawn_reason && <div className="muted">Not needed because {q.withdrawn_reason}</div>}
-                </li>
-              ))}
-              {committeeDeal.questions.length === 0 && (
-                <li className="state-empty">
-                  Nothing has been named as missing. A packet with no gaps is either finished or has
-                  not been started — the state above says which.
-                </li>
-              )}
-            </ul>
-
-            <h4>Who is in the room</h4>
-            <ul className="card-list small" data-testid="deal-committee-seats">
-              {committeeDeal.seats.map((s) => (
-                <li key={s.name}>
-                  <strong>{s.name}</strong> {s.decides && <span className="badge badge-gate">decides</span>}
-                  <div className="muted">{s.role}</div>
-                </li>
-              ))}
-              {committeeDeal.seats.length === 0 && (
-                <li className="state-empty">
-                  Nobody is seated. A committee with no named members is one nobody has agreed to sit on.
-                </li>
-              )}
-            </ul>
-
-            <h4>What it decided</h4>
-            <ul className="card-list small" data-testid="deal-committee-decision">
-              {committeeDeal.decision ? (
-                <li>
-                  <strong>{committeeDeal.decision.decision === "APPROVE"
-                    ? "The firm is investing."
-                    : committeeDeal.decision.decision === "REJECT"
-                      ? "The firm passed."
-                      : "Not yet — deferred."}</strong>
-                  <div className="muted">
-                    {committeeDeal.decision.rationale ?? "No reason was written down."}
-                  </div>
-                  <div className="muted">
-                    Recorded by {committeeDeal.decision.decided_by} · {day(committeeDeal.decision.created_at)}
-                  </div>
-                </li>
-              ) : (
-                <li className="state-empty">
-                  Nothing decided. The decision is made against the packet, by the partners, with an
-                  approval receipt behind it — and a pass keeps its reason for good.
-                </li>
-              )}
-            </ul>
-
-            <h4>Who disagreed</h4>
-            <ul className="card-list small" data-testid="deal-committee-dissent">
-              {committeeDeal.dissents.map((ds) => (
-                <li key={ds.id} data-testid={`deal-committee-dissent-${ds.id}`}>
-                  <strong>{ds.dissenter} disagreed — {ds.decision.toLowerCase()}</strong>
-                  {/* Printed in their own words, never condensed. A committee that records "we
-                      agreed" over somebody who did not is wrong about the one thing worth going
-                      back for. */}
-                  <div className="closeout-quote">{ds.dissent_text}</div>
-                  <div className="muted">{day(ds.created_at)}</div>
-                </li>
-              ))}
-              {committeeDeal.dissents.length === 0 && (
-                <li className="state-empty">
-                  {committeeDeal.decision
-                    ? "Nobody recorded a disagreement with this decision. That is not the same as everybody agreeing — it is the same as nobody having written one down, and it can still be added against the decision from Meetings."
-                    : "There is no decision to disagree with yet."}
-                </li>
-              )}
-            </ul>
-
-            <button
-              type="button"
-              className="link-button"
-              data-testid="deal-committee-open-meetings"
-              onClick={() => onNavigate("meetings")}
-            >
-              Answer a question, put the packet forward, or record what was decided in Meetings
-            </button>
-          </>
-        )}
-      </section>
-
-      {/* ── 6 · ITS HISTORY ────────────────────────────────────────────────────────────────── */}
-      <h3>Its history</h3>
-      <section className="card" data-testid="deal-history">
-        <p className="muted small record-lede">
-          Every change to {companyName} and to its deals, most recent first, with whoever made it.
-        </p>
-        <ul className="card-list small">
-          {entries.map((e) => (
-            <li key={e.id} data-testid={`deal-history-${e.id}`}>
-              <strong>{eventSentence(e.what)}</strong>{" "}
-              <span className="muted">
-                · {e.by} · {day(e.at)}
-              </span>
-              {e.said && <div className="muted">{e.said}</div>}
-            </li>
-          ))}
-          {entries.length === 0 && (
-            <li className="state-empty">
-              {history.loading
-                ? "Reading the trail…"
-                : `Nothing has been done to ${companyName} since it was added. Every edit, every move along the pipeline and every document filed against it will appear here with a name and a date.`}
-            </li>
-          )}
-        </ul>
-      </section>
-
-      {/* ── 7 · A SECOND DEAL ──────────────────────────────────────────────────────────────── */}
-      {/*
-        THE ONE THING ON THIS RECORD THAT NESTS, and it nests because the operator said it could:
-        "yes and the add a second deal to this company part can be neested i guess." A company with
-        a follow-on beside a secondary is real and rare; the ordinary case is one deal, and a form
-        for the rare case sitting open above the work is what made this page feel like a form rather
-        than a record.
-      */}
-      <h3>Add a second deal to this company</h3>
-      <details className="card deal-record-new" data-testid="deal-second-details">
-        <summary>Another deal for {companyName} — a follow-on, or a secondary</summary>
-        <p className="muted small">
-          Only for a second deal in a company already on the board. A company new to the firm goes in
-          through “Add a company” at the top of this page.
-        </p>
-        <form className="form-row" data-testid="deal-second-form" onSubmit={addSecondDeal}>
-          <label>
-            What kind{" "}
-            <select data-testid="deal-second-kind" value={second.kind} onChange={(e) => setSecond((f) => ({ ...f, kind: e.target.value }))}>
-              {SECOND_DEAL_KINDS.map((k) => (
-                <option key={k.key} value={k.key}>
-                  {k.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            What to call it{" "}
-            <input
-              data-testid="deal-second-title"
-              value={second.title}
-              onChange={(e) => setSecond((f) => ({ ...f, title: e.target.value }))}
-              placeholder="Series A follow-on"
-            />
-          </label>
-          <label>
-            How we met them{" "}
-            <select data-testid="deal-second-origin" value={second.origin} onChange={(e) => setSecond((f) => ({ ...f, origin: e.target.value }))}>
-              {ORIGIN_KEYS.map((o) => (
-                <option key={o} value={o}>
-                  {originLabel(o)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Known since{" "}
-            <input
-              type="date"
-              data-testid="deal-second-known-since"
-              value={second.knownSince}
-              onChange={(e) => setSecond((f) => ({ ...f, knownSince: e.target.value }))}
-            />
-          </label>
-          <button type="submit" className="btn-strong" disabled={busy} data-testid="deal-second-submit">
-            Add it
-          </button>
-        </form>
-      </details>
+            ))}
+            {entries.length === 0 && (
+              <li className="state-empty">
+                {history.loading
+                  ? "Reading the trail…"
+                  : `Nothing has been done to ${companyName} since it was added. Every edit, every move along the pipeline and every document filed against it will appear here with a name and a date.`}
+              </li>
+            )}
+          </ul>
+        </section>
+      </FacePanel>
 
       {message && (
         <p className="notice" data-testid="deal-record-message" role="status">
@@ -1950,9 +2537,90 @@ function CompanyDealRecord({
   );
 }
 
+/** A proposal card on the Waiting-on-you band: one click to move the deal, a reason to leave it. */
+function ProposalCard({ p, onDone, onOpen }: {
+  p: Proposal;
+  onDone: () => void;
+  onOpen: (companyId: string, name: string) => void;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [declining, setDeclining] = useState(false);
+  const from = stage(p.from_status)?.label ?? p.from_status.toLowerCase();
+  const to = stage(p.to_status)?.label ?? p.to_status.toLowerCase();
+
+  async function decide(decision: "ACCEPT" | "DECLINE", note?: string) {
+    setBusy(true);
+    setError(null);
+    const res = await api<{ error?: string; detail?: string }>(`/api/meeting-stage-proposals/${p.id}/decide`, {
+      method: "POST",
+      body: note === undefined ? { decision } : { decision, note },
+    });
+    setBusy(false);
+    if (res.status !== 200) {
+      // The server's own sentence where it wrote one ("no longer in Screening"), the status otherwise.
+      setError(res.data?.detail ?? res.data?.error ?? `Could not do that (HTTP ${res.status}).`);
+      return;
+    }
+    onDone();
+  }
+
+  return (
+    <div className="card watch-banner" data-testid={`proposal-${p.id}`} data-state={error ? "error" : undefined}>
+      <div className="row between">
+        <div className="grow">
+          <p className="eyebrow">
+            From the room · {p.meeting_title} · {whenInWords(p.meeting_at ?? p.created_at)}
+          </p>
+          <p>
+            <strong>
+              Move {p.company_name} from {from} to {to}
+            </strong>{" "}
+            — {p.rationale} <span className="muted">{p.proposed_by} proposed it; the meeting's After face holds the reasoning.</span>
+          </p>
+        </div>
+        <div className="deal-actions">
+          <button type="button" className="btn-primary" disabled={busy} aria-busy={busy || undefined} data-testid={`proposal-accept-${p.id}`} onClick={() => void decide("ACCEPT")}>
+            {busy && !declining ? "Moving…" : "Move it"}
+          </button>
+          <button type="button" disabled={busy} aria-expanded={declining} data-testid={`proposal-decline-${p.id}`} onClick={() => setDeclining((v) => !v)}>
+            Leave it where it is
+          </button>
+          <button type="button" className="link-button" onClick={() => onOpen(p.company_id, p.company_name)}>
+            Open the deal
+          </button>
+        </div>
+      </div>
+      {declining && (
+        <ReasonField
+          id={`proposal-decline-reason-${p.id}`}
+          label="Why is it staying where it is?"
+          help="A few words, so the next reader knows this was considered rather than missed."
+          minLength={3}
+          tooShort="Say why in a few words, so the next reader knows this was considered."
+          confirmLabel="Leave it"
+          confirmClass="btn-strong"
+          busy={busy}
+          onConfirm={(note) => void decide("DECLINE", note)}
+          onCancel={() => setDeclining(false)}
+          testId={`proposal-decline-reason-${p.id}`}
+        />
+      )}
+      {error && (
+        <p className="notice small" role="alert" data-testid={`proposal-error-${p.id}`}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }) {
   const board = useApi<Board>("/api/dealflow/board");
   const companies = useApi<{ companies: Array<{ id: string; canonical_name: string }> }>("/api/companies");
+  // The committee band's read — every deal at or past the committee. One query, the record's face
+  // reads the same one for one deal.
+  const committee = useApi<CommitteeSurface>("/api/ic/deals");
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState("");
@@ -1967,14 +2635,12 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   /** Optional. A deal is a record; a deck is an attachment, and one must not block the other. */
   const [deck, setDeck] = useState<File | null>(null);
   /**
-   * WHICH COMPANY'S RECORD IS OPEN. The whole of the second half of this page is this one value.
-   *
-   * Operator: "you need to fix it once we pick a company and all the stuff comes out." Picking a
-   * company used to mean picking it TWICE — once on the pipeline, which navigated away to the
-   * register, and again from a dropdown further down, which was the only thing that opened a
-   * record. One value, set from either door, and the record is what comes out.
+   * WHICH COMPANY'S RECORD IS OPEN, and on which face. The whole of the second half of this page
+   * is this one value. Operator: "you need to fix it once we pick a company and all the stuff
+   * comes out." One value, set from any door — a row, a proposal, the committee band — and the
+   * record is what comes out.
    */
-  const [openCompany, setOpenCompany] = useState<{ id: string; name: string } | null>(null);
+  const [openCompany, setOpenCompany] = useState<{ id: string; name: string; face: RecordFace; dealId: string | null } | null>(null);
   /*
    * The sector list, derived from the fund's written mandate on the server and fetched whole.
    * Amending the thesis changes what a company can be filed under, so the two cannot drift — and
@@ -1986,16 +2652,16 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const sectors = sectorList.data?.options ?? [];
   const [sleeve, setSleeve] = useState("EARLY_STAGE_PRIMARY");
   /**
-   * WHERE A DEAL STANDS, as a filter.
-   *
-   * "Is there a way to filter for passed companies or invested or screening" — no, there was not.
-   * The list was everything, always, sorted by urgency, which works at three deals and stops
-   * working somewhere around fifteen. Passed deals are the ones most worth being able to isolate:
-   * they are the firm's own record of what it declined and why.
+   * WHERE A DEAL STANDS, as a filter. The chips are the five questions somebody arrives with; a
+   * rail node narrows to one stage (`stage:KEY`). "Live" is the working default.
    */
   const [filter, setFilter] = useState<string>("LIVE");
 
   const deals = board.data?.deals ?? [];
+  const proposals = board.data?.proposals ?? [];
+  const counts = board.data?.counts ?? {};
+  const committeeDeals = committee.data?.deals ?? [];
+  const facilitator = committee.data?.facilitator ?? null;
 
   // Sorted by what needs attention soonest: stalled first, then longest waiting, exits last.
   const sorted = useMemo(() => {
@@ -2010,14 +2676,8 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
     });
   }, [deals]);
 
-  /**
-   * The filters, and why these five.
-   *
-   * "Live" is the working default — what is still moving. The rest exist because each answers a
-   * question somebody actually arrives with: what needs me, what did we back, what did we pass on,
-   * and everything.
-   */
   const matchesFilter = (dd: Deal, key: string): boolean => {
+    if (key.startsWith("stage:")) return dd.status === key.slice("stage:".length);
     const f = DEAL_FILTERS.find((x) => x.key === key);
     if (!f) return true;
     // "Needs you" adds the only condition the stage registry cannot express: how long it has sat.
@@ -2027,6 +2687,69 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
 
   const countFor = (key: string) => deals.filter((dd) => matchesFilter(dd, key)).length;
   const shown = sorted.filter((dd) => matchesFilter(dd, filter));
+  const filterLabel = filter.startsWith("stage:")
+    ? `at ${(stage(filter.slice("stage:".length))?.label ?? "that stage").toLowerCase()}`
+    : (DEAL_FILTERS.find((f) => f.key === filter)?.label ?? "shown").toLowerCase();
+
+  /* ── What is waiting on a person, in the order it should be dealt with ─────────────────── */
+  const unreviewed = deals.filter((dd) => dd.unreviewed);
+  const inFront = committeeDeals.filter((c) => c.packet_id && c.approval_card && !c.decision);
+  const waiting = proposals.length + inFront.length + unreviewed.length;
+  /**
+   * THE ONE ORANGE NODE. The stage where the first thing waiting on a person sits: a proposal's
+   * current stage, else the committee, else New for an emailed arrival nobody has looked at. No
+   * act waiting means no orange on the rail — orange is never a status.
+   */
+  const actStage: string | null = proposals[0]
+    ? proposals[0].from_status
+    : inFront.length > 0
+      ? "IC_READY"
+      : unreviewed.length > 0
+        ? "NEW"
+        : null;
+
+  const live = deals.filter((dd) => !stage(dd.status)?.isExit && dd.status !== "CLOSED").length;
+  const invested = counts.CLOSED ?? 0;
+  const passed = (counts.PASS ?? 0) + (counts.WITHDRAWN ?? 0);
+
+  /* The masthead: the answer, then the detail that explains it, derived from the counts loaded. */
+  const answer = board.loading && !board.data
+    ? "Reading the pipeline…"
+    : deals.length === 0 && waiting === 0
+      ? "Nothing is in the pipeline yet."
+      : waiting === 0
+        ? "Nothing is waiting on you."
+        : waiting === 1
+          ? "One decision is waiting on you."
+          : `${waiting} decisions are waiting on you.`;
+  const detail = (() => {
+    const parts: string[] = [];
+    const p0 = proposals[0];
+    if (p0) {
+      parts.push(
+        proposals.length === 1
+          ? `${p0.meeting_title} proposed moving ${p0.company_name} to ${(stage(p0.to_status)?.label ?? p0.to_status).toLowerCase()}.`
+          : `${proposals.length} meetings proposed stage moves, the first for ${p0.company_name}.`,
+      );
+    }
+    if (inFront.length > 0) {
+      parts.push(inFront.length === 1 ? `${inFront[0]!.company_name ?? inFront[0]!.title} is in front of the partners.` : `${inFront.length} deals are in front of the partners.`);
+    }
+    if (unreviewed.length > 0) {
+      parts.push(
+        unreviewed.length === 1
+          ? `${unreviewed[0]!.company_name} arrived by email and nobody has looked at it yet.`
+          : `${unreviewed.length} companies arrived by email and nobody has looked at them yet.`,
+      );
+    }
+    if (parts.length === 0) {
+      const stalledCount = deals.filter((dd) => stallRead(dd.status, dd.in_stage_since)?.stalled).length;
+      if (deals.length === 0) parts.push("Add a company below, or capture one as you meet them — every company the firm records enters at New.");
+      else if (stalledCount > 0) parts.push(`${stalledCount} deal${stalledCount === 1 ? " has" : "s have"} sat past the stage's clock — the rows say which.`);
+      else parts.push("Every live deal is inside its stage's clock.");
+    }
+    return parts.join(" ");
+  })();
 
   /*
    * A RECORD THAT OPENS OFF-SCREEN HAS NOT OPENED.
@@ -2042,8 +2765,13 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   }, [openCompany?.id]);
 
   /** Open the record. The scroll is an effect below, once the record actually exists in the page. */
-  function openRecord(id: string, name: string) {
-    setOpenCompany({ id, name });
+  function openRecord(id: string, name: string, face: RecordFace = "standing", dealId: string | null = null) {
+    setOpenCompany({ id, name, face, dealId });
+  }
+
+  function reloadBoard() {
+    board.reload();
+    committee.reload();
   }
 
   /**
@@ -2137,251 +2865,345 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
     setAdding(false);
     setCompanyId("");
     setDeck(null);
-    board.reload();
+    reloadBoard();
     // The record for what was just added opens straight away — that is the thing you came to fill in.
-    if (id) openRecord(id, name);
+    if (id) openRecord(id, name, "deal", created.data.id);
   }
 
   if (board.loading && !board.data) return <p data-testid="dealflow-loading">Loading the pipeline…</p>;
 
+  const today = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
   return (
     <section data-testid="dealflow-page">
-      {/*
-        THE TOP OF THE FUNNEL, and it is the only one.
+      {/* ── The masthead: the answer a partner came for, derived from the counts the page loads. ── */}
+      <header className="masthead">
+        <p className="masthead-date" data-testid="dealflow-eyebrow">
+          {today} · {live} live · {invested} invested · {passed} passed
+        </p>
+        <h2 data-testid="dealflow-answer">{answer}</h2>
+        <p className="masthead-second" data-testid="dealflow-detail">{detail}</p>
+      </header>
 
-        Every company the firm has enters here — the operator's instruction, and the reason
-        Companies stopped creating records. A door that every deal comes through should not be a
-        link-sized control tucked beside a heading, so this is the widest, heaviest thing on the
-        page: what we are looking for on one side, the way in on the other.
-      */}
-      <section className="funnel-mouth" data-testid="dealflow-mouth">
-        <div className="funnel-mouth-copy">
-          <h3>Top of the funnel</h3>
-          <p className="small">
-            Every company the firm records enters here, {me.fullName.split(" ")[0]} — primary or
-            secondary. Each one is screened against the written mandate, not against instinct,
-            which is how a pipeline fills with companies that are interesting and out of scope.
+      {/* ── The rail IS the page. ── */}
+      <StageRail counts={counts} actStage={actStage} filter={filter} onFilter={setFilter} />
+
+      {/* ── Waiting on you: the human act, above everything else, with the page's one primary. ── */}
+      <section className="band" data-testid="dealflow-waiting">
+        <div className="band-head">
+          <h3>Waiting on you</h3>
+          {waiting > 0 && <span className="count-pill" data-testid="dealflow-waiting-count">{waiting}</span>}
+          <span className="band-when">a proposal is never acted on without your click</span>
+        </div>
+        {waiting === 0 ? (
+          <p className="state-empty" data-testid="dealflow-waiting-empty">
+            Nothing is waiting on you. A stage move proposed in a meeting, a packet in front of the
+            partners, or a company that arrived by email and has not been looked at would appear here.
           </p>
+        ) : (
+          <div className="stack">
+            {proposals.map((p) => (
+              <ProposalCard key={p.id} p={p} onDone={reloadBoard} onOpen={openRecord} />
+            ))}
+            {inFront.map((c) => (
+              <div className="card" key={c.opportunity_id} data-testid={`waiting-committee-${c.opportunity_id}`}>
+                <div className="row between">
+                  <div className="grow">
+                    <p className="eyebrow">At the committee</p>
+                    <p>
+                      <strong>{c.company_name ?? c.title} is in front of the partners.</strong>{" "}
+                      <span className="muted">
+                        {c.open_question_count === 0 ? "Nothing the packet does not know is still open." : `${c.open_question_count} thing${c.open_question_count === 1 ? "" : "s"} the packet does not know ${c.open_question_count === 1 ? "is" : "are"} still open.`}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="deal-actions">
+                    <button
+                      type="button"
+                      className="btn-strong"
+                      disabled={!c.company_id}
+                      title={c.company_id ? undefined : "Its company record is off the board, so the record cannot be opened from here"}
+                      data-testid={`waiting-decide-${c.opportunity_id}`}
+                      onClick={() => c.company_id && openRecord(c.company_id, c.company_name ?? c.title, "committee", c.opportunity_id)}
+                    >
+                      Record what the committee decided
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {unreviewed.map((dd) => (
+              <div className="card" key={dd.id} data-testid={`waiting-unreviewed-${dd.id}`}>
+                <div className="row between">
+                  <div className="grow">
+                    <p className="eyebrow">Arrived by email</p>
+                    <p>
+                      <strong>{dd.company_name}</strong>{" "}
+                      <span className="muted">arrived by email and nobody has looked at it. It stays until you do.</span>
+                    </p>
+                  </div>
+                  <div className="deal-actions">
+                    <button type="button" className="btn-strong" data-testid={`waiting-look-${dd.id}`} onClick={() => openRecord(dd.company_id, dd.company_name)}>
+                      Look at it
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── The pipeline, with a way to narrow it and the one door in. ── */}
+      <section className="band" data-testid="dealflow-pipeline">
+        <div className="band-head">
+          <h3>The pipeline</h3>
+          <span className="band-when">sorted by what needs you soonest · press a company to open its record</span>
+        </div>
+        <div className="row between">
+          <div className="chips" role="group" aria-label="Show">
+            {DEAL_FILTERS.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                className="chip"
+                aria-pressed={filter === f.key}
+                data-testid={`dealflow-filter-${f.key}`}
+                onClick={() => setFilter(f.key)}
+              >
+                {f.label} · {countFor(f.key)}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="btn-strong" aria-expanded={adding} data-testid="dealflow-add-toggle" onClick={() => setAdding((a) => !a)}>
+            {adding ? "Cancel" : "Add a company"}
+          </button>
+        </div>
+        {/*
+          THE OTHER DOORS, stated once. Companies also arrive by email, from Network OS and from the
+          analyst's own scouting — and since Phase A (migration 0197) every one of them files at New
+          rather than opening a work card first. The old sentence here said the opposite.
+        */}
+        <p className="muted small" data-testid="dealflow-other-routes">
+          Companies also arrive by email to {INTAKE_MAILBOX} tagged {EMAIL_TRIGGERS.map((t) => t.tag).join(" or ")},
+          pushed across from Network OS, and from {DEAL_INTAKE_EMPLOYEE}'s own scouting. Every one enters at New,
+          however it arrived, and stays until a person has looked at it.{" "}
           <button type="button" className="link-button" data-testid="dealflow-thesis" onClick={() => onNavigate("thesis")}>
             What we are looking for →
           </button>
-        </div>
-        <div className="funnel-mouth-action">
-          <button type="button" className="btn-strong btn-lg" data-testid="dealflow-add-toggle" onClick={() => setAdding((a) => !a)}>
-            {adding ? "Cancel" : "Add a company"}
-          </button>
-          <span className="muted small">the one you drive yourself</span>
-        </div>
-        <p className="muted small" data-testid="dealflow-other-routes">
-          Companies also arrive three other ways, and all three open a work card for {DEAL_INTAKE_EMPLOYEE} rather
-          than filing themselves: an email to {INTAKE_MAILBOX} tagged {EMAIL_TRIGGERS.map((t) => t.tag).join(" or ")};
-          a company pushed across from Network OS; and {DEAL_INTAKE_EMPLOYEE}'s own scouting. Nothing enters the funnel
-          without somebody deciding it should.
         </p>
+
+        {message && <p className="notice" role="status" data-testid="dealflow-message">{message}</p>}
+
+        {adding && (
+          <form className="card form-row" data-testid="dealflow-add-form" onSubmit={create}>
+            <label>
+              Company{" "}
+              <select data-testid="dealflow-company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
+                <option value="">— a company we have not recorded yet —</option>
+                {(companies.data?.companies ?? []).map((c) => (
+                  <option key={c.id} value={c.id}>{c.canonical_name}</option>
+                ))}
+              </select>
+            </label>
+            {!companyId && (
+              <>
+                <label>
+                  Its name{" "}
+                  <input
+                    data-testid="dealflow-new-name"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Psyflo"
+                  />
+                </label>
+                {/* The list comes from the thesis, never typed. Sector was free text and had already
+                    drifted from the firm's own mandate — three spellings of one taxonomy means "how
+                    much of the pipeline is health tech" has no answer. */}
+                <label>
+                  Sector{" "}
+                  <select data-testid="dealflow-new-sector" value={newSector} onChange={(e) => setNewSector(e.target.value)}>
+                    <option value="">— not said —</option>
+                    {sectors.map((o) => (
+                      <option key={o.key} value={o.key}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            )}
+            {/* The deck, attached to the company as the deal is created — see `create`. */}
+            <label>
+              Deck{" "}
+              <input
+                type="file"
+                data-testid="dealflow-deck"
+                accept=".pdf,.ppt,.pptx,.key,image/*"
+                onChange={(e) => setDeck(e.target.files?.[0] ?? null)}
+              />
+            </label>
+
+            {/* PRIMARY OR SECONDARY. One answer, and everything downstream follows it. */}
+            <label>
+              What kind{" "}
+              <select data-testid="dealflow-sleeve" value={sleeve} onChange={(e) => setSleeve(e.target.value)}>
+                <option value="EARLY_STAGE_PRIMARY">Primary — we invest in the company</option>
+                <option value="SECONDARY_PURCHASE">Secondary — we buy someone else's shares</option>
+                <option value="SECONDARY_SALE">Secondary — we sell ours</option>
+              </select>
+            </label>
+            <label>
+              Starts at{" "}
+              <select data-testid="dealflow-stage" value={startsAt} onChange={(e) => setStartsAt(e.target.value)}>
+                {SPINE.filter((s) => s.key !== "CLOSED").map((s) => (
+                  <option key={s.key} value={s.key}>{s.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              How we met them{" "}
+              <select data-testid="dealflow-origin" value={origin} onChange={(e) => setOrigin(e.target.value)}>
+                {ORIGIN_KEYS.filter((o) => o !== "OFFICE" && o !== "COUNCIL").map((o) => (
+                  <option key={o} value={o}>{originLabel(o)}</option>
+                ))}
+              </select>
+            </label>
+            {/*
+              HOW LONG WE HAVE KNOWN THEM, asked at the moment the deal is created. `DealProvenance`
+              measures lead time from exactly this field, so every deal opened through the ordinary
+              door was contributing nothing to the band underneath it. Asked here, beside how we met
+              them, because they are one thought: who introduced us, and how long ago.
+            */}
+            <label>
+              Known since{" "}
+              <input
+                type="date"
+                data-testid="dealflow-known-since"
+                value={knownSince}
+                onChange={(e) => setKnownSince(e.target.value)}
+              />
+            </label>
+            <button type="submit" className="btn-strong" data-testid="dealflow-add-submit">Add</button>
+            <span className="muted small">
+              Start it where it already is — everything arriving at “New” makes every clock lie.
+              {sleeve !== "EARLY_STAGE_PRIMARY" && " A secondary also appears on the Secondaries page; you do not enter it twice."}
+            </span>
+          </form>
+        )}
+
+        <ul className="deal-list" data-testid="deal-list">
+          {shown.map((dd) => (
+            <DealRow
+              key={dd.id}
+              deal={dd}
+              open={openCompany?.id === dd.company_id}
+              onChanged={reloadBoard}
+              onOpen={openRecord}
+            />
+          ))}
+          {shown.length === 0 && (
+            <li className="state-empty" data-testid="dealflow-empty">
+              {deals.length === 0
+                ? "Nothing in the pipeline yet. Add a company above, or capture one as you meet them."
+                : `Nothing is ${filterLabel}. The pipeline has ${deals.length} deal${deals.length === 1 ? "" : "s"} in other states.`}
+            </li>
+          )}
+        </ul>
+        <p className="muted small" data-testid="dealflow-staleness-note">{board.data?.how_staleness_works}</p>
+
+        {openCompany && (
+          <CompanyDealRecord
+            key={openCompany.id}
+            companyId={openCompany.id}
+            companyName={openCompany.name}
+            boardDeals={deals.filter((dd) => dd.company_id === openCompany.id)}
+            initialFace={openCompany.face}
+            initialDealId={openCompany.dealId}
+            me={me}
+            onChanged={reloadBoard}
+            onClose={() => setOpenCompany(null)}
+            onNavigate={onNavigate}
+          />
+        )}
       </section>
 
-      {/* THE PIPELINE ITSELF, under the door it comes through. The spine IS the funnel: it belongs
-          directly under the mouth, open, and the counts it carries make a row of stat cards
-          redundant rather than complementary. */}
-      <Spine counts={board.data?.counts ?? {}} onShowExit={() => setFilter("PASSED")} />
-
-      <p className="muted small" data-testid="dealflow-staleness-note">
-        {board.data?.how_staleness_works}
-      </p>
-
-      {/* THE PIPELINE, with a way to narrow it. Three companies fit on a screen; thirty do not,
-          and "show me what we passed on" is a question this page could not answer at all. */}
-      <div className="home-section-head">
-        <h3>The pipeline</h3>
-        <span className="muted small">sorted by what needs you soonest · press a company to open its record</span>
-        <span className="deal-filters" role="group" aria-label="Filter deals by where they stand">
-          {DEAL_FILTERS.map((f) => (
-            <button
-              key={f.key}
-              type="button"
-              className={filter === f.key ? "chip chip-on" : "chip"}
-              aria-pressed={filter === f.key}
-              data-testid={`dealflow-filter-${f.key}`}
-              onClick={() => setFilter(f.key)}
-            >
-              {f.label} <span className="muted">{countFor(f.key)}</span>
-            </button>
-          ))}
-        </span>
-      </div>
-
-      {message && <p className="notice" data-testid="dealflow-message">{message}</p>}
-
-      {adding && (
-        <form className="card form-row" data-testid="dealflow-add-form" onSubmit={create}>
-          <label>
-            Company{" "}
-            <select data-testid="dealflow-company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
-              <option value="">— a company we have not recorded yet —</option>
-              {(companies.data?.companies ?? []).map((c) => (
-                <option key={c.id} value={c.id}>{c.canonical_name}</option>
-              ))}
-            </select>
-          </label>
-          {!companyId && (
-            <>
-              <label>
-                Its name{" "}
-                <input
-                  data-testid="dealflow-new-name"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Psyflo"
-                />
-              </label>
-              {/* The list comes from the thesis, never typed. Sector was free text and had already
-                  drifted from the firm's own mandate — three spellings of one taxonomy means "how
-                  much of the pipeline is health tech" has no answer. */}
-              <label>
-                Sector{" "}
-                <select data-testid="dealflow-new-sector" value={newSector} onChange={(e) => setNewSector(e.target.value)}>
-                  <option value="">— not said —</option>
-                  {sectors.map((o) => (
-                    <option key={o.key} value={o.key}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </>
-          )}
-          {/* The deck, attached to the company as the deal is created — see `create`. */}
-          <label>
-            Deck{" "}
-            <input
-              type="file"
-              data-testid="dealflow-deck"
-              accept=".pdf,.ppt,.pptx,.key,image/*"
-              onChange={(e) => setDeck(e.target.files?.[0] ?? null)}
-            />
-          </label>
-
-          {/* PRIMARY OR SECONDARY. One answer, and everything downstream follows it. */}
-          <label>
-            What kind{" "}
-            <select data-testid="dealflow-sleeve" value={sleeve} onChange={(e) => setSleeve(e.target.value)}>
-              <option value="EARLY_STAGE_PRIMARY">Primary — we invest in the company</option>
-              <option value="SECONDARY_PURCHASE">Secondary — we buy someone else's shares</option>
-              <option value="SECONDARY_SALE">Secondary — we sell ours</option>
-            </select>
-          </label>
-          <label>
-            Starts at{" "}
-            <select data-testid="dealflow-stage" value={startsAt} onChange={(e) => setStartsAt(e.target.value)}>
-              {SPINE.filter((s) => s.key !== "CLOSED").map((s) => (
-                <option key={s.key} value={s.key}>{s.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            How we met them{" "}
-            <select data-testid="dealflow-origin" value={origin} onChange={(e) => setOrigin(e.target.value)}>
-              {ORIGIN_KEYS.filter((o) => o !== "OFFICE" && o !== "COUNCIL").map((o) => (
-                <option key={o} value={o}>{originLabel(o)}</option>
-              ))}
-            </select>
-          </label>
-          {/*
-            HOW LONG WE HAVE KNOWN THEM, asked at the moment the deal is created.
-            
-            It was dropped in the rebuild and survived only on the deal's terms or on adding a SECOND
-            deal — which turned it into the separate errand this form exists to prevent.
-            `DealProvenance` measures lead time from exactly this field, so every deal opened through
-            the ordinary door was contributing nothing to the panel sitting underneath it. Asked here,
-            beside how we met them, because they are one thought: who introduced us, and how long ago.
-          */}
-          <label>
-            Known since{" "}
-            <input
-              type="date"
-              data-testid="dealflow-known-since"
-              value={knownSince}
-              onChange={(e) => setKnownSince(e.target.value)}
-            />
-          </label>
-          <button type="submit" className="btn-strong" data-testid="dealflow-add-submit">Add</button>
-          <span className="muted small">
-            Start it where it already is — everything arriving at “New” makes every clock lie.
-            {sleeve !== "EARLY_STAGE_PRIMARY" && " A secondary also appears on the Secondaries page; you do not enter it twice."}
-          </span>
-        </form>
-      )}
-
-      <ul className="deal-list" data-testid="deal-list">
-        {shown.map((dd) => (
-          <DealRow
-            key={dd.id}
-            deal={dd}
-            open={openCompany?.id === dd.company_id}
-            onChanged={board.reload}
-            onOpen={openRecord}
-          />
-        ))}
-        {shown.length === 0 && (
-          <li className="state-empty" data-testid="dealflow-empty">
-            {deals.length === 0
-              ? "Nothing in the pipeline yet. Add a company above, or capture one as you meet them."
-              : `Nothing is ${DEAL_FILTERS.find((f) => f.key === filter)?.label.toLowerCase()}. The pipeline has ${deals.length} deal${deals.length === 1 ? "" : "s"} in other states.`}
-          </li>
-        )}
-      </ul>
-
-      {/* THE OTHER DOOR INTO THE RECORD. A company the filter is hiding, or one whose deal was
-          archived, still has a record — and a page where the only way in is a row you can see is a
-          page that loses companies the moment the list is narrowed. */}
-      <div className="deal-record-step" data-testid="deal-record-pick">
-        <label>
-          <strong>Open a company's deal record</strong>{" "}
-          <select
-            data-testid="deal-record-company"
-            value={openCompany?.id ?? ""}
-            onChange={(e) => {
-              const picked = (companies.data?.companies ?? []).find((c) => c.id === e.target.value);
-              if (picked) openRecord(picked.id, picked.canonical_name);
-              else setOpenCompany(null);
-            }}
-          >
-            <option value="">— none open —</option>
-            {(companies.data?.companies ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.canonical_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="muted small">
-          Its terms, what we know, what is still open and everything done to it — all of it, in one
-          record, below.
-        </span>
-      </div>
-
-      {openCompany ? (
-        <CompanyDealRecord
-          key={openCompany.id}
-          companyId={openCompany.id}
-          companyName={openCompany.name}
-          boardDeals={deals.filter((dd) => dd.company_id === openCompany.id)}
-          me={me}
-          onChanged={board.reload}
-          onClose={() => setOpenCompany(null)}
-          onNavigate={onNavigate}
-        />
-      ) : (
-        <p className="state-empty" data-testid="deal-record-closed">
-          No company is open. Press a company above, or pick one here, and its whole deal record —
-          the terms, the price per share, the shares, what we know and what is still unanswered —
-          opens underneath.
+      {/* ── The committee: moved here from Meetings (design §1.1 #1), where the stage lives. ── */}
+      <section className="band" data-testid="dealflow-committee">
+        <div className="band-head">
+          <h3>The committee</h3>
+          <span className="band-when">the packet, what it does not know, and who owes each answer</span>
+        </div>
+        {/*
+          THE FOUR QUESTIONS, ANSWERED WHERE THEY ARE ASKED. Operator, 22 Aug 2026: "the IC flow ----
+          who makes the packet how does that get done? how do we get thru the pipeline and what
+          happens to the page once a deal is at the IC stage?" It renders whether or not any deal has
+          got here — because the commonest moment somebody needs the answer is when the list below is
+          empty and they cannot tell why.
+        */}
+        <p className="muted small" data-testid="ic-how-it-works">
+          <strong>{facilitator?.name ?? "The committee's facilitator"} assembles the packet and never decides anything.</strong>{" "}
+          A deal gets here by one move, made by a person, on the rail above — moving it to Ready to
+          decide opens the packet and hands the facilitator a card to assemble it. Every gap becomes a
+          question with a name on it; nothing is written to fill a hole. The partners decide, on the
+          record's committee face, and the decision goes back to the pipeline: investing marks the
+          deal decided, passing sends it to the pass pile with the reason, not yet leaves it where it is.
         </p>
-      )}
+        {facilitator && facilitator.status !== "ACTIVE" && (
+          <p className="notice notice-gate small" data-testid="ic-facilitator-off">
+            {facilitator.name} facilitates the committee — assembling the packet and recording the
+            dissent — and is currently {facilitator.status.toLowerCase()}. The committee can still
+            meet; nobody will prepare it or write it down.{" "}
+            <button type="button" className="link-button" onClick={() => onNavigate("employees")}>
+              Switch her on
+            </button>
+          </p>
+        )}
+        <ul className="deal-list" data-testid="ic-deals">
+          {committeeDeals.map((c) => {
+            const open = openCompany?.id === c.company_id && openCompany?.face === "committee";
+            return (
+              <li key={c.opportunity_id} className={open ? "deal-row deal-row-2 deal-row-selected" : "deal-row deal-row-2"} data-testid={`ic-row-${c.opportunity_id}`}>
+                <div className="deal-company">
+                  <div className="deal-name">{c.company_name ?? c.title}</div>
+                  <div className="deal-sub">
+                    {c.stage} · {c.packet_state}
+                    {c.decision
+                      ? ` · ${c.decision.decision === "APPROVE" ? "investing" : c.decision.decision === "REJECT" ? "passed" : "not yet"}`
+                      : c.approval_card
+                        ? " · in front of the partners"
+                        : c.open_question_count > 0
+                          ? ` · ${c.open_question_count} open`
+                          : ""}
+                  </div>
+                </div>
+                <div className="deal-actions">
+                  <button
+                    type="button"
+                    className={c.approval_card && !c.decision ? "btn-strong" : "link-button"}
+                    disabled={!c.company_id}
+                    aria-expanded={open}
+                    title={c.company_id ? undefined : "Its company record is off the board, so the record cannot be opened from here"}
+                    data-testid={`ic-open-${c.opportunity_id}`}
+                    onClick={() => c.company_id && openRecord(c.company_id, c.company_name ?? c.title, "committee", c.opportunity_id)}
+                  >
+                    {c.decision ? "Read what was decided" : c.approval_card ? "Record what the committee decided" : "Open the committee face"}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+          {committeeDeals.length === 0 && (
+            <li className="state-empty" data-testid="no-ic-deals">
+              {committee.loading && !committee.data
+                ? "Reading the committee's file…"
+                : "No deal is in front of the partners. A packet opens by itself when a deal reaches Ready to decide; the facilitator assembles it and never decides anything."}
+            </li>
+          )}
+        </ul>
+      </section>
 
-      {/* WHERE DEALS COME FROM, kept on the page it is about and given the same section shape as
-          everything else. It used to end mid-air with no line saying the queue was empty, which is
-          the "last section is incomplete" the operator caught. */}
+      {/* WHERE DEALS COME FROM, the last band. */}
       <DealProvenance />
     </section>
   );

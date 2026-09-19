@@ -2408,9 +2408,53 @@ export async function handleDealflowBoard(ctx: RouteContext): Promise<Response> 
   const counts: Record<string, number> = {};
   for (const d of deals) counts[String(d.status)] = (counts[String(d.status)] ?? 0) + 1;
 
+  /*
+   * WHAT IS WAITING ON A PERSON, on the board itself (design/DEALS_SECTION_DESIGN.md §4).
+   *
+   * A meeting can PROPOSE a stage move (Phase B, `meeting_stage_proposal`), and until 18 Sep 2026
+   * that proposal surfaced only on the meeting's own After face — so the one page built around
+   * "where every company stands" never said that a move was waiting for a click. Folded into this
+   * response rather than given a route of its own: the rows and the proposals are read under the
+   * same visibility clause, so a proposal can never be shown for a deal the reader may not see.
+   * Accepting one is the existing `POST /api/meeting-stage-proposals/:id/decide`; nothing here
+   * writes.
+   */
+  const proposalRows = await ctx.env.WP_OS_DB.prepare(
+    `SELECT p.id, p.meeting_id, m.title AS meeting_title, m.occurred_at, m.scheduled_at,
+            p.opportunity_id, p.from_status, p.to_status, p.rationale, p.created_at,
+            p.proposed_by_type, p.proposed_by_id,
+            c.canonical_name AS company_name, c.id AS company_id
+       FROM meeting_stage_proposal p
+       JOIN investment_opportunity o ON o.id = p.opportunity_id
+       JOIN canonical_company c ON c.id = o.company_id
+       JOIN meeting m ON m.id = p.meeting_id
+      WHERE p.state = 'PROPOSED' AND ${visibility} AND o.archived_at IS NULL
+      ORDER BY p.created_at DESC
+      LIMIT 50`,
+  ).all<Record<string, unknown>>();
+  const proposals: Array<Record<string, unknown>> = [];
+  for (const r of proposalRows.results ?? []) {
+    // A name, never an id: the proposer is on one of two rosters and the row says which.
+    const kind = String(r.proposed_by_type ?? "");
+    const id = String(r.proposed_by_id ?? "");
+    let proposed_by = "Somebody";
+    if (kind === "AI") {
+      const row = await ctx.env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1 OR name = ?1").bind(id).first<{ name: string }>();
+      proposed_by = row?.name ?? "An employee whose seat has since been removed";
+    } else if (kind === "HUMAN") {
+      const row = await ctx.env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1").bind(id).first<{ full_name: string }>();
+      proposed_by = row?.full_name ?? "Somebody who has since left the firm";
+    } else {
+      proposed_by = "The system";
+    }
+    const { proposed_by_type: _t, proposed_by_id: _i, ...rest } = r;
+    proposals.push({ ...rest, proposed_by, meeting_at: (r.occurred_at as string | null) ?? (r.scheduled_at as string | null) });
+  }
+
   return json({
     deals,
     counts,
+    proposals,
     /** Stated so the board never has to explain its own colour in prose. */
     how_staleness_works:
       "A deal is stalled when it has sat in one stage longer than that stage allows. Each stage has " +

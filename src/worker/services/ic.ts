@@ -921,6 +921,8 @@ export interface IcDealView {
   opportunity_id: string;
   title: string;
   company_name: string | null;
+  /** The record on Dealflow opens by company, so the committee band needs the id to open it. */
+  company_id: string | null;
   /** Plain English, never the stored value. */
   stage: string;
   packet_id: string | null;
@@ -1036,22 +1038,22 @@ export async function icDealSurface(env: Env, opportunityId?: string): Promise<I
    */
   const deals = opportunityId
     ? await env.WP_OS_DB.prepare(
-        `SELECT o.id, o.title, o.status, c.canonical_name
+        `SELECT o.id, o.title, o.status, o.company_id, c.canonical_name
            FROM investment_opportunity o
            LEFT JOIN canonical_company c ON c.id = o.company_id
           WHERE o.id = ?1`,
       )
         .bind(opportunityId)
-        .all<{ id: string; title: string; status: string; canonical_name: string | null }>()
+        .all<{ id: string; title: string; status: string; company_id: string | null; canonical_name: string | null }>()
     : await env.WP_OS_DB.prepare(
-        `SELECT o.id, o.title, o.status, c.canonical_name
+        `SELECT o.id, o.title, o.status, o.company_id, c.canonical_name
            FROM investment_opportunity o
            LEFT JOIN canonical_company c ON c.id = o.company_id
           WHERE o.status IN ('IC_READY','IC_DECIDED')
              OR EXISTS (SELECT 1 FROM ic_packet p WHERE p.opportunity_id = o.id)
           ORDER BY o.created_at DESC, o.id
           LIMIT 50`,
-      ).all<{ id: string; title: string; status: string; canonical_name: string | null }>();
+      ).all<{ id: string; title: string; status: string; company_id: string | null; canonical_name: string | null }>();
 
   const out: IcDealView[] = [];
   for (const deal of deals.results ?? []) {
@@ -1195,6 +1197,7 @@ export async function icDealSurface(env: Env, opportunityId?: string): Promise<I
       opportunity_id: deal.id,
       title: deal.title,
       company_name: deal.canonical_name,
+      company_id: deal.company_id,
       stage: stageInWords(deal.status),
       packet_id: packet?.id ?? null,
       packet_state: packetStateInWords(packet?.status ?? null),
@@ -1288,7 +1291,14 @@ export async function handleResolveIcQuestion(ctx: RouteContext): Promise<Respon
 
 /** GET /api/ic/deals — every deal at or past the committee, and what each is waiting on. */
 export async function handleIcDealSurface(ctx: RouteContext): Promise<Response> {
-  return json({ deals: await icDealSurface(ctx.env) });
+  // Poppy runs this. If she is switched off, the packet does not get assembled and nobody records
+  // the dissent — a fact the committee band states rather than discovers mid-meeting. Read here
+  // (as `/api/meetings` also does) so the band that moved to Dealflow does not have to fetch the
+  // whole meetings list to learn one employee's status.
+  const facilitator = await ctx.env.WP_OS_DB.prepare("SELECT name, status FROM ai_employee WHERE name = ?1")
+    .bind(IC_FACILITATOR)
+    .first<{ name: string; status: string }>();
+  return json({ deals: await icDealSurface(ctx.env), facilitator: facilitator ?? null });
 }
 
 /**

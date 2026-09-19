@@ -98,8 +98,14 @@ export function DealProvenance(): JSX.Element {
   );
 
   return (
-    <>
-      <h3>Where deals come from</h3>
+    /* The last band on Dealflow (design/DEALS_SECTION_DESIGN.md §4): the same `.band` shape as the
+       bands above it, so the page ends on a section that looks like the others rather than on a
+       heading of a different rank. */
+    <section className="band">
+      <div className="band-head">
+        <h3>Where deals come from</h3>
+        <span className="band-when">the community is the thesis; this is the proof</span>
+      </div>
       <section className="card" data-testid="deal-provenance">
         <p className="muted small">
           Not how busy the community is — how early it puts us in the room. The number that matters
@@ -188,7 +194,7 @@ export function DealProvenance(): JSX.Element {
           </>
         )}
       </section>
-    </>
+    </section>
   );
 }
 
