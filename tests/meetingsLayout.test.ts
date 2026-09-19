@@ -102,8 +102,9 @@ describe("Meetings reads the order a partner asks in", () => {
     expect(shared).toMatch(/!isUpcoming\(m, now\)\)[\s\S]{0,40}\.sort\(\(a, b\) => timeOf\(b\.occurred_at \?\? b\.scheduled_at, -Infinity\) - timeOf\(a\.occurred_at \?\? a\.scheduled_at, -Infinity\)\)/);
     // A row with no time goes LAST in both bands — the fallbacks are the ends of the number line.
     expect(shared).toContain("function timeOf(value: string | null, fallback: number): number");
-    // And "upcoming" is SCHEDULED *and not past*, never SCHEDULED alone.
-    expect(shared).toMatch(/return m\.status === "SCHEDULED" && !isPastMeeting\(m, now\);/);
+    // And "upcoming" is SCHEDULED, *not past* and *not started* — never SCHEDULED alone (0214:
+    // a meeting something started is happening now, off Coming up).
+    expect(shared).toMatch(/return m\.status === "SCHEDULED" && !isPastMeeting\(m, now\) && !isInProgress\(m\);/);
   });
 
   it("sends the reader to Dealflow for the committee, and carries none of it here", () => {
@@ -314,12 +315,26 @@ describe("the room hears only while the button is held, and nothing here writes 
   it("renders standalone behind the same gate, for a Meet Add-on side panel later", () => {
     expect(APP).toContain("export function RoomStandalone");
     expect(APP).toMatch(/#\\\/room\\\//);
-    expect(APP).toContain("<RoomPanel meetingId={meetingId} standalone />");
+    expect(APP).toContain("<RoomPanel meetingId={meetingId} standalone armLaptopMic={armed} />");
     expect(APP).toContain('useApi<MeResponse>("/api/me")');
-    // Standalone is one column with the seats as chips (artboard D); in the app the aside is the page's.
-    expect(ROOM).toContain("standalone || !aside ? (");
+    // `#/room/<id>?mic=1` arrives armed: the laptop-mic path opens the consent prompt on arrival.
+    expect(APP).toContain("function roomArrivedArmed()");
+    // THE NARROW ROOM (19 Sep 2026): standalone is its own one-column layout — the hearing chip at
+    // the top, the head with the call's doors and the way back, the draft first, the stream, the
+    // seats as avatars with a count, the ask box docked at the bottom. In the app the aside is the page's.
+    const standalone = ROOM.slice(ROOM.indexOf("if (standalone) {"), ROOM.indexOf("const left = ("));
+    expect(standalone).toContain('className="room room-standalone"');
+    expect(standalone).toMatch(/<HearingLine[^>]*chip \/>/);
+    expect(standalone).toContain("<CallDoors");
+    expect(standalone).toContain("room-return-${meetingId}");
+    expect(standalone).toContain('className="room-dock"');
+    expect(standalone).toContain("<SeatedRow seated={state?.seated ?? []} tasks={state?.tasks ?? []} compact />");
+    expect(standalone.indexOf("{summary}")).toBeLessThan(standalone.indexOf("{stream}"));
+    expect(standalone.indexOf("{stream}")).toBeLessThan(standalone.indexOf("<SeatedRow"));
+    expect(standalone.indexOf("<SeatedRow")).toBeLessThan(standalone.indexOf("{ask}"));
     expect(ROOM).toContain("<SeatedRow");
     expect(ROOM).toContain('className="chips"');
+    expect(ROOM).toContain('className="seats-collapsed"');
   });
 });
 
@@ -451,16 +466,28 @@ describe("the firm default has a door on the page, and the reserved act stays th
 });
 
 describe("joining a Meet call is one press that says where it goes", () => {
-  it("names Meet in the accessible name, says nothing joins for you, and opens with no opener", () => {
+  it("names Meet in the accessible name, says nothing joins for you, offers the two ways remembered, the laptop mic, and opens with no opener", () => {
     // 19 Sep 2026: "If I push Join on Meet what happens?" The name says it opens a tab and that
     // nothing joins; the tooltip and the line under it are the one sentence from howTheRoomHears.
-    expect(MEETINGS).toContain('aria-label="Join on Meet — opens Google Meet in a new tab; nothing joins for you"');
-    expect(MEETINGS).toContain("title={JOIN_ON_MEET_LINE}");
-    expect(MEETINGS).toContain("data-testid={`join-line-${meeting.id}`}");
-    expect(MEETINGS).toContain('"_blank", "noopener,noreferrer"');
-    expect(MEETINGS).toContain("m.meet_link && <JoinOnMeet");
-    // On the record's head it carries the explanation under it; on the row it is the button alone.
-    expect(MEETINGS).toContain("row.meet_link && <JoinOnMeet meeting={row} explain />");
+    // The doors live in CallDoors.tsx — one component on the row, the record head, Before, and the
+    // narrow room — and every press tells the row it started (0214).
+    const DOORS = readFileSync(new URL("../src/client/pages/CallDoors.tsx", import.meta.url), "utf8");
+    expect(DOORS).toContain("opens Google Meet in a new tab; nothing joins for you");
+    expect(DOORS).toContain("title={JOIN_ON_MEET_LINE}");
+    expect(DOORS).toContain("data-testid={`join-line-${meeting.id}`}");
+    expect(DOORS).toContain('"_blank", "noopener,noreferrer"');
+    expect(DOORS).toContain("JOIN_MODES.map");
+    expect(DOORS).toContain("data-testid={`join-mode-${m}-${meeting.id}`}");
+    expect(DOORS).toContain("window.localStorage.setItem(JOIN_MODE_KEY, mode)");
+    expect(DOORS).toContain("Use my laptop mic for this Meet call");
+    expect(DOORS).toContain("data-testid={`laptop-mic-note-${meeting.id}`}");
+    expect(DOORS).toContain("liveMeetPathAvailable(meeting)");
+    expect(DOORS).toContain("/started`, { method: \"POST\"");
+    expect(DOORS).toMatch(/if \(mode === "inside" && !meetAddonInstalled\(\)\)/);
+    expect(MEETINGS).toContain("m.meet_link && <CallDoors");
+    expect(MEETINGS).toContain("row.meet_link && (");
+    expect(MEETINGS).toContain("Go to this meeting");
+    expect(MEETINGS).not.toContain("JoinOnMeet");
   });
 });
 

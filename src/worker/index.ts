@@ -429,6 +429,7 @@ import {
   handleRecordConsent,
   handleTransitionMeeting,
   handleArchiveMeeting,
+  handleMeetingStarted,
 } from "./services/meetings";
 import {
   handleAssembleIcPacket,
@@ -1161,6 +1162,9 @@ const router = new Router()
   // meeting's source, the firm default, the ingest cadence from its job row, the Meet inbox row,
   // the capture gates — and, for After, where its material came from with times.
   .get("/api/meetings/:id/hearing", handleHearing)
+  // A partner joined the call from the app (Join on Meet, Beside the call, the laptop-mic path): the
+  // meeting is in progress from that moment (0214). Idempotent; the first start wins.
+  .post("/api/meetings/:id/started", handleMeetingStarted)
   // === end How the room hears ===
   // P8 — portfolio monitoring: dated metrics, deterministic alerts, support.
   .post("/api/portfolio/metric-definitions", handleCreateMetricDefinition)

@@ -185,12 +185,13 @@ describe("how does this page work", () => {
     // Two scenarios, each a numbered list under its own heading; the second is the in-person one.
     expect(blocks.filter((b) => b.kind === "heading").length).toBe(2);
     expect(blocks.filter((b) => b.kind === "ordered").length).toBe(2);
-    for (const control of ["**Seat**", "**Join on Meet**", "**Done — open the record**", "**Draft what came out of it**", "**Approve — make these the record**", "**Move it**", "**They said yes — record**", "**Record meeting**"]) {
+    for (const control of ["**Go to this meeting**", "**Seat**", "**Join on Meet**", "**Use my laptop mic for this Meet call**", "**Done — open the record**", "**Draft what came out of it**", "**Approve — make these the record**", "**Move it**", "**They said yes — record**", "**Record meeting**"]) {
       expect(reply, control).toContain(control);
     }
     // What Join on Meet does NOT do is said, and the transcript's arrival after the call is said.
     expect(reply).toMatch(/What does not happen: nothing joins for you/);
-    expect(reply).toMatch(/No employee is in the call/);
+    expect(reply).toMatch(/no employee is in the call/);
+    expect(reply).toMatch(/one room, several doors/);
     expect(reply).toMatch(/Within the hour Google's transcript/);
     expect(reply).toMatch(/laptop microphone/);
     for (const phrase of RETIRED_MEETINGS_TRIO) expect(reply).not.toContain(phrase);

@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import {
-  HELD_NOTHING_ON_THE_RECORD, MEETING_SETTLES_AFTER_MINUTES, isPastMeeting, isUpcoming, splitMeetings,
+  HAPPENING_NOW, HELD_NOTHING_ON_THE_RECORD, MEETING_SETTLES_AFTER_MINUTES, isInProgress, isPastMeeting, isUpcoming, splitMeetings,
 } from "../src/shared/meetings/pastMeetings";
-import { settlePastMeetings } from "../src/worker/services/meetings";
+import { markMeetingStarted, settlePastMeetings } from "../src/worker/services/meetings";
+import { handleRequest } from "../src/worker/index";
 
 /**
  * A MEETING WHOSE TIME HAS PASSED IS NEVER "COMING UP" (19 Sep 2026).
@@ -56,12 +57,92 @@ describe("the split — pure", () => {
     expect(isUpcoming({ status: "HELD", scheduled_at: "2027-01-01T00:00:00.000Z", occurred_at: null }, NOW)).toBe(false);
   });
 
+  /*
+   * IN PROGRESS IS DERIVED, NEVER PRESSED (19 Sep 2026). Owner, on "It is happening now": "wtf is
+   * that button". A started meeting leaves Coming up and reads "happening now" on the record.
+   */
+  it("a SCHEDULED meeting that something started is off Coming up and reads happening now", () => {
+    const started = { id: "h", status: "SCHEDULED", scheduled_at: "2026-09-22T13:00:00.000Z", occurred_at: null, started_at: "2026-09-19T13:58:00.000Z" };
+    expect(isInProgress(started)).toBe(true);
+    expect(isUpcoming(started, NOW)).toBe(false);
+    const { upcoming, past } = splitMeetings([...rows, started], NOW);
+    expect(upcoming.map((m) => m.id)).not.toContain("h");
+    expect(past.map((m) => m.id)).toContain("h");
+    // The masthead's next one skips it too.
+    expect(upcoming[0]!.id).toBe("c");
+    expect(isInProgress({ ...started, status: "HELD" })).toBe(false);
+    expect(isInProgress({ ...started, started_at: null })).toBe(false);
+    expect(HAPPENING_NOW).toBe("happening now");
+  });
+
   it("the page uses the shared split and the shared reading, not its own filter", () => {
     const page = readFileSync(new URL("../src/client/pages/MeetingsPage.tsx", import.meta.url), "utf8");
     expect(page).toMatch(/splitMeetings\(rows, new Date\(\)\)/);
     expect(page, "the old status-only filter is back").not.toMatch(/rows\.filter\(\(m\) => m\.status === "SCHEDULED"\)/);
     expect(page).toContain("HELD_NOTHING_ON_THE_RECORD");
     expect(HELD_NOTHING_ON_THE_RECORD).toBe("held, nothing on the record");
+    expect(page).toContain("HAPPENING_NOW");
+    // The retired control: no "It is happening now", no start- door that only chose a face.
+    expect(page).not.toContain("It is happening now");
+    expect(page).not.toContain("data-testid={`start-${m.id}`}");
+  });
+});
+
+describe("one place marks a meeting started", () => {
+  let t: TestDb;
+  let env: Env;
+  const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
+  const ACTOR = { type: "HUMAN" as const, firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
+  async function call<T = any>(path: string, method = "GET", body?: unknown): Promise<{ status: number; body: T }> {
+    const res = await handleRequest(new Request(`https://test.local${path}`, { method, headers: body === undefined ? MP : { ...MP, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }), env);
+    return { status: res.status, body: (await res.json()) as T };
+  }
+  beforeAll(async () => {
+    t = await createTestDb();
+    env = makeTestEnv(t.db);
+  });
+  afterAll(async () => {
+    await disposeTestDb(t);
+  });
+
+  it("joining from the app, their yes, and Google's conference-started all land on the same column; the first start wins; the list moves it off Coming up", async () => {
+    const created = await call<{ id: string }>("/api/meetings", "POST", { title: "Started by joining", meeting_type: "FOUNDER", scheduled_at: new Date(Date.now() + 3_600_000).toISOString() });
+    const id = created.body.id;
+    const before = await call<{ meetings: Array<{ id: string; started_at: string | null }> }>("/api/meetings");
+    expect(before.body.meetings.find((m) => m.id === id)?.started_at ?? null).toBeNull();
+
+    const joined = await call<{ started_at: string; started_via: string; changed: boolean }>(`/api/meetings/${id}/started`, "POST", { via: "join_on_meet" });
+    expect(joined.status).toBe(200);
+    expect(joined.body.changed).toBe(true);
+    expect(joined.body.started_via).toBe("join_on_meet");
+
+    // A second start of any kind leaves the first moment alone.
+    const again = await markMeetingStarted(env, ACTOR, id, "capture");
+    expect(again.changed).toBe(false);
+    expect(again.started_via).toBe("join_on_meet");
+    expect(again.started_at).toBe(joined.body.started_at);
+
+    const list = await call<{ meetings: Array<{ id: string; status: string; started_at: string | null; scheduled_at: string | null; occurred_at: string | null }> }>("/api/meetings");
+    const row = list.body.meetings.find((m) => m.id === id)!;
+    expect(row.started_at).toBe(joined.body.started_at);
+    expect(isUpcoming(row, new Date())).toBe(false);
+    expect(isInProgress(row)).toBe(true);
+    const event = await t.db.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'meeting.started' AND object_id = ?1").bind(id).first<{ n: number }>();
+    expect(Number(event?.n)).toBe(1);
+
+    // Their yes starts a meeting nobody joined from the app (capture is a start), and the
+    // conference-started name is accepted for the sibling's live path.
+    const second = await call<{ id: string }>("/api/meetings", "POST", { title: "Started by their yes", meeting_type: "FOUNDER", scheduled_at: new Date(Date.now() + 3_600_000).toISOString() });
+    await call(`/api/meetings/${second.body.id}/capture/consent`, "POST", { answer: "GRANTED", granted_by: "Deana Oliver", basis: "asked out loud at the start" });
+    const viaYes = await t.db.prepare("SELECT started_via FROM meeting WHERE id = ?1").bind(second.body.id).first<{ started_via: string | null }>();
+    expect(viaYes?.started_via).toBe("capture");
+    const third = await call<{ id: string }>("/api/meetings", "POST", { title: "Started by Google", meeting_type: "FOUNDER", scheduled_at: new Date(Date.now() + 3_600_000).toISOString() });
+    expect((await markMeetingStarted(env, ACTOR, third.body.id, "conference_started", "2026-09-19T15:00:00.000Z")).started_at).toBe("2026-09-19T15:00:00.000Z");
+    // A no does not start anything, and the route refuses a name it does not know.
+    const fourth = await call<{ id: string }>("/api/meetings", "POST", { title: "Said no", meeting_type: "FOUNDER" });
+    await call(`/api/meetings/${fourth.body.id}/capture/consent`, "POST", { answer: "DENIED", basis: "asked out loud" });
+    expect((await t.db.prepare("SELECT started_at FROM meeting WHERE id = ?1").bind(fourth.body.id).first<{ started_at: string | null }>())?.started_at).toBeNull();
+    expect((await call(`/api/meetings/${fourth.body.id}/started`, "POST", { via: "button" })).status).toBe(400);
   });
 });
 

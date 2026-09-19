@@ -148,10 +148,11 @@ describe("what the sentences say, in the owner's order", () => {
     expect(hearing({ ...meet, ingest_every_minutes: null }, { live: false }).sentence).toContain("the next ingest run");
   });
 
-  it("recording here on a Meet says the words arrive twice", () => {
+  it("the laptop mic on a Meet reads: laptop mic · live · Meet transcript after the call as the authoritative record", () => {
     const h = hearing(meet, { live: true });
+    expect(h.sentence).toContain("laptop mic · live");
     expect(h.sentence).toContain("through your speakers");
-    expect(h.sentence).toContain("twice");
+    expect(h.sentence).toContain("Google's transcript arrives after the call as the authoritative record");
     expect(h.live_path).toBeNull();
   });
 
@@ -174,7 +175,7 @@ describe("what the sentences say, in the owner's order", () => {
     expect(JOIN_ON_MEET_LINE).toMatch(/does not hear it live/);
     expect(SEATED_EMPLOYEE_LINE).toMatch(/never in the Meet call/);
     expect(SEATED_EMPLOYEE_LINE).toMatch(/take a task that returns here/);
-    expect(STANDALONE_ROOM_LINE).toMatch(/same room, without the app shell/);
+    expect(STANDALONE_ROOM_LINE).toMatch(/same room, in its own window/);
   });
 });
 
@@ -244,6 +245,59 @@ describe("GET /api/meetings/:id/hearing — the facts come from the rows", () =>
     expect(meetSrc.turns).toBe(3);
     expect(meetSrc.first_at).toBeTruthy();
     expect(read.body.sources.find((s) => s.kind === "typed_notes")!.count).toBe(1);
+  });
+
+  /*
+   * THE LAPTOP-MIC PATH ONTO A MEET CALL (owner, 19 Sep 2026): nothing is stored before "They said
+   * yes"; after it, chunks flow, the row says LAPTOP_MIC, and the hearing state changes. The
+   * transcription service is a fake binding here — Nova-3 answers in its own shape — so the path
+   * is proven through the real adapter and the real two gates.
+   */
+  it("before their yes a chunk stores nothing; after it, chunks are stamped as the laptop mic and the state moves", async () => {
+    const fakeAi = { run: async () => ({ results: { channels: [{ alternatives: [{ transcript: "we can send the data room by Friday", words: [] }] }] } }) };
+    const live = makeTestEnv(t.db, { AI: fakeAi as never });
+    const req = async <T = any>(path: string, method = "GET", body?: unknown): Promise<{ status: number; body: T }> => {
+      const res = await handleRequest(new Request(`https://test.local${path}`, { method, headers: body === undefined ? MP : { ...MP, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }), live);
+      return { status: res.status, body: (await res.json()) as T };
+    };
+    const created = await req<{ id: string }>("/api/meetings", "POST", { title: "Deana on Meet, laptop mic", meeting_type: "FOUNDER", scheduled_at: new Date(Date.now() + 600_000).toISOString() });
+    const id = created.body.id;
+    await t.db.prepare("UPDATE meeting SET source = 'google_calendar', meet_link = 'https://meet.google.com/abc-defg-hij', meet_conference_id = 'abc-defg-hij' WHERE id = ?1").bind(id).run();
+    // The Managing Partner's recording policy for this meeting, through the ordinary approval.
+    const card = await req<{ id: string }>("/api/approvals", "POST", { action_key: "meeting.recording_policy.activate", object_type: "meeting", object_id: id, title: "policy", submit: true });
+    await req(`/api/approvals/${card.body.id}/decide`, "POST", { decision: "approved" });
+    expect((await req(`/api/meetings/${id}/recording-policy`, "POST", { approval_receipt_id: card.body.id })).status).toBe(200);
+
+    // The door was pressed: the row is in progress, and nothing is recorded yet.
+    expect((await req(`/api/meetings/${id}/started`, "POST", { via: "laptop_mic" })).status).toBe(200);
+    const before = await req<{ facts: HearingFacts }>(`/api/meetings/${id}/hearing`);
+    expect(before.body.facts.transcription_available).toBe(true);
+    expect(before.body.facts.recording_policy_active).toBe(true);
+    expect(hearingStateOf(before.body.facts, { live: false })).toBe("MEET_PENDING");
+    const refused = await req<{ error: string }>(`/api/meetings/${id}/capture/chunk`, "POST", { audio_base64: "AAAA", sequence: 0, content_type: "audio/webm", via: "laptop_mic" });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe("consent_not_granted");
+    expect(Number((await t.db.prepare("SELECT COUNT(*) AS n FROM transcript_import WHERE meeting_id = ?1 AND status = 'IMPORTED'").bind(id).first<{ n: number }>())?.n)).toBe(0);
+    expect(Number((await t.db.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1").bind(id).first<{ n: number }>())?.n)).toBe(0);
+
+    // They said yes: chunks flow, each row names the laptop mic, and the state line moves.
+    const yes = await req<{ can_capture: boolean }>(`/api/meetings/${id}/capture/consent`, "POST", { answer: "GRANTED", granted_by: "Deana Oliver", basis: "Asked out loud at the start of the call." });
+    expect(yes.status).toBe(201);
+    expect(yes.body.can_capture).toBe(true);
+    const chunk = await req<{ turns_written: number; via: string; engine: string }>(`/api/meetings/${id}/capture/chunk`, "POST", { audio_base64: "AAAA", sequence: 1, content_type: "audio/webm", via: "laptop_mic" });
+    expect(chunk.status).toBe(201);
+    expect(chunk.body.via).toBe("laptop_mic");
+    expect(chunk.body.turns_written).toBeGreaterThan(0);
+    const row = await t.db.prepare("SELECT source, provider_name FROM transcript_import WHERE meeting_id = ?1 AND status = 'IMPORTED'").bind(id).first<{ source: string; provider_name: string | null }>();
+    expect(row?.source).toBe("NATIVE");
+    expect(row?.provider_name).toBe("LAPTOP_MIC");
+    const after = await req<{ facts: HearingFacts; sources: MaterialSource[] }>(`/api/meetings/${id}/hearing`);
+    expect(after.body.facts.turns_captured).toBeGreaterThan(0);
+    expect(hearing(after.body.facts, { live: true }).state).toBe("MEET_LIVE_HERE");
+    expect(hearing(after.body.facts, { live: true }).chip).toBe("laptop mic · live");
+    expect(after.body.sources.map((s) => s.kind)).toEqual(["laptop_capture"]);
+    // A chunk cannot claim to be anything else.
+    expect((await req(`/api/meetings/${id}/capture/chunk`, "POST", { audio_base64: "AAAA", sequence: 2, content_type: "audio/webm", via: "meet_media" })).status).toBe(400);
   });
 
   it("is not served for a meeting the reader may not see", async () => {

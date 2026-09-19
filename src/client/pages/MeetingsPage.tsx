@@ -1,10 +1,12 @@
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { MEETING_TYPES, meetingType } from "@shared/meetings/meetingTypes";
-import { HELD_NOTHING_ON_THE_RECORD, isPastMeeting, splitMeetings } from "@shared/meetings/pastMeetings";
+import { HAPPENING_NOW, HELD_NOTHING_ON_THE_RECORD, isInProgress, isPastMeeting, splitMeetings } from "@shared/meetings/pastMeetings";
 import { LiveHelpPanel } from "./LiveHelpPanel";
 import { RoomPanel } from "./RoomPanel";
-import { JOIN_ON_MEET_LINE, STANDALONE_ROOM_LINE } from "@shared/meetings/howTheRoomHears";
+import { STANDALONE_ROOM_LINE } from "@shared/meetings/howTheRoomHears";
+import { meetingFaceFromHash, roomHash } from "@shared/meetings/meetJoin";
+import { CallDoors, ONE_ROOM_LINE } from "./CallDoors";
 import { CloseoutPanel } from "./CloseoutPanel";
 import { AfterPanel, BeforePanel } from "./MeetingFacesPanel";
 import { MeetBand } from "./MeetBand";
@@ -55,6 +57,9 @@ interface MeetingRow {
   archived_at?: string | null;
   archived_by?: string | null;
   archive_reason?: string | null;
+  /** Migration 0214: when something started it. In progress while SCHEDULED with this set. */
+  started_at?: string | null;
+  started_via?: string | null;
   /** Phase Meet (migration 0202). Present on a meeting the calendar sync created. */
   meet_link?: string | null;
   source?: "manual" | "google_calendar";
@@ -169,7 +174,9 @@ function whenOnMasthead(value: string | null, now: Date): string {
 }
 
 /** Where a meeting stands, in words. Lower-casing a stored value is still printing it. */
-function statusInWords(status: string | null, m?: { scheduled_at: string | null; occurred_at: string | null }): string {
+function statusInWords(status: string | null, m?: { scheduled_at: string | null; occurred_at: string | null; started_at?: string | null }): string {
+  // In progress is derived from what started it (0214), never from a button that chose a face.
+  if (status === "SCHEDULED" && m && isInProgress({ status, scheduled_at: m.scheduled_at, occurred_at: m.occurred_at, started_at: m.started_at ?? null })) return HAPPENING_NOW;
   switch (status) {
     // A SCHEDULED row whose time has passed is on the record with nothing captured — the calendar
     // says it happened, no transcript says what came of it. Never "on the calendar".
@@ -558,17 +565,26 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
             <span data-testid="meeting-status">{statusInWords(m?.status ?? row.status, m ?? row)}</span> · {sourceInWordsRow(row)}
           </p>
         </div>
-        {row.meet_link && <JoinOnMeet meeting={row} explain />}
         <button type="button" className="btn-ghost" data-testid="record-back" onClick={onBack}>
           ← All meetings
         </button>
       </div>
+      {/*
+        ONE ROOM, SEVERAL DOORS (owner, 19 Sep 2026: "I don't understand what Open the room does
+        anymore"). You are in the room now — these are the doors onto the call, from here.
+      */}
+      {row.meet_link && (
+        <div className="stack" data-testid={`record-doors-${meetingId}`}>
+          <p className="field-help" data-testid={`one-room-line-${meetingId}`}>{ONE_ROOM_LINE}</p>
+          <CallDoors meeting={{ id: meetingId, meet_link: row.meet_link }} />
+        </div>
+      )}
 
       <Faces meetingId={meetingId} face={face} onFace={onFace} badges={badges} />
 
       <div role="tabpanel" id={`face-panel-${face}-${meetingId}`} aria-labelledby={`face-${face}-${meetingId}`} data-testid={`face-panel-${face}`}>
         {face === "before" && (
-          <BeforePanel meetingId={meetingId} onChanged={changed} seating={seating} onOpenRoom={() => onFace("during")} onNavigate={onNavigate} />
+          <BeforePanel meetingId={meetingId} meetLink={row.meet_link ?? null} onChanged={changed} seating={seating} onOpenRoom={() => onFace("during")} onNavigate={onNavigate} />
         )}
         {face === "during" && (
           <div className="stack">
@@ -587,8 +603,8 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
                     owner asked whether it was "a real room"; it is this one, and the line says so.
                   */}
                   <div className="stack">
-                    <button type="button" className="btn-ghost" data-testid={`room-standalone-link-${meetingId}`} aria-describedby={`room-standalone-line-${meetingId}`} onClick={() => window.open(`#/room/${meetingId}`, "_blank", "noopener,noreferrer")}>
-                      Open this room in its own window ↗
+                    <button type="button" className="btn-ghost" data-testid={`room-standalone-link-${meetingId}`} aria-describedby={`room-standalone-line-${meetingId}`} onClick={() => window.open(roomHash(meetingId), "_blank", "noopener,noreferrer")}>
+                      The same room, in its own window ↗
                     </button>
                     <span className="field-help" id={`room-standalone-line-${meetingId}`} data-testid={`room-standalone-line-${meetingId}`}>{STANDALONE_ROOM_LINE}</span>
                   </div>
@@ -633,40 +649,6 @@ function QuestionChecklist({ meetingId }: { meetingId: string }): JSX.Element {
   );
 }
 
-/**
- * The Meet link the calendar carries, so joining is one press. A button rather than a bare link
- * because the row's other acts are buttons and the design system has no anchor-as-button rule;
- * the label says where it goes and that it opens elsewhere.
- */
-function JoinOnMeet({ meeting, explain = false }: { meeting: MeetingRow; explain?: boolean }): JSX.Element {
-  /*
-   * WHAT IT DOES AND DOES NOT DO IS SAID ON THE BUTTON (owner, 19 Sep 2026: "If I push Join on Meet
-   * what happens? … Is it recording? Are my AI employees there from Join on Meet alone?"). The
-   * tooltip and the line under it are the same sentence from `howTheRoomHears.ts`, and the During
-   * face's "How this room hears" line says the rest. This component opens a tab. That is all it does.
-   */
-  const button = (
-    <button
-      type="button"
-      data-testid={`join-${meeting.id}`}
-      aria-label="Join on Meet — opens Google Meet in a new tab; nothing joins for you"
-      aria-describedby={explain ? `join-line-${meeting.id}` : undefined}
-      title={JOIN_ON_MEET_LINE}
-      onClick={() => window.open(meeting.meet_link ?? "", "_blank", "noopener,noreferrer")}
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6" /></svg>
-      Join on Meet
-    </button>
-  );
-  if (!explain) return button;
-  return (
-    <div className="join-meet">
-      {button}
-      <span className="field-help" id={`join-line-${meeting.id}`} data-testid={`join-line-${meeting.id}`}>{JOIN_ON_MEET_LINE}</span>
-    </div>
-  );
-}
-
 // ── The page ──────────────────────────────────────────────────────────────────
 
 export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (key: string) => void }): JSX.Element {
@@ -676,9 +658,23 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   const [type, setType] = useState("FOUNDER");
   const [companyId, setCompanyId] = useState("");
   const [startsNow, setStartsNow] = useState(true);
-  const [open, setOpen] = useState<string | null>(null);
-  const [face, setFace] = useState<Face>("before");
+  // Arrived by address — `#/meetings?open=<id>&face=after` is the way back from the standalone
+  // room when the call is over (owner, 19 Sep 2026: "we can return when it's over").
+  const arrived = typeof window === "undefined" ? null : meetingFaceFromHash(window.location.hash);
+  const [open, setOpen] = useState<string | null>(arrived?.open ?? null);
+  const [face, setFace] = useState<Face>(arrived?.face ?? "before");
   const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => {
+    const onHash = () => {
+      const at = meetingFaceFromHash(window.location.hash);
+      if (at) {
+        setOpen(at.open);
+        setFace(at.face);
+      }
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   /**
    * TAKING A MEETING OFF THE RECORD. Operator, 22 Aug 2026: "the call with scooter meeting has no
    * way to delete it. it was a test and some meetings i want to delete….we need a way to delete them
@@ -817,14 +813,17 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
                 </div>
               </div>
               <ReadinessLine parts={readinessInWords(m)} testid={`readiness-${m.id}`} />
-              <div className="deal-actions">
-                {m.meet_link && <JoinOnMeet meeting={m} />}
-                <button type="button" data-testid={`start-${m.id}`} onClick={() => openRecord(m.id, "during")}>
-                  It is happening now
+              {/*
+                ONE PRIMARY DOOR, then the call's doors beneath it (owner, 19 Sep 2026). "It is
+                happening now" is retired — "wtf is that button" — in progress is derived from the
+                events that start a meeting (0214), never pressed.
+              */}
+              <div className="deal-actions deal-actions-doors">
+                <button type="button" className="btn-strong" data-testid={`upcoming-open-${m.id}`} aria-describedby={`one-room-line-${m.id}`} onClick={() => openRecord(m.id, "before")}>
+                  Go to this meeting
                 </button>
-                <button type="button" className="btn-strong" data-testid={`upcoming-open-${m.id}`} onClick={() => openRecord(m.id, "before")}>
-                  Open the room
-                </button>
+                <span className="field-help" id={`one-room-line-${m.id}`} data-testid={`one-room-line-${m.id}`}>{ONE_ROOM_LINE}</span>
+                {m.meet_link && <CallDoors meeting={{ id: m.id, meet_link: m.meet_link }} compact />}
               </div>
             </li>
           ))}
@@ -982,7 +981,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             <label>
               When{" "}
               <select data-testid="meeting-when" value={startsNow ? "now" : "later"} onChange={(e) => setStartsNow(e.target.value === "now")}>
-                <option value="now">It is happening now</option>
+                <option value="now">Right now — it is in progress</option>
                 <option value="later">Put it on the calendar</option>
               </select>
             </label>

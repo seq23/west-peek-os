@@ -102,6 +102,8 @@ export type LivePath = (typeof LIVE_PATHS)[number];
 
 export interface Hearing {
   state: HearingState;
+  /** The narrow room's chip words for this state. */
+  chip: string;
   /** The line under "How this room hears": what is heard, by what, and when it lands. */
   sentence: string;
   /** How to have the room follow live, when it is not. Null while it is, or once the call is read. */
@@ -131,7 +133,7 @@ function n(count: number, one: string, many: string): string {
  */
 export const HEARING_SENTENCES: Readonly<Record<HearingState, (f: HearingFacts) => string>> = {
   MEET_LIVE_HERE: (f) =>
-    `Google Meet call · this room is recording through the laptop microphone right now, so it hears the call through your speakers · Google is transcribing the call as well, and that transcript is read into this record within ${minutes(f.ingest_every_minutes)} of the call ending — the same words will arrive twice`,
+    `Google Meet call · laptop mic · live — this room hears you directly and them through your speakers · Google's transcript arrives after the call as the authoritative record, within ${minutes(f.ingest_every_minutes)} of it ending`,
   MEET_INGESTED: (f) =>
     `Google Meet call · transcribed by Google · read into this record ${clock(f.meet?.read_at ?? null) || "after the call"}: ${n(f.meet?.turns ?? 0, "turn", "turns")}, ${n(f.meet?.participants ?? 0, "participant", "participants")} · nobody from the firm's AI was in the call; they read it afterwards`,
   MEET_WAITING_FOR_TRANSCRIPT: (f) =>
@@ -158,6 +160,24 @@ export const HEARING_SENTENCES: Readonly<Record<HearingState, (f: HearingFacts) 
     `In person or by phone · recording is off now · ${n(f.turns_captured, "turn", "turns")} were captured through the laptop microphone earlier and are on this record · switch recording on to continue; it asks for their yes again`,
   MANUAL_READY: () =>
     "In person or by phone · nothing is being heard yet · switch recording on above, ask them out loud, and the laptop microphone writes the room down a minute at a time · a seated employee reads what is written down here",
+};
+
+/** The chip the narrow room shows at the top — one or three words per state, the sentence behind it. */
+export const HEARING_CHIP_WORDS: Readonly<Record<HearingState, string>> = {
+  MEET_LIVE_HERE: "laptop mic · live",
+  MEET_INGESTED: "Meet transcript read in",
+  MEET_WAITING_FOR_TRANSCRIPT: "waiting for Google's transcript",
+  MEET_NO_TRANSCRIPT: "no transcript from Meet",
+  MEET_REFUSED_DEFAULT_OFF: "transcript refused · firm default off",
+  MEET_READ_FAILED: "transcript not read",
+  MEET_DEFAULT_OFF: "firm default off",
+  MEET_PENDING: "Google transcribes · read in after the call",
+  MANUAL_LIVE: "laptop mic · live",
+  MANUAL_NO_SERVICE: "no transcription service",
+  MANUAL_POLICY_OFF: "recording not switched on",
+  MANUAL_CONSENT_DENIED: "they said no",
+  MANUAL_CAPTURED_EARLIER: "captured earlier · off now",
+  MANUAL_READY: "not recording",
 };
 
 export const LIVE_PATH_SENTENCES: Readonly<Record<LivePath, string>> = {
@@ -214,6 +234,7 @@ export function hearing(f: HearingFacts, now: HearingNow): Hearing {
   const path = TAIL_STATES.has(state) ? livePath(f) : null;
   return {
     state,
+    chip: HEARING_CHIP_WORDS[state],
     sentence: HEARING_SENTENCES[state](f),
     live_path: path,
     live_sentence: path ? LIVE_PATH_SENTENCES[path] : null,
@@ -228,4 +249,4 @@ export const JOIN_ON_MEET_LINE = "Opens the Google Meet call in a new tab. Nothi
 export const SEATED_EMPLOYEE_LINE = "A seated employee answers in Ask the room by name and can take a task that returns here. They read what is written down — typed notes, and the recording when it is on — and are never in the Meet call itself.";
 
 /** The standalone room, said where its link is. */
-export const STANDALONE_ROOM_LINE = "The same room, without the app shell — for a second window beside your call.";
+export const STANDALONE_ROOM_LINE = "The same room, in its own window — no app shell, for a second window beside your call, and a way back when it is over.";

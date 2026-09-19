@@ -92,10 +92,11 @@ test("ask Walter to walk you through a real meeting: a numbered scenario from th
   expect(await ordered.first().locator("li").count()).toBeGreaterThanOrEqual(10);
   const text = (await answer.innerText()).replace(/\s+/g, " ");
   expect(text).toMatch(/^WALTER Here is how you would use Meetings, start to finish — 2 scenarios/);
-  for (const control of ["Seat", "Join on Meet", "Done — open the record", "Draft what came out of it", "Approve — make these the record", "Move it", "They said yes — record"]) expect(text, control).toContain(control);
+  for (const control of ["Go to this meeting", "Seat", "Join on Meet", "Use my laptop mic for this Meet call", "Done — open the record", "Draft what came out of it", "Approve — make these the record", "Move it", "They said yes — record"]) expect(text, control).toContain(control);
   // What does not happen, and when the transcript lands — the two things she could not find out.
   expect(text).toContain("What does not happen: nothing joins for you");
-  expect(text).toContain("No employee is in the call");
+  expect(text).toContain("no employee is in the call");
+  expect(text).toContain("one room, several doors");
   expect(text).toContain("Within the hour Google's transcript");
   expect(text).toContain("laptop microphone");
   for (const phrase of RETIRED_MEETINGS_TRIO) expect(text, phrase).not.toContain(phrase);
@@ -123,7 +124,17 @@ test("the During face says how this room hears — a calendar Meet call, then a 
   await gotoSurface(page, "Meetings");
 
   // ── The Meet call ──
-  await page.getByTestId(`start-${meetId}`).click();
+  // The row: one primary door with the one-room line, the call's doors beneath it, and no
+  // "It is happening now" (retired 19 Sep 2026 — "wtf is that button").
+  await expect(page.getByTestId(`start-${meetId}`)).toHaveCount(0);
+  await expect(page.getByTestId(`one-room-line-${meetId}`)).toContainText("One room for this meeting");
+  await expect(page.getByTestId(`join-${meetId}`).first()).toBeVisible();
+  await expect(page.getByTestId(`laptop-mic-${meetId}`).first()).toBeVisible();
+  await page.getByTestId(`upcoming-open-${meetId}`).click();
+  // With a call, Before carries the call's doors instead of Open the room.
+  await expect(page.getByTestId("face-before")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("brief-open-room")).toHaveCount(0);
+  await page.getByTestId("face-during").click();
   await expect(page.getByTestId("face-during")).toHaveAttribute("aria-selected", "true");
   const hears = page.getByTestId(`hears-${meetId}`);
   await expect(hears).toBeVisible();
@@ -133,13 +144,16 @@ test("the During face says how this room hears — a calendar Meet call, then a 
   await expect(hears.getByTestId("hears-sentence")).toContainText("Join on Meet only opens the call");
   await expect(hears.getByTestId("hears-sentence")).toContainText("firm default is off");
   await expect(hears.getByTestId("hears-live-path")).toBeVisible();
-  // Join on Meet says what it does and does not do, on the button and under it.
+  // Join on Meet says what it does and does not do, on the button and under it, and offers the
+  // two ways — inside the call, beside the call — remembered per viewer.
   const join = page.getByTestId(`join-${meetId}`).first();
   await expect(join).toHaveAttribute("title", /new tab.*no employee is in the call.*does not hear it live/);
-  await expect(page.getByTestId(`join-line-${meetId}`)).toContainText("Nothing joins for you");
+  await expect(page.getByTestId(`join-line-${meetId}`).first()).toContainText("Nothing joins for you");
+  await expect(page.getByTestId(`join-mode-inside-${meetId}`).first()).toBeAttached();
+  await expect(page.getByTestId(`join-mode-beside-${meetId}`).first()).toBeChecked();
   // Beside Seat, what a seated employee can and cannot do; the standalone link says what it is.
   await expect(page.getByTestId("seat-line")).toContainText("never in the Meet call");
-  await expect(page.getByTestId(`room-standalone-line-${meetId}`)).toContainText("same room, without the app shell");
+  await expect(page.getByTestId(`room-standalone-line-${meetId}`)).toContainText("same room, in its own window");
   const popup = page.waitForEvent("popup");
   await page.getByTestId(`room-standalone-link-${meetId}`).click();
   const standalone = await popup;
@@ -165,7 +179,11 @@ test("the During face says how this room hears — a calendar Meet call, then a 
 
   // ── The meeting recorded here ──
   await page.getByTestId("record-back").click();
-  await page.getByTestId(`start-${manualId}`).click();
+  await page.getByTestId(`upcoming-open-${manualId}`).click();
+  // No call: Open the room stands on Before and goes into the same room.
+  await expect(page.getByTestId("brief-open-room-line")).toContainText("the same room, not a second one");
+  await page.getByTestId("brief-open-room").click();
+  await expect(page.getByTestId("face-during")).toHaveAttribute("aria-selected", "true");
   const manualHears = page.getByTestId(`hears-${manualId}`);
   await expect(manualHears).toBeVisible();
   await expect(manualHears).toContainText("How this room hears · In person or by phone");

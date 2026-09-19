@@ -3,6 +3,9 @@ import type { RingSlice } from "@shared/fund/allocation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
 import { hearing as hearingOf, type HearingFacts } from "@shared/meetings/howTheRoomHears";
+import { LAPTOP_MIC_NOTE, RETURN_LABEL, RETURN_LINE, meetingFaceHash } from "@shared/meetings/meetJoin";
+import { CallDoors } from "./CallDoors";
+import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
 /**
  * THE DURING FACE — the meeting is a live room (Phase C, owner-approved 18 Sep 2026).
@@ -106,12 +109,16 @@ function parseBody(raw: string): Record<string, unknown> {
   }
 }
 
-export function RoomPanel({ meetingId, standalone = false, aside }: { meetingId: string; standalone?: boolean; aside?: ReactNode }): JSX.Element {
+export function RoomPanel({ meetingId, standalone = false, aside, armLaptopMic = false }: { meetingId: string; standalone?: boolean; aside?: ReactNode; armLaptopMic?: boolean }): JSX.Element {
   const room = useApi<RoomState>(`/api/meetings/${meetingId}/room`, [meetingId]);
   const hearingRead = useApi<{ facts: HearingFacts }>(`/api/meetings/${meetingId}/hearing`, [meetingId]);
   const [message, setMessage] = useState<string | null>(null);
   // The one fact only this browser has: whether its recorder is running right now.
   const [live, setLive] = useState(false);
+  // The laptop-mic path onto a Meet call: arrived armed (`#/room/<id>?mic=1`) or armed in place.
+  // The recording line opens the consent prompt the moment the room's gates allow it — the SAME
+  // prompt, the same yes; nothing records before "They said yes".
+  const [armed, setArmed] = useState(armLaptopMic);
   const roomReload = room.reload;
   const hearingReload = hearingRead.reload;
   const reload = useCallback(() => {
@@ -127,26 +134,77 @@ export function RoomPanel({ meetingId, standalone = false, aside }: { meetingId:
   }, [reload]);
 
   const state = room.data;
+  const facts = hearingRead.data?.facts ?? null;
+  /*
+   * RETURN WHEN IT IS OVER (owner, 19 Sep 2026: "we can return when it's over"). The call is over
+   * when the Meet inbox row carries `conference_ended_at` (`CALL_ENDED_SIGNAL` — Google reported the
+   * end, or the sibling's live path saw it), or the meeting is HELD. The narrow room then shows one
+   * primary that returns her to the full After face in the app.
+   */
+  const over = Boolean(facts?.meet?.conference_ended_at) || state?.meeting.status === "HELD";
+  const goToAfter = () => {
+    window.location.hash = meetingFaceHash(meetingId, "after");
+  };
+
+  const summary = <SummaryBlock meetingId={meetingId} summary={state?.summary ?? null} turns={state?.capture.turns ?? 0} rollEveryMs={state?.roll_every_ms ?? 300_000} onRolled={reload} compact={standalone} />;
+  const ask = <AskBox meetingId={meetingId} hostName={state?.host?.name ?? "Walter"} revoked={state?.meeting.ai_access_state === "REVOKED"} onAsked={reload} onMessage={setMessage} compact={standalone} />;
+  const stream = <ArtifactStream artifacts={state?.artifacts ?? []} tasks={state?.tasks ?? []} loading={room.loading} />;
+  const recording = <RecordingLine meetingId={meetingId} capture={state?.capture ?? null} onChange={reload} onLive={setLive} armed={armed} onDisarm={() => setArmed(false)} />;
+
+  if (standalone) {
+    /*
+     * THE NARROW ROOM — 320 to 400px, the width of Meet's side panel (owner, 19 Sep 2026: "if
+     * inside, it loads a new layout"). One column, in this order: how this room hears as one chip;
+     * the head with the call's doors and, when it is over, the way back; the recording line; the
+     * rolling draft first; the stream; the seats as avatars with a count; and the ask box pinned to
+     * the bottom with hold-to-talk as the biggest target. No shell, no nav.
+     */
+    return (
+      <section className="room room-standalone" data-testid={`room-${meetingId}`} aria-label="The live room">
+        <HearingLine meetingId={meetingId} facts={facts} live={live} loading={hearingRead.loading} status={hearingRead.status} chip />
+        <div className="room-head">
+          <h3>{state?.meeting.title ?? "The room"}</h3>
+          <span className="muted small">{state ? `${state.meeting.meeting_type} · ${state.meeting.status.toLowerCase()}` : "Reading the room…"}</span>
+          {facts?.meet_link && <CallDoors meeting={{ id: meetingId, meet_link: facts.meet_link }} standalone compact onArmMic={() => setArmed(true)} />}
+          {over && (
+            <div className="stack" data-testid={`room-over-${meetingId}`}>
+              <button type="button" className="btn-strong btn-lg" data-testid={`room-return-${meetingId}`} aria-describedby={`room-return-line-${meetingId}`} onClick={goToAfter}>
+                {RETURN_LABEL}
+              </button>
+              <span className="field-help" id={`room-return-line-${meetingId}`}>{RETURN_LINE}</span>
+            </div>
+          )}
+        </div>
+        {recording}
+        <div className="stack room-scroll">
+          {summary}
+          {stream}
+          <SeatedRow seated={state?.seated ?? []} tasks={state?.tasks ?? []} compact />
+        </div>
+        <div className="room-dock">
+          {ask}
+          <button type="button" className={over ? "btn-ghost" : undefined} data-testid={`room-finish-${meetingId}`} onClick={goToAfter}>
+            Done — open the record
+          </button>
+        </div>
+        {message && <p className="notice small" data-testid="room-message" role="status">{message}</p>}
+      </section>
+    );
+  }
+
   const left = (
     <>
-      <SummaryBlock meetingId={meetingId} summary={state?.summary ?? null} turns={state?.capture.turns ?? 0} rollEveryMs={state?.roll_every_ms ?? 300_000} onRolled={reload} compact={standalone} />
-      <AskBox meetingId={meetingId} hostName={state?.host?.name ?? "Walter"} revoked={state?.meeting.ai_access_state === "REVOKED"} onAsked={reload} onMessage={setMessage} compact={standalone} />
-      <ArtifactStream artifacts={state?.artifacts ?? []} tasks={state?.tasks ?? []} loading={room.loading} />
+      {summary}
+      {ask}
+      {stream}
     </>
   );
   return (
-    <section className={standalone ? "room room-standalone" : "room"} data-testid={`room-${meetingId}`} aria-label="The live room">
-      {standalone && state && (
-        <div className="room-head">
-          <h3>{state.meeting.title}</h3>
-          <span className="muted small">{state.meeting.meeting_type} · {state.meeting.status}</span>
-        </div>
-      )}
+    <section className="room" data-testid={`room-${meetingId}`} aria-label="The live room">
+      {recording}
+      <HearingLine meetingId={meetingId} facts={facts} live={live} loading={hearingRead.loading} status={hearingRead.status} />
 
-      <RecordingLine meetingId={meetingId} capture={state?.capture ?? null} onChange={reload} onLive={setLive} />
-      <HearingLine meetingId={meetingId} facts={hearingRead.data?.facts ?? null} live={live} loading={hearingRead.loading} status={hearingRead.status} />
-
-      {standalone || !aside ? (
+      {!aside ? (
         <div className="stack">
           {left}
           <SeatedRow seated={state?.seated ?? []} tasks={state?.tasks ?? []} />
@@ -177,7 +235,7 @@ export function RoomPanel({ meetingId, standalone = false, aside }: { meetingId:
  * EACH SLICE IS A COMPLETE RECORDING. The recorder is stopped and restarted every minute rather
  * than streamed, because a timesliced stream's later fragments are not independently decodable.
  */
-function RecordingLine({ meetingId, capture, onChange, onLive }: { meetingId: string; capture: CaptureReadiness | null; onChange: () => void; onLive: (live: boolean) => void }): JSX.Element {
+function RecordingLine({ meetingId, capture, onChange, onLive, armed = false, onDisarm }: { meetingId: string; capture: CaptureReadiness | null; onChange: () => void; onLive: (live: boolean) => void; armed?: boolean; onDisarm?: () => void }): JSX.Element {
   const [prompting, setPrompting] = useState(false);
   const [asked, setAsked] = useState(false);
   const [who, setWho] = useState("");
@@ -196,6 +254,26 @@ function RecordingLine({ meetingId, capture, onChange, onLive }: { meetingId: st
   // The "How this room hears" line reads the recorder's state from here — the one fact the server
   // cannot know.
   useEffect(() => onLive(recording), [recording, onLive]);
+  /*
+   * THE LAPTOP-MIC PATH ARMS THE SAME PROMPT (owner, 19 Sep 2026). Arrived from "Use my laptop mic
+   * for this Meet call": the moment the room's gates are known, the consent prompt opens — the same
+   * prompt, the same yes — or the line says which gate is shut. Nothing records before "They said
+   * yes"; the recorder starts only from `answerPrompt`, as always.
+   */
+  const promptedRef = useRef(false);
+  useEffect(() => {
+    if (!armed) {
+      promptedRef.current = false;
+      return;
+    }
+    if (!capture || recording || prompting || promptedRef.current) return;
+    promptedRef.current = true;
+    if (!capture.transcription_available || !capture.recording_policy_active) {
+      setMessage(`Nothing can start yet — ${capture.blockers[0] ?? "the room is not ready."}`);
+      return;
+    }
+    setPrompting(true);
+  }, [armed, capture, recording, prompting]);
 
   const state = capture;
   const consentGranted = state?.consent.TRANSCRIPTION === "GRANTED" && state?.consent.RECORDING === "GRANTED";
@@ -233,7 +311,7 @@ function RecordingLine({ meetingId, capture, onChange, onLive }: { meetingId: st
     }
     const res = await api<{ text?: string; engine?: string; fallback_reason?: string | null; error?: string; detail?: string }>(
       `/api/meetings/${meetingId}/capture/chunk`,
-      { method: "POST", body: { audio_base64: audio, sequence: seqRef.current++, content_type: blob.type || "audio/webm" } },
+      { method: "POST", body: { audio_base64: audio, sequence: seqRef.current++, content_type: blob.type || "audio/webm", via: "laptop_mic" } },
     );
     if (res.status !== 201) {
       // Named, never dropped. A transcript with a silent hole in it is worse than a short one.
@@ -250,6 +328,7 @@ function RecordingLine({ meetingId, capture, onChange, onLive }: { meetingId: st
     setRecording(false);
     // The prompt is re-armed, deliberately: starting again is a new start and asks again.
     setAsked(false);
+    onDisarm?.();
   }
 
   async function start() {
@@ -351,6 +430,8 @@ function RecordingLine({ meetingId, capture, onChange, onLive }: { meetingId: st
         )}
       </div>
 
+      {armed && <p className="notice small" data-testid="laptop-mic-note" role="status">{LAPTOP_MIC_NOTE}</p>}
+
       {state && state.blockers.length > 0 && (
         <ul className="card-list small" data-testid="capture-blockers">
           {state.blockers.map((b) => (
@@ -386,7 +467,7 @@ function RecordingLine({ meetingId, capture, onChange, onLive }: { meetingId: st
             <button type="button" disabled={busy} data-testid="consent-no" onClick={() => void answerPrompt("DENIED")}>
               They said no
             </button>
-            <button type="button" className="btn-ghost" disabled={busy} onClick={() => setPrompting(false)}>
+            <button type="button" className="btn-ghost" disabled={busy} onClick={() => { setPrompting(false); onDisarm?.(); }}>
               Not now
             </button>
           </div>
@@ -411,16 +492,34 @@ function RecordingLine({ meetingId, capture, onChange, onLive }: { meetingId: st
  * `shared/meetings/howTheRoomHears.ts` from the facts the Worker serves plus this browser's
  * recorder — never composed here. States: loading, error, and one of the named states.
  */
-function HearingLine({ meetingId, facts, live, loading, status }: { meetingId: string; facts: HearingFacts | null; live: boolean; loading: boolean; status: number | null }): JSX.Element {
+function HearingLine({ meetingId, facts, live, loading, status, chip = false }: { meetingId: string; facts: HearingFacts | null; live: boolean; loading: boolean; status: number | null; chip?: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false);
   if (!facts) {
     return (
-      <p className="hears" data-testid={`hears-${meetingId}`} data-state={loading ? "loading" : "error"} role="status" aria-live="polite">
+      <p className={chip ? "hears hears-chip" : "hears"} data-testid={`hears-${meetingId}`} data-state={loading ? "loading" : "error"} role="status" aria-live="polite">
         <span className="eyebrow">How this room hears</span>
         <span className="muted small">{loading ? "Reading how this room hears…" : `Could not read how this room hears (HTTP ${status ?? "—"}).`}</span>
       </p>
     );
   }
   const h = hearingOf(facts, { live });
+  if (chip) {
+    // The narrow room: one chip at the top, the sentence behind it on a press (8 states: the
+    // named state on data-state; open/closed on aria-expanded; focus, hover and active from .hears-chip).
+    return (
+      <div className="hears hears-chip" data-testid={`hears-${meetingId}`} data-state={h.state} role="status" aria-live="polite">
+        <button type="button" className="hears-chip-button" aria-expanded={open} aria-controls={`hears-detail-${meetingId}`} data-testid="hears-chip" onClick={() => setOpen((v) => !v)}>
+          <span className="live-dot" aria-hidden="true" hidden={!live} />
+          <span className="eyebrow">{h.channel}</span>
+          <span data-testid="hears-chip-words">{h.chip}</span>
+        </button>
+        <div id={`hears-detail-${meetingId}`} hidden={!open} className="stack">
+          <span data-testid="hears-sentence">{h.sentence}</span>
+          {h.live_sentence && <span className="muted small" data-testid="hears-live-path" data-path={h.live_path ?? undefined}>{h.live_sentence}</span>}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="hears" data-testid={`hears-${meetingId}`} data-state={h.state} role="status" aria-live="polite">
       <span className="eyebrow">How this room hears · {h.channel}</span>
@@ -900,10 +999,38 @@ export function RoomChart({ kind, rows, columns, title }: { kind: string; rows: 
 
 // ── 6 · Who is seated, with a chip per task ───────────────────────────────────────────────────
 
-function SeatedRow({ seated, tasks }: { seated: RoomState["seated"]; tasks: Task[] }): JSX.Element {
+function SeatedRow({ seated, tasks, compact = false }: { seated: RoomState["seated"]; tasks: Task[]; compact?: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  if (compact && seated.length > 0 && !open) {
+    // The narrow room: avatars and a count; a press opens the chips.
+    return (
+      <div className="stack" data-testid="room-seated">
+        <button type="button" className="seats-collapsed" aria-expanded={false} data-testid="room-seated-toggle" onClick={() => setOpen(true)}>
+          <span className="seats-avatars" aria-hidden="true">
+            {seated.slice(0, 5).map((s) =>
+              portraitFor(s.name) ? (
+                <img key={s.ai_employee_id} className="employee-portrait" src={portraitFor(s.name)!} alt={portraitAlt(s.name, s.role)} width={22} height={22} loading="lazy" />
+              ) : (
+                <span key={s.ai_employee_id} className="avatar">{s.name.slice(0, 2).toUpperCase()}</span>
+              ),
+            )}
+          </span>
+          <span>{seated.length} seated{tasks.some((t) => t.chip === "working") ? " · working" : ""}</span>
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="stack" data-testid="room-seated">
-      <p className="eyebrow">Seated</p>
+      <p className="eyebrow">
+        Seated
+        {compact && seated.length > 0 && (
+          <>
+            {" "}
+            <button type="button" className="btn-ghost" aria-expanded={true} data-testid="room-seated-toggle" onClick={() => setOpen(false)}>fold</button>
+          </>
+        )}
+      </p>
       {seated.length === 0 ? (
         <p className="muted small" data-testid="room-seated-nobody">Nobody is seated yet. Address someone by name — “Wyatt, …” — and they join the room.</p>
       ) : (

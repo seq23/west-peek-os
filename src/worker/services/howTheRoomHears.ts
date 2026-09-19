@@ -114,7 +114,7 @@ export async function materialSources(env: Env, meetingId: string): Promise<Mate
   const out: MaterialSource[] = [];
   for (const i of imports) {
     if (i.provider_name === MEET_PROVIDER) out.push({ kind: "meet_transcript", label: "Meet transcript", count: i.n, first_at: i.first_at, last_at: i.last_at, turns: i.turns });
-    else if (i.source === "NATIVE") out.push({ kind: "laptop_capture", label: "Laptop capture", count: i.n, first_at: i.first_at, last_at: i.last_at, turns: i.turns });
+    else if (i.source === "NATIVE" || i.provider_name === "LAPTOP_MIC") out.push({ kind: "laptop_capture", label: "Laptop capture", count: i.n, first_at: i.first_at, last_at: i.last_at, turns: i.turns });
     else if (i.provider_name === "FIREFLIES") out.push({ kind: "fireflies_export", label: "Fireflies export", count: i.n, first_at: i.first_at, last_at: i.last_at, turns: i.turns });
     else out.push({ kind: "other_import", label: "A transcript brought in", count: i.n, first_at: i.first_at, last_at: i.last_at, turns: i.turns });
   }

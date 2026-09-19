@@ -24,7 +24,7 @@
  *   5 · NO COMPONENT COMPOSES THE SENTENCE. `RoomPanel.tsx`, `MeetingsPage.tsx`,
  *       `MeetingFacesPanel.tsx` and `LiveHelpPanel.tsx` (comments stripped) must not carry the
  *       marker phrases the module owns ("transcribed by Google", "does not hear it live",
- *       "never in the Meet call", "without the app shell"); they render them from the module.
+ *       "never in the Meet call", "in its own window — no app shell"); they render them from the module.
  *   6 · THE LINE IS ON THE PAGE. `RoomPanel.tsx` calls the module's `hearing(` and emits
  *       `data-testid={`hears-…`}`; `MeetingsPage.tsx` emits the Join line and the standalone line;
  *       `LiveHelpPanel.tsx` emits `seat-line`; `MeetingFacesPanel.tsx` emits `after-sources`.
@@ -48,10 +48,10 @@ const ROOT = path.resolve(HERE, "..", "..");
 const MODULE = path.join(ROOT, "src", "shared", "meetings", "howTheRoomHears.ts");
 const SERVICE = path.join(ROOT, "src", "worker", "services", "howTheRoomHears.ts");
 const TEST = path.join(ROOT, "tests", "howTheRoomHears.test.ts");
-const COMPONENTS = ["RoomPanel.tsx", "MeetingsPage.tsx", "MeetingFacesPanel.tsx", "LiveHelpPanel.tsx"].map((f) => path.join(ROOT, "src", "client", "pages", f));
+const COMPONENTS = ["RoomPanel.tsx", "MeetingsPage.tsx", "MeetingFacesPanel.tsx", "LiveHelpPanel.tsx", "CallDoors.tsx"].map((f) => path.join(ROOT, "src", "client", "pages", f));
 
 /** Phrases the module owns. A component that carries one has composed its own version. */
-export const OWNED_PHRASES = ["transcribed by Google", "does not hear it live", "never in the Meet call", "without the app shell", "read into this record within"];
+export const OWNED_PHRASES = ["transcribed by Google", "does not hear it live", "never in the Meet call", "in its own window — no app shell", "read into this record within"];
 
 const SAMPLE_FACTS = {
   source: "google_calendar",
@@ -80,6 +80,8 @@ export function checkSentences(mod) {
     const line = fn(SAMPLE_FACTS);
     if (typeof line !== "string" || line.length < 60) v.push(`state ${s}: its sentence is not a full line (${typeof line === "string" ? line.length : typeof line})`);
     else if (!/^(Google Meet call|In person or by phone)/.test(line)) v.push(`state ${s}: its sentence does not open with its channel`);
+    const chip = mod.HEARING_CHIP_WORDS?.[s];
+    if (typeof chip !== "string" || chip.length < 3 || chip.length > 48) v.push(`state ${s} has no chip words for the narrow room (3–48 characters)`);
   }
   for (const p of paths) {
     const line = mod.LIVE_PATH_SENTENCES?.[p];
@@ -157,7 +159,8 @@ export function checkEmitted(sources) {
   const v = [];
   const need = {
     "RoomPanel.tsx": [/hearingOf\(|\bhearing\(/, /data-testid=\{`hears-/],
-    "MeetingsPage.tsx": [/JOIN_ON_MEET_LINE/, /STANDALONE_ROOM_LINE/, /room-standalone-link-/],
+    "MeetingsPage.tsx": [/STANDALONE_ROOM_LINE/, /room-standalone-link-/, /<CallDoors/],
+    "CallDoors.tsx": [/JOIN_ON_MEET_LINE/, /LAPTOP_MIC_NOTE/, /data-testid=\{`laptop-mic-\$\{meeting\.id\}`\}/],
     "LiveHelpPanel.tsx": [/SEATED_EMPLOYEE_LINE/, /data-testid="seat-line"/],
     "MeetingFacesPanel.tsx": [/data-testid="after-sources"/, /\/hearing`/],
   };
@@ -217,6 +220,8 @@ async function selfTest() {
   const noSentence = { ...mod, HEARING_STATES: [...mod.HEARING_STATES, "MEET_GHOST"], HEARING_SENTENCES: mod.HEARING_SENTENCES };
   say(checkSentences(noSentence).violations.some((v) => /MEET_GHOST has no sentence/.test(v)), "a state with no sentence is caught");
 
+  const noChip = { ...mod, HEARING_CHIP_WORDS: { ...mod.HEARING_CHIP_WORDS, MEET_PENDING: "" } };
+  say(checkSentences(noChip).violations.some((v) => /MEET_PENDING has no chip words/.test(v)), "a state with no chip words for the narrow room is caught");
   const shortSentence = { ...mod, HEARING_SENTENCES: { ...mod.HEARING_SENTENCES, MEET_PENDING: () => "Google Meet call" } };
   say(checkSentences(shortSentence).violations.some((v) => /MEET_PENDING: its sentence is not a full line/.test(v)), "a sentence that is not a full line is caught");
 

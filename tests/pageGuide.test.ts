@@ -246,7 +246,7 @@ describe("the walkthrough and the buttons, for every guide", () => {
       "In person or by phone — no calendar, the laptop microphone",
     ]);
     const meet = m.walkthroughs[0]!;
-    const order = ["**Open the room**", "**Seat**", "**Join on Meet**", "**Ask**", "**Done — open the record**", "**Draft what came out of it**", "**Approve — make these the record**", "**Move it**"];
+    const order = ["**Go to this meeting**", "**Seat**", "**Join on Meet**", "**Use my laptop mic for this Meet call**", "**Ask**", "**Done — open the record**", "**Draft what came out of it**", "**Approve — make these the record**", "**Move it**"];
     let last = -1;
     for (const control of order) {
       const at = meet.steps.findIndex((st, i) => i > last && st.do.includes(control));
@@ -255,8 +255,20 @@ describe("the walkthrough and the buttons, for every guide", () => {
     }
     const join = meet.steps.find((st) => st.do.includes("**Join on Meet**"))!;
     expect(join.not).toMatch(/nothing joins for you/);
-    expect(join.not).toMatch(/No employee is in the call/);
-    expect(join.not).toMatch(/does not hear it live/);
+    expect(join.not).toMatch(/no employee is in the call/);
+    expect(join.then).toMatch(/Beside the call/);
+    expect(join.then).toMatch(/Inside the call/);
+    // One room, several doors — said in those words, first step of the walk.
+    expect(m.purpose).toMatch(/One room per meeting, several doors/);
+    expect(meet.steps.find((st) => st.do.includes("**Go to this meeting**"))!.do).toMatch(/one room, several doors/);
+    const mic = meet.steps.find((st) => st.do.includes("**Use my laptop mic for this Meet call**"))!;
+    expect(mic.then).toMatch(/They said yes — record/);
+    expect(mic.then).toMatch(/speakers, not headphones/);
+    expect(mic.not).toMatch(/nothing records before their yes/);
+    expect(mic.not).toMatch(/authoritative record/);
+    // The retired control is not in the walk.
+    expect(JSON.stringify(m)).not.toContain("It is happening now");
+    expect(JSON.stringify(m)).not.toContain("Bring it in");
     const seat = meet.steps.find((st) => st.do.includes("**Seat**"))!;
     expect(seat.not).toMatch(/not in the Google Meet call/);
     const person = m.walkthroughs[1]!;

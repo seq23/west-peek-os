@@ -90,6 +90,14 @@ export const OWNER_PHRASINGS = [
 /** The page as she was told it worked, on 19 Sep 2026. Must never come back, anywhere. */
 export const RETIRED_MEETINGS_TRIO = ["Prepare for a meeting", "Confer with an AI employee", "Run a close-out"];
 
+/**
+ * Controls the owner retired, by label, per page. A source the guide names may not render them
+ * (comments stripped). "It is happening now" — "wtf is that button" (19 Sep 2026): it chose a face
+ * and changed nothing; in progress is derived now. "Bring it in" — the Fireflies import, retired
+ * the same day ("we will use Whisper in lieu of Fireflies — it's better").
+ */
+export const RETIRED_CONTROLS = { meetings: ["It is happening now", "Bring it in"] };
+
 /** Every route key App.tsx renders — the same read `tests/pagePurpose.test.ts` makes. */
 export function routeKeys(appSource) {
   return new Set([...appSource.matchAll(/active === "([a-z0-9-]+)"/g)].map((m) => m[1]));
@@ -221,6 +229,10 @@ export function checkGuide(guide, { readSource, routes, jobs }) {
       if (!testidIsEmitted(id, emitted)) v.push(`${key}: act "${a.label}" names testid "${id}", which the page does not emit`);
     }
     if (!source.includes(a.label)) v.push(`${key}: act "${a.label}" is not a label the page renders`);
+  }
+
+  for (const label of RETIRED_CONTROLS[key] ?? []) {
+    if (new RegExp(`>\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*<|"${label}"`).test(source)) v.push(`${key}: the page renders "${label}", a control the owner retired`);
   }
 
   const notActs = guide.notActs ?? {};
@@ -414,6 +426,11 @@ async function selfTest() {
     "the retired Meetings trio (Prepare / Confer / Run a close-out) is caught as labels the page does not render",
   );
   say(staleResult.violations.some((v) => /primary act .* the guide does not mention/.test(v)), "a guide that omits the page's primary acts is caught");
+
+  // The retired control planted back on the page: caught by label, whatever its testid.
+  const planted = { ...deps, readSource: (rel) => { const t = deps.readSource(rel); return t === null ? null : `${t}\n<button type="button" data-testid={\`start-${"$"}{m.id}\`}>\n  It is happening now\n</button>`; } };
+  say(checkGuide(meetings, planted).violations.some((v) => /"It is happening now", a control the owner retired/.test(v)), "the retired \"It is happening now\" planted back on the page is caught");
+  say(checkGuide(meetings, deps).violations.every((v) => !/retired/.test(v)), "the shipped page renders no retired control");
 
   const ghostTestid = { ...meetings, acts: [...meetings.acts, { label: meetings.acts[0].label, testid: "meeting-ghost-button", does: "x" }] };
   say(checkGuide(ghostTestid, deps).violations.some((v) => /meeting-ghost-button/.test(v)), "a testid the page does not emit is caught");
