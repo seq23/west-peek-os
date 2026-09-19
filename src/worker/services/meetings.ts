@@ -70,6 +70,15 @@ export interface MeetingRow {
   archived_at?: string | null;
   archived_by?: string | null;
   archive_reason?: string | null;
+  /** Migration 0202 (Phase Meet). Present on every row; NULL / 'manual' for meetings somebody typed in. */
+  calendar_key?: string | null;
+  google_event_id?: string | null;
+  meet_conference_id?: string | null;
+  meet_link?: string | null;
+  source?: "manual" | "google_calendar";
+  type_inference?: "FIRM_ONLY" | "LP_CONTACT" | "COMPANY_DOMAIN" | "UNKNOWN_CHECK_IT" | null;
+  recording_ref?: string | null;
+  transcript_ref?: string | null;
 }
 
 export interface ConsentRecordRow {
@@ -351,20 +360,20 @@ async function recordTranscriptImport(
   env: Env,
   meeting: MeetingRow,
   actorId: string,
-  input: { source: string; document_id?: string; consent_record_id?: string },
+  input: { source: string; document_id?: string; consent_record_id?: string; provider_name?: string },
   status: "IMPORTED" | "REFUSED",
   refusalReason?: string,
 ): Promise<TranscriptImportRow> {
   const id = `tri_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
-    `INSERT INTO transcript_import (id, meeting_id, document_id, consent_record_id, source, status, refusal_reason, imported_by, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    `INSERT INTO transcript_import (id, meeting_id, document_id, consent_record_id, source, status, refusal_reason, imported_by, firm_scope, provider_name)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
   )
-    .bind(id, meeting.id, input.document_id ?? null, input.consent_record_id ?? null, input.source, status, refusalReason ?? null, actorId, meeting.firm_scope)
+    .bind(id, meeting.id, input.document_id ?? null, input.consent_record_id ?? null, input.source, status, refusalReason ?? null, actorId, meeting.firm_scope, input.provider_name ?? null)
     .run();
   await appendEvent(env, {
     eventType: status === "IMPORTED" ? "meeting.transcript_imported" : "meeting.transcript_refused",
-    actorType: "firm_user",
+    actorType: actorId === "system" ? "system" : "firm_user",
     actorId,
     objectType: "transcript_import",
     objectId: id,
@@ -375,33 +384,51 @@ async function recordTranscriptImport(
 }
 
 /**
+ * The one platform whose transcripts may arrive without a person pressing anything. Google Meet
+ * announces recording and transcription to the room; `meetIngest.ts` says why that is consent and
+ * where it is not. Named as a constant so the exception is greppable and cannot widen by a typo.
+ */
+export const PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS = ["GOOGLE_MEET"] as const;
+export type PlatformNativeProvider = (typeof PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS)[number];
+
+/**
  * Import a transcript. Refused (and recorded as REFUSED) unless BOTH the recording
  * policy is active for this meeting AND transcription consent is currently GRANTED.
+ *
+ * HUMAN-INITIATED, WITH ONE NAMED EXCEPTION. A transcript somebody pastes or uploads is a human
+ * act and stays one. A transcript Google Meet generated for a call the firm hosted is read by the
+ * scheduled ingest as SYSTEM, and only when `platform` names it — the two gates above are NOT
+ * relaxed for it; the recording policy comes from the firm-level decision (migration 0203) and the
+ * consent row from the platform's announcement, both written before this is called. What the
+ * exception changes is who pressed the button, not whether the gates are checked.
  */
 export async function importTranscript(
   env: Env,
   actor: Actor,
   meetingId: string,
-  input: { source: string; document_id?: string },
+  input: { source: string; document_id?: string; platform?: PlatformNativeProvider },
 ): Promise<TranscriptImportRow> {
   const meeting = await requireMeeting(env, meetingId);
-  if (actor.type !== "HUMAN") throw new MeetingError(403, "forbidden", "transcript import is human-initiated");
+  const platformNative = actor.type === "SYSTEM" && input.platform !== undefined && (PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS as readonly string[]).includes(input.platform);
+  if (actor.type !== "HUMAN" && !platformNative) throw new MeetingError(403, "forbidden", "transcript import is human-initiated");
   await mustAuthorize(env, actor, "meeting.transcript.import", "transcript_import", meetingId, meeting.firm_scope);
+  const importer = actor.firmUserId ?? "system";
+  const record = { source: input.source, document_id: input.document_id, provider_name: input.platform };
 
   if (meeting.recording_enabled !== 1) {
-    const refused = await recordTranscriptImport(env, meeting, actor.firmUserId!, input, "REFUSED", "recording_policy_not_activated");
+    const refused = await recordTranscriptImport(env, meeting, importer, record, "REFUSED", "recording_policy_not_activated");
     throw new MeetingError(409, "recording_policy_not_activated", `transcript refused and recorded as ${refused.id}`);
   }
   const consent = await currentConsent(env, meetingId, "TRANSCRIPTION");
   if (!consent || consent.state !== "GRANTED") {
-    const refused = await recordTranscriptImport(env, meeting, actor.firmUserId!, input, "REFUSED", `consent_state:${consent?.state ?? "NOT_RECORDED"}`);
+    const refused = await recordTranscriptImport(env, meeting, importer, record, "REFUSED", `consent_state:${consent?.state ?? "NOT_RECORDED"}`);
     throw new MeetingError(409, "consent_not_granted", `transcript refused and recorded as ${refused.id}`);
   }
   if (input.document_id) {
     const doc = await env.WP_OS_DB.prepare("SELECT id FROM document WHERE id = ?1").bind(input.document_id).first();
     if (!doc) throw new MeetingError(400, "unknown_document", `document '${input.document_id}' does not exist`);
   }
-  return recordTranscriptImport(env, meeting, actor.firmUserId!, { ...input, consent_record_id: consent.id }, "IMPORTED");
+  return recordTranscriptImport(env, meeting, importer, { ...record, consent_record_id: consent.id }, "IMPORTED");
 }
 
 // ── Notes ──

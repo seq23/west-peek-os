@@ -100,6 +100,16 @@ export const HUMAN_RESERVED_ACTIONS: readonly ReservedActionDef[] = [
     description: "Write a West Peek OS record back into Network OS (live integration is a named human gate).",
     approverRoles: MP,
   },
+  // Phase Meet (18 Sep 2026). ONE decision per firm, not one per call: recording/transcription
+  // on by default for every Google Meet the firm hosts. Every meeting the ingest reads points its
+  // recording_policy_receipt_id at this card, so the audit trail from any transcript leads back to
+  // the human decision. Migration 0203 says why the per-meeting gate could not be the shape.
+  {
+    key: "meet.recording_policy.firm_default",
+    category: "LEGAL_COMPLIANCE",
+    description: "Turn the recording/transcription policy on by default for every Google Meet the firm hosts (human-reserved; one decision per firm).",
+    approverRoles: MP_OR_COMPLIANCE,
+  },
 ] as const;
 
 export const HUMAN_RESERVED_ACTION_KEYS: readonly string[] = HUMAN_RESERVED_ACTIONS.map((a) => a.key);

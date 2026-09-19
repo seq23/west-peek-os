@@ -568,6 +568,8 @@ import {
   handleListFirmSkills,
   handleRetireFirmSkill,
 } from "./services/firmSkills";
+import { handleCalendarLedger, handleRunCalendarSync } from "./services/calendarSync";
+import { handleFirmRecordingPolicy, handleMeetInbox, handleMeetStatus, handleRunMeetIngest } from "./services/meetIngest";
 import {
   handleCreatePersonalEntry,
   handleGetPersonalProfile,
@@ -959,6 +961,18 @@ const router = new Router()
   .post("/api/meetings/:id/capture/chunk", handleCaptureChunk)
   // A transcript somebody else recorded. Same two gates, and importing is never consent.
   .post("/api/meetings/:id/transcript/fireflies", handleImportFireflies)
+  // === Phase Meet: Google Meet integration ===
+  // Tier 1: the firm calendar becomes meetings. Tier 2: an ended Meet is read once, through the
+  // governed import. The one reserved decision — recording on by default for every firm-hosted
+  // Meet — is a receipt-gated POST. Everything here is read from Google and written here; no route
+  // writes to a calendar, a space or Drive. Literal paths only, so nothing shadows a :id route.
+  .get("/api/meet/status", handleMeetStatus)
+  .get("/api/meet/inbox", handleMeetInbox)
+  .get("/api/meet/calendar", handleCalendarLedger)
+  .post("/api/meet/calendar/sync", handleRunCalendarSync)
+  .post("/api/meet/ingest", handleRunMeetIngest)
+  .post("/api/meet/recording-policy", handleFirmRecordingPolicy)
+  // === end Phase Meet ===
   // P33 — Event OS / Community OS scaffolding.
   .get("/api/events", handleListEvents)
   .post("/api/events", handleCreateEvent)

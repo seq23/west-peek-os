@@ -171,6 +171,7 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('transaction.void', 'transaction.void', 'Void a transaction (reverses its position effect; the record is preserved).', 0, 1),
   ('meeting.recording_policy.activate', 'meeting.recording_policy.activate', 'Activate recording/transcription policy for a meeting (human-reserved gate).', 0, 1),
   ('network_os.writeback', 'network_os.writeback', 'Write a West Peek OS record back into Network OS (live integration is a named human gate).', 0, 1),
+  ('meet.recording_policy.firm_default', 'meet.recording_policy.firm_default', 'Turn the recording/transcription policy on by default for every Google Meet the firm hosts (human-reserved; one decision per firm).', 0, 1),
   ('capture.create', 'Create capture', 'Record unstructured input into the capture intake.', 0, 0),
   ('capture.route', 'Route capture', 'Route a capture to a machine.', 0, 0),
   ('capture.resolve', 'Resolve capture', 'Say what a capture is about — a company, a person, or neither — and reconcile it against the register or Network OS.', 0, 0),
@@ -360,6 +361,9 @@ INSERT OR IGNORE INTO action_type (key, name, description, is_external_effect, i
   ('match.manage', 'Manage introduction suggestions', 'Propose or dismiss a suggested introduction between two people. Proposing is internal; making the introduction is a human act.', 0, 0),
   ('duty_override.set', 'Change who is on duty', 'Put an employee on or off a named shift, or give them explicit working hours that supersede the shift model for them. Stored as a difference from the firm''s default rota, never as a copy of it, and always with who changed it and why.', 0, 0),
   ('duty_override.clear', 'Put a duty change back to default', 'Remove a duty override so the employee follows the firm''s default rota again. The change and its removal both stay on the event spine.', 0, 0),
+  ('calendar.sync', 'Sync a partner calendar', 'Read a partner''s Google Calendar and create or update one meeting per event with a Meet link. Internal record only; reads nothing it cannot see and writes nothing to Google.', 0, 0),
+  ('meet.ingest', 'Read an ended Google Meet', 'Read the participants, transcript entries and recording pointer of a conference that ended, and ingest the transcript through the governed import. Never runs a model.', 0, 0),
+  ('meet.consent.platform_announced', 'Record platform-announced consent', 'Record TRANSCRIPTION and RECORDING consent as GRANTED for a Meet-native transcript, on the basis that Google Meet announced both to every participant. Never for a transcript uploaded by hand.', 0, 0),
   ('effect.email.send', 'Send email', 'External effect: deliver an email to an outside recipient (simulated locally).', 1, 0),
   ('effect.message.send', 'Send message', 'External effect: deliver a message to an external channel (simulated locally).', 1, 0),
   ('effect.webhook.post', 'Post webhook', 'External effect: POST to an external webhook endpoint (simulated locally).', 1, 0);
@@ -418,7 +422,8 @@ INSERT OR IGNORE INTO human_reserved_action (key, category, description, approve
   ('knowledge.promote', 'LEGAL_COMPLIANCE', 'Promote evidence into durable institutional memory (knowledge_record).', '["MANAGING_PARTNER"]'),
   ('transaction.void', 'INVESTMENT_CAPITAL', 'Void a transaction (reverses its position effect; the record is preserved).', '["MANAGING_PARTNER"]'),
   ('meeting.recording_policy.activate', 'LEGAL_COMPLIANCE', 'Activate recording/transcription policy for a meeting (human-reserved gate).', '["MANAGING_PARTNER","COMPLIANCE_OFFICER"]'),
-  ('network_os.writeback', 'RELATIONSHIP_PUBLIC', 'Write a West Peek OS record back into Network OS (live integration is a named human gate).', '["MANAGING_PARTNER"]');
+  ('network_os.writeback', 'RELATIONSHIP_PUBLIC', 'Write a West Peek OS record back into Network OS (live integration is a named human gate).', '["MANAGING_PARTNER"]'),
+  ('meet.recording_policy.firm_default', 'LEGAL_COMPLIANCE', 'Turn the recording/transcription policy on by default for every Google Meet the firm hosts (human-reserved; one decision per firm).', '["MANAGING_PARTNER","COMPLIANCE_OFFICER"]');
 -- END GENERATED SEEDS
 
 -- ── Capture intake (+Capture) ──

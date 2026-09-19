@@ -173,6 +173,31 @@
       "kind": "config",
       "required": false,
       "purpose": "Access service token client id of the subscription-seat claimer on the owner's Mac (migration 0187). A NAME, not a secret: Access verifies both halves at the edge and forwards only a signed assertion. Absent means the claimer identity does not exist and the subscription lanes can never be claimed — safe, not broken: the chain answers every run on the lanes it always used."
+    },
+    "WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Service-account JSON with domain-wide delegation over the firm calendar (Phase Meet). Vault name GSC_SERVICE_ACCOUNT_JSON, aliased by cloudflare-mapping.json. Read only by effects/googleWorkspaceClient.ts."
+    },
+    "WP_OS_CAL_ICS_WESTPEEK": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Private iCal URL of the firm calendar - the fallback door when the Calendar API path fails. Vault name CAL_ICS_WESTPEEK."
+    },
+    "WP_OS_GCP_PROJECT_ID": {
+      "kind": "var",
+      "required": false,
+      "purpose": "GCP project owning the service account, the Meet API enablement and the Pub/Sub topic (gsc-automation-493801). Non-secret."
+    },
+    "WP_OS_MEET_PUBSUB_TOPIC": {
+      "kind": "var",
+      "required": false,
+      "purpose": "projects/{p}/topics/{t} that Workspace Events publish Meet events to. Non-secret."
+    },
+    "WP_OS_MEET_PUBSUB_SUBSCRIPTION": {
+      "kind": "var",
+      "required": false,
+      "purpose": "projects/{p}/subscriptions/{s} the meet_ingest tick pulls from. Pull, never push: the Worker sits behind Cloudflare Access. Non-secret."
     }
   }
 }
