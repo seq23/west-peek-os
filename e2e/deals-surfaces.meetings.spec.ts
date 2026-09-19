@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { retireFixtureDeals } from "./support/fixtures";
 import { VIEWPORTS, measureSurface, reportLine, signIn, type Viewport } from "./support/measure";
 
 /**
@@ -33,8 +34,16 @@ test.describe("Meetings", () => {
    * proposed stage move — so the list's readiness and outputs lines, the After face's banner and
    * both columns of "Owed", and the During checklist all render with rows rather than empty states.
    */
-  interface Seed { upcomingId: string; heldId: string }
+  interface Seed { upcomingId: string; heldId: string; dealId: string }
   let seed: Seed | null = null;
+
+  /* THE FIXTURE CONTRACT (support/fixtures.ts): the seeded deal is retired once every test has
+     measured it, so its live NEW row cannot fill a later spec's intelligence window. */
+  test.afterAll(async ({ request }) => {
+    if (!seed) return;
+    const retired = await retireFixtureDeals(request, [seed.dealId], "the Meetings measurement");
+    expect(retired, "the Meetings fixture deal is retired").toBe(1);
+  });
 
   async function seedMeetings(request: APIRequestContext): Promise<Seed> {
     if (seed) return seed;
@@ -68,7 +77,7 @@ test.describe("Meetings", () => {
     expect(heldRow?.stage_proposal_pending_count, "the held meeting must carry its proposal").toBe(1);
     expect(heldRow?.decision_count).toBe(1);
     expect(list.meetings.find((m) => m.id === upcoming.id)?.we_owe_them, "the upcoming meeting must carry what rolls forward").toBe(1);
-    seed = { upcomingId: upcoming.id, heldId: held.id };
+    seed = { upcomingId: upcoming.id, heldId: held.id, dealId: opp.id };
     return seed;
   }
 

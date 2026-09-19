@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
+import { retireFixtureDeals } from "./support/fixtures";
 import { deliverMail } from "./support/mail";
 
 /**
@@ -302,24 +303,11 @@ async function seedRegister(request: APIRequestContext): Promise<{
   };
 }
 
-/**
- * LEAVE THE FIRM AS IT WAS FOUND. The suite shares one database, and a live NEW deal is not inert:
- * every intelligence run acquires the open NEW/SCREENING opportunities as items (services/
- * intelligence.ts `acquireInternal`, scored 0.30 for naming a company), and Home's intelligence
- * module shows the top EIGHT. Eight deals left here pushed journey 1 of p25 — an unscored manual
- * item — out of that window, so the module had nothing new and did not render. Twice in CI,
- * reproducibly, on a spec that never touches Home. The seeded live deals are therefore removed
- * (the product's own "Remove this record", with a reason) once each test has measured them.
- */
+/** The fixture contract (support/fixtures.ts): the seeded live deals are retired once measured. */
 async function tidyRegister(request: APIRequestContext, seed: Awaited<ReturnType<typeof seedRegister>>): Promise<void> {
-  for (const row of [seed.manual, seed.mailed]) {
-    if (!row.deal_id) continue;
-    const res = await request.post(`/api/opportunities/${row.deal_id}/archive`, {
-      headers: MP,
-      data: { reason: `e2e fixture for the Companies measurement (${seed.marker}); removed so it cannot bias another spec's Home` },
-    });
-    expect(res.status(), await res.text()).toBe(200);
-  }
+  const ids = [seed.manual.deal_id, seed.mailed.deal_id];
+  const retired = await retireFixtureDeals(request, ids, `the Companies measurement (${seed.marker})`);
+  expect(retired, "both Companies fixture deals are retired").toBe(ids.filter(Boolean).length);
 }
 
 async function openCompanies(page: Page): Promise<void> {
