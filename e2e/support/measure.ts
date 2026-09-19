@@ -165,10 +165,11 @@ export async function measureSurface(page: Page, rootTestId: string, label: stri
         .filter((el) => {
           const r = el.getBoundingClientRect();
           const s = getComputedStyle(el);
-          // A deliberately scrollable box (the faces strip, a wide table in its own container) is
-          // not an overflowing page, and neither is what sits inside it.
+          // A deliberately scrollable box (the faces strip, a wide table in its own container, Home's
+          // filter rail — design/HOME_DESIGN.md §5 names it the one inner scroller) is not an
+          // overflowing page, and neither is what sits inside it.
           if (s.overflowX === "auto" || s.overflowX === "scroll") return false;
-          if (el.closest(".faces, .table-wrap")) return false;
+          if (el.closest(".faces, .table-wrap, .rail")) return false;
           if (el.closest(".sr-only")) return false;
           return r.width > 0 && Math.round(r.right) > w + 1;
         })

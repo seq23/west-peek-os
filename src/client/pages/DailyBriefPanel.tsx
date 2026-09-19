@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { api, useApi } from "../lib/api";
-import { collapsedBriefLine } from "../lib/briefCollapse";
 import { briefArrival } from "../lib/briefState";
 import {
   MOVING_KINDS, POLL_EVERY_MS, answerLine, examinedLine, pressOutcomeLine, progressFraction, showsLiveDot, toneClassFor,
@@ -433,11 +432,9 @@ function InterestsEditor(): JSX.Element {
  */
 export function DailyBriefPanel({
   compact = false,
-  collapsed = false,
-  onToggleCollapsed,
   viewerId = null,
   preparedBy = null,
-}: { compact?: boolean; collapsed?: boolean; onToggleCollapsed?: (next: boolean) => void; viewerId?: string | null; preparedBy?: string | null } = {}): JSX.Element {
+}: { compact?: boolean; viewerId?: string | null; preparedBy?: string | null } = {}): JSX.Element {
   const state = useApi<{ report: Report | null; sections: Section[]; citations: Citation[]; date: string; no_brief_because?: string | null }>("/api/daily-intelligence");
   /*
    * THE NAMED STATE, FROM THE ROW, EVERY FEW SECONDS WHILE IT MOVES (19 Sep 2026).
@@ -503,7 +500,12 @@ export function DailyBriefPanel({
     return ids.map((i) => citations.get(i)).filter((c): c is Citation => Boolean(c));
   }
 
-  const collapsible = Boolean(onToggleCollapsed);
+  /*
+   * THE FOLD IS RETIRED (design/HOME_DESIGN.md §2, 19 Sep 2026). "Hide the brief / Show the brief"
+   * was one of four collapse controls on Home, and folded it hid whether the brief ran at all. The
+   * filter rail is the fold now; the band is on every filter because it is the one thing built on
+   * request, and its state line always says what the row says.
+   */
   const examined = examinedLine({
     completedAt: report?.status === "READY" ? report.completed_at : null,
     preparedBy,
@@ -522,42 +524,8 @@ export function DailyBriefPanel({
         {report?.edition ? `${report.edition} · ` : ""}
         {state.data?.date ?? run?.date ?? ""}
       </span>
-      {collapsible && (
-        <button
-          type="button"
-          className="link-button brief-fold"
-          data-testid="daily-brief-fold"
-          aria-expanded={!collapsed}
-          aria-controls="daily-brief-contents"
-          onClick={() => onToggleCollapsed!(!collapsed)}
-        >
-          {collapsed ? "Show the brief" : "Hide the brief"}
-        </button>
-      )}
     </header>
   );
-
-  /*
-   * FOLDED AWAY, BUT NEVER SILENT ABOUT WHETHER IT RAN. One line: today's date, and whether a brief
-   * exists for it. The state she must never be left guessing at is "is this hidden, or did it not
-   * arrive?", so the collapsed panel answers exactly that question and nothing else.
-   */
-  if (collapsed) {
-    return (
-      <section className="card daily-brief daily-brief-collapsed" data-testid="daily-brief">
-        {masthead}
-        <p className="muted small" data-testid="daily-brief-collapsed-state">
-          {collapsedBriefLine({
-            report,
-            sectionCount: sections.length,
-            loading: state.loading,
-            date: state.data?.date ?? null,
-            noBriefBecause: state.data?.no_brief_because ?? null,
-          })}
-        </p>
-      </section>
-    );
-  }
 
   return (
     <section className="card daily-brief" data-testid="daily-brief" id="daily-brief-contents">
@@ -576,15 +544,22 @@ export function DailyBriefPanel({
         * usual. Nothing here is inferred from silence: the server computed every word from the row.
         */}
       {run && (
-        <div className={toneClassFor(run.kind)} data-testid="daily-brief-state" data-kind={run.kind} role="status" aria-live="polite">
+        <div className={run.slow ? "notice notice-gate brief-state" : `${toneClassFor(run.kind)} brief-state`} data-testid="daily-brief-state" data-kind={run.kind} data-slow={run.slow ? "true" : undefined} role="status" aria-live="polite">
           <p className="brief-state-line">
             {showsLiveDot(run.kind) && <span className="live-dot" aria-hidden="true" />}
             <strong data-testid="daily-brief-state-line">{answerLine(run)}</strong>
           </p>
           {run.next && <p className="muted small" data-testid="daily-brief-state-next">{run.next}</p>}
+          {MOVING_KINDS.has(run.kind) && run.stages && (
+            <ol className="brief-stage" aria-hidden="true" data-testid="daily-brief-stages">
+              {run.stages.map((st) => (
+                <li key={st.key} className="brief-stage-words" data-state={st.state}>{st.words}</li>
+              ))}
+            </ol>
+          )}
           {progressFraction(run) !== null && (
             <div className="progress-track" role="progressbar" aria-label="How far the build has got" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((progressFraction(run) ?? 0) * 100)}>
-              <div className="progress-fill" style={{ width: `${Math.round((progressFraction(run) ?? 0) * 100)}%` }} />
+              <div className={run.slow ? "progress-fill progress-fill-slow" : "progress-fill"} style={{ width: `${Math.round((progressFraction(run) ?? 0) * 100)}%` }} />
             </div>
           )}
           {run.elapsedSeconds !== null && MOVING_KINDS.has(run.kind) && (

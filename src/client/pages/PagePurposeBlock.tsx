@@ -87,6 +87,10 @@ export function PagePurposeBlock({
           {p.archived}
         </p>
       )}
+      {/* On a phone (≤ 40rem) this line is hidden by CSS: with the shell header it put 437px of
+          chrome above Home's answer, and the design's first rule is that the answer and the first
+          arrival sit above the 844px fold at 390. The sentence and the help link stay on every
+          width; the verbs are one tap away in Help, where `pagePurpose` already carries them. */}
       <p className="page-purpose-can">
         {p.youCan.map((c, i) => (
           <span key={c}>

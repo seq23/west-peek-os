@@ -171,7 +171,7 @@ export function IntegrationsPage({ me }: { me: MeResponse }) {
    * The investor sections are LP_PRIVATE. When the reader lacks that access the API refuses, and
    * every section below still renders its heading and says this instead of disappearing.
    */
-  const lpBlocked = lpOps.data?.error
+  const lpBlocked = lpOps.status === 403
     ? "You do not have investor access, so this cannot be shown to you. A Managing Partner can see it."
     : null;
   const lpRows = lpBlocked ? null : lpOps.data;

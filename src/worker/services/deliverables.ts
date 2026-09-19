@@ -286,7 +286,15 @@ export async function handleListDeliverables(ctx: RouteContext): Promise<Respons
    * a kind is one field on its definition and never a second list here.
    */
   const archived = archivedDeliverableKinds();
-  const archivedClause = archived.length > 0 ? `d.kind NOT IN (${archived.map((k) => `'${k}'`).join(", ")})` : "1=1";
+  /*
+   * `?exclude_kind=daily_brief` (design/HOME_DESIGN.md §2, 19 Sep 2026): Home's Arrived band shows
+   * everything prepared for the reader EXCEPT the brief, because the brief band above it IS the
+   * brief — 39 of 57 deliverables she put away by hand were a copy of the panel above them. Excluded
+   * in the query so `limit` still means rows she will see, not rows minus copies.
+   */
+  const excludeKind = url.searchParams.get("exclude_kind");
+  const excluded = excludeKind && /^[a-z_]+$/.test(excludeKind) ? [...archived, excludeKind] : archived;
+  const archivedClause = excluded.length > 0 ? `d.kind NOT IN (${excluded.map((k) => `'${k}'`).join(", ")})` : "1=1";
 
   // BOTH PARTNERS SEE EACH OTHER'S. Research is INTERNAL by default, and the operator's question was
   // explicitly "if scooter requests research i can find it". Anything labelled more sensitive is
@@ -595,4 +603,65 @@ export function copyEmail(row: Pick<DeliverableRow, "kind" | "title" | "body" | 
     ],
     details: markdown,
   };
+}
+
+// === Home overhaul ===
+/*
+ * MANY AT ONCE, ONE HONEST ANSWER (design/HOME_DESIGN.md §3.4, 19 Sep 2026).
+ *
+ * Production, 20 Aug → 19 Sep: 24 of 57 deliverables put away by hand, one press each; 4 read.
+ * "The open things below have to be opened one by one and can't all be dismissed." So the Arrived
+ * band gets `Mark all read` and select-many, and each lands here as ONE request rather than N: a
+ * partial failure is then one sentence — which ids were done and which were not — instead of N
+ * separate results the page would have to reconcile.
+ *
+ * ZERO IDS IS A REFUSAL, NOT A NO-OP. A batch route that answers 200 to an empty list is the "runs
+ * but inert" shape: a page that lost its selection would report success having done nothing.
+ */
+const manySchema = z.object({ ids: z.array(z.string().trim().min(1)).min(1, "at least one id").max(200) });
+
+async function markMany(ctx: RouteContext, kind: "acknowledge" | "dismiss"): Promise<Response> {
+  const parsed = manySchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", detail: "ids: a non-empty list of deliverable ids", issues: parsed.error.issues }, { status: 400 });
+  const done: string[] = [];
+  const missing: string[] = [];
+  for (const id of parsed.data.ids) {
+    const row = await loadVisible(ctx, id);
+    if (!row) { missing.push(id); continue; }
+    if (kind === "acknowledge") {
+      await ctx.env.WP_OS_DB.prepare(`UPDATE deliverable SET acknowledged_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), acknowledged_by = ?2 WHERE id = ?1`).bind(row.id, ctx.identity!.id).run();
+    } else {
+      await ctx.env.WP_OS_DB.prepare(`UPDATE deliverable SET dismissed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), dismissed_by = ?2 WHERE id = ?1`).bind(row.id, ctx.identity!.id).run();
+    }
+    await appendEvent(ctx.env, {
+      eventType: kind === "acknowledge" ? "deliverable.acknowledged" : "deliverable.dismissed",
+      actorType: "firm_user",
+      actorId: ctx.identity!.id,
+      objectType: "deliverable",
+      objectId: row.id,
+      firmScope: row.firm_scope,
+      payload: { kind: row.kind, title: row.title, batch: parsed.data.ids.length },
+    });
+    done.push(row.id);
+  }
+  await appendEvent(ctx.env, {
+    eventType: kind === "acknowledge" ? "home.mark_all_read" : "home.dismiss_many",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "deliverable",
+    objectId: "many",
+    firmScope: "west-peek",
+    payload: { asked: parsed.data.ids.length, done: done.length, missing: missing.length },
+  });
+  return json({ ok: missing.length === 0, done, missing, note: missing.length ? `${missing.length} of ${parsed.data.ids.length} could not be found or are not yours to change.` : null }, { status: missing.length ? 207 : 200 });
+}
+
+/** POST /api/deliverables/acknowledge-many {ids} — Mark all read. */
+export async function handleAcknowledgeMany(ctx: RouteContext): Promise<Response> {
+  return markMany(ctx, "acknowledge");
+}
+
+/** POST /api/deliverables/dismiss-many {ids} — Put the selected away. */
+export async function handleDismissMany(ctx: RouteContext): Promise<Response> {
+  return markMany(ctx, "dismiss");
 }

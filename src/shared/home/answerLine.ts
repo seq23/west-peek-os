@@ -1,24 +1,17 @@
 /**
- * RANK 0 ON HOME: the one line that answers the question the page exists to answer.
+ * THE ANSWER LINE — rank 0 on Home, in words, from ONE count (design/HOME_DESIGN.md §3.1).
  *
- * Home used to open with "This evening, Sequoia" — a greeting, set in the largest type on the
- * page — while the thing a partner actually came for ("is anything blocked on me?") was spelled
- * out in three places further down at three different weights, one of which was a grey line
- * floated into the far right corner. The operator's words on 18 Sep 2026 were "i can't keep up"
- * and "the headings have no visual weight".
+ * WHAT WAS WRONG (audit #4). The masthead keyed on decisions alone ("Nothing is waiting on your
+ * signature.") while the band under it said "Waiting on you 1" from decisions + blockers +
+ * previews. The same page, two counts, and the largest type on it contradicted the pill beneath.
  *
- * So the largest type now states the answer, and the greeting is the eyebrow above it. Both lines
- * are derived from counts Home has already computed — `waiting.count`, the operator-attention
- * list, and the deliveries that are NEW since she last looked. Nothing here fetches anything and
- * nothing here rounds: a page that says "two decisions" when there are three is worse than a page
- * that says nothing.
- *
- * PURE, AND IN `shared/`, because the sentence is the product decision — the grammar of "one
- * decision is" against "two decisions are", and the rule that a blocker is not a signature — and a
- * product decision that lives inside a JSX expression is a product decision nobody can test.
+ * NOW: the answer is `needsHer` — decisions + blockers + previews — in words; the detail names the
+ * kinds ("Not a signature — Scooter's brief failed and Willow has it."), then what arrived, then
+ * today's brief. Every clause comes from a count the page already loads; a clause with nothing to
+ * say is dropped, never printed as a zero. `tests/homeAnswerLine.test.ts` pins that the answer and
+ * the Waiting pill can never disagree, because they are the same number.
  */
 
-/** One to nine in words; ten and up stay as digits, where a numeral reads faster than a word. */
 const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
 
 export function inWords(n: number): string {
@@ -30,60 +23,79 @@ function capitalise(s: string): string {
 }
 
 export interface HomeCounts {
-  /** Decisions blocked on her signature — approvals, and only approvals. */
+  /** Decisions blocked on her signature — approval cards. */
   decisions: number;
   /** Things blocking the firm that are not hers to sign: dead letters, setup, a dark provider. */
   blockers: number;
-  /** The headline of the first blocker, used verbatim in the second line when there is exactly one. */
+  /** The headline of the first blocker, used verbatim in the detail when there is exactly one. */
   firstBlocker?: string | null;
-  /** Colleagues with something NEW since she last looked. Quiet is not new. */
+  /** Previews waiting on "Approve and send" — finished work that decays if she does not answer. */
+  previews?: number;
+  /** Things that arrived since she last looked: deliverables for her, colleagues with news. */
   fresh: number;
   /** Colleagues with nothing new. Reported, because silence from a named person is information. */
   quiet: number;
+  /** Today's brief, in one clause, from the brief band's own state line; null when unknown. */
+  brief?: string | null;
 }
 
-/**
- * The answer line.
- *
- * KEYED ON DECISIONS ALONE. A blocker is real and it is on the page, but it is not waiting on her
- * SIGNATURE, and a headline that conflates the two teaches her to discount it. The zero case is
- * stated here rather than as a headed, empty "Waiting on you (0)" section — that section no longer
- * renders at all, because a screenful that says nothing is the worst use of the top of this page.
- */
+/** ONE number, shared by the answer and the Waiting band's pill. */
+export function needsHer(counts: Pick<HomeCounts, "decisions" | "blockers" | "previews">): number {
+  return Math.max(0, counts.decisions) + Math.max(0, counts.blockers) + Math.max(0, counts.previews ?? 0);
+}
+
 export function answerLine(counts: HomeCounts): string {
-  if (counts.decisions <= 0) return "Nothing is waiting on your signature.";
-  if (counts.decisions === 1) return "One decision is waiting on you.";
-  return `${capitalise(inWords(counts.decisions))} decisions are waiting on you.`;
+  const n = needsHer(counts);
+  if (n === 0) return "Nothing is waiting on you.";
+  if (n === 1) return "One thing is waiting on you.";
+  return `${capitalise(inWords(n))} things are waiting on you.`;
 }
 
-/**
- * The second line: what is unfinished, what the firm produced, and who was silent.
- *
- * Every clause is dropped when its count is zero rather than rendered as "0 blockers" — the whole
- * point of the rewrite is that empty states shrink instead of occupying.
- */
+/** The kinds, so "one thing" is never a mystery: what it is, and whether it needs a signature. */
+export function waitingKinds(counts: HomeCounts): string | null {
+  const n = needsHer(counts);
+  if (n === 0) return null;
+  const parts: string[] = [];
+  const previews = counts.previews ?? 0;
+  if (previews > 0) parts.push(previews === 1 ? "a preview to approve and send" : `${inWords(previews)} previews to approve and send`);
+  if (counts.decisions > 0) parts.push(counts.decisions === 1 ? "a decision on your signature" : `${inWords(counts.decisions)} decisions on your signature`);
+  if (counts.blockers > 0) {
+    parts.push(
+      counts.blockers === 1 && counts.firstBlocker
+        ? `${counts.firstBlocker.replace(/\.$/, "")}`
+        : counts.blockers === 1
+          ? "one thing unfinished"
+          : `${inWords(counts.blockers)} things unfinished`,
+    );
+  }
+  const joined = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  const signature = counts.decisions === 0 && previews === 0 ? "Not a signature — " : "";
+  return `${signature}${capitalise(joined)}.`;
+}
+
+/** The first sentence of a line, so a two-sentence state contributes one clause. */
+export function firstSentence(line: string): string {
+  const m = /^(.*?[.!?])(?:\s|$)/.exec(line.trim());
+  return m ? m[1]! : line.trim();
+}
+
 export function secondLine(counts: HomeCounts): string {
   const parts: string[] = [];
-
-  if (counts.blockers === 1) {
-    parts.push(
-      counts.firstBlocker
-        ? `One thing is unfinished — ${counts.firstBlocker.replace(/\.$/, "")}.`
-        : "One thing is unfinished.",
-    );
-  } else if (counts.blockers > 1) {
-    parts.push(`${capitalise(inWords(counts.blockers))} things are unfinished.`);
-  }
+  const kinds = waitingKinds(counts);
+  if (kinds) parts.push(kinds);
 
   parts.push(
     counts.fresh === 0
-      ? "Nothing new from your team since you last looked."
+      ? "Nothing arrived since you last looked."
       : counts.fresh === 1
-        ? "One of your team has something new for you."
-        : `${capitalise(inWords(counts.fresh))} of your team have something new for you.`,
+        ? "One arrived since you last looked."
+        : `${capitalise(inWords(counts.fresh))} arrived since you last looked.`,
   );
 
-  if (counts.quiet === 1) parts.push("One colleague has nothing new.");
+  // ONE sentence of the brief: the band under the masthead carries the whole line, and the
+  // masthead read "No brief today yet. None has been built yet." when it carried both.
+  if (counts.brief) parts.push(firstSentence(counts.brief).replace(/\.?$/, "."));
+  else if (counts.quiet === 1) parts.push("One colleague has nothing new.");
   else if (counts.quiet > 1) parts.push(`${capitalise(inWords(counts.quiet))} colleagues have nothing new.`);
 
   return parts.join(" ");

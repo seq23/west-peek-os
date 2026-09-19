@@ -18,9 +18,11 @@ import { CrossOfficePage } from "./pages/CrossOfficePage";
 import { SecondariesPage } from "./pages/SecondariesPage";
 import { PagePurposeBlock } from "./pages/PagePurposeBlock";
 import { FundStrategyPage } from "./pages/FundStrategyPage";
+import { PrivateLayerPage } from "./pages/PrivateLayerPage";
 import { actionName, actorName } from "@shared/help/actionNames";
 import { stateMeaning } from "@shared/work/workCards";
 import { SignInCard, SignedOutPage } from "./pages/AuthSurfaces";
+import { SurfaceBoundary } from "./pages/SurfaceBoundary";
 import { UniversityPage } from "./pages/UniversityPage";
 import { MarketMapPage } from "./pages/MarketMapPage";
 // The approvals queue is its own surface file, like every other page. It left App.tsx when the
@@ -399,6 +401,8 @@ const ALL_NAV_KEYS: ReadonlySet<string> = new Set([
   ...NAV_ITEMS.map((n) => n.key),
   // Merged destinations whose addresses still work, so an old link or bookmark lands somewhere real.
   "allocation",
+  // The private layer: reachable by URL and from Home's foot, never in the nav (design/HOME_DESIGN.md §2).
+  "private",
   "follow-on",
   "market-map",
   "jobs",
@@ -439,7 +443,12 @@ function IdentityPanel({ me, status, loading, onSignOut }: { me: MeResponse | nu
         <span className="avatar" aria-hidden="true">
           {initials(me.fullName)}
         </span>
-        Signed in as <strong>{me.fullName}</strong> ({me.email}) — {me.roles.join(", ") || "no roles"}
+        Signed in as <strong>{me.fullName}</strong>{" "}
+        {/* The address is the one thing on this line a phone can do without: at 390px it wrapped the
+            identity line to three, and with the purpose block put 437px of chrome above Home's
+            answer (design/HOME_DESIGN.md: the answer sits above the 844px fold). Hidden ≤ 40rem
+            by `.identity-email` and `.identity-role`; the name and Sign out stay. */}
+        <span className="identity-email">({me.email})</span><span className="identity-role"> — {me.roles.join(", ") || "no roles"}</span>
         <button type="button" className="link-button" data-testid="sign-out" onClick={onSignOut}>
           Sign out
         </button>
@@ -2950,6 +2959,10 @@ function Shell() {
             </div>
           </header>
           <div className="surface-body" id="wp-surface">
+          {/* A page that throws takes only itself (SurfaceBoundary.tsx). Keyed on the route AND
+              the identity, so the fault clears when she moves on — and when the session ends, so
+              the signed-out page is never held behind a page's fault. */}
+          <SurfaceBoundary key={`${active}:${authed ? me.data!.id : "out"}`} label={activeItem.label}>
           {/* Plain-English orientation, rendered once for every route (P40). Only when signed in:
               an anonymous visitor sees the login prompt, and explaining a page they cannot open
               would be noise. */}
@@ -2997,6 +3010,7 @@ function Shell() {
           {authed && active === "today" && <HomePage me={me.data!} onNavigate={navigate} />}
           {authed && active === "capture" && <CapturePage me={me.data!} onChanged={refresh} onNavigate={navigate} />}
           {authed && active === "intent" && <IntentPage me={me.data!} onNavigate={navigate} />}
+          {authed && active === "private" && <PrivateLayerPage />}
           {/*
             THE MACHINERY IS HANDED IN, NOT STACKED UNDERNEATH.
 
@@ -3074,6 +3088,7 @@ function Shell() {
           {authed && active === "ai-controls" && <AiPage me={me.data!} />}
           {authed && active === "cockpit" && <AiOpsPage me={me.data!} />}
           {authed && active === "diagnostics" && <DiagnosticsPage onNavigate={navigate} />}
+          </SurfaceBoundary>
           </div>
         </main>
       </div>

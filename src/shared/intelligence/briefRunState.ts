@@ -120,6 +120,14 @@ export interface BriefRunState {
   actAt: string | null;
   /** The button's label and whether pressing it does anything. */
   button: { label: string; enabled: boolean };
+  /**
+   * RUNNING PAST THE MEASURED USUAL (design/HOME_DESIGN.md §3.5 state 4). Still `running` — the
+   * lease is live, nothing is wrong — but the band says so in the gate tone and names the slow end,
+   * so a build that is taking longer than most reads as "longer than most", not as "stuck".
+   */
+  slow: boolean;
+  /** The stages in order with the current one, for the band's stage strip. */
+  stages: Array<{ key: string; words: string; state: "done" | "now" | "todo" }>;
 }
 
 /** The stages in her words rather than the column's. */
@@ -187,14 +195,14 @@ export function lastBriefWords(iso: string, now: Date, timeZone?: string): strin
   return `${dayWord} ${clockWords(iso, timeZone)}`;
 }
 
-export function briefRunState(
+function rawState(
   row: BriefRunRow | null,
   history: BriefHistory,
   expectations: BriefExpectations,
   now: Date,
   /** The partner's zone, for the clock words. Optional so the pure function needs no environment. */
   timeZone?: string,
-): BriefRunState {
+): Omit<BriefRunState, "slow" | "stages"> {
   const usual = usualWords(expectations);
   const build = { label: "Build today's brief", enabled: true };
 
@@ -287,6 +295,15 @@ export function briefRunState(
   }
 
   if (leased) {
+    const pastUsual = elapsed !== null && expectations.usualSeconds > 0 && elapsed > expectations.usualSeconds;
+    if (pastUsual) {
+      return {
+        kind: "running", arrived: false,
+        line: `Still building — ${stage}. ${elapsedWords(elapsed)} in; usually about ${Math.max(1, Math.round(expectations.usualSeconds / 60))} minutes. The slow end is ${Math.max(1, Math.round(expectations.slowSeconds / 60))}.`,
+        next: "Nothing is wrong yet: the lease is live and the lane is answering. If it passes the slow end the sweeper closes it and says so.",
+        stage, elapsedSeconds: elapsed, usualSeconds: expectations.usualSeconds, actAt: null, button: already,
+      };
+    }
     return {
       kind: "running", arrived: false,
       line: `Building — ${stage}. ${since[0]!.toUpperCase()}${since.slice(1)}; ${usual}.`,
@@ -303,4 +320,29 @@ export function briefRunState(
     next: "Nothing to do; it moves within a minute.",
     stage, elapsedSeconds: elapsed, usualSeconds: expectations.usualSeconds, actAt: null, button: already,
   };
+}
+
+/** The four stages in her words, and where the row is among them. */
+export function stageStrip(status: string | null | undefined): BriefRunState["stages"] {
+  const order = [
+    { key: "GATHERING", words: "read 48h" },
+    { key: "RANKING", words: "ranked" },
+    { key: "GENERATING", words: "writing" },
+    { key: "VERIFYING", words: "checked" },
+  ];
+  const at = order.findIndex((o) => o.key === status);
+  const done = status === "READY" ? order.length : at;
+  return order.map((o, i) => ({ key: o.key, words: o.words, state: i < done ? "done" : i === at && status !== "READY" ? "now" : "todo" }));
+}
+
+export function briefRunState(
+  row: BriefRunRow | null,
+  history: BriefHistory,
+  expectations: BriefExpectations,
+  now: Date,
+  timeZone?: string,
+): BriefRunState {
+  const base = rawState(row, history, expectations, now, timeZone);
+  const slow = base.kind === "running" && base.line.startsWith("Still building");
+  return { ...base, slow, stages: stageStrip(row?.status) };
 }

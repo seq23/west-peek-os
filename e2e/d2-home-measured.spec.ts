@@ -142,6 +142,9 @@ test("Home holds its measured numbers: contrast, tap targets, overflow, unwrappe
             // A deliberately scrollable box (a wide table in its own overflow-x container) is not
             // an overflowing page; its own width is what is asked about.
             if (getComputedStyle(el).overflowX === "auto" || getComputedStyle(el).overflowX === "scroll") return false;
+            // Home's filter rail is the one declared inner scroller (design/HOME_DESIGN.md §5):
+            // a chip past the edge scrolls into view, it does not push the page.
+            if (el.closest(".rail")) return false;
             return r.width > 0 && Math.round(r.right) > w + 1;
           })
           .map((el) => `${el.tagName.toLowerCase()}.${(el.className || "").toString().split(" ")[0]}[${el.getAttribute("data-testid") || ""}] "${(el.textContent || "").trim().slice(0, 40)}" → ${Math.round(el.getBoundingClientRect().right)}px`)
