@@ -6014,8 +6014,8 @@ Waiting band is gone; the masthead carries one sentence of the brief. Masthead a
 Waiting head and the first row whole above the fold; Arrived within one row-height under the rows
 (above the fold when one thing waits). `design/home-screens/before-390.png` and `after-390.png`.
 
-**The sign-out race, fixed at its source (coordinator's addition, from main run 35457193192's
-predecessor 35457328146).** CONFIRMED from the runner's log: after sign-in, Home's children sent
+**The sign-out race, fixed at its source (coordinator's addition; main run 35457328146 on the
+merge of #127, 171/172).** CONFIRMED from the runner's log: after sign-in, Home's children sent
 their first reads AFTER Sign out had dropped the identity; they came back 401 `{error}`; four
 children read `.length` / `.themes` / `.enabled` / `.map` off that body; one threw and React 18
 unmounted the whole tree — `#root` empty, no signed-out page. Reproduced deterministically by
