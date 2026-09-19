@@ -202,7 +202,7 @@ async function installMeasurers(page: Page): Promise<void> {
  * (the committee band and the record's committee face), and an emailed arrival nobody has looked
  * at (the attention badge and the third kind of waiting item).
  */
-async function seedDealflow(request: APIRequestContext): Promise<{ proposed: string; committee: string; proposalId: string; committeeDealId: string; meetingId: string }> {
+async function seedDealflow(request: APIRequestContext): Promise<{ proposed: string; committee: string; emailed: string; proposalId: string; committeeDealId: string; emailedDealId: string; meetingId: string }> {
   const token = `M${Date.now().toString(36)}`;
   const mk = async (name: string, startAt: string[], extra: Record<string, unknown> = {}) => {
     const co = await request.post("/api/companies", { headers: MP, data: { canonical_name: name } });
@@ -239,15 +239,20 @@ async function seedDealflow(request: APIRequestContext): Promise<{ proposed: str
   const committee = `${token} Northwind Robotics`;
   const b = await mk(committee, ["SCREENING", "DILIGENCE", "IC_READY"]);
 
+  // An emailed arrival nobody has looked at: `source_channel` starting `email:` and never moved.
+  const emailed = `${token} Vynlo`;
+  const c = await mk(emailed, [], { source_channel: "email:founder@example.com" });
+
   // The board must carry both, with the proposal on it — Rule 0 for the seed itself.
   const board = (await (await request.get("/api/dealflow/board", { headers: MP })).json()) as {
-    deals: Array<{ id: string; status: string }>;
+    deals: Array<{ id: string; status: string; unreviewed: boolean }>;
     proposals: Array<{ id: string }>;
   };
   expect(board.deals.find((d) => d.id === a.dealId)?.status, "the proposed deal must be at Screening").toBe("SCREENING");
   expect(board.deals.find((d) => d.id === b.dealId)?.status, "the committee deal must be at the committee").toBe("IC_READY");
   expect(board.proposals.some((p) => p.id === proposalId), "the board must carry the proposal").toBe(true);
-  return { proposed, committee, proposalId, committeeDealId: b.dealId, meetingId };
+  expect(board.deals.find((d) => d.id === c.dealId)?.unreviewed, "the emailed arrival must read as not yet looked at").toBe(true);
+  return { proposed, committee, emailed, proposalId, committeeDealId: b.dealId, emailedDealId: c.dealId, meetingId };
 }
 
 async function openDealflow(page: Page): Promise<void> {
@@ -276,6 +281,8 @@ test.describe("Dealflow", () => {
       await expect(page.getByTestId("dealflow-waiting-count")).toBeVisible();
       await expect(page.getByTestId("stage-node-SCREENING")).toHaveAttribute("aria-label", /the act is here/);
       await expect(page.getByTestId(`ic-row-${seed.committeeDealId}`)).toBeVisible();
+      await expect(page.getByTestId(`waiting-unreviewed-${seed.emailedDealId}`)).toBeVisible();
+      await expect(page.getByTestId(`deal-unreviewed-${seed.emailedDealId}`)).toHaveText("by email · not yet looked at");
 
       report.push(await sweep(page, "dealflow-page", "pipeline", vp));
 
