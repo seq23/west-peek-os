@@ -22,6 +22,7 @@ import { PrivateLayerPage } from "./pages/PrivateLayerPage";
 import { actionName, actorName } from "@shared/help/actionNames";
 import { stateMeaning } from "@shared/work/workCards";
 import { SignInCard, SignedOutPage } from "./pages/AuthSurfaces";
+import { SurfaceBoundary } from "./pages/SurfaceBoundary";
 import { UniversityPage } from "./pages/UniversityPage";
 import { MarketMapPage } from "./pages/MarketMapPage";
 // The approvals queue is its own surface file, like every other page. It left App.tsx when the
@@ -2958,6 +2959,10 @@ function Shell() {
             </div>
           </header>
           <div className="surface-body" id="wp-surface">
+          {/* A page that throws takes only itself (SurfaceBoundary.tsx). Keyed on the route AND
+              the identity, so the fault clears when she moves on — and when the session ends, so
+              the signed-out page is never held behind a page's fault. */}
+          <SurfaceBoundary key={`${active}:${authed ? me.data!.id : "out"}`} label={activeItem.label}>
           {/* Plain-English orientation, rendered once for every route (P40). Only when signed in:
               an anonymous visitor sees the login prompt, and explaining a page they cannot open
               would be noise. */}
@@ -3083,6 +3088,7 @@ function Shell() {
           {authed && active === "ai-controls" && <AiPage me={me.data!} />}
           {authed && active === "cockpit" && <AiOpsPage me={me.data!} />}
           {authed && active === "diagnostics" && <DiagnosticsPage onNavigate={navigate} />}
+          </SurfaceBoundary>
           </div>
         </main>
       </div>
