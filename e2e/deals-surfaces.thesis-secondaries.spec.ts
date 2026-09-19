@@ -157,7 +157,10 @@ export async function holdTheNumbers(
   expect(docWide, `the document itself scrolls sideways at ${vp.name}`).toBeLessThanOrEqual(1);
 
   const nodes = await page.evaluate((id) => measureContrast(id), rootTestId);
-  expect(nodes.length, `Rule 0 — measured ${nodes.length} text nodes in ${rootTestId} at ${vp.name}; a sweep over nothing is not a pass`).toBeGreaterThanOrEqual(floors.minTextNodes);
+  expect(
+    nodes.length,
+    `Rule 0 — measured ${nodes.length} text nodes in ${rootTestId} at ${vp.name}; a sweep over nothing is not a pass`,
+  ).toBeGreaterThanOrEqual(floors.minTextNodes);
   const failures = nodes.filter((n) => n.ratio < n.need - 0.005);
   expect(
     failures.map((f) => `${f.ratio.toFixed(2)}:1 (needs ${f.need}) at ${f.px}px — "${f.text}"`),
@@ -166,11 +169,19 @@ export async function holdTheNumbers(
   const min = Math.min(...nodes.map((n) => n.ratio));
 
   const targets = await page.evaluate((id) => measureTargets(id), rootTestId);
-  expect(targets.length, `Rule 0 — found ${targets.length} clickables in ${rootTestId} at ${vp.name}`).toBeGreaterThanOrEqual(floors.minClickables);
+  expect(targets.length, `Rule 0 — found ${targets.length} clickables in ${rootTestId} at ${vp.name}`).toBeGreaterThanOrEqual(
+    floors.minClickables,
+  );
   const small = targets.filter((t) => t.h < 24 || t.w < 24);
-  expect(small.map((t) => `${t.label} — ${Math.round(t.w)}×${Math.round(t.h)}`), `tap targets under 24px in ${rootTestId} at ${vp.name}`).toEqual([]);
+  expect(
+    small.map((t) => `${t.label} — ${Math.round(t.w)}×${Math.round(t.h)}`),
+    `tap targets under 24px in ${rootTestId} at ${vp.name}`,
+  ).toEqual([]);
   const wrapped = targets.filter((t) => t.rects > 1);
-  expect(wrapped.map((t) => `${t.label} — ${t.rects} rects`), `clickables broken over more than one line in ${rootTestId} at ${vp.name}`).toEqual([]);
+  expect(
+    wrapped.map((t) => `${t.label} — ${t.rects} rects`),
+    `clickables broken over more than one line in ${rootTestId} at ${vp.name}`,
+  ).toEqual([]);
 
   return `${vp.name}: ${nodes.length} text nodes, min ${min.toFixed(2)}:1, 0 below AA · ${targets.length} clickables, 0 under 24px, 0 wrapped · 0 horizontal overflow`;
 }
@@ -237,24 +248,55 @@ async function seedCommissionedFund(request: APIRequestContext): Promise<{ id: s
   return { id: fund.id, name };
 }
 
+/**
+ * LOOK AT THE FUND THIS TEST MADE, NOT WHATEVER IS FIRST. Other Deals journeys (Portfolio's, for
+ * one) leave their own fund behind, and the pages fall back to the first fund when nothing has
+ * been chosen. So every assertion about a policy figure is preceded by choosing the fund through
+ * the picker on Thesis — the same control an operator uses — and the choice is remembered for
+ * Secondaries, which reads the same selection and has no picker of its own. With one fund the
+ * picker is a line of text and the fund is asserted to be ours.
+ */
+async function chooseFund(page: Page, fund: { id: string; name: string }): Promise<void> {
+  await gotoSurface(page, "Thesis");
+  const select = page.getByTestId("fund-select");
+  if (await select.isVisible().catch(() => false)) {
+    await select.selectOption(fund.id);
+  } else {
+    await expect(page.getByTestId("fund-single")).toContainText(fund.name);
+  }
+  await expect(page.getByTestId("thesis-eyebrow")).toContainText(fund.name);
+}
+
+interface SleeveSnapshot {
+  opportunities: Array<{ id: string; opportunity_type: string; status: string }>;
+  stage_counts: Record<string, number>;
+  sleeve: { target_usd: number | null; deployed_usd: number };
+}
+async function sleeveSnapshot(request: APIRequestContext, fundId: string): Promise<SleeveSnapshot> {
+  return (await (await request.get(`/api/secondaries?fund_id=${fundId}`, { headers: MP })).json()) as SleeveSnapshot;
+}
+
+/** Leave the firm as the test found it: a seeded deal is taken off the record with a reason. */
+async function archiveDeals(request: APIRequestContext, ids: string[]): Promise<void> {
+  for (const id of ids) {
+    const r = await request.post(`/api/opportunities/${id}/archive`, {
+      headers: MP,
+      data: { reason: "e2e fixture, removed by the test that made it" },
+    });
+    expect(r.status(), `archiving ${id}`).toBe(200);
+  }
+}
+
 test.describe("Thesis — the document, the fit rail, the versions (design §7)", () => {
-  test("with no fund the page says so; nothing is drawn from nothing", async ({ page, request }) => {
-    // This is the first test in the file and the d-specs before it create no fund: the state is
-    // reachable, and a fund here means a spec ordering has changed — say so rather than skip.
-    const funds = (await (await request.get("/api/funds", { headers: MP })).json()) as { funds: unknown[] };
-    expect(funds.funds, "a fund exists before the no-fund test ran — the suite's ordering changed").toHaveLength(0);
-    await signIn(page);
-    await gotoSurface(page, "Thesis");
-    await expect(page.getByTestId("thesis-no-fund")).toContainText("No fund exists yet");
-    await expect(page.getByTestId("thesis-rail")).toHaveCount(0);
-  });
+  // The no-fund state — "No fund exists yet" — is asserted in e2e/d0-empty-firm.spec.ts, the one
+  // place the firm is provably empty; by the time this file runs other journeys have made funds.
 
   test("the fit rail reads the policy in Wyatt's order, the date is effective_from, Amend is a disclosure", async ({ page, request }) => {
     const fund = await seedCommissionedFund(request);
     await installMeasures(page);
     await signIn(page);
     await page.setViewportSize({ width: 1280, height: 900 });
-    await gotoSurface(page, "Thesis");
+    await chooseFund(page, fund);
     await expect(page.getByTestId("thesis-page")).toBeVisible();
 
     // The masthead: eyebrow names the fund and the version; the answer is derived from the fill.
@@ -320,10 +362,10 @@ test.describe("Thesis — the document, the fit rail, the versions (design §7)"
   });
 
   test("Thesis holds its measured numbers at five widths, with the form closed and open", async ({ page, request }) => {
-    const funds = (await (await request.get("/api/funds", { headers: MP })).json()) as { funds: Array<{ id: string }> };
-    if (funds.funds.length === 0) await seedCommissionedFund(request);
+    const fund = await seedCommissionedFund(request);
     await installMeasures(page);
     await signIn(page);
+    await chooseFund(page, fund);
     const report: string[] = [];
     for (const vp of VIEWPORTS) {
       await page.setViewportSize({ width: vp.width, height: vp.height });
@@ -340,34 +382,60 @@ test.describe("Thesis — the document, the fit rail, the versions (design §7)"
 });
 
 test.describe("Secondaries — the sleeve, on the same rail (design §8)", () => {
-  test("empty: the budget is read from the policy, the row is drawn as its shape, nothing is invented", async ({ page, request }) => {
-    const funds = (await (await request.get("/api/funds", { headers: MP })).json()) as { funds: Array<{ id: string }> };
-    if (funds.funds.length === 0) await seedCommissionedFund(request);
+  test("the budget is read from the policy; wherever a band is empty the row is drawn as its shape; nothing is invented", async ({
+    page,
+    request,
+  }) => {
+    const fund = await seedCommissionedFund(request);
+    const record = await sleeveSnapshot(request, fund.id);
     await signIn(page);
     await page.setViewportSize({ width: 1280, height: 900 });
+    await chooseFund(page, fund);
     await gotoSurface(page, "Secondaries");
     await expect(page.getByTestId("secondaries-page")).toBeVisible();
 
     // $7,200,000 is 30% of the $24M investable base — derived, and not the $7.0M the policy stores.
+    // Nothing has been booked into a fund this test just made, so deployed is $0 of that.
+    expect(record.sleeve.target_usd).toBe(7_200_000);
+    expect(record.sleeve.deployed_usd).toBe(0);
     await expect(page.getByTestId("secondaries-budget")).toContainText("$0 of $7,200,000");
     await expect(page.getByTestId("secondaries-budget")).toContainText("sleeve_policy_version v1 · 30% of the investable base");
     await expect(page.getByTestId("secondaries-budget")).not.toContainText("7,000,000");
-    await expect(page.getByTestId("secondaries-eyebrow")).toContainText("0 bought · 0 sold · $7,200,000 unspent");
+    await expect(page.getByTestId("secondaries-eyebrow")).toContainText("$7,200,000 unspent");
 
-    // The rail: six stages, every count zero, no node orange, the questions re-worded for a block.
+    // The rail: six stages, each node's count is the record's count for that stage; orange only
+    // where a block waits on a decision, and never more than one; the questions re-worded for a block.
     const nodes = page.getByTestId("secondaries-rail").locator(".stage-node");
     await expect(nodes).toHaveCount(6);
-    for (const n of await nodes.allTextContents()) expect(n.trim()).toBe("0");
-    await expect(page.getByTestId("secondaries-rail").locator(".stage-node-current")).toHaveCount(0);
+    for (const key of ["NEW", "SCREENING", "DILIGENCE", "IC_READY", "IC_DECIDED", "CLOSED"]) {
+      await expect(page.getByTestId(`secondaries-node-${key}`)).toHaveText(String(record.stage_counts[key] ?? 0));
+    }
+    await expect(page.getByTestId("secondaries-rail").locator(".stage-node-current")).toHaveCount(
+      (record.stage_counts.IC_READY ?? 0) > 0 ? 1 : 0,
+    );
     await expect(page.getByTestId("secondaries-stage-DILIGENCE")).toContainText("Price against the last round");
     await expect(page.getByTestId("secondaries-stage-CLOSED")).toContainText("Bought · Sold");
 
-    // The empty state IS the page: shape hidden from assistive tech, copy says where values come from.
-    const shape = page.getByTestId("secondaries-shape-buying");
-    await expect(shape).toHaveAttribute("aria-hidden", "true");
-    await expect(shape).toContainText("[COMPANY]");
-    await expect(page.getByTestId("secondaries-purchases-empty")).toContainText("a pricing observation against the last round");
-    await expect(page.getByTestId("secondaries-sales-empty")).toContainText("A sale begins on the holding's row on Portfolio");
+    // The empty state IS the page. Each band either lists exactly the record's deals of its kind or
+    // draws the shape (hidden from assistive tech) beside copy that says where the values come from.
+    const purchases = record.opportunities.filter((o) => o.opportunity_type === "SECONDARY_PURCHASE");
+    const sales = record.opportunities.filter((o) => o.opportunity_type === "SECONDARY_SALE");
+    await expect(page.getByTestId("secondaries-purchases-count")).toHaveText(String(purchases.length));
+    await expect(page.getByTestId("secondaries-sales-count")).toHaveText(String(sales.length));
+    if (purchases.length === 0) {
+      const shape = page.getByTestId("secondaries-shape-buying");
+      await expect(shape).toHaveAttribute("aria-hidden", "true");
+      await expect(shape).toContainText("[COMPANY]");
+      await expect(page.getByTestId("secondaries-purchases-empty")).toContainText("a pricing observation against the last round");
+    } else {
+      await expect(page.getByTestId("secondaries-shape-buying")).toHaveCount(0);
+      for (const o of purchases) await expect(page.getByTestId(`secondary-${o.id}`)).toBeVisible();
+    }
+    if (sales.length === 0) {
+      await expect(page.getByTestId("secondaries-sales-empty")).toContainText("A sale begins on the holding's row on Portfolio");
+    } else {
+      for (const o of sales) await expect(page.getByTestId(`secondary-${o.id}`)).toBeVisible();
+    }
     // The separation rule is said once, in the masthead — not three times.
     await expect(page.getByTestId("secondaries-page").getByText(/never the primary path/)).toHaveCount(1);
   });
@@ -376,8 +444,8 @@ test.describe("Secondaries — the sleeve, on the same rail (design §8)", () =>
     page,
     request,
   }) => {
-    const funds = (await (await request.get("/api/funds", { headers: MP })).json()) as { funds: Array<{ id: string }> };
-    if (funds.funds.length === 0) await seedCommissionedFund(request);
+    const fund = await seedCommissionedFund(request);
+    const before = await sleeveSnapshot(request, fund.id);
     const company = (await (
       await request.post("/api/companies", { headers: MP, data: { canonical_name: `D5 Block Co ${Date.now()}` } })
     ).json()) as { id: string };
@@ -407,63 +475,116 @@ test.describe("Secondaries — the sleeve, on the same rail (design §8)", () =>
     const moved = await request.post(`/api/opportunities/${sell.id}/transition`, { headers: MP, data: { to: "SCREENING" } });
     expect(moved.status()).toBe(200);
 
-    await signIn(page);
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await gotoSurface(page, "Secondaries");
-    await expect(page.getByTestId("secondaries-answer")).toContainText("in the sleeve: 1 buying, 1 selling");
+    try {
+      // Counts are relative to what was there: other journeys leave their own secondaries behind.
+      const buying =
+        before.opportunities.filter((o) => o.opportunity_type === "SECONDARY_PURCHASE" && !["PASS", "WITHDRAWN"].includes(o.status))
+          .length + 1;
+      const selling =
+        before.opportunities.filter((o) => o.opportunity_type === "SECONDARY_SALE" && !["PASS", "WITHDRAWN"].includes(o.status)).length + 1;
 
-    // The rows, with the readiness line honest about what has no writer yet.
-    const buyRow = page.getByTestId(`secondary-${buy.id}`);
-    await expect(buyRow).toContainText("Secondary — buying · An early employee via A broker · 1,000 units · @ $12 · -20% to last round");
-    await expect(buyRow).toContainText("last round: to confirm — no pricing observation on this company");
-    await expect(buyRow).toContainText("ownership after the block: to confirm");
-    await expect(page.getByTestId("secondaries-shape-buying")).toHaveCount(0);
-    await expect(page.getByTestId(`secondary-${sell.id}`)).toContainText("Secondary — selling");
+      await signIn(page);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await chooseFund(page, fund);
+      await gotoSurface(page, "Secondaries");
+      await expect(page.getByTestId("secondaries-answer")).toContainText(`in the sleeve: ${buying} buying, ${selling} selling`);
 
-    // A PRIMARY_ROUND observation is read onto the row the moment it exists.
-    const obs = await request.post("/api/pricing-observations", {
-      headers: MP,
-      data: { company_id: company.id, observation_type: "PRIMARY_ROUND", price_per_share: 15, observed_at: "2026-06-01", source: "the cap table" },
-    });
-    expect(obs.status()).toBe(201);
-    await page.reload();
-    await expect(page.getByTestId(`secondary-${buy.id}`)).toContainText("last round: $15 · 2026-06-01");
+      // The rows, with the readiness line honest about what has no writer yet.
+      const buyRow = page.getByTestId(`secondary-${buy.id}`);
+      await expect(buyRow).toContainText("Secondary — buying · An early employee via A broker · 1,000 units · @ $12 · -20% to last round");
+      await expect(buyRow).toContainText("last round: to confirm — no pricing observation on this company");
+      await expect(buyRow).toContainText("ownership after the block: to confirm");
+      await expect(page.getByTestId("secondaries-shape-buying")).toHaveCount(0);
+      await expect(page.getByTestId(`secondary-${sell.id}`)).toContainText("Secondary — selling");
 
-    // The nodes count and filter: NEW holds the purchase, SCREENING the sale.
-    await expect(page.getByTestId("secondaries-node-NEW")).toHaveText("1");
-    await expect(page.getByTestId("secondaries-node-NEW")).toHaveClass(/stage-node-filled/);
-    await expect(page.getByTestId("secondaries-node-SCREENING")).toHaveText("1");
-    await page.getByTestId("secondaries-node-SCREENING").click();
-    await expect(page.getByTestId("secondaries-node-SCREENING")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("secondaries-purchases-empty")).toContainText("Nothing we are buying is at Screening");
-    await expect(page.getByTestId(`secondary-${sell.id}`)).toBeVisible();
-    await expect(page.getByTestId("secondaries-purchases-count")).toContainText("0 at Screening");
-    await page.getByTestId("secondaries-clear-filter").click();
-    await expect(page.getByTestId(`secondary-${buy.id}`)).toBeVisible();
+      // A PRIMARY_ROUND observation is read onto the row the moment it exists.
+      const obs = await request.post("/api/pricing-observations", {
+        headers: MP,
+        data: {
+          company_id: company.id,
+          observation_type: "PRIMARY_ROUND",
+          price_per_share: 15,
+          observed_at: "2026-06-01",
+          source: "the cap table",
+        },
+      });
+      expect(obs.status()).toBe(201);
+      await page.reload();
+      await expect(page.getByTestId(`secondary-${buy.id}`)).toContainText("last round: $15 · 2026-06-01");
 
-    // A block waiting on a decision is where the human act is: one orange node, and words for it.
-    for (const to of ["SCREENING", "DILIGENCE", "IC_READY"]) {
-      const r = await request.post(`/api/opportunities/${buy.id}/transition`, { headers: MP, data: { to } });
-      expect(r.status(), `move to ${to}`).toBe(200);
+      // The nodes count and filter: NEW gained the purchase, SCREENING the sale — one more than before.
+      await expect(page.getByTestId("secondaries-node-NEW")).toHaveText(String((before.stage_counts.NEW ?? 0) + 1));
+      await expect(page.getByTestId("secondaries-node-NEW")).toHaveClass(/stage-node-filled/);
+      await expect(page.getByTestId("secondaries-node-SCREENING")).toHaveText(String((before.stage_counts.SCREENING ?? 0) + 1));
+      await page.getByTestId("secondaries-node-SCREENING").click();
+      await expect(page.getByTestId("secondaries-node-SCREENING")).toHaveAttribute("aria-pressed", "true");
+      // The filter hides the purchase (at NEW) and keeps the sale (at SCREENING); the band count says
+      // it is a filtered count; the empty copy names the stage when nothing of that kind is there.
+      await expect(page.getByTestId(`secondary-${buy.id}`)).toHaveCount(0);
+      await expect(page.getByTestId(`secondary-${sell.id}`)).toBeVisible();
+      await expect(page.getByTestId("secondaries-purchases-count")).toContainText("at Screening");
+      const buyingAtScreening = before.opportunities.filter(
+        (o) => o.opportunity_type === "SECONDARY_PURCHASE" && o.status === "SCREENING",
+      ).length;
+      if (buyingAtScreening === 0) {
+        await expect(page.getByTestId("secondaries-purchases-empty")).toContainText("Nothing we are buying is at Screening");
+      }
+      await page.getByTestId("secondaries-clear-filter").click();
+      await expect(page.getByTestId(`secondary-${buy.id}`)).toBeVisible();
+
+      // A block waiting on a decision is where the human act is: one orange node, and words for it.
+      for (const to of ["SCREENING", "DILIGENCE", "IC_READY"]) {
+        const r = await request.post(`/api/opportunities/${buy.id}/transition`, { headers: MP, data: { to } });
+        expect(r.status(), `move to ${to}`).toBe(200);
+      }
+      await page.reload();
+      await expect(page.getByTestId("secondaries-node-IC_READY")).toHaveClass(/stage-node-current/);
+      await expect(page.getByTestId("secondaries-rail").locator(".stage-node-current")).toHaveCount(1);
+      await expect(page.getByTestId("secondaries-stage-IC_READY")).toContainText("the act is here");
+    } finally {
+      // Off the record with a reason, so the next journey finds the sleeve as this one did — and
+      // the page proves an archived deal leaves it (the same clause the board reads).
+      await archiveDeals(request, [buy.id, sell.id]);
+      const after = await sleeveSnapshot(request, fund.id);
+      expect(after.opportunities.map((o) => o.id)).not.toContain(buy.id);
+      expect(after.opportunities.map((o) => o.id)).not.toContain(sell.id);
     }
-    await page.reload();
-    await expect(page.getByTestId("secondaries-node-IC_READY")).toHaveClass(/stage-node-current/);
-    await expect(page.getByTestId("secondaries-rail").locator(".stage-node-current")).toHaveCount(1);
-    await expect(page.getByTestId("secondaries-stage-IC_READY")).toContainText("the act is here");
   });
 
   test("Secondaries holds its measured numbers at five widths, with rows on the page", async ({ page, request }) => {
-    const funds = (await (await request.get("/api/funds", { headers: MP })).json()) as { funds: Array<{ id: string }> };
-    if (funds.funds.length === 0) await seedCommissionedFund(request);
-    await installMeasures(page);
-    await signIn(page);
-    const report: string[] = [];
-    for (const vp of VIEWPORTS) {
-      await page.setViewportSize({ width: vp.width, height: vp.height });
-      await gotoSurface(page, "Secondaries");
-      await expect(page.getByTestId("secondaries-budget")).toContainText("deployed");
-      report.push(await holdTheNumbers(page, "secondaries-page", vp, { minTextNodes: 30, minClickables: 8 }));
+    const fund = await seedCommissionedFund(request);
+    // A row of each kind on the page while it is measured, taken off the record afterwards.
+    const company = (await (
+      await request.post("/api/companies", { headers: MP, data: { canonical_name: `D5 Measured Co ${Date.now()}` } })
+    ).json()) as { id: string };
+    const seeded: string[] = [];
+    for (const [type, title] of [
+      ["SECONDARY_PURCHASE", "A measured block"],
+      ["SECONDARY_SALE", "A measured sale"],
+    ] as const) {
+      const o = (await (
+        await request.post("/api/opportunities", {
+          headers: MP,
+          data: { company_id: company.id, opportunity_type: type, title, quantity: 10, price_per_share: 3 },
+        })
+      ).json()) as { id: string };
+      seeded.push(o.id);
     }
-    console.log("SECONDARIES MEASURED\n  " + report.join("\n  "));
+    try {
+      await installMeasures(page);
+      await signIn(page);
+      await chooseFund(page, fund);
+      const report: string[] = [];
+      for (const vp of VIEWPORTS) {
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await gotoSurface(page, "Secondaries");
+        await expect(page.getByTestId("secondaries-budget")).toContainText("$0 of $7,200,000");
+        for (const id of seeded) await expect(page.getByTestId(`secondary-${id}`)).toBeVisible();
+        report.push(await holdTheNumbers(page, "secondaries-page", vp, { minTextNodes: 30, minClickables: 8 }));
+      }
+      console.log("SECONDARIES MEASURED\n  " + report.join("\n  "));
+    } finally {
+      await archiveDeals(request, seeded);
+    }
   });
 });
