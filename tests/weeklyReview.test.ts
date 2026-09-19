@@ -1,16 +1,28 @@
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
+import { runDueJobs, runJob } from "../src/worker/services/jobs";
 import { deriveItems, mergeItems } from "../src/worker/services/weeklyReview";
 import { REVIEW_HEADINGS, guessHeading, isResolved, weekEnd, weekStart } from "../src/shared/review/weeklyAgenda";
 import { buildNotesPrompt, parseProposals, resolveOwner } from "../src/shared/review/meetingNotes";
 
 /**
- * The weekly MP operating review (P37, V1 #18, canon §8).
+ * The weekly MP operating review (P37, V1 #18, canon §8) — ARCHIVED 18 Sep 2026.
  *
- * Every derivation query is raw SQL against a table this module does not own, so the tests exist
- * mainly to run them. A column rename anywhere upstream turns a heading silently empty, and an
- * empty heading looks exactly like "nothing happened this week".
+ * Owner: "we don't need it anymore." The per-person Wednesday prep packet (services/meetingPrep.ts)
+ * replaced the one shared sixteen-heading agenda. The first block below pins the archive: the job
+ * `weekly_mp_review` is RETIRED and refuses every trigger including a partner asking by hand
+ * (stricter than the PAUSED it used to sit at, which a hand-run passed), the status route cannot
+ * re-enable it, the tick never picks it up, the machinery list leaves it out, the nav does not list
+ * the page while the route still answers a bookmark, `weekly_review.manage` still gates the page's
+ * own routes, and the archived kind is off the unfiltered shelf while every row stays readable.
+ *
+ * The blocks after it still run the derivation. The generator is still reachable by a human from
+ * the page's own button, and every derivation query is raw SQL against tables this module does not
+ * own — a column rename upstream would turn a heading silently empty, and a page that still answers
+ * must still answer correctly.
  */
 
 let t: TestDb;
@@ -34,6 +46,125 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await disposeTestDb(t);
+});
+
+const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
+const MP_ACTOR = { type: "HUMAN" as const, firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
+
+async function call<T = any>(path: string, headers: Record<string, string>, method = "GET", body?: unknown): Promise<{ status: number; body: T }> {
+  const res = await handleRequest(
+    new Request(`https://test.local${path}`, {
+      method,
+      headers: body === undefined ? headers : { ...headers, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+    env,
+  );
+  return { status: res.status, body: (await res.json()) as T };
+}
+
+describe("the weekly review is archived (18 Sep 2026)", () => {
+  it("is RETIRED after migration 0198 — the table's terminal status, not a pause", async () => {
+    const job = await t.db
+      .prepare("SELECT status, next_run_at, pause_reason FROM scheduled_job WHERE job_key = 'weekly_mp_review'")
+      .first<{ status: string; next_run_at: string | null; pause_reason: string | null }>();
+    expect(job, "the row is kept so its runs still resolve").toBeTruthy();
+    expect(job!.status).toBe("RETIRED");
+    expect(job!.next_run_at).toBeNull();
+    expect(job!.pause_reason).toContain("Retired 18 Sep 2026");
+    expect(job!.pause_reason).toContain("we don't need it anymore");
+  });
+
+  it("refuses a scheduled tick AND a partner asking by hand — stricter than the pause it replaced", async () => {
+    // PAUSED let a human run it by hand (jobs.ts checkPreconditions). RETIRED does not, on purpose.
+    const scheduled = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "SCHEDULED", now: new Date("2026-09-23T12:30:00.000Z") });
+    expect(scheduled.run.status).toBe("REFUSED");
+    expect(String(scheduled.run.error)).toContain("RETIRED");
+
+    const byHand = await runJob(env, MP_ACTOR, "weekly_mp_review", { trigger: "MANUAL", now: new Date("2026-09-23T12:31:00.000Z") });
+    expect(byHand.run.status).toBe("REFUSED");
+    expect(String(byHand.run.error)).toContain("RETIRED");
+
+    // And no review was written by either attempt.
+    const reviews = await t.db.prepare("SELECT COUNT(*) AS n FROM weekly_review WHERE week_start = '2026-09-23'").first<{ n: number }>();
+    expect(reviews!.n).toBe(0);
+  });
+
+  it("cannot be re-enabled from the status route", async () => {
+    const res = await call<{ error: string }>("/api/jobs/weekly_mp_review/status", MP, "POST", { status: "ACTIVE", reason: "bring it back" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("retired");
+    const job = await t.db.prepare("SELECT status FROM scheduled_job WHERE job_key = 'weekly_mp_review'").first<{ status: string }>();
+    expect(job!.status).toBe("RETIRED");
+  });
+
+  it("is never due on a tick, and is left out of the machinery list", async () => {
+    const ran = await runDueJobs(env, new Date("2026-09-23T12:30:00.000Z"));
+    expect(ran.map((r) => r.job_key)).not.toContain("weekly_mp_review");
+    const list = await call<{ jobs: Array<{ job_key: string }> }>("/api/jobs", MP);
+    expect(list.status).toBe(200);
+    expect(list.body.jobs.map((j) => j.job_key)).not.toContain("weekly_mp_review");
+  });
+
+  it("is off the nav while the route still answers a bookmark", async () => {
+    const app = readFileSync(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+    // The nav literal shape every other coverage test reads; guard the guard by finding a neighbour.
+    expect(app).toMatch(/\{ key: "notifications", label: "Notifications" \}/);
+    expect(app).not.toMatch(/\{ key: "weekly-review", label: "/);
+    expect(app).toMatch(/active === "weekly-review"/);
+
+    const page = await call<{ review: unknown }>("/api/weekly-review?week=2026-09-16", MP);
+    expect(page.status).toBe(200);
+  });
+
+  it("says on the page itself that it is archived", async () => {
+    const { pagePurpose } = await import("../src/shared/help/pagePurpose");
+    const p = pagePurpose("weekly-review");
+    expect(p?.archived).toContain("Archived 18 Sep 2026");
+    // The purpose block still exists — the page still answers — and its controls no longer promise
+    // to generate anything new.
+    expect(p?.youCan.join(" ")).not.toContain("Generate");
+  });
+
+  it("keeps `weekly_review.manage` as the gate on the page's own routes", async () => {
+    const { generateReview } = await import("../src/worker/services/weeklyReview");
+    // In scope: allowed, and a human on the page's button can still assemble one by hand.
+    const out = await generateReview(env, MP_ACTOR, new Date("2026-09-16T12:00:00.000Z"));
+    expect(out.review.id).toMatch(/^wrv_/);
+    const mine = await call<{ item: { id: string } }>("/api/weekly-review/items", MP, "POST", { body: "Typed by a partner on the archived page" });
+    expect(mine.status).toBe(201);
+
+    // Out of scope: refused by the same key, at the same route. The gate is consulted, not
+    // decorative — an identity whose only firm scope is another firm gets the authorizer's own
+    // `cross_firm_scope`, which only exists if `authorize()` ran.
+    await t.db.prepare("INSERT INTO firm_user (id, email, full_name, status) VALUES ('fu_other_firm', 'other@elsewhere.example', 'Other Firm', 'ACTIVE')").run();
+    await t.db.prepare("INSERT INTO authority_scope (id, firm_user_id, scope_key, scope_value) VALUES ('as_other_firm', 'fu_other_firm', 'firm_scope', 'other-firm')").run();
+    const theirs = await call<{ error: string; detail: string }>("/api/weekly-review/items", { "x-wpos-dev-user": "other@elsewhere.example" }, "POST", { body: "Typed from another firm" });
+    expect(theirs.status).toBe(403);
+    expect(theirs.body.detail).toBe("cross_firm_scope");
+
+    const key = await t.db.prepare("SELECT key FROM action_type WHERE key = 'weekly_review.manage'").first<{ key: string }>();
+    expect(key?.key).toBe("weekly_review.manage");
+  });
+
+  it("keeps every review row and deliverable, off the unfiltered shelf but there by name", async () => {
+    // A review delivered before the archive: still in the database, still returned when asked for.
+    await t.db
+      .prepare(
+        `INSERT INTO deliverable (id, kind, title, body, prepared_by, prepared_for, privacy_label, firm_scope)
+         VALUES ('dlv_wr_archived', 'weekly_review', 'Weekly operating review — 9 Sep', 'kept', 'aie_porter', 'fu_scooter_taylor', 'INTERNAL', 'west-peek')`,
+      )
+      .run();
+    const shelf = await call<{ deliverables: Array<{ id: string; kind: string }> }>("/api/deliverables?limit=100", MP);
+    expect(shelf.status).toBe(200);
+    expect(shelf.body.deliverables.map((d) => d.kind)).not.toContain("weekly_review");
+
+    const byName = await call<{ deliverables: Array<{ id: string }> }>("/api/deliverables?kind=weekly_review&limit=100", MP);
+    expect(byName.body.deliverables.map((d) => d.id)).toContain("dlv_wr_archived");
+
+    const rows = await t.db.prepare("SELECT COUNT(*) AS n FROM deliverable WHERE id = 'dlv_wr_archived'").first<{ n: number }>();
+    expect(rows!.n).toBe(1);
+  });
 });
 
 describe("canon §8 structure", () => {
