@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Meet live listener for West Peek OS (Phase Meet, tier 4; 19 Sep 2026).
+
+  WHAT IT IS. The OS's ears in a firm-hosted Google Meet: headless Chromium holding the Meet Media
+  API's WebRTC session, posting each minute of audio to the Worker, which transcribes it and files
+  it through the governed import. Every decision — which meetings, whether to join, consent, the
+  state on the row — is the Worker's; this process is a pair of ears. See scripts/meet/live-listener.mjs.
+
+  SEPARATE FROM THE SEAT CLAIMER, on purpose: a different label, a different log, a different
+  process, so a hung call can never stall a seat and `launchctl unload` on one never touches the
+  other. It presents the SAME Access service token, so the Worker sees the same Mac identity.
+
+  NO SECRET IS IN THIS FILE: the service-account JSON and the two Access token halves come out of
+  the encrypted vault at launch through `vault.mjs run --` and exist only in the child's environment.
+
+  KeepAlive: the listener's own loop waits; launchd only restarts it if it dies. ThrottleInterval so
+  a machine without the vault unlocked is one quiet start every five minutes, not a spin.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ventures.westpeek.os.meet-listener</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-lc</string>
+    <!-- REPLACE ONLY THE REPO PATH if the checkout lives elsewhere. `exec` so launchd supervises node itself. -->
+    <string>cd "$HOME/GitHub/west-peek-os" &amp;&amp; exec node scripts/vault/vault.mjs run -- node scripts/meet/live-listener.mjs</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/westpeek-os-meet-listener.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/westpeek-os-meet-listener.err.log</string>
+
+  <!-- Not Background: a call must not be throttled while it is being listened to. -->
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

@@ -112,39 +112,115 @@ only path.
 3. **Nothing else.** The three scopes are granted, auto-transcription is on, Pub/Sub exists, the
    two spaces on the calendar are subscribed (live, 18 Sep 2026).
 
-## Tier 3 — scope: a Meet Add-on hosting the During face
+## Tier 4 — the room hears the Meet LIVE (built 19 Sep 2026)
 
-- **Eligibility: CONFIRMED** — "Supplemental add-ons ON" in the westpeek.ventures admin console.
-- **What it is.** A Meet Add-on is a web app rendered in Meet's side panel (and optionally the main
-  stage), declared in a Google Cloud project's add-on manifest and installed for the org. The side
-  panel would host Phase C's During face: the live prompts, the seated employee, the running notes,
-  reading and writing through this Worker's existing `/api/meetings/:id/*` routes.
-- **What it needs.** (a) The Add-ons SDK (`@googleworkspace/meet-addons`) loaded in a page this
-  Worker serves; (b) an add-on deployment in project `gsc-automation-493801` with a manifest naming
-  the side-panel URL; (c) the page must be reachable from inside Meet's iframe — which means an
-  Access policy for that path or a signed, short-lived link, because Access answers the iframe with
-  a 302 today (the same wall the push endpoint hit); (d) the meeting id: the add-on can read the
-  Meet meeting code (`meetingInfo`) and this Worker resolves it through `meeting.meet_conference_id`,
-  which tier 1 already fills.
-- **Not built** because the During face is Phase C's, and the Access decision (c) is the owner's.
+**The owner's question:** "If I push Join on Meet what happens? Is it recording? Are my AI
+employees there from Join on Meet alone?" Now: when a firm-hosted Meet on the calendar is running,
+the OS joins it as a participant through the Meet Media API and what it hears goes down the SAME
+path the laptop microphone uses in Phase C — a slice a minute → Nova-3 (Whisper when the model is
+not there) → the governed import → TRANSCRIPT_DERIVED notes — so the rolling draft, ask-the-room
+and the seated employees hear the call with no new UI. `ARCHITECTURAL_DECISIONS.md` (19 Sep 2026)
+records why the WebRTC peer is on her Mac and not in the Worker.
 
-## Tier 4 — scope: the Meet Media API live path
+### The probe, continued (read-only, 19 Sep 2026)
 
-- **Eligibility: CONFIRMED** — "Media API ON" in the admin console (it is a Developer Preview
-  feature gated per org).
-- **What it is.** A WebRTC client that joins a conference as a participant and receives audio
-  (and video) streams in real time, plus a metadata channel of who is speaking. It is the only
-  Google-native way to get words DURING the call rather than after it.
-- **What it needs.** A long-lived WebRTC peer — not a Cloudflare Worker request. The realistic
-  host is the seat already on her Mac (`scripts/claimer/`), joining as the firm with the
-  service-account grant (`meetings.space.readonly` plus the Media API scope
-  `meetings.conference.media.readonly`, not yet delegated — one more scope string to paste), and
-  feeding audio to the existing `captureChunk` path, which already transcribes slices and files
-  them through the same two gates as everything else.
-- **Consent.** A Media API participant is visible in the call as a participant and Meet announces
-  it; the same `google_meet_announced` basis applies, and the same exclusions.
-- **Not built** because it is a live room, which is Phase C's, and it depends on a preview API whose
-  terms should be read before the firm joins calls with it.
+| Question | Finding | The exact call |
+|---|---|---|
+| Is the Media API scope delegated? | **Was a STOP; now CONFIRMED** — the owner added it the same day; the token mints under impersonation | `POST oauth2.googleapis.com/token` with `sub=sequoia@…`, scope `meetings.conference.media.readonly` → 200 |
+| Does the service account's own identity see the space? | **CONFIRMED NO** — the join must impersonate the partner; the bot alone is refused on the space | `GET v2/spaces/svf-nzzr-pax` without `sub` → 403 PERMISSION_DENIED; with `sub` → 200 |
+| Is the Media API surface (`v2beta`) served to the project? | **CONFIRMED NO — the second STOP.** Every identity and scope combination gets Google's `404 "Method not found."` on `v2beta`, while `v2` answers 200; the `v2beta` discovery document is not served either. That is the Developer Preview gate: the project, the OAuth principal and the participants must be enrolled | `GET v2beta/spaces/svf-nzzr-pax` → 404 `Method not found`; `POST v2beta/spaces/svf-nzzr-pax:connectActiveConference` → 404 `Method not found` |
+| Does the peer page's audio decode on Nova-3? | **CONFIRMED.** The exact `audio/webm;codecs=opus` slices headless Chromium produced from a spoken fixture (`tests/fixtures/meet-live-fixture.wav`) were played to Nova-3 over the Workers AI REST surface: both 200, the sentence back verbatim, 61.5 neurons for 7.9 s | `POST accounts/…/ai/run/@cf/deepgram/nova-3` ×2 → "We agreed to send the term sheet by Friday. The founder said their runway is" / "Fourteen months. Olive will confirm the commitment amount next week." |
+| Does the listener's loop run against the real Google? | **CONFIRMED up to the wall** — heartbeat, `media_scope: GRANTED`, real `spaces.get` on `svf-nzzr-pax`, no active conference → `meet_not_started` on the row | `npm run vault:run -- node scripts/meet/live-listener.mjs --once --base http://127.0.0.1:9631` → `{"due":1,"active":0,"media_scope":"GRANTED"}` |
+
+### Named stops (for the owner)
+
+1. **Developer Preview enrolment** of project `gsc-automation-493801` (number `156361797325`) with
+   `sequoia@westpeek.ventures` as the OAuth principal — applied for 19 Sep 2026; acceptance takes
+   days. Until it lands every attempted join reads `meet_live_unavailable_preview` on the row with
+   Google's exact message, and the listener retries every five minutes while the call is running,
+   so it lights up on the first successful `v2beta` call with no redeploy.
+2. **Run the listener on the Mac**: `deployment/launchd/README.md` — one plist, the same vault, the
+   same Access token as the seat claimer. `--doctor` first.
+
+### How it works
+
+- **The listener** (`scripts/meet/live-listener.mjs`; the loop in `lib/listener-core.mjs`, the peer
+  in `lib/meet-media-page.js`) heartbeats the Worker every 30 s and is told which calendar Meets
+  are in their window (15 min before start to 3 h after). For each it reads the space; an
+  `activeConference` means the call is running. It asks the Worker to open a session, mints the
+  Media API token, creates a headless-Chromium peer (three receive-only audio transceivers, the
+  `session-control` and `media-stats` channels the API requires, `media-entries` and
+  `participants`), hands the SDP offer to `spaces.connectActiveConference` and the answer back.
+  The three virtual streams are mixed into one track; a MediaRecorder is stopped and restarted
+  every minute (each slice a complete container, as the During face's recorder does) and each
+  slice is posted, in sequence, to the Worker. The conference ending — `session-control` says
+  `STATE_DISCONNECTED`, or the space no longer has that active conference — leaves and reports.
+- **The Worker** (`services/meetLive.ts`) holds the gates, in order, each a named state on the
+  row: a calendar-synced meeting with a conference (a manual meeting has no live path; state NULL);
+  the meeting-type rule; the firm recording default (0203); platform-announced consent (the same
+  function and basis as tier 2, recorded once per conference); `meet.live.join` for the SYSTEM
+  actor. Only then a `meet_live_session` row exists, and only against it may audio arrive.
+- **LP and Broker meetings never join live** — the owner's rule, 19 Sep 2026. The Media API is
+  Pre-GA and term (vi) of the Developer Preview terms lets Google use what passes through it; an LP
+  conversation must never go there. Enforced at the join decision in code
+  (`liveAllowedForType`, `meetLiveView.ts`), on the row as `meet_live_off_lp_policy`; those
+  meetings keep the GA post-call transcript path. `validate:meet-live` plants an LP meeting and
+  requires the refusal.
+- **Every slice** → `transcribeWithSpeakers` → `ingestTranscript` with `platform: GOOGLE_MEET_LIVE`
+  (a SYSTEM-actor import under the platform-announced consent, exactly like tier 2's
+  `GOOGLE_MEET`; the field is on no request schema) → notes carrying the meeting's label. Every
+  `ROLL_EVERY_MS` with new words, the After DRAFT rolls through Phase B's drafter — a draft, never
+  a record; `validate:voice-is-read-only` still holds.
+- **Two sources of one call.** The official transcript is authoritative for After; when tier 2
+  reads it, every live import for the meeting gets `superseded_by` and the note readers that feed
+  the draft and the room's context skip them. The live notes stay on the record as corroboration.
+- **The end-of-call signal** is one column, `meeting.call_ended_at` (0216), written by the
+  listener or the ingest, whichever learns it first. The During face and the side panel read it.
+- **States on the row** (`meeting.meet_live_state`, detail in `meet_live_detail`; `GET
+  /api/meetings/:id/room` returns them as `meet_live`): `meet_not_started`, `meet_live_joining`,
+  `meet_live_listening`, `meet_live_ended`, `meet_live_no_listener`, `meet_live_unavailable_scope`,
+  `meet_live_unavailable_preview`, `meet_live_unavailable_edition` (Google's exact error in the
+  detail), `meet_live_unavailable_policy`, `meet_live_off_lp_policy`, `meet_live_failed`, and NULL
+  for a meeting the live path does not apply to.
+- **Cost per hour of call**, measured: Nova-3 at 7.8 neurons/s on the peer's real slices →
+  ~28,000 neurons/hour → **$0.31/hour** after the free 10,000 neurons/day (~21 minutes free).
+  The rolling draft: at most one run per five minutes with new words, on the ladder's free-first
+  lanes; the session row carries `neurons`, `seconds_heard` and `drafts_rolled`, and
+  `GET /api/meet/live/status` reports `cost.usd_per_hour` from what the platform actually billed.
+- Routes, one block `// === Meet live ===`: `POST /api/meet/live/heartbeat`,
+  `POST /api/meet/live/sessions`, `POST /api/meet/live/sessions/:id/report`,
+  `POST /api/meet/live/sessions/:id/chunk` (listener identity only); `GET /api/meet/live/status`,
+  `GET /api/meet/live/resolve?code=`, `POST /api/meet/live/adopt` (partners).
+
+## Tier 3 — the Meet Add-on side panel (built 19 Sep 2026)
+
+- **`#/meet-panel`** (`src/client/pages/MeetPanel.tsx`) is the During face beside the call: inside
+  Meet the Add-ons SDK (`https://www.gstatic.com/meetjs/addons/1.1.0/meet.addons.js`,
+  `createAddonSession({ cloudProjectNumber })` → `createSidePanelClient()` → `getMeetingInfo()`)
+  names the call; `GET /api/meet/live/resolve?code=` turns the code into the meeting the calendar
+  sync created (the nearest occurrence); the same `RoomPanel` as `#/room/<id>` renders, narrow.
+  Not on the record → "This call is not on the record" with one action, **Record this meeting
+  now** (`POST /api/meet/live/adopt`: an ordinary meeting carrying the code, FOUNDER /
+  `UNKNOWN_CHECK_IT`, `source = 'manual'` — so the live path does not apply and the room records
+  the way Phase C does). Once `call_ended_at` is set → **Open what came out of it** → the full After
+  face in the main app (`#/meetings?open=<id>&face=after`).
+- **Auth inside the iframe, decided: her own session cookie.** Cloudflare Access answers an iframe
+  on meet.google.com only if the application sends `CF_Authorization` with `SameSite=None` — today
+  the attribute is unset on both Access applications (probed 19 Sep 2026, read-only), so the panel
+  would load as the login page, which cannot be framed. A service token cannot live in a browser
+  page; an Access application "for the add-on origin" has nothing to verify. **Console step
+  (owner):** Zero Trust › Access › Applications › *west-peek-os* › Settings › Cookie settings ›
+  SameSite attribute → **None**. The cost — a cross-site form could POST with her cookie — is closed
+  in the Worker: a state-changing `/api` request whose `Sec-Fetch-Site` is not `same-origin`/`none`
+  is refused 403 before any handler (`index.ts`, pinned in `tests/meetLive.test.ts`). If the cookie
+  is absent the panel offers "Open West Peek OS" (a tab to sign in) and "Try again".
+- **Registration.** The service account cannot: the Google Workspace Add-ons API is not enabled on
+  the project and `cloud-platform` is not delegated (probed). The deployment file is
+  `deployment/meet-addon/deployment.json` (checked against `src/shared/meetings/meetAddon.ts`);
+  the four commands are in its `_README` — enable `gsuiteaddons.googleapis.com`, `gcloud
+  workspace-add-ons deployments create west-peek-os-meet --deployment-file=…`, `… install
+  west-peek-os-meet`. Org-wide is a private Marketplace listing, optional.
+- Proven in the browser: `e2e/p72-meet-panel.spec.ts`.
 
 ## The doors onto a call, and the hooks the live path wires (19 Sep 2026, PR #130)
 
@@ -175,7 +251,8 @@ only path.
 - `meeting.meet_conference_id` / `meeting.meet_link` — the space the During face is inside.
 - `GET /api/meet/status` — is the door open (policy on, subscriptions live, inbox counts).
 - `captureChunk` (`services/liveTranscription.ts`) for anything captured live; `ingestTranscript`
-  with `platform: "GOOGLE_MEET"` only from `meetIngest.ts`, never from a request.
+  with `platform: "GOOGLE_MEET"` only from `meetIngest.ts` and `"GOOGLE_MEET_LIVE"` only from
+  `meetLive.ts`, never from a request.
 - `meet_event_inbox` rows for "what came of the call": `state`, `turns`, `unattributed_turns`,
   `transcript_ref`, `recording_ref`, `transcript_import_id`.
 - `PLATFORM_CONSENT_BASIS` and `MEET_PROVIDER` from `services/meetIngest.ts`; `provider_name =
@@ -183,9 +260,11 @@ only path.
 
 ## Proof
 
-- `tests/calendarSync.test.ts` (12) and `tests/meetIngest.test.ts` (11) against a fake Google whose
-  service account carries a real RSA key, so the JWT path runs for real.
-- `npm run validate:calendar-sync` and `npm run validate:meet-ingest`, each with a self-test and a
-  negative proof recorded in the PR (a planted spry mailbox; a join that guesses).
+- `tests/calendarSync.test.ts` (12), `tests/meetIngest.test.ts` (11) and `tests/meetLive.test.ts`
+  (24 — the listener's real loop against a fake Meet media server and a fake Nova-3) against a fake
+  Google whose service account carries a real RSA key, so the JWT path runs for real.
+- `npm run validate:calendar-sync`, `npm run validate:meet-ingest` and `npm run validate:meet-live`,
+  each with a self-test and a negative proof recorded in the PR (a planted spry mailbox; a join that
+  guesses; an LP meeting let into the live stream).
 - `npm run vault:run -- node scripts/meet/probe-google.mjs [--subscribe]` — the live table above,
   12 checks, 0 not confirmed on 18 Sep 2026 (one UNPROVEN until the first real call ends).

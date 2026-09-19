@@ -533,3 +533,49 @@ them rather than a theoretical actor.
 The contract is in `src/shared/work/previewLane.ts`, the enforcement in `assertPreviewLane` beside
 `applyPreviewBoundary`, and `npm run validate:preview-lane` fails the build if a future transport,
 route or handler gets round any of it.
+
+## The WebRTC peer for a Google Meet runs on the owner's Mac, not in the Worker (19 Sep 2026)
+
+Owner, 19 Sep 2026: "If I push Join on Meet what happens? Is it recording? Are my AI employees
+there from Join on Meet alone?" The honest answer was no — the room heard nothing until the call
+ended and tier 2 read the official transcript. The approved plan makes the room hear the Meet live
+through the Meet Media API, and the first decision is where the media session can live.
+
+**The Meet Media API is a WebRTC session.** `spaces.connectActiveConference` takes an SDP offer and
+returns an SDP answer; everything after that is ICE over UDP, DTLS, SRTP, three virtual Opus
+streams at 48 kHz, and four data channels, for as long as the call lasts. A Cloudflare Worker has
+`fetch` and a request lifetime — no `RTCPeerConnection`, no UDP socket — and a Durable Object is
+the same runtime with a mailbox. Neither can hold the session, and this ADR refuses to pretend
+otherwise. A Cloudflare Container could, with a Chromium or libwebrtc image inside it and a bill for
+every hour it waits for a call; AGENTS.md admits a new Cloudflare product only for a real
+requirement, and there is a cheaper runtime that is also the one Google built the API for.
+
+**The peer is headless Chromium on the owner's Mac**, driven by the Playwright this repo already
+installs for e2e (`scripts/meet/live-listener.mjs`, launchd job
+`ventures.westpeek.os.meet-listener`). Google's reference client runs in Chrome; Chrome carries the
+codecs the API requires; and the Mac already runs the seat claimer under launchd with an Access
+service token in the vault, so the pattern, the identity and the credential path all exist. It
+costs nothing. Its honest limit is that her Mac must be awake, and the meeting row says
+`meet_live_no_listener` when it is not, rather than silence.
+
+**Every decision stays in the Worker.** The listener may say it is awake, learn which firm-hosted
+Meets are in their window, read a space to see whether its conference is running, ask the Worker
+to open a session, join, post each minute of audio to the Worker's chunk route, and say how it
+ended. The Worker holds the gates (`meetLive.ts`: a calendar-synced meeting with a conference, the
+meeting-type rule, the firm recording default, platform-announced consent, `meet.live.join`), the
+consent record, the import, the states on the row, and the rolling draft. Audio goes only to the
+Worker and from there only to the Workers AI binding with `mip_opt_out`; `validate:meet-live`
+reads the service, the listener and the peer page and fails the build otherwise.
+
+**LP and Broker meetings never join live** (owner's rule the same day). The Media API is Pre-GA
+under the Workspace Developer Preview Program, whose term (vi) lets Google use data sent through
+Pre-GA APIs to improve them. An LP conversation names limited partners and terms, and the rule
+this repo already enforces for models — never a route whose terms permit that — applies to a media
+route too. Enforced at the join decision in code (`liveAllowedForType`), recorded on the row as
+`meet_live_off_lp_policy`, with the GA post-call transcript path unchanged for those meetings.
+
+**Two sources of one call, one authoritative.** The live notes (`GOOGLE_MEET_LIVE`) exist so the
+room can hear DURING; the official transcript (`GOOGLE_MEET`) is complete and attributed by name.
+When the official one lands it supersedes the live imports (`transcript_import.superseded_by`), and
+the After draft and the room's context read one conversation once. The live notes stay on the
+record as corroboration.
