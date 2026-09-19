@@ -94,8 +94,11 @@ test("ask Walter to walk you through a real meeting: a numbered scenario from th
   expect(text).toMatch(/^WALTER Here is how you would use Meetings, start to finish — 2 scenarios/);
   for (const control of ["Go to this meeting", "Seat", "Join on Meet", "Use my laptop mic for this Meet call", "Done — open the record", "Draft what came out of it", "Approve — make these the record", "Move it", "They said yes — record"]) expect(text, control).toContain(control);
   // What does not happen, and when the transcript lands — the two things she could not find out.
-  expect(text).toContain("What does not happen: nothing joins for you");
-  expect(text).toContain("no employee is in the call");
+  // Tier 4 (19 Sep 2026): Join on Meet alone still puts no employee in the call; the OS joins on the next step.
+  expect(text).toContain("What does not happen: Join on Meet alone puts no employee in the call");
+  expect(text).toContain("The call starts: the OS joins it from the Mac");
+  expect(text).toContain("never for LP or Broker");
+  expect(text).not.toContain("nothing joins for you");
   expect(text).toContain("one room, several doors");
   expect(text).toContain("Within the hour Google's transcript");
   expect(text).toContain("laptop microphone");
@@ -147,8 +150,10 @@ test("the During face says how this room hears — a calendar Meet call, then a 
   // Join on Meet says what it does and does not do, on the button and under it, and offers the
   // two ways — inside the call, beside the call — remembered per viewer.
   const join = page.getByTestId(`join-${meetId}`).first();
-  await expect(join).toHaveAttribute("title", /new tab.*no employee is in the call.*does not hear it live/);
-  await expect(page.getByTestId(`join-line-${meetId}`).first()).toContainText("Nothing joins for you");
+  await expect(join).toHaveAttribute("title", /the OS joins the call as a participant.*never for LP or Broker meetings.*read into this record after the call/);
+  // Tier 4 (19 Sep 2026): the line says when the OS itself joins, and when it never does.
+  await expect(page.getByTestId(`join-line-${meetId}`).first()).toContainText("the OS joins the call as a participant");
+  await expect(page.getByTestId(`join-line-${meetId}`).first()).toContainText("never for LP or Broker meetings");
   await expect(page.getByTestId(`join-mode-inside-${meetId}`).first()).toBeAttached();
   await expect(page.getByTestId(`join-mode-beside-${meetId}`).first()).toBeChecked();
   // Beside Seat, what a seated employee can and cannot do; the standalone link says what it is.
@@ -169,7 +174,9 @@ test("the During face says how this room hears — a calendar Meet call, then a 
   await page.getByTestId("face-during").click();
   await expect(hears).toHaveAttribute("data-state", "MEET_PENDING");
   await expect(hears.getByTestId("hears-sentence")).toContainText("within ~60 min of the call ending");
-  await expect(hears.getByTestId("hears-sentence")).toContainText("this room does not hear it live");
+  // A firm-hosted Meet that has not started: the sentence says the OS joins when it does — if Google admits it — and that the line will say which.
+  await expect(hears.getByTestId("hears-sentence")).toContainText("the call has not started");
+  await expect(hears.getByTestId("hears-sentence")).toContainText("the OS joins it from the Mac and this room hears it live if Google admits the join");
   provisionLocalD1("UPDATE meet_recording_policy SET active = 0 WHERE firm_scope = 'west-peek'");
 
   // After says where its material came from — nothing yet, and says so.
