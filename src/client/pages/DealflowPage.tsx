@@ -2328,8 +2328,11 @@ function CompanyDealRecord({
                 <button type="button" className="btn-strong" disabled={busy} data-testid="deal-math-create" onClick={() => void workOutMath()}>
                   Work it out
                 </button>
+                {/* Short enough to stay one line at 320px in the platform fallback face — CI's Linux
+                    Chromium measured the longer label at 342px on a 320px screen. The sentence above
+                    the fields says what "verified" means. */}
                 <button type="button" disabled={busy || !packet} data-testid="deal-math-calculate" onClick={() => void calculate()}>
-                  Recompute with the verified formulas
+                  Recompute (verified formulas)
                 </button>
               </div>
 
