@@ -122,7 +122,11 @@ export function LiveHelpPanel({ meeting, me }: { meeting: { id: string; meeting_
                   <span>
                     {s.role} · {s.because}
                     {/* A WARNING, NOT A LOCK. The owner's rule: any employee can be seated anywhere. */}
-                    {s.warning && <span className="badge badge-gate" data-testid={`seat-warning-${s.name}`}>{s.warning}</span>}
+                    {s.warning && (
+                      <span data-testid={`seat-warning-${s.name}`}>
+                        {" "}<span className="badge badge-gate">internal-only seat</span> {s.warning}
+                      </span>
+                    )}
                   </span>
                 </div>
                 {on ? (
