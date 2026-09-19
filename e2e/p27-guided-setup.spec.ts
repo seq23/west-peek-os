@@ -137,10 +137,25 @@ test("recurring work is proposed as PAUSED, with blockers that name the fix", as
   const setup = page.getByTestId("setup-page");
   await expect(setup.getByRole("button", { name: /switch on|enable|create job/i })).toHaveCount(0);
 
-  // A blocked proposal must say what to do about it, never just "blocked".
+  // A blocked proposal must say what to do about it, never just "blocked" — and the page never
+  // claims a blocker before it has read the roster, the providers and the existing jobs (it used
+  // to flash "No AI provider" while /api/providers was in flight). So: wait for the settled plan,
+  // then the blockers list either matches the live state exactly or is absent because there is
+  // nothing to block on — never a stale in-between.
+  await expect(page.getByTestId("setup-jobs")).toHaveAttribute("data-loaded", "true");
+  const asMp = { headers: { "x-wpos-dev-user": "sequoia@westpeek.ventures" } };
+  const [providers, lounge] = await Promise.all([
+    page.request.get("/api/ai/providers", asMp).then((r) => r.json() as Promise<{ providers: Array<{ enabled: number; kill_switched: number }> }>),
+    page.request.get("/api/workforce/lounge", asMp).then((r) => r.json() as Promise<{ employees: Array<{ name: string; status: string }> }>),
+  ]);
+  const providerUsable = providers.providers.some((p) => p.enabled === 1 && p.kill_switched === 0);
+  const wrenActive = lounge.employees.some((e) => e.name === "Wren" && e.status === "ACTIVE");
   const blockers = page.getByTestId("setup-job-blockers-wednesday_mp_meeting_prep");
-  if (await blockers.isVisible()) {
-    await expect(blockers).toContainText(/approval receipt|not active|No AI provider/);
+  if (!providerUsable) await expect(blockers).toContainText("No AI provider");
+  if (!wrenActive) await expect(blockers).toContainText(/Wren.*not active.*approval receipt/);
+  if (providerUsable && wrenActive) {
+    await expect(blockers).toHaveCount(0);
+    await expect(prep).toContainText(/Ready to create|Already created/);
   }
 });
 

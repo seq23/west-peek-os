@@ -217,7 +217,47 @@ export async function companyFromSubject(
   return await matchFunnelCompany(env, whole);
 }
 
+/**
+ * A MESSAGE IS HANDLED ONCE, however many times it is delivered.
+ *
+ * Cloudflare Email Routing re-delivers when the handler does not answer cleanly, and the local dev
+ * harness drops the RPC stream under load ("Network connection lost") AFTER the handler has already
+ * finished — p54 on 19 Sep 2026. Either way the second delivery used to open a second capture, a
+ * second card, a second deck. The Message-ID header (RFC 5322 §3.6.4) is the sender's own identity
+ * for the message: it is recorded when the handler COMPLETES and checked on entry, so a delivery
+ * that crashed halfway is still retried, and one that finished is a named no-op the log can see.
+ * A message with no Message-ID cannot be recognised and is handled every time — that is honest.
+ */
+export function inboundMessageKey(headers: Headers): string | null {
+  const raw = (headers.get("message-id") ?? "").trim();
+  if (!raw) return null;
+  return raw.replace(/^<|>$/g, "").trim().slice(0, 998) || null;
+}
+
 export async function handleInboundEmail(
+  message: { from: string; to: string; headers: Headers; raw: ReadableStream; rawSize: number },
+  env: Env,
+): Promise<void> {
+  const key = inboundMessageKey(message.headers);
+  const firmScope = "west-peek";
+  if (key) {
+    const seen = await env.WP_OS_DB.prepare("SELECT seen_at FROM inbound_email_seen WHERE message_id = ?1")
+      .bind(key)
+      .first<{ seen_at: string }>();
+    if (seen) {
+      console.warn(`inbound email already handled at ${seen.seen_at}; re-delivery ignored`, { message_id: key });
+      return;
+    }
+  }
+  await handleInboundEmailOnce(message, env);
+  if (key) {
+    await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO inbound_email_seen (message_id, firm_scope) VALUES (?1, ?2)")
+      .bind(key, firmScope)
+      .run();
+  }
+}
+
+async function handleInboundEmailOnce(
   message: { from: string; to: string; headers: Headers; raw: ReadableStream; rawSize: number },
   env: Env,
 ): Promise<void> {
