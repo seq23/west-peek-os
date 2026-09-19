@@ -1,6 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
-import { fixtureDealsByMarker, retireFixtureDeals } from "./support/fixtures";
 
 /**
  * THE DEALS SURFACES, MEASURED RATHER THAN ASSERTED.
