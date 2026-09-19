@@ -5653,3 +5653,47 @@ never due, nav absent while the route answers, `weekly_review.manage` proven wit
 identity, archived kind off the shelf but there by name). `tests/jobs.test.ts` used the review as its
 occurrence-key vehicle and now uses `deck_reading`, asserting the premise that the first occurrence
 SUCCEEDED. `e2e/p57` asserts all four doors land on the board.
+
+## 18 Sep 2026 — The portfolio shows what the firm owns, once
+
+Operator: *"I think the one company we invested in should go there, and some of the pictorial graphs
+in portfolio allocation from the fund strategy page."*
+
+**What was true in production (read-only, `wrangler d1 execute --remote`).** One CLOSED
+`investment_opportunity` — Sensori, `opp_ea7463ad…`, `$1 × 10,000` placeholder shares standing in for
+a real $10K SPV, `backfill_reason: "$10K SPV that closed before Fund I existed; never went through
+West Peek's IC"`, `as_of_date 2025-08-06`. Zero `position` rows, zero `transaction` rows, zero
+`position_mark` rows. Portfolio's "What we own" read `/api/funds/:id/performance`, which reads
+`position` alone, so it said "The fund holds nothing yet"; Fund strategy's composition read CLOSED
+opportunities and drew Sensori at 100%. The Portfolio page's own header comment recorded the
+disagreement — as the reason the bars had been removed from it.
+
+**The fix is the query, not a position row.** Booking a pre-fund SPV with stand-in share counts into
+Fund I would put it into the fund's cost basis and from there into TVPI and the LP letter. What is
+true is that the firm invested in it, and that is what a CLOSED opportunity records.
+
+| File | What |
+|---|---|
+| `src/worker/services/portfolioHoldings.ts` | ONE list: CLOSED opportunities ∪ OPEN positions, merged per company, each row saying which it is (`booked`), with amount in, vehicle, ownership, current mark, last check-in, open asks, open flags, follow-on reviews. `GET /api/portfolio/holdings`. Composition (`/composition`, moved here from `investment.ts`) and the new deployment view (`/allocation?fund_id=`) are computed from it. Fund performance is deliberately untouched — the fund's ledger stays positions-only. |
+| `src/shared/fund/allocation.ts` | `planSlices` — the four plan figures Fund strategy used to work out inline — and `deploymentSlices`, the same plan with deployed / still-to-deploy drawn against it. Both pages call it. Colours are token names; the fifth "still to deploy" segment uses the ring's empty-track colour because the palette holds four separable hues on purpose. |
+| `src/client/pages/AllocationRing.tsx` | The ring SVG, legend and table, extracted from `FundAllocation.tsx`. One definition, two hosts. |
+| `src/client/pages/PortfolioAllocation.tsx` | Portfolio's host: "Where the money is, against the plan". |
+| `src/client/pages/PortfolioPage.tsx` | "What we own" renders from `/api/portfolio/holdings`, hosts `<Composition />` and `<PortfolioAllocation>`. The header comment that recorded the disagreement now records the fix. |
+| `src/worker/index.ts` | `// === Phase Portfolio ===` block: holdings, composition, allocation. |
+
+**Proof.** `tests/portfolioHoldings.test.ts` (8): the Sensori-shaped fixture (backfilled CLOSED,
+placeholder economics, no position) hard-fails the run if it produced no closed-but-unbooked row, then
+must appear with `booked: false`, `$10,000`, `SPV`, `2025-08-06`; a booked position appears with its
+cost basis and mark, one row per company; composition's total equals holdings' total; and the plan
+figures the server returns are diffed to the cent against `planSlices` over the same fixture
+(`$30M − $7M = $23M · 30% = $6.9M · 70% = $16.1M · 40% = $6.44M · initial $9.66M`).
+`validate:portfolio` (24-fixture self-test) fails if the closed SELECT joins `position`, if either page
+grows its own ring or its own arithmetic, if a route leaves the block, or if the test excuses itself.
+
+**Negative proofs, run.** The join planted on the closed SELECT: validator exits 1 naming it, 5 of 8
+tests red. The server's reserve percentage nudged 40 → 35: the diff test alone goes red. A second
+`strokeDasharray` file under `src/client`: validator exits 1. Each restored, each green again.
+
+Counts: vitest **2480/2480** (was 2472; +8), `tsc --noEmit` green, `validate:brand`,
+`design-tokens`, `css-classes`, `heading-scale`, `css-variables`, `sql`, `scans-read-code` and the new
+`validate:portfolio` all PASSED with self-tests.

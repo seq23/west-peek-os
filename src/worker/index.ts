@@ -308,7 +308,6 @@ import {
   handleBackfillOpportunity,
   handleConfirmPlaceholders,
   handleDealflowBoard,
-  handlePortfolioComposition,
   handleUpdateDealMathPacket,
   handleUpdateOpportunity,
   handleVoidTransaction,
@@ -490,6 +489,7 @@ import {
 } from "./services/machines";
 import { handleAllocationStrategyView, handlePortfolioCockpit } from "./services/cockpit";
 import { handleDraftPortfolioSummary, handlePortfolioReporting } from "./services/portfolioReporting";
+import { handlePortfolioAllocation, handlePortfolioComposition, handlePortfolioHoldings } from "./services/portfolioHoldings";
 import { handleCheckConnector, handleListConnectors, handleMeetingPrepQueue } from "./services/connectors";
 import { handleAcceptEngagement, handleListEngagements, handleOpenEngagement } from "./services/specialist";
 import {
@@ -874,7 +874,6 @@ const router = new Router()
   .get("/api/security-classes", handleListSecurityClasses)
   // P6 — investment opportunities (secondaries keep seller/broker/class provenance).
   .get("/api/dealflow/board", handleDealflowBoard)
-  .get("/api/portfolio/composition", handlePortfolioComposition)
   // Item 7, route 1: the manual door a partner drives herself. It runs through openIntoFunnel.
   .post("/api/opportunities", handleCreateOpportunity)
   // Item 7, route 4: the analyst's own scouting. His list, so his to cut — but it still arrives
@@ -1337,7 +1336,14 @@ const router = new Router()
   .post("/api/lp-ops/engagements/:id", handleUpdateLpEngagement)
   // P25 — MP cockpit views. Read-only aggregations; nothing is recomputed for display.
   .get("/api/portfolio/cockpit", handlePortfolioCockpit)
-  .get("/api/allocation/scenarios/:id/strategy-view", handleAllocationStrategyView);
+  .get("/api/allocation/scenarios/:id/strategy-view", handleAllocationStrategyView)
+  // === Phase Portfolio ===
+  // What the firm owns, as ONE list: closed investments and booked positions, merged per company.
+  // Composition and the deployment ring are computed from that list, so Portfolio and Fund
+  // strategy cannot name different portfolios (services/portfolioHoldings.ts).
+  .get("/api/portfolio/holdings", handlePortfolioHoldings)
+  .get("/api/portfolio/composition", handlePortfolioComposition)
+  .get("/api/portfolio/allocation", handlePortfolioAllocation);
 
 /**
  * Pure request handler — exported so tests can exercise it directly with a

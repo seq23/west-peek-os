@@ -324,6 +324,12 @@ jobs:
       - name: A scan reads code, not prose
         run: npm run validate:scans-read-code
 
+      # 18 Sep 2026: Portfolio said the fund held nothing while Fund strategy drew the firm's one
+      # investment (a pre-fund SPV with no position row) at 100%. One list now feeds both pages, one
+      # ring and one arithmetic are hosted twice, and this fails if either page grows its own again.
+      - name: The portfolio shows what the firm owns
+        run: npm run validate:portfolio
+
       - name: Build client
         run: npm run build
 
