@@ -5,6 +5,7 @@ import { canAccessPrivacyLabel } from "./authorize";
 import { captureReadiness, CaptureRefused } from "./liveTranscription";
 import { firmRecordingPolicy, MEET_PROVIDER } from "./meetIngest";
 import type { HearingFacts, MaterialSource, MeetInboxState } from "../../shared/meetings/howTheRoomHears";
+import { meetLiveView } from "./meetLiveView";
 
 /**
  * HOW THE ROOM HEARS — the facts, served (owner, 19 Sep 2026).
@@ -36,10 +37,11 @@ interface MeetingHearingRow {
   id: string;
   source: "manual" | "google_calendar" | null;
   meet_link: string | null;
+  meet_conference_id: string | null;
   firm_scope: string;
   privacy_label: string;
-  /** #131's column; not selected on this head (see `hearingFacts`). */
-  call_ended_at?: string | null;
+  /** THE END-OF-CALL SIGNAL: `meeting.call_ended_at` (migration 0216). */
+  call_ended_at: string | null;
 }
 
 interface InboxRowSlim {
@@ -71,7 +73,7 @@ function participantsIn(raw: string): number {
 
 /** Every fact the states are chosen from, read from the rows that own them. */
 export async function hearingFacts(env: Env, meeting: MeetingHearingRow): Promise<HearingFacts> {
-  const [policy, job, inbox, capture, typed] = await Promise.all([
+  const [policy, job, inbox, capture, typed, live] = await Promise.all([
     firmRecordingPolicy(env, meeting.firm_scope),
     env.WP_OS_DB.prepare("SELECT interval_minutes FROM scheduled_job WHERE job_key = 'meet_ingest'").first<{ interval_minutes: number | null }>(),
     env.WP_OS_DB.prepare(
@@ -79,17 +81,14 @@ export async function hearingFacts(env: Env, meeting: MeetingHearingRow): Promis
     ).bind(meeting.id).first<InboxRowSlim>(),
     captureReadiness(env, meeting.id),
     env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1 AND note_type = 'MANUAL'").bind(meeting.id).first<{ n: number }>(),
+    // The live path (tier 4): the state the listener wrote on the row, staleness applied.
+    meetLiveView(env, { id: meeting.id, source: meeting.source === "google_calendar" ? "google_calendar" : "manual", meet_conference_id: meeting.meet_conference_id }),
   ]);
   return {
-    /*
-     * THE END-OF-CALL SIGNAL IS #131's COLUMN, `meeting.call_ended_at`, and this head does not have
-     * it: `validate:sql` refuses a statement against a column no migration here creates, and a
-     * guarded read would be a query the scan cannot see — the wrong kind of quiet. So the field is
-     * served null here with its name on the contract, `callIsOver` already reads it first, and
-     * #131 (which rebases onto this) replaces this line with the one-column read once its
-     * migration lands. Until then Google's end time on the inbox row stands in, below.
-     */
-    call_ended_at: meeting.call_ended_at ?? null,
+    // THE END-OF-CALL SIGNAL: the column itself (migration 0216); Google's end time on the inbox
+    // row stands in only for a call the listener never heard — `callIsOver` reads both.
+    call_ended_at: meeting.call_ended_at,
+    meet_live: { state: live.state, detail: live.detail, turns: live.live_turns },
     source: meeting.source === "google_calendar" ? "google_calendar" : "manual",
     meet_link: meeting.meet_link ?? null,
     firm_default_on: policy?.active === 1,
@@ -142,7 +141,7 @@ export async function materialSources(env: Env, meetingId: string): Promise<Mate
 
 /** GET /api/meetings/:id/hearing — how this room hears, and where After's material came from. */
 export async function handleHearing(ctx: RouteContext): Promise<Response> {
-  const meeting = await ctx.env.WP_OS_DB.prepare("SELECT id, source, meet_link, firm_scope, privacy_label FROM meeting WHERE id = ?1")
+  const meeting = await ctx.env.WP_OS_DB.prepare("SELECT id, source, meet_link, meet_conference_id, firm_scope, privacy_label, call_ended_at FROM meeting WHERE id = ?1")
     .bind(ctx.params.id!)
     .first<MeetingHearingRow>();
   if (!meeting || !canAccessPrivacyLabel(ctx.identity!, meeting.privacy_label)) return json({ error: "not_found" }, { status: 404 });

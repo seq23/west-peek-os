@@ -57,6 +57,7 @@ const SAMPLE_FACTS = {
   source: "google_calendar",
   meet_link: "https://meet.google.com/abc-defg-hij",
   call_ended_at: null,
+  meet_live: { state: null, detail: "x", turns: 4 },
   firm_default_on: true,
   ingest_every_minutes: 60,
   meet: { state: "INGESTED", conference_ended_at: "2026-09-19T15:02:00Z", turns: 12, participants: 2, read_at: "2026-09-19T15:48:00Z", detail: "x" },
@@ -110,7 +111,9 @@ export function checkReachable(mod) {
   const bools = [true, false];
   const inboxStates = [null, "RECEIVED", "INGESTED", "REFUSED", "NO_TRANSCRIPT", "NO_MEETING", "FAILED"];
   const consents = ["NOT_RECORDED", "GRANTED", "DENIED"];
+  const liveStates = [null, "meet_not_started", "meet_live_joining", "meet_live_listening", "meet_live_ended", "meet_live_no_listener", "meet_live_unavailable_scope", "meet_live_unavailable_preview", "meet_live_unavailable_edition", "meet_live_unavailable_policy", "meet_live_off_lp_policy", "meet_live_failed"];
   for (const source of ["manual", "google_calendar"])
+    for (const liveState of liveStates)
     for (const inbox of inboxStates)
       for (const firm of bools)
         for (const avail of bools)
@@ -124,6 +127,7 @@ export function checkReachable(mod) {
                     meet_link: source === "google_calendar" ? SAMPLE_FACTS.meet_link : null,
                     firm_default_on: firm,
                     meet: inbox ? { ...SAMPLE_FACTS.meet, state: inbox } : null,
+                    meet_live: { state: source === "google_calendar" ? liveState : null, detail: null, turns: 0 },
                     transcription_available: avail,
                     recording_policy_active: policy,
                     consent: { transcription: consent, recording: consent },

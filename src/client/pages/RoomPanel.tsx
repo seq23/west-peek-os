@@ -166,7 +166,7 @@ export function RoomPanel({ meetingId, standalone = false, aside, armLaptopMic =
         <div className="room-head">
           <h3>{state?.meeting.title ?? "The room"}</h3>
           <span className="muted small">{state ? `${state.meeting.meeting_type} · ${state.meeting.status.toLowerCase()}` : "Reading the room…"}</span>
-          {facts?.meet_link && <CallDoors meeting={{ id: meetingId, meet_link: facts.meet_link }} standalone compact onArmMic={() => setArmed(true)} />}
+          {facts?.meet_link && <CallDoors meeting={{ id: meetingId, meet_link: facts.meet_link, meet_live_state: facts.meet_live.state }} standalone compact onArmMic={() => setArmed(true)} />}
           {over && (
             <div className="stack" data-testid={`room-over-${meetingId}`}>
               <button type="button" className="btn-strong btn-lg" data-testid={`room-return-${meetingId}`} aria-describedby={`room-return-line-${meetingId}`} onClick={goToAfter}>

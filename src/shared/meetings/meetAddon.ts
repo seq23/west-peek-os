@@ -17,4 +17,11 @@ export const MEET_ADDON = {
   sdkUrl: "https://www.gstatic.com/meetjs/addons/1.1.0/meet.addons.js",
   /** The add-on's name in Meet's "Activities" panel. */
   name: "West Peek OS",
+  /**
+   * The org the add-on is installed for, or null. Google offers no API to ask this from a page, so
+   * it is a fact recorded here when the owner runs the registration commands in
+   * `deployment/meet-addon/deployment.json` (`gcloud workspace-add-ons deployments install …`).
+   * Null keeps "Inside the call" honest: it says the panel is not installed and opens beside.
+   */
+  installedFor: null as string | null,
 } as const;

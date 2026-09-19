@@ -62,6 +62,7 @@ const manual: HearingFacts = {
   firm_default_on: true,
   ingest_every_minutes: 60,
   meet: null,
+  meet_live: { state: null, detail: null, turns: 0 },
   transcription_available: true,
   recording_policy_active: true,
   consent: { transcription: "NOT_RECORDED", recording: "NOT_RECORDED" },
@@ -80,7 +81,19 @@ const inbox = (state: HearingFacts["meet"] extends infer M ? (M extends { state:
 });
 
 /** Every state, and the facts that reach it. The validator reads the state names off this table. */
+const live = (state: NonNullable<HearingFacts["meet_live"]["state"]>, turns = 0, detail: string | null = null): HearingFacts["meet_live"] => ({ state, detail, turns });
+
 const REACHES: Array<[HearingState, HearingFacts, boolean]> = [
+  // The live path (tier 4): the OS in the call from the Mac.
+  ["MEET_LIVE_LISTENING", { ...meet, meet_live: live("meet_live_listening", 14) }, false],
+  ["MEET_LIVE_JOINING", { ...meet, meet_live: live("meet_live_joining") }, false],
+  ["MEET_LIVE_ENDED", { ...meet, meet_live: live("meet_live_ended", 40), meet: inbox("RECEIVED", { turns: 0 }) }, false],
+  ["MEET_LIVE_NO_LISTENER", { ...meet, meet_live: live("meet_live_no_listener", 0, "the Mac has not been heard from since 15:02") }, false],
+  ["MEET_LIVE_NO_SCOPE", { ...meet, meet_live: live("meet_live_unavailable_scope") }, false],
+  ["MEET_LIVE_NO_PREVIEW", { ...meet, meet_live: live("meet_live_unavailable_preview") }, false],
+  ["MEET_LIVE_REFUSED", { ...meet, meet_live: live("meet_live_unavailable_edition", 0, "The Meet Media API is not enabled for this organization's edition.") }, false],
+  ["MEET_LIVE_OFF_LP", { ...meet, meet_live: live("meet_live_off_lp_policy") }, false],
+  ["MEET_LIVE_FAILED", { ...meet, meet_live: live("meet_live_failed", 0, "ice failed") }, false],
   ["MEET_LIVE_HERE", meet, true],
   ["MEET_INGESTED", { ...meet, meet: inbox("INGESTED") }, false],
   ["MEET_WAITING_FOR_TRANSCRIPT", { ...meet, meet: inbox("RECEIVED", { turns: 0 }) }, false],
@@ -133,16 +146,39 @@ describe("every state is reachable from the row and has a sentence", () => {
 });
 
 describe("what the sentences say, in the owner's order", () => {
-  it("a Meet call that is only joined is not heard live, and the transcript comes within the cadence from the job row", () => {
+  it("a Meet call outside its window is not heard live yet, and the transcript comes within the cadence from the job row", () => {
     const h = hearing({ ...meet, ingest_every_minutes: 45 }, { live: false });
     expect(h.state).toBe("MEET_PENDING");
-    expect(h.sentence).toContain("Join on Meet only opens the call");
+    expect(h.sentence).toContain("Join on Meet opens the call");
     expect(h.sentence).toContain("no employee is in it");
     expect(h.sentence).toContain("does not hear it live");
     expect(h.sentence).toContain("within ~45 min");
     expect(h.sentence).not.toContain("60");
     expect(h.live_path).toBe("LIVE_PATH_OPEN");
     expect(h.live_sentence).toContain("laptop");
+  });
+
+  it("the live path, in order: not started says the OS joins; listening says the turns; ended yields to Google's transcript once it is read; a refusal carries Google's words; LP is off by policy", () => {
+    const notStarted = hearing({ ...meet, meet_live: live("meet_not_started") }, { live: false });
+    expect(notStarted.state).toBe("MEET_PENDING");
+    expect(notStarted.sentence).toContain("the OS joins it from the Mac");
+    const listening = hearing({ ...meet, meet_live: live("meet_live_listening", 14) }, { live: false });
+    expect(listening.chip).toBe("in the call · live");
+    expect(listening.sentence).toContain("14 turns heard so far");
+    expect(listening.live_path).toBeNull();
+    // The laptop mic, switched on during a live join, still wins the line: what THIS browser is doing now.
+    expect(hearing({ ...meet, meet_live: live("meet_live_listening", 14) }, { live: true }).state).toBe("MEET_LIVE_HERE");
+    const ended = hearing({ ...meet, meet_live: live("meet_live_ended", 40), meet: inbox("RECEIVED", { turns: 0 }) }, { live: false });
+    expect(ended.sentence).toContain("40 turns heard live");
+    expect(hearing({ ...meet, meet_live: live("meet_live_ended", 40), meet: inbox("INGESTED") }, { live: false }).state).toBe("MEET_INGESTED");
+    const refused = hearing({ ...meet, meet_live: live("meet_live_unavailable_edition", 0, "The Meet Media API is not enabled for this organization's edition.") }, { live: false });
+    expect(refused.sentence).toContain("not enabled for this organization's edition");
+    expect(refused.live_path).toBe("LIVE_PATH_OPEN");
+    // Once the call has been read, a failed join is history: the read call speaks.
+    expect(hearing({ ...meet, meet_live: live("meet_live_unavailable_preview"), meet: inbox("INGESTED") }, { live: false }).state).toBe("MEET_INGESTED");
+    const lp = hearing({ ...meet, meet_live: live("meet_live_off_lp_policy") }, { live: false });
+    expect(lp.chip).toBe("not joined live · LP policy");
+    expect(lp.sentence).toContain("Pre-GA");
   });
 
   it("with no job row the cadence is named as unknown rather than invented", () => {
@@ -171,10 +207,13 @@ describe("what the sentences say, in the owner's order", () => {
   });
 
   it("the three lines said beside the controls tell the truth about the code", () => {
-    expect(JOIN_ON_MEET_LINE).toMatch(/new tab/);
-    expect(JOIN_ON_MEET_LINE).toMatch(/no employee is in the call/);
-    expect(JOIN_ON_MEET_LINE).toMatch(/does not hear it live/);
+    // Tier 4 made the old line false ("nothing joins for you"); the new one says when the OS does join and when it never does.
+    expect(JOIN_ON_MEET_LINE).toMatch(/the OS joins the call as a participant/);
+    expect(JOIN_ON_MEET_LINE).toMatch(/never for LP or Broker meetings/);
+    expect(JOIN_ON_MEET_LINE).toMatch(/read into this record after the call/);
+    expect(JOIN_ON_MEET_LINE).not.toMatch(/nothing joins for you/);
     expect(SEATED_EMPLOYEE_LINE).toMatch(/never in the Meet call/);
+    expect(SEATED_EMPLOYEE_LINE).toMatch(/the OS is/);
     expect(SEATED_EMPLOYEE_LINE).toMatch(/take a task that returns here/);
     expect(STANDALONE_ROOM_LINE).toMatch(/same room, in its own window/);
   });

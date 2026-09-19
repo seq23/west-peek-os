@@ -15,14 +15,16 @@
  *            the narrow layout, no shell, a way back when it is over.
  *
  * THE HOOKS THE SIBLING WIRES (feat/meet-media-live), named here so nothing has to be guessed:
- *   `meetAddonInstalled()`   — true once the add-on is installed for westpeek.ventures; INSIDE then
- *                              opens the Meet and lets the add-on open `#/room/<id>` in its panel.
- *   `liveMeetPathAvailable`  — true for a meeting the Media API path can join; the laptop-mic
- *                              control then yields to it and says so.
+ *   `meetAddonInstalled()`   — true once the add-on is installed for westpeek.ventures
+ *                              (`MEET_ADDON.installedFor`); INSIDE then opens the Meet and lets the
+ *                              add-on open `#/meet-panel` in its panel.
+ *   `liveMeetPathAvailable`  — true while the OS is joining or in the call itself
+ *                              (`meeting.meet_live_state`); the laptop-mic control then yields.
  *   `CALL_ENDED_SIGNAL`      — the column the room reads to know the call is over:
- *                              `meeting.call_ended_at` (#131's), served as `facts.call_ended_at`;
- *                              until that column lands, Google's end time on the inbox row stands in.
+ *                              `meeting.call_ended_at` (migration 0216), served as `facts.call_ended_at`.
  */
+
+import { MEET_ADDON } from "./meetAddon";
 
 export const JOIN_MODES = ["inside", "beside"] as const;
 export type JoinMode = (typeof JOIN_MODES)[number];
@@ -35,16 +37,28 @@ export const JOIN_MODE_WORDS: Readonly<Record<JoinMode, { label: string; does: s
   beside: { label: "Beside the call", does: "opens the Meet in a new tab and this room, narrow, in this one." },
 };
 
-/** The Tier 3 add-on: not installed for the org yet. The sibling flips this when it is. */
+/**
+ * The Tier 3 add-on. Google offers no API this client could ask "is the add-on installed for this
+ * account", so the signal is the one place the deployment is described — `MEET_ADDON.installedFor`
+ * in `meetAddon.ts`, null until the owner runs the registration commands in
+ * `deployment/meet-addon/deployment.json` and flips it. INSIDE then opens the Meet and the add-on
+ * opens `#/meet-panel` in Meet's own panel; until then the choice says so and opens beside.
+ */
 export function meetAddonInstalled(): boolean {
-  return false;
+  return MEET_ADDON.installedFor !== null;
 }
 
 export const ADDON_NOT_INSTALLED_LINE = "The Meet side panel is not installed for the firm yet, so this opens the call beside the room instead.";
 
-/** The Media API live path: not available for any meeting yet. The sibling makes this real per meeting. */
-export function liveMeetPathAvailable(_meeting: { id: string; meet_link: string | null }): boolean {
-  return false;
+/**
+ * The Media API live path, per meeting: true while the OS is joining or in the call itself
+ * (`meeting.meet_live_state`, written by the live listener — tier 4, #131). Then the laptop-mic
+ * control yields and says so; every other state, including "not started" and every refusal, keeps
+ * the laptop mic as the way to follow live. A caller without the row state (a list row that did
+ * not select it) gets false, which keeps the mic offered — the safe direction.
+ */
+export function liveMeetPathAvailable(meeting: { id: string; meet_link: string | null; meet_live_state?: string | null }): boolean {
+  return Boolean(meeting.meet_link) && (meeting.meet_live_state === "meet_live_joining" || meeting.meet_live_state === "meet_live_listening");
 }
 
 /**
