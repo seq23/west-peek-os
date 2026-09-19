@@ -164,9 +164,9 @@ export function checkApprovalExecutes(approvals, investment) {
  *
  * `indexRaw` is index.ts UNSTRIPPED, and the one reader of this file that is: the block markers
  * `// === Phase D: portfolio ===` / `// === end Phase D ===` ARE comments, by the coordinator's
- * convention for this branch, so they have to be found in the raw text. DELIBERATELY DOES NOT STRIP
- * COMMENTS for that one lookup. Every route check below runs over the stripped text, so a sentence
- * naming a route can neither satisfy nor block the scan.
+ * convention for this branch, so they have to be found in the raw text.
+ * DELIBERATELY DOES NOT STRIP COMMENTS for that one lookup. Every route check below runs over the
+ * stripped text, so a sentence naming a route can neither satisfy nor block the scan.
  */
 export function checkRouteBlock(indexRaw) {
   const bad = [];
