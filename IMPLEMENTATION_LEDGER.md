@@ -5612,3 +5612,30 @@ and now requires the DEFECT report and the partner notification.
 
 Counts: vitest **2447/2447** (was 2433; +14), `tsc --noEmit` green, and all **35** `validate:*`
 scripts PASSED with their self-tests, including the new `validate:steer-waits` (18 fixtures).
+
+## Phase Meet — Google Meet, seamless (18 Sep 2026)
+
+Owner-approved. Tiers 1 and 2 built; 3 and 4 scoped in `docs/GOOGLE_MEET.md`, which also carries the
+probe table (CONFIRMED / SUSPECTED per row with the exact call), the owner's correction that this
+system reads only the firm calendar, and the named stops.
+
+| Where | What |
+|---|---|
+| `migrations/0202_…` | `meeting` gains `calendar_key`, `google_event_id` (UNIQUE with the key), `meet_conference_id`, `meet_link`, `source`, `type_inference`, `recording_ref`, `transcript_ref`; `google_calendar_sync` (the two-door ledger); `meet_event_inbox` (UNIQUE per conference record — one read per ended call is a property of the schema). |
+| `migrations/0203_…` | `meet.recording_policy.firm_default` (reserved, one decision per firm) and `meet_recording_policy`; `calendar.sync`, `meet.ingest`, `meet.consent.platform_announced`; `meet_space_subscription`; jobs `sjb_calendar_sync` / `sjb_meet_ingest` (INTERVAL 60, guarded `CHECK (matched = 2)`). |
+| `src/shared/meetings/calendarSources.ts` | The ONE calendar, `sequoia@westpeek.ventures` → `west-peek`. |
+| `src/shared/meetings/calendarSync.ts` | Pure: API and iCal events to one shape, identity across doors, the type inference, the plan (create/update/cancel/skip — every event one named action). |
+| `src/shared/meetings/meetTranscript.ts` | Pure: entries joined to participants by resource; unattributed stays unattributed; same `turnLine` renderer as Fireflies. |
+| `src/worker/effects/googleWorkspaceClient.ts` | The only file that talks to Google as the firm (allowlisted egress with its reason): SA JWT via WebCrypto, Calendar read, iCal, Meet v2 reads, Workspace Events per-space create/renew, Pub/Sub pull/ack. |
+| `src/worker/services/calendarSync.ts` | Tier 1: two doors, one ledger, every write authorised. |
+| `src/worker/services/meetIngest.ts` | Tier 2: subscriptions, pull, poll, one inbox, the governed read; the firm default; platform-announced consent with its argument and its exclusions. |
+| `src/worker/services/meetings.ts` | `importTranscript` admits a SYSTEM actor only with `platform: "GOOGLE_MEET"`; both gates unchanged. |
+| `src/client/pages/MeetingsPage.tsx` | "Join on Meet" and "type inferred, check it" on the upcoming card. |
+| `scripts/validate/a-calendar-meeting-exists-once.mjs` | `validate:calendar-sync` — one meeting per event through both doors, and the never-blend guard. |
+| `scripts/validate/a-meet-call-that-ended-is-read.mjs` | `validate:meet-ingest` — one read per conference, attribution by join only, LP private by construction, the governed path is the only path. |
+| `scripts/meet/probe-google.mjs` | The live probe through the Worker's own client. 12 checks, 0 not confirmed, 18 Sep 2026. |
+
+Provider layers: Calendar read, iCal read, Meet scopes, Workspace Events subscribe/renew, Pub/Sub pull
+are **PROVEN live** (read-only probe plus two real subscriptions); reading participants / transcript
+entries / recordings of an ended call is **UNPROVEN live** (no conference record exists yet under
+the grant) and proven against the fake; Pub/Sub push is **CONFIRMED impossible** behind Access.

@@ -49,6 +49,10 @@ interface MeetingRow {
   archived_at?: string | null;
   archived_by?: string | null;
   archive_reason?: string | null;
+  /** Phase Meet (migration 0202). Present on a meeting the calendar sync created. */
+  meet_link?: string | null;
+  source?: "manual" | "google_calendar";
+  type_inference?: "FIRM_ONLY" | "LP_CONTACT" | "COMPANY_DOMAIN" | "UNKNOWN_CHECK_IT" | null;
 }
 
 interface MeetingsResponse {
@@ -1016,7 +1020,22 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             <strong>{m.title}</strong>{" "}
             <span className="badge">{meetingType(m.meeting_type)?.label ?? m.meeting_type}</span>{" "}
             <span className="muted small">{whenInWords(m.scheduled_at)}</span>
+            {/*
+              THE TYPE WAS A GUESS, AND THE CARD SAYS SO. A calendar meeting whose attendees matched
+              neither the firm, a known LP contact nor a known company's domain is filed FOUNDER
+              because something has to be chosen; this is the flag that keeps the guess honest until
+              a person confirms or corrects it. Phase D redesigns the card; the flag stays.
+            */}
+            {m.type_inference === "UNKNOWN_CHECK_IT" && (
+              <span className="muted small" data-testid={`type-check-${m.id}`}> · type inferred, check it</span>
+            )}
             <div className="form-row">
+              {/* Phase Meet: the Meet link the calendar carries, so joining is one press from here. */}
+              {m.meet_link && (
+                <a className="link-button" href={m.meet_link} target="_blank" rel="noreferrer noopener" data-testid={`join-${m.id}`}>
+                  Join on Meet
+                </a>
+              )}
               <button type="button" className="link-button" data-testid={`start-${m.id}`} onClick={() => setLive(m.id)}>
                 It is happening now
               </button>
