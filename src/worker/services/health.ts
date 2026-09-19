@@ -1,11 +1,12 @@
 import type { Env } from "../env";
+import { isAfterLocalTime, isWeekend, localReportDate } from "../../shared/intelligence/pipeline";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { ago, summarise, worstOf, type HealthCheck } from "../../shared/health/checks";
 // The browser and the cheap tier are platform bindings that do not carry the WP_OS_ prefix.
 // Reading them through their owning module keeps the one cast in the one file that owns it.
 import { browserConfigured } from "../effects/browserClient";
-import { STALE_AFTER_MINUTES } from "./dailyIntelligence";
+import { BRIEF_SENTINEL_GRACE_MINUTES, STALE_AFTER_MINUTES } from "./dailyIntelligence";
 import { dailySpendUsd, workersAiConfigured } from "../ai/runAi";
 import { actionName } from "../../shared/help/actionNames";
 
@@ -95,18 +96,29 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
             (SELECT started_at FROM intelligence_report r
               WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS started_at,
             (SELECT COUNT(*) FROM intelligence_report r
-              WHERE r.firm_user_id = u.id AND r.status = 'FAILED' AND r.report_date >= date('now','-7 day')) AS fails
+              WHERE r.firm_user_id = u.id AND r.status = 'FAILED' AND r.report_date >= date('now','-7 day')) AS fails,
+            COALESCE(p.timezone, 'America/Chicago') AS timezone,
+            COALESCE(p.earliest_start_local, '06:15') AS earliest_start_local,
+            COALESCE(p.enabled, 1) AS enabled,
+            COALESCE(p.weekends, 1) AS weekends
        FROM firm_user u
        JOIN firm_user_role fr ON fr.firm_user_id = u.id AND fr.role_id = 'role_managing_partner'
+       LEFT JOIN partner_intelligence_profile p ON p.firm_user_id = u.id
       WHERE u.status = 'ACTIVE'
       ORDER BY u.full_name`,
-  ).all<{ id: string; full_name: string; status: string | null; report_date: string | null; error_message: string | null; started_at: string | null; fails: number }>()
+  ).all<{ id: string; full_name: string; status: string | null; report_date: string | null; error_message: string | null; started_at: string | null; fails: number; timezone: string; earliest_start_local: string; enabled: number; weekends: number }>()
     .catch(() => {
       unreadable.push("intelligence_report");
       return { results: [] };
     })).results ?? []);
 
   const TERMINAL = new Set(["READY", "FAILED"]);
+  /** "06:15" + 105 → "08:00". A malformed hour is treated as its floor rather than as a throw. */
+  const plusMinutes = (hhmm: string, minutes: number): string => {
+    const m = /^(\d{2}):(\d{2})$/.exec(hhmm.trim());
+    const total = (m ? Number(m[1]) * 60 + Number(m[2]) : 6 * 60 + 15) + minutes;
+    return `${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  };
   for (const b of briefs) {
     const firstName = b.full_name.split(" ")[0] ?? b.full_name;
     /*
@@ -116,15 +128,31 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
      */
     const ageMinutes = b.started_at ? (Date.now() - new Date(b.started_at).getTime()) / 60_000 : 0;
     const stuck = b.status !== null && !TERMINAL.has(b.status) && ageMinutes > STALE_AFTER_MINUTES;
+    /*
+     * THE SENTINEL (19 Sep 2026): by BRIEF_SENTINEL_GRACE_MINUTES after the partner's earliest
+     * start, on a day the schedule builds, today's row must EXIST and be either READY or FAILED
+     * with a reason. A morning with no row at all is the one failure the row-based checks above
+     * cannot see — it is what happened on Saturday 19 Sep, when the schedule skipped the day and
+     * nothing anywhere was red. "No brief and no explanation" is DOWN, named as such.
+     */
+    const now = new Date();
+    const today = localReportDate(now, b.timezone);
+    const buildsToday = b.enabled === 1 && (b.weekends === 1 || !isWeekend(now, b.timezone));
+    const pastSentinel = buildsToday && isAfterLocalTime(now, b.timezone, plusMinutes(b.earliest_start_local, BRIEF_SENTINEL_GRACE_MINUTES));
+    const missing = pastSentinel && b.report_date !== today;
+    const unstated = pastSentinel && b.report_date === today && b.status === "FAILED" && !(b.error_message ?? "").trim();
     checks.push({
       key: `daily_brief_${b.id}`,
       label: `${firstName}'s brief`,
       state:
-        !b.status ? "DEGRADED"
+        missing || unstated ? "DOWN"
+        : !b.status ? "DEGRADED"
         : b.status === "READY" ? "OK"
         : b.status === "FAILED" || stuck ? "DOWN"
         : "DEGRADED",
-      reading: b.status
+      reading: missing
+        ? `${today} · no brief and no explanation — the clock never started one${b.report_date ? `; the last row is ${b.report_date}` : ""}`
+        : b.status
         ? `${b.report_date} · ${
             b.status === "READY" ? "delivered"
             : stuck ? `stopped part-way, ${ago(b.started_at)}`
@@ -132,11 +160,15 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
           }${b.fails > 0 ? ` · ${b.fails} failed this week` : ""}`
         : "none has ever been built",
       remedy:
-        b.status === "FAILED"
-          ? (b.error_message ?? "It failed. Build it again from Home.")
-          : stuck
-            ? "It stopped part-way through and never finished. Build it again from Home."
-            : undefined,
+        missing
+          ? `It should have started at ${b.earliest_start_local} ${b.timezone} and the tick serves it every minute; if this stays red the cron is not firing. Press "Build today's brief" on Home now.`
+          : unstated
+            ? "It failed and the run did not record why. Build it again from Home; if it fails the same way, the lane that wrote it is the thing to look at."
+            : b.status === "FAILED"
+              ? (b.error_message ?? "It failed. Build it again from Home.")
+              : stuck
+                ? "It stopped part-way through and never finished. Build it again from Home."
+                : undefined,
       page: "home",
     });
   }

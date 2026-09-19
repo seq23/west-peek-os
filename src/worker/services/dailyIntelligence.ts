@@ -95,6 +95,14 @@ export const BRIEF_EXPECTED_OUTPUT_TOKENS = 24_000;
  */
 export const RETRY_AFTER_MINUTES = 20;
 
+/**
+ * THE SENTINEL HOUR. By this many minutes after a partner's earliest start — 06:15 + 105 = 08:00
+ * in her zone — today's row must exist and be READY or FAILED-with-a-reason, or the health board
+ * turns that partner's brief DOWN as "no brief and no explanation". A gap of an hour and three
+ * quarters holds three attempts twenty minutes apart plus the build itself.
+ */
+export const BRIEF_SENTINEL_GRACE_MINUTES = 105;
+
 interface ProfileRow {
   firm_user_id: string;
   timezone: string;
@@ -372,9 +380,15 @@ interface StoredMarket {
   detail: string;
 }
 
-async function stamp(env: Env, id: string, status: string, extra: Record<string, string | number | null> = {}): Promise<void> {
-  const sets = ["status = ?2", "stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')", "stage_lease_until = NULL"];
-  const binds: (string | number | null)[] = [id, status];
+/**
+ * ONE CLOCK. `stage_at` is what the closers compare against the caller's `now` to decide whether a
+ * row has stopped moving, so it is written FROM that clock rather than from SQLite's — two clocks
+ * agree in production and disagree under any test that moves time, which is how a requested brief
+ * was swept as "abandoned" one second after it was opened.
+ */
+async function stamp(env: Env, id: string, status: string, now: Date, extra: Record<string, string | number | null> = {}): Promise<void> {
+  const sets = ["status = ?2", "stage_at = ?3", "stage_lease_until = NULL"];
+  const binds: (string | number | null)[] = [id, status, now.toISOString()];
   for (const [k, v] of Object.entries(extra)) {
     binds.push(v);
     sets.push(`${k} = ?${binds.length}`);
@@ -439,17 +453,17 @@ export async function startReport(
   const reportDate = localReportDate(now, profile.timezone);
   const reportId = `dir_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
-    `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope, stage_at, requested_at, requested_by)
-     VALUES (?1, ?2, ?3, 'GATHERING', ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-             CASE WHEN ?6 = 'requested' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END,
+    `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope, started_at, stage_at, requested_at, requested_by)
+     VALUES (?1, ?2, ?3, 'GATHERING', ?4, ?5, ?8, ?8,
+             CASE WHEN ?6 = 'requested' THEN ?8 ELSE NULL END,
              CASE WHEN ?6 = 'requested' THEN ?7 ELSE NULL END)
      ON CONFLICT (firm_scope, firm_user_id, report_date)
-       DO UPDATE SET status = 'GATHERING', started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-                     stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), stage_lease_until = NULL,
+       DO UPDATE SET status = 'GATHERING', started_at = ?8,
+                     stage_at = ?8, stage_lease_until = NULL,
                      candidates_json = NULL, market_json = NULL, completed_at = NULL, retry_after = NULL,
                      -- THE REQUEST IS A FACT ON THE ROW. The card reads it back as "requested by you
                      -- at 09:29"; a scheduled restart leaves whatever was there.
-                     requested_at = CASE WHEN ?6 = 'requested' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE intelligence_report.requested_at END,
+                     requested_at = CASE WHEN ?6 = 'requested' THEN ?8 ELSE intelligence_report.requested_at END,
                      requested_by = CASE WHEN ?6 = 'requested' THEN ?7 ELSE intelligence_report.requested_by END,
                      error_code = NULL, error_message = NULL, prompt_version = excluded.prompt_version,
                      -- Counted on the way IN, so a run that dies mid-flight still spends its
@@ -458,7 +472,7 @@ export async function startReport(
                      -- see the trigger parameter on this function.
                      attempts = CASE WHEN ?6 = 'requested' THEN 1 ELSE intelligence_report.attempts + 1 END`,
   )
-    .bind(reportId, firmUserId, reportDate, PROMPT_VERSION, firmScope, trigger, requestedBy)
+    .bind(reportId, firmUserId, reportDate, PROMPT_VERSION, firmScope, trigger, requestedBy, now.toISOString())
     .run();
   const row = (await env.WP_OS_DB.prepare(
     "SELECT id FROM intelligence_report WHERE firm_scope = ?1 AND firm_user_id = ?2 AND report_date = ?3",
@@ -503,7 +517,7 @@ async function stageGather(env: Env, row: ReportRow, firmScope: string, now: Dat
     importance: c.score,
     why_ranked: c.reasons,
   }));
-  await stamp(env, row.id, "RANKING", {
+  await stamp(env, row.id, "RANKING", now, {
     raw_count: raw.length, deduped_count: deduped.length, candidate_count: candidates.length,
     candidates_json: JSON.stringify(packetEvents),
   });
@@ -541,7 +555,7 @@ async function stageMarket(env: Env, actor: Actor, row: ReportRow, now: Date, de
       ),
     );
   }
-  await stamp(env, row.id, "GENERATING", { market_json: JSON.stringify(stored) });
+  await stamp(env, row.id, "GENERATING", now, { market_json: JSON.stringify(stored) });
   return "GENERATING";
 }
 
@@ -635,7 +649,7 @@ async function stageWrite(env: Env, actor: Actor, row: ReportRow, firmScope: str
   }
   const sections = parsed;
 
-  await stamp(env, row.id, "VERIFYING");
+  await stamp(env, row.id, "VERIFYING", now);
   const flags = verifyReport(sections, packet);
   const flagged = new Set(flags.map((f) => f.section));
 

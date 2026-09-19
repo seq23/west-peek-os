@@ -168,7 +168,7 @@ describe("the database and the code agree about finished", () => {
       /startReport\(ctx\.env, firmScope, target, now, "requested", actor\.firmUserId \?\? null\)/,
     );
     // And the request is a FACT ON THE ROW — the card reads it back, nothing infers it.
-    expect(service).toMatch(/requested_at = CASE WHEN \?6 = 'requested' THEN strftime/);
+    expect(service).toMatch(/requested_at = CASE WHEN \?6 = 'requested' THEN \?8 ELSE intelligence_report\.requested_at END/);
     expect(service).toMatch(/requested_by = CASE WHEN \?6 = 'requested' THEN \?7/);
   });
 });
