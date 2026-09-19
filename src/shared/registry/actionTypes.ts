@@ -326,6 +326,13 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "meeting.stage_change.propose", name: "Propose a stage change from a meeting", description: "Propose that a deal move stage because of what a meeting produced. A proposal only — a partner accepts it, and acceptance runs the ordinary opportunity transition.", isExternalEffect: false },
   { key: "meeting.brief.assemble", name: "Assemble a meeting brief", description: "Assemble the BEFORE face of a meeting: why it exists, what we need to find out, what both sides said last time, the record, and (for founder and diligence meetings) the diligence framework marked answered or not. AI may draft; an empty brief says what it examined.", isExternalEffect: false },
   { key: "meeting.after.approve", name: "Approve a meeting's After draft", description: "A partner approves the AI-drafted decisions, commitments, open questions and stage proposal from a meeting, which is the moment they become records. Human only in code; nothing is a record until this.", isExternalEffect: false },
+  // Phase C: the live room
+  // One key for the room's READ-ONLY acts — asking, querying the record, transcribing a spoken
+  // question. The block it saves is under meeting.note.add, a card it opens is under
+  // work_card.create, the rolling draft is under meeting.commitment.create. Nothing asked in the
+  // room becomes a record without Phase B's approve route, and validate:voice-is-read-only reads
+  // the services to keep it so.
+  { key: "meeting.room.ask", name: "Ask the live room", description: "Ask a question in a live meeting, typed or spoken (push-to-talk). Read-only: the answer, table or chart is saved as a block on the meeting, an employee may be handed a preview-first work card, and the After draft may be refreshed. Nothing asked here becomes a decision, commitment, question or stage move without a partner approving it.", isExternalEffect: false },
 ] as const;
 
 /**

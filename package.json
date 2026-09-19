@@ -71,7 +71,9 @@
     "validate:calendar-sync": "node scripts/validate/a-calendar-meeting-exists-once.mjs && node scripts/validate/a-calendar-meeting-exists-once.mjs --self-test",
     "validate:meet-ingest": "node scripts/validate/a-meet-call-that-ended-is-read.mjs && node scripts/validate/a-meet-call-that-ended-is-read.mjs --self-test",
     "validate:meeting-yield": "node scripts/validate/a-meeting-produces-something.mjs && node scripts/validate/a-meeting-produces-something.mjs --self-test",
-    "validate:meeting-brief": "node scripts/validate/a-brief-exists-before-every-meeting.mjs && node scripts/validate/a-brief-exists-before-every-meeting.mjs --self-test"
+    "validate:meeting-brief": "node scripts/validate/a-brief-exists-before-every-meeting.mjs && node scripts/validate/a-brief-exists-before-every-meeting.mjs --self-test",
+    "validate:voice-is-read-only": "node scripts/validate/nothing-writes-from-voice.mjs && node scripts/validate/nothing-writes-from-voice.mjs --self-test",
+    "validate:room-answers": "node scripts/validate/a-room-question-is-answered-from-the-record.mjs && node scripts/validate/a-room-question-is-answered-from-the-record.mjs --self-test"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",

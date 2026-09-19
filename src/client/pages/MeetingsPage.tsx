@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { MEETING_TYPES, meetingType, seatableFor } from "@shared/meetings/meetingTypes";
 import { IC_FLOW } from "@shared/ic/meetingFlow";
 import { LiveHelpPanel } from "./LiveHelpPanel";
+import { RoomPanel } from "./RoomPanel";
 import { CloseoutPanel } from "./CloseoutPanel";
 import { AfterPanel, BeforePanel } from "./MeetingFacesPanel";
 
@@ -102,16 +103,6 @@ interface MeetingsResponse {
     decisions: number;
     facilitator: { name: string; status: string } | null;
   };
-}
-
-interface CaptureReadiness {
-  meeting_id: string;
-  transcription_available: boolean;
-  recording_policy_active: boolean;
-  consent: Record<string, string>;
-  can_capture: boolean;
-  blockers: string[];
-  turns: number;
 }
 
 interface OpenQuestion {
@@ -242,241 +233,12 @@ function owedInWords(q: OpenQuestion): string {
   }
 }
 
-// ── Section 3's working parts: consent, then capture ──────────────────────────
-
-const CHUNK_MS = 60_000;
-
-/** Blob → base64, without the data-URI prefix the API does not want. */
-function toBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("could not read the recording"));
-    reader.onload = () => {
-      const result = String(reader.result ?? "");
-      resolve(result.slice(result.indexOf(",") + 1));
-    };
-    reader.readAsDataURL(blob);
-  });
-}
-
-/**
- * The consent prompt and the recorder behind it.
- *
- * THE PROMPT IS SHOWN EVERY TIME AND IS NEVER REMEMBERED. California is a two-party state; New York
- * and Georgia are not. Consent is given by a person, in a room, on a day — a checkbox that carries
- * it forward to the next session is a record of something that did not happen. So the answer is
- * re-asked before every start, even when this meeting already carries a GRANTED row.
- *
- * THE BUTTON IS NEVER LIVE-LOOKING AND INERT. Whether a transcription service can be reached at all
- * is decided by the server and reported here, so wherever it cannot be, the control is disabled
- * with the reason printed beside it rather than failing after somebody has spoken for ten minutes.
- *
- * EACH SLICE IS A COMPLETE RECORDING. The recorder is stopped and restarted every minute rather
- * than streamed, because a timesliced stream produces fragments that are not independently
- * decodable — the container header only appears in the first one. A fragment nothing can read is
- * indistinguishable from silence, which is the worst possible failure for a record of a
- * conversation.
- */
-function CapturePanel({ meeting, onCaptured }: { meeting: MeetingRow; onCaptured: () => void }): JSX.Element {
-  const readiness = useApi<CaptureReadiness>(`/api/meetings/${meeting.id}/capture`, [meeting.id]);
-  const [asked, setAsked] = useState(false);
-  const [who, setWho] = useState("");
-  const [basis, setBasis] = useState("Asked out loud at the start of the call.");
-  const [recording, setRecording] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [heard, setHeard] = useState<string[]>([]);
-  const stopRef = useRef<(() => void) | null>(null);
-  const seqRef = useRef(0);
-
-  // A recorder left running after the panel goes away would hold the microphone open with nothing
-  // on screen saying so, which is the one thing a recording indicator exists to prevent.
-  useEffect(() => () => stopRef.current?.(), []);
-
-  const state = readiness.data;
-  const consentGranted = state?.consent.TRANSCRIPTION === "GRANTED" && state?.consent.RECORDING === "GRANTED";
-
-  async function answerPrompt(answer: "GRANTED" | "DENIED") {
-    setBusy(true);
-    setMessage(null);
-    const res = await api<{ error?: string; detail?: string }>(`/api/meetings/${meeting.id}/capture/consent`, {
-      method: "POST",
-      body: { answer, granted_by: who.trim() || undefined, basis: basis.trim() },
-    });
-    setBusy(false);
-    if (res.status !== 201) {
-      setMessage(res.data?.detail ?? res.data?.error ?? `Not recorded (HTTP ${res.status}).`);
-      return;
-    }
-    setAsked(answer === "GRANTED");
-    setMessage(
-      answer === "GRANTED"
-        ? "Recorded. Their answer is on the file for this meeting and can be taken back at any point."
-        : "Recorded as a no. Nothing will be captured, and that refusal is on the file too.",
-    );
-    readiness.reload();
-  }
-
-  async function send(blob: Blob) {
-    if (blob.size === 0) return;
-    let audio: string;
-    try {
-      audio = await toBase64(blob);
-    } catch {
-      setMessage("A slice of the recording could not be read, so it was not written down.");
-      return;
-    }
-    const res = await api<{ text?: string; error?: string; detail?: string }>(
-      `/api/meetings/${meeting.id}/capture/chunk`,
-      { method: "POST", body: { audio_base64: audio, sequence: seqRef.current++ } },
-    );
-    if (res.status !== 201) {
-      // Named, never dropped. A transcript with a silent hole in it is worse than a short one.
-      setMessage(`Minute ${seqRef.current} was not written down: ${res.data?.detail ?? res.data?.error ?? res.status}`);
-      return;
-    }
-    if (res.data?.text) setHeard((h) => [...h, res.data!.text!]);
-    onCaptured();
-    readiness.reload();
-  }
-
-  function stop() {
-    stopRef.current?.();
-    stopRef.current = null;
-    setRecording(false);
-    // The prompt is re-armed, deliberately: starting again is a new start and asks again.
-    setAsked(false);
-  }
-
-  async function start() {
-    setMessage(null);
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setMessage("This browser will not record audio for a page. Nothing was started.");
-      return;
-    }
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      setMessage("The browser did not give this page the microphone, so nothing is being recorded.");
-      return;
-    }
-    let stopped = false;
-    stopRef.current = () => {
-      stopped = true;
-      stream.getTracks().forEach((t) => t.stop());
-    };
-    setRecording(true);
-
-    const runOne = () => {
-      if (stopped) return;
-      const rec = new MediaRecorder(stream);
-      const parts: Blob[] = [];
-      rec.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) parts.push(e.data);
-      };
-      rec.onstop = () => {
-        void send(new Blob(parts, { type: rec.mimeType || "audio/webm" }));
-        runOne();
-      };
-      rec.start();
-      window.setTimeout(() => {
-        if (rec.state !== "inactive") rec.stop();
-      }, CHUNK_MS);
-    };
-    runOne();
-  }
-
-  return (
-    <div data-testid={`capture-${meeting.id}`}>
-      <h4>Before anything is recorded</h4>
-      <p className="muted small">
-        California needs everyone in the conversation to agree; New York and Georgia do not. This
-        firm sits in one and talks to founders in the others, so permission gets asked for out loud
-        every time — not remembered from last time, and not assumed from an invitation nobody read.
-      </p>
-
-      <p className="consent-script" data-testid="consent-script">
-        “Before we start — I record these calls so I can write up what we agreed rather than take
-        notes at you. It stays inside the firm. Is that alright with you?”
-      </p>
-
-      <div className="form-row">
-        <label>
-          Who said yes{" "}
-          <input
-            data-testid="consent-who"
-            value={who}
-            onChange={(e) => setWho(e.target.value)}
-            placeholder="Deana Oliver"
-          />
-        </label>
-        <label>
-          How you asked{" "}
-          <input
-            data-testid="consent-basis"
-            value={basis}
-            onChange={(e) => setBasis(e.target.value)}
-          />
-        </label>
-        <button type="button" className="btn-strong" disabled={busy} data-testid="consent-yes" onClick={() => void answerPrompt("GRANTED")}>
-          They said yes
-        </button>
-        <button type="button" disabled={busy} data-testid="consent-no" onClick={() => void answerPrompt("DENIED")}>
-          They said no
-        </button>
-      </div>
-
-      <h4>Record it</h4>
-      {state && state.blockers.length > 0 && (
-        <ul className="card-list small" data-testid="capture-blockers">
-          {state.blockers.map((b) => (
-            <li key={b} className="state-empty">{b}</li>
-          ))}
-        </ul>
-      )}
-      {state && state.can_capture && !asked && (
-        <p className="notice small" data-testid="capture-reask">
-          Permission is on the file for this meeting already. Ask again before you start anyway —
-          consent is something a person gave in a room on a day, not a setting.
-        </p>
-      )}
-
-      <div className="form-row">
-        <button
-          type="button"
-          className="btn-strong"
-          data-testid="capture-start"
-          disabled={!state?.can_capture || !asked || recording}
-          onClick={() => void start()}
-        >
-          Start recording
-        </button>
-        <button type="button" data-testid="capture-stop" disabled={!recording} onClick={stop}>
-          Stop
-        </button>
-        {recording && (
-          <span className="capture-live" data-testid="capture-live">
-            Recording. Every minute is written down as it finishes.
-          </span>
-        )}
-        {!recording && consentGranted && (
-          <span className="muted small">{state?.turns ?? 0} turns written down so far.</span>
-        )}
-      </div>
-
-      {heard.length > 0 && (
-        <ul className="card-list small" data-testid="capture-heard">
-          {heard.slice(-6).map((t, i) => (
-            <li key={i} className="closeout-quote">“{t}”</li>
-          ))}
-        </ul>
-      )}
-
-      {message && <p className="notice small" data-testid="capture-message" role="status">{message}</p>}
-    </div>
-  );
-}
+// ── Section 3's working parts: the live room ──────────────────────────────────
+//
+// The consent prompt and the recorder moved into RoomPanel.tsx (Phase C), where they are one
+// status line and one button on the During face beside the rolling draft, the ask box and the
+// artifacts stream. Nothing about the gates changed: the server still refuses a chunk without an
+// activated policy AND a granted consent, and the prompt is still asked every session.
 
 // ── Who is in the room ────────────────────────────────────────────────────────
 
@@ -1254,9 +1016,8 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
       {liveMeeting ? (
         <div className="card" data-testid="live-meeting">
           <h4>{liveMeeting.title}</h4>
-          <CapturePanel meeting={liveMeeting} onCaptured={() => meetings.reload()} />
+          <RoomPanel meetingId={liveMeeting.id} />
           <SeatingPanel meeting={liveMeeting} me={me} />
-          <LiveHelpPanel meetingId={liveMeeting.id} />
           <div className="form-row">
             <button type="button" className="link-button" data-testid="live-finish" onClick={() => { setOpen(liveMeeting.id); setLive(null); }}>
               We are done — open the record
