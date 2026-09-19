@@ -68,13 +68,7 @@ export function usedClasses(src) {
   const add = (cls, ok) => {
     if (ok && cls) found.set(cls, true);
   };
-  for (const m of src.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\})/g)) {
-    const literal = m[1] ?? m[3];
-    if (literal !== undefined) {
-      for (const c of literal.split(/\s+/)) add(c, true);
-      continue;
-    }
-    const tpl = m[2] ?? "";
+  const addTemplate = (tpl) => {
     // Split on interpolations; a fragment adjacent to one may be a prefix or a suffix.
     const parts = tpl.split(/\$\{[^}]*\}/);
     parts.forEach((part, i) => {
@@ -86,6 +80,47 @@ export function usedClasses(src) {
         add(tok, !touchesLeft && !touchesRight);
       });
     });
+  };
+  for (const m of src.matchAll(/className="([^"]*)"/g)) for (const c of m[1].split(/\s+/)) add(c, true);
+
+  /*
+   * A CLASS CHOSEN BY AN EXPRESSION IS STILL A CLASS. `className={open ? "deal-row-selected" : ""}`
+   * and `className={["stage-node", done ? "stage-node-done" : ""].join(" ")}` were invisible to
+   * the first version of this scan, which read only a bare string or a whole template literal —
+   * so a misspelt class inside a ternary had no symptom, and, in the other direction, a class the
+   * Dealflow rail applied through a ternary counted as worn by nothing (18 Sep 2026). The whole
+   * expression is walked to its closing brace and every string literal and template fragment in
+   * it is a class. A literal that is not a class does not occur inside `className={…}`: the
+   * expression evaluates to the attribute, and there is nothing else for a string there to be.
+   */
+  for (const m of src.matchAll(/className=\{/g)) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    const start = i;
+    while (i < src.length && depth > 0) {
+      const ch = src[i];
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      i += 1;
+    }
+    const expr = src.slice(start, i - 1);
+    const interpolations = [];
+    for (const t of expr.matchAll(/`([^`]*)`/g)) {
+      addTemplate(t[1]);
+      // A literal INSIDE an interpolation — `${done ? "on" : ""}` — is a plain literal and is read
+      // as one, below, with the same comparison rule.
+      for (const inner of t[1].matchAll(/\$\{([^}]*)\}/g)) interpolations.push(inner[1]);
+    }
+    const plain = [expr.replace(/`[^`]*`/g, " "), ...interpolations].join(" ; ");
+    for (const q of plain.matchAll(/"([^"]*)"|'([^']*)'/g)) {
+      // A literal being COMPARED is a value, not a class: `status === "OPEN" ? "badge-ok" : …`.
+      // So is the argument of a membership test: `LIVE.includes("SCREENING")`.
+      const before = plain.slice(0, q.index).replace(/\s+$/, "");
+      const after = plain.slice(q.index + q[0].length).replace(/^\s+/, "");
+      if (/[=!]=$/.test(before) || /^[=!]=/.test(after)) continue;
+      if (/\.(includes|has|startsWith|endsWith|get|indexOf|test)\($/.test(before)) continue;
+      for (const c of (q[1] ?? q[2] ?? "").split(/\s+/)) add(c, true);
+    }
   }
   return found;
 }
@@ -114,6 +149,12 @@ function selfTest() {
     ["<div className={`ghost ${x}`} />", 1, "…and caught when undefined"],
     ["<div className={`pre-${x}`} />", 0, "a prefix cut by an interpolation is not a class"],
     ["<div className={`${x}-suf`} />", 0, "a suffix cut by an interpolation is not a class"],
+    ['<div className={open ? "real" : "ghost"} />', 1, "a class chosen by a ternary is checked"],
+    ['<div className={["real", done ? "ghost" : ""].filter(Boolean).join(" ")} />', 1, "a class inside an array join is checked"],
+    ['<div className={busy ? "real" : undefined} />', 0, "a ternary with no bad literal passes"],
+    ['<div className={state === "OPEN" ? "real" : "real"} />', 0, "a literal being compared is a value, not a class"],
+    ['<div className={LIVE.includes("OPEN") ? "real" : "real"} />', 0, "the argument of a membership test is a value, not a class"],
+    ["<div className={`real ${done ? \"ghost\" : \"\"}`} />", 1, "a literal inside a template interpolation is checked"],
   ];
   const defined = definedClasses(css);
   let failed = 0;

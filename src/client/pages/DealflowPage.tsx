@@ -227,6 +227,19 @@ interface CommitteeDeal {
   approval_card: { id: string; state: string } | null;
 }
 
+/** What the committee face needs of `GET /api/ic/packets/:id/diligence` — the scorecard, not the editor. */
+interface DiligenceSummary {
+  packet: { id: string; champion_user_id: string | null };
+  framework: {
+    core: Array<{ id: string; title: string }>;
+    sector: { sector: string; title: string } | null;
+    closing_six: Array<{ n: number; question: string; championMayNotAnswer?: boolean }>;
+  };
+  answers: Array<{ section_id: string; state: string }>;
+  readiness: { open: string[]; complete: boolean; bear_case_missing: boolean };
+  restricted_section_ids: string[];
+}
+
 interface CommitteeSurface {
   deals: CommitteeDeal[];
   facilitator: { name: string; status: string } | null;
@@ -472,11 +485,6 @@ const PASSABLE: readonly string[] = ["NEW", "SCREENING", "DILIGENCE", "IC_READY"
  * a status — against §2 of the design system — and they are retired.
  */
 const LIVE_STAGES: readonly string[] = ["SCREENING", "DILIGENCE", "IC_READY"];
-
-function stageChipClass(status: string): string {
-  if (status === "CLOSED") return "stage-chip stage-chip-closed";
-  return LIVE_STAGES.includes(status) ? "stage-chip stage-chip-live" : "stage-chip";
-}
 
 /** What the stage clock says on a row: how long here, and the clock it is running against. */
 function clockInWords(status: string, since: string): { text: string; stalled: boolean } | null {
@@ -800,7 +808,9 @@ function DealRow({ deal, open, onChanged, onOpen }: {
       </div>
 
       <div className="deal-stage">
-        <span className={stageChipClass(deal.status)}>{s?.label ?? "Off the rail"}</span>
+        <span className={deal.status === "CLOSED" ? "stage-chip stage-chip-closed" : LIVE_STAGES.includes(deal.status) ? "stage-chip stage-chip-live" : "stage-chip"}>
+          {s?.label ?? "Off the rail"}
+        </span>
         {clock && (
           <div className={stalled ? "deal-sub deal-sub-stalled" : "deal-sub"} data-testid={`deal-age-${deal.id}`}>
             {clock.text}
@@ -1084,6 +1094,13 @@ function CommitteeFace({
   const [dissent, setDissent] = useState("");
   const [packetOpen, setPacketOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  /*
+   * The framework's readiness, for the scorecard: which sections are answered, and whether the
+   * bear case is open and locked against the reader because they are the champion. Read here so
+   * the committee face can say "11 of 11 answered · the Closing Six 5 of 6" without the packet
+   * being opened; the packet's own Diligence face reads the same route to edit it.
+   */
+  const diligence = useApi<DiligenceSummary>(deal?.packet_id ? `/api/ic/packets/${deal.packet_id}/diligence` : null, [deal?.packet_id]);
 
   async function resolveQuestion(id: string, state: "ANSWERED" | "WITHDRAWN") {
     setBusy(true);
@@ -1316,6 +1333,62 @@ function CommitteeFace({
             )}
             {packetOpen && d.packet_id && <DealPacket packetId={d.packet_id} me={me} />}
           </section>
+
+          {/* ── Diligence framework: the scorecard, and the champion lock said in words ──── */}
+          {d.packet_id && (() => {
+            const fw = diligence.data;
+            if (!fw) {
+              return (
+                <section className="card" data-testid="ic-framework">
+                  <div className="panel-head">
+                    <h4>Diligence framework</h4>
+                  </div>
+                  <p className="state-empty">
+                    {diligence.loading ? "Reading the framework…" : `The framework could not be read${diligence.status ? ` (HTTP ${diligence.status})` : ""}. The packet exists; its sections are behind “Open the packet”.`}
+                  </p>
+                </section>
+              );
+            }
+            const answered = new Set(fw.answers.filter((a) => a.state === "ANSWERED" || a.state === "NOT_APPLICABLE").map((a) => a.section_id));
+            const sections = [
+              ...fw.framework.core.map((c) => ({ id: c.id, title: c.title })),
+              ...(fw.framework.sector ? [{ id: `sector_${fw.framework.sector.sector.toLowerCase()}`, title: `${fw.framework.sector.title} (sector module)` }] : []),
+            ];
+            const six = fw.framework.closing_six.map((q) => ({ id: `closing_${q.n}`, title: `${q.n}. ${q.question}`, restricted: Boolean(q.championMayNotAnswer) }));
+            const sixDone = six.filter((q) => answered.has(q.id)).length;
+            const coreDone = sections.filter((x) => answered.has(x.id)).length;
+            const isChampion = Boolean(fw.packet.champion_user_id && fw.packet.champion_user_id === me.id);
+            const bear = six.find((q) => q.restricted && !answered.has(q.id));
+            return (
+              <section className="card" data-testid="ic-framework">
+                <div className="panel-head">
+                  <h4>Diligence framework</h4>
+                  <span className="muted small">
+                    {coreDone} of {sections.length} answered · the Closing Six {sixDone} of {six.length}
+                  </span>
+                </div>
+                {bear && (
+                  <p className="notice notice-gate" data-testid="ic-framework-bear-case">
+                    {bear.title} is open
+                    {isChampion
+                      ? ", and you cannot write it: you are the champion. Someone else has to argue against this investment."
+                      : ". Whoever is carrying the deal may not write it; someone else has to argue against this investment."}
+                  </p>
+                )}
+                <ul className="scorecard" data-testid="ic-framework-scorecard">
+                  {[...sections, ...six].map((x) => (
+                    <li key={x.id}>
+                      <span className="check">
+                        <i className={answered.has(x.id) ? "on" : undefined} aria-hidden="true" />
+                        {x.title}
+                      </span>
+                      <span className={answered.has(x.id) ? "badge badge-ok" : "badge badge-gate"}>{answered.has(x.id) ? "answered" : "open"}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })()}
 
           {/* ── Who disagreed ──────────────────────────────────────────────────────────── */}
           <section className="card">

@@ -82,11 +82,19 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
   const [message, setMessage] = useState<string | null>(null);
   const [openPreview, setOpenPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* Sending a version back takes its reason in an inline field under the row — a labelled input
+     with an error slot, not a browser prompt with neither (design/DEALS_SECTION_DESIGN.md §1.2 #6). */
+  const [rejecting, setRejecting] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectError, setRejectError] = useState<string | null>(null);
 
   async function decide(id: string, decision: "APPROVE" | "REJECT", reinstate = false): Promise<void> {
+    const reason = decision === "REJECT" ? rejectReason.trim() : undefined;
+    if (decision === "REJECT" && !reason) {
+      setRejectError("Say what is wrong with it — Preston gets this back, and a blank note sends him nothing to fix.");
+      return;
+    }
     setBusy(true);
-    const reason = decision === "REJECT" ? window.prompt("What is wrong with it? Preston gets this back.") : undefined;
-    if (decision === "REJECT" && !reason) { setBusy(false); return; }
     const res = await api(`/api/deck/versions/${id}/decide`, { method: "POST", body: { decision, reason } });
     setBusy(false);
     setMessage(
@@ -98,6 +106,11 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
             : "Approved. That is now the current deck."
         : "That did not go through. Nothing changed.",
     );
+    if (res.status === 200) {
+      setRejecting(null);
+      setRejectReason("");
+      setRejectError(null);
+    }
     deck.reload();
   }
 
@@ -226,7 +239,7 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
             THE LINE THAT WOULD HAVE CAUGHT ALL SIX. Not "up to date" as a badge somebody set, but a
             comparison made now between what the deck was built from and what the records say today.
           */}
-          <div className={drift.length > 0 ? "note" : "note calm"} data-testid="deck-staleness">
+          <div className={drift.length > 0 ? "notice notice-gate" : "notice notice-ok"} data-testid="deck-staleness">
             <p>{data.staleness?.headline}</p>
             {drift.length > 0 && (
               <ul className="card-list small" data-testid="deck-drift">
@@ -281,11 +294,38 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
                     onClick={() => void decide(v.id, "APPROVE")}>
                     Approve
                   </button>
-                  <button type="button" disabled={busy} data-testid={`deck-reject-${v.id}`}
-                    onClick={() => void decide(v.id, "REJECT")}>
+                  <button type="button" disabled={busy} aria-expanded={rejecting === v.id} data-testid={`deck-reject-${v.id}`}
+                    onClick={() => { setRejecting(rejecting === v.id ? null : v.id); setRejectReason(""); setRejectError(null); }}>
                     Send back to Preston
                   </button>
                 </div>
+                {rejecting === v.id && (
+                  <div className="stack">
+                    <label className="field" htmlFor={`deck-reject-reason-${v.id}`}>
+                      What is wrong with it?
+                      <input
+                        id={`deck-reject-reason-${v.id}`}
+                        data-testid={`deck-reject-reason-${v.id}`}
+                        value={rejectReason}
+                        autoFocus
+                        aria-invalid={rejectError ? true : undefined}
+                        onChange={(e) => { setRejectReason(e.target.value); if (rejectError) setRejectError(null); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void decide(v.id, "REJECT"); } if (e.key === "Escape") setRejecting(null); }}
+                      />
+                      <span className={rejectError ? "field-help err" : "field-help"} role={rejectError ? "alert" : undefined}>
+                        {rejectError ?? "Preston gets this back, word for word."}
+                      </span>
+                    </label>
+                    <div className="row">
+                      <button type="button" className="btn-strong" disabled={busy} data-testid={`deck-reject-confirm-${v.id}`} onClick={() => void decide(v.id, "REJECT")}>
+                        Send it back
+                      </button>
+                      <button type="button" className="btn-ghost" disabled={busy} onClick={() => setRejecting(null)}>
+                        Never mind
+                      </button>
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

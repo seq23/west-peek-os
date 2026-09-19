@@ -1944,7 +1944,7 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
     d.deck!.state === "CURRENT" ? "badge badge-ok" : d.deck!.state === "PROPOSED" ? "badge badge-gate" : "badge badge-quiet";
 
   const row = (d: DocumentRow, opts: { archived?: boolean } = {}) => (
-    <li key={d.id} className={d.id === focus ? "card card-focus" : "card"} data-testid={`document-${d.id}`}>
+    <li key={d.id} className={d.id === focus ? "card deal-row-selected" : "card"} data-testid={`document-${d.id}`}>
       <div>
         {d.deck && (
           <span className={d.deck.state === "CURRENT" ? "badge badge-ok" : d.deck.state === "PROPOSED" ? "badge badge-gate" : "badge"} data-testid={`document-deck-${d.id}`}>

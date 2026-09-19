@@ -328,7 +328,7 @@ export function FundConstruction({ fundId }: { fundId: string | null }): JSX.Ele
         Making it visible at the moment of editing is the difference between a form and a decision
         surface.
       */}
-      <div className={derived.headroom < 0 ? "note" : "note calm"} data-testid="construction-affordability">
+      <div className={derived.headroom < 0 ? "notice notice-gate" : "notice notice-ok"} data-testid="construction-affordability">
         <p>
           <strong>{positions} companies at {usd(checkMinK * 1000)}–{usd(checkMaxK * 1000)}</strong> needs{" "}
           {usd(derived.needMin)}–{usd(derived.needMax)} of initial capital, and you have{" "}
