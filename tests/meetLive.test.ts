@@ -307,10 +307,12 @@ describe("4. a slice of the call becomes the room's record", () => {
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ state: "ENDED" });
     expect(r.body.ended_at).toBeTruthy();
-    const m = await env.WP_OS_DB.prepare("SELECT status, meet_live_state, meet_live_detail FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>();
+    const m = await env.WP_OS_DB.prepare("SELECT status, meet_live_state, meet_live_detail, call_ended_at FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>();
     expect(m.status).toBe("HELD");
     expect(m.meet_live_state).toBe("meet_live_ended");
     expect(m.meet_live_detail).toContain("4 turn(s) heard live");
+    // THE END-OF-CALL SIGNAL: one column, written by whichever side learns it first.
+    expect(m.call_ended_at).toBe(r.body.ended_at);
     const late = await call(`/api/meet/live/sessions/${sessionId}/chunk`, "POST", slice("too late", 9), LISTENER);
     expect(late.status).toBe(409);
     expect(late.body.error).toBe("not_listening");
@@ -398,6 +400,29 @@ describe("6. the official transcript supersedes the live notes, and consent is r
     expect(view).toMatchObject({ state: "meet_live_ended", live_turns: 4, superseded: true });
     // Consent was recorded when the OS joined and is not recorded again when the transcript lands.
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(internalMeeting.id).first<any>()).n).toBe(2);
+    // The end-of-call signal: the listener wrote it first, and Google's end time does not overwrite it.
+    const ended = await env.WP_OS_DB.prepare("SELECT call_ended_at FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>();
+    expect(ended.call_ended_at).not.toBe(INT_CONF.endTime);
+    expect(Date.parse(ended.call_ended_at)).toBeLessThan(Date.parse(INT_CONF.endTime!));
+  });
+
+  it("a call the room did not hear live still gets the signal from Google's end time when the official transcript is read", async () => {
+    const LP_CONF: FakeConference = {
+      name: "conferenceRecords/lp_after", space: "spaces/sp_lp", meetingCode: "ddd-eeee-fff",
+      startTime: iso(-4 * 60_000), endTime: iso(30 * 60_000),
+      participants: [{ name: "conferenceRecords/lp_after/participants/p1", displayName: "Sequoia Taylor", kind: "SIGNED_IN" }],
+      transcript: { name: "conferenceRecords/lp_after/transcripts/t1", state: "FILE_GENERATED", document: "doc_lp_after", entries: [{ participant: "conferenceRecords/lp_after/participants/p1", text: "Thank you for the time.", startTime: iso(-3 * 60_000) }] },
+      recording: null,
+    };
+    g.conferences = [LP_CONF];
+    const out = await runMeetIngest(env, { fetchImpl: g.fetch, now: new Date(NOW.getTime() + 61 * 60_000) });
+    expect(out.read.find((r) => r.conference_record === "conferenceRecords/lp_after")?.state).toBe("INGESTED");
+    const lp = await env.WP_OS_DB.prepare("SELECT call_ended_at, meet_live_state, privacy_label FROM meeting WHERE id = ?1").bind(lpMeeting.id).first<any>();
+    expect(lp.call_ended_at).toBe(LP_CONF.endTime);
+    // The LP meeting kept the GA path only: never joined live, notes still LP_PRIVATE, by policy.
+    expect(lp.meet_live_state).toBe("meet_live_off_lp_policy");
+    expect(lp.privacy_label).toBe("LP_PRIVATE");
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM transcript_import WHERE meeting_id = ?1 AND provider_name = ?2").bind(lpMeeting.id, LIVE_PROVIDER).first<any>()).n).toBe(0);
   });
 });
 
@@ -522,13 +547,43 @@ describe("8. the routes, through the router", () => {
     const ok = await call("/api/meet/live/resolve?code=AAA-BBBB-CCC");
     expect(ok.status).toBe(200);
     expect(ok.body).toMatchObject({ meeting_id: internalMeeting.id, title: "Partners sync", meet_live_state: "meet_live_ended", candidates: 1 });
+    expect(ok.body.call_ended_at).toBeTruthy();
     const lp = await call("/api/meet/live/resolve?code=ddd-eeee-fff");
     expect(lp.body).toMatchObject({ meeting_id: lpMeeting.id, meet_live_state: "meet_live_off_lp_policy" });
     expect((await call("/api/meet/live/resolve?code=nope")).status).toBe(400);
     expect((await call("/api/meet/live/resolve?code=zzz-zzzz-zzz")).status).toBe(404);
-    for (const [method, path] of [["POST", "/api/meet/live/heartbeat"], ["POST", "/api/meet/live/sessions"], ["POST", "/api/meet/live/sessions/x/report"], ["POST", "/api/meet/live/sessions/x/chunk"], ["GET", "/api/meet/live/status"], ["GET", "/api/meet/live/resolve?code=ddd-eeee-fff"]] as const) {
+    for (const [method, path] of [["POST", "/api/meet/live/heartbeat"], ["POST", "/api/meet/live/sessions"], ["POST", "/api/meet/live/sessions/x/report"], ["POST", "/api/meet/live/sessions/x/chunk"], ["GET", "/api/meet/live/status"], ["GET", "/api/meet/live/resolve?code=ddd-eeee-fff"], ["POST", "/api/meet/live/adopt"]] as const) {
       const res = await handleRequest(new Request(`https://test.local${path}`, { method, body: method === "POST" ? "{}" : undefined }), env);
       expect(res.status, `${method} ${path}`).toBe(401);
     }
+  });
+
+  it("'Record this meeting now' adopts a Meet the calendar does not know as an ordinary meeting the panel finds again — manual, so no live path", async () => {
+    expect((await call("/api/meet/live/resolve?code=qqq-rrrr-sss")).status).toBe(404);
+    const adopted = await call("/api/meet/live/adopt", "POST", { code: "QQQ-RRRR-SSS" });
+    expect(adopted.status).toBe(201);
+    expect(adopted.body).toMatchObject({ adopted: true, title: "Meet call qqq-rrrr-sss" });
+    const m = await env.WP_OS_DB.prepare("SELECT source, meeting_type, type_inference, meet_conference_id, meet_link, meet_live_state FROM meeting WHERE id = ?1").bind(adopted.body.meeting_id).first<any>();
+    expect(m).toEqual({ source: "manual", meeting_type: "FOUNDER", type_inference: "UNKNOWN_CHECK_IT", meet_conference_id: "qqq-rrrr-sss", meet_link: "https://meet.google.com/qqq-rrrr-sss", meet_live_state: null });
+    const found = await call("/api/meet/live/resolve?code=qqq-rrrr-sss");
+    expect(found.body).toMatchObject({ meeting_id: adopted.body.meeting_id, source: "manual", call_ended_at: null });
+    const live = await call("/api/meet/live/sessions", "POST", { meeting_id: adopted.body.meeting_id, conference_record: "conferenceRecords/adopted", listener_device: "mac-test" }, LISTENER);
+    expect(live.status).toBe(409);
+    expect(live.body.error).toBe("not_firm_hosted");
+    expect((await call("/api/meet/live/adopt", "POST", { code: "not a code" })).status).toBe(400);
+  });
+
+  it("a cross-site write is refused before any handler runs; same-origin and non-browser requests pass", async () => {
+    const post = (site: string | null) => handleRequest(new Request("https://test.local/api/meet/live/adopt", { method: "POST", headers: { ...MP, "content-type": "application/json", ...(site ? { "sec-fetch-site": site } : {}) }, body: JSON.stringify({ code: "ttt-uuuu-vvv" }) }), env);
+    expect((await post("cross-site")).status).toBe(403);
+    expect((await (await post("cross-site")).json()).error).toBe("cross_site_refused");
+    expect((await post("same-site")).status).toBe(403);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting WHERE meet_conference_id = 'ttt-uuuu-vvv'").first<any>()).n, "refused before the handler: nothing was created").toBe(0);
+    expect((await post("same-origin")).status).toBe(201);
+    expect((await post("none")).status).toBe(201);
+    expect((await post(null)).status).toBe(201);
+    // GET is never refused on this ground: reading from an iframe is the whole point.
+    const get = await handleRequest(new Request("https://test.local/api/me", { headers: { ...MP, "sec-fetch-site": "cross-site" } }), env);
+    expect(get.status).toBe(200);
   });
 });

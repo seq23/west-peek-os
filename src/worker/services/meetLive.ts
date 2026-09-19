@@ -344,6 +344,8 @@ export async function reportSession(env: Env, identity: FirmUserIdentity, sessio
     await env.WP_OS_DB.prepare("UPDATE meet_live_session SET state = 'ENDED', detail = ?2, ended_at = COALESCE(ended_at, ?3), updated_at = ?3 WHERE id = ?1")
       .bind(session.id, input.detail ?? "The call ended.", ts).run();
     await setMeetLiveState(env, session.meeting_id, "meet_live_ended", `${input.detail ?? "The call ended."} ${session.turns} turn(s) heard live; the official transcript is read in after the call.`, now);
+    // THE END-OF-CALL SIGNAL (migration 0216): one column both faces read. First writer wins.
+    await env.WP_OS_DB.prepare("UPDATE meeting SET call_ended_at = COALESCE(call_ended_at, ?2) WHERE id = ?1").bind(session.meeting_id, ts).run();
     const meeting = await requireMeeting(env, session.meeting_id);
     if (meeting.status === "SCHEDULED") await transitionMeeting(env, systemActor(meeting.firm_scope), meeting.id, "HELD", session.joined_at ?? undefined);
   } else {
@@ -539,13 +541,51 @@ export async function handleLiveStatus(ctx: RouteContext): Promise<Response> {
 export async function handleResolveMeetCode(ctx: RouteContext): Promise<Response> {
   const code = new URL(ctx.request.url).searchParams.get("code")?.trim().toLowerCase() ?? "";
   if (!/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(code)) return json({ error: "invalid_input", detail: "code must look like abc-defg-hij" }, { status: 400 });
+  // A calendar-synced meeting first; failing that, one a partner adopted from the panel
+  // (`handleAdoptMeetCode`) — either way the nearest occurrence the reader may see.
   const rows = (await ctx.env.WP_OS_DB.prepare(
-    "SELECT id, title, scheduled_at, privacy_label, meet_live_state FROM meeting WHERE meet_conference_id = ?1 AND source = 'google_calendar' AND status <> 'CANCELLED' AND archived_at IS NULL",
-  ).bind(code).all<{ id: string; title: string; scheduled_at: string | null; privacy_label: string; meet_live_state: MeetLiveState | null }>()).results ?? [];
+    "SELECT id, title, scheduled_at, privacy_label, meet_live_state, call_ended_at, source FROM meeting WHERE meet_conference_id = ?1 AND status <> 'CANCELLED' AND archived_at IS NULL",
+  ).bind(code).all<{ id: string; title: string; scheduled_at: string | null; privacy_label: string; meet_live_state: MeetLiveState | null; call_ended_at: string | null; source: string }>()).results ?? [];
   const visible = rows.filter((r) => canAccessPrivacyLabel(ctx.identity!, r.privacy_label));
-  if (visible.length === 0) return json({ error: "not_found", detail: `no calendar meeting carries Meet code ${code}` }, { status: 404 });
+  if (visible.length === 0) return json({ error: "not_found", detail: `no meeting on the record carries Meet code ${code}` }, { status: 404 });
   const t = Date.now();
   visible.sort((a, b) => Math.abs((a.scheduled_at ? Date.parse(a.scheduled_at) : 0) - t) - Math.abs((b.scheduled_at ? Date.parse(b.scheduled_at) : 0) - t));
   const m = visible[0]!;
-  return json({ meeting_id: m.id, title: m.title, scheduled_at: m.scheduled_at, meet_live_state: m.meet_live_state, candidates: visible.length });
+  return json({ meeting_id: m.id, title: m.title, scheduled_at: m.scheduled_at, meet_live_state: m.meet_live_state, call_ended_at: m.call_ended_at, source: m.source, candidates: visible.length });
+}
+
+const adoptSchema = z.object({
+  code: z.string().trim().toLowerCase().regex(/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/, "code must look like abc-defg-hij"),
+  title: z.string().trim().min(1).max(200).optional(),
+});
+
+/**
+ * POST /api/meet/live/adopt — "Record this meeting now" (tier 3). A Meet the calendar does not
+ * know, adopted from inside the call by a partner: an ordinary meeting through `createMeeting`
+ * (the same authority as the Meetings page), carrying the Meet code so the panel finds it again.
+ *
+ * WHAT IT IS NOT. Not a firm-hosted calendar Meet: `source` stays 'manual', so the live path does
+ * not apply (the OS cannot announce itself into a call it does not host) and the room records the
+ * way Phase C does — the laptop microphone, the consent prompt asked out loud. The type is FOUNDER
+ * with `type_inference = 'UNKNOWN_CHECK_IT'`, the calendar sync's own word for "a person should
+ * look", never LP by guess.
+ */
+export async function handleAdoptMeetCode(ctx: RouteContext): Promise<Response> {
+  const parsed = adoptSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
+  const { createMeeting } = await import("./meetings");
+  const { actorFromIdentity } = await import("./authorize");
+  try {
+    const meeting = await createMeeting(ctx.env, actorFromIdentity(ctx.identity!), {
+      title: parsed.data.title ?? `Meet call ${parsed.data.code}`,
+      meeting_type: "FOUNDER",
+      scheduled_at: new Date().toISOString(),
+      location: `https://meet.google.com/${parsed.data.code}`,
+    });
+    await ctx.env.WP_OS_DB.prepare("UPDATE meeting SET meet_conference_id = ?2, meet_link = ?3, type_inference = 'UNKNOWN_CHECK_IT' WHERE id = ?1")
+      .bind(meeting.id, parsed.data.code, `https://meet.google.com/${parsed.data.code}`).run();
+    return json({ meeting_id: meeting.id, title: meeting.title, adopted: true }, { status: 201 });
+  } catch (err) {
+    return fail(err);
+  }
 }

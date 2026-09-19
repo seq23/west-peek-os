@@ -501,6 +501,10 @@ export async function readConference(env: Env, row: InboxRow, deps: MeetIngestDe
       await setInbox(env, row.id, { detail, meeting_id: meeting.id, meeting_code: meetingCode });
       return { state: "RECEIVED", detail };
     }
+    // THE END-OF-CALL SIGNAL (migration 0216): the one column the During face and the side panel
+    // read. Google's end time, written the first time it is known; the live listener may have
+    // written its own moment first, and the earlier writer wins.
+    await env.WP_OS_DB.prepare("UPDATE meeting SET call_ended_at = COALESCE(call_ended_at, ?2) WHERE id = ?1").bind(meeting.id, record.endTime).run();
 
     // 2. Who was there.
     const participants: MeetParticipant[] = (await listParticipants(token, row.conference_record, fetchImpl)).map(participantFromApi);
