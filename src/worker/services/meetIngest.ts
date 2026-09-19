@@ -556,8 +556,21 @@ export async function runMeetIngest(env: Env, deps: MeetIngestDeps = {}): Promis
   const pubsub = await drainPubsub(env, fetchImpl);
   const poll = await pollEnded(env, source, now, fetchImpl);
 
+  /*
+   * A ROW REFUSED FOR WANT OF THE FIRM DEFAULT IS READ ONCE THE DEFAULT IS ON. The refusal stays
+   * on transcript_import as the record of what happened the first time; the second reading writes
+   * its own IMPORTED row. Any other refusal — consent, a missing meeting — stays refused: those are
+   * facts about the call, not about a switch somebody has since flipped.
+   */
   const due = (await env.WP_OS_DB.prepare(
-    "SELECT * FROM meet_event_inbox WHERE state IN ('RECEIVED','FAILED') AND attempts < 48 ORDER BY received_at ASC LIMIT ?1",
+    `SELECT i.* FROM meet_event_inbox i
+      WHERE i.attempts < 48
+        AND (
+          i.state IN ('RECEIVED','FAILED')
+          OR (i.state = 'REFUSED' AND i.detail LIKE 'refused: the firm%'
+              AND EXISTS (SELECT 1 FROM meet_recording_policy p WHERE p.firm_scope = i.firm_scope AND p.active = 1))
+        )
+      ORDER BY i.received_at ASC LIMIT ?1`,
   ).bind(deps.maxRows ?? 5).all<InboxRow>()).results ?? [];
   const read: MeetIngestOutcome["read"] = [];
   for (const row of due) {

@@ -188,12 +188,15 @@ async function applyPlan(env: Env, actor: Actor, source: CalendarSource, plan: P
     for (const a of event.attendees) {
       const firm = source.firmDomains.includes(a.email.slice(a.email.lastIndexOf("@") + 1));
       const firmUser = firm
-        ? await env.WP_OS_DB.prepare("SELECT id FROM firm_user WHERE LOWER(email) = ?1").bind(a.email).first<{ id: string }>()
+        ? await env.WP_OS_DB.prepare("SELECT id, full_name FROM firm_user WHERE LOWER(email) = ?1").bind(a.email).first<{ id: string; full_name: string }>()
         : null;
       await addParticipant(env, actor, id, {
         participant_type: firmUser ? "FIRM_USER" : "EXTERNAL",
         firm_user_id: firmUser?.id,
-        display_name: a.displayName ?? a.email,
+        // The firm's own people by the name the firm knows them by; the calendar's display name
+        // for everybody else; the address when there is nothing better. Meet later matches on this
+        // name, so a partner is not listed twice as "Sequoia Taylor" and "sequoia@…".
+        display_name: firmUser?.full_name ?? a.displayName ?? a.email,
         organization: firm ? undefined : a.email.slice(a.email.lastIndexOf("@") + 1),
         participant_role: a.email === event.organizerEmail ? "organizer" : undefined,
       });
