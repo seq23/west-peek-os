@@ -5,7 +5,7 @@
     "meetings": { "landed": false, "spec": "§3 — the list, the room's three faces, the standalone panel" },
     "dealflow": { "landed": false, "spec": "§4 — the rail is the page; the committee lives here" },
     "companies": { "landed": false, "spec": "§5 — the register" },
-    "portfolio": { "landed": false, "spec": "§6 — holdings, the deployment ring, Book it" },
+    "portfolio": { "landed": true, "spec": "§6 — holdings, the deployment ring, Book it" },
     "thesis": { "landed": false, "spec": "§7 — one sentence and its numbers" },
     "secondaries": { "landed": false, "spec": "§8 — the sleeve, on the same rail" }
   },
@@ -67,7 +67,7 @@
     "ic-seat": ["dealflow"],
 
     "dl": ["meetings", "dealflow"],
-    "two-col": ["meetings", "dealflow", "thesis"],
+    "two-col": ["meetings", "dealflow", "portfolio", "thesis"],
     "scorecard": ["meetings", "dealflow"],
     "check": ["meetings", "dealflow"],
     "on": ["meetings", "dealflow"],

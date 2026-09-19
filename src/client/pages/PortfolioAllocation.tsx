@@ -18,7 +18,9 @@ import { AllocationRing } from "./AllocationRing";
  * same holdings list the page shows above it. `tests/portfolioHoldings.test.ts` feeds both from
  * one fixture and diffs them.
  */
-export function PortfolioAllocation({ fundId }: { fundId: string | null }): JSX.Element | null {
+export function PortfolioAllocation({ fundId, level = "h3" }: { fundId: string | null; level?: "h3" | "h4" }): JSX.Element | null {
+  // Under Portfolio's band head (Phase D) the panel's own head is the third rank.
+  const Head = level;
   const data = useApi<{
     fund: { id: string; name: string };
     plan: PlanSlices;
@@ -35,7 +37,7 @@ export function PortfolioAllocation({ fundId }: { fundId: string | null }): JSX.
   if (d.plan.fundSize === 0) {
     return (
       <section className="card" data-testid="portfolio-allocation-empty">
-        <h3>Where the money is, against the plan</h3>
+        <Head>Where the money is, against the plan</Head>
         <p className="state-empty">{d.note}</p>
       </section>
     );
@@ -45,7 +47,7 @@ export function PortfolioAllocation({ fundId }: { fundId: string | null }): JSX.
 
   return (
     <section className="card viz-root" data-testid="portfolio-allocation">
-      <h3>Where the money is, against the plan</h3>
+      <Head>Where the money is, against the plan</Head>
       <p className="muted small">
         Of the {usd(d.plan.fundSize)} the firm decided to divide on Fund strategy, {usd(d.deployment.deployed)} is
         in {d.companies} compan{d.companies === 1 ? "y" : "ies"} today and {usd(d.deployment.remaining)} of
