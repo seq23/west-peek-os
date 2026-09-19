@@ -109,7 +109,13 @@ describe("turns from Meet", () => {
 describe("the firm recording default", () => {
   it("refuses the ingest, as a REFUSED row, while the firm default is off — and says which door opens it", async () => {
     const out = await runMeetIngest(env, { fetchImpl: g.fetch, now: NOW });
-    expect(out.heard.subscription.state).toBe("ACTIVE");
+    expect(out.heard.subscription).toEqual({ state: "ACTIVE", detail: "2/2 space(s) subscribed" });
+    const spaces = (await env.WP_OS_DB.prepare("SELECT meeting_code, space_name, state, detail FROM meet_space_subscription ORDER BY meeting_code").all<any>()).results;
+    expect(spaces).toEqual([
+      { meeting_code: "aaa-bbbb-ccc", space_name: "spaces/sp_int", state: "ACTIVE", detail: "created" },
+      { meeting_code: "ddd-eeee-fff", space_name: "spaces/sp_lp", state: "ACTIVE", detail: "created" },
+    ]);
+    expect(g.subscriptions.map((s) => s.targetResource).sort()).toEqual(["//meet.googleapis.com/spaces/sp_int", "//meet.googleapis.com/spaces/sp_lp"]);
     expect(out.heard.poll.inserted).toBe(2);
     expect(out.read.map((r) => r.state)).toEqual(["REFUSED", "REFUSED"]);
     expect(out.read[0]!.detail).toContain("POST /api/meet/recording-policy");
@@ -232,8 +238,11 @@ describe("reading an ended call", () => {
 
   it("names a missing delegation grant on the ledger and keeps polling, rather than dying", async () => {
     g.grantedScopes.delete("https://www.googleapis.com/auth/meetings.space.created");
+    // Force a renewal so the grant is actually consulted: an ACTIVE row with a week to run would be left alone.
+    await env.WP_OS_DB.prepare("UPDATE meet_space_subscription SET expires_at = ?1").bind(new Date(NOW.getTime() + 3_600_000).toISOString()).run();
     const out = await runMeetIngest(env, { fetchImpl: g.fetch, now: NOW });
     expect(out.heard.subscription.state).toBe("SCOPE_MISSING");
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meet_space_subscription WHERE state = 'SCOPE_MISSING'").first<any>())!.n).toBe(2);
     expect(out.heard.subscription.detail).toContain("meetings.space.created");
     const ledger = await env.WP_OS_DB.prepare("SELECT subscription_state FROM google_calendar_sync WHERE calendar_key = 'westpeek'").first<any>();
     expect(ledger.subscription_state).toBe("SCOPE_MISSING");
@@ -242,6 +251,7 @@ describe("reading an ended call", () => {
     // The grant lands; the next tick clears the state on its own.
     const back = await runMeetIngest(env, { fetchImpl: g.fetch, now: NOW });
     expect(back.heard.subscription.state).toBe("ACTIVE");
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meet_space_subscription WHERE state = 'ACTIVE'").first<any>())!.n).toBe(2);
   });
 
   it("is reachable as a job and reports on /api/meet/status", async () => {

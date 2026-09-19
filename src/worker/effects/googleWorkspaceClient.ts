@@ -296,14 +296,19 @@ export async function listMeetSubscriptions(token: string, fetchImpl: typeof fet
 }
 
 /**
- * Subscribe to Meet events for every space the impersonated user hosts, delivered to the firm's
- * Pub/Sub topic. The target is the USER, not a space, so one subscription covers every call.
+ * Subscribe to Meet events for ONE space, delivered to the firm's Pub/Sub topic.
+ *
+ * PER SPACE, NOT PER USER — probed 18 Sep 2026. A user-target subscription
+ * (`//cloudidentity.googleapis.com/users/{id}`) is refused with TARGET_RESOURCE_ACCESS_DENIED for
+ * both the email form and `me`: it wants the account's numeric id, which none of the delegated
+ * scopes can reveal (openid is not granted). A space-target subscription is created and ACTIVE
+ * for seven days. The calendar knows every space the firm uses, so the ingest keeps one per space.
  * Returns the created subscription (the API answers with a long-running operation whose
  * `response` is the subscription; `done` is true synchronously for this resource).
  */
 export async function createMeetSubscription(
   token: string,
-  userEmail: string,
+  spaceName: string,
   pubsubTopic: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<SubscriptionRaw> {
@@ -311,7 +316,7 @@ export async function createMeetSubscription(
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({
-      targetResource: `//cloudidentity.googleapis.com/users/${encodeURIComponent(userEmail)}`,
+      targetResource: `//meet.googleapis.com/${spaceName}`,
       eventTypes: MEET_EVENT_TYPES,
       notificationEndpoint: { pubsubTopic },
       payloadOptions: { includeResource: false },
@@ -322,7 +327,7 @@ export async function createMeetSubscription(
   return { name: op.name ?? "" };
 }
 
-/** Push a subscription's expiry out. Meet subscriptions expire; renewal is a PATCH of expireTime. */
+/** Push a subscription's expiry out. Meet subscriptions expire (seven days for a space); renewal is a PATCH of ttl. */
 export async function renewMeetSubscription(token: string, name: string, ttlHours: number, fetchImpl: typeof fetch = fetch): Promise<SubscriptionRaw> {
   const u = new URL(`${EVENTS_BASE}/${name}`);
   u.searchParams.set("updateMask", "ttl");

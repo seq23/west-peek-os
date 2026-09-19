@@ -108,7 +108,11 @@ export function makeFakeGoogle(): FakeGoogle {
       const sp = /^spaces\/(.+)$/.exec(p);
       if (sp) {
         const c = g.conferences.find((x) => x.space === `spaces/${sp[1]}` || x.meetingCode === sp[1]);
-        return c ? json({ name: c.space, meetingCode: c.meetingCode, meetingUri: `https://meet.google.com/${c.meetingCode}` }) : json({ error: { code: 403, status: "PERMISSION_DENIED", message: "Permission denied on resource Space (or it might not exist)" } }, 403);
+        if (c) return json({ name: c.space, meetingCode: c.meetingCode, meetingUri: `https://meet.google.com/${c.meetingCode}` });
+        // A space the calendar knows but no conference has used yet resolves by its code, as Google's does.
+        const fromCalendar = g.calendarItems.find((i) => (i as { conferenceData?: { conferenceId?: string } }).conferenceData?.conferenceId === sp[1]);
+        if (fromCalendar) return json({ name: `spaces/sp_${sp[1]}`, meetingCode: sp[1], meetingUri: `https://meet.google.com/${sp[1]}` });
+        return json({ error: { code: 403, status: "PERMISSION_DENIED", message: "Permission denied on resource Space (or it might not exist)" } }, 403);
       }
     }
     if (u.hostname === "workspaceevents.googleapis.com") {

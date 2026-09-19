@@ -44,6 +44,26 @@ CREATE TABLE IF NOT EXISTS meet_recording_policy (
   note          TEXT
 );
 
+-- ── One Workspace Events subscription per Meet SPACE the calendar knows. ──
+-- Probed 18 Sep 2026: a subscription targeting the USER (`//cloudidentity.googleapis.com/users/…`)
+-- is refused (TARGET_RESOURCE_ACCESS_DENIED) because it wants the account's numeric id, which no
+-- granted scope reveals; a subscription targeting the SPACE (`//meet.googleapis.com/spaces/…`) is
+-- created and ACTIVE for seven days. So the ingest keeps one per space, renewed before it lapses,
+-- and this table is the ledger of which spaces are covered and which are not — a space without a
+-- live subscription is still polled, so an expired row is a visible state, never a silent gap.
+CREATE TABLE IF NOT EXISTS meet_space_subscription (
+  meeting_code       TEXT PRIMARY KEY,
+  space_name         TEXT,
+  subscription_name  TEXT,
+  expires_at         TEXT,
+  state              TEXT NOT NULL DEFAULT 'NONE'
+                     CHECK (state IN ('NONE','ACTIVE','SCOPE_MISSING','FAILED')),
+  detail             TEXT,
+  calendar_key       TEXT NOT NULL,
+  firm_scope         TEXT NOT NULL DEFAULT 'west-peek',
+  updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- ── The two jobs. INTERVAL rather than DAILY_AT, deliberately: a Meet invitation that arrives at
 --    ten is a meeting at eleven, and a transcript is generated within minutes of a call ending.
 --    A daily read would put the Join affordance on tomorrow's card and the After-face a day late.

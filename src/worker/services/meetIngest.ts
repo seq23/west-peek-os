@@ -358,38 +358,90 @@ async function pollEnded(env: Env, source: CalendarSource, now: Date, fetchImpl:
 }
 
 /**
- * Keep one Workspace Events subscription alive per calendar. A missing grant is a named state on
- * the ledger (`SCOPE_MISSING`), never an exception that kills the tick — polling still runs.
+ * Keep one Workspace Events subscription alive per Meet SPACE the calendar knows.
+ *
+ * Per space because that is what Google permits under this grant (see `createMeetSubscription`).
+ * The spaces are the distinct meeting codes on calendar meetings from yesterday to three weeks
+ * out — a recurring series is one space, so the set is small. Each is created or renewed before
+ * it lapses; a missing grant is a named state (`SCOPE_MISSING`) on the ledger, never an exception
+ * that kills the tick — polling still runs, so a space without a live subscription is a visible
+ * gap rather than a silent one. The calendar ledger carries the aggregate.
  */
-async function ensureSubscription(env: Env, source: CalendarSource, now: Date, fetchImpl: typeof fetch): Promise<Heard["subscription"]> {
+async function ensureSubscriptions(env: Env, source: CalendarSource, now: Date, fetchImpl: typeof fetch): Promise<Heard["subscription"]> {
   const topic = env.WP_OS_MEET_PUBSUB_TOPIC;
-  const write = async (state: Heard["subscription"]["state"], detail: string | null, name?: string | null, expires?: string | null) => {
+  const aggregate = async (state: Heard["subscription"]["state"], detail: string | null) => {
     await env.WP_OS_DB.prepare(
-      `INSERT INTO google_calendar_sync (calendar_key, subject_email, firm_scope, subscription_state, subscription_detail, subscription_name, subscription_expires, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-       ON CONFLICT (calendar_key) DO UPDATE SET subscription_state = excluded.subscription_state, subscription_detail = excluded.subscription_detail,
-         subscription_name = COALESCE(excluded.subscription_name, subscription_name), subscription_expires = COALESCE(excluded.subscription_expires, subscription_expires), updated_at = excluded.updated_at`,
-    ).bind(source.key, source.subjectEmail, source.firmScope, state, detail, name ?? null, expires ?? null, now.toISOString()).run();
+      `INSERT INTO google_calendar_sync (calendar_key, subject_email, firm_scope, subscription_state, subscription_detail, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+       ON CONFLICT (calendar_key) DO UPDATE SET subscription_state = excluded.subscription_state, subscription_detail = excluded.subscription_detail, updated_at = excluded.updated_at`,
+    ).bind(source.key, source.subjectEmail, source.firmScope, state, detail, now.toISOString()).run();
     return { state, detail };
   };
-  if (!topic) return write("NONE", "no Pub/Sub topic configured (WP_OS_MEET_PUBSUB_TOPIC); polling only");
+  if (!topic) return aggregate("NONE", "no Pub/Sub topic configured (WP_OS_MEET_PUBSUB_TOPIC); polling only");
+
+  const codes = ((await env.WP_OS_DB.prepare(
+    `SELECT DISTINCT meet_conference_id AS code FROM meeting
+      WHERE calendar_key = ?1 AND source = 'google_calendar' AND meet_conference_id IS NOT NULL AND status <> 'CANCELLED' AND archived_at IS NULL
+        AND scheduled_at >= ?2 AND scheduled_at <= ?3 ORDER BY scheduled_at DESC LIMIT 40`,
+  ).bind(source.key, new Date(now.getTime() - 86_400_000).toISOString(), new Date(now.getTime() + 21 * 86_400_000).toISOString()).all<{ code: string }>()).results ?? []).map((r) => r.code);
+  if (codes.length === 0) return aggregate("NONE", "no calendar meeting with a Meet link between yesterday and three weeks out");
+
+  const writeSpace = async (code: string, patch: { space_name?: string | null; subscription_name?: string | null; expires_at?: string | null; state: string; detail: string | null }) => {
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO meet_space_subscription (meeting_code, space_name, subscription_name, expires_at, state, detail, calendar_key, firm_scope, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+       ON CONFLICT (meeting_code) DO UPDATE SET space_name = COALESCE(excluded.space_name, space_name), subscription_name = COALESCE(excluded.subscription_name, subscription_name),
+         expires_at = COALESCE(excluded.expires_at, expires_at), state = excluded.state, detail = excluded.detail, updated_at = excluded.updated_at`,
+    ).bind(code, patch.space_name ?? null, patch.subscription_name ?? null, patch.expires_at ?? null, patch.state, patch.detail, source.key, source.firmScope, now.toISOString()).run();
+  };
+
+  let token: string;
   try {
-    const token = await serviceAccountToken(env, [SCOPE.meetCreated, SCOPE.meetRead], source.subjectEmail, fetchImpl);
-    const existing = (await listMeetSubscriptions(token, fetchImpl)).find((s) => s.notificationEndpoint?.pubsubTopic === topic && s.state !== "DELETED");
-    if (existing) {
-      const expires = existing.expireTime ? Date.parse(existing.expireTime) : 0;
-      if (expires - now.getTime() < 12 * 3_600_000) {
-        const renewed = await renewMeetSubscription(token, existing.name, 24, fetchImpl);
-        return write("ACTIVE", "renewed", renewed.name, renewed.expireTime ?? null);
-      }
-      return write("ACTIVE", null, existing.name, existing.expireTime ?? null);
-    }
-    const created = await createMeetSubscription(token, source.subjectEmail, topic, fetchImpl);
-    return write("ACTIVE", "created", created.name, created.expireTime ?? null);
+    token = await serviceAccountToken(env, [SCOPE.meetCreated, SCOPE.meetRead], source.subjectEmail, fetchImpl);
   } catch (err) {
-    if (err instanceof GoogleWorkspaceError && err.code === "scope_missing") return write("SCOPE_MISSING", err.message);
-    return write("FAILED", err instanceof Error ? err.message : String(err));
+    const scopeMissing = err instanceof GoogleWorkspaceError && err.code === "scope_missing";
+    const detail = err instanceof Error ? err.message : String(err);
+    for (const code of codes) await writeSpace(code, { state: scopeMissing ? "SCOPE_MISSING" : "FAILED", detail });
+    return aggregate(scopeMissing ? "SCOPE_MISSING" : "FAILED", detail);
   }
+  let existing: Awaited<ReturnType<typeof listMeetSubscriptions>> = [];
+  try {
+    existing = await listMeetSubscriptions(token, fetchImpl);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return aggregate("FAILED", `could not list subscriptions: ${detail}`);
+  }
+  const RENEW_WITHIN_MS = 24 * 3_600_000;
+  let active = 0;
+  const failures: string[] = [];
+  for (const code of codes) {
+    const known = await env.WP_OS_DB.prepare("SELECT space_name, subscription_name, expires_at, state FROM meet_space_subscription WHERE meeting_code = ?1").bind(code).first<{ space_name: string | null; subscription_name: string | null; expires_at: string | null; state: string }>();
+    if (known?.state === "ACTIVE" && known.expires_at && Date.parse(known.expires_at) - now.getTime() > RENEW_WITHIN_MS) {
+      active += 1;
+      continue;
+    }
+    try {
+      const spaceName = known?.space_name ?? (await getSpace(token, `spaces/${code}`, fetchImpl)).name;
+      const target = `//meet.googleapis.com/${spaceName}`;
+      const live = existing.find((s) => s.targetResource === target && s.notificationEndpoint?.pubsubTopic === topic && s.state !== "DELETED");
+      if (live && live.expireTime && Date.parse(live.expireTime) - now.getTime() > RENEW_WITHIN_MS) {
+        await writeSpace(code, { space_name: spaceName, subscription_name: live.name, expires_at: live.expireTime, state: "ACTIVE", detail: null });
+      } else if (live) {
+        const renewed = await renewMeetSubscription(token, live.name, 7 * 24, fetchImpl);
+        await writeSpace(code, { space_name: spaceName, subscription_name: renewed.name, expires_at: renewed.expireTime ?? null, state: "ACTIVE", detail: "renewed" });
+      } else {
+        const created = await createMeetSubscription(token, spaceName, topic, fetchImpl);
+        await writeSpace(code, { space_name: spaceName, subscription_name: created.name, expires_at: created.expireTime ?? null, state: "ACTIVE", detail: "created" });
+      }
+      active += 1;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      await writeSpace(code, { state: "FAILED", detail });
+      failures.push(`${code}: ${detail}`);
+    }
+  }
+  if (failures.length > 0) return aggregate(active > 0 ? "ACTIVE" : "FAILED", `${active}/${codes.length} space(s) subscribed; ${failures.join("; ")}`);
+  return aggregate("ACTIVE", `${active}/${codes.length} space(s) subscribed`);
 }
 
 // ── Reading one conference ───────────────────────────────────────────────────
@@ -552,7 +604,7 @@ export async function runMeetIngest(env: Env, deps: MeetIngestDeps = {}): Promis
       read: [],
     };
   }
-  const subscription = await ensureSubscription(env, source, now, fetchImpl);
+  const subscription = await ensureSubscriptions(env, source, now, fetchImpl);
   const pubsub = await drainPubsub(env, fetchImpl);
   const poll = await pollEnded(env, source, now, fetchImpl);
 

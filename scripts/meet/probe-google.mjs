@@ -67,18 +67,24 @@ try {
   } else row("meet v2 participants/transcripts on an ended call", "UNPROVEN", "no ended conference record visible yet — the first real call proves it");
 } catch (err) { row("meet v2 conferenceRecords.list", fail(err), err.message); }
 
-// Workspace Events
+// Workspace Events — per SPACE (a user target is refused under this grant; see createMeetSubscription)
 try {
   const t = await g.serviceAccountToken(env, [g.SCOPE.meetCreated, g.SCOPE.meetRead], source.subjectEmail);
   const subs = await g.listMeetSubscriptions(t);
-  const ours = subs.find((s) => s.notificationEndpoint?.pubsubTopic === TOPIC);
-  row("workspaceevents subscriptions.list", "CONFIRMED", `${subs.length} Meet subscription(s); ours: ${ours ? `${ours.name} ${ours.state} until ${ours.expireTime}` : "none"}`);
-  if (subscribe && !ours) {
-    const created = await g.createMeetSubscription(t, source.subjectEmail, TOPIC);
-    row("workspaceevents subscriptions.create (user target → Pub/Sub)", "CONFIRMED", `${created.name} until ${created.expireTime ?? "?"}`);
-  } else if (subscribe && ours) {
-    const renewed = await g.renewMeetSubscription(t, ours.name, 24);
-    row("workspaceevents subscriptions.patch (renew)", "CONFIRMED", `${renewed.name} until ${renewed.expireTime ?? "?"}`);
+  const ours = subs.filter((s) => s.notificationEndpoint?.pubsubTopic === TOPIC && s.state !== "DELETED");
+  row("workspaceevents subscriptions.list", "CONFIRMED", `${subs.length} Meet subscription(s); ${ours.length} on our topic${ours[0] ? `; e.g. ${ours[0].targetResource} ${ours[0].state} until ${ours[0].expireTime}` : ""}`);
+  if (subscribe) {
+    const cal = await g.serviceAccountToken(env, [g.SCOPE.calendarRead], source.subjectEmail);
+    const items = await g.listCalendarEvents(cal, new Date(Date.now() - 864e5), new Date(Date.now() + 21 * 864e5));
+    const codes = [...new Set(items.map((e) => e.conferenceData?.conferenceId).filter(Boolean))];
+    for (const code of codes) {
+      const space = await g.getSpace(t, `spaces/${code}`);
+      const target = `//meet.googleapis.com/${space.name}`;
+      const live = ours.find((s) => s.targetResource === target);
+      if (live) { const r = await g.renewMeetSubscription(t, live.name, 7 * 24); row(`subscription for ${code} (renew)`, "CONFIRMED", `${r.name} until ${r.expireTime ?? "?"}`); }
+      else { const c = await g.createMeetSubscription(t, space.name, TOPIC); row(`subscription for ${code} (create)`, "CONFIRMED", `${c.name} ${c.state ?? ""} until ${c.expireTime ?? "?"}`); }
+    }
+    if (codes.length === 0) row("subscriptions", "UNPROVEN", "no Meet code on the calendar in the window");
   }
 } catch (err) { row(`workspaceevents ${subscribe ? "create/renew" : "list"}`, fail(err), err.message); }
 
