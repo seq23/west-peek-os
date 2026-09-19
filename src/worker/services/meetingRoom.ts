@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { NOT_SUPERSEDED_NOTE_CLAUSE } from "./meetLiveNotes";
+import { meetLiveView, type MeetLiveView } from "./meetLiveView";
 import type { Env } from "../env";
 import type { FirmUserIdentity } from "../auth";
 import type { RouteContext } from "../router";
@@ -70,11 +72,14 @@ interface MeetingRow {
   privacy_label: string;
   firm_scope: string;
   ai_access_state: string;
+  /** Migration 0202: what makes a meeting a firm-hosted Meet, which is what the live path (tier 4) needs. */
+  source: "manual" | "google_calendar";
+  meet_conference_id: string | null;
 }
 
 async function requireMeeting(env: Env, meetingId: string): Promise<MeetingRow> {
   const row = await env.WP_OS_DB.prepare(
-    "SELECT id, title, meeting_type, status, company_id, lp_record_id, privacy_label, firm_scope, ai_access_state FROM meeting WHERE id = ?1",
+    "SELECT id, title, meeting_type, status, company_id, lp_record_id, privacy_label, firm_scope, ai_access_state, source, meet_conference_id FROM meeting WHERE id = ?1",
   )
     .bind(meetingId)
     .first<MeetingRow>();
@@ -127,6 +132,12 @@ export interface RoomState {
   seated: SeatedEmployee[];
   tasks: RoomTask[];
   roll_every_ms: number;
+  /**
+   * How this room hears (tier 4): the live state on the meeting row, the session's counters and
+   * whether the official transcript has superseded the live notes. `state` is NULL when the live
+   * path does not apply — a manual meeting, or one without a Meet conference.
+   */
+  meet_live: MeetLiveView;
 }
 
 function chipFor(state: string): RoomTask["chip"] {
@@ -139,7 +150,7 @@ export async function roomState(env: Env, identity: FirmUserIdentity, meetingId:
   const meeting = await requireMeeting(env, meetingId);
   if (!canAccessPrivacyLabel(identity, meeting.privacy_label)) throw new RoomError(404, "not_found", "meeting not found");
   const host = pageHost("meetings", identity.fullName);
-  const [capture, summary, artifacts, seated, cards] = await Promise.all([
+  const [capture, summary, artifacts, seated, cards, meetLive] = await Promise.all([
     captureReadiness(env, meetingId),
     env.WP_OS_DB.prepare(
       "SELECT * FROM meeting_after_draft WHERE meeting_id = ?1 AND state IN ('DRAFTED','APPROVED') ORDER BY created_at DESC LIMIT 1",
@@ -151,6 +162,7 @@ export async function roomState(env: Env, identity: FirmUserIdentity, meetingId:
          FROM work_card wc LEFT JOIN ai_employee e ON e.id = wc.owner_id
         WHERE wc.meeting_id = ?1 ORDER BY wc.created_at DESC LIMIT 40`,
     ).bind(meetingId).all<{ id: string; title: string; state: string; block_needed: string | null; created_at: string; owner_name: string | null }>(),
+    meetLiveView(env, meeting),
   ]);
   return {
     meeting: { id: meeting.id, title: meeting.title, meeting_type: meeting.meeting_type, status: meeting.status, ai_access_state: meeting.ai_access_state, confidential: isConfidentialMeeting(meeting) },
@@ -161,6 +173,7 @@ export async function roomState(env: Env, identity: FirmUserIdentity, meetingId:
     seated,
     tasks: (cards.results ?? []).map((c) => ({ work_card_id: c.id, title: c.title, state: c.state, owner_name: c.owner_name, chip: chipFor(c.state), block_needed: c.block_needed, created_at: c.created_at })),
     roll_every_ms: ROLL_EVERY_MS,
+    meet_live: meetLive,
   };
 }
 
@@ -176,7 +189,7 @@ export async function buildRoomContext(env: Env, meeting: MeetingRow): Promise<s
   const db = env.WP_OS_DB;
   const brief = await latestBrief(env, meeting.id);
   const notes = (await db.prepare(
-    "SELECT body FROM meeting_note WHERE meeting_id = ?1 AND note_type IN ('MANUAL','TRANSCRIPT_DERIVED') ORDER BY created_at DESC, id DESC LIMIT 60",
+    `SELECT body FROM meeting_note WHERE meeting_id = ?1 AND note_type IN ('MANUAL','TRANSCRIPT_DERIVED') AND ${NOT_SUPERSEDED_NOTE_CLAUSE} ORDER BY created_at DESC, id DESC LIMIT 60`,
   ).bind(meeting.id).all<{ body: string }>()).results ?? [];
   const people = (await db.prepare("SELECT display_name, participant_type FROM meeting_participant WHERE meeting_id = ?1 LIMIT 20").bind(meeting.id).all<{ display_name: string; participant_type: string }>()).results ?? [];
 

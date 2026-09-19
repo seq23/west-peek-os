@@ -200,6 +200,16 @@ export async function recordPlatformAnnouncedConsent(env: Env, actor: Actor, mee
   if (authz.decision !== "ALLOW") throw new MeetIngestError(403, "forbidden", authz.reason);
   const ids: Record<string, string> = {};
   for (const type of ["TRANSCRIPTION", "RECORDING"] as const) {
+    // ONCE PER CONFERENCE. The live listener (tier 4) records this when it joins and the ended-call
+    // ingest (tier 2) would record it again for the same call; the second is bookkeeping, not a
+    // second consent, and the row already there is the one returned.
+    const already = await env.WP_OS_DB.prepare(
+      "SELECT id FROM consent_record WHERE meeting_id = ?1 AND consent_type = ?2 AND state = 'GRANTED' AND basis LIKE ?3 ORDER BY created_at DESC LIMIT 1",
+    ).bind(meeting.id, type, `${PLATFORM_CONSENT_BASIS}:%${conferenceRecord}%`).first<{ id: string }>();
+    if (already) {
+      ids[type] = already.id;
+      continue;
+    }
     const id = `csr_${crypto.randomUUID()}`;
     await env.WP_OS_DB.prepare(
       `INSERT INTO consent_record (id, meeting_id, consent_type, state, basis, granted_by, recorded_by, firm_scope)
@@ -560,10 +570,14 @@ export async function readConference(env: Env, row: InboxRow, deps: MeetIngestDe
       return { state: "REFUSED", detail };
     }
 
-    // 7. The meeting was held. Pointers on the meeting; the row says what was read.
+    // 7. The meeting was held. Pointers on the meeting; the row says what was read. If the room
+    //    heard this call live (tier 4), the official transcript now supersedes those notes: they
+    //    stay on the record as corroboration and are not read twice into the After draft.
     await env.WP_OS_DB.prepare("UPDATE meeting SET recording_ref = COALESCE(?2, recording_ref), transcript_ref = COALESCE(?3, transcript_ref) WHERE id = ?1").bind(meeting.id, recordingRef, transcriptRef).run();
+    const { supersedeLiveImports } = await import("./meetLive");
+    const superseded = await supersedeLiveImports(env, meeting.id, importId);
     if (meeting.status === "SCHEDULED") await transitionMeeting(env, actor, meeting.id, "HELD", record.startTime ?? undefined);
-    const detail = `${turns.turns.length} turn(s)${turns.unattributed > 0 ? `, ${turns.unattributed} not attributed by Meet` : ""}; ${participants.length} participant(s)${recordingRef ? "; recording in Drive" : ""}`;
+    const detail = `${turns.turns.length} turn(s)${turns.unattributed > 0 ? `, ${turns.unattributed} not attributed by Meet` : ""}; ${participants.length} participant(s)${recordingRef ? "; recording in Drive" : ""}${superseded > 0 ? `; supersedes ${superseded} live import(s)` : ""}`;
     await setInbox(env, row.id, {
       state: "INGESTED", detail, meeting_id: meeting.id, meeting_code: meetingCode, transcript_import_id: importId, transcript_ref: transcriptRef, recording_ref: recordingRef,
       turns: turns.turns.length, unattributed_turns: turns.unattributed, participants_json: JSON.stringify(participants.map((p) => p.displayName)),
@@ -573,7 +587,7 @@ export async function readConference(env: Env, row: InboxRow, deps: MeetIngestDe
       eventType: "meet.conference_ingested",
       actorType: "system", actorId: "system",
       objectType: "meeting", objectId: meeting.id, firmScope: meeting.firm_scope,
-      payload: { conference_record: row.conference_record, transcript_import_id: importId, turns: turns.turns.length, unattributed: turns.unattributed, recording_ref: recordingRef, transcript_ref: transcriptRef, delivered_via: row.delivered_via },
+      payload: { conference_record: row.conference_record, transcript_import_id: importId, turns: turns.turns.length, unattributed: turns.unattributed, recording_ref: recordingRef, transcript_ref: transcriptRef, delivered_via: row.delivered_via, superseded_live_imports: superseded },
     });
     return { state: "INGESTED", detail };
   } catch (err) {

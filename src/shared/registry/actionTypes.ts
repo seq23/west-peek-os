@@ -315,6 +315,10 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   { key: "calendar.sync", name: "Sync a partner calendar", description: "Read a partner's Google Calendar and create or update one meeting per event with a Meet link. Internal record only; reads nothing it cannot see and writes nothing to Google.", isExternalEffect: false },
   { key: "meet.ingest", name: "Read an ended Google Meet", description: "Read the participants, transcript entries and recording pointer of a conference that ended, and ingest the transcript through the governed import. Never runs a model.", isExternalEffect: false },
   { key: "meet.consent.platform_announced", name: "Record platform-announced consent", description: "Record TRANSCRIPTION and RECORDING consent as GRANTED for a Meet-native transcript, on the basis that Google Meet announced both to every participant. Never for a transcript uploaded by hand.", isExternalEffect: false },
+  // Phase Meet, tier 4 (migration 0215) — the room hears the Meet live. Internal, not reserved: the
+  // join is the mechanism of the one reserved decision above (the firm recording default) and is
+  // refused in code without it; Meet announces the participant to everyone in the call.
+  { key: "meet.live.join", name: "Join a firm-hosted Google Meet live", description: "Open a live listening session on a calendar-synced meeting whose Meet conference is running, under the firm's activated recording default, with platform-announced consent recorded. The audio goes only to Workers AI speech-to-text and the words through the governed transcript import. Never for a manual meeting.", isExternalEffect: false },
   // Phase B: meeting model (migrations 0199/0200). A meeting has three faces — BEFORE (the brief),
   // DURING (capture) and AFTER (what came out). Every key here is internal: recording what was
   // settled, what is owed, what is still unknown, and PROPOSING a stage move. Nothing here moves a

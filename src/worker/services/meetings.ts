@@ -470,7 +470,12 @@ async function recordTranscriptImport(
  * announces recording and transcription to the room; `meetIngest.ts` says why that is consent and
  * where it is not. Named as a constant so the exception is greppable and cannot widen by a typo.
  */
-export const PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS = ["GOOGLE_MEET"] as const;
+/**
+ * GOOGLE_MEET is the official transcript tier 2 reads after the call; GOOGLE_MEET_LIVE is what the
+ * live listener heard during it (tier 4, migration 0215). Both are SYSTEM-actor imports under the
+ * platform-announced consent; the official one supersedes the live one when it lands.
+ */
+export const PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS = ["GOOGLE_MEET", "GOOGLE_MEET_LIVE"] as const;
 export type PlatformNativeProvider = (typeof PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS)[number];
 
 /**

@@ -194,6 +194,8 @@ export interface ChunkResult {
   speakers: number[];
   /** Why Whisper was used, when it was. */
   fallback_reason: string | null;
+  /** Neurons the platform reported for this slice (Nova-3 reports them; Whisper's adapter does not). Never fabricated. */
+  neurons: number | null;
 }
 
 /**
@@ -211,15 +213,15 @@ export async function transcribeWithSpeakers(
   env: Env,
   audioBase64: string,
   contentType: string | undefined,
-): Promise<Pick<ChunkResult, "text" | "engine" | "speakers" | "fallback_reason">> {
+): Promise<Pick<ChunkResult, "text" | "engine" | "speakers" | "fallback_reason" | "neurons">> {
   try {
     const d = await transcribeDiarised(env.AI, audioBase64, contentType);
     const text = d.turns.length > 0 ? d.turns.map(diarisedLine).join("\n") : d.text.trim();
-    return { text: text.trim(), engine: "NOVA3", speakers: d.speakers, fallback_reason: null };
+    return { text: text.trim(), engine: "NOVA3", speakers: d.speakers, fallback_reason: null, neurons: d.neurons };
   } catch (err) {
     if (!(err instanceof DiarisationUnavailable)) throw err;
     const w = await transcribeChunk(env.AI, audioBase64);
-    return { text: w.text.trim(), engine: "WHISPER", speakers: [], fallback_reason: err.reason.slice(0, 300) };
+    return { text: w.text.trim(), engine: "WHISPER", speakers: [], fallback_reason: err.reason.slice(0, 300), neurons: null };
   }
 }
 
@@ -249,7 +251,7 @@ export async function captureChunk(
 
   // A silent slice is a correct answer and not a failure. Writing an empty note for it would put a
   // blank line in the record of a conversation, which reads as something lost.
-  if (!text) return { sequence: input.sequence, text: "", turns_written: 0, engine: heard.engine, speakers: [], fallback_reason: heard.fallback_reason };
+  if (!text) return { sequence: input.sequence, text: "", turns_written: 0, engine: heard.engine, speakers: [], fallback_reason: heard.fallback_reason, neurons: heard.neurons };
 
   const { importTranscript } = await import("./meetings");
   const out = await ingestTranscript(
@@ -267,7 +269,7 @@ export async function captureChunk(
   await env.WP_OS_DB.prepare("UPDATE transcript_import SET provider_name = ?2 WHERE id = ?1 AND status = 'IMPORTED' AND provider_name IS NULL")
     .bind(out.transcript_import_id, LAPTOP_MIC_PROVIDER)
     .run();
-  return { sequence: input.sequence, text, turns_written: out.notes_created, engine: heard.engine, speakers: heard.speakers, fallback_reason: heard.fallback_reason, via: "laptop_mic" };
+  return { sequence: input.sequence, text, turns_written: out.notes_created, engine: heard.engine, speakers: heard.speakers, fallback_reason: heard.fallback_reason, neurons: heard.neurons, via: "laptop_mic" };
 }
 
 // ── A transcript somebody else recorded: RETIRED ─────────────────────────────

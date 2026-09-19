@@ -593,6 +593,7 @@ import {
 } from "./services/firmSkills";
 import { handleCalendarLedger, handleRunCalendarSync } from "./services/calendarSync";
 import { handleFirmRecordingPolicy, handleMeetInbox, handleMeetStatus, handleRunMeetIngest } from "./services/meetIngest";
+import { handleLiveChunk, handleLiveHeartbeat, handleLiveStatus, handleOpenLiveSession, handleReportLiveSession, handleResolveMeetCode } from "./services/meetLive";
 import {
   handleCreatePersonalEntry,
   handleGetPersonalProfile,
@@ -1001,6 +1002,21 @@ const router = new Router()
   .post("/api/meet/ingest", handleRunMeetIngest)
   .post("/api/meet/recording-policy", handleFirmRecordingPolicy)
   // === end Phase Meet ===
+  // === Meet live ===
+  // Tier 4: the room hears the Meet LIVE. The WebRTC peer is the listener on the owner's Mac
+  // (scripts/meet/live-listener.mjs); these routes are everything it may do — say it is awake and
+  // ask what is due, open a session THROUGH THE GATES (calendar-synced meeting with a conference,
+  // firm recording default on, platform-announced consent, meet.live.join authorised), post a slice
+  // of audio that goes only to Workers AI and then through the governed import, and report how the
+  // join ended. The four listener routes accept the Mac's service-token identity and nobody else;
+  // status and resolve are for partners (and tier 3's side panel). Literal paths before :id.
+  .post("/api/meet/live/heartbeat", handleLiveHeartbeat)
+  .post("/api/meet/live/sessions", handleOpenLiveSession)
+  .post("/api/meet/live/sessions/:id/report", handleReportLiveSession)
+  .post("/api/meet/live/sessions/:id/chunk", handleLiveChunk)
+  .get("/api/meet/live/status", handleLiveStatus)
+  .get("/api/meet/live/resolve", handleResolveMeetCode)
+  // === end Meet live ===
   // P33 — Event OS / Community OS scaffolding.
   .get("/api/events", handleListEvents)
   .post("/api/events", handleCreateEvent)
