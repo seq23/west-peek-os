@@ -4,6 +4,7 @@ import { MEETING_TYPES, meetingType, seatableFor } from "@shared/meetings/meetin
 import { IC_FLOW } from "@shared/ic/meetingFlow";
 import { LiveHelpPanel } from "./LiveHelpPanel";
 import { CloseoutPanel } from "./CloseoutPanel";
+import { AfterPanel, BeforePanel } from "./MeetingFacesPanel";
 
 /**
  * Meetings — the whole surface, in the order a partner asks in (ADR-019).
@@ -18,12 +19,15 @@ import { CloseoutPanel } from "./CloseoutPanel";
  * rendered `meeting-${id}`, and opening a meeting in one had no effect on the other. Anybody
  * looking at it was reading two surfaces and being asked to work out which one they were on.
  *
- * FIVE SECTIONS, ALWAYS RENDERED, EACH WITH AN EMPTY STATE. "Nothing has reached this yet" and
+ * FOUR SECTIONS, ALWAYS RENDERED, EACH WITH AN EMPTY STATE. "Nothing has reached this yet" and
  * "this is broken" look identical unless the page says which — the same defect the IC sequence
  * block was written to fix, applied to the whole page. The order is the argument: what is coming
- * up, what happened and what came of it, start one now, where a deal stands with the committee,
- * and last of all how any of this becomes work. The explainer goes last because a page that
- * explains itself before showing anything is a page you have to read before you can use.
+ * up, what happened and what came of it, start one now, and where a deal stands with the
+ * committee. The static "How a meeting becomes work" explainer went with Phase B (18 Sep 2026):
+ * every meeting record now SHOWS its three faces — the brief before, the capture during, and what
+ * came out after — so a chain described in the abstract at the foot of the page was describing
+ * something the record itself now says. The committee sequence stays inside section 4, where the
+ * deals it describes are.
  */
 
 interface MeetingRow {
@@ -49,6 +53,40 @@ interface MeetingRow {
   archived_at?: string | null;
   archived_by?: string | null;
   archive_reason?: string | null;
+  /**
+   * The three faces on the list (Phase B). Readiness for an upcoming meeting — is the brief built,
+   * what rolls forward from earlier meetings with the same company or LP — and outputs for a past
+   * one. Server-counted; the list never derives them.
+   */
+  brief_ready?: number;
+  carried_open_questions?: number;
+  we_owe_them?: number;
+  they_owe_us?: number;
+  decision_count?: number;
+  commitment_overdue_count?: number;
+  open_question_count?: number;
+  stage_proposal_pending_count?: number;
+  draft_waiting_count?: number;
+}
+
+/** "Brief ready · 3 open · 2 we owe them" — what an upcoming meeting is walking into. */
+function readinessInWords(m: MeetingRow): string {
+  const parts = [m.brief_ready ? "Brief ready" : "No brief yet"];
+  parts.push(`${m.carried_open_questions ?? 0} open`);
+  parts.push(`${m.we_owe_them ?? 0} we owe them`);
+  if ((m.they_owe_us ?? 0) > 0) parts.push(`${m.they_owe_us} they owe us`);
+  return parts.join(" \u00b7 ");
+}
+
+/** "2 decisions · 1 commitment overdue" — what a past meeting produced, and what is still owed. */
+function outputsInWords(m: MeetingRow): string {
+  const n = (k: number | undefined) => k ?? 0;
+  const parts = [`${n(m.decision_count)} decision${n(m.decision_count) === 1 ? "" : "s"}`];
+  if (n(m.commitment_overdue_count) > 0) parts.push(`${n(m.commitment_overdue_count)} commitment${n(m.commitment_overdue_count) === 1 ? "" : "s"} overdue`);
+  if (n(m.open_question_count) > 0) parts.push(`${n(m.open_question_count)} still open`);
+  if (n(m.stage_proposal_pending_count) > 0) parts.push(`${n(m.stage_proposal_pending_count)} stage move waiting on you`);
+  if (n(m.draft_waiting_count) > 0) parts.push("draft waiting for approval");
+  return parts.join(" \u00b7 ");
 }
 
 interface MeetingsResponse {
@@ -505,6 +543,8 @@ function SeatingPanel({ meeting, me }: { meeting: MeetingRow; me: MeResponse }):
                   <strong>{s.name}</strong> <span className="muted small">{s.role}</span>
                   {s.suggested && <span className="badge">suggested</span>}
                   <div className="muted small">{s.because}</div>
+                  {/* A WARNING, NOT A LOCK. The owner's rule: any employee can be seated anywhere. */}
+                  {s.warning && <div className="notice small" data-testid={`seat-warning-${s.name}`}>{s.warning}</div>}
                 </div>
                 <button
                   type="button"
@@ -522,7 +562,8 @@ function SeatingPanel({ meeting, me }: { meeting: MeetingRow; me: MeResponse }):
 
       {type?.external && (
         <p className="muted small">
-          Internal-only employees are not offered here — this meeting has people outside the firm in it.
+          This meeting has people outside the firm in it. Every employee can be seated; the ones
+          whose job is checking the firm are marked so you know before you press.
         </p>
       )}
       {message && <p className="notice small" data-testid="seating-message" role="status">{message}</p>}
@@ -726,6 +767,8 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
         </button>
       </div>
 
+      <BeforePanel meetingId={meetingId} onChanged={() => meeting.reload()} />
+
       <h4>What was said</h4>
       <form
         className="form-row"
@@ -826,6 +869,7 @@ function MeetingRecord({ meetingId, me }: { meetingId: string; me: MeResponse })
       {m && <SeatingPanel meeting={m} me={me} />}
       <LiveHelpPanel meetingId={meetingId} />
       <CloseoutPanel meetingId={meetingId} />
+      <AfterPanel meetingId={meetingId} onChanged={() => meeting.reload()} />
 
       {message && <p className="notice small" data-testid="meeting-message" role="status">{message}</p>}
     </div>
@@ -1016,6 +1060,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             <strong>{m.title}</strong>{" "}
             <span className="badge">{meetingType(m.meeting_type)?.label ?? m.meeting_type}</span>{" "}
             <span className="muted small">{whenInWords(m.scheduled_at)}</span>
+            <div className="muted small" data-testid={`readiness-${m.id}`}>{readinessInWords(m)}</div>
             <div className="form-row">
               <button type="button" className="link-button" data-testid={`start-${m.id}`} onClick={() => setLive(m.id)}>
                 It is happening now
@@ -1053,6 +1098,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
             </button>{" "}
             <span className="badge">{meetingType(m.meeting_type)?.label ?? m.meeting_type}</span>{" "}
             <span className="muted small">{whenInWords(m.occurred_at ?? m.scheduled_at)}</span>
+            <div className="muted small" data-testid={`outputs-${m.id}`}>{outputsInWords(m)}</div>
             {archiving === m.id ? (
               <div className="form-row">
                 {/* WHAT STAYS IS SAID BEFORE THE PRESS, not implied afterwards. */}
@@ -1487,66 +1533,8 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
         )}
       </ul>
 
-      {/* ── 5 ─────────────────────────────────────────────────────────────── */}
-      <div className="home-section-head">
-        <h3>How a meeting becomes work</h3>
-        <span className="muted small">the whole chain, whether or not anything is in it yet</span>
-      </div>
-      <p className="muted small">
-        Nothing on this page sends anything or decides anything. The chain below is what actually
-        happens to a conversation after it ends: it is read, what was agreed is proposed back to you
-        as work, and you are the one who accepts it.
-      </p>
-      <ol className="ic-flow" data-testid="meeting-chain">
-        <li className="ic-step">
-          <span className="ic-step-num" aria-hidden="true">1</span>
-          <div className="ic-step-body">
-            <p className="ic-step-title"><strong>Permission, then the recording</strong></p>
-            <p className="small">
-              You ask out loud, the answer goes on the file, and only then can anything be captured.
-              Taking permission back closes the door again immediately, and a refusal is written
-              down rather than leaving a gap that looks like an oversight.
-            </p>
-            <p className="muted small">You ask. Nobody else can record that somebody agreed.</p>
-          </div>
-        </li>
-        <li className="ic-step">
-          <span className="ic-step-num" aria-hidden="true">2</span>
-          <div className="ic-step-body">
-            <p className="ic-step-title"><strong>Walter reads the notes and proposes the follow-ups</strong></p>
-            <p className="small">
-              Each one quotes the line it came from, so you can check it against the words it was
-              read out of. Proposals only — nothing is assigned by the model.
-            </p>
-            <p className="muted small">Walter proposes. He never assigns.</p>
-          </div>
-        </li>
-        <li className="ic-step">
-          <span className="ic-step-num" aria-hidden="true">3</span>
-          <div className="ic-step-body">
-            <p className="ic-step-title"><strong>Who holds each one is decided in code, not by the model</strong></p>
-            <p className="small">
-              Employees by default; work that genuinely needs a person is recommended to you and
-              never assigned to anybody. The policy holds even on a run where the model ignores its
-              instructions, because it is not the model making the choice.
-            </p>
-            <p className="muted small">The firm's rule, applied the same way every time.</p>
-          </div>
-        </li>
-        <li className="ic-step">
-          <span className="ic-step-num" aria-hidden="true">4</span>
-          <div className="ic-step-body">
-            <p className="ic-step-title"><strong>You turn what you accept into a work card</strong></p>
-            <p className="small">
-              A promise sitting in a close-out is a note. A work card is the thing that gets worked,
-              chased and closed — so nothing leaves this page as work until you say it should.
-            </p>
-            <p className="muted small">You accept. Nothing is sent to anybody outside the firm by any of this.</p>
-          </div>
-        </li>
-      </ol>
-
-      <p className="small"><strong>And how a deal becomes a decision</strong></p>
+      {/* The committee's own sequence, kept with the deals it describes. */}
+      <p className="small"><strong>How a deal becomes a decision</strong></p>
       <ol className="ic-flow" data-testid="ic-flow">
         {IC_FLOW.map((step, i) => (
           <li key={step.key} className="ic-step" data-testid={`ic-step-${step.key}`}>
