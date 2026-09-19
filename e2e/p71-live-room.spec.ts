@@ -25,6 +25,13 @@ test.use({
 });
 
 test("Phase C: start recording → consent → ask the room by text → a block appears → nothing became a record", async ({ page, request }) => {
+  /*
+   * Opening the fake microphone is a browser-side device operation and takes 1–2s on an idle
+   * laptop and 20s+ when a sibling e2e run holds the machine (measured 19 Sep 2026: the line read
+   * "Opening the microphone…" for the whole 15s poll, then the switch went on). The journey's
+   * assertions are unchanged; the bound covers the device, not a product wait.
+   */
+  test.setTimeout(90_000);
   const marker = `E2E-C-${Date.now()}`;
 
   // A meeting on the calendar, with the Managing Partner's recording policy activated through the
@@ -80,7 +87,7 @@ test("Phase C: start recording → consent → ask the room by text → a block 
           const msg = (await room.getByTestId("capture-message").count()) > 0 ? await room.getByTestId("capture-message").textContent() : null;
           return checked === "true" || /on the file|nothing is recording|microphone/.test(msg ?? "");
         },
-        { message: "the switch turns on, or the line says why it did not", timeout: 15_000 },
+        { message: "the switch turns on, or the line says why it did not", timeout: 45_000 },
       )
       .toBe(true);
     // The yes is on the file — and the recorder either runs, or the line says why not.

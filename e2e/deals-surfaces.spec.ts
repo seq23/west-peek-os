@@ -79,6 +79,7 @@ test.describe("Meetings", () => {
     const back = page.getByTestId("record-back");
     if (await back.isVisible().catch(() => false)) await back.click();
     await expect(page.getByTestId("meetings-answer")).not.toContainText("Reading the calendar");
+    await expect(page.getByTestId("meet-default-status")).not.toContainText("Reading");
   }
 
   async function openFace(page: Page, s: Seed, which: "upcoming" | "held", face: "before" | "during" | "after"): Promise<void> {
@@ -88,10 +89,9 @@ test.describe("Meetings", () => {
     await page.getByTestId(`face-${face}`).click();
     await expect(page.getByTestId(`face-${face}`)).toHaveAttribute("aria-selected", "true");
     await expect(page.getByTestId(`face-panel-${face}`)).toBeVisible();
-    // The face's own reads have landed: no "Reading…" slot is left on it.
-    await expect(page.getByTestId(`face-panel-${face}`)).not.toContainText("Reading the record…");
-    await expect(page.getByTestId(`face-panel-${face}`)).not.toContainText("Reading the brief…");
-    await page.waitForTimeout(400);
+    // The face's own reads have landed: no "Reading…" slot is left on it — a condition, not a sleep.
+    await expect(page.getByTestId(`face-panel-${face}`)).not.toContainText(/Reading the record…|Reading the brief…|Reading the room…|Reading the framework…/);
+    await expect(page.getByTestId(`seating-${which === "upcoming" ? s.upcomingId : s.heldId}`)).not.toContainText("Reading");
   }
 
   test("the list holds its numbers at five widths", async ({ page, request }) => {
