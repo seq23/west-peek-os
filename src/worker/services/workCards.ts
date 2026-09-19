@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Env } from "../env";
+import { artifactAskFromWords } from "../../shared/artifacts/artifact";
 import type { FirmUserIdentity } from "../auth";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -237,6 +238,8 @@ export interface CreateWorkCardInput {
   preview_first?: boolean | null;
   /** Migration 0199. The meeting this card was raised from, so it returns to it. */
   meeting_id?: string | null;
+  /** The chain that works it. Left unset, an ask to build a dashboard, deck or document becomes `ARTIFACT` from the words. */
+  kind?: string | null;
 }
 
 /** Shared creation path (HTTP handler and capture routing). Authorizes internally. */
@@ -445,13 +448,21 @@ export async function createWorkCardInternal(
   }
 
   const id = `wc_${crypto.randomUUID()}`;
+  /*
+   * A CARD THAT ASKS FOR SOMETHING BUILT IS AN ARTIFACT CARD (19 Sep 2026). "Wyatt, build me a
+   * one-pager on the Sensori round" typed onto a card, from Intent, from the room or from an email,
+   * is recognised from her words here — the one place every card passes — so the sweep hands it to
+   * the one producer rather than the general loop. Her words still reach a reasoning model first:
+   * `runArtifactCard` calls `steerFor` before any stage runs. A kind a caller set explicitly wins.
+   */
+  const kind = input.kind ?? (artifactAskFromWords(`${input.title} ${input.prompt ?? ""}`) ? "ARTIFACT" : null);
   await env.WP_OS_DB.prepare(
     `INSERT INTO work_card
        (id, capture_id, title, description, domain_id, machine_id, owner_type, owner_id,
         state, priority, privacy_label, firm_scope, next_action, due_at, created_by, prompt,
-        model_access, audience, result_recipient, preview_first, preview_owner_id, meeting_id)
+        model_access, audience, result_recipient, preview_first, preview_owner_id, meeting_id, kind)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'OPEN', ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-             ?18, ?19, ?20, ?21)`,
+             ?18, ?19, ?20, ?21, ?22)`,
   )
     .bind(
       id,
@@ -488,6 +499,7 @@ export async function createWorkCardInternal(
        */
       input.preview_first === true ? (partnerByFirmUserId(identity.id)?.firmUserId ?? null) : null,
       input.meeting_id ?? null,
+      kind,
     )
     .run();
 

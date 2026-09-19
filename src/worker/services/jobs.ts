@@ -1147,6 +1147,7 @@ export async function runDueJobs(
   const systemActor: Actor = { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] };
   const results: Array<{ job_key: string; status: string; summary: string }> = [];
   await serveBriefOnTick(env, now, results);
+  await serveArtifactsOnTickSafely(env, now, results);
   for (const job of dueFirst) {
     try {
       const { run } = await runJob(env, systemActor, job.id, { trigger: "SCHEDULED", now });
@@ -1177,6 +1178,26 @@ async function serveBriefOnTick(env: Env, now: Date, results: Array<{ job_key: s
     const { recordSwallowed } = await import("./swallowed");
     await recordSwallowed(env, "jobs.serveBriefOnTick", err).catch(() => undefined);
     results.push({ job_key: "_morning_brief", status: "ERROR", summary: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
+ * A REQUESTED ARTIFACT IS ADVANCED ON EVERY TICK, the same way as the brief (19 Sep 2026). The
+ * room asks for a dashboard, a deck or a document; the stages that need no model ran inside her
+ * request, and the ones that do — planning from a brief, writing the findings — run here, on the
+ * clock, with the router's own chain budget. A card's build is advanced by its own sweep turn
+ * instead (`workSweep.ts` → `runArtifactCard`), so a card is never built twice. One line in the
+ * tick's results only when something moved; never throws.
+ */
+async function serveArtifactsOnTickSafely(env: Env, now: Date, results: Array<{ job_key: string; status: string; summary: string }>): Promise<void> {
+  try {
+    const { serveArtifactsOnTick } = await import("./artifacts");
+    const out = await serveArtifactsOnTick(env, now);
+    if (out.served) results.push({ job_key: "_artifacts", status: out.outcomes.some((o) => o.status === "failed") ? "FAILED" : "SUCCEEDED", summary: out.summary });
+  } catch (err) {
+    const { recordSwallowed } = await import("./swallowed");
+    await recordSwallowed(env, "jobs.serveArtifactsOnTick", err).catch(() => undefined);
+    results.push({ job_key: "_artifacts", status: "ERROR", summary: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -1213,6 +1234,7 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
   const sweptReports = await closeAbandonedReports(env, now);
   const results: Array<{ job_key: string; status: string; summary: string }> = [];
   await serveBriefOnTick(env, now, results);
+  await serveArtifactsOnTickSafely(env, now, results);
 
   const due = (
     await env.WP_OS_DB.prepare(

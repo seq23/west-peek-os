@@ -138,7 +138,8 @@ export interface MeetingStageProposalRow {
 export interface MeetingArtifactRow {
   id: string;
   meeting_id: string;
-  kind: "answer" | "table" | "chart" | "packet" | "summary";
+  /** `artifact` (0218) is the room's LINK BLOCK to something built on demand; the artifact itself lives in `artifact`. */
+  kind: "answer" | "table" | "chart" | "packet" | "summary" | "artifact";
   title: string;
   body_json: string;
   produced_by_type: string;

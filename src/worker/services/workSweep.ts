@@ -393,6 +393,7 @@ export async function sweepOnce(
     productionsHire?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+    artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -412,7 +413,7 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -455,6 +456,14 @@ export async function sweepOnce(
     } else if (card.kind === "BLOG_HELP") {
       // A partner's blog help: research judged, the piece written in their voice, filed, one email.
       const run = runners.blogHelp ?? (await import("./blogHelp")).runBlogHelpCard;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
+      detail = out.detail;
+    } else if (card.kind === "ARTIFACT") {
+      // Artifacts on demand, door B: "Wyatt, build me a one-pager on the Sensori round". Her words
+      // are read by `steerFor` first; the ONE producer builds it; the artifact is the deliverable.
+      const run = runners.artifact ?? (await import("./artifacts")).runArtifactCard;
       const out = await run(env, card);
       finished = out.finished;
       blocked = out.blocked;

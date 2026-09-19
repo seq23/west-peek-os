@@ -18,6 +18,8 @@ import { pageHost } from "../../shared/help/pageHosts";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { citationsFor, compileRecordQuery, describeAllowlist, RecordQueryRefused, recordQueryPlanSchema, CHART_TYPES } from "../../shared/meetings/roomQuery";
+import { ARTIFACT_KINDS, KIND_WORDS, kindFromWords, type PanelPlan } from "../../shared/artifacts/artifact";
+import { artifactStatuses, requestArtifactBuild, ArtifactError, type ArtifactStatus } from "./artifacts";
 
 /**
  * THE DURING FACE — the meeting is a live room (Phase C, owner-approved 18 Sep 2026).
@@ -38,6 +40,10 @@ import { citationsFor, compileRecordQuery, describeAllowlist, RecordQueryRefused
  *   (b) a WORK CARD, preview-first     `createWorkCardInternal` (the ordinary door; card.prompt is
  *                                     what instruction.ts's `steerFor` reads before a stage runs)
  *   (c) the After DRAFT                `draftMeetingAfter`      (Phase B; a proposal, not a record)
+ *   (d) an ARTIFACT REQUEST            `requestArtifactBuild`   (artifacts on demand, 19 Sep 2026: a
+ *                                     dashboard, deck or document built from the record by the ONE
+ *                                     producer in artifacts.ts, plus a link block here; a proposal
+ *                                     she opens, attached to the company/LP the meeting is about)
  *
  * No decision, commitment, open question, stage proposal, opportunity or company row is reachable
  * from here. A partner clicks Phase B's approve route to make any of it a record.
@@ -129,6 +135,8 @@ export interface RoomState {
   capture: Awaited<ReturnType<typeof captureReadiness>>;
   summary: MeetingAfterDraftRow | null;
   artifacts: MeetingArtifactRow[];
+  /** The live state of every artifact the room asked for, by artifact id — the link blocks read it. */
+  builds: Record<string, ArtifactStatus>;
   seated: SeatedEmployee[];
   tasks: RoomTask[];
   roll_every_ms: number;
@@ -164,12 +172,14 @@ export async function roomState(env: Env, identity: FirmUserIdentity, meetingId:
     ).bind(meetingId).all<{ id: string; title: string; state: string; block_needed: string | null; created_at: string; owner_name: string | null }>(),
     meetLiveView(env, meeting),
   ]);
+  const builds = await artifactStatuses(env, (artifacts.results ?? []).filter((a) => a.kind === "artifact").map((a) => String(safeJson(a.body_json).artifact_id ?? "")).filter(Boolean));
   return {
     meeting: { id: meeting.id, title: meeting.title, meeting_type: meeting.meeting_type, status: meeting.status, ai_access_state: meeting.ai_access_state, confidential: isConfidentialMeeting(meeting) },
     host: host ? { name: host.name, role: host.role } : null,
     capture,
     summary: summary ?? null,
     artifacts: artifacts.results ?? [],
+    builds,
     seated,
     tasks: (cards.results ?? []).map((c) => ({ work_card_id: c.id, title: c.title, state: c.state, owner_name: c.owner_name, chip: chipFor(c.state), block_needed: c.block_needed, created_at: c.created_at })),
     roll_every_ms: ROLL_EVERY_MS,
@@ -241,10 +251,12 @@ export async function buildRoomContext(env: Env, meeting: MeetingRow): Promise<s
 
 /** What the model may propose in reply to a question. Checked in code; every branch is read-only. */
 export const roomReplySchema = z.object({
-  mode: z.enum(["answer", "query", "task", "refuse"]),
+  mode: z.enum(["answer", "query", "task", "refuse", "build"]),
   answer: z.string().trim().max(2000).nullish(),
   query: recordQueryPlanSchema.nullish(),
   task: z.object({ employee: z.string().trim().min(2).max(40), brief: z.string().trim().min(8).max(900) }).nullish(),
+  /** Artifacts on demand: a dashboard, deck or document to be built by the one producer. */
+  build: z.object({ kind: z.enum(ARTIFACT_KINDS), brief: z.string().trim().min(4).max(900), title: z.string().trim().max(120).nullish() }).nullish(),
   reason: z.string().trim().max(400).nullish(),
 });
 export type RoomReply = z.infer<typeof roomReplySchema>;
@@ -281,13 +293,14 @@ export function roomPrompt(args: { name: string; role: string; context: string; 
     "",
     `EMPLOYEES IN THE ROOM: ${args.seated.length ? args.seated.join(", ") : "nobody else yet"}. The host is ${args.hostName}.`,
     "",
-    "YOU CAN DO EXACTLY FOUR THINGS, and you say which as JSON:",
+    "YOU CAN DO EXACTLY FIVE THINGS, and you say which as JSON:",
     '  {"mode":"answer","answer":"…"}  — answer from the context above. Cite the line or record you used. If it is not in the context, say so; never invent a number, a name or a date.',
     '  {"mode":"query","answer":"one line saying what the table shows","query":{…}}  — when they want a report, a table, a chart or a count from the firm\'s record. The query is a PLAN, not SQL:',
     '     {"table":"<one of the tables below>","select":["col",…],"where":[{"column":"col","op":"eq|neq|gt|gte|lt|lte|like|in|is_null|not_null","value":…}],"group_by":"col","metric":{"fn":"count|sum|avg|min|max","column":"col"},"order_by":{"column":"col","dir":"asc|desc"},"limit":25,"chart":"bar|line|pie"}',
     "     Use group_by + metric for a chart. Use chart only when they asked to see it drawn. Tables you may read (name: columns):",
     describeAllowlist(),
     '  {"mode":"task","task":{"employee":"Name","brief":"what to do, in one paragraph"}}  — when they are handing an employee a piece of WORK to go and do (research, pull comparables, draft something, check a cap table). Name the employee they addressed, or the one whose job it is.',
+    '  {"mode":"build","build":{"kind":"dashboard|deck|document","brief":"what it should show, in one paragraph","title":"a title"}}  — when they want something BUILT and KEPT: a dashboard (several tables/charts on one page), a deck (slides), or a document (a memo, a one-pager). It is built from the same tables above by the firm\'s builder and filed on the company or LP this meeting is about. Say the kind they asked for.',
     '  {"mode":"refuse","reason":"…"}  — when the question needs a table not listed above, or would need you to change a record. You cannot record a decision, a commitment, a question, or move a deal: a partner does that after the meeting from the draft.',
     "",
     "Return ONLY the JSON object. Short. No preamble.",
@@ -329,6 +342,8 @@ export interface AskResult {
   artifact: MeetingArtifactRow;
   /** Set when the room opened a card. */
   work_card_id: string | null;
+  /** Set when the room asked for something to be built: the artifact's id, whose state the block polls. */
+  artifact_id?: string | null;
 }
 
 /**
@@ -384,6 +399,23 @@ export async function askRoom(env: Env, identity: FirmUserIdentity, meetingId: s
     await seatEmployee(env, actor, meetingId, emp.id);
   }
 
+  /*
+   * "MAKE THIS A DASHBOARD" NEEDS NO MODEL. When the words say to build something out of what the
+   * room already holds — the tables and charts saved above — the plans are those blocks' own plans,
+   * and the one producer runs them again in code. Zero model calls, and READY before this returns.
+   * Anything else that asks for a build goes through the model, which proposes the kind and brief.
+   */
+  const fromWords = buildFromWords(addressed ? rest : question);
+  if (fromWords) {
+    const plans = await plansFromRoomBlocks(env, meetingId);
+    if (plans.length === 0) {
+      const artifact = await save("answer", `Nothing in the room to build ${KIND_WORDS[fromWords.kind].a} from`, { state: "REFUSED", detail: `Ask the room for a table or a chart first, then say "make this ${KIND_WORDS[fromWords.kind].a}" — or say what it should be about and ${emp.name} will plan it.`, answered_by: emp.name }, null);
+      return { asked: question, via, answered_by: emp.name, artifact, work_card_id: null, artifact_id: null };
+    }
+    const built = await buildFromRoom(env, identity, meeting, { kind: fromWords.kind, brief: question, title: null, plans, asked: question, via, askedOf: emp.name, aiRunId: null });
+    return { asked: question, via, answered_by: emp.name, artifact: built.artifact, work_card_id: null, artifact_id: built.artifact_id };
+  }
+
   const context = await buildRoomContext(env, meeting);
   const prompt = roomPrompt({ name: emp.name, role: emp.role, context, question: addressed ? rest : question, seated: seated.map((s) => s.name), hostName });
 
@@ -413,6 +445,11 @@ export async function askRoom(env: Env, identity: FirmUserIdentity, meetingId: s
   if (reply.mode === "task" && reply.task) {
     const pulled = await pullInEmployee(env, identity, meeting, { employee: reply.task.employee, brief: reply.task.brief, asked: question, via, askedOf: emp.name });
     return { asked: question, via, answered_by: emp.name, artifact: pulled.artifact, work_card_id: pulled.work_card_id };
+  }
+
+  if (reply.mode === "build" && reply.build) {
+    const built = await buildFromRoom(env, identity, meeting, { kind: reply.build.kind, brief: reply.build.brief, title: reply.build.title ?? null, plans: null, asked: question, via, askedOf: emp.name, aiRunId: out.aiRunId });
+    return { asked: question, via, answered_by: emp.name, artifact: built.artifact, work_card_id: null, artifact_id: built.artifact_id };
   }
 
   const text = (reply.answer ?? "").trim() || `${emp.name} had nothing to add.`;
@@ -474,7 +511,10 @@ async function runRecordQuery(
       row_cap: 50,
       cites,
       chart,
-      // What was run — a partner can see exactly which question of the record produced this.
+      // The plan, kept on the block, so "make this a dashboard" can run it again through the one
+      // producer without a model. And what was run — a partner can see exactly which question of
+      // the record produced this.
+      plan: reply.query,
       sql: compiled.sql,
       confidential: compiled.confidential,
       note: rows.length === 0 ? "The record holds nothing matching that." : null,
@@ -484,6 +524,81 @@ async function runRecordQuery(
     asked_via: via,
     work_card_id: null,
   });
+}
+
+// ── Building something to keep: a dashboard, a deck, a document ────────────────────────────────
+
+/** "make this a dashboard", "turn these into a deck", "add this to the deck", "put that in a document". */
+export function buildFromWords(question: string): { kind: "dashboard" | "deck" | "document" } | null {
+  const q = question.trim();
+  if (!/^(?:please\s+)?(?:can you\s+|could you\s+)?(?:make|turn|build|put|add|save|collect|gather)\b[\s\S]{0,40}\b(?:this|that|these|those|it|them|the (?:table|chart|tables|charts|blocks?|results?))\b/i.test(q)) return null;
+  const kind = kindFromWords(q);
+  return kind ? { kind } : null;
+}
+
+/** The plans behind every table and chart block saved on this meeting, newest first, deduplicated. */
+export async function plansFromRoomBlocks(env: Env, meetingId: string): Promise<PanelPlan[]> {
+  const rows = (await env.WP_OS_DB.prepare("SELECT title, kind, body_json FROM meeting_artifact WHERE meeting_id = ?1 AND kind IN ('table','chart') ORDER BY created_at DESC, id DESC LIMIT 12").bind(meetingId).all<{ title: string; kind: string; body_json: string }>()).results ?? [];
+  const seen = new Set<string>();
+  const plans: PanelPlan[] = [];
+  for (const r of rows) {
+    const body = safeJson(r.body_json);
+    if (body.state !== "OK" || !body.plan || typeof body.plan !== "object") continue;
+    const key = JSON.stringify(body.plan);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const chart = typeof body.chart === "string" && (["bar", "line", "pie"] as string[]).includes(body.chart) ? (body.chart as "bar" | "line" | "pie") : "table";
+    plans.push({ title: r.title, chart, plan: body.plan as PanelPlan["plan"] });
+  }
+  return plans.reverse().slice(0, 8);
+}
+
+/**
+ * Door A of the one producer. The artifact is requested through `requestArtifactBuild` — attached
+ * to this meeting AND the company or LP it is about, so it is never only on a meeting — and the
+ * room keeps a LINK BLOCK whose body names the artifact. The block's state is read from the
+ * artifact row on every poll (`roomState.builds`); this file never writes the artifact itself.
+ */
+export async function buildFromRoom(
+  env: Env,
+  identity: FirmUserIdentity,
+  meeting: MeetingRow,
+  input: { kind: "dashboard" | "deck" | "document"; brief: string; title: string | null; plans: PanelPlan[] | null; asked: string; via: "TEXT" | "VOICE"; askedOf: string; aiRunId: string | null },
+): Promise<{ artifact: MeetingArtifactRow; artifact_id: string | null }> {
+  const actor = actorFromIdentity(identity);
+  let status: ArtifactStatus | null = null;
+  let refused: string | null = null;
+  try {
+    const row = await requestArtifactBuild(env, actor, {
+      kind: input.kind,
+      title: input.title,
+      brief: input.brief,
+      about: { meeting_id: meeting.id, company_id: meeting.company_id, lp_record_id: meeting.lp_record_id },
+      door: "ROOM",
+      requestedBy: identity.id,
+      builtBy: input.askedOf,
+      plans: input.plans,
+      privacyLabel: meeting.privacy_label,
+      firmScope: meeting.firm_scope,
+    });
+    status = (await artifactStatuses(env, [row.id]))[row.id] ?? null;
+  } catch (err) {
+    refused = err instanceof ArtifactError ? err.message : `The build could not be opened: ${String(err).slice(0, 200)}`;
+  }
+  if (!status) {
+    const artifact = await saveRoomArtifact(env, actor, meeting.id, { kind: "answer", title: `${KIND_WORDS[input.kind].label} not started`, body: { state: "REFUSED", detail: refused ?? "The build could not be opened.", answered_by: input.askedOf }, ai_run_id: input.aiRunId, asked_text: input.asked, asked_via: input.via, work_card_id: null });
+    return { artifact, artifact_id: null };
+  }
+  const artifact = await saveRoomArtifact(env, actor, meeting.id, {
+    kind: "artifact",
+    title: `${KIND_WORDS[input.kind].label}: ${status.title}`,
+    body: { state: status.state, artifact_id: status.id, kind: input.kind, answered_by: input.askedOf, panels: input.plans?.length ?? null, brief: input.brief },
+    ai_run_id: input.aiRunId,
+    asked_text: input.asked,
+    asked_via: input.via,
+    work_card_id: null,
+  });
+  return { artifact, artifact_id: status.id };
 }
 
 // ── Pulling an employee in for a task ──────────────────────────────────────────────────────────

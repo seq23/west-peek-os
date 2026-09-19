@@ -166,7 +166,27 @@ export function aboutColumnFor(objectId: string): keyof Omit<ArtifactAbout, "lab
 export function kindFromWords(text: string): ArtifactKind | null {
   const t = text.toLowerCase();
   if (/\b(dashboard|dash board)\b/.test(t)) return "dashboard";
-  if (/\b(deck|slides?|presentation|pitch)\b/.test(t)) return "deck";
-  if (/\b(one[- ]?pager|memo|document|doc|write[- ]?up|brief(?:ing)? (?:note|doc))\b/.test(t)) return "document";
+  if (/\b(deck|slides?|slide deck|presentation)\b/.test(t)) return "deck";
+  if (/\b(one[- ]?pager|memo|document|write[- ]?up)\b/.test(t)) return "document";
   return null;
 }
+
+/** The kind words, as one alternation, for the recognisers below. Kept beside `kindFromWords` so they cannot drift. */
+const KIND_WORD = "(?:dashboard|dash board|deck|slides?|slide deck|presentation|one[- ]?pager|memo|document|write[- ]?up)";
+
+/**
+ * Recognise "Wyatt, build me a one-pager on the Sensori round" for what it is, from her words on
+ * the card. Deterministic and cheap; the model's turn comes in `steerFor`, which reads the same
+ * words before any stage runs and can still stop the build.
+ */
+export function artifactAskFromWords(text: string): { kind: ArtifactKind } | null {
+  const t = text.trim();
+  // A build verb, then within a few words the thing to build: "build me a one-pager", "make this a
+  // dashboard", "turn these into a deck", "put together a memo". "Review their deck" is not an ask.
+  const ask = new RegExp(`\\b(?:build|make|put together|prepare|write|draft|create|turn|give me)\\b(?:\\s+(?:me|us))?(?:\\s+(?:this|that|these|those|it|them))?(?:\\s+into)?(?:\\s+(?:a|an|the|one|quick|short|new))*\\s+${KIND_WORD}\\b`, "i");
+  const m = ask.exec(t);
+  if (!m) return null;
+  const kind = kindFromWords(m[0]);
+  return kind ? { kind } : null;
+}
+

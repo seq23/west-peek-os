@@ -176,7 +176,22 @@ export async function resolveFirmUser(request: Request, env: Env): Promise<FirmU
     .bind(email)
     .first<FirmUserRow>();
   if (!user || user.status !== "ACTIVE") return null;
+  return identityForFirmUser(env, user);
+}
 
+/**
+ * The identity a firm user has, from their row — what a request resolves, rebuilt for work that
+ * runs later on their behalf. The artifact producer (services/artifacts.ts) runs a partner's build
+ * on the clock, after her request has ended, and reads the record with HER visibility clause
+ * rather than the system's: a build she asked for may show her nothing she could not open herself.
+ */
+export async function identityForFirmUserId(env: Env, firmUserId: string): Promise<FirmUserIdentity | null> {
+  const user = await env.WP_OS_DB.prepare("SELECT id, email, full_name, status FROM firm_user WHERE id = ?1").bind(firmUserId).first<FirmUserRow>();
+  if (!user || user.status !== "ACTIVE") return null;
+  return identityForFirmUser(env, user);
+}
+
+async function identityForFirmUser(env: Env, user: FirmUserRow): Promise<FirmUserIdentity> {
   const roles = await env.WP_OS_DB.prepare(
     `SELECT r.key AS key
        FROM firm_user_role fur
