@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openDealRecord } from "./support/nav";
 import { queryLocalD1 } from "./support/provision";
 import { addressOf, deliverMail, tinyPdfBase64 } from "./support/mail";
 
@@ -180,9 +180,7 @@ test("a deck emailed about a company we already have is stored, queued, and read
   // And the operator can see the company's record on Dealflow, under the name she would look for.
   await signIn(page);
   await gotoSurface(page, "Dealflow");
-  await page.getByTestId("deal-record-company").selectOption({ label: company });
-  await expect(page.getByTestId("deal-record")).toBeVisible();
-  await expect(page.getByTestId("deal-record-company-name")).toContainText(company);
+  await openDealRecord(page, company);
 });
 
 /*
@@ -376,13 +374,14 @@ test("a forwarded deck is filed under the founder, and the subject prefixes are 
   // On Dealflow the operator finds ONE company under the name she would look for.
   await signIn(page);
   await gotoSurface(page, "Dealflow");
-  const picker = page.getByTestId("deal-record-company");
-  await expect(picker).toBeVisible();
-  // ONE entry, not two. `Fwd: FW: Re: Sensori` matching the company already on the board is the
+  await page.getByTestId("dealflow-filter-ALL").click();
+  await expect(page.getByTestId("deal-list")).toBeVisible();
+  // ONE row, not two. `Fwd: FW: Re: Sensori` matching the company already on the board is the
   // whole point; a second row called "FW: Re: Sensori" is the duplicate CanonicalCompany exists to
-  // prevent. Polled because the register loads after the page paints.
+  // prevent. Asserted on the rows themselves — the picker that used to list the register is gone,
+  // the row's name is the door — and polled because the board loads after the page paints.
   await expect
-    .poll(async () => (await picker.locator("option").allTextContents()).filter((o) => o.includes(company)).length)
+    .poll(async () => (await page.locator('button[data-testid^="deal-company-"]').allTextContents()).filter((o) => o.includes(company)).length)
     .toBe(1);
 });
 

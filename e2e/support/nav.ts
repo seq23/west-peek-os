@@ -83,3 +83,24 @@ export async function openWorkMachinery(page: Page): Promise<void> {
   await page.getByTestId("work-view-machinery").click();
   await expect(jobs, "the machinery must be exactly one click from the desk").toBeVisible();
 }
+
+/**
+ * Open a company's deal record on Dealflow, the way a person does: press its name on the row.
+ *
+ * The record picker `<select>` under the pipeline is gone (design/DEALS_SECTION_DESIGN.md §1.2 #7:
+ * "the row's name is the door"), so a journey that used to `selectOption` a company now narrows
+ * the list to Everything — a passed or invested deal is not on the Live chip — and presses the
+ * row. The record opens under the pipeline on its first face.
+ */
+export async function openDealRecord(page: Page, companyName: string): Promise<void> {
+  await page.getByTestId("dealflow-filter-ALL").click();
+  await page.locator('button[data-testid^="deal-company-"]', { hasText: companyName }).first().click();
+  await expect(page.getByTestId("deal-record")).toBeVisible();
+  await expect(page.getByTestId("deal-record-company-name")).toContainText(companyName);
+}
+
+/** Pick a face of the open deal record: standing · deal · known · committee · history. */
+export async function openDealFace(page: Page, face: "standing" | "deal" | "known" | "committee" | "history"): Promise<void> {
+  await page.getByTestId(`deal-face-${face}`).click();
+  await expect(page.getByTestId(`deal-face-${face}`)).toHaveAttribute("aria-selected", "true");
+}

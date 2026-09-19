@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openDealFace, openDealRecord } from "./support/nav";
 
 /**
  * THE FUND ACTUALLY BUYS SOMETHING, and a `position` exists afterwards.
@@ -75,8 +75,9 @@ test("a partner books an investment end to end, and the fund holds a position af
   await page.getByTestId("dealflow-add-submit").click();
   await expect(page.getByTestId("dealflow-message")).toContainText(companyName);
 
-  await page.getByTestId("deal-record-company").selectOption({ label: companyName });
+  // Adding the company opened its record on the terms face, where the ladder is.
   await expect(page.getByTestId("deal-record")).toBeVisible();
+  await expect(page.getByTestId("deal-face-deal")).toHaveAttribute("aria-selected", "true");
   const panel = page.getByTestId("record-investment");
   await expect(panel).toBeVisible();
 
@@ -146,7 +147,8 @@ test("a partner books an investment end to end, and the fund holds a position af
 
   // ── Rung 5: BOOK IT. This is the step that creates the position, and the only one that does. ──
   await gotoSurface(page, "Dealflow");
-  await page.getByTestId("deal-record-company").selectOption({ label: companyName });
+  await openDealRecord(page, companyName);
+  await openDealFace(page, "deal");
   const booked = page.getByTestId("record-investment");
   await booked.getByTestId(`txn-receipt-${txnId}`).fill(cardId);
   await booked.getByTestId(`txn-execute-${txnId}`).click();
@@ -194,7 +196,8 @@ test("a partner books an investment end to end, and the fund holds a position af
    * absent from a screen with nothing booked on it, which is correct behaviour.
    */
   await gotoSurface(page, "Dealflow");
-  await page.getByTestId("deal-record-company").selectOption({ label: companyName });
+  await openDealRecord(page, companyName);
+  await openDealFace(page, "deal");
   const panelAfter = page.getByTestId("record-investment");
   const undo = panelAfter.getByTestId(`txn-void-${txnId}`);
   await expect(undo, "a booking must be reversible from the screen that made it").toBeVisible();
