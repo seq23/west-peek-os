@@ -11,7 +11,7 @@ import { PortfolioAllocation } from "./PortfolioAllocation";
  * owner-approved 18 Sep 2026).
  *
  * WHAT WAS WRONG (§1.4, the audit): "Book it" did not exist — the holdings notice sent a partner to
- * another screen and a receipt id to paste; marking was a separate form with a `<select>` of
+ * another screen and a receipt id to paste; marking was a separate form with a drop-down of
  * holdings; two sub-tabs split one object; a holding was nine facts in one wrapped sentence;
  * concentration, per-company reserves and the stage were absent. The owner's words: "there needs to
  * be an easy intuitive way to book a company as a real Fund I position and the MPs should be able
@@ -1027,10 +1027,15 @@ type MoneyState = "default" | "error" | "success";
  * only the colour changes, so a field flipping state never shifts the layout. Three explicit
  * branches rather than a computed string, because `validate:css-classes` reads literal classNames.
  */
-const MoneyInput = forwardRef<HTMLInputElement, { state: MoneyState } & React.InputHTMLAttributes<HTMLInputElement>>(function MoneyInput({ state, ...rest }, ref) {
-  if (state === "error") return <input {...rest} ref={ref} className="input-money in-error" inputMode="decimal" />;
-  if (state === "success") return <input {...rest} ref={ref} className="input-money in-success" inputMode="decimal" />;
-  return <input {...rest} ref={ref} className="input-money" inputMode="decimal" />;
+const MoneyInput = forwardRef<HTMLInputElement, { state: MoneyState; label: string } & React.InputHTMLAttributes<HTMLInputElement>>(function MoneyInput(
+  { state, label, ...rest },
+  ref,
+) {
+  // `label` is the visible <label> text the caller wraps this in, repeated as the accessible name
+  // so the control is announced even where a wrapper is composed away.
+  if (state === "error") return <input {...rest} ref={ref} aria-label={label} className="input-money in-error" inputMode="decimal" />;
+  if (state === "success") return <input {...rest} ref={ref} aria-label={label} className="input-money in-success" inputMode="decimal" />;
+  return <input {...rest} ref={ref} aria-label={label} className="input-money" inputMode="decimal" />;
 });
 
 interface SecurityClass {
@@ -1196,6 +1201,7 @@ function BookItForm({
           Price per share
           <MoneyInput
             state={inputState("price", price.trim().length > 0)}
+            label="Price per share"
             data-testid={`book-price-${h.company_id}`}
             value={price}
             aria-invalid={errors.price ? true : undefined}
@@ -1208,6 +1214,7 @@ function BookItForm({
           Share count
           <MoneyInput
             state={inputState("quantity", quantity.trim().length > 0)}
+            label="Share count"
             data-testid={`book-quantity-${h.company_id}`}
             value={quantity}
             aria-invalid={errors.quantity ? true : undefined}
@@ -1329,7 +1336,7 @@ function MarkForm({ positionId, onDone, onCancel }: { positionId: string; onDone
       <div className="form-row">
         <label className="field">
           Worth now
-          <MoneyInput ref={first} state={error && !mark.value.trim() ? "error" : "default"} data-testid="mark-value" value={mark.value} aria-invalid={error && !mark.value.trim() ? true : undefined} onChange={(e) => setMark((m) => ({ ...m, value: e.target.value }))} placeholder="2500000" />
+          <MoneyInput ref={first} label="Worth now" state={error && !mark.value.trim() ? "error" : "default"} data-testid="mark-value" value={mark.value} aria-invalid={error && !mark.value.trim() ? true : undefined} onChange={(e) => setMark((m) => ({ ...m, value: e.target.value }))} placeholder="2500000" />
           <span className="field-help">&nbsp;</span>
         </label>
         <label className="field">
@@ -1424,7 +1431,7 @@ function ReserveForm({
       <div className="form-row">
         <label className="field">
           Reserve for it
-          <MoneyInput ref={first} state={error ? "error" : "default"} data-testid="reserve-amount" value={amount} aria-invalid={error ? true : undefined} onChange={(e) => setAmount(e.target.value)} placeholder="250000" />
+          <MoneyInput ref={first} label="Reserve for it" state={error ? "error" : "default"} data-testid="reserve-amount" value={amount} aria-invalid={error ? true : undefined} onChange={(e) => setAmount(e.target.value)} placeholder="250000" />
           <span className="field-help">{current ? `Now ${money(current.amount, "USD")} as of ${day(current.as_of)}` : "Follow-on capital earmarked for this company"}</span>
         </label>
         <label className="field">
