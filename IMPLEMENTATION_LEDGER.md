@@ -5823,3 +5823,67 @@ binding's input shape is the documented one).
 deployed origin, Cloudflare Access allowing the add-on's iframe (the same session cookie), and the
 Phase Meet `meet_conference_id` on `meeting` so the panel can be opened by conference rather than by
 meeting id.
+
+## The morning brief arrives (19 Sep 2026)
+
+**What production showed, CONFIRMED from the rows.** Saturday 19 Sep: no `intelligence_report` row
+for either partner between 06:15 and 09:29 ET; every scheduled tick read sources, because both
+`partner_intelligence_profile` rows carried `weekends = 0` — the column default, never chosen. Her
+press at 13:29:30Z gathered and read the market in six seconds, then the write stage's model call
+ran INSIDE her HTTP request on `deepseek/deepseek-v4-flash-0731:free`; the request was cut and the
+`ai_run` was still RUNNING at 13:45 with the row at GENERATING under a ten-minute lease. Her second
+press met that lease ("Another run holds it"). The day before, both briefs FAILED "incomplete" three
+times each: twelve calls, all to `@cf/ibm-granite/granite-4.0-h-micro` under the free-first ladder,
+every one exactly 256 output tokens; Sonnet — 38 of 38 accepted briefs 20 Aug–17 Sep — was never
+reached because a truncated reply is a completed run to the chain.
+
+**The decision: AUTO every morning PLUS on demand** (the model already in place, kept). Evidence: 44
+weekday briefs owed 20 Aug–18 Sep, 38 arrived (86%); 62 of 67 synthesis calls were the schedule's,
+5 were a person's button (3 hers, 3 of those on days the schedule had not delivered); her three
+complaints in 30 days (22 Aug, 18 Sep, 19 Sep) were each about the AUTOMATIC brief not being there,
+including a Saturday. On-demand-only was rejected: it converts every morning into a 4–5 minute wait
+she must start herself, and the evidence says she reads what arrives and presses only when it does
+not. Cost, measured: $0.12–$0.30 a brief on Sonnet (mean $0.20, 51 runs), ~$0.41/day for both
+partners = 16% of the $2.50 cap; the brief lane was $6.70 of September's $9.61 to the 18th. The
+free lanes have written zero acceptable briefs in thirteen attempts, so the write call now leads on
+its routing pin (`leadOnPolicy`); FREE_ONLY still stops it with a named reason.
+
+**Built.** Migration 0211 (weekends on for stored profiles; `requested_at`, `requested_by`,
+`retry_after` on the row; the sweep job renamed for what it does). `serveBrief` on EVERY tick, both
+`runDueJobs` branches, walking every ready stage inside one invocation — a brief owed at 06:15 is
+READY by ~06:20 (gather ~2s, market ~10s, write 98–281s measured) and a press is picked up within a
+minute; the sweep job builds nothing. The button is a request: `POST /generate` records it and
+returns the named state at once (202; 200 `already: true` while moving); `GET /status` returns the
+state from `shared/intelligence/briefRunState.ts` — arrived · requested · running · queued ·
+retrying · failed_out · scheduled · off · stalled — each with a sentence, what happens next, elapsed
+against the MEASURED usual (median of the last 30 completed write calls + 75s), and the button's
+label and enabled flag. A FAILED row carries `retry_after` (+20 min, from the caller's clock) and a
+notification addressed to her — once for "retrying at HH:MM", once for "nothing more today; tomorrow
+at 06:15". The write lease is derived from `CHAIN_BUDGET_MS` (two walks + 4 min = 20). `stage_at`,
+`started_at`, `retry_after` are written from the caller's clock, never SQLite's — a requested row
+was being swept as "abandoned" under a test clock because the two disagreed. The health board gains
+the 08:00 sentinel: past `earliest_start + 105 min`, no row for today is DOWN "no brief and no
+explanation". `expectedOutputTokens` 8,000 → 24,000 (measured median 17,415, p90 22,969, max
+27,536). Home's band: state line with live dot and progress track, the examined line (built at · by
+whom · items → events → considered · model · requested by you at), one button with the states above.
+
+**Also in this PR (coordinator's addition).** Meetings: a SCHEDULED meeting whose time + 90 min has
+passed is never "Coming up"; synced rows settle to HELD ("held, nothing on the record") from the sync
+and the list route; one shared split (`shared/meetings/pastMeetings.ts`) for server and page.
+
+**Proof.** `tests/briefRunState.test.ts` (224 row/schedule combinations, one arrival), 
+`tests/briefServed.test.ts` (the tick walks a Saturday brief to READY; a request is served on a day
+the schedule skips; a second press is refused from the row; a lane forced to fail leaves the reason,
+the retry time and the notice; the third failure says nothing more today; the numbers are derived),
+`tests/pastMeetings.test.ts`; strengthened, never loosened: `jobs.test.ts` (the sweep job never
+builds a brief; the tick's `_morning_brief` line), `briefTick.test.ts` (the retry waits for
+`retry_after`), `dailyIntelligence.test.ts` (weekends on unless a partner says otherwise, both
+directions), `briefTerminality.test.ts`, `meetingsLayout.test.ts`. `validate:brief-lands` (new,
+311 items, nine restored pre-fix shapes) plus `validate:brief-arrives` and `validate:brief-ends-stated`
+strengthened. `e2e/p62`: press → named state → second press refused → tick → arrived or the stated
+reason with its retry time.
+
+**Not done, and why.** Sonnet's reply is ~75% reasoning tokens (out_len ≈ 21k chars ≈ 6k tokens
+against 17k output tokens); a smaller thinking budget would cut the brief's cost 2–3× — a quality
+decision for the owner, recorded here, not taken. A cheaper paid long-form lane is UNPROVEN on this
+report shape; the one measured truth is Sonnet 38/38, free 0/13.
