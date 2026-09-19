@@ -767,6 +767,8 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           */}
           <DailyBriefPanel
             compact
+            viewerId={me.id}
+            preparedBy={chiefOfStaff.name}
             collapsed={briefCollapsed}
             onToggleCollapsed={(next) => {
               setBriefCollapsed(next);

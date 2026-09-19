@@ -6164,3 +6164,22 @@ body {
   .face-tab,
   .ptt { transition: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE MORNING BRIEF'S STATE LINE (19 Sep 2026).
+   The band's notice carries the named state from the row — arrived, requested,
+   running, queued, retrying, failed out, scheduled, off, stalled — as one strong
+   line with the live dot beside it while a stage is moving, a muted "what next"
+   under it, and the existing `.progress-track` for elapsed against the measured
+   usual. Tones are the existing notice tones; nothing here declares colour.
+   ══════════════════════════════════════════════════════════════════════════ */
+.brief-state-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: 0;
+}
+.brief-state-line strong { font-weight: 600; }
+.notice > .brief-state-line + .muted { margin: var(--space-2xs) 0 0; }
+.notice > .progress-track { margin-top: var(--space-sm); }
+.notice[data-kind="running"] .progress-fill { background: var(--wp-ink-2); }
