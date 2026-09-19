@@ -58,16 +58,20 @@ test("journey 1 — MP Home → intelligence item → its source → follow-up r
    * the quiet roll if that is where the module is, and press Open on it.
    */
   const module = page.getByTestId("home-module-intelligence");
+  let quiet = false;
   if (!(await module.isVisible().catch(() => false))) {
     const roll = page.getByTestId("home-quiet-roll");
     await expect(roll, "the module is neither a card nor in the quiet roll — it is missing from Home").toContainText("nothing new since you last looked");
     await page.getByTestId("home-quiet-roll-toggle").click();
+    quiet = true;
   }
   await expect(module).toBeVisible();
-  await expect(module).toContainText("What moved overnight");
+  // A fresh card leads with what moved; a quiet one says since when nothing has, and still opens.
+  if (quiet) await expect(module).toContainText("nothing new since");
+  else await expect(module).toContainText("What moved overnight");
 
   // Drill into the module and read the item's provenance on the surface that owns it.
-  await module.getByRole("button", { name: "Open" }).click();
+  await module.getByRole("button", { name: quiet ? "Open anyway" : "Open" }).click();
   const card = page.locator('[data-testid^="intel-item-"]', { hasText: headline });
   await card.locator('[data-testid^="intel-detail-"]').click();
   await expect(card.locator('[data-testid^="intel-citations-"]')).toContainText("Broker call, journey 1");
