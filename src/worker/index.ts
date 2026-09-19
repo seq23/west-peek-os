@@ -194,6 +194,22 @@ import {
 import { handleListHireCandidates } from "./services/productionsHire";
 import { handleRunPreview } from "./services/preview";
 import { handleRunMeetingPrep } from "./services/meetingPrep";
+import { handleGetMeetingBrief } from "./services/meetingBrief";
+import {
+  handleApproveMeetingAfter,
+  handleAskOfferLedger,
+  handleDecideStageProposal,
+  handleDiscardMeetingAfter,
+  handleDraftMeetingAfter,
+  handleGetMeetingAfter,
+  handleHonourCommitment,
+  handleListMeetingArtifacts,
+  handleProposeStageChange,
+  handleRecordDecision,
+  handleRecordOpenQuestion,
+  handleResolveOpenQuestion,
+  handleSaveMeetingArtifact,
+} from "./services/meetingAfter";
 import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/deck";
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
@@ -1084,6 +1100,25 @@ const router = new Router()
   .post("/api/meeting-commitments/:id/convert", handleConvertCommitment)
   .post("/api/meetings/:id/debriefs", handleCreateDebrief)
   .post("/api/meetings/:id/claim-candidates", handlePromoteToClaim)
+  // === Phase B: meeting model ===
+  // A meeting is one object with three faces. BEFORE: the brief (built by POST …/prep, read here).
+  // AFTER: what came out — decisions, commitments on both sides, open questions, a stage PROPOSAL,
+  // saved artifacts — and the AI draft that is the only door in for a model, approved by a person.
+  .get("/api/meetings/:id/brief", handleGetMeetingBrief)
+  .get("/api/meetings/:id/after", handleGetMeetingAfter)
+  .post("/api/meetings/:id/decisions", handleRecordDecision)
+  .post("/api/meetings/:id/open-questions", handleRecordOpenQuestion)
+  .post("/api/meeting-open-questions/:id/resolve", handleResolveOpenQuestion)
+  .post("/api/meeting-commitments/:id/honour", handleHonourCommitment)
+  .post("/api/meetings/:id/stage-proposals", handleProposeStageChange)
+  .post("/api/meeting-stage-proposals/:id/decide", handleDecideStageProposal)
+  .get("/api/meetings/:id/artifacts", handleListMeetingArtifacts)
+  .post("/api/meetings/:id/artifacts", handleSaveMeetingArtifact)
+  .post("/api/meetings/:id/after-draft", handleDraftMeetingAfter)
+  .post("/api/meeting-after-drafts/:id/approve", handleApproveMeetingAfter)
+  .post("/api/meeting-after-drafts/:id/discard", handleDiscardMeetingAfter)
+  .get("/api/meeting-ledger/ask-offer", handleAskOfferLedger)
+  // === end Phase B ====
   // P8 — portfolio monitoring: dated metrics, deterministic alerts, support.
   .post("/api/portfolio/metric-definitions", handleCreateMetricDefinition)
   .get("/api/portfolio/metric-definitions", handleListMetricDefinitions)

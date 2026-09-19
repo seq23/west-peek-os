@@ -235,6 +235,8 @@ export interface CreateWorkCardInput {
    * person filled in always says something, because the box is always on the form.
    */
   preview_first?: boolean | null;
+  /** Migration 0199. The meeting this card was raised from, so it returns to it. */
+  meeting_id?: string | null;
 }
 
 /** Shared creation path (HTTP handler and capture routing). Authorizes internally. */
@@ -447,9 +449,9 @@ export async function createWorkCardInternal(
     `INSERT INTO work_card
        (id, capture_id, title, description, domain_id, machine_id, owner_type, owner_id,
         state, priority, privacy_label, firm_scope, next_action, due_at, created_by, prompt,
-        model_access, audience, result_recipient, preview_first, preview_owner_id)
+        model_access, audience, result_recipient, preview_first, preview_owner_id, meeting_id)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'OPEN', ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-             ?18, ?19, ?20)`,
+             ?18, ?19, ?20, ?21)`,
   )
     .bind(
       id,
@@ -485,6 +487,7 @@ export async function createWorkCardInternal(
        * preview. It only says which of the two partners asked to see this one.
        */
       input.preview_first === true ? (partnerByFirmUserId(identity.id)?.firmUserId ?? null) : null,
+      input.meeting_id ?? null,
     )
     .run();
 

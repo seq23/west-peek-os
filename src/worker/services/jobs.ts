@@ -352,6 +352,29 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   /*
+   * The night-before meeting briefs (Phase B, migration 0200). Same DAILY_AT shape as
+   * `wednesday_prep`, dispatched by job_key for the same reason. One brief per SCHEDULED meeting in
+   * the next 36 hours that has none; a meeting whose brief could not be built is a CRITICAL
+   * notification and a FAILED run. A window with no meetings is SUCCEEDED and says how many it
+   * examined — the named stop, not the inert one.
+   */
+  if (job.job_key === "meeting_brief") {
+    const { runMeetingBriefs } = await import("./meetingBrief");
+    const out = await runMeetingBriefs(env, actor, now);
+    for (const b of out.built) artifacts.push({ kind: "MEETING_PREP", ref_type: "meeting", ref_id: b.meetingId });
+    const unwritten = out.built.filter((b) => !b.whyWritten).length;
+    return {
+      status: out.failures.length > 0 ? "FAILED" : "SUCCEEDED",
+      summary:
+        `${out.examined} meeting(s) in the next 36h examined; ${out.built.length} brief(s) built` +
+        `${out.alreadyBriefed > 0 ? `, ${out.alreadyBriefed} already had one` : ""}` +
+        `${unwritten > 0 ? ` (${unwritten} with no why-line — the brief says so)` : ""}` +
+        `${out.failures.length > 0 ? `. FAILED: ${out.failures.map((f) => `"${f.title}" — ${f.detail}`).join("; ")}` : "."}`,
+      artifacts,
+    };
+  }
+
+  /*
    * Preston rebuilding the deck. Assignable rather than a command she has to run.
    *
    * ON REQUEST, and deliberately: a deck is rebuilt when the records move or when a partner asks,
