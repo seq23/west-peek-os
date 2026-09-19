@@ -85,13 +85,25 @@ describe("Meetings reads the order a partner asks in", () => {
     expect(code(MEETINGS)).not.toContain("Where a deal stands with the committee");
   });
 
-  it("sorts what is coming up by the calendar, soonest first, and what happened newest first", () => {
-    // §1.1 #4: the list route orders by created_at; the page must not print that order.
+  it("sorts what is coming up by the calendar, soonest first, and what happened newest first — through the ONE shared split", () => {
+    /*
+     * §1.1 #4: the list route orders by created_at; the page must not print that order.
+     * STRICTER SINCE 19 Sep 2026: the page may not filter or sort the two bands itself at all. It
+     * calls `splitMeetings` from `@shared/meetings/pastMeetings`, which the server also reads, so
+     * "a past-dated SCHEDULED meeting is never coming up" is one rule in one place — the page's
+     * own `status === "SCHEDULED"` filter is what listed the 16th and the 18th as upcoming on the
+     * 19th. The two sorts and the end-of-line fallback are pinned on the shared module.
+     */
     const c = code(MEETINGS);
-    expect(c).toMatch(/status === "SCHEDULED"\)\.sort\(\(a, b\) => timeOf\(a\.scheduled_at, Infinity\) - timeOf\(b\.scheduled_at, Infinity\)\)/);
-    expect(c).toMatch(/status !== "SCHEDULED"\)\.sort\(\(a, b\) => timeOf\(b\.occurred_at \?\? b\.scheduled_at, -Infinity\) - timeOf\(a\.occurred_at \?\? a\.scheduled_at, -Infinity\)\)/);
+    expect(c).toMatch(/const \{ upcoming, past \} = useMemo\(\(\) => splitMeetings\(rows, new Date\(\)\), \[rows\]\);/);
+    expect(c, "the page filters the bands itself again").not.toMatch(/rows\.filter\(\(m\) => m\.status [!=]== "SCHEDULED"\)/);
+    const shared = code(readFileSync(new URL("../src/shared/meetings/pastMeetings.ts", import.meta.url), "utf8"));
+    expect(shared).toMatch(/isUpcoming\(m, now\)\)\.sort\(\(a, b\) => timeOf\(a\.scheduled_at, Infinity\) - timeOf\(b\.scheduled_at, Infinity\)\)/);
+    expect(shared).toMatch(/!isUpcoming\(m, now\)\)[\s\S]{0,40}\.sort\(\(a, b\) => timeOf\(b\.occurred_at \?\? b\.scheduled_at, -Infinity\) - timeOf\(a\.occurred_at \?\? a\.scheduled_at, -Infinity\)\)/);
     // A row with no time goes LAST in both bands — the fallbacks are the ends of the number line.
-    expect(c).toContain("function timeOf(value: string | null, fallback: number): number");
+    expect(shared).toContain("function timeOf(value: string | null, fallback: number): number");
+    // And "upcoming" is SCHEDULED *and not past*, never SCHEDULED alone.
+    expect(shared).toMatch(/return m\.status === "SCHEDULED" && !isPastMeeting\(m, now\);/);
   });
 
   it("sends the reader to Dealflow for the committee, and carries none of it here", () => {

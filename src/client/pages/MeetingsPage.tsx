@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useRef, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { MEETING_TYPES, meetingType } from "@shared/meetings/meetingTypes";
+import { HELD_NOTHING_ON_THE_RECORD, isPastMeeting, splitMeetings } from "@shared/meetings/pastMeetings";
 import { LiveHelpPanel } from "./LiveHelpPanel";
 import { RoomPanel } from "./RoomPanel";
 import { CloseoutPanel } from "./CloseoutPanel";
@@ -167,9 +168,11 @@ function whenOnMasthead(value: string | null, now: Date): string {
 }
 
 /** Where a meeting stands, in words. Lower-casing a stored value is still printing it. */
-function statusInWords(status: string | null): string {
+function statusInWords(status: string | null, m?: { scheduled_at: string | null; occurred_at: string | null }): string {
   switch (status) {
-    case "SCHEDULED": return "on the calendar";
+    // A SCHEDULED row whose time has passed is on the record with nothing captured — the calendar
+    // says it happened, no transcript says what came of it. Never "on the calendar".
+    case "SCHEDULED": return m && isPastMeeting({ status, scheduled_at: m.scheduled_at, occurred_at: m.occurred_at }, new Date()) ? HELD_NOTHING_ON_THE_RECORD : "on the calendar";
     case "HELD": return "it happened";
     case "CANCELLED": return "it did not happen";
     default: return "no state recorded";
@@ -619,7 +622,7 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
           <p className="deal-name">{row.title}</p>
           <p className="deal-sub">
             {type?.label ?? row.meeting_type} · {whenShort(row.occurred_at ?? row.scheduled_at)} ·{" "}
-            <span data-testid="meeting-status">{statusInWords(m?.status ?? row.status)}</span> · {sourceInWordsRow(row)}
+            <span data-testid="meeting-status">{statusInWords(m?.status ?? row.status, m ?? row)}</span> · {sourceInWordsRow(row)}
           </p>
         </div>
         {row.meet_link && <JoinOnMeet meeting={row} />}
@@ -738,14 +741,12 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
    * reasons (the archive shelf, the 500 cap); a partner reads a calendar. Soonest first for what is
    * coming, newest first for what happened; a row with no time at all goes last, never first.
    */
-  const upcoming = useMemo(
-    () => rows.filter((m) => m.status === "SCHEDULED").sort((a, b) => timeOf(a.scheduled_at, Infinity) - timeOf(b.scheduled_at, Infinity)),
-    [rows],
-  );
-  const past = useMemo(
-    () => rows.filter((m) => m.status !== "SCHEDULED").sort((a, b) => timeOf(b.occurred_at ?? b.scheduled_at, -Infinity) - timeOf(a.occurred_at ?? a.scheduled_at, -Infinity)),
-    [rows],
-  );
+  /*
+   * AND A MEETING WHOSE TIME HAS PASSED IS NEVER "COMING UP" (19 Sep 2026). The sync imports a
+   * week back and writes every event SCHEDULED, so this list showed the 16th and the 18th as
+   * upcoming on the 19th. One rule, shared with the server: `@shared/meetings/pastMeetings`.
+   */
+  const { upcoming, past } = useMemo(() => splitMeetings(rows, new Date()), [rows]);
   const chosen = meetingType(type);
   const openRow = open ? rows.find((m) => m.id === open) ?? null : null;
   const masthead = mastheadFor(upcoming, past, meetings.loading && rows.length === 0, new Date());
@@ -1049,9 +1050,3 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
   );
 }
 
-/** A parseable time as a number, or the given fallback so a missing time sorts to the end. */
-function timeOf(value: string | null, fallback: number): number {
-  if (!value) return fallback;
-  const t = new Date(value).getTime();
-  return Number.isNaN(t) ? fallback : t;
-}

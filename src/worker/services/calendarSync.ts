@@ -3,7 +3,7 @@ import { appendEvent } from "../events";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
-import { addParticipant, transitionMeeting } from "./meetings";
+import { addParticipant, settlePastMeetings, transitionMeeting } from "./meetings";
 import { CALENDAR_SOURCES, type CalendarSource } from "../../shared/meetings/calendarSources";
 import {
   eventFromCalendarApi,
@@ -249,6 +249,9 @@ export async function syncCalendar(env: Env, source: CalendarSource, deps: Calen
   }
   const plan = planCalendarSync(read.events, await existingSynced(env, source), await knownContacts(env, source));
   const applied = await applyPlan(env, actor, source, plan, now);
+  // What the window brought in from the past — and anything already here whose time has gone —
+  // is HELD with nothing on the record, never "coming up".
+  await settlePastMeetings(env, now, source.firmScope).catch(() => ({ settled: [] }));
   const detail =
     `${read.via === "ics" ? `via iCal (API failed: ${read.apiFailure}); ` : ""}` +
     `${read.events.length} event(s) read, ${applied.created} created, ${applied.updated} updated, ${applied.cancelled} cancelled, ` +
