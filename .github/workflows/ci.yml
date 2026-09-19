@@ -382,6 +382,13 @@ jobs:
       - name: A page guide names what the page emits
         run: npm run validate:page-guides
 
+      # Home, rebuilt (design/HOME_DESIGN.md, approved 19 Sep 2026): the masthead's answer and the
+      # Waiting pill are ONE count, the brief never renders twice, nothing approves in a batch, the
+      # brief band names no clock, the rail never opens on an empty band, one orange control, the
+      # removals have homes, and every control the Home journey drives is declared (Rule 0).
+      - name: Home answers with one count
+        run: npm run validate:home
+
       - name: Build client
         run: npm run build
 

@@ -143,3 +143,31 @@ describe("Open leaves a mark, and the module goes quiet until something arrives"
     }
   });
 });
+
+/**
+ * ONE COUNT, EVERY ROW (design/HOME_DESIGN.md §3.1, 19 Sep 2026). The approvals module used to hand
+ * Home the first eight cards and a `count` of all of them, and Home — which counts the rows it is
+ * given — said "Eight things are waiting" over nine pending cards, with the ninth undecidable from
+ * the page. Every card she can decide is a row, and `count` equals the rows.
+ */
+describe("the Waiting band is handed every card she can decide", () => {
+  it("renders the ninth card, and the count is the rows", async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    for (let i = 0; i < 11; i++) {
+      await t.db
+        .prepare(
+          `INSERT INTO approval_card (id, action_key, object_type, object_id, title, requested_by_type, requested_by_id, required_approver_roles_json, state, created_at)
+           VALUES (?1, 'governance.policy_change', 'provider_registry', 'anthropic', ?2, 'HUMAN', 'fu_scooter_taylor', '["MANAGING_PARTNER"]', 'pending_review', ?3)`,
+        )
+        .bind(`apc_nine_${i}`, `card ${i} of eleven`, `${day}T0${i % 10}:0${i}:00.000Z`)
+        .run();
+    }
+    const home = await buildHome(env, SEQUOIA);
+    const approvals = home.modules.find((m) => m.key === "approvals")!;
+    const ids = approvals.items.map((c) => String(c.id)).filter((id) => id.startsWith("apc_nine_"));
+    expect(ids.length, "every pending card she can decide is a row on Home").toBe(11);
+    expect(ids).toContain("apc_nine_8");
+    expect(ids).toContain("apc_nine_10");
+    expect(approvals.count, "the count is the rows, never a count over a capped list").toBe(approvals.items.length);
+  });
+});

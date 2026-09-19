@@ -175,7 +175,12 @@ export function useApi<T>(
             setTimeout(() => attempt(n + 1), 300 * (n + 1));
             return;
           }
-          setState({ data, status, loading: false });
+          // DATA MEANS THE SHAPE THE PAGE ASKED FOR. A refusal (401, 403), a miss (404) or a
+          // fault (5xx) carries `{error, detail}`, and a page that read `data.deliverables.map`
+          // off one threw and unmounted the whole app (19 Sep 2026, the p42 sign-out race — see
+          // SurfaceBoundary.tsx). The status still says what happened; `data` is only ever a 2xx
+          // body, so `data ?` means "the read succeeded" on every page.
+          setState({ data: status >= 200 && status < 300 ? data : null, status, loading: false });
         })
         .catch(() => {
           if (!cancelled) setState({ data: null, status: 0, loading: false });

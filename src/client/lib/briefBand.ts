@@ -22,6 +22,8 @@ export interface BriefStatusResponse {
   usualSeconds: number | null;
   actAt: string | null;
   button: { label: string; enabled: boolean };
+  slow?: boolean;
+  stages?: Array<{ key: string; words: string; state: "done" | "now" | "todo" }>;
   report_id: string | null;
   status: string | null;
   attempts: number;

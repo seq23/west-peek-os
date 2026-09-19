@@ -77,7 +77,8 @@
     "validate:voice-is-read-only": "node scripts/validate/nothing-writes-from-voice.mjs && node scripts/validate/nothing-writes-from-voice.mjs --self-test",
     "validate:room-answers": "node scripts/validate/a-room-question-is-answered-from-the-record.mjs && node scripts/validate/a-room-question-is-answered-from-the-record.mjs --self-test",
     "validate:booking": "node scripts/validate/a-position-is-opened-only-by-approval.mjs && node scripts/validate/a-position-is-opened-only-by-approval.mjs --self-test",
-    "validate:page-guides": "node scripts/validate/a-guide-names-what-the-page-emits.mjs && node scripts/validate/a-guide-names-what-the-page-emits.mjs --self-test"
+    "validate:page-guides": "node scripts/validate/a-guide-names-what-the-page-emits.mjs && node scripts/validate/a-guide-names-what-the-page-emits.mjs --self-test",
+    "validate:home": "node scripts/validate/home-answers-with-one-count.mjs && node scripts/validate/home-answers-with-one-count.mjs --self-test"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",

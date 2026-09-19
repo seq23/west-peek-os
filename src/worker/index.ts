@@ -98,6 +98,7 @@ import { handleSystemHealth } from "./services/health";
 import {
   handleClearSilencedAttention,
   handleDismissAttention,
+  handleDismissManyAttention,
   handleListSilencedAttention,
 } from "./services/attention";
 import { handleListDomains, handleListMachines } from "./services/registry";
@@ -178,6 +179,8 @@ import {
 import { handleGenerateImage } from "./services/imageGeneration";
 import {
   handleAcknowledgeDeliverable,
+  handleAcknowledgeMany,
+  handleDismissMany,
   handleDeliverableFeedback,
   handleDismissDeliverable,
   handleDownloadDeliverable,
@@ -737,6 +740,10 @@ const router = new Router()
   .get("/api/deliverables", handleListDeliverables)
   .get("/api/deliverables/:id/download", handleDownloadDeliverable)
   .post("/api/deliverables/:id/email", handleEmailDeliverable)
+  // === Home overhaul ===
+  .post("/api/deliverables/acknowledge-many", handleAcknowledgeMany)
+  .post("/api/deliverables/dismiss-many", handleDismissMany)
+  .post("/api/attention/dismiss-many", handleDismissManyAttention)
   .post("/api/deliverables/:id/acknowledge", handleAcknowledgeDeliverable)
   .post("/api/deliverables/:id/dismiss", handleDismissDeliverable)
   .get("/api/deliverables/:id/feedback", handleListDeliverableFeedback)

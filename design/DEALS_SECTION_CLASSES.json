@@ -29,6 +29,10 @@
     "fund-strategy": {
       "landed": true,
       "spec": "design/FUND_STRATEGY_DESIGN.md §5 — the door, the pace, the gap rows, the policy lines, Amend, the headroom"
+    },
+    "home": {
+      "landed": true,
+      "spec": "design/HOME_DESIGN.md §5 — the rail, the foot line, select-many, the brief's stage strip"
     }
   },
   "classes": {
@@ -39,7 +43,8 @@
       "companies",
       "thesis",
       "secondaries",
-      "fund-strategy"
+      "fund-strategy",
+      "home"
     ],
     "masthead-date": [
       "meetings",
@@ -48,7 +53,8 @@
       "companies",
       "thesis",
       "secondaries",
-      "fund-strategy"
+      "fund-strategy",
+      "home"
     ],
     "masthead-second": [
       "meetings",
@@ -57,7 +63,8 @@
       "companies",
       "thesis",
       "secondaries",
-      "fund-strategy"
+      "fund-strategy",
+      "home"
     ],
     "band": [
       "meetings",
@@ -65,7 +72,8 @@
       "portfolio",
       "companies",
       "secondaries",
-      "fund-strategy"
+      "fund-strategy",
+      "home"
     ],
     "band-head": [
       "meetings",
@@ -73,7 +81,8 @@
       "portfolio",
       "companies",
       "secondaries",
-      "fund-strategy"
+      "fund-strategy",
+      "home"
     ],
     "band-when": [
       "meetings",
@@ -81,7 +90,8 @@
       "portfolio",
       "companies",
       "secondaries",
-      "fund-strategy"
+      "fund-strategy",
+      "home"
     ],
     "section-head": [
       "meetings",
@@ -165,13 +175,15 @@
       "dealflow"
     ],
     "deal-row-3": [
-      "meetings"
+      "meetings",
+      "home"
     ],
     "deal-row-2": [
       "meetings",
       "dealflow",
       "secondaries",
-      "fund-strategy"
+      "fund-strategy",
+      "home"
     ],
     "deal-row-selected": [
       "dealflow"
@@ -186,7 +198,8 @@
     ],
     "readiness": [
       "meetings",
-      "secondaries"
+      "secondaries",
+      "home"
     ],
     "dot": [
       "meetings",
@@ -263,7 +276,8 @@
     ],
     "check": [
       "meetings",
-      "dealflow"
+      "dealflow",
+      "home"
     ],
     "on": [
       "meetings",
@@ -426,6 +440,51 @@
     ],
     "headroom": [
       "fund-strategy"
+    ],
+    "rail": [
+      "home"
+    ],
+    "rail-chip": [
+      "home"
+    ],
+    "rail-home": [
+      "home"
+    ],
+    "rail-count": [
+      "home"
+    ],
+    "rail-note": [
+      "home"
+    ],
+    "band-act": [
+      "home"
+    ],
+    "select-bar": [
+      "home"
+    ],
+    "row-select": [
+      "home"
+    ],
+    "brief-state": [
+      "home"
+    ],
+    "brief-stage": [
+      "home"
+    ],
+    "brief-stage-words": [
+      "home"
+    ],
+    "progress-fill-slow": [
+      "home"
+    ],
+    "identity-email": [
+      "home"
+    ],
+    "identity-role": [
+      "home"
+    ],
+    "band-when-echo": [
+      "home"
     ]
   }
 }

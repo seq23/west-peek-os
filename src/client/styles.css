@@ -773,13 +773,6 @@ details h3 {
   line-height: var(--lh-tight);
 }
 
-.question-list {
-  margin: 0;
-  padding-left: var(--space-lg);
-  font-size: var(--text-sm);
-  line-height: var(--lh-normal);
-}
-
 /* Owner-private material reads as a locked drawer, not as a status. */
 .private-panel {
   border-left: 3px solid var(--wp-ink);
@@ -900,11 +893,13 @@ details h3 {
   color: var(--wp-ink);
 }
 
-/* Inline drill-through inside dense rows. Still a real target: 44px on touch. */
+/* Inline drill-through inside dense rows. Still a real target: 24px on the desk (the measured
+   contract's floor — Home's foot links and the arrivals' Open/Email/Put away measured 20–23px at
+   1280 on 19 Sep 2026), 44px on touch. */
 .surface-body button.link-button,
 .shell-header button.link-button,
 .link-button {
-  min-height: auto;
+  min-height: var(--space-xl);
   padding: var(--space-3xs) var(--space-2xs);
   border: 1px solid transparent;
   border-radius: var(--radius-xs);
@@ -2021,111 +2016,6 @@ details h3 {
 }
 .thesis-grid dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   HOME AS A DELIVERY WINDOW
-   Every value below is a token. The masthead is the only place on the work
-   surface that goes above --text-xl, because it is the one line that has to
-   read as an arrival rather than a heading.
-   ══════════════════════════════════════════════════════════════════════════ */
-
-/* ONE COLUMN, AND THE ANSWER IS THE BIG THING. This was a two-column flex row: the greeting large
-   on the left, and the thing the greeting was ABOUT ("nothing new from your team") small, grey and
-   floated to the far right — two halves of one sentence, as far apart as the layout allowed. They
-   are now stacked in reading order: eyebrow, answer, detail. */
-.home-masthead {
-  display: block;
-  margin-bottom: var(--space-xl);
-}
-.home-date {
-  font-size: var(--text-2xs);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: var(--wp-muted);
-  font-weight: 600;
-  margin-bottom: var(--space-sm);
-}
-/* ── THE SELECTOR BUG THIS FILE SHIPPED WITH ────────────────────────────────
-   This rule read `.home-masthead h1` and the page has emitted an `h2` since the
-   second `h1` was removed (a greeting is not the name of the application). It
-   therefore matched ZERO elements, the masthead fell back to the browser's own
-   h2, and the page's largest type was never set by this stylesheet at all. That
-   is the whole of "the headings have no visual weight" — a bug, not taste.
-
-   Both tags are named here so the scale survives the next honest change to the
-   document outline, and `scripts/validate/heading-scale-applies.mjs` fails the
-   build if any heading-scale selector stops matching what the client emits.
-   ────────────────────────────────────────────────────────────────────────── */
-.home-masthead h1,
-.home-masthead h2 {
-  margin: 0;
-  font-size: var(--text-2xl);
-  line-height: var(--lh-tight);
-  letter-spacing: var(--tracking-tight);
-  font-weight: 700;
-  max-width: 26ch;
-}
-/* --text-md against the --text-2xl above: three steps apart, so it reads as a deliberate drop
-   rather than the one-step drift `validate:design-tokens` exists to catch. */
-.home-answer-second {
-  margin: var(--space-sm) 0 0;
-  font-size: var(--text-md);
-  color: var(--wp-ink-2);
-  max-width: var(--measure);
-}
-
-/* ASK AS A DOCK, not as the only tinted card on the page. Ghost border, ink text: present, findable
-   and unmistakably not the most important thing here. */
-.ask-dock {
-  margin-top: var(--space-lg);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-sm);
-}
-.ask-open {
-  min-height: var(--touch-min);
-  padding: var(--space-xs) var(--space-md);
-  background: var(--wp-surface);
-  border: 1px solid var(--wp-line-control);
-  border-radius: var(--radius-md);
-  color: var(--wp-ink);
-  font-weight: 600;
-}
-.ask-open:hover { background: var(--wp-surface-2); border-color: var(--wp-ink-2); }
-.ask-label { white-space: nowrap; }
-.ask-note {
-  font-size: var(--text-xs);
-  color: var(--wp-muted);
-  flex: 1 1 20rem;
-  min-width: 0;
-  max-width: var(--measure);
-}
-
-/* ══ THE THREE BANDS — the whole navigation of the page ═══════════════════════════════════════
-   Waiting on you · Since you last looked · The rest. A full-bleed hairline above each, and a head
-   two steps above body copy, so the eye can find the three places without reading any of them. */
-.home-band { margin-top: var(--space-2xl); }
-.home-band-head {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  border-top: 1px solid var(--wp-line-strong);
-  padding-top: var(--space-lg);
-  margin-bottom: var(--space-lg);
-}
-.home-band-head h3 {
-  margin: 0;
-  font-size: var(--text-xl);
-  font-weight: 700;
-  letter-spacing: var(--tracking-tight);
-}
-.home-band-when {
-  font-size: var(--text-xs);
-  color: var(--wp-muted);
-  margin-left: auto;
-}
-
 .home-section-head {
   display: flex;
   align-items: baseline;
@@ -2155,28 +2045,7 @@ details h3 {
   border-radius: var(--radius-pill);
 }
 
-.waiting-list li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-lg);
-  flex-wrap: wrap;
-}
-
-/* A delivery keeps its byline whether or not it has anything to report — silence from a
-   named colleague is information; an unattributed empty box is just a gap. */
-.delivery-card { display: flex; flex-direction: column; }
-.delivery-by {
-  margin: auto 0 0;
-  padding-top: var(--space-md);
-  border-top: 1px solid var(--wp-line);
-  font-size: var(--text-xs);
-  color: var(--wp-muted);
-}
-.delivery-by strong { color: var(--wp-ink); font-weight: 600; }
-
 @media (max-width: 40rem) {
-  .home-masthead { flex-direction: column; align-items: flex-start; }
   .home-signed { text-align: left; }
 }
 
@@ -2404,14 +2273,6 @@ details h3 {
   .surface-body button.link-button.brief-fold { min-height: var(--touch-min); }
 }
 
-/*
- * COLLAPSED: one line, and it still says whether today's brief arrived. Padded down from the full
- * panel so a folded brief reads as a strip rather than an empty card, and nothing below it moves
- * when it opens again.
- */
-.daily-brief-collapsed { padding-bottom: var(--space-md); }
-.daily-brief-collapsed p { margin-bottom: 0; }
-
 /* A packet's folded subsections: one line each, the number that matters on the line. */
 .packet-fold { margin: var(--space-2xs) 0; }
 .packet-fold > summary { cursor: pointer; padding: var(--space-2xs) 0; }
@@ -2524,36 +2385,7 @@ details h3 {
   flex-shrink: 0;
   object-fit: cover;
 }
-
-.brief-delivery { padding: 0; overflow: hidden; }
-.brief-byline {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-lg) var(--space-xl);
-  background: var(--wp-surface-2);
-  border-bottom: 1px solid var(--wp-line);
-}
-.brief-byline-line { font-size: var(--text-md); font-weight: 600; }
-/* Who wrote the brief, beside the line they wrote. Undefined, it stacked. */
-.brief-byline-who { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; }
 .brief-delivery > .daily-brief { border: none; margin: 0; }
-
-.delivery-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-md); }
-.delivery {
-  background: var(--wp-surface);
-  border: 1px solid var(--wp-line);
-  border-radius: var(--radius-md);
-  padding: var(--space-lg);
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-md);
-}
-/* Nothing to report still shows the person, smaller and quieter. */
-.delivery-quiet { padding: var(--space-md) var(--space-lg); opacity: 0.7; align-items: center; }
-.delivery-what { flex-grow: 1; min-width: 0; }
-.delivery-who { font-size: var(--text-base); }
-.delivery-headline { font-size: var(--text-base); margin-top: var(--space-3xs); }
 .delivery .module-items { margin: var(--space-2xs) 0 0; padding-left: var(--space-lg); font-size: var(--text-sm); }
 
 /* NINE QUIET COLLEAGUES ARE ONE LINE. Reporting silence nine times, in nine bordered cards, made
@@ -2574,10 +2406,6 @@ details h3 {
 }
 .quiet-roll > span { flex: 1 1 20rem; min-width: 0; }
 .quiet-roll b { color: var(--wp-ink); font-weight: 600; }
-
-/* A blocker keeps its own semantic colour. Orange is the firm's accent and never carries a safety
-   meaning, so "something is wrong" is warn-tinted and says the word as well as showing it. */
-.blocker-list { margin-top: var(--space-md); }
 .blocker {
   background: var(--wp-warn-tint);
   border: 1px solid var(--wp-warn-line);
@@ -6214,6 +6042,23 @@ body {
    to one column through minmax(0,1fr) tracks only. ── */
 @media (max-width: 40rem) {
   .masthead h2 { font-size: var(--text-xl); }
+  /* THE 7 AM SCREEN (design/HOME_DESIGN.md §3, 19 Sep 2026). At 390×844 the shell put 437px above
+     Home's answer: the identity line wrapped to three, the purpose block ran to five. What a phone
+     can do without: the e-mail address and the role (the name and Sign out stay) and the purpose block's verb line
+     (the sentence and the help link stay). Measured by e2e/home-overhaul.spec.ts: masthead, rail,
+     Waiting and its first row, and the Arrived head above the fold. */
+  .identity-email,
+  .identity-role { display: none; }
+  .page-purpose-can { display: none; }
+  .surface-identity { margin-top: var(--space-2xs); gap: var(--space-2xs) var(--space-sm); }
+  .masthead { margin-bottom: var(--space-md); }
+  /* A band-head line that echoes the masthead's detail is hidden on the phone; bands sit one step
+     closer. Measured on the CI runner's font stack, where text wraps a line earlier than here:
+     the first waiting row's bottom was 862px at 390×844 with these in place. */
+  .band-when-echo { display: none; }
+  .band { margin-top: var(--space-xl); }
+  .band-head { padding-top: var(--space-md); }
+  .rail { margin-bottom: var(--space-md); }
   .stage-rail { position: relative; flex-direction: column; gap: 0; }
   /* The edge runs through the node's centre — half a 40px node less half the 2px line — drawn
      behind the nodes rather than pushed into place with an off-scale margin. */
@@ -6400,4 +6245,108 @@ body {
   .deck-title { margin-right: 0; }
   .surface-body a.btn-primary,
   .surface-body a.btn-strong { min-height: var(--touch-min); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HOME (design/HOME_DESIGN.md §5, approved 19 Sep 2026). Tokens only.
+   The shared vocabulary — .masthead*, .band*, .deal-row*, .count-pill,
+   .badge*, .notice*, .progress-track, .live-dot, .state-empty — is reused
+   as-is; what follows is only what Home needed that nothing else had: the
+   filter rail, the foot line, the select bar and its checkboxes, and the
+   brief band's stage strip. Registered under `home` in
+   design/DEALS_SECTION_CLASSES.json.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── The rail: one filter instead of four toggles. A scroller on a phone; the focus ring is
+   inset so the scroller never clips it. ── */
+.rail {
+  display: flex;
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-lg);
+  padding: 0 0 var(--space-2xs);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.rail::-webkit-scrollbar { display: none; }
+.surface-body button.rail-chip,
+.rail-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: var(--touch-min);
+  padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--wp-line-control);
+  border-radius: var(--radius-pill);
+  background: var(--wp-surface);
+  color: var(--wp-ink);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.surface-body button.rail-chip:hover,
+.rail-chip:hover { border-color: var(--wp-ink); background: var(--wp-surface-2); }
+.surface-body button.rail-chip[aria-pressed="true"],
+.rail-chip[aria-pressed="true"] { background: var(--wp-ink); border-color: var(--wp-ink); color: var(--wp-shell-ink); }
+.surface-body button.rail-chip:focus-visible,
+.rail-chip:focus-visible { outline: 2px solid var(--wp-orange); outline-offset: -2px; }
+.surface-body button.rail-chip.rail-home,
+.rail-chip.rail-home { border-style: dashed; }
+.rail-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--space-lg);
+  padding: 0 var(--space-2xs);
+  border-radius: var(--radius-pill);
+  background: var(--wp-surface-3);
+  color: var(--wp-ink-2);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.surface-body button.rail-chip[aria-pressed="true"] .rail-count,
+.rail-chip[aria-pressed="true"] .rail-count { background: var(--wp-ink-2); color: var(--wp-shell-ink); }
+
+/* ── The foot line: Ask · Home layout · Setup · Private layer. ── */
+.rail-note {
+  margin: var(--space-2xl) 0 0;
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--wp-line);
+  font-size: var(--text-sm);
+  color: var(--wp-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-sm);
+  align-items: center;
+}
+
+/* ── Select-many: an act on the band head, a bar under it, a checkbox on each row. ── */
+.band-act { margin-left: 0; }
+.surface-body button.band-act { min-height: var(--space-xl); padding: var(--space-3xs) var(--space-sm); font-size: var(--text-2xs); }
+.select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: 0 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-sm);
+  background: var(--wp-surface-2);
+}
+.check { display: inline-flex; align-items: center; justify-content: center; min-width: var(--touch-min); min-height: var(--touch-min); cursor: pointer; }
+.check input { width: var(--space-lg); height: var(--space-lg); margin: 0; accent-color: var(--wp-ink); }
+.check input:disabled { cursor: not-allowed; }
+.row-select { float: left; margin-right: var(--space-xs); }
+
+/* ── The brief band's stage strip: four words, the current one in ink. ── */
+.brief-state { margin-top: var(--space-sm); }
+.brief-stage { display: flex; flex-wrap: wrap; gap: var(--space-xs) var(--space-md); list-style: none; margin: var(--space-xs) 0 0; padding: 0; font-size: var(--text-xs); color: var(--wp-muted); }
+.brief-stage-words[data-state="done"] { color: var(--wp-ink-2); text-decoration: line-through; }
+.brief-stage-words[data-state="now"] { color: var(--wp-ink); font-weight: 600; }
+.progress-fill-slow { background: var(--wp-warn); }
+
+@media (max-width: 899px) {
+  .surface-body button.band-act { min-height: var(--touch-min); }
 }

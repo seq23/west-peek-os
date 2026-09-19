@@ -57,21 +57,27 @@ test("journey 1 — MP Home → intelligence item → its source → follow-up r
    * without one passed. The journey is about the DRILL, so it walks the path a person walks: open
    * the quiet roll if that is where the module is, and press Open on it.
    */
+  /*
+   * RE-POINTED, 19 Sep 2026 (design/HOME_DESIGN.md §3.2): the quiet roll's "Show each" is retired;
+   * the rail's Quiet chip shows each quiet colleague as a row with one door. A fresh module is a row
+   * in Arrived; a quiet one is a row under Quiet. Either way the drill is one press.
+   */
   const module = page.getByTestId("home-module-intelligence");
   let quiet = false;
   if (!(await module.isVisible().catch(() => false))) {
     const roll = page.getByTestId("home-quiet-roll");
-    await expect(roll, "the module is neither a card nor in the quiet roll — it is missing from Home").toContainText("nothing new since you last looked");
-    await page.getByTestId("home-quiet-roll-toggle").click();
+    await expect(roll, "the module is neither an Arrived row nor in the quiet roll — it is missing from Home").toContainText("nothing new since you last looked");
+    await page.getByTestId("home-rail-quiet").click();
+    await expect(page.getByTestId("home-rail")).toHaveAttribute("data-filter", "quiet");
     quiet = true;
   }
   await expect(module).toBeVisible();
-  // A fresh card leads with what moved; a quiet one says since when nothing has, and still opens.
+  // A fresh row leads with what moved; a quiet one says since when nothing has, and still opens.
   if (quiet) await expect(module).toContainText("nothing new since");
   else await expect(module).toContainText("What moved overnight");
 
   // Drill into the module and read the item's provenance on the surface that owns it.
-  await module.getByRole("button", { name: quiet ? "Open anyway" : "Open" }).click();
+  await module.getByTestId("home-open-intelligence").click();
   const card = page.locator('[data-testid^="intel-item-"]', { hasText: headline });
   await card.locator('[data-testid^="intel-detail-"]').click();
   await expect(card.locator('[data-testid^="intel-citations-"]')).toContainText("Broker call, journey 1");

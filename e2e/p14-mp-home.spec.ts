@@ -66,51 +66,62 @@ test("MP runs the intelligence engine and the item reaches Home with its provena
   // ── Home: the item is surfaced, the ten questions are mapped, links work ──
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await expect(page.getByTestId("home-page")).toBeVisible();
-  await expect(page.getByTestId("home-module-intelligence")).toContainText(headline);
-  /* The ten questions moved to "The rest" — the shelf band — as a closed drawer in the 18 Sep
-     redesign. They are reference: read once in two hundred visits, and a permanently open list of
-     them was competing with the brief the partner came for. Still one click, still on Home. */
-  await page.getByTestId("home-questions-toggle").click();
-  await expect(page.getByTestId("home-questions")).toContainText("What needs my decision?");
-  await expect(page.getByTestId("home-questions")).toContainText("What is costing money?");
-
-  // "One thing to watch" was removed from Home on operator direction (17 Aug 2026) — it restated
-  // what the modules below already said. Asserted absent in BOTH states, because the old block had
-  // an empty variant too and removing only the populated one would leave Home showing a headed
-  // card that says "nothing is flagged".
+  /*
+   * RE-POINTED STRICTER, 19 Sep 2026 (design/HOME_DESIGN.md §2). The ten questions left Home for
+   * the Help Center (pagePurpose already carried them; no telemetry ever showed the drawer opened);
+   * Ask left the masthead for the foot line and stays in the nav; "One thing to watch" stays gone.
+   * A module with something new is a row in Arrived; a quiet one is a row under the Quiet chip.
+   */
+  await expect(page.getByTestId("home-answer")).toBeVisible();
+  const module = page.getByTestId("home-module-intelligence");
+  if (!(await module.isVisible())) await page.getByTestId("home-rail-quiet").click();
+  await expect(module).toBeVisible();
+  await expect(page.getByTestId("home-questions")).toHaveCount(0);
   await expect(page.getByTestId("one-thing-to-watch")).toHaveCount(0);
   await expect(page.getByTestId("one-thing-to-watch-empty")).toHaveCount(0);
 
-  // Ask has its own highlighted band on Home (operator direction, 17 Aug 2026) AND stays in the
-  // nav. Home is where you are reminded it exists; the nav is where you reach for it once you know.
-  await expect(page.getByTestId("home-ask")).toBeVisible();
+  // Ask is on the foot line — under the answer, never above it — and still one press away.
+  const foot = page.getByTestId("home-foot");
+  await expect(foot).toContainText("Ask for anything");
+  expect((await foot.boundingBox())!.y, "the foot sits below the masthead").toBeGreaterThan((await page.getByTestId("home-masthead").boundingBox())!.y);
   await page.getByTestId("home-ask-open").click();
   await expect(page.getByTestId("intent-page")).toBeVisible();
   await page.getByRole("button", { name: "Home", exact: true }).click();
 
-  // Drilling from a module lands on the surface that owns the records.
-  await page.getByTestId("home-module-intelligence").getByRole("button", { name: "Open" }).click();
+  // Drilling from a module lands on the surface that owns the records. Home has re-mounted, so
+  // wait for its answer before asking where the module sits: a fresh one is a row in Arrived, a
+  // quiet one is under the Quiet chip — checked in that order, never guessed while loading.
+  await expect(page.getByTestId("home-answer")).toBeVisible();
+  const rail = page.getByTestId("home-rail");
+  await expect(rail).toHaveAttribute("data-filter", "all");
+  if (!(await page.getByTestId("home-module-intelligence").isVisible())) await page.getByTestId("home-rail-quiet").click();
+  await expect(page.getByTestId("home-module-intelligence")).toBeVisible();
+  await page.getByTestId("home-open-intelligence").click();
   await expect(page.getByTestId("intelligence-page")).toBeVisible();
 });
 
 test("home layout is configurable and saved as a new version", async ({ page }) => {
   await signIn(page);
   await page.getByRole("button", { name: "Home", exact: true }).click();
+  // "Choose what Home shows" is a foot link that opens the same component in place (§3.7).
   await page.getByTestId("home-settings-toggle").click();
   await page.getByTestId("module-toggle-ic_priorities").check();
   await page.getByTestId("home-settings-save").click();
   await expect(page.getByTestId("home-settings-message")).toContainText("version");
-  /* A module with nothing NEW in it is a name in the quiet roll, not a card — nine colleagues
-     reporting silence in nine bordered cards was the largest visual mass on the page. The card is
-     one click behind "Show each", and this asserts the enabled module reaches the page either way. */
-  const shelved = page.getByTestId("home-quiet-roll-toggle");
-  if (await shelved.isVisible()) await shelved.click();
-  await expect(page.getByTestId("home-module-ic_priorities")).toBeVisible();
+  /* A module with nothing NEW is a name in the quiet roll; its row is under the Quiet chip. This
+     asserts the enabled module reaches the page either way. */
+  const row = page.getByTestId("home-module-ic_priorities");
+  if (!(await row.isVisible().catch(() => false))) await page.getByTestId("home-rail-quiet").click();
+  await expect(row).toBeVisible();
 });
 
 test("the private personal layer is separate, disclaimed, and honest about calculation", async ({ page }) => {
   await signIn(page);
   await page.getByRole("button", { name: "Home", exact: true }).click();
+  // The private layer left Home for its own route (§2: 0 profiles, 0 entries in 30 days); the foot
+  // links to it and the boundary is unchanged.
+  await expect(page.getByTestId("personal-intelligence")).toHaveCount(0);
+  await page.getByTestId("home-private-link").click();
 
   const panel = page.getByTestId("personal-intelligence");
   await expect(panel).toContainText("Not institutional truth");
@@ -178,7 +189,9 @@ test("pressing Open quiets a colleague until something new arrives, and the coun
   // because signing in lands on Home and reads the modules once.
   const made = await request.post("/api/work-cards", {
     headers: { "x-wpos-dev-user": "scooter@westpeek.ventures" },
-    data: { title: "Read the Sensori memo before Thursday", description: "Opened by the e2e suite.", owner_type: "HUMAN", owner_id: "fu_scooter_taylor", priority: "NORMAL" },
+    // URGENT, so it heads the row's two headline items whatever earlier specs (or earlier runs of
+    // this file against the same D1) left open in his name; the row shows the top two by priority.
+    data: { title: "Read the Sensori memo before Thursday", description: "Opened by the e2e suite.", owner_type: "HUMAN", owner_id: "fu_scooter_taylor", priority: "URGENT" },
   });
   expect(made.status(), await made.text()).toBe(201);
 
@@ -186,17 +199,12 @@ test("pressing Open quiets a colleague until something new arrives, and the coun
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await expect(page.getByTestId("home-page")).toBeVisible();
 
-  /* Quiet and empty colleagues live behind "Show each" since the 18 Sep redesign; this journey is
-     about a card going from new to quiet, so it opens the roll and keeps it open throughout. */
-  const openRoll = async () => {
-    const toggle = page.getByTestId("home-quiet-roll-toggle");
-    if (await toggle.isVisible()) await toggle.click();
-  };
-
+  /* A fresh colleague is a row in Arrived; a quiet one is a row under the Quiet chip (19 Sep 2026).
+     This journey is about a row going from new to quiet, so it filters as a person would. */
   const wren = page.getByTestId("home-module-my_work");
   await expect(wren).toHaveAttribute("data-fresh", "new");
   await expect(wren).toContainText("Read the Sensori memo before Thursday");
-  await expect(page.getByTestId("home-deliveries-count")).toContainText(/\d+ (has|have) something new/);
+  await expect(page.getByTestId("home-deliveries-count")).toContainText(/\d+ since you last looked/);
   const loudKeys = async () =>
     Promise.all((await page.locator('[data-testid^="home-module-"][data-fresh="new"]').all()).map((l) => l.getAttribute("data-testid")));
   const loudBefore = await loudKeys();
@@ -206,21 +214,17 @@ test("pressing Open quiets a colleague until something new arrives, and the coun
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await expect(page.getByTestId("home-page")).toBeVisible();
 
-  await openRoll();
-  await expect(wren).toHaveAttribute("data-fresh", "quiet");
-  await expect(wren.getByTestId("home-module-quiet-my_work")).toContainText(/nothing new since \d/);
-  await expect(wren).toHaveClass(/delivery-quiet/);
+  // Not in Arrived any more — and under Quiet, saying since when.
   const loudAfter = await loudKeys();
   expect(loudBefore).toContain("home-module-my_work");
   expect(loudAfter).not.toContain("home-module-my_work");
-  // Nobody became loud by her looking. ("What changed" may go EMPTY between two visits — Home's
-  // own visit mark makes it a diff — which is the older rule and not this one.)
   for (const k of loudAfter) expect(loudBefore).toContain(k);
-  // Quiet drops below new: every loud card is above the quiet one.
-  const wrenTop = (await wren.boundingBox())!.y;
-  for (const loud of await page.locator('[data-testid^="home-module-"][data-fresh="new"]').all()) {
-    expect((await loud.boundingBox())!.y).toBeLessThan(wrenTop);
-  }
+  await page.getByTestId("home-rail-quiet").click();
+  await expect(wren).toHaveAttribute("data-fresh", "quiet");
+  await expect(wren.getByTestId("home-module-quiet-my_work")).toContainText(/nothing new since \d/);
+  await expect(wren).toHaveClass(/deal-row-out/);
+  await page.getByTestId("home-rail-home").click();
+  await expect(page.getByTestId("home-rail")).toHaveAttribute("data-filter", "all");
 
   // Something new in her name again: loud again, and it says how many since when.
   const again = await request.post("/api/work-cards", {

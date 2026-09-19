@@ -26,7 +26,7 @@
  * OUT OF the migration rather than restating it, so a status added later cannot quietly default to
  * silence.
  *
- * WHY IT IS SHARED WITH THE COLLAPSED LINE. `collapsedBriefLine` had the same bug from the other
+ * WHY IT WAS SHARED WITH THE COLLAPSED LINE (retired 19 Sep 2026 with the fold). It had the same bug from the other
  * direction: it said "today's brief arrived" for any non-null report, FAILED included. Two
  * components each keeping their own idea of what "arrived" means, with no link between them, is
  * how one gets fixed and the other does not. There is now one answer and both read it.

@@ -165,7 +165,7 @@ function PreviewCard({ preview, onDone }: { preview: Preview; onDone: () => void
       <div className="preview-doors">
         <button
           type="button"
-          className="btn-strong"
+          className="btn-primary"
           data-testid={`preview-send-${preview.id}`}
           disabled={busy !== null || preview.lapsed}
           title={preview.lapsed ? "This lapsed; send it back for a fresh one." : undefined}
