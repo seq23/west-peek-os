@@ -41,7 +41,13 @@ test("the signed-out page leads back in", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("dev-login-email").fill("scooter@westpeek.ventures");
   await page.getByTestId("dev-login-submit").click();
+  // The session must have LANDED before it is ended. Clicking sign-out while the sign-in response
+  // is still in flight lets the late response re-establish the session after sign-out has run, and
+  // the signed-out page never appears — seen once in a full run on 18 Sep 2026, 145/146. The first
+  // test in this file already sequences it this way; this one now holds the same line.
+  await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
   await page.getByTestId("sign-out").click();
+  await expect(page.getByTestId("signed-out-page")).toBeVisible();
 
   await page.getByTestId("signed-out-signin").click();
   await expect(page.getByTestId("dev-login")).toBeVisible();
