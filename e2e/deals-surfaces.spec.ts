@@ -103,6 +103,10 @@ function measureTargets(rootId: string): Array<{ label: string; w: number; h: nu
     if (rects.length === 0) return [];
     // A file input renders its own native control; its box is the browser's, not the page's.
     if (el instanceof HTMLInputElement && el.type === "file") return [];
+    // WCAG 2.5.8's inline exception: a link that sits in a sentence is sized by the sentence's
+    // line-height, not by the target rule. Only a control INSIDE a paragraph qualifies — a
+    // standalone control in an action row does not, and is measured.
+    if (el.closest("p")) return [];
     const r = el.getBoundingClientRect();
     return [
       {

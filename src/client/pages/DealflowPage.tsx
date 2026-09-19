@@ -2674,7 +2674,7 @@ function ProposalCard({ p, onDone, onOpen }: {
           <button type="button" disabled={busy} aria-expanded={declining} data-testid={`proposal-decline-${p.id}`} onClick={() => setDeclining((v) => !v)}>
             Leave it where it is
           </button>
-          <button type="button" className="link-button" onClick={() => onOpen(p.company_id, p.company_name)}>
+          <button type="button" className="btn-ghost" onClick={() => onOpen(p.company_id, p.company_name)}>
             Open the deal
           </button>
         </div>
@@ -3269,7 +3269,7 @@ export function DealflowPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
                 <div className="deal-actions">
                   <button
                     type="button"
-                    className={c.approval_card && !c.decision ? "btn-strong" : "link-button"}
+                    className={c.approval_card && !c.decision ? "btn-strong" : "btn-ghost"}
                     disabled={!c.company_id}
                     aria-expanded={open}
                     title={c.company_id ? undefined : "Its company record is off the board, so the record cannot be opened from here"}
