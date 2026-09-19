@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
+import type { MaterialSource } from "@shared/meetings/howTheRoomHears";
 
 /**
  * The BEFORE and AFTER faces of a meeting on its record (Phase B data, Phase D shape — §3, C1/C3).
@@ -75,6 +76,26 @@ function whenInWords(iso: string): string {
 
 function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * The owner asked whether the second "Open the room" was "a real room". It is the During face of
+ * this same meeting — the tab above — and the line under the button says so, rather than leaving a
+ * button at the end of the brief to be guessed at.
+ */
+const OPEN_THE_ROOM_LINE = "Goes to During — this meeting's room: the recording switch, Ask the room, and who is seated. It is the same room as the During tab above, not a second one.";
+
+/** "Meet transcript · read Thu 18 Sep 11:04 · 212 turns" — where After's material came from. */
+function sourceInWords(s: MaterialSource): string {
+  const when = s.first_at && s.last_at && s.first_at !== s.last_at ? `${whenInWords(s.first_at)} → ${whenInWords(s.last_at)}` : whenInWords(s.last_at ?? s.first_at ?? "");
+  const what =
+    s.kind === "laptop_capture" ? `${count(s.count, "minute", "minutes")} captured` :
+    s.kind === "meet_transcript" ? "read from Google" :
+    s.kind === "typed_notes" ? count(s.count, "note", "notes") :
+    s.kind === "room_blocks" ? count(s.count, "block", "blocks") :
+    count(s.count, "import", "imports");
+  const turns = s.turns !== null && s.kind !== "typed_notes" && s.kind !== "room_blocks" ? ` · ${count(s.turns, "turn", "turns")}` : "";
+  return `${what}${turns} · ${when}`;
 }
 
 /** A "we said" / "they said" line with its standing beside it. */
@@ -268,6 +289,7 @@ export function BeforePanel({ meetingId, onChanged, seating, onOpenRoom, onNavig
                 {busy ? "Building…" : "Build the brief again"}
               </button>
             </div>
+            <p className="field-help" data-testid="brief-open-room-line">{OPEN_THE_ROOM_LINE}</p>
           </div>
         </div>
       )}
@@ -281,6 +303,7 @@ export function BeforePanel({ meetingId, onChanged, seating, onOpenRoom, onNavig
             </button>
             <button type="button" data-testid="brief-open-room" onClick={onOpenRoom}>Open the room</button>
           </div>
+          <p className="field-help" data-testid="brief-open-room-line">{OPEN_THE_ROOM_LINE}</p>
         </div>
       )}
       {message && <p className="notice small" data-testid="brief-message" role="status">{message}</p>}
@@ -326,6 +349,7 @@ function sentenceOf(decisions: number, commitments: number, questions: number, m
 /** AFTER: the four objects, the artifacts, who is holding what, and the draft with the partner's button on it. */
 export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: string; onChanged: () => void; closeout: ReactNode }): JSX.Element {
   const state = useApi<AfterResponse>(`/api/meetings/${meetingId}/after`, [meetingId]);
+  const hearing = useApi<{ sources: MaterialSource[] }>(`/api/meetings/${meetingId}/hearing`, [meetingId]);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [answering, setAnswering] = useState<string | null>(null);
@@ -340,6 +364,7 @@ export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: stri
     setBusy(null);
     setMessage(ok.includes(res.status) ? `${label}.` : `${label} refused: ${res.data?.detail ?? res.data?.error ?? res.status}`);
     state.reload();
+    hearing.reload();
     onChanged();
   }
 
@@ -383,6 +408,27 @@ export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: stri
         <p className="masthead-date">{eyebrow}</p>
         <h2 data-testid="after-answer">{answerLine}</h2>
         {detail && <p className="masthead-second">{detail}</p>}
+      </div>
+
+      {/*
+        WHERE THE MATERIAL CAME FROM (owner, 19 Sep 2026). A draft written from Google's transcript
+        of the call, from the laptop's minute-by-minute capture, or from three typed lines reads the
+        same on the page; the eyebrow above says how many notes were read, not what they were. This
+        says it, by origin, with the times, from `/hearing` — one route the During face shares.
+      */}
+      <div className="hears" data-testid="after-sources" data-state={hearing.data ? (hearing.data.sources.length === 0 ? "empty" : "ready") : hearing.loading ? "loading" : "error"}>
+        <span className="eyebrow">Where this came from</span>
+        {!hearing.data ? (
+          <span className="muted small">{hearing.loading ? "Reading where the material came from…" : `Could not read where the material came from (HTTP ${hearing.status ?? "—"}).`}</span>
+        ) : hearing.data.sources.length === 0 ? (
+          <span className="muted small" data-testid="after-sources-empty">Nothing has reached this record yet — no Meet transcript, no laptop capture, no typed notes.</span>
+        ) : (
+          <ul className="card-list small" data-testid="after-sources-list">
+            {hearing.data.sources.map((src) => (
+              <li key={src.kind} data-testid={`after-source-${src.kind}`}><strong>{src.label}</strong> · {sourceInWords(src)}</li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {a?.latest_draft && a.latest_draft.state !== "DRAFTED" && a.latest_draft.state !== "APPROVED" && (

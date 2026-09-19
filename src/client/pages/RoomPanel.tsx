@@ -2,6 +2,7 @@ import { AllocationRing } from "./AllocationRing";
 import type { RingSlice } from "@shared/fund/allocation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
+import { hearing as hearingOf, type HearingFacts } from "@shared/meetings/howTheRoomHears";
 
 /**
  * THE DURING FACE — the meeting is a live room (Phase C, owner-approved 18 Sep 2026).
@@ -107,8 +108,16 @@ function parseBody(raw: string): Record<string, unknown> {
 
 export function RoomPanel({ meetingId, standalone = false, aside }: { meetingId: string; standalone?: boolean; aside?: ReactNode }): JSX.Element {
   const room = useApi<RoomState>(`/api/meetings/${meetingId}/room`, [meetingId]);
+  const hearingRead = useApi<{ facts: HearingFacts }>(`/api/meetings/${meetingId}/hearing`, [meetingId]);
   const [message, setMessage] = useState<string | null>(null);
-  const reload = room.reload;
+  // The one fact only this browser has: whether its recorder is running right now.
+  const [live, setLive] = useState(false);
+  const roomReload = room.reload;
+  const hearingReload = hearingRead.reload;
+  const reload = useCallback(() => {
+    roomReload();
+    hearingReload();
+  }, [roomReload, hearingReload]);
 
   // The room changes underneath the reader — a card finishes, a chunk lands — so it re-reads on a
   // quiet interval. One route, one read; nothing here fires per block.
@@ -134,7 +143,8 @@ export function RoomPanel({ meetingId, standalone = false, aside }: { meetingId:
         </div>
       )}
 
-      <RecordingLine meetingId={meetingId} capture={state?.capture ?? null} onChange={reload} />
+      <RecordingLine meetingId={meetingId} capture={state?.capture ?? null} onChange={reload} onLive={setLive} />
+      <HearingLine meetingId={meetingId} facts={hearingRead.data?.facts ?? null} live={live} loading={hearingRead.loading} status={hearingRead.status} />
 
       {standalone || !aside ? (
         <div className="stack">
@@ -167,7 +177,7 @@ export function RoomPanel({ meetingId, standalone = false, aside }: { meetingId:
  * EACH SLICE IS A COMPLETE RECORDING. The recorder is stopped and restarted every minute rather
  * than streamed, because a timesliced stream's later fragments are not independently decodable.
  */
-function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; capture: CaptureReadiness | null; onChange: () => void }): JSX.Element {
+function RecordingLine({ meetingId, capture, onChange, onLive }: { meetingId: string; capture: CaptureReadiness | null; onChange: () => void; onLive: (live: boolean) => void }): JSX.Element {
   const [prompting, setPrompting] = useState(false);
   const [asked, setAsked] = useState(false);
   const [who, setWho] = useState("");
@@ -183,6 +193,9 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
   // A recorder left running after the panel goes away would hold the microphone open with nothing
   // on screen saying so.
   useEffect(() => () => stopRef.current?.(), []);
+  // The "How this room hears" line reads the recorder's state from here — the one fact the server
+  // cannot know.
+  useEffect(() => onLive(recording), [recording, onLive]);
 
   const state = capture;
   const consentGranted = state?.consent.TRANSCRIPTION === "GRANTED" && state?.consent.RECORDING === "GRANTED";
@@ -381,6 +394,38 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
       )}
 
       {message && <p className="notice small" data-testid="capture-message" role="status">{message}</p>}
+    </div>
+  );
+}
+
+// ── 1b · How this room hears ─────────────────────────────────────────────────────────────────
+
+/**
+ * ONE LINE UNDER THE RECORDING SWITCH THAT SAYS HOW THE WORDS REACH THE RECORD.
+ *
+ * Owner, 19 Sep 2026: "If I push Join on Meet what happens? … Is it recording? Are my AI employees
+ * there from Join on Meet alone?" The recording line answers "is THIS switch on"; this line answers
+ * the rest: a Google Meet call is transcribed by Google and read in after it ends (the cadence from
+ * the job row), the laptop switch is a different path that hears the call through the speakers, and
+ * no employee is ever in the Meet. Every sentence is a named state chosen in
+ * `shared/meetings/howTheRoomHears.ts` from the facts the Worker serves plus this browser's
+ * recorder — never composed here. States: loading, error, and one of the named states.
+ */
+function HearingLine({ meetingId, facts, live, loading, status }: { meetingId: string; facts: HearingFacts | null; live: boolean; loading: boolean; status: number | null }): JSX.Element {
+  if (!facts) {
+    return (
+      <p className="hears" data-testid={`hears-${meetingId}`} data-state={loading ? "loading" : "error"} role="status" aria-live="polite">
+        <span className="eyebrow">How this room hears</span>
+        <span className="muted small">{loading ? "Reading how this room hears…" : `Could not read how this room hears (HTTP ${status ?? "—"}).`}</span>
+      </p>
+    );
+  }
+  const h = hearingOf(facts, { live });
+  return (
+    <div className="hears" data-testid={`hears-${meetingId}`} data-state={h.state} role="status" aria-live="polite">
+      <span className="eyebrow">How this room hears · {h.channel}</span>
+      <span data-testid="hears-sentence">{h.sentence}</span>
+      {h.live_sentence && <span className="muted small" data-testid="hears-live-path" data-path={h.live_path ?? undefined}>{h.live_sentence}</span>}
     </div>
   );
 }

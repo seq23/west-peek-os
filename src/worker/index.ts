@@ -159,6 +159,7 @@ import {
   handleMatchConsent, handleRecordSignal, handleRetireSignal, handleRunMatching,
 } from "./services/matching";
 import { handleGetRoomCloseout, handleRunRoomCloseout } from "./services/roomCloseout";
+import { handleHearing } from "./services/howTheRoomHears";
 import { handleCommunityPopulation, handleUpsertMember } from "./services/communityOs";
 import {
   handleAddFollowup,
@@ -1152,6 +1153,13 @@ const router = new Router()
   .post("/api/meetings/:id/room/roll", handleRoomRoll)
   .post("/api/meetings/:id/room/ask", handleRoomAsk)
   // === end Phase C ====
+  // === How the room hears ===
+  // Owner, 19 Sep 2026: "If I push Join on Meet what happens? Is it recording? Are my AI employees
+  // there?" One read: the facts the During face's "How this room hears" line is chosen from — the
+  // meeting's source, the firm default, the ingest cadence from its job row, the Meet inbox row,
+  // the capture gates — and, for After, where its material came from with times.
+  .get("/api/meetings/:id/hearing", handleHearing)
+  // === end How the room hears ===
   // P8 — portfolio monitoring: dated metrics, deterministic alerts, support.
   .post("/api/portfolio/metric-definitions", handleCreateMetricDefinition)
   .get("/api/portfolio/metric-definitions", handleListMetricDefinitions)

@@ -5800,6 +5800,35 @@ body {
 .rec-text { display: flex; flex-direction: column; gap: var(--space-3xs); min-width: 0; }
 .rec-text span { font-size: var(--text-xs); color: var(--wp-muted); }
 
+/* How this room hears: the eyebrow, the sentence, and the way to follow live — one block under
+   the recording line, in the record's own voice. Also "Where this came from" on After. Each state
+   is a data-state from howTheRoomHears.ts; the text is the cue, the tint is decoration. */
+.hears {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  margin: 0 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 3px solid var(--wp-line-strong);
+  background: var(--wp-surface-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+.hears[data-state="MEET_LIVE_HERE"],
+.hears[data-state="MANUAL_LIVE"] { border-left-color: var(--wp-good); }
+.hears[data-state="MEET_DEFAULT_OFF"],
+.hears[data-state="MEET_REFUSED_DEFAULT_OFF"],
+.hears[data-state="MEET_NO_TRANSCRIPT"],
+.hears[data-state="MEET_READ_FAILED"],
+.hears[data-state="MANUAL_NO_SERVICE"],
+.hears[data-state="MANUAL_POLICY_OFF"],
+.hears[data-state="MANUAL_CONSENT_DENIED"],
+.hears[data-state="error"] { border-left-color: var(--wp-warn); }
+.hears .card-list { margin: var(--space-3xs) 0 0; }
+
+/* Join on Meet with the line that says what it does and does not do, under it. */
+.join-meet { display: flex; flex-direction: column; gap: var(--space-3xs); max-width: 36ch; }
+
 /* The switch, eight states. role=switch + aria-checked; the 44px hit area is the ::before inset so
    the control itself stays 44×24. The knob slides on the one duration; the global reduced-motion
    rule collapses it. */

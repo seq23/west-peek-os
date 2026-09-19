@@ -4,6 +4,7 @@ import { MEETING_TYPES, meetingType } from "@shared/meetings/meetingTypes";
 import { HELD_NOTHING_ON_THE_RECORD, isPastMeeting, splitMeetings } from "@shared/meetings/pastMeetings";
 import { LiveHelpPanel } from "./LiveHelpPanel";
 import { RoomPanel } from "./RoomPanel";
+import { JOIN_ON_MEET_LINE, STANDALONE_ROOM_LINE } from "@shared/meetings/howTheRoomHears";
 import { CloseoutPanel } from "./CloseoutPanel";
 import { AfterPanel, BeforePanel } from "./MeetingFacesPanel";
 import { MeetBand } from "./MeetBand";
@@ -625,7 +626,7 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
             <span data-testid="meeting-status">{statusInWords(m?.status ?? row.status, m ?? row)}</span> · {sourceInWordsRow(row)}
           </p>
         </div>
-        {row.meet_link && <JoinOnMeet meeting={row} />}
+        {row.meet_link && <JoinOnMeet meeting={row} explain />}
         <button type="button" className="btn-ghost" data-testid="record-back" onClick={onBack}>
           ← All meetings
         </button>
@@ -648,6 +649,18 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
                   <button type="button" className="btn-strong btn-lg" data-testid="live-finish" onClick={() => onFace("after")}>
                     Done — open the record
                   </button>
+                  {/*
+                    THE SAME ROOM, WITHOUT THE SHELL. `#/room/<id>` renders this During face alone
+                    (App.tsx, RoomStandalone) — the second window a partner keeps beside the call. The
+                    owner asked whether it was "a real room"; it is this one, and the line says so.
+                  */}
+                  <p className="muted small">
+                    <a href={`#/room/${meetingId}`} target="_blank" rel="noopener noreferrer" data-testid={`room-standalone-link-${meetingId}`} aria-describedby={`room-standalone-line-${meetingId}`}>
+                      Open this room in its own window ↗
+                    </a>
+                    <br />
+                    <span id={`room-standalone-line-${meetingId}`} data-testid={`room-standalone-line-${meetingId}`}>{STANDALONE_ROOM_LINE}</span>
+                  </p>
                 </>
               }
             />
@@ -694,18 +707,32 @@ function QuestionChecklist({ meetingId }: { meetingId: string }): JSX.Element {
  * because the row's other acts are buttons and the design system has no anchor-as-button rule;
  * the label says where it goes and that it opens elsewhere.
  */
-function JoinOnMeet({ meeting }: { meeting: MeetingRow }): JSX.Element {
-  return (
+function JoinOnMeet({ meeting, explain = false }: { meeting: MeetingRow; explain?: boolean }): JSX.Element {
+  /*
+   * WHAT IT DOES AND DOES NOT DO IS SAID ON THE BUTTON (owner, 19 Sep 2026: "If I push Join on Meet
+   * what happens? … Is it recording? Are my AI employees there from Join on Meet alone?"). The
+   * tooltip and the line under it are the same sentence from `howTheRoomHears.ts`, and the During
+   * face's "How this room hears" line says the rest. This component opens a tab. That is all it does.
+   */
+  const button = (
     <button
       type="button"
       data-testid={`join-${meeting.id}`}
-      aria-label="Join on Meet — opens Google Meet in a new tab"
-      title={meeting.meet_link ?? undefined}
+      aria-label="Join on Meet — opens Google Meet in a new tab; nothing joins for you"
+      aria-describedby={explain ? `join-line-${meeting.id}` : undefined}
+      title={JOIN_ON_MEET_LINE}
       onClick={() => window.open(meeting.meet_link ?? "", "_blank", "noopener,noreferrer")}
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6" /></svg>
       Join on Meet
     </button>
+  );
+  if (!explain) return button;
+  return (
+    <div className="join-meet">
+      {button}
+      <span className="field-help" id={`join-line-${meeting.id}`} data-testid={`join-line-${meeting.id}`}>{JOIN_ON_MEET_LINE}</span>
+    </div>
   );
 }
 
