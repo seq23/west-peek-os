@@ -49,7 +49,7 @@
  * Worker's own client, bundled from TypeScript, and never enters the browser page.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,11 +74,13 @@ const POLL_MS = Number(process.env.WP_OS_LISTENER_POLL_MS ?? 30_000);
  * production URL can never be reached with a header instead of a token.
  */
 function workerHeaders() {
+  const u = new URL(BASE_URL);
+  // A LOCAL Worker (WP_OS_ENV=local) reads the dev identity header and ignores Access headers; a
+  // production URL is reached only with the service token, never with a header.
+  if (u.hostname === "127.0.0.1" || u.hostname === "localhost") return { "x-wpos-dev-user": "subscription-claimer@joinwestpeek.com", "content-type": "application/json" };
   const id = process.env.CF_ACCESS_CLIENT_ID;
   const secret = process.env.CF_ACCESS_CLIENT_SECRET;
   if (id && secret) return { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret, "content-type": "application/json" };
-  const u = new URL(BASE_URL);
-  if (u.hostname === "127.0.0.1" || u.hostname === "localhost") return { "x-wpos-dev-user": "subscription-claimer@joinwestpeek.com", "content-type": "application/json" };
   return null;
 }
 
@@ -178,7 +180,11 @@ async function fixture() {
   const results = [];
   let seq = 0;
   const pending = [];
+  // --dump <dir>: keep each slice on disk as well, so the exact bytes the peer page produced can be
+  // played to a transcription service by hand (the encoding proof).
+  const dump = arg("--dump");
   peer.onSlice((slice) => {
+    if (dump) writeFileSync(path.join(dump, `slice-${seq}.webm`), Buffer.from(slice.audio_base64, "base64"));
     const p = workerCall(`/api/meet/live/sessions/${sessionId}/chunk`, { ...slice, sequence: seq++ }).then((r) => { results.push(r); log(`slice ${results.length}: HTTP ${r.status} ${r.body?.error ?? ""} ${r.body?.detail ?? ""} ${r.body?.turns_written !== undefined ? `${r.body.turns_written} turn(s)` : ""}`.trim()); });
     pending.push(p);
   });
