@@ -336,10 +336,13 @@ test.describe("Dealflow", () => {
       await page.getByTestId(`ic-open-${seed.committeeDealId}`).click();
       await expect(page.getByTestId("deal-record")).toBeVisible();
       await expect(page.getByTestId("deal-face-committee")).toHaveAttribute("aria-selected", "true");
-      await expect(page.getByTestId(`ic-deal-${seed.committeeDealId}`)).toBeVisible();
+      // The face says "Reading the committee's file…" until `/api/ic/deals/:id` answers — a read
+      // of six tables that took 6s on a laptop under a load average of 25 on 19 Sep. This waits on
+      // that condition, not on a UI race, so it is given the time a read can take.
+      await expect(page.getByTestId(`ic-deal-${seed.committeeDealId}`)).toBeVisible({ timeout: 30_000 });
       await page.getByTestId(`ic-open-packet-${seed.committeeDealId}`).click();
       await expect(page.getByTestId("deal-packet")).toBeVisible();
-      await expect(page.getByTestId("ic-diligence")).toBeVisible();
+      await expect(page.getByTestId("ic-diligence")).toBeVisible({ timeout: 30_000 });
       report.push(await sweep(page, "dealflow-page", "record · committee + packet", vp));
       for (const face of ["standing", "deal", "known", "history"] as const) {
         await openDealFace(page, face);
