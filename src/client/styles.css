@@ -5809,7 +5809,7 @@ body {
 /* A word longer than the phone (a URL-shaped company name at 320px) wraps inside itself rather than
    pushing the row sideways — Hallmark responsive rule 63. The measurer flags a SQUEEZED title, never
    an unavoidable one. */
-.deal-name, .room-standalone h3, .masthead-answer { overflow-wrap: anywhere; min-width: 0; }
+.deal-name, .room-head h3, .masthead-answer { overflow-wrap: anywhere; min-width: 0; }
 .deal-row-2 { grid-template-columns: minmax(0, 1fr) auto; }
 .deal-row-selected { background: var(--wp-tint); border-color: var(--wp-tint-line); }
 .deal-sub { font-size: var(--text-xs); color: var(--wp-muted); margin-top: var(--space-3xs); }
