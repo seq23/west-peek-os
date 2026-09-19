@@ -855,6 +855,14 @@ export interface TransactionRow {
   transaction_date: string;
   status: (typeof TRANSACTION_STATUSES)[number];
   approval_card_id: string | null;
+  /**
+   * The fund the position is booked to when this executes (migration 0209). Named on the draft so
+   * that a partner's approval can be the last human act. NULL on a draft written through the older
+   * API without one — that draft executes only through the explicit route, with the fund named there.
+   */
+  fund_id: string | null;
+  /** Which entity holds it — "SPV", "Fund I direct", "Warehouse" (migration 0209). */
+  vehicle: string | null;
   firm_scope: string;
   created_by: string;
   created_at: string;
@@ -877,6 +885,9 @@ export interface CreateTransactionInput {
   carry?: number;
   transaction_date: string;
   parties?: TransactionPartyInput[];
+  /** Phase D: the fund the position is booked to on execution, and the entity that holds it. */
+  fund_id?: string;
+  vehicle?: string;
 }
 
 const BUY_SIDE_TYPES: readonly string[] = ["PURCHASE", "PRIMARY_INVESTMENT", "FOLLOW_ON"];
@@ -906,6 +917,9 @@ export async function createTransaction(env: Env, actor: Actor, input: CreateTra
   if (input.quantity <= 0 || input.price_per_share <= 0) {
     throw new InvestmentError(400, "invalid_input", "quantity and price_per_share must be positive");
   }
+  // A fund named on the draft must exist now, not at execution: the approval that executes it is
+  // a partner's click, and "unknown_fund" is not an answer to give a partner who has just said yes.
+  if (input.fund_id) await requireFund(env, input.fund_id);
   const gross = input.quantity * input.price_per_share;
   const fees = input.fees ?? 0;
   const carry = input.carry ?? 0;
@@ -914,8 +928,8 @@ export async function createTransaction(env: Env, actor: Actor, input: CreateTra
   await env.WP_OS_DB.prepare(
     `INSERT INTO "transaction"
        (id, company_id, opportunity_id, transaction_type, security_class_id, quantity, price_per_share,
-        gross_amount, fees, carry, net_amount, transaction_date, status, firm_scope, created_by)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'DRAFT', ?13, ?14)`,
+        gross_amount, fees, carry, net_amount, transaction_date, status, firm_scope, created_by, fund_id, vehicle)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'DRAFT', ?13, ?14, ?15, ?16)`,
   )
     .bind(
       id,
@@ -932,6 +946,8 @@ export async function createTransaction(env: Env, actor: Actor, input: CreateTra
       input.transaction_date,
       actor.firmScopes[0] ?? "west-peek",
       actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+      input.fund_id ?? null,
+      input.vehicle ?? null,
     )
     .run();
   for (const party of input.parties ?? []) {
@@ -1017,13 +1033,30 @@ export async function submitTransactionForApproval(env: Env, actor: Actor, trans
   }
   const opportunity = txn.opportunity_id ? await getOpportunity(env, txn.opportunity_id) : null;
   const actionKey = reservedActionForTransaction(txn, opportunity);
+  // The card says what approving it DOES (Phase D, decision Q1): with a fund on the draft, approval
+  // books the position; without one, approval is a decision and the booking still needs the fund
+  // named on the explicit route. A partner should read that on the card, not discover it afterwards.
+  const company = await env.WP_OS_DB.prepare("SELECT canonical_name FROM canonical_company WHERE id = ?1").bind(txn.company_id).first<{ canonical_name: string }>();
+  const fund = txn.fund_id ? await env.WP_OS_DB.prepare("SELECT name FROM fund WHERE id = ?1").bind(txn.fund_id).first<{ name: string }>() : null;
   const card = await requestApproval(env, actor, {
     action_key: actionKey,
     object_type: "transaction",
     object_id: transactionId,
-    title: `${actionKey}: ${txn.transaction_type} ${txn.quantity} @ ${txn.price_per_share} (company ${txn.company_id})`,
-    summary: `gross ${txn.gross_amount}, fees ${txn.fees}, carry ${txn.carry}, net ${txn.net_amount}, date ${txn.transaction_date}`,
-    payload: { transaction_id: transactionId, transaction_type: txn.transaction_type, company_id: txn.company_id },
+    title: `${actionKey}: ${txn.transaction_type} ${txn.quantity} @ ${txn.price_per_share} (${company?.canonical_name ?? `company ${txn.company_id}`})`,
+    summary:
+      `gross ${txn.gross_amount}, fees ${txn.fees}, carry ${txn.carry}, net ${txn.net_amount}, date ${txn.transaction_date}` +
+      (txn.vehicle ? `, held via ${txn.vehicle}` : "") +
+      (fund
+        ? `. Approving books the position to ${fund.name} — no further step.`
+        : ". No fund is named on this draft, so approving decides it and the booking is executed separately with the fund named."),
+    payload: {
+      transaction_id: transactionId,
+      transaction_type: txn.transaction_type,
+      company_id: txn.company_id,
+      fund_id: txn.fund_id,
+      vehicle: txn.vehicle,
+      executes_on_approval: txn.fund_id !== null,
+    },
     firm_scope: txn.firm_scope,
     submit: true,
   });
@@ -1038,6 +1071,9 @@ export async function submitTransactionForApproval(env: Env, actor: Actor, trans
     firmScope: txn.firm_scope,
     payload: { action_key: actionKey, approval_card_id: card.id },
   });
+  // A standing authority may have approved the card at submission. That is a partner's decision
+  // made in advance, and it books the same way a click does (`bookOnApproval`).
+  if (card.state === "approved") await bookOnApproval(env, actor, card);
   return (await getTransaction(env, transactionId))!;
 }
 
@@ -1129,9 +1165,16 @@ async function reversePositionEffect(env: Env, txn: TransactionRow, effect: Posi
  * + an approved receipt is the only way in; the receipt is consumed on success.
  * Execution applies the position effect and records it on the spine.
  */
-export async function executeTransaction(env: Env, actor: Actor, transactionId: string, receiptId: string | undefined, fundId?: string): Promise<TransactionRow> {
+export async function executeTransaction(env: Env, actor: Actor, transactionId: string, receiptId: string | undefined, fundIdGiven?: string): Promise<TransactionRow> {
   const txn = await getTransaction(env, transactionId);
   if (!txn) throw new InvestmentError(404, "not_found");
+  // The fund the draft named (Phase D) wins over one typed at execution: the card the partner
+  // approved said where the position would be booked, and a different fund here would book
+  // something other than what was approved.
+  const fundId = txn.fund_id ?? fundIdGiven;
+  if (txn.fund_id && fundIdGiven && fundIdGiven !== txn.fund_id) {
+    throw new InvestmentError(409, "fund_mismatch", `the draft names fund ${txn.fund_id}; it cannot be booked to ${fundIdGiven}`);
+  }
   const opportunity = txn.opportunity_id ? await getOpportunity(env, txn.opportunity_id) : null;
   const actionKey = reservedActionForTransaction(txn, opportunity);
   const authz = await authorize(env, actor, actionKey, { objectType: "transaction", objectId: transactionId, firmScope: txn.firm_scope }, { receiptId });
@@ -1166,6 +1209,77 @@ export async function executeTransaction(env: Env, actor: Actor, transactionId: 
     payload: { transaction_id: transactionId, ...effect },
   });
   return (await getTransaction(env, transactionId))!;
+}
+
+/**
+ * APPROVAL EXECUTES THE BOOKING (Phase D: portfolio, design §6, decision Q1 — owner, 18 Sep 2026).
+ *
+ * The ladder used to have a rung after the partner's decision: come back to the deal record, paste
+ * the card's id into a box, press "Book it". `RecordInvestment.tsx` carried that box and the e2e
+ * journey walked it. The owner's words were that there has to be an easy, intuitive way to book a
+ * company as a real Fund I position, and the design's answer is that the partner's approval of the
+ * `investment.approve` card IS the booking — no receipt paste, no third click.
+ *
+ * WHAT IS UNCHANGED, and it is the whole of the governance:
+ *   · nothing reaches `position` except `applyPositionEffect`, and nothing calls that except
+ *     `executeTransaction` — this function calls `executeTransaction`, with the approved card as
+ *     the receipt, exactly as the explicit route does; `validate:booking` reads the code to keep it so;
+ *   · `executeTransaction` re-verifies the receipt through `authorize()` — state approved, this
+ *     action key, this object, decided by somebody who still holds the role — and consumes it, so
+ *     the card cannot book twice and the explicit route afterwards answers `receipt_already_consumed`;
+ *   · the fund is the one the DRAFT named (0209). A draft with no fund — the older API shape — is
+ *     not booked here, because the ledger cannot book to a fund nobody named; the decision stands
+ *     and the explicit route books it with the fund given. Both outcomes are said in the result and
+ *     written on the spine, so an approval that booked nothing is never silent (Rule 0).
+ *
+ * Called from `decideApproval` (a partner's click) and from `submitTransactionForApproval` when a
+ * standing authority approved the card at submission — the same act, decided in advance.
+ */
+export interface BookingOnApproval {
+  executed: boolean;
+  transaction_id: string;
+  position_id: string | null;
+  reason: string;
+}
+
+export async function bookOnApproval(
+  env: Env,
+  actor: Actor,
+  card: { id: string; state: string; action_key: string; object_type: string; object_id: string; firm_scope: string },
+): Promise<BookingOnApproval | null> {
+  if (card.object_type !== "transaction" || card.state !== "approved") return null;
+  const txn = await getTransaction(env, card.object_id);
+  if (!txn) return null;
+  const opportunity = txn.opportunity_id ? await getOpportunity(env, txn.opportunity_id) : null;
+  if (reservedActionForTransaction(txn, opportunity) !== card.action_key) return null;
+  if (txn.status === "EXECUTED") {
+    return { executed: false, transaction_id: txn.id, position_id: null, reason: "already_executed" };
+  }
+  if (!txn.fund_id) {
+    const { actorType, actorId } = eventActor(actor);
+    await appendEvent(env, {
+      eventType: "investment.booking_awaits_fund",
+      actorType,
+      actorId,
+      objectType: "transaction",
+      objectId: txn.id,
+      firmScope: txn.firm_scope,
+      payload: { approval_card_id: card.id, reason: "no_fund_on_draft" },
+    });
+    return {
+      executed: false,
+      transaction_id: txn.id,
+      position_id: null,
+      reason: "Approved, not booked: the draft names no fund. Book it on the company's record with the fund named, or draft it again from Portfolio.",
+    };
+  }
+  const executed = await executeTransaction(env, actor, txn.id, card.id, txn.fund_id);
+  const position = await env.WP_OS_DB.prepare(
+    "SELECT id FROM position WHERE company_id = ?1 AND fund_id = ?2 AND security_class_id = ?3 AND status = 'OPEN'",
+  )
+    .bind(executed.company_id, txn.fund_id, executed.security_class_id)
+    .first<{ id: string }>();
+  return { executed: true, transaction_id: txn.id, position_id: position?.id ?? null, reason: "booked_on_approval" };
 }
 
 /**
@@ -2010,6 +2124,10 @@ const createTransactionSchema = z.object({
   carry: z.number().optional(),
   transaction_date: z.string().trim().min(1),
   parties: z.array(partySchema).optional(),
+  // Phase D: named on the draft so approval can execute (0209). Optional here so the older
+  // API shape still drafts; a draft without a fund executes only through the explicit route.
+  fund_id: z.string().trim().min(1).optional(),
+  vehicle: z.string().trim().min(1).max(80).optional(),
 });
 
 export async function handleCreateTransaction(ctx: RouteContext): Promise<Response> {

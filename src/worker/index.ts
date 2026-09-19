@@ -507,6 +507,7 @@ import {
 import { handleAllocationStrategyView, handlePortfolioCockpit } from "./services/cockpit";
 import { handleDraftPortfolioSummary, handlePortfolioReporting } from "./services/portfolioReporting";
 import { handlePortfolioAllocation, handlePortfolioComposition, handlePortfolioHoldings } from "./services/portfolioHoldings";
+import { handleBookHolding, handleReservePosition, handleSellHolding } from "./services/portfolioBooking";
 import { handleCheckConnector, handleListConnectors, handleMeetingPrepQueue } from "./services/connectors";
 import { handleAcceptEngagement, handleListEngagements, handleOpenEngagement } from "./services/specialist";
 import {
@@ -1396,6 +1397,16 @@ const router = new Router()
   // P25 — MP cockpit views. Read-only aggregations; nothing is recomputed for display.
   .get("/api/portfolio/cockpit", handlePortfolioCockpit)
   .get("/api/allocation/scenarios/:id/strategy-view", handleAllocationStrategyView)
+  // === Phase D: portfolio ===
+  // Book it from the row (design §6, §12.4): ONE save walks the existing ladder — share class →
+  // DRAFT transaction → the investment.approve card — and a partner's approval of that card
+  // executes the booking (services/approvals.ts decideApproval → investment.ts bookOnApproval →
+  // executeTransaction). Nothing here opens a position. A sale starts from the booked row (Q5) and
+  // is a SECONDARY_SALE deal on Dealflow; a reserve is an MP write per company (0210).
+  .post("/api/holdings/:company_id/book", handleBookHolding)
+  .post("/api/holdings/:company_id/sell", handleSellHolding)
+  .post("/api/positions/:id/reserve", handleReservePosition)
+  // === end Phase D ===
   // === Phase Portfolio ===
   // What the firm owns, as ONE list: closed investments and booked positions, merged per company.
   // Composition and the deployment ring are computed from that list, so Portfolio and Fund
