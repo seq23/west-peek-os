@@ -38,6 +38,8 @@ export function AllocationRing({
   total,
   caption,
   testid,
+  format = usd,
+  ariaLabel,
 }: {
   slices: RingSlice[];
   total: number;
@@ -45,12 +47,21 @@ export function AllocationRing({
   caption: string;
   /** Prefix for the legend rows' test ids, so two hosts on one page stay distinguishable. */
   testid: string;
+  /**
+   * How a value is written. Dollars by default — the fund hosts. The meeting room's "chart this"
+   * answers (Phase C) are counts and metrics, not money, and pass their own. The ring is still the
+   * one ring: on 18 Sep 2026 `validate:portfolio` caught RoomPanel drawing its own strokeDasharray
+   * geometry, and this prop is what let it host the same drawing instead of a second one.
+   */
+  format?: (n: number) => string;
+  /** The accessible name for the drawing; defaults to the fund hosts' wording. */
+  ariaLabel?: string;
 }): JSX.Element {
   const segments = ringSegments(slices, total);
   return (
     <>
       <div className="allocation-body">
-        <svg viewBox="0 0 130 130" width="180" height="180" role="img" aria-label={`Allocation of ${usd(total)}`}>
+        <svg viewBox="0 0 130 130" width="180" height="180" role="img" aria-label={ariaLabel ?? `Allocation of ${format(total)}`}>
           <circle cx="65" cy="65" r="54" fill="none" stroke="var(--wp-line)" strokeWidth="18" />
           {segments.map((s) => (
             <circle
@@ -65,10 +76,10 @@ export function AllocationRing({
               strokeDashoffset={s.offset}
               transform="rotate(-90 65 65)"
             >
-              <title>{`${s.label}: ${usd(s.usd)} (${s.pct.toFixed(0)}%)`}</title>
+              <title>{`${s.label}: ${format(s.usd)} (${s.pct.toFixed(0)}%)`}</title>
             </circle>
           ))}
-          <text x="65" y="61" textAnchor="middle" className="ring-total">{usd(total)}</text>
+          <text x="65" y="61" textAnchor="middle" className="ring-total">{format(total)}</text>
           <text x="65" y="76" textAnchor="middle" className="ring-caption">{caption}</text>
         </svg>
 
@@ -78,7 +89,7 @@ export function AllocationRing({
             <li key={s.key} data-testid={`${testid}-${s.key}`}>
               <span className="legend-swatch" style={{ background: s.color }} aria-hidden="true" />
               <span className="legend-label">{s.label}</span>
-              <span className="legend-value">{usd(s.usd)}</span>
+              <span className="legend-value">{format(s.usd)}</span>
               <span className="legend-pct">{s.pct.toFixed(0)}%</span>
               <span className="legend-note">{s.note}</span>
             </li>
@@ -98,13 +109,13 @@ export function AllocationRing({
               {segments.map((s) => (
                 <tr key={s.key}>
                   <td>{s.label}</td>
-                  <td className="num">{usd(s.usd)}</td>
+                  <td className="num">{format(s.usd)}</td>
                   <td className="num">{s.pct.toFixed(1)}%</td>
                 </tr>
               ))}
               <tr>
                 <td><strong>Total</strong></td>
-                <td className="num"><strong>{usd(total)}</strong></td>
+                <td className="num"><strong>{format(total)}</strong></td>
                 <td className="num"><strong>100%</strong></td>
               </tr>
             </tbody>

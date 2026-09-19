@@ -1,3 +1,5 @@
+import { AllocationRing } from "./AllocationRing";
+import type { RingSlice } from "@shared/fund/allocation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, useApi } from "../lib/api";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
@@ -707,31 +709,24 @@ export function RoomChart({ kind, rows, columns, title }: { kind: string; rows: 
   const pad = 8;
 
   if (kind === "pie") {
-    const total = points.reduce((s, p) => s + Math.max(0, p.value), 0) || 1;
-    let acc = 0;
-    const r = 54;
-    const c = 2 * Math.PI * r;
+    /*
+     * THE ONE RING. This used to draw its own strokeDasharray geometry — the same 54px radius and
+     * the same circumference arithmetic as AllocationRing.tsx, copied. `validate:portfolio` refused
+     * the merge on 18 Sep 2026: two rings drift the way two numbers drift. So the room hosts the
+     * fund's drawing and passes its own formatter; the slice field is called `usd` because the ring
+     * was born on the fund pages, and a count rides in it unchanged.
+     */
+    const total = points.reduce((s, p) => s + Math.max(0, p.value), 0);
+    const slices: RingSlice[] = points.map((p, i) => ({
+      key: `s${i}`,
+      label: p.label,
+      usd: Math.max(0, p.value),
+      color: SERIES[i % SERIES.length] ?? "var(--viz-1)",
+      note: "",
+    }));
     return (
       <div className="room-chart" data-testid="room-chart-pie">
-        <svg viewBox="0 0 130 130" width="150" height="150" role="img" aria-label={title}>
-          <circle cx="65" cy="65" r={r} fill="none" stroke="var(--wp-line)" strokeWidth="18" />
-          {points.map((p, i) => {
-            const frac = Math.max(0, p.value) / total;
-            const dash = `${frac * c} ${c}`;
-            const offset = -acc * c;
-            acc += frac;
-            return (
-              <circle key={i} cx="65" cy="65" r={r} fill="none" stroke={SERIES[i % SERIES.length]} strokeWidth="18" strokeDasharray={dash} strokeDashoffset={offset} transform="rotate(-90 65 65)">
-                <title>{`${p.label}: ${p.value}`}</title>
-              </circle>
-            );
-          })}
-        </svg>
-        <ul className="room-legend">
-          {points.map((p, i) => (
-            <li key={i}><span className="legend-swatch" style={{ background: SERIES[i % SERIES.length] }} aria-hidden="true" /> {p.label} · {p.value}</li>
-          ))}
-        </ul>
+        <AllocationRing slices={slices} total={total || 1} caption={title} testid="room-pie" format={(n) => String(Math.round(n * 100) / 100)} ariaLabel={title} />
       </div>
     );
   }
