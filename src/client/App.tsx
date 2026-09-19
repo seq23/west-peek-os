@@ -257,7 +257,12 @@ const NAV_GROUPS = [
       // Introductions moved into Community. It sat here beside Approvals and Notifications — things
       // that always have something waiting — while being a surface that is deliberately empty most
       // months, so its presence read as a system that had stopped working. The route stays live.
-      { key: "weekly-review", label: "Weekly review" },
+      //
+      // The weekly review is archived, 18 Sep 2026 — owner: "we don't need it anymore." The
+      // per-person Wednesday prep packet (services/meetingPrep.ts, kind `meeting_prep`) replaced
+      // the one shared sixteen-heading agenda, and its job `weekly_mp_review` is RETIRED (0198).
+      // Every review already written is kept. The route stays live so a bookmark still lands;
+      // it is simply no longer listed here.
     ],
   },
   {

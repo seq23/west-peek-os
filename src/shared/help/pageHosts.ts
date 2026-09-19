@@ -160,8 +160,9 @@ export const PAGE_HOSTS: Readonly<Record<string, PageHost>> = {
  * itself, and putting a colleague's face over a spend table implies a judgement nobody is making.
  *
  * The personal surfaces — Home, Today, Notifications — are excluded for a different reason: they
- * are already signed. Home carries a byline per delivered module and the weekly review is signed by
- * both Chiefs of Staff, so a host card there would be a second signature on a page that has one.
+ * are already signed. Home carries a byline per delivered module, and the weekly review (archived
+ * 18 Sep 2026, still readable by URL) was signed by both Chiefs of Staff, so a host card there
+ * would be a second signature on a page that has one.
  */
 export const HOSTED_NAV_GROUPS: readonly string[] = ["Deals", "Firm", "Learn"];
 

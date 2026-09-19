@@ -25,6 +25,11 @@ export interface PagePurpose {
   purpose: string;
   /** Two to four things you can actually do here, in the operator's words. */
   youCan: string[];
+  /**
+   * The page is archived: off the nav, still answering its URL, nothing new made on it. The string
+   * is the dated reason, said on the page itself so a bookmark that lands here is not confusing.
+   */
+  archived?: string;
 }
 
 export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
@@ -54,7 +59,10 @@ export const PAGE_PURPOSES: Readonly<Record<string, PagePurpose>> = {
   },
   "weekly-review": {
     purpose: "One agenda across sixteen areas of the firm, assembled from live records rather than written by hand.",
-    youCan: ["Generate this week's agenda", "Work down it with both partners", "Record how each item was resolved"],
+    youCan: ["Read the reviews already written", "Work down one with both partners", "Record how each item was resolved"],
+    // Owner, 18 Sep 2026: "we don't need it anymore." Off the nav; the route stays live so a
+    // bookmark lands; the job that generated it is retired; every review written is kept.
+    archived: "Archived 18 Sep 2026 — the per-person Wednesday prep packet replaced it. Nothing new is generated here; what was written is kept.",
   },
   capture: {
     purpose: "Somewhere to put anything that arrives before it has a home — a note, a forward, a thought between meetings.",

@@ -53,6 +53,17 @@ export interface DeliverableKindDef {
    * `intelligence_report`; only the second copy stops being made.
    */
   file: boolean;
+  /**
+   * ARCHIVED: nothing new of this kind is produced, and the finished-work shelf no longer surfaces
+   * it by default. Every row is kept and still answers by URL and by `?kind=`. The string is the
+   * reason, dated, so a reader of this file knows why without a git blame.
+   */
+  archived?: string;
+}
+
+/** The kinds the shelf hides unless asked for by name. Derived from the definitions, never a second list. */
+export function archivedDeliverableKinds(): DeliverableKind[] {
+  return DELIVERABLE_KINDS.filter((k) => Boolean(DELIVERABLE_KINDS_BY_KEY[k].archived));
 }
 
 export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, DeliverableKindDef>> = {
@@ -72,6 +83,9 @@ export const DELIVERABLE_KINDS_BY_KEY: Readonly<Record<DeliverableKind, Delivera
     page: "weekly-review",
     docType: "REVIEW",
     file: true,
+    // Owner, 18 Sep 2026: "we don't need it anymore." The per-person prep packet below replaced
+    // it; its job is RETIRED (0198) and the nav item is gone. Every review written is kept.
+    archived: "Archived 18 Sep 2026: replaced by the per-person Wednesday prep packet.",
   },
   research_packet: {
     key: "research_packet",

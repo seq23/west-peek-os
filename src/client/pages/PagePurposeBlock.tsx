@@ -80,6 +80,13 @@ export function PagePurposeBlock({
           </button>
         </span>
       </p>
+      {/* An archived page says so first, so a bookmark that lands here reads the reason before the
+          controls — a surface that is still reachable but no longer listed has to explain itself. */}
+      {p.archived && (
+        <p className="notice notice-gate small" data-testid={`page-archived-${navKey}`}>
+          {p.archived}
+        </p>
+      )}
       <p className="page-purpose-can">
         {p.youCan.map((c, i) => (
           <span key={c}>

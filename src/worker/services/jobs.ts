@@ -308,12 +308,20 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   // confirmed, not assumed. Dropping the CHECK would remove what stops a typo becoming a job that
   // silently never runs, so one documented special case is the better trade. See migration 0043.
   if (job.job_key === "weekly_mp_review") {
-    const { generateReview } = await import("./weeklyReview");
-    const out = await generateReview(env, actor, now);
-    artifacts.push({ kind: "WEEKLY_REVIEW", ref_type: "weekly_review", ref_id: String(out.review.id) });
+    /*
+     * ARCHIVED, 18 Sep 2026. Owner: "we don't need it anymore." The row is RETIRED (migration 0198)
+     * and `checkPreconditions` refuses it before this line on every trigger, so this branch is not
+     * reachable from a tick. It is kept as a REFUSAL rather than deleted, because deleting it would
+     * make a hand-edited row fall through to the INTELLIGENCE path below and run the sweep under
+     * this key — and a job that generates something other than what its name says is worse than one
+     * that says no. The generator itself (services/weeklyReview.ts) is still reachable by a human
+     * from the page's own button, behind `weekly_review.manage`; nothing on a clock reaches it.
+     */
     return {
-      status: "SUCCEEDED",
-      summary: `Weekly review assembled: ${(out.items ?? []).length} agenda item(s) across sixteen headings.`,
+      status: "REFUSED",
+      summary:
+        "The weekly review is archived (18 Sep 2026): the per-person Wednesday prep packet replaced it. " +
+        "This job is RETIRED and never generates again; every review already written is kept.",
       artifacts,
     };
   }
