@@ -149,7 +149,8 @@ export function checkPage(page) {
   else if (!/own\?\.holdings\s*\?\?\s*\[\]\)\.map\(/.test(list[0])) {
     bad.push("the `holdings-list` is not rendered from the holdings response — it would read positions alone again");
   }
-  if (!/<Composition\s*\/>/.test(page)) bad.push("PortfolioPage.tsx does not host <Composition />");
+  // `<Composition />` or `<Composition level="h4" />` — hosted either way; a prop is not a second drawing.
+  if (!/<Composition\b[^>]*\/>/.test(page)) bad.push("PortfolioPage.tsx does not host <Composition />");
   if (!/<PortfolioAllocation\b/.test(page)) bad.push("PortfolioPage.tsx does not host <PortfolioAllocation");
   return bad;
 }
@@ -259,7 +260,7 @@ function selfTest() {
   // Rule 3 — the page reading positions alone again.
   expectCaught("page not fetching holdings", checkPage(page.replace('"/api/portfolio/holdings"', '"/api/portfolio/positions"')));
   expectCaught("list rendered from positions", checkPage(page.replace("(own?.holdings ?? []).map(", "(p?.holdings ?? []).map(")));
-  expectCaught("composition not hosted", checkPage(page.replace("<Composition />", "")));
+  expectCaught("composition not hosted", checkPage(page.replace(/<Composition\b[^>]*\/>/, "")));
   expectCaught("allocation not hosted", checkPage(page.replace(/<PortfolioAllocation\b/, "<PortfolioNothing")));
 
   // Rule 4 — a copied ring.

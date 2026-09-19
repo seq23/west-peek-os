@@ -13,10 +13,17 @@ import { api, mutationError, useApi, type MeResponse } from "../lib/api";
  * the product could report "1 holding" and "owns nothing" at the same time.
  *
  * THE SHAPE IS THE GOVERNANCE, and it is deliberately not one button. A security class first,
- * because shares are shares OF something. Then a draft, which is arithmetic and commits nothing.
- * Then submission, which raises an approval card a partner decides on the Approvals page. Only then
- * execute, carrying the receipt — and that is the step that books the position. Nothing here
- * shortcuts any of it; the point is that the ladder was already right and simply had no rungs.
+ * because shares are shares OF something. Then a draft, which is arithmetic and commits nothing —
+ * and names the fund and the vehicle, so that the decision can be the last act. Then submission,
+ * which raises an approval card a partner decides on the Approvals page. APPROVING THAT CARD BOOKS
+ * THE POSITION (Phase D, design §6, decision Q1, owner 18 Sep 2026). The rung that used to follow —
+ * come back here, paste the card's id, press "Book it" — is gone: the server executes through the
+ * same `executeTransaction`, with the approved card as the receipt, the moment the partner decides.
+ * `validate:booking` reads this file and fails if the paste box grows back.
+ *
+ * The easy way to book a closed deal is now "Book it" on its Portfolio row, which is one save. This
+ * panel remains the record's own view of every transaction on the company — follow-ons, secondary
+ * purchases, sales — and the way to undo a booking.
  */
 
 interface SecurityClass {
@@ -34,7 +41,12 @@ interface TransactionRow {
   net_amount: number;
   transaction_date: string;
   approval_card_id: string | null;
+  fund_id: string | null;
+  vehicle: string | null;
 }
+
+/** Which entity holds it. A short list, typed over when none fits. */
+const VEHICLES = ["Fund I direct", "SPV", "Warehouse"] as const;
 
 const TRANSACTION_TYPES = [
   { key: "PRIMARY_INVESTMENT", label: "Primary investment — we bought new shares from the company" },
@@ -60,9 +72,9 @@ function transactionStanding(status: string): string {
     case "DRAFT":
       return "drafted — nothing is booked";
     case "PENDING_APPROVAL":
-      return "waiting on a partner's decision";
+      return "waiting on a partner's decision — approving it books the position";
     case "APPROVED":
-      return "approved — not booked until it is executed";
+      return "approved — the draft named no fund, so it is booked on the Portfolio row with one";
     case "EXECUTED":
       return "booked — the fund holds this";
     // `VOID` is what the column holds (`migrations/0006…:111` CHECK, and `voidTransaction` writes
@@ -117,7 +129,11 @@ export function RecordInvestment({
     fees: "0",
     carry: "0",
     transaction_date: new Date().toISOString().slice(0, 10),
+    fund_id: "",
+    vehicle: "Fund I direct",
   });
+  // The receipt for UNDOING a booking (`transaction.void`, MP-reserved). Booking itself needs no
+  // receipt any more: the partner's approval is the receipt, spent on the server.
   const [receipt, setReceipt] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -150,6 +166,13 @@ export function RecordInvestment({
       setMessage(`Still needed: ${missing.map((m) => m.split("_").join(" ")).join(", ")}.`);
       return;
     }
+    // The fund is named on the draft so that the partner's approval can book it. Read rather than
+    // typed: the first fund when there is one, and the partner should not have to know an id.
+    const fundId = form.fund_id || funds.data?.funds?.[0]?.id;
+    if (!fundId) {
+      setMessage("No fund is recorded, and a position has to belong to one. Set the fund up first.");
+      return;
+    }
     setBusy(true);
     const failed = mutationError(
       await api("/api/transactions", {
@@ -164,12 +187,14 @@ export function RecordInvestment({
           fees: Number(form.fees || 0),
           carry: Number(form.carry || 0),
           transaction_date: form.transaction_date,
+          fund_id: fundId,
+          vehicle: form.vehicle.trim() || "Fund I direct",
         },
       }),
       201,
     );
     setBusy(false);
-    setMessage(failed ?? "Drafted. Nothing is booked yet — submit it for a partner to approve.");
+    setMessage(failed ?? "Drafted. Nothing is booked yet — send it, and a partner's approval books it.");
     if (!failed) transactions.reload();
   }
 
@@ -177,7 +202,7 @@ export function RecordInvestment({
     setBusy(true);
     const failed = mutationError(await api(`/api/transactions/${id}/submit`, { method: "POST", body: {} }), [200, 201]);
     setBusy(false);
-    setMessage(failed ?? "Sent for approval. A Managing Partner decides it on Approvals.");
+    setMessage(failed ?? "Sent for approval. A Managing Partner decides it on Approvals, and approving it books the position.");
     if (!failed) transactions.reload();
   }
 
@@ -193,8 +218,9 @@ export function RecordInvestment({
    * a booking is a mistake somebody notices AFTER the fund's own records say it owns something, and
    * the only way to correct it was an API client.
    *
-   * The receipt field is shared with Book it deliberately — both are MP-reserved acts on the same
-   * transaction, and a second box for the same kind of token would invite pasting the wrong one.
+   * Undoing keeps its receipt box: `transaction.void` is its own reserved decision with its own
+   * card, and reversing a booked position is the one act on this panel that still wants the card's
+   * id in hand. Booking no longer does — approval is the booking.
    */
   async function voidTxn(id: string) {
     setBusy(true);
@@ -213,43 +239,14 @@ export function RecordInvestment({
     if (!failed) transactions.reload();
   }
 
-  async function execute(id: string) {
-    if (!receipt.trim()) {
-      setMessage("Paste the approval receipt id from the decided card. Executing is what books the position.");
-      return;
-    }
-    const fund = funds.data?.funds?.[0];
-    if (!fund) {
-      setMessage("No fund is recorded, and a position has to belong to one. Set the fund up first.");
-      return;
-    }
-    setBusy(true);
-    const failed = mutationError(
-      await api(`/api/transactions/${id}/execute`, {
-        method: "POST",
-        // `approval_receipt_id`, not `receipt_id` — the wrong name is accepted by the schema as
-        // absent, and the run is then refused for want of a receipt it was actually given.
-        body: { approval_receipt_id: receipt.trim(), fund_id: fund.id },
-      }),
-      [200, 201],
-    );
-    setBusy(false);
-    setMessage(failed ?? "Executed. The fund now holds a recorded position in this company.");
-    if (!failed) {
-      setReceipt("");
-      transactions.reload();
-      onRecorded?.();
-    }
-  }
-
   return (
     <section className="card" data-testid="record-investment">
       {/* An h4: this panel sits inside "The deal itself" on the deal record, and a section heading
           here would read as a sibling of that section rather than a part of it. */}
       <h4>What the fund has actually booked</h4>
       <p className="muted small">
-        A position is created when a transaction is executed, and never any other way. Draft it, a partner approves it,
-        then it is booked against {companyName}.
+        A position is created when a transaction is executed, and never any other way. Draft it naming the fund, send
+        it, and a partner's approval books it against {companyName} — no receipt to paste.
       </p>
 
       {available.length === 0 && (
@@ -328,6 +325,32 @@ export function RecordInvestment({
               onChange={(e) => setForm((f) => ({ ...f, transaction_date: e.target.value }))}
             />
           </label>
+          <label>
+            Vehicle{" "}
+            <input
+              data-testid="txn-vehicle"
+              list="txn-vehicles"
+              value={form.vehicle}
+              onChange={(e) => setForm((f) => ({ ...f, vehicle: e.target.value }))}
+            />
+            <datalist id="txn-vehicles">
+              {VEHICLES.map((v) => (
+                <option key={v} value={v} />
+              ))}
+            </datalist>
+          </label>
+          {(funds.data?.funds?.length ?? 0) > 1 && (
+            <label>
+              Fund{" "}
+              <select data-testid="txn-fund" value={form.fund_id || funds.data!.funds[0]!.id} onChange={(e) => setForm((f) => ({ ...f, fund_id: e.target.value }))}>
+                {funds.data!.funds.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button type="button" className="btn-strong" disabled={busy} data-testid="txn-draft" onClick={() => void draft()}>
             Draft it
           </button>
@@ -350,48 +373,22 @@ export function RecordInvestment({
                 </button>
               </>
             )}
-            {/* The card's id used to be printed here. It is an identifier, it means nothing to a
-                reader, and the card is already the top item on Approvals when it is waiting. */}
-            {t.status === "PENDING_APPROVAL" && (
-              <p className="muted small">
-                Waiting on a decision. A Managing Partner decides it on Approvals; bring the receipt
-                back here afterwards.
-              </p>
-            )}
             {/*
-              THE RUNG THAT WAS NOT THERE, and it is why production holds zero positions.
+              THE RUNG THAT IS NOT HERE ANY MORE, on purpose.
 
-              This read `t.status === "APPROVED"`, and NOTHING EVER WRITES THAT STATUS. The only
-              three UPDATEs on the column are `PENDING_APPROVAL` (submit), `EXECUTED` (execute) and
-              `VOID` (void) — `investment.ts:1030/1146/1194` — so a submitted transaction sits at
-              `PENDING_APPROVAL` for the whole of its approved life and the receipt field could
-              never render. The line directly above it told the partner to "bring the receipt back
-              here afterwards", to a control that did not exist. The ladder was complete on the
-              server and had no last rung on the page, exactly as the comment at the top of this
-              file says it must not.
-
-              Showing it while the decision is still outstanding is safe, and it is the honest
-              shape: the server is the gate. `executeTransaction` re-verifies the receipt through
-              `authorize()` every time — the card must be in state `approved`, for this exact action
-              key and this exact object, decided by somebody who still holds the approver role — and
-              answers `409 approval_required` otherwise. A partner who presses this early is told
-              no by the authority that is entitled to say it, rather than by a hidden button.
+              This row used to carry an "Approval receipt" box and a "Book it" button: after the
+              partner decided on Approvals, somebody came back here, pasted the card's id, and
+              pressed it — the step that created the position. Phase D (design §6, Q1) makes the
+              decision itself the booking: `decideApproval` executes through the same
+              `executeTransaction`, with the approved card as the receipt, so a partner's yes on
+              Approvals is where the position opens. A draft that named no fund (the older shape)
+              is the one case approval cannot book, and its standing says so above.
             */}
-            {(t.status === "PENDING_APPROVAL" || t.status === "APPROVED") && isPartner && (
-              <div className="form-row">
-                <label>
-                  Approval receipt{" "}
-                  <input
-                    data-testid={`txn-receipt-${t.id}`}
-                    value={receipt}
-                    onChange={(e) => setReceipt(e.target.value)}
-                    placeholder="apc_…"
-                  />
-                </label>
-                <button type="button" className="btn-strong" disabled={busy} data-testid={`txn-execute-${t.id}`} onClick={() => void execute(t.id)}>
-                  Book it
-                </button>
-              </div>
+            {t.status === "PENDING_APPROVAL" && (
+              <p className="muted small" data-testid={`txn-pending-${t.id}`}>
+                A Managing Partner decides it on Approvals. Approving it books the position
+                {t.fund_id ? "" : " — once a fund is named on the draft"}; nothing to bring back here.
+              </p>
             )}
             {/*
               REVERSING IT. Offered only once something has actually been booked: a draft is
@@ -413,9 +410,17 @@ export function RecordInvestment({
                 >
                   Undo this booking
                 </button>
+                <label>
+                  Void receipt{" "}
+                  <input
+                    data-testid={`txn-void-receipt-${t.id}`}
+                    value={receipt}
+                    onChange={(e) => setReceipt(e.target.value)}
+                    placeholder="apc_…"
+                  />
+                </label>
                 <span className="muted small">
-                  Backs the position out and keeps the record. Needs a Managing Partner's approval
-                  receipt in the box above.
+                  Backs the position out and keeps the record. Needs the approved transaction.void card's id.
                 </span>
               </div>
             )}

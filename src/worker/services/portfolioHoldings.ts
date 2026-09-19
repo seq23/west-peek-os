@@ -65,9 +65,53 @@ export interface HoldingRow {
   open_asks: number;
   open_alerts: number;
   open_follow_on_reviews: number;
+  // ── Phase D: portfolio (design §6) ──
+  /** The closed deal this row stands on, when there is one. Book it names it so the stand-ins heal. */
+  opportunity_id: string | null;
+  /** Where the deal stands: CLOSED by decision, or entered as history (backfilled). */
+  stage: { status: string; backfilled: boolean } | null;
+  /**
+   * The row's standing, which is the Book-it state machine:
+   *   unbooked → draft (a DRAFT transaction) → awaiting (PENDING_APPROVAL, one card) → booked.
+   *   `declined`: the card was rejected or sent back — edit and resend.
+   */
+  standing: "unbooked" | "draft" | "awaiting" | "declined" | "booked";
+  /** The booking in flight, when the standing is draft/awaiting/declined. */
+  booking: {
+    transaction_id: string;
+    status: string;
+    approval_card_id: string | null;
+    card_state: string | null;
+    quantity: number;
+    price_per_share: number;
+    net_amount: number;
+    transaction_date: string;
+    fund_id: string | null;
+    vehicle: string | null;
+    created_by: string;
+    created_at: string;
+  } | null;
+  /** Shares held and the price paid, from the ledger, when booked. */
+  shares: { quantity: number; price_per_share: number | null; security_class_id: string } | null;
+  /** The per-company reserve (0210): the newest row, or null when none was ever set. */
+  reserve: { amount: number; as_of: string; note: string | null } | null;
+  /** A SECONDARY_SALE opened from this row and still live on Dealflow (decision Q5). */
+  sale: { opportunity_id: string; status: string } | null;
+}
+
+/** Ownership concentration, per company, against the plan's cap (design §6: "concentration line"). */
+export interface ConcentrationView {
+  /** From the current concentration_policy_version; null when the fund has no policy yet. */
+  max_single_company_pct: number | null;
+  /** The committed capital the cap is a share of — the mandate's target size, as the ring's total. */
+  committed_usd: number;
+  cap_usd: number | null;
+  rows: Array<{ company_id: string; company: string; at_cost_usd: number; pct_of_committed: number; ownership_pct: number | null; level: "ok" | "near" | "at" }>;
 }
 
 interface ClosedRow {
+  id: string;
+  backfilled_at: string | null;
   company_id: string;
   company: string;
   sector: string | null;
@@ -88,8 +132,14 @@ interface PositionRow {
   fund_id: string;
   fund_name: string;
   cost_basis: number;
+  quantity: number;
+  security_class_id: string;
   opened_at: string;
   transaction_type: string | null;
+  txn_price: number | null;
+  reserve_minor: number | null;
+  reserve_as_of: string | null;
+  reserve_note: string | null;
   value_minor: number | null;
   mark_source: string | null;
   mark_basis: string | null;
@@ -109,7 +159,7 @@ export async function portfolioHoldings(env: Env, identity: FirmUserIdentity): P
 
   const closed = (
     await env.WP_OS_DB.prepare(
-      `SELECT o.company_id, c.canonical_name AS company, c.sector, o.opportunity_type,
+      `SELECT o.id, o.backfilled_at, o.company_id, c.canonical_name AS company, c.sector, o.opportunity_type,
               o.price_per_share, o.quantity, o.terms_json, o.placeholder_fields, o.placeholder_note, o.as_of_date
          FROM investment_opportunity o
          JOIN canonical_company c ON c.id = o.company_id
@@ -121,13 +171,17 @@ export async function portfolioHoldings(env: Env, identity: FirmUserIdentity): P
   const positions = (
     await env.WP_OS_DB.prepare(
       `SELECT p.id AS position_id, p.company_id, c.canonical_name AS company, c.sector,
-              p.fund_id, f.name AS fund_name, p.cost_basis, p.opened_at,
-              t.transaction_type,
+              p.fund_id, f.name AS fund_name, p.cost_basis, p.quantity, p.security_class_id, p.opened_at,
+              t.transaction_type, t.price_per_share AS txn_price,
+              r.amount_minor AS reserve_minor, r.as_of_date AS reserve_as_of, r.note AS reserve_note,
               m.value_minor, m.source AS mark_source, m.basis AS mark_basis, m.as_of_date AS mark_as_of
          FROM position p
          JOIN canonical_company c ON c.id = p.company_id
          JOIN fund f ON f.id = p.fund_id
          LEFT JOIN "transaction" t ON t.id = p.acquired_via_transaction_id
+         LEFT JOIN position_reserve r
+           ON r.id = (SELECT id FROM position_reserve WHERE position_id = p.id
+                       ORDER BY as_of_date DESC, created_at DESC LIMIT 1)
          LEFT JOIN position_mark m
            ON m.id = (SELECT id FROM position_mark WHERE position_id = p.id
                        ORDER BY as_of_date DESC, created_at DESC LIMIT 1)
@@ -177,8 +231,18 @@ export async function portfolioHoldings(env: Env, identity: FirmUserIdentity): P
       open_asks: 0,
       open_alerts: 0,
       open_follow_on_reviews: 0,
+      opportunity_id: r.id,
+      stage: { status: "CLOSED", backfilled: r.backfilled_at !== null },
+      standing: "unbooked",
+      booking: null,
+      shares: null,
+      reserve: null,
+      sale: null,
     });
   }
+
+  const reserveOf = (p: PositionRow) =>
+    p.reserve_minor === null || p.reserve_as_of === null ? null : { amount: Math.round(p.reserve_minor) / 100, as_of: p.reserve_as_of, note: p.reserve_note };
 
   for (const p of positions) {
     const valuation =
@@ -198,6 +262,9 @@ export async function portfolioHoldings(env: Env, identity: FirmUserIdentity): P
       existing.placeholder_note = null;
       existing.valuation = existing.valuation ?? valuation;
       existing.invested_on = existing.invested_on ?? p.opened_at.slice(0, 10);
+      existing.standing = "booked";
+      existing.shares = existing.shares ?? { quantity: p.quantity, price_per_share: p.txn_price, security_class_id: p.security_class_id };
+      existing.reserve = existing.reserve ?? reserveOf(p);
       continue;
     }
     byCompany.set(p.company_id, {
@@ -221,6 +288,13 @@ export async function portfolioHoldings(env: Env, identity: FirmUserIdentity): P
       open_asks: 0,
       open_alerts: 0,
       open_follow_on_reviews: 0,
+      opportunity_id: null,
+      stage: null,
+      standing: "booked",
+      booking: null,
+      shares: { quantity: p.quantity, price_per_share: p.txn_price, security_class_id: p.security_class_id },
+      reserve: reserveOf(p),
+      sale: null,
     });
   }
 
@@ -307,12 +381,116 @@ export async function portfolioHoldings(env: Env, identity: FirmUserIdentity): P
     if (row) row.open_follow_on_reviews = r.n;
   }
 
+  // ── Phase D: the booking in flight, and the sale opened from the row ──
+  // The newest DRAFT / PENDING_APPROVAL transaction per company is the row's standing between
+  // unbooked and booked; the card's own state says whether a partner sent it back. Read from the
+  // same tables the ledger writes, never inferred from the page's last click.
+  const inFlight = (
+    await bind(
+      env.WP_OS_DB.prepare(
+        `SELECT t.id, t.company_id, t.status, t.approval_card_id, a.state AS card_state, t.quantity, t.price_per_share,
+                t.net_amount, t.transaction_date, t.fund_id, t.vehicle, t.created_by, t.created_at
+           FROM "transaction" t
+           LEFT JOIN approval_card a ON a.id = t.approval_card_id
+          WHERE t.company_id IN (${marks}) AND t.status IN ('DRAFT','PENDING_APPROVAL','APPROVED')
+          ORDER BY t.created_at DESC`,
+      ),
+    ).all<{
+      id: string; company_id: string; status: string; approval_card_id: string | null; card_state: string | null;
+      quantity: number; price_per_share: number; net_amount: number; transaction_date: string;
+      fund_id: string | null; vehicle: string | null; created_by: string; created_at: string;
+    }>()
+  ).results ?? [];
+  for (const t of inFlight) {
+    const row = byCompany.get(t.company_id);
+    if (!row || row.booking) continue;
+    row.booking = {
+      transaction_id: t.id,
+      status: t.status,
+      approval_card_id: t.approval_card_id,
+      card_state: t.card_state,
+      quantity: t.quantity,
+      price_per_share: t.price_per_share,
+      net_amount: t.net_amount,
+      transaction_date: t.transaction_date,
+      fund_id: t.fund_id,
+      vehicle: t.vehicle,
+      created_by: t.created_by,
+      created_at: t.created_at,
+    };
+    if (row.standing !== "booked") {
+      const sentBack = t.card_state === "rejected" || t.card_state === "revise_requested";
+      row.standing = t.status === "DRAFT" ? "draft" : sentBack ? "declined" : "awaiting";
+    }
+  }
+
+  const sales = (
+    await bind(
+      env.WP_OS_DB.prepare(
+        `SELECT id, company_id, status FROM investment_opportunity
+          WHERE company_id IN (${marks}) AND opportunity_type = 'SECONDARY_SALE'
+            AND status NOT IN ('CLOSED','PASS','WITHDRAWN') AND archived_at IS NULL
+          ORDER BY created_at DESC`,
+      ),
+    ).all<{ id: string; company_id: string; status: string }>()
+  ).results ?? [];
+  for (const s of sales) {
+    const row = byCompany.get(s.company_id);
+    if (row && !row.sale) row.sale = { opportunity_id: s.id, status: s.status };
+  }
+
   return [...byCompany.values()].sort((a, b) => a.company.localeCompare(b.company));
 }
 
-/** GET /api/portfolio/holdings — every company the firm has invested in, with its facts. */
+/**
+ * Ownership concentration against the plan (design §6: "concentration line under the table against
+ * `concentration_policy_version.max_single_company_pct` × committed — amber ≥ 80% of cap, red at
+ * cap — non-colour cue is the words"). Committed is the mandate's target size, the same figure the
+ * deployment ring calls "committed", so the cap and the ring agree about what the fund is.
+ */
+export async function concentrationView(env: Env, holdings: HoldingRow[], fundId: string | null): Promise<ConcentrationView> {
+  let maxPct: number | null = null;
+  let committed = 0;
+  if (fundId) {
+    const policy = await env.WP_OS_DB.prepare(
+      "SELECT concentration_json AS doc FROM concentration_policy_version WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1",
+    )
+      .bind(fundId)
+      .first<{ doc: string }>();
+    const doc = parseJson<{ max_single_company_pct?: number }>(policy?.doc ?? null, {});
+    maxPct = typeof doc.max_single_company_pct === "number" ? doc.max_single_company_pct : null;
+    const mandate = await env.WP_OS_DB.prepare(
+      "SELECT mandate_json AS doc FROM investment_mandate_version WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1",
+    )
+      .bind(fundId)
+      .first<{ doc: string }>();
+    const m = parseJson<{ target_size_usd?: number }>(mandate?.doc ?? null, {});
+    committed = typeof m.target_size_usd === "number" ? m.target_size_usd : 0;
+  }
+  const cap = maxPct !== null && committed > 0 ? (committed * maxPct) / 100 : null;
+  const rows = holdings
+    .map((h) => {
+      const atCost = h.amount_in ?? 0;
+      const pct = committed > 0 ? (atCost / committed) * 100 : 0;
+      const level: "ok" | "near" | "at" = cap === null ? "ok" : atCost >= cap ? "at" : atCost >= cap * 0.8 ? "near" : "ok";
+      return { company_id: h.company_id, company: h.company, at_cost_usd: atCost, pct_of_committed: pct, ownership_pct: h.ownership_pct, level };
+    })
+    .sort((a, b) => b.at_cost_usd - a.at_cost_usd);
+  return { max_single_company_pct: maxPct, committed_usd: committed, cap_usd: cap, rows };
+}
+
+/** GET /api/portfolio/holdings[?fund_id=…] — every company the firm has invested in, with its facts. */
 export async function handlePortfolioHoldings(ctx: RouteContext): Promise<Response> {
   const holdings = await portfolioHoldings(ctx.env, ctx.identity!);
+  const url = new URL(ctx.request.url);
+  // The concentration cap is a fund's policy; read against the fund asked for, else the one the
+  // booked positions name, else the firm's first fund — never against no fund while one exists.
+  const fundId =
+    url.searchParams.get("fund_id") ??
+    holdings.find((h) => h.fund_id)?.fund_id ??
+    (await ctx.env.WP_OS_DB.prepare("SELECT id FROM fund ORDER BY created_at LIMIT 1").first<{ id: string }>())?.id ??
+    null;
+  const concentration = await concentrationView(ctx.env, holdings, fundId);
   const booked = holdings.filter((h) => h.booked).length;
   const unbooked = holdings.length - booked;
   const invested = holdings.reduce((sum, h) => sum + (h.amount_in ?? 0), 0);
@@ -321,11 +499,12 @@ export async function handlePortfolioHoldings(ctx: RouteContext): Promise<Respon
   const unvalued = holdings.filter((h) => h.valuation === null).length;
   return json({
     holdings,
+    concentration,
     totals: { companies: holdings.length, booked, unbooked, invested, held_at: heldAt, unvalued },
     rule: "A company appears here when the firm has a CLOSED investment in it or the fund holds an OPEN position in it. Both are read; neither is invented from the other.",
     note:
       unbooked > 0
-        ? `${unbooked} of ${holdings.length} ${unbooked === 1 ? "is" : "are"} recorded as closed but not yet booked to a fund, so ${unbooked === 1 ? "it has" : "they have"} no position, no mark and no place in fund performance. Book the transaction on the company's own record, under Dealflow.`
+        ? `${unbooked} of ${holdings.length} ${unbooked === 1 ? "is" : "are"} recorded as closed but not yet booked to a fund, so ${unbooked === 1 ? "it has" : "they have"} no position, no mark and no place in fund performance. Press Book it on the row: one save, one partner's approval, and it is a position.`
         : null,
   });
 }

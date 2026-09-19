@@ -47,7 +47,9 @@ const usd = (n: number): string =>
  * seventy-five per cent early stage, and counting names hides exactly the concentration that
  * matters.
  */
-export function Composition() {
+export function Composition({ level = "h3" }: { level?: "h3" | "h4" } = {}) {
+  // Portfolio hosts this under a band head (Phase D), where the panel's own head is the third rank.
+  const Head = level;
   const data = useApi<{
     positions: number;
     valued: number;
@@ -65,7 +67,7 @@ export function Composition() {
   if (d.positions === 0) {
     return (
       <section className="card viz-root" data-testid="composition-empty">
-        <h3>What the portfolio is made of</h3>
+        <Head>What the portfolio is made of</Head>
         <p className="state-empty">
           Nothing closed yet. This fills in as investments complete, and answers what share of the
           money sits in each kind of deal.
@@ -100,7 +102,7 @@ export function Composition() {
 
   return (
     <section className="card viz-root" data-testid="composition">
-      <h3>What the portfolio is made of</h3>
+      <Head>What the portfolio is made of</Head>
       <p className="muted small">
         {d.valued} holding{d.valued === 1 ? "" : "s"} by money, not by headcount — three small cheques
         and one large one is not an even split.
