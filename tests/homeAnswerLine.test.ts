@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answerLine, inWords, needsHer, secondLine, waitingKinds } from "../src/shared/home/answerLine";
+import { answerLine, firstSentence, inWords, needsHer, secondLine, waitingKinds } from "../src/shared/home/answerLine";
 
 /**
  * THE ANSWER AND THE WAITING PILL ARE ONE NUMBER (design/HOME_DESIGN.md §3.1, 19 Sep 2026).
@@ -72,6 +72,15 @@ describe("the detail names the kind", () => {
     const dotted = secondLine({ decisions: 0, blockers: 1, firstBlocker: "Calendar is not connected.", fresh: 0, quiet: 0, brief: "Today's brief arrived at 7:26 AM." });
     expect(dotted).not.toContain("..");
     expect(dotted).toContain("Today's brief arrived at 7:26 AM.");
+  });
+
+  it("carries ONE sentence of the brief's line — the band under it carries the rest", () => {
+    expect(firstSentence("No brief today yet. None has been built yet.")).toBe("No brief today yet.");
+    expect(firstSentence("Still building — writing. 3 minutes in; usually about 4 minutes. The slow end is 6.")).toBe("Still building — writing.");
+    expect(firstSentence("No brief yet — attempt 2 of 3 failed: the model was cut off")).toBe("No brief yet — attempt 2 of 3 failed: the model was cut off");
+    const line = secondLine({ decisions: 0, blockers: 0, fresh: 0, quiet: 0, brief: "No brief today yet. None has been built yet." });
+    expect(line).toBe("Nothing arrived since you last looked. No brief today yet.");
+    expect(line).not.toContain("None has been built");
   });
 
   it("agrees arrived with the number, and keeps the quiet clause only when there is no brief clause", () => {

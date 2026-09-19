@@ -442,7 +442,12 @@ function IdentityPanel({ me, status, loading, onSignOut }: { me: MeResponse | nu
         <span className="avatar" aria-hidden="true">
           {initials(me.fullName)}
         </span>
-        Signed in as <strong>{me.fullName}</strong> ({me.email}) — {me.roles.join(", ") || "no roles"}
+        Signed in as <strong>{me.fullName}</strong>{" "}
+        {/* The address is the one thing on this line a phone can do without: at 390px it wrapped the
+            identity line to three, and with the purpose block put 437px of chrome above Home's
+            answer (design/HOME_DESIGN.md: the answer sits above the 844px fold). Hidden ≤ 40rem
+            by `.identity-email` and `.identity-role`; the name and Sign out stay. */}
+        <span className="identity-email">({me.email})</span><span className="identity-role"> — {me.roles.join(", ") || "no roles"}</span>
         <button type="button" className="link-button" data-testid="sign-out" onClick={onSignOut}>
           Sign out
         </button>

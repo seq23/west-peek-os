@@ -64,13 +64,22 @@ test.describe("Home", () => {
     expect(answer, "the answer names the same number the pill shows").toContain(n < 10 ? words[n]! : String(n));
     await expect(page.getByTestId("home-rail-waiting")).toHaveAttribute("aria-label", `Waiting on me, ${n}`);
 
-    // ABOVE THE FOLD AT 390×844: masthead, rail, the Waiting head and its first row, the Arrived head.
+    // ABOVE THE FOLD AT 390×844: masthead, rail, the Waiting head and its FIRST row — whole, so
+    // Approve and Reject are on the first screen — and, when one thing waits, the Arrived head.
+    // On the busy morning (the design's words) the waiting rows fill the first screen and Arrived
+    // is the first thing below them: pinned as "no further than one row-height under the fold".
     const fold = PHONE.height;
-    for (const id of ["home-masthead", "home-rail", "home-waiting", `home-waiting-card-${cardId}`, "home-arrived-pill"]) {
-      const box = await page.getByTestId(id).boundingBox();
-      expect(box, `${id} did not render`).not.toBeNull();
-      expect(box!.y, `${id} is below the 390×844 fold (y=${Math.round(box!.y)})`).toBeLessThan(fold);
+    const firstCard = page.locator('[data-testid^="home-waiting-card-"]').first();
+    for (const [name, loc] of [["home-masthead", page.getByTestId("home-masthead")], ["home-rail", page.getByTestId("home-rail")], ["the Waiting head", page.getByTestId("home-waiting-pill")], ["the first waiting row", firstCard]] as const) {
+      const box = await loc.boundingBox();
+      expect(box, `${name} did not render`).not.toBeNull();
+      expect(box!.y + box!.height, `${name} is not whole above the 390×844 fold (bottom=${Math.round(box!.y + box!.height)})`).toBeLessThanOrEqual(fold);
     }
+    const rows = await page.locator('[data-testid^="home-waiting-card-"]').count();
+    const arrivedHead = (await page.getByTestId("home-arrived-pill").boundingBox())!;
+    const lastCard = (await page.locator('[data-testid^="home-waiting-card-"]').last().boundingBox())!;
+    if (rows === 1) expect(arrivedHead.y, `one thing waiting: the Arrived head must be above the fold (y=${Math.round(arrivedHead.y)})`).toBeLessThan(fold);
+    else expect(arrivedHead.y - (lastCard.y + lastCard.height), `${rows} waiting: Arrived is the first thing under the rows, within one row-height`).toBeLessThan(lastCard.height);
     mkdirSync("test-results/home-screens", { recursive: true });
     await page.screenshot({ path: "test-results/home-screens/after-390.png", fullPage: false });
 
@@ -182,6 +191,8 @@ test.describe("Home", () => {
       await expect(page.getByTestId("home-waiting-select-bar")).toHaveCount(0);
     }
     await expect(page.locator('[data-testid="home-page"]').getByText(/Approve selected/i)).toHaveCount(0);
+    // Leave the local record as it was found: this card was raised to prove it cannot be batched.
+    expect((await request.post(`/api/approvals/${cardId}/decide`, { headers: MP, data: { decision: "rejected", note: "e2e: raised to prove select-many never ticks an approval" } })).status()).toBe(200);
   });
 
   test("Home holds the measured contract at five widths, and the brief band on every filter", async ({ page }) => {

@@ -87,7 +87,7 @@ async function approvalsModule(env: Env, identity: FirmUserIdentity): Promise<Ho
   const rows = await env.WP_OS_DB.prepare(
     `SELECT id, action_key, object_type, object_id, title, required_approver_roles_json, created_at,
             risk_level, impact_note, expires_at, requested_by_type, requested_by_id
-       FROM approval_card WHERE state = 'pending_review' ORDER BY created_at LIMIT 25`,
+       FROM approval_card WHERE state = 'pending_review' ORDER BY created_at LIMIT 100`,
   ).all<{ id: string; action_key: string; object_type: string; object_id: string; title: string; required_approver_roles_json: string; created_at: string; risk_level: string; impact_note: string | null; expires_at: string | null; requested_by_type: string; requested_by_id: string }>();
   const all = rows.results ?? [];
   const mine = all.filter((c) => {
@@ -103,7 +103,12 @@ async function approvalsModule(env: Env, identity: FirmUserIdentity): Promise<Ho
     answers: "What needs my decision?",
     link: "approvals",
     count: mine.length,
-    items: mine.slice(0, 8).map((c) => ({
+    // EVERY card she can decide, not the first eight: Home's masthead, its Waiting pill and the
+    // band's rows are ONE count (design/HOME_DESIGN.md §3.1), and the page counts the rows it was
+    // handed. Capped at eight, the ninth card was pending, uncounted and undecidable from Home —
+    // found 19 Sep 2026 when the Home journey's own card was the ninth. Production has raised 18
+    // cards ever and holds 0 pending, so 100 is a ceiling nobody reaches, not a page size.
+    items: mine.map((c) => ({
       id: c.id, title: c.title, action_key: c.action_key, created_at: c.created_at,
       risk_level: c.risk_level, impact_note: c.impact_note, expires_at: c.expires_at,
       requested_by_type: c.requested_by_type, requested_by_id: c.requested_by_id,

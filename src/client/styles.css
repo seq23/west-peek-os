@@ -893,11 +893,13 @@ details h3 {
   color: var(--wp-ink);
 }
 
-/* Inline drill-through inside dense rows. Still a real target: 44px on touch. */
+/* Inline drill-through inside dense rows. Still a real target: 24px on the desk (the measured
+   contract's floor — Home's foot links and the arrivals' Open/Email/Put away measured 20–23px at
+   1280 on 19 Sep 2026), 44px on touch. */
 .surface-body button.link-button,
 .shell-header button.link-button,
 .link-button {
-  min-height: auto;
+  min-height: var(--space-xl);
   padding: var(--space-3xs) var(--space-2xs);
   border: 1px solid transparent;
   border-radius: var(--radius-xs);
@@ -5956,6 +5958,16 @@ body {
    to one column through minmax(0,1fr) tracks only. ── */
 @media (max-width: 40rem) {
   .masthead h2 { font-size: var(--text-xl); }
+  /* THE 7 AM SCREEN (design/HOME_DESIGN.md §3, 19 Sep 2026). At 390×844 the shell put 437px above
+     Home's answer: the identity line wrapped to three, the purpose block ran to five. What a phone
+     can do without: the e-mail address and the role (the name and Sign out stay) and the purpose block's verb line
+     (the sentence and the help link stay). Measured by e2e/home-overhaul.spec.ts: masthead, rail,
+     Waiting and its first row, and the Arrived head above the fold. */
+  .identity-email,
+  .identity-role { display: none; }
+  .page-purpose-can { display: none; }
+  .surface-identity { margin-top: var(--space-2xs); gap: var(--space-2xs) var(--space-sm); }
+  .masthead { margin-bottom: var(--space-md); }
   .stage-rail { position: relative; flex-direction: column; gap: 0; }
   /* The edge runs through the node's centre — half a 40px node less half the 2px line — drawn
      behind the nodes rather than pushed into place with an off-scale margin. */

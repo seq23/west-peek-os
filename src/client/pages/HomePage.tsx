@@ -362,10 +362,13 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       setRejecting(null);
       setRejectNote("");
       setNotice(decision === "approved" ? `Approved at ${at}. It runs now.` : `Rejected at ${at}.`);
+      // The row stays, wearing its `approved 7:04 AM` badge, and leaves on the next read
+      // (design/HOME_DESIGN.md §3.3) — `undecided` already keeps it out of the count. A reload
+      // here made the badge a flicker: the card was gone before she saw what she had done.
     } else {
       setNotice(res.status === 409 ? `Not ${decision} — it is no longer pending (somebody decided it first).` : `Not ${decision}: ${res.data?.detail ?? res.data?.error ?? `HTTP ${res.status}`}`);
+      home.reload();
     }
-    home.reload();
   }
 
   const answer = answerLineFor(counts);
@@ -489,7 +492,9 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                         </div>
                       )}
                     </div>
-                    <span className="readiness">{outcome ? <span className="badge badge-ok" data-testid={`home-decided-${c.id}`}>{outcome}</span> : <span className="badge badge-gate">waiting on you</span>}</span>
+                    {/* No "waiting on you" badge on a row inside the band headed "Waiting on you": the
+                        band says it once. The cell appears when the row has been decided. */}
+                    {outcome && <span className="readiness"><span className="badge badge-ok" data-testid={`home-decided-${c.id}`}>{outcome}</span></span>}
                     <div className="deal-actions">
                       {!outcome && (
                         <>

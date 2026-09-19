@@ -73,6 +73,12 @@ export function waitingKinds(counts: HomeCounts): string | null {
   return `${signature}${capitalise(joined)}.`;
 }
 
+/** The first sentence of a line, so a two-sentence state contributes one clause. */
+export function firstSentence(line: string): string {
+  const m = /^(.*?[.!?])(?:\s|$)/.exec(line.trim());
+  return m ? m[1]! : line.trim();
+}
+
 export function secondLine(counts: HomeCounts): string {
   const parts: string[] = [];
   const kinds = waitingKinds(counts);
@@ -86,7 +92,9 @@ export function secondLine(counts: HomeCounts): string {
         : `${capitalise(inWords(counts.fresh))} arrived since you last looked.`,
   );
 
-  if (counts.brief) parts.push(counts.brief.replace(/\.?$/, "."));
+  // ONE sentence of the brief: the band under the masthead carries the whole line, and the
+  // masthead read "No brief today yet. None has been built yet." when it carried both.
+  if (counts.brief) parts.push(firstSentence(counts.brief).replace(/\.?$/, "."));
   else if (counts.quiet === 1) parts.push("One colleague has nothing new.");
   else if (counts.quiet > 1) parts.push(`${capitalise(inWords(counts.quiet))} colleagues have nothing new.`);
 

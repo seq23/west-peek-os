@@ -476,6 +476,12 @@
     ],
     "progress-fill-slow": [
       "home"
+    ],
+    "identity-email": [
+      "home"
+    ],
+    "identity-role": [
+      "home"
     ]
   }
 }
