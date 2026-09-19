@@ -173,6 +173,7 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
   const [who, setWho] = useState("");
   const [basis, setBasis] = useState("Asked out loud at the start of the call.");
   const [recording, setRecording] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [engine, setEngine] = useState<string | null>(null);
@@ -245,12 +246,16 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
       return;
     }
     let stream: MediaStream;
+    // The wait for the microphone is a state the line says, not a silence.
+    setOpening(true);
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
+      setOpening(false);
       setMessage("The browser did not give this page the microphone, so nothing is being recorded.");
       return;
     }
+    setOpening(false);
     let stopped = false;
     stopRef.current = () => {
       stopped = true;
@@ -279,6 +284,8 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
   const gateWords = "Two gates, both required: a Managing Partner switches recording on for the meeting (a receipt), and somebody in the room says yes today. The yes is asked for every session and never remembered.";
   const status = recording
     ? `Recording${engine ? ` · ${engine}` : ""} · ${state?.turns ?? 0} turns written down`
+    : opening
+      ? "Opening the microphone…"
     : !state
       ? "Reading the room…"
       : state.blockers.length > 0 && !state.can_capture
@@ -310,9 +317,9 @@ function RecordingLine({ meetingId, capture, onChange }: { meetingId: string; ca
           aria-label="Recording"
           data-testid="capture-start"
           title={gateWords}
-          aria-busy={!state}
+          aria-busy={!state || opening}
           data-state={failed ? "error" : recording && consentGranted ? "success" : undefined}
-          disabled={!recording && (!state?.transcription_available || !state?.recording_policy_active || prompting)}
+          disabled={!recording && (!state?.transcription_available || !state?.recording_policy_active || prompting || opening)}
           onClick={recording ? stop : () => setPrompting(true)}
         >
           <i aria-hidden="true" />

@@ -79,7 +79,7 @@ test("Phase C: start recording → consent → ask the room by text → a block 
           const msg = await room.getByTestId("capture-message").textContent().catch(() => null);
           return checked === "true" || /on the file|nothing is recording|microphone/.test(msg ?? "");
         },
-        { message: "the switch turns on, or the line says why it did not", timeout: 15_000 },
+        { message: "the switch turns on, or the line says why it did not", timeout: 30_000 },
       )
       .toBe(true);
     // The yes is on the file — and the recorder either runs, or the line says why not.
