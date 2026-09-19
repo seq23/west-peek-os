@@ -4,7 +4,7 @@
   "tabs": {
     "meetings": { "landed": false, "spec": "§3 — the list, the room's three faces, the standalone panel" },
     "dealflow": { "landed": false, "spec": "§4 — the rail is the page; the committee lives here" },
-    "companies": { "landed": false, "spec": "§5 — the register" },
+    "companies": { "landed": true, "spec": "§5 — the register" },
     "portfolio": { "landed": false, "spec": "§6 — holdings, the deployment ring, Book it" },
     "thesis": { "landed": false, "spec": "§7 — one sentence and its numbers" },
     "secondaries": { "landed": false, "spec": "§8 — the sleeve, on the same rail" }
@@ -95,9 +95,9 @@
     "thesis-statement": ["thesis"],
     "eyebrow": ["thesis"],
 
-    "stack": ["meetings", "dealflow", "companies", "portfolio", "thesis", "secondaries"],
+    "stack": ["meetings", "dealflow", "portfolio", "thesis", "secondaries"],
     "between": ["meetings", "dealflow", "companies", "portfolio", "thesis", "secondaries"],
-    "grow": ["meetings", "dealflow", "companies", "portfolio", "thesis", "secondaries"],
-    "hairline": ["meetings", "dealflow", "companies", "portfolio", "thesis", "secondaries"]
+    "grow": ["meetings", "dealflow", "portfolio", "thesis", "secondaries"],
+    "hairline": ["meetings", "dealflow", "portfolio", "thesis", "secondaries"]
   }
 }

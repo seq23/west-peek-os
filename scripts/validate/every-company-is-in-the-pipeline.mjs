@@ -28,7 +28,12 @@
  *       D1 and asserts exactly one live opportunity each; the test is found by name and must name
  *       every route. A guard whose test was quietly deleted is the inert-guard defect.
  *   4 · THE CALM LABEL IS GONE. `CompaniesPage.tsx` may not render "Not in the pipeline" and must
- *       render the fault notice, with its testid, for a company row that has no deal.
+ *       render the fault TWICE: a page-level `.fault` strip (`companies-fault`) that names every
+ *       deal-less company above the grid, where no filter can hide it, and the card's own `.fault`
+ *       (`company-no-deal-<id>`) so the fault travels with the row. Both must wear `.fault` — the
+ *       section's one left-rule strip (design/DEALS_SECTION_DESIGN.md §2) — and the strip must be
+ *       derived from every company, not the filtered list. Phase A's `.notice.notice-bad.small`
+ *       inside the card was the same size as the one-liner and read as a caption (§1.3 #2).
  *   5 · THE BACKFILL IS SHAPED RIGHT. Migration 0197 opens one for every non-MERGED company with
  *       no non-archived opportunity — the `NOT EXISTS` and the `archived_at IS NULL` are both there.
  *
@@ -137,11 +142,27 @@ export function auditPage(pageSource) {
   if (/Not in the pipeline/.test(pageSource)) {
     violations.push('CompaniesPage.tsx renders "Not in the pipeline" as a calm label — a company with no deal is a fault and must say so');
   }
-  if (!/data-testid=\{`company-no-deal-\$\{c\.id\}`\}/.test(pageSource)) {
-    violations.push("CompaniesPage.tsx does not render the `company-no-deal-<id>` fault notice for a row with no deal");
+  // The card's own copy, and it must be the section's fault strip rather than a small notice.
+  const card = /className="fault"[^>]*data-testid=\{`company-no-deal-\$\{c\.id\}`\}/.exec(pageSource);
+  if (!card) {
+    violations.push("CompaniesPage.tsx does not render a `.fault` with testid `company-no-deal-<id>` on a row with no deal");
   }
-  if (!/notice-bad/.test(pageSource)) {
-    violations.push("the fault notice on CompaniesPage.tsx is not styled as a fault (`notice-bad`)");
+  if (/notice-bad/.test(pageSource)) {
+    violations.push("CompaniesPage.tsx styles a fault as `.notice-bad` — the caption-sized notice Phase A shipped; the fault is `.fault`");
+  }
+  // The page-level strip, named, above the grid, derived from every company rather than the filtered list.
+  const strip = /className="fault"[^>]*data-testid="companies-fault"/.exec(pageSource);
+  if (!strip) {
+    violations.push("CompaniesPage.tsx does not render the page-level `.fault` strip (`companies-fault`) naming the deal-less companies");
+  }
+  if (!/const faulted = all\.filter\(\(c\) => !c\.deal_status\);/.test(pageSource)) {
+    violations.push("the page-level fault strip is not derived from `all` — a strip read from the filtered list disappears behind a search");
+  }
+  if (strip) {
+    const body = pageSource.slice(strip.index, strip.index + 600);
+    if (!/faulted\.map\(\(c\) => c\.canonical_name\)/.test(body)) {
+      violations.push("the page-level fault strip does not name the companies (`faulted.map((c) => c.canonical_name)`)");
+    }
   }
   return violations;
 }
@@ -217,14 +238,30 @@ function selfTest() {
   if (!auditTest({ routes: [...routes, "CARRIER_PIGEON"], testSource }).some((v) => v.includes("CARRIER_PIGEON"))) fail("a route the pin does not exercise was not caught");
   ok("the pin deleted, and a fifth route the pin does not exercise");
 
-  // The real calm label.
+  // The real calm label, and the card's fault notice removed.
   const page = read(PAGE);
   if (auditPage(page).length !== 0) fail(`the real page was rejected: ${auditPage(page).join("; ")}`);
-  const calm = page.replace(/\{!s && \([\s\S]*?\)\}\n/, "").replace('{s?.label ?? "—"}', '{s?.label ?? "Not in the pipeline"}');
+  const calm = page.replace(/\{!s && \([\s\S]*?\)\}\n/, "").replace("<CompactRail statusKey", '<span>{s?.label ?? "Not in the pipeline"}</span><CompactRail statusKey');
   const v3 = auditPage(calm);
   if (!v3.some((v) => v.includes("calm label"))) fail('the real "Not in the pipeline" label was not caught');
-  if (!v3.some((v) => v.includes("company-no-deal"))) fail("a page with no fault notice was not caught");
-  ok('the real calm label, "Not in the pipeline", with the fault notice removed');
+  if (!v3.some((v) => v.includes("company-no-deal"))) fail("a page with no card fault notice was not caught");
+  ok('the real calm label, "Not in the pipeline", with the card\'s fault notice removed');
+
+  // Phase A's real shape: the fault as a caption-sized notice inside the card, no page-level strip.
+  const phaseA = page
+    .replace('className="fault" data-testid={`company-no-deal-${c.id}`}', 'className="notice notice-bad small" data-testid={`company-no-deal-${c.id}`}')
+    .replace(/\{faulted\.length > 0 && \([\s\S]*?data-testid="companies-fault"[\s\S]*?\)\}\n/, "");
+  const v4 = auditPage(phaseA);
+  if (!v4.some((v) => v.includes("notice-bad"))) fail("the caption-sized `.notice-bad` fault was not caught");
+  if (!v4.some((v) => v.includes("companies-fault"))) fail("a page with no page-level fault strip was not caught");
+  ok("Phase A's shape: a `.notice-bad` caption in the card and no page-level strip");
+
+  // A strip read from the filtered list, and one that does not name the company.
+  const filtered = page.replace("const faulted = all.filter((c) => !c.deal_status);", "const faulted = shown.filter((c) => !c.deal_status);");
+  if (!auditPage(filtered).some((v) => v.includes("filtered list"))) fail("a fault strip read from the filtered list was not caught");
+  const unnamed = page.replace("faulted.map((c) => c.canonical_name).join(\", \")", "\"A company\"");
+  if (!auditPage(unnamed).some((v) => v.includes("does not name"))) fail("a fault strip that does not name the company was not caught");
+  ok("a strip that hides behind the search filter, and one that does not say which company");
 
   // The backfill missing its archived clause.
   const sql = read(MIGRATION);
