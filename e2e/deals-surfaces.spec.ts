@@ -150,8 +150,7 @@ export async function holdTheNumbers(
 ): Promise<string> {
   // Let the 90ms colour transitions finish: a rail node measured mid-transition from surface to ink
   // scores its white numeral against a light background and reports a defect the page does not have.
-  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))));
-  await page.waitForTimeout(150);
+  await page.waitForFunction(() => document.getAnimations().length === 0);
   const overflow = await page.evaluate(([id, w]) => measureOverflow(id as string, w as number), [rootTestId, vp.width] as const);
   expect(overflow, `horizontal overflow inside ${rootTestId} at ${vp.name}`).toEqual([]);
   const docWide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -240,8 +239,10 @@ async function seedCommissionedFund(request: APIRequestContext): Promise<{ id: s
 
 test.describe("Thesis — the document, the fit rail, the versions (design §7)", () => {
   test("with no fund the page says so; nothing is drawn from nothing", async ({ page, request }) => {
+    // This is the first test in the file and the d-specs before it create no fund: the state is
+    // reachable, and a fund here means a spec ordering has changed — say so rather than skip.
     const funds = (await (await request.get("/api/funds", { headers: MP })).json()) as { funds: unknown[] };
-    test.skip(funds.funds.length > 0, "a fund already exists in this run's database — the no-fund state is not reachable");
+    expect(funds.funds, "a fund exists before the no-fund test ran — the suite's ordering changed").toHaveLength(0);
     await signIn(page);
     await gotoSurface(page, "Thesis");
     await expect(page.getByTestId("thesis-no-fund")).toContainText("No fund exists yet");
