@@ -36,71 +36,94 @@ async function signIn(page: import("@playwright/test").Page): Promise<void> {
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
 }
 
-test("the morning brief either arrives or states, in the schedule's own words, why it has not", async ({
+test("the morning brief: press the button → a named state is on screen → the clock builds it → it arrives; a lane that cannot write leaves the reason and the retry time", async ({
   page,
   request,
 }) => {
+  /*
+   * 19 Sep 2026: "I pushed the button to build a brief and I don't know if it's coming or not or
+   * how long it takes — there is no progress bar — and I pushed the button again and some other
+   * message came up." Every step of that morning is driven here, through the browser, against the
+   * real routes, with the tick fired the way the Cron Trigger fires it.
+   *
+   * WHERE THIS STOPS. Under local `wrangler dev` there is no provider credential and privacy mode is
+   * LOCKDOWN, so the write stage's model is `mock-local`, which returns prose. What a real model
+   * writes into each section is not claimed here. What IS proven: the press is a request the row
+   * carries, the page shows a named state with the measured usual duration, a second press changes
+   * nothing and says so, the tick walks the row to a terminal state, and the page ends on EITHER a
+   * brief or a stated reason with a retry time — never the blank this journey exists to prevent.
+   */
   await signIn(page);
   await gotoSurface(page, "Home");
-
   const panel = page.getByTestId("daily-brief");
   await expect(panel).toBeVisible();
 
-  /*
-   * THE PAGE PRINTS THE SERVER'S OWN REASON, VERBATIM.
-   *
-   * Asserted by comparison rather than by pinning a sentence, and that is the point: there are four
-   * different reasons a brief legitimately does not exist — no settings yet, switched off, a
-   * weekend the partner turned off, or "not built yet today, it starts after 06:00 and needs a
-   * sweep to have found something" — and each is a different thing for a partner to do next. A spec
-   * that pinned one of them would pass while the page showed the wrong one of the other three.
-   */
-  const before = (await (await request.get("/api/daily-intelligence", { headers: MP })).json()) as {
-    report: unknown | null;
-    no_brief_because?: string;
+  // 1 · THE STATE IS ON SCREEN BEFORE ANY PRESS, and it is one of the named ones.
+  const state = page.getByTestId("daily-brief-state");
+  await expect(state).toBeVisible();
+  const kinds = ["arrived", "requested", "running", "queued", "retrying", "failed_out", "scheduled", "off", "stalled"];
+  expect(kinds, "the band renders a state the shared module does not name").toContain(await state.getAttribute("data-kind"));
+  await expect(page.getByTestId("daily-brief-state-line")).not.toHaveText("");
+
+  // 2 · PRESS. The server answers at once with the named state; nothing runs inside the request.
+  const button = page.getByTestId("daily-brief-generate");
+  await expect(button).toBeEnabled();
+  await button.click();
+  await expect(state).toHaveAttribute("data-kind", /requested|running|queued/);
+  await expect(page.getByTestId("daily-brief-state-next")).toContainText(/usually|at a guess/);
+  // "requested by you" is a fact from the row, not a label the client added.
+  await expect(page.getByTestId("daily-brief-meta")).toContainText(/requested by you/);
+
+  // 3 · A SECOND PRESS WHILE IT MOVES DOES NOTHING AND SAYS SO — from the row: the button is
+  //     disabled and reads "Already building — started …", and the route answers `already: true`.
+  await expect(button).toBeDisabled();
+  await expect(button).toHaveText(/^Already building — started /);
+  const again = await request.post("/api/daily-intelligence/generate", { headers: MP, data: {} });
+  expect(again.status(), await again.text()).toBe(200);
+  const againBody = (await again.json()) as { already: boolean; kind: string; line: string };
+  expect(againBody.already).toBe(true);
+  expect(againBody.line).toMatch(/Requested|Building|Between stages/);
+
+  // 4 · THE CLOCK. The same code path the Cron Trigger calls, fired once.
+  const tick = await request.post("/api/jobs/tick", { headers: MP });
+  expect(tick.status(), await tick.text()).toBe(200);
+  const ran = (await tick.json()) as { ran: Array<{ job_key: string; status: string; summary: string }> };
+  const served = ran.ran.find((r) => r.job_key === "_morning_brief");
+  expect(served, "a tick with a requested brief must serve it and say so").toBeTruthy();
+  expect(served!.summary).toMatch(/^Morning brief for fu_/);
+  expect(["READY", "FAILED"], "one tick walks a requested brief to a terminal state").toContain(served!.status);
+
+  // 5 · THE PAGE ENDS ON A BRIEF OR A STATED REASON. The poll picks the change up within a few
+  //     seconds; the terminal kind is asserted strictly for whichever the model produced.
+  await expect(state).toHaveAttribute("data-kind", /arrived|retrying|failed_out/, { timeout: 15_000 });
+  const kind = await state.getAttribute("data-kind");
+  const status = (await (await request.get("/api/daily-intelligence/status", { headers: MP })).json()) as {
+    kind: string; line: string; next: string | null; actAt: string | null; attempts: number; status: string; button: { label: string; enabled: boolean };
   };
-
-  if (!before.report) {
-    expect(before.no_brief_because, "a missing brief must carry the reason it is missing").toBeTruthy();
-    await expect(page.getByTestId("daily-brief-empty")).toHaveText(before.no_brief_because!);
+  expect(status.kind).toBe(kind);
+  if (kind === "arrived") {
+    expect(status.status).toBe("READY");
+    await expect(page.getByTestId("daily-brief-state-line")).toContainText(/Today's brief arrived at/);
+    await expect(page.getByTestId("brief-executive_summary")).toBeVisible();
+    await expect(button).toHaveText("Rebuild today's brief");
   } else {
-    await expect(page.getByTestId("daily-brief-meta")).toBeVisible();
+    // mock-local returns prose; the verifier refuses it; the row says so and says when it retries.
+    expect(status.status).toBe("FAILED");
+    expect(status.line, "a failed brief names its reason").toMatch(/failed: .{10,}/);
+    if (kind === "retrying") {
+      expect(status.actAt, "a retryable failure carries the clock time it retries at").toBeTruthy();
+      expect(status.next).toMatch(/tries again at \d{1,2}:\d{2} (AM|PM)/);
+      await expect(page.getByTestId("daily-brief-state-next")).toContainText(/tries again at/);
+    } else {
+      expect(status.next).toMatch(/Nothing more is tried automatically today/);
+    }
+    await expect(button).toHaveText("Try again now");
   }
+  await expect(button).toBeEnabled();
+  // The empty-state fallback never shows beside a named state.
+  await expect(page.getByTestId("daily-brief-empty")).toHaveCount(0);
 
-  /*
-   * AND IT CAN BE BUILT ON DEMAND. The partner is not left waiting for a cron she cannot see.
-   *
-   * WHERE THIS STOPS. Writing the brief is a model call, and under local `wrangler dev` there is no
-   * provider credential and privacy mode is LOCKDOWN, so `run_ai` routes to the deterministic
-   * `mock-local` model. What a real model would write into each section cannot be proven here and is
-   * not claimed. What IS proven is the whole chain around it: the build is accepted, it reaches a
-   * definite recorded state, and the page afterwards is EITHER a report or a stated reason — never
-   * the blank this journey exists to prevent.
-   */
-  const built = await request.post("/api/daily-intelligence/generate", { headers: MP, data: {} });
-  expect(built.status(), await built.text()).toBe(201);
-  const outcome = (await built.json()) as { status: string; report_id?: string; stage?: string; done?: boolean };
-  expect(outcome.status, "a build must land in a named state, never in silence").toBeTruthy();
-  // v5: a request advances ONE stage (a request has the same CPU budget as a cron tick) and says
-  // which, and whether the brief is done. An empty firm has nothing to rank, so it is done at once.
-  expect(outcome.stage).toBeTruthy();
-  expect(typeof outcome.done).toBe("boolean");
-
-  await page.reload();
-  await gotoSurface(page, "Home");
-  const after = (await (await request.get("/api/daily-intelligence", { headers: MP })).json()) as {
-    report: { report_date: string } | null;
-    no_brief_because?: string;
-  };
-  if (after.report) {
-    await expect(page.getByTestId("daily-brief-meta")).toContainText(after.report.report_date);
-    await expect(page.getByTestId("daily-brief-empty")).toHaveCount(0);
-  } else {
-    await expect(page.getByTestId("daily-brief-empty")).toHaveText(after.no_brief_because!);
-  }
-
-  // The brief is delivered by a named colleague on Home rather than appearing from nowhere — the
-  // section exists whether or not there is anything in it today.
+  // The brief is delivered by a named colleague on Home rather than appearing from nowhere.
   await expect(page.getByTestId("home-brief-delivery")).toBeVisible();
 });
 

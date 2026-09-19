@@ -1015,10 +1015,11 @@ export async function runDailyForAll(
       await env.WP_OS_DB.prepare(
         `UPDATE intelligence_report
             SET status = 'FAILED', error_code = 'generation_threw', error_message = ?2,
-                completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                retry_after = ${RETRY_AFTER_CASE("?4")}
           WHERE firm_scope = ?3 AND firm_user_id = ?1 AND status NOT IN ('READY','FAILED')`,
       )
-        .bind(p.id, (err instanceof Error ? err.message : String(err)).slice(0, 400), firmScope)
+        .bind(p.id, (err instanceof Error ? err.message : String(err)).slice(0, 400), firmScope, retryAfterIso(now))
         .run()
         .catch(() => undefined);
       await recordSwallowed(env, "dailyIntelligence.generateForPartner", err, { firm_user_id: p.id });
@@ -1384,6 +1385,8 @@ export async function closeUnfinishableReports(env: Env, now: Date = new Date())
     `UPDATE intelligence_report
         SET status = 'FAILED', error_code = 'unfinishable',
             error_message = ?3,
+            -- The budget is spent by definition of "stranded": no retry time is a fact, stated.
+            retry_after = NULL,
             stage_lease_until = NULL,
             completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
             stage_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')

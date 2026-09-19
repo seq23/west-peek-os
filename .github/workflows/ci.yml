@@ -154,6 +154,9 @@ jobs:
       - name: A brief that fails says so, and none is truncated by a ceiling nobody chose
         run: npm run validate:brief-arrives
 
+      - name: The brief reaches Home or says why
+        run: npm run validate:brief-lands
+
       # AND THE OTHER HALF OF THAT MORNING. At 14:58 Scooter's row read FAILED/3 with a reason on it
       # and Sequoia's read GENERATING/3 with error_message empty: her write stage made both its
       # model calls and the isolate was evicted before the outcome was persisted, so nothing wrote
