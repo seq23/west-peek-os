@@ -2353,7 +2353,14 @@ details h3 {
  * `margin-left: auto` keeps it right-aligned when the edition line is short and lets it wrap under
  * on a narrow screen rather than crushing the date.
  */
-.brief-fold { margin-left: auto; white-space: nowrap; }
+/* A pointer's floor is 24px and a finger's is 44 (the measured contract, e2e/support/measure.ts).
+   `.surface-body button.link-button` sets `min-height: auto` at a higher specificity, so this matches it. */
+.brief-fold,
+.surface-body button.link-button.brief-fold { margin-left: auto; white-space: nowrap; min-height: var(--space-xl); }
+@media (max-width: 899px) {
+  .brief-fold,
+  .surface-body button.link-button.brief-fold { min-height: var(--touch-min); }
+}
 
 /*
  * COLLAPSED: one line, and it still says whether today's brief arrived. Padded down from the full

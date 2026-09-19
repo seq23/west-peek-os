@@ -44,6 +44,9 @@ test.describe("Home — the brief band", () => {
 
     for (const vp of VIEWPORTS) {
       await page.setViewportSize({ width: vp.width, height: vp.height });
+      // A fresh load: the band asks the row on mount and polls only while it moves, so a page that
+      // was open through the press must be reloaded to read the outcome — as a partner's would be.
+      await page.reload();
       await openHome(page);
       await expect(page.getByTestId("daily-brief-state")).toHaveAttribute("data-kind", after.kind);
       // The state line reads as a sentence, and the button reads as its next act, at every width.
