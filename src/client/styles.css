@@ -2237,10 +2237,6 @@ details h3 {
   background: var(--wp-neutral-tint);
   color: var(--wp-ink-2);
 }
-/* Orange means "waiting on the firm"; green means done. Nothing else earns a colour. */
-.stage-chip-screening,
-.stage-chip-diligence,
-.stage-chip-ic_ready { background: var(--wp-orange); color: var(--wp-orange-ink); }
 .stage-chip-closed { background: var(--wp-good); color: var(--wp-surface); }
 
 @media (max-width: 60rem) {
@@ -4184,6 +4180,12 @@ tbody tr.is-selected > td {
    target is enlarged only where the pointer is actually coarse. Rows get slightly
    taller on touch, which is the correct trade. */
 @media (pointer: coarse) {
+  /* `.surface-body button.link-button` is repeated here on purpose: the resting rule that carries
+     it (`min-height: auto`) is more specific than a bare `.link-button`, so above 900px the touch
+     floor never reached a text link — 22.5px under a finger at 1280 on an iPad in landscape. Found
+     by the Companies surface measurer on 19 Sep 2026 and marked `test.fail` until this line. */
+  .surface-body button.link-button,
+  .shell-header button.link-button,
   .link-button,
   .work-card-summary,
   .posture-pick,
@@ -4251,31 +4253,8 @@ tbody tr.is-selected > td {
    everything comes through should not be a link-sized control beside a
    heading. This is the widest and heaviest thing on Dealflow: what we are
    looking for on one side, the way in on the other. */
-.funnel-mouth {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
-  padding: var(--space-lg) var(--space-xl);
-  margin: 0 0 var(--space-md);
-  background: var(--wp-surface);
-  border: 1px solid var(--wp-line-strong);
-  border-left: 4px solid var(--wp-orange);
-  border-radius: var(--radius-md);
-}
 
-.funnel-mouth-copy { flex: 1 1 26rem; min-width: 0; }
-.funnel-mouth-copy h2 { margin: 0 0 var(--space-xs); letter-spacing: -0.02em; }
-.funnel-mouth-copy p { margin: 0 0 var(--space-sm); max-width: 46em; }
 
-.funnel-mouth-action {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2xs);
-  flex: 0 0 auto;
-}
 
 /* The one control on the page that earns extra size. */
 .btn-lg {
@@ -4756,18 +4735,6 @@ body {
      "everything needs to be crystal clear like on the LP page — that one flows well". The sections
      were always distinct and the page never showed it: a rule and real space between them is most
      of the difference, and each one now says what it is for rather than naming its table. */
-.deal-record-step {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-sm);
-  padding: var(--space-md);
-  margin-bottom: var(--space-md);
-  border: 1px solid var(--wp-line);
-  border-left: 3px solid var(--wp-orange);
-  border-radius: var(--radius-sm);
-  background: var(--wp-surface);
-}
 
 .deal-record-section {
   margin-top: var(--space-xl);
@@ -4923,10 +4890,6 @@ body {
 /* The pipeline row whose record is open below. It is not selected in the sense
    of chosen-for-an-action, so it takes the tint and the accent edge rather than
    the filled treatment a pressed control would get. */
-.deal-row-open {
-  border-color: var(--wp-orange);
-  background: var(--wp-tint);
-}
 
 /* ── The worked-out half of the fund construction editor ──────────────────────────────────────
    Every row here is COMPUTED from the inputs above it and none of it is typeable. The styling
@@ -5575,11 +5538,11 @@ body {
    `.class hN` rule aimed at air ONLY while that register says the class is
    awaiting its tab.
 
-   NOT RETIRED HERE, although §12.1 says to: `.stage-chip-screening/-diligence/
-   -ic_ready`, `.funnel-mouth*` and `.deal-record-step` are still emitted on
-   this base (DealflowPage.tsx, App.tsx). They go when the Dealflow tab lands
-   and stops emitting them — a rule pulled from under a live element is the
-   defect `validate:css-classes` exists to catch.
+   RETIRED on 19 Sep 2026, once the Dealflow tab landed and stopped emitting
+   them: `.stage-chip-screening/-diligence/-ic_ready`, `.funnel-mouth*`,
+   `.deal-record-step`, `.deal-row-open`. They were kept while a live element
+   wore them — a rule pulled from under a live element is the defect
+   `validate:css-classes` exists to catch — and went the moment nothing did.
 
    NO DARK MODE: the token block declares `color-scheme: light` and carries no
    dark values, so none are invented here. Reduced motion: the global rule in

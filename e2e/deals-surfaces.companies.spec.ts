@@ -380,12 +380,9 @@ test.describe("Companies", () => {
     });
 
     test("desktop text links reach the touch floor under a coarse pointer", async ({ page, request }) => {
-      test.fail(
-        true,
-        "styles.css §Touch targets: `.surface-body button.link-button { min-height: auto }` outranks " +
-          "`@media (pointer: coarse) .link-button { min-height: 44px }`, so above 900px the rule never reaches " +
-          "the link. Raise the coarse rule to `.surface-body button.link-button` and remove this marker.",
-      );
+      // Was `test.fail` until 19 Sep 2026: `.surface-body button.link-button { min-height: auto }`
+      // outranked the coarse-pointer floor above 900px. styles.css now repeats the specific selector
+      // inside the coarse block, and this is a real assertion from here on.
       await signIn(page);
       const seed = await seedRegister(request);
       try {
