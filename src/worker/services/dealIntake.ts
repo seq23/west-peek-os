@@ -5,33 +5,55 @@ import type { FirmUserIdentity } from "../auth";
 import { json, type RouteContext } from "../router";
 import { createWorkCardInternal, WorkCardError } from "./workCards";
 import { actorFromIdentity, type Actor } from "./authorize";
-import { createOpportunity, type CreateOpportunityInput, type OpportunityRow } from "./investment";
+import { createOpportunity, getOpportunity, type CreateOpportunityInput, type OpportunityRow } from "./investment";
 
 /**
  * THE ONE DOOR INTO THE FUNNEL.
  *
  * Item 7, and the note that opened it: "Four uncontrolled routes already exist while the page claims
  * 'the only way in'. Consolidate before adding." The page has since stopped lying; this file is the
- * other half — the four routes now converge on ONE function, `openIntoFunnel`, and differ only in
- * what they hand it and who picks up the resulting card.
+ * other half — the four routes converge on ONE function, `openIntoFunnel`, and differ only in what
+ * they hand it and who picks up the resulting card.
  *
- * The operator's model, in her words: "its not about going str8 to the funnel is about opening a
- * work card for Wyatt to route it appropriately", and "its about creating work cards for these
- * employees to do the things." So three of the four routes do not write to the pipeline at all.
- * They raise work.
+ * THE RULE, SINCE 18 SEP 2026: EVERY COMPANY IN THE SYSTEM IS IN THE PIPELINE.
+ *
+ * Owner, verbatim in intent: "all companies should be in the pipeline, no matter how they come in.
+ * They are top of funnel if they are in the system. From email we have to DECIDE on them." So every
+ * route — a partner's own entry, an email, a Network OS push, the analyst's scouting — opens an
+ * `investment_opportunity` at the top of the funnel THE MOMENT IT ARRIVES. The human act is the
+ * DECISION on that opportunity (advance it, pass on it), never its admission. What still differs
+ * between the routes is who holds the card that asks for the decision and what that card says.
+ *
+ * WHY IT WAS THE OTHER WAY, AND WHY THAT WAS WRONG. Until 18 Sep only MANUAL wrote the pipeline
+ * (`opensRecord: true`, one route of four). The reasoning was sound as far as it went: a hashtag is
+ * a public word that routes and never authorises, and "the register is not the pipeline" — recording
+ * that the firm heard of somebody commits nothing, while an opportunity is a claim on partner
+ * attention that needed a human. The other three routes therefore created the `canonical_company`
+ * row and raised a card telling Wyatt to "open it at the top of the funnel". Nothing ever guaranteed
+ * the card did that. In production it did not: Northwind Robotics (22 Aug, created by Wyatt, no card
+ * at all) and Vynlo (24 Aug, by email, deck read, card DONE) both sat in the register with no
+ * opportunity — the card for Vynlo concluded without the thing it governed ever existing. A company
+ * that is "in the system" but invisible on the board is a deal the firm does not know it has. The
+ * governance the old split protected — that an AI never DECIDES — is untouched: an opportunity at NEW
+ * is not a decision, and the card still says "recommend pass loudly, never close it yourself".
+ * Migration 0197 backfilled the two, and `validate:companies-in-pipeline` fails the build if any
+ * route can arrive without an opportunity again.
  *
  * THE FOUR ROUTES, and what is genuinely different about each:
  *
  *   MANUAL      A partner pressed "Add a company". She drove it herself and she is authenticated,
- *               so this is the only route that opens the record. No card: raising one would be
- *               asking an employee to confirm a decision a Managing Partner just made.
+ *               so the opportunity is hers and carries her name. No card: raising one would be
+ *               asking an employee to confirm a decision a Managing Partner just made. This is the
+ *               one route that may open a SECOND opportunity on a company that already has one —
+ *               a secondary beside a primary is a partner's call to make.
  *   EMAIL       `#wpdealflow` / `#wpdeck` to the intake mailbox. A hashtag is a public word — it
- *               routes, it never authorises — so this lands as a card for Wyatt. Mail nobody can
- *               read goes one rung down to Porter (`openRoutingCard`), which is not a funnel entry
- *               at all but the honest end of the ladder.
+ *               routes, it never authorises — so the opportunity is opened on Wyatt's desk and a
+ *               card asks him to decide on it. Mail nobody can read goes one rung down to Porter
+ *               (`openRoutingCard`), which is not a funnel entry at all but the honest end of the
+ *               ladder.
  *   NETWORK_OS  A company pushed across from the partner system. Network OS is authoritative for
- *               PEOPLE and this app is authoritative for DEALFLOW, so a push is a proposal about
- *               our own record and gets the same card, never a direct write.
+ *               PEOPLE and this app is authoritative for DEALFLOW, so the push opens the opportunity
+ *               here and the same card asks for the decision.
  *   SCOUT       Wyatt's own proactive finds. Identical to the two above with one real difference:
  *               nobody outside the firm is waiting on an answer, so this list is his to cut. He may
  *               fast-no his OWN scouted items; he may never scrap inbound without a partner. Either
@@ -42,12 +64,14 @@ import { createOpportunity, type CreateOpportunityInput, type OpportunityRow } f
  * for a company already added with info missing", and every other route carries the same duplicate
  * risk: a follow-up about a company already on the board must not build a second row for it. One
  * implementation of that lookup lives here and every route uses it, because three copies of a
- * matching rule is three chances for the register to grow a second Sensori.
+ * matching rule is three chances for the register to grow a second Sensori. And a company that
+ * already has a LIVE opportunity does not get a second one from an unattended route — the card says
+ * "decide whether this changes anything about the one already open".
  *
  * PROVENANCE IS NOT OPTIONAL. Every arrival records who sent it, by which route, and when — on the
- * event spine as `dealflow.arrival`, and on the row itself as `source_channel` for the route that
- * writes one. It is the only evidence a Fund I has about whether its sourcing is repeatable, and it
- * is worthless if it is recorded on three routes out of four.
+ * event spine as `dealflow.arrival`, and on the opportunity itself as `source_channel`
+ * (`<route>:<who>`). It is the only evidence a Fund I has about whether its sourcing is repeatable,
+ * and it is worthless if it is recorded on three routes out of four.
  */
 
 // Both seats now live in `shared/intake/emailTriggers.ts` — the Dealflow page has to name them and
@@ -73,21 +97,20 @@ export interface RoutePolicy {
   /** The seat that picks it up. Null on the one route where a person already did the work. */
   owner: string | null;
   machine: number | null;
-  /**
-   * Does this route write the pipeline record itself?
-   *
-   * True for exactly one route, and that is the whole governance. A partner pressing a button in a
-   * page she is authenticated into is a decision; anything arriving from outside is a claim.
-   */
-  opensRecord: boolean;
   /** May the seat holding it close it on its own judgement, with no partner? */
   finderMayScrap: boolean;
   /** How the card says where this came from. One line, for a person. */
   arrival: (from: string) => string;
   /** The standing instruction, on the card rather than only in a method nobody re-reads. */
   prompt: string;
-  /** `source_channel` prefix on any row this route opens. `email:` is load-bearing — see below. */
+  /** `source_channel` prefix on the row this route opens. `email:` is load-bearing — see below. */
   channel: string;
+  /**
+   * `relationship_origin` on the row an unattended route opens. MANUAL carries none here because the
+   * partner says where she met them on the form; an emailed deal is INBOUND, a push is NETWORK, and
+   * a scout's find is OUTBOUND — the firm went looking.
+   */
+  origin: "INBOUND" | "NETWORK" | "OUTBOUND" | null;
 }
 
 /**
@@ -99,54 +122,57 @@ export const ROUTE_POLICY: Record<IntakeRoute, RoutePolicy> = {
   MANUAL: {
     owner: null,
     machine: null,
-    opensRecord: true,
     finderMayScrap: true,
     arrival: (from) => `Entered by ${from}.`,
     prompt: "",
     channel: "manual",
+    origin: null,
   },
   EMAIL: {
     owner: DEAL_INTAKE_EMPLOYEE,
     machine: EARLY_STAGE_DEAL_MACHINE,
-    opensRecord: false,
     finderMayScrap: false,
     arrival: (from) => `Arrived by email from ${from}.`,
     // The operator's rule, verbatim in intent: every arrival survives until a partner has seen it.
     prompt:
-      "This ARRIVED. It survives until a partner has seen it. You may recommend scrapping it and " +
-      "should say so plainly with the one-line reason, but never close it yourself — somebody " +
-      "outside the firm took the trouble to send this, and that earns a look from a person even " +
-      "when the answer is obvious. Anything you found scouting is different: that list is yours to cut.",
+      "This ARRIVED and it is already at the top of the funnel — decide on it. It survives until a " +
+      "partner has seen it. You may recommend passing and should say so plainly with the one-line " +
+      "reason, but never close it yourself — somebody outside the firm took the trouble to send " +
+      "this, and that earns a look from a person even when the answer is obvious. Anything you " +
+      "found scouting is different: that list is yours to cut.",
     // `email:` is read by the dealflow board to badge a deal "by email · not yet looked at". Changing
     // this prefix silently removes that badge, so it is a contract and not a label.
     channel: "email",
+    origin: "INBOUND",
   },
   NETWORK_OS: {
     owner: DEAL_INTAKE_EMPLOYEE,
     machine: EARLY_STAGE_DEAL_MACHINE,
-    opensRecord: false,
     finderMayScrap: false,
     arrival: (from) => `Pushed across from Network OS by ${from}.`,
     prompt:
-      "This ARRIVED from the partner system. It survives until a partner has seen it. Network OS is " +
-      "authoritative for the PERSON and this app is authoritative for the DEAL, so nothing here is " +
-      "settled by the push — you may recommend scrapping it with the one-line reason, but never " +
-      "close it yourself. Anything you found scouting is different: that list is yours to cut.",
+      "This ARRIVED from the partner system and it is already at the top of the funnel — decide on " +
+      "it. It survives until a partner has seen it. Network OS is authoritative for the PERSON and " +
+      "this app is authoritative for the DEAL, so nothing here is settled by the push — you may " +
+      "recommend passing with the one-line reason, but never close it yourself. Anything you found " +
+      "scouting is different: that list is yours to cut.",
     channel: "network_os",
+    origin: "NETWORK",
   },
   SCOUT: {
     owner: DEAL_INTAKE_EMPLOYEE,
     machine: EARLY_STAGE_DEAL_MACHINE,
-    opensRecord: false,
     finderMayScrap: true,
     arrival: (from) => `Found by ${from} while scouting.`,
     prompt:
-      "You found this yourself. Nobody outside the firm is waiting on an answer, so this one IS " +
+      "You found this yourself and it is already at the top of the funnel — decide on it. Nobody " +
+      "outside the firm is waiting on an answer, so this one IS " +
       "yours to drop — say why in one line and drop it, rather than filling a partner's queue with " +
       "your own near misses. What you drop still shows on the pass pile, so the firm can see what " +
       "you turned down. Inbound is the opposite and stays that way: never scrap something somebody " +
       "sent us without a partner.",
     channel: "scout",
+    origin: "OUTBOUND",
   },
 };
 
@@ -187,15 +213,16 @@ export interface FunnelArrival {
 export interface FunnelEntry {
   route: IntakeRoute;
   /**
-   * IN_FUNNEL   the record is open — only the manual route reaches this.
-   * OPENED      not on the board; this would be a new company.
-   * ENRICHED    on the board already, with no live opportunity.
-   * ALREADY_OPEN on the board with a live opportunity — do not open a second one.
+   * IN_FUNNEL    an opportunity was opened at the top of the funnel — on every route, whether the
+   *              company was new to the register or already on it with no live deal.
+   * ALREADY_OPEN on the board with a live opportunity; an unattended route does not open a second
+   *              one, and the card asks whether this changes anything about the one that exists.
    */
-  outcome: "IN_FUNNEL" | "OPENED" | "ENRICHED" | "ALREADY_OPEN";
-  company_id: string | null;
-  opportunity_id: string | null;
-  opportunity: OpportunityRow | null;
+  outcome: "IN_FUNNEL" | "ALREADY_OPEN";
+  company_id: string;
+  /** Never null: every route ends with the company on the board. */
+  opportunity_id: string;
+  opportunity: OpportunityRow;
   work_card_id: string | null;
   /** Who holds it now. Null when nobody has to: a partner already did the work. */
   owner: string | null;
@@ -360,6 +387,19 @@ function systemIdentity(): FirmUserIdentity {
   };
 }
 
+/**
+ * The actor an unattended route opens the opportunity as: the seat that owns the top of the funnel.
+ *
+ * An AI actor rather than the MANAGING_PARTNER-bearing `systemIdentity()`, on purpose. The card
+ * needs that identity because `work_card.create` is authorized per actor; the opportunity does not,
+ * `opportunity.create` is an ordinary internal action, and writing a partner's role onto a row a
+ * partner has not seen would be the thing this file exists to prevent. `created_by` therefore reads
+ * `aie_wyatt` — the firm noticed, nobody decided.
+ */
+function intakeActor(policy: RoutePolicy): Actor {
+  return { type: "AI", aiEmployeeId: seatId(policy.owner ?? DEAL_INTAKE_EMPLOYEE), roles: [], firmScopes: [FIRM_SCOPE] };
+}
+
 /** Who the event spine records as having caused this arrival. */
 function arrivalActor(arrival: FunnelArrival): { actorType: "firm_user" | "ai_employee" | "system"; actorId: string } {
   if (arrival.route === "MANUAL") {
@@ -396,7 +436,9 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
   }
   const open = existing
     ? await env.WP_OS_DB.prepare(
-        "SELECT id FROM investment_opportunity WHERE company_id = ?1 AND status NOT IN ('CLOSED','PASS','WITHDRAWN') LIMIT 1",
+        // An archived record (0098) is off the board and does not count as live; a company whose
+        // only deal was taken off as a typo is a company with no deal.
+        "SELECT id FROM investment_opportunity WHERE company_id = ?1 AND status NOT IN ('CLOSED','PASS','WITHDRAWN') AND archived_at IS NULL LIMIT 1",
       )
         .bind(existing.id)
         .first<{ id: string }>()
@@ -409,24 +451,12 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
     : "Not on the board — this would be a new company.";
 
   let companyId = existing?.id ?? null;
-  let opportunity: OpportunityRow | null = null;
-  let workCardId: string | null = null;
 
   /*
-   * 2a. THE REGISTER IS NOT THE PIPELINE, and conflating them made the deck feature a no-op.
-   *
-   * `opensRecord` used to gate BOTH creating the company record and opening an opportunity, so a
-   * company arriving by email never got a `canonical_company` row at all. Everything downstream that
-   * needs one — the deck reader above all — had nothing to attach to, and `deckQueue` skipped it for
-   * ever while the job cheerfully reported "no decks waiting".
-   *
-   * They are different acts. The REGISTER is every company the firm has heard of; recording that we
-   * heard of somebody commits nothing and is exactly what an arrival IS. The PIPELINE is a claim on
-   * partner attention, and that still requires a human — which is what `opensRecord` actually meant
-   * and now solely governs.
-   *
-   * The operator's own sentence needs both halves: "if its a new company they create a new one. if
-   * existing they update it."
+   * 2a. THE REGISTER ROW. Every company the firm has heard of has one, and an arrival IS the firm
+   * hearing of somebody. Created here when the match found nothing; the deck reader and everything
+   * else downstream attaches to it. (Until 22 Aug the unattended routes created no row at all, and
+   * the deck reader skipped every emailed deck for ever while reporting "no decks waiting".)
    */
   if (!companyId) {
     companyId = `cc_${crypto.randomUUID()}`;
@@ -456,15 +486,20 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
     });
   }
 
-  if (policy.opensRecord) {
-    /*
-     * 2b. THE ROUTE THAT OPENS AN OPPORTUNITY. Exactly one, and it needs an authenticated actor —
-     * the whole reason the other three raise cards is that they have nobody to attribute a claim on
-     * partner attention to.
-     */
+  /*
+   * 2b. THE OPPORTUNITY, ON EVERY ROUTE. "They are top of funnel if they are in the system."
+   *
+   * MANUAL opens one unconditionally under the partner's own name — she decided, and she may open a
+   * second on a company that already has one (a secondary beside a primary is her call). The three
+   * unattended routes open one only when the company has no live opportunity; otherwise the arrival
+   * joins the one that exists and the card asks whether anything changed. The row is opened by the
+   * seat that owns the top of the funnel, so `created_by` names Wyatt rather than a partner who has
+   * not looked yet — an opportunity at NEW is the firm noticing, not the firm deciding.
+   */
+  let opportunity: OpportunityRow;
+  if (arrival.route === "MANUAL") {
     const actor = arrival.actor;
-    if (!actor) throw new Error(`the ${arrival.route} route opens the record itself and needs the actor who drove it`);
-
+    if (!actor) throw new Error(`the ${arrival.route} route opens the record under a partner's name and needs the actor who drove it`);
     const wanted = arrival.opportunity;
     opportunity = await createOpportunity(env, actor, {
       ...(wanted ?? { opportunity_type: "EARLY_STAGE_PRIMARY", title: arrival.company.trim() }),
@@ -473,22 +508,38 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
       // it knows more than the door does — but silence is filled in rather than left blank.
       source_channel: wanted?.source_channel ?? `${policy.channel}:${arrival.source}`,
     });
+  } else if (open) {
+    opportunity = (await getOpportunity(env, open.id))!;
   } else {
-    /*
-     * 2b. THE ROUTES THAT PROPOSE. Identical work, different seat and different standing instruction.
-     * Nothing enters the pipeline here; a card does, and an employee puts the company in.
-     */
-    const nextAction = existing
-      ? open
-        ? "Decide whether this changes anything about the opportunity already open. Do not open a second one."
-        : `Fill in what is missing on ${existing.canonical_name} from this, then open it at the top of the funnel.`
-      : "Check it is real and fits the thesis, then open it at the top of the funnel.";
+    opportunity = await createOpportunity(env, intakeActor(policy), {
+      opportunity_type: "EARLY_STAGE_PRIMARY",
+      title: arrival.company.trim(),
+      company_id: companyId,
+      // `email:` is the prefix the dealflow board badges "by email · not yet looked at" on. The
+      // prefix is the route's channel, the rest is who — a contract, not a label.
+      source_channel: `${policy.channel}:${arrival.source}`,
+      relationship_origin: policy.origin ?? "UNRECORDED",
+      ...(arrival.received_at ? { relationship_started_at: arrival.received_at } : {}),
+    });
+  }
+
+  /*
+   * 2c. THE CARD, on the three unattended routes. Identical work, different seat and different
+   * standing instruction. The card no longer asks anybody to put the company in the pipeline — it
+   * is there — it asks for the DECISION, which is the one thing the system may not make alone.
+   */
+  let workCardId: string | null = null;
+  if (arrival.route !== "MANUAL") {
+    const nextAction = open
+      ? `${existing!.canonical_name} was already on the board with a live opportunity. Decide whether this changes anything about it — never open a second one.`
+      : `It is at the top of the funnel now. Decide on it: check it is real and fits the thesis, fill in what is missing, and recommend advance or pass — loudly, with the one-line reason — for a partner to act on.`;
 
     const card = await createWorkCardInternal(env, systemIdentity(), {
       title: `${arrival.is_deck ? "Deck" : arrival.route === "SCOUT" ? "Scouted" : "Deal flow"}: ${arrival.company}`,
       description: [
         policy.arrival(arrival.source),
         known,
+        `Opportunity ${opportunity.id} is on the board at the top of the funnel.`,
         arrival.sector ? `Sector given: ${arrival.sector}` : null,
         arrival.one_liner ? `What they do: ${arrival.one_liner}` : null,
         arrival.website ? `Website: ${arrival.website}` : null,
@@ -532,17 +583,14 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
   for (const attachment of arrival.attachments ?? []) {
     if (!env.WP_OS_DOCUMENTS) break;
     /*
-     * KEPT EVEN WHEN THERE IS NO COMPANY YET, which is the case the operator actually described:
-     * "if its a new company they create a new one." The EMAIL route deliberately does not write the
-     * pipeline — it raises a card and the analyst decides — so a brand-new company has no record to
-     * attach a deck to at this moment. Discarding the bytes for that reason threw the deck away for
-     * precisely the arrival it mattered most for, while the card raised in the same breath told the
-     * analyst to read it.
-     *
-     * So the deck is stored against the WORK CARD when there is no company, and the reader fills a
-     * record once one exists. Losing the attachment is not an acceptable way to respect a boundary.
+     * Stored against BOTH the company and the work card. There was a day (22 Aug) when a brand-new
+     * company had no register row at this point and the bytes were discarded for it — precisely the
+     * arrival the deck mattered most for, while the card raised in the same breath told the analyst
+     * to read it. Every route writes the row now, and the card id is kept as well so the reader can
+     * hand the deck to the analyst's card. Losing the attachment is never an acceptable way to
+     * respect a boundary.
      */
-    const key = `decks/${companyId ?? "unmatched"}/${crypto.randomUUID()}.pdf.b64`;
+    const key = `decks/${companyId}/${crypto.randomUUID()}.pdf.b64`;
     try {
       /*
        * STORED AS BASE64, EXACTLY AS IT ARRIVED. Not decoded here and not re-encoded later.
@@ -566,7 +614,7 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
         `INSERT INTO pending_deck (id, company_id, work_card_id, filename, object_key, bytes, firm_scope)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
       )
-        .bind(`pdk_${crypto.randomUUID()}`, companyId ?? null, workCardId ?? null, attachment.filename, key, attachment.bytes, FIRM_SCOPE)
+        .bind(`pdk_${crypto.randomUUID()}`, companyId, workCardId ?? null, attachment.filename, key, attachment.bytes, FIRM_SCOPE)
         .run();
     } catch (err) {
       // A deck that could not be stored is said out loud on the spine rather than dropped. The card
@@ -576,7 +624,7 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
         actorType: "system",
         actorId: "deal_intake",
         objectType: "canonical_company",
-        objectId: companyId ?? "unknown",
+        objectId: companyId,
         firmScope: FIRM_SCOPE,
         payload: { filename: attachment.filename, detail: String(err).slice(0, 300) },
       });
@@ -590,8 +638,9 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
     eventType: "dealflow.arrival",
     actorType,
     actorId,
-    objectType: opportunity ? "investment_opportunity" : workCardId ? "work_card" : "canonical_company",
-    objectId: opportunity?.id ?? workCardId ?? companyId ?? arrival.company.slice(0, 120),
+    // The opportunity, on every route: it is the one object every arrival now produces.
+    objectType: "investment_opportunity",
+    objectId: opportunity.id,
     firmScope: FIRM_SCOPE,
     payload: {
       route: arrival.route,
@@ -601,7 +650,7 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
       company: arrival.company,
       company_id: companyId,
       matched_via: existing?.matched_via ?? null,
-      opportunity_id: opportunity?.id ?? null,
+      opportunity_id: opportunity.id,
       work_card_id: workCardId,
       owner: policy.owner,
       is_deck: arrival.is_deck ?? false,
@@ -609,19 +658,20 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
     },
   });
 
-  const outcome: FunnelEntry["outcome"] = opportunity ? "IN_FUNNEL" : existing ? (open ? "ALREADY_OPEN" : "ENRICHED") : "OPENED";
+  const outcome: FunnelEntry["outcome"] = open && arrival.route !== "MANUAL" ? "ALREADY_OPEN" : "IN_FUNNEL";
 
   return {
     route: arrival.route,
     outcome,
     company_id: companyId,
-    opportunity_id: opportunity?.id ?? null,
+    opportunity_id: opportunity.id,
     opportunity,
     work_card_id: workCardId,
     owner: policy.owner,
-    detail: opportunity
-      ? `${arrival.company} is in the funnel, entered by ${arrival.source}.`
-      : `${policy.owner} has a card for ${arrival.company}. ${known}`,
+    detail:
+      arrival.route === "MANUAL"
+        ? `${arrival.company} is in the funnel, entered by ${arrival.source}.`
+        : `${arrival.company} is at the top of the funnel; ${policy.owner} has the card to decide on it. ${known}`,
     arrival_event_id: arrivalEventId,
   };
 }
