@@ -5556,3 +5556,648 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .room-ptt, .room-ptt-live { transition: none; }
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DEALS SECTION — the shared pattern
+   design/DEALS_SECTION_DESIGN.md §2 (artboard A), then the per-tab lists in
+   §3–§8. Every value is a token from the block at the top of this file; the
+   artboards' <style> was that block copied verbatim plus the classes below,
+   so what the owner approved and what the product renders are one rule set.
+
+   BUILD ORDER (§12.1). These classes land BEFORE the pages that wear them, on
+   purpose: five tab branches start from this one so they never disagree about
+   a name or a size. Until a tab lands its classes are declared ahead, and
+   `design/DEALS_SECTION_CLASSES.json` is the register that keeps that honest —
+   `validate:css-classes` fails if a registered class has no rule, if a tab
+   that has landed does not emit its classes, or if a class is emitted while
+   its tab is still marked pending; `validate:heading-scale` tolerates a
+   `.class hN` rule aimed at air ONLY while that register says the class is
+   awaiting its tab.
+
+   NOT RETIRED HERE, although §12.1 says to: `.stage-chip-screening/-diligence/
+   -ic_ready`, `.funnel-mouth*` and `.deal-record-step` are still emitted on
+   this base (DealflowPage.tsx, App.tsx). They go when the Dealflow tab lands
+   and stops emitting them — a rule pulled from under a live element is the
+   defect `validate:css-classes` exists to catch.
+
+   NO DARK MODE: the token block declares `color-scheme: light` and carries no
+   dark values, so none are invented here. Reduced motion: the global rule in
+   §10 collapses every transition; the one animation this section adds, the
+   live dot, is switched off explicitly below as `.health-ok` is.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Masthead: eyebrow → answer → detail. One per page, derived from counts the page already
+   loads. The `.home-masthead` pattern (#95/#98) generalised beyond Home. ── */
+.masthead {
+  display: block;
+  margin-bottom: var(--space-xl);
+}
+.masthead-date {
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--wp-muted);
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+}
+/* h2 because every surface's answer line is an h2 under the shell's h1 — the tag Home emits,
+   and the tag `validate:heading-scale` will hold the Deals pages to. */
+.masthead h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  font-weight: 700;
+  max-width: 26ch;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+/* --text-md under --text-2xl: three steps, a deliberate drop rather than adjacent drift. */
+.masthead-second {
+  margin: var(--space-sm) 0 0;
+  font-size: var(--text-md);
+  color: var(--wp-ink-2);
+  max-width: var(--measure);
+}
+
+/* ── Band: a full-bleed hairline above, a head two steps above body copy, a muted "when" on the
+   right. Orange appears in a band head only as a `.count-pill`, and only when a human is waited on. ── */
+.band { margin-top: var(--space-2xl); }
+.band-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  border-top: 1px solid var(--wp-line-strong);
+  padding-top: var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+.band-head h3 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+}
+.band-when {
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+  margin-left: auto;
+}
+/* Panel head inside a band: the third rank (--text-lg). Same shape as `.home-section-head`, named
+   for the section so a Deals page never has to borrow Home's vocabulary. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin: var(--space-xl) 0 var(--space-md);
+  flex-wrap: wrap;
+}
+.section-head h3,
+.section-head h4 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+}
+
+/* ── Stage rail: the pipeline drawn as a line. `.spine*` generalised — the nodes are BUTTONS
+   that filter the list. Ink = has companies, orange = where the human act is (one node at most),
+   green = done. The label column also says "the act is here" so colour is never the only cue. ── */
+.stage-rail {
+  display: flex;
+  align-items: flex-start;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stage-rail > li {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.stage-rail-line { display: flex; align-items: center; width: 100%; }
+.stage-rail-line i { height: 2px; background: var(--wp-line-strong); flex-grow: 1; }
+/* The line stops at the ends rather than trailing into nothing. */
+.stage-rail > li:first-child .stage-rail-line i:first-child,
+.stage-rail > li:last-child .stage-rail-line i:last-child { background: transparent; }
+
+/* The node, eight states. Base and hover/active/disabled are written at the same specificity as
+   the `.surface-body button` chrome so a node inside a surface is a node, not a grey button. */
+.surface-body button.stage-node,
+.stage-node {
+  width: 40px;
+  height: 40px;
+  min-height: 0;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--wp-line-strong);
+  background: var(--wp-surface);
+  color: var(--wp-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.surface-body button.stage-node:hover,
+.stage-node:hover { border-color: var(--wp-ink-2); background: var(--wp-surface-2); color: var(--wp-ink); }
+.surface-body button.stage-node:active,
+.stage-node:active { background: var(--wp-surface-3); }
+.stage-node:focus-visible {
+  outline: var(--focus-width) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-pill);
+}
+.surface-body button.stage-node:disabled,
+.stage-node:disabled { opacity: 0.6; cursor: not-allowed; background: var(--wp-surface); border-color: var(--wp-line-strong); color: var(--wp-muted); }
+.stage-node[aria-busy="true"] { color: transparent; cursor: progress; }
+.stage-node[data-state="error"] { border-color: var(--wp-danger); color: var(--wp-danger); }
+.surface-body button.stage-node-filled,
+.stage-node-filled { background: var(--wp-ink); border-color: var(--wp-ink); color: var(--wp-surface); }
+.surface-body button.stage-node-filled:hover,
+.stage-node-filled:hover { background: var(--wp-ink-hover); border-color: var(--wp-ink-hover); color: var(--wp-surface); }
+.surface-body button.stage-node-current,
+.stage-node-current { background: var(--wp-orange); border-color: var(--wp-orange); color: var(--wp-orange-ink); }
+.surface-body button.stage-node-current:hover,
+.stage-node-current:hover { background: var(--wp-orange-strong); border-color: var(--wp-orange-strong); color: var(--wp-orange-ink); }
+/* success = done: the stage the firm finished. */
+.surface-body button.stage-node-done,
+.stage-node-done,
+.stage-node[data-state="success"] { background: var(--wp-good); border-color: var(--wp-good); color: var(--wp-surface); }
+.surface-body button.stage-node-done:hover,
+.stage-node-done:hover { background: var(--wp-good); border-color: var(--wp-ink); color: var(--wp-surface); }
+/* A node pressed to filter the list says so. */
+.stage-node[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--wp-surface), 0 0 0 4px var(--wp-ink); }
+
+.stage-label { font-size: var(--text-sm); font-weight: 600; text-align: center; overflow-wrap: anywhere; min-width: 0; }
+.stage-q { font-size: var(--text-xs); color: var(--wp-muted); text-align: center; line-height: var(--lh-snug); }
+.stage-rail-exits {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--wp-line);
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--wp-muted);
+}
+.stage-rail-exits strong { color: var(--wp-ink); }
+
+/* ── Compact rail: on a row, a card, a record head. Never interactive — dots and segments only,
+   and the row's stage word carries the meaning for a reader who cannot see the orange. ── */
+.stage-rail-compact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  flex-wrap: nowrap;
+  overflow: hidden;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stage-rail-compact > li { display: flex; align-items: center; gap: var(--space-2xs); min-width: 0; }
+.stage-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--wp-line-strong);
+  background: var(--wp-surface);
+  flex-shrink: 0;
+}
+.stage-dot-done { background: var(--wp-ink); border-color: var(--wp-ink); }
+.stage-dot-current { background: var(--wp-orange); border-color: var(--wp-orange); width: 14px; height: 14px; }
+.stage-dot-closed { background: var(--wp-good); border-color: var(--wp-good); }
+.stage-seg { height: 2px; width: 14px; background: var(--wp-line-strong); flex-shrink: 0; }
+
+/* ── Faces: one object, three (or five) faces. role=tablist / role=tab with aria-selected; the
+   orange underline is on the selected face only. The strip scrolls inside itself on a phone so the
+   document never scrolls sideways; its hairline is an inset shadow rather than a border so a tab's
+   3px underline sits ON it without a negative margin. ── */
+.faces {
+  display: flex;
+  gap: 0;
+  margin-bottom: var(--space-lg);
+  box-shadow: inset 0 -1px 0 var(--wp-line-strong);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+/* `.faces .face-tab` (0,2,0) outranks the `.surface-body button` chrome (0,1,1) without borrowing
+   its name — a tab is only ever inside its tablist. */
+.faces .face-tab {
+  flex: 0 0 auto;
+  min-height: var(--touch-min);
+  padding: var(--space-sm) var(--space-lg);
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--wp-ink-2);
+  font-size: var(--text-base);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.faces .face-tab:hover { background: var(--wp-surface-2); border-color: transparent; border-bottom-color: var(--wp-line-strong); color: var(--wp-ink); }
+.faces .face-tab:active { background: var(--wp-surface-3); }
+/* The ring is drawn inside the strip so an outer offset is never clipped by the scroller. */
+.faces .face-tab:focus-visible { outline: var(--focus-width) solid var(--focus-color); outline-offset: calc(-1 * var(--focus-width)); border-radius: var(--radius-xs); }
+.faces .face-tab[aria-selected="true"] { color: var(--wp-ink); border-bottom-color: var(--wp-orange); }
+.faces .face-tab[aria-selected="true"]:hover { border-bottom-color: var(--wp-orange); }
+.faces .face-tab:disabled { background: transparent; border-color: transparent; color: var(--wp-muted); opacity: 0.6; cursor: not-allowed; }
+.faces .face-tab[aria-busy="true"] { cursor: progress; color: var(--wp-muted); }
+.faces .face-tab[data-state="error"] { color: var(--wp-danger); border-bottom-color: var(--wp-danger-line); }
+.faces .face-tab[data-state="success"] { border-bottom-color: var(--wp-good-line); }
+/* What the face holds: live · draft · empty. */
+.faces .face-tab .badge { margin-left: var(--space-xs); }
+
+/* ── Deal row variants. `.deal-row` keeps its four cells (name+sub · stage+clock · what is
+   stopping it · the act); `-3` drops the stage cell for a `.readiness` line (Meetings); `-2` is
+   name + act (Secondaries). Selected = the one selection colour. ── */
+.deal-row-3 { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.4fr) auto; }
+.deal-row-2 { grid-template-columns: minmax(0, 1fr) auto; }
+.deal-row-selected { background: var(--wp-tint); border-color: var(--wp-tint-line); }
+.deal-sub { font-size: var(--text-xs); color: var(--wp-muted); margin-top: var(--space-3xs); }
+/* Red AND the word "stalled" — the row's copy carries it. */
+.deal-sub-stalled { color: var(--wp-danger); font-weight: 600; }
+.deal-blocker { font-size: var(--text-base); }
+.deal-blocker.warn { color: var(--wp-warn); }
+.deal-actions { flex-wrap: wrap; justify-content: flex-end; }
+
+/* ── Readiness / outputs: "Brief ready · 3 to find out · 2 we owe them". Counts from MeetingRow. ── */
+.readiness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs) var(--space-sm);
+  align-items: center;
+  font-size: var(--text-xs);
+  color: var(--wp-ink-2);
+}
+.readiness .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--wp-line-strong);
+  margin: 0 var(--space-3xs);
+}
+
+/* ── Status. Four tones, orange is not one; `.stage-chip-live` is the stage the firm is acting
+   in — the ONE chip that carries orange, replacing the three per-stage orange chips once Dealflow
+   stops emitting them. ── */
+.stage-chip-live { background: var(--wp-orange); color: var(--wp-orange-ink); }
+.task-chip {
+  display: inline-block;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  padding: var(--space-3xs) var(--space-sm);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--wp-line-strong);
+  background: var(--wp-surface-2);
+  color: var(--wp-ink-2);
+  white-space: nowrap;
+}
+.task-chip-live { border-color: var(--wp-orange); background: var(--wp-tint); color: var(--wp-orange-deep); }
+/* A filter chip that is pressed reads in ink: selection is a state, not an alarm. */
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.chip[aria-pressed="true"] { background: var(--wp-ink); border-color: var(--wp-ink); color: var(--wp-shell-ink); }
+
+/* ── Fault: a company with no deal. The only left-rule strip in the section, because it is the
+   one thing that must not read as decoration; the strip names the company in words. ── */
+.fault {
+  border: 1px solid var(--wp-danger-line);
+  border-left: 3px solid var(--wp-danger);
+  background: var(--wp-danger-tint);
+  color: var(--wp-danger);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  margin: 0 0 var(--space-md);
+  font-size: var(--text-sm);
+}
+
+/* ── The room (Meetings, During face). ── */
+.room-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--space-lg);
+  align-items: start;
+}
+/* The recording line: switch · live dot · status + consent · Stop. A grid, because as a flex row
+   "Stop" wrapped to a second line on the first render (§9). */
+.rec-line {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-md);
+  background: var(--wp-surface);
+  margin-bottom: var(--space-md);
+}
+.rec-text { display: flex; flex-direction: column; gap: var(--space-3xs); min-width: 0; }
+.rec-text span { font-size: var(--text-xs); color: var(--wp-muted); }
+
+/* The switch, eight states. role=switch + aria-checked; the 44px hit area is the ::before inset so
+   the control itself stays 44×24. The knob slides on the one duration; the global reduced-motion
+   rule collapses it. */
+.surface-body button.switch,
+.switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--wp-line-control);
+  background: var(--wp-surface-3);
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.switch::before { content: ""; position: absolute; inset: -10px; }
+.switch i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--wp-ink-2);
+  transition: left var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.surface-body button.switch:hover,
+.switch:hover { background: var(--wp-surface-3); border-color: var(--wp-ink-2); }
+.switch:hover i { background: var(--wp-ink); }
+.surface-body button.switch:active,
+.switch:active { background: var(--wp-line); }
+.switch:focus-visible { outline: var(--focus-width) solid var(--focus-color); outline-offset: var(--focus-offset); border-radius: var(--radius-pill); }
+.surface-body button.switch[aria-checked="true"],
+.switch[aria-checked="true"] { background: var(--wp-orange); border-color: var(--wp-orange); }
+.switch[aria-checked="true"] i { left: 23px; background: var(--wp-orange-ink); }
+.surface-body button.switch[aria-checked="true"]:hover,
+.switch[aria-checked="true"]:hover { background: var(--wp-orange-strong); border-color: var(--wp-orange-strong); }
+.surface-body button.switch:disabled,
+.switch:disabled { opacity: 0.6; cursor: not-allowed; background: var(--wp-surface-3); border-color: var(--wp-line); }
+/* loading "Reading the room…": the knob sits centred while the line says what is happening. */
+.switch[aria-busy="true"] { cursor: progress; }
+.switch[aria-busy="true"] i { left: 13px; background: var(--wp-muted); }
+/* error "Minute N was not written down": the switch itself goes red-edged; the words are in the line. */
+.switch[data-state="error"] { border-color: var(--wp-danger); background: var(--wp-danger-tint); }
+.switch[data-state="error"] i { background: var(--wp-danger); }
+/* success = on with consent on file: orange, and the consent line beside it says so. */
+.switch[data-state="success"] { border-color: var(--wp-good); }
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--wp-orange);
+  box-shadow: 0 0 0 0 var(--wp-tint-line);
+  flex-shrink: 0;
+  animation: live-pulse 2.4s ease-out infinite;
+}
+@keyframes live-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--wp-tint-line); }
+  70%  { box-shadow: 0 0 0 0.4rem transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.transcript { font-size: var(--text-sm); line-height: var(--lh-normal); color: var(--wp-ink-2); }
+.transcript b { color: var(--wp-ink); font-weight: 600; }
+
+/* Ask the room: input + Ask + hold-to-talk. */
+.ask { display: flex; gap: var(--space-sm); align-items: stretch; }
+.ask input { flex: 1 1 auto; min-height: var(--touch-min); font-size: var(--text-md); }
+.surface-body button.ptt,
+.ptt {
+  min-height: var(--touch-min);
+  min-width: var(--touch-min);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-md);
+  gap: var(--space-xs);
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.ptt:focus-visible { outline: var(--focus-width) solid var(--focus-color); outline-offset: var(--focus-offset); border-radius: var(--radius-md); }
+/* held: ink fill — the firm is speaking, which is a state, not an alarm. */
+.surface-body button.ptt[aria-pressed="true"],
+.ptt[aria-pressed="true"] { background: var(--wp-ink); border-color: var(--wp-ink); color: var(--wp-shell-ink); }
+.surface-body button.ptt[aria-pressed="true"]:hover,
+.ptt[aria-pressed="true"]:hover { background: var(--wp-ink-hover); border-color: var(--wp-ink-hover); color: var(--wp-shell-ink-max); }
+.ptt[aria-busy="true"] { cursor: progress; color: var(--wp-muted); }
+/* error "Nobody called … works here" / revoked: the words sit under the box in `.field-help.err`. */
+.ptt[data-state="error"] { border-color: var(--wp-danger); color: var(--wp-danger); }
+.ptt[data-state="success"] { border-color: var(--wp-good); }
+
+/* The artifacts stream: answer / table / chart / packet / summary, charts inline SVG on --viz-*. */
+.artifact {
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-md);
+  background: var(--wp-surface);
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.artifact-kind {
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--wp-muted);
+  font-weight: 600;
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+}
+/* The meta beside the kind is not a second eyebrow (§9, C2). */
+.artifact-kind .muted { text-transform: none; letter-spacing: 0; font-weight: 500; }
+
+/* Who is in the room: a seat per row, a task chip where the seat holds a work card. */
+.seat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--wp-line);
+}
+.seat:last-child { border-bottom: 0; }
+/* base over xs: two steps between the name and its role, never one. */
+.seat .who { flex: 1 1 auto; min-width: 0; font-size: var(--text-base); }
+.seat .who span { display: block; font-size: var(--text-xs); color: var(--wp-muted); }
+.ic-seat { display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-xs) 0; font-size: var(--text-sm); }
+
+/* ── The record's facts and checklists (Before face, committee face). ── */
+.dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm) var(--space-lg); margin: 0; }
+.dl dt { font-size: var(--text-2xs); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--wp-muted); font-weight: 600; }
+.dl dd { margin: 0; font-size: var(--text-sm); font-weight: 600; overflow-wrap: anywhere; }
+.two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-lg); }
+.scorecard { list-style: none; margin: 0; padding: 0; }
+.scorecard li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-md);
+  padding: var(--space-xs) 0;
+  border-bottom: 1px solid var(--wp-line);
+  font-size: var(--text-sm);
+  align-items: baseline;
+}
+.scorecard li:last-child { border-bottom: 0; }
+.check { display: inline-flex; align-items: center; gap: var(--space-xs); font-size: var(--text-sm); }
+.check i { width: 16px; height: 16px; border-radius: var(--radius-xs); border: 1px solid var(--wp-line-control); display: inline-block; background: var(--wp-surface); flex-shrink: 0; }
+.check i.on { background: var(--wp-ink); border-color: var(--wp-ink); }
+
+/* ── Fields with a helper slot. The slot reserves one line so an error replacing the helper never
+   shifts the layout; `.err` is the error, and it is written as an instruction. ── */
+.field { display: flex; flex-direction: column; gap: var(--space-2xs); font-size: var(--text-xs); font-weight: 600; color: var(--wp-ink-2); min-width: 0; }
+.field-help { min-height: 1lh; font-size: var(--text-xs); font-weight: 400; color: var(--wp-muted); }
+.field-help.err { color: var(--wp-danger); }
+/* Class forms of the two input states no pseudo-class carries (aria-invalid is the error). */
+.in-error,
+.field input[aria-invalid="true"],
+.book-grid input[aria-invalid="true"] { border-color: var(--wp-danger); background: var(--wp-danger-tint); }
+.in-success { border-color: var(--wp-good); }
+.find-field { flex: 1 1 22rem; min-width: 0; }
+
+/* ── Portfolio: the holding row and Book it. ── */
+.holding-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--space-md);
+  align-items: center;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--wp-surface);
+  border: 1px solid var(--wp-line);
+  border-radius: var(--radius-md);
+}
+.holding-row.is-open { border-radius: var(--radius-md) var(--radius-md) 0 0; border-bottom-color: transparent; }
+.holding-form {
+  background: var(--wp-surface-2);
+  border: 1px solid var(--wp-line);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  padding: var(--space-lg);
+  margin-bottom: var(--space-sm);
+}
+.book-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-sm) var(--space-md); }
+.book-grid .input-money { max-width: none; text-align: left; }
+.kv { font-size: var(--text-sm); }
+.kv b { display: block; font-size: var(--text-2xs); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--wp-muted); font-weight: 600; }
+/* Composition beside the deployment ring; the legend is `.allocation-legend`'s shape, hosted. */
+.viz-row { display: flex; flex-wrap: wrap; gap: var(--space-2xl); align-items: center; }
+.legend { list-style: none; margin: 0; padding: 0; flex: 1 1 320px; min-width: 0; }
+.legend li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--space-sm);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--wp-line);
+}
+.legend li:last-child { border-bottom: 0; }
+.legend-val { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.sw { width: 10px; height: 10px; border-radius: var(--radius-xs); display: inline-block; flex-shrink: 0; }
+.bar { height: 8px; border-radius: var(--radius-xs); background: var(--wp-surface-3); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--wp-ink); }
+
+/* ── Thesis: versions, and the top-rule statement (the alternative to the orange banner, §13 Q3). ── */
+.version-rail { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; font-size: var(--text-xs); color: var(--wp-muted); }
+.version-rail .v { padding: var(--space-2xs) var(--space-sm); border: 1px solid var(--wp-line-strong); border-radius: var(--radius-pill); background: var(--wp-surface); font-weight: 600; color: var(--wp-ink-2); }
+.version-rail .v-current { background: var(--wp-ink); border-color: var(--wp-ink); color: var(--wp-shell-ink); }
+/* design-token-exempt: as .thesis-banner-statement — the mandate as display type, fluid, above the --text-2xl ceiling on purpose */
+.thesis-statement {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: clamp(1.4rem, 3.2vw, 2.1rem);
+  line-height: var(--lh-snug);
+  letter-spacing: -0.014em;
+  text-wrap: balance;
+  max-width: 32em;
+  padding: var(--space-xl) 0;
+  border-top: 3px solid var(--wp-orange);
+  border-bottom: 1px solid var(--wp-line-strong);
+}
+.eyebrow { font-size: var(--text-2xs); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--wp-muted); font-weight: 600; }
+
+/* ── Layout words the artboards use. `.row` already exists as a form row and keeps its rule. ── */
+.stack { display: flex; flex-direction: column; gap: var(--space-sm); }
+.between { justify-content: space-between; }
+.grow { flex: 1 1 auto; min-width: 0; }
+.hairline { border-top: 1px solid var(--wp-line); margin: var(--space-md) 0; }
+
+/* ── Tablet and below: rows stack (the existing `.deal-row` rule at 60rem does the same; these
+   variants are declared later and would otherwise win at that width), the book form halves. ── */
+@media (max-width: 60rem) {
+  .deal-row-3,
+  .deal-row-2 { grid-template-columns: minmax(0, 1fr); gap: var(--space-sm); }
+  .book-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .holding-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ── Phone: the rail stands up — one stage per row, node left, words right, the line becomes the
+   left edge. Measured at 320/375/414 (§10): no overlap, no wrapped clickable. Everything else goes
+   to one column through minmax(0,1fr) tracks only. ── */
+@media (max-width: 40rem) {
+  .masthead h2 { font-size: var(--text-xl); }
+  .stage-rail { position: relative; flex-direction: column; gap: 0; }
+  /* The edge runs through the node's centre — half a 40px node less half the 2px line — drawn
+     behind the nodes rather than pushed into place with an off-scale margin. */
+  .stage-rail::before {
+    content: "";
+    position: absolute;
+    left: 19px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--wp-line-strong);
+  }
+  .stage-rail > li {
+    position: relative;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-xs) 0;
+  }
+  .stage-rail-line { width: auto; flex: 0 0 auto; }
+  .stage-rail-line i { display: none; }
+  .stage-label { text-align: left; flex: 0 0 9rem; }
+  .stage-q { text-align: left; flex: 1 1 auto; }
+  .stage-rail-exits { text-align: left; }
+  .deal-actions { justify-content: flex-start; }
+  .faces .face-tab { padding: var(--space-sm) var(--space-md); font-size: var(--text-sm); }
+  .room-grid,
+  .dl,
+  .two-col,
+  .holding-row { grid-template-columns: minmax(0, 1fr); }
+  .holding-row { gap: var(--space-xs); }
+  .book-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rec-line { grid-template-columns: auto auto minmax(0, 1fr); row-gap: var(--space-sm); }
+  .rec-line > button:last-child { grid-column: 1 / -1; justify-self: start; }
+  .ask { flex-wrap: wrap; }
+  .ask input { flex: 1 1 100%; }
+}
+
+/* Touch: the node is 40px on a desk and a 44px target under a finger. The switch's hit area is
+   already its ::before inset; the face tabs and hold-to-talk are 44px everywhere. */
+@media (pointer: coarse) {
+  .surface-body button.stage-node,
+  .stage-node { width: var(--touch-min); height: var(--touch-min); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+  .switch,
+  .switch i,
+  .stage-node,
+  .face-tab,
+  .ptt { transition: none; }
+}
