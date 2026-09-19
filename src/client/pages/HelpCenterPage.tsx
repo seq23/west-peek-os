@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { CONNECTION_FACTS, FIRM_SENDING_FACTS, SEND_AS_FACTS } from "@shared/help/connectionFacts";
 import { PAGE_GUIDES, pageGuidesInOrder, type PageGuide } from "@shared/help/pageGuide";
-import { renderGuideMarkdown, titleOf } from "@shared/help/pageGuide/render";
+import { renderGuideMarkdown, renderWalkthroughMarkdown, titleOf } from "@shared/help/pageGuide/render";
 import { pageHost } from "@shared/help/pageHosts";
 import { pagePurpose } from "@shared/help/pagePurpose";
 import { AI_EMPLOYEE_ROSTER, FOCUS_TEAM_SIZE_DOC, MAX_ACTIVE_AI_EMPLOYEES_DOC } from "../lib/helpFacts";
@@ -476,7 +476,15 @@ const TOPICS: Topic[] = [
 
 /** Words the search may match on a page's section: its title, purpose, bands and controls. */
 function pageSearchText(g: PageGuide): string {
-  return [g.title, g.navKey, g.purpose, ...g.youCan, ...g.bands.map((b) => `${b.name} ${b.shows}`), ...g.acts.map((a) => `${a.label} ${a.does}`)]
+  return [
+    g.title,
+    g.navKey,
+    g.purpose,
+    ...g.youCan,
+    ...g.bands.map((b) => `${b.name} ${b.shows}`),
+    ...g.acts.map((a) => `${a.label} ${a.does}`),
+    ...g.walkthroughs.flatMap((w) => [w.scenario, ...w.steps.map((st) => `${st.do} ${st.then ?? ""} ${st.not ?? ""}`)]),
+  ]
     .join(" ")
     .toLowerCase();
 }
@@ -515,7 +523,18 @@ function PageSection({ navKey, onNavigate }: { navKey: string; onNavigate?: (key
         </p>
       )}
       {guide ? (
-        <MarkdownLite text={renderGuideMarkdown(guide)} className="md-lite" />
+        <>
+          <MarkdownLite text={renderGuideMarkdown(guide)} className="md-lite" />
+          {/*
+            HOW YOU WOULD USE IT — the same walkthrough the host speaks when asked "walk me through
+            it" (19 Sep 2026), under the guide, so the Help tab and the host cannot disagree about
+            the order of the steps or what a control does not do.
+          */}
+          <div className="help-walkthrough" data-testid={`help-walkthrough-${navKey}`}>
+            <h4>How you would use it</h4>
+            <MarkdownLite text={renderWalkthroughMarkdown(guide)} className="md-lite" />
+          </div>
+        </>
       ) : (
         <>
           <p>{purpose!.purpose}</p>

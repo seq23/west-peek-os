@@ -442,10 +442,16 @@ describe("the firm default has a door on the page, and the reserved act stays th
 });
 
 describe("joining a Meet call is one press that says where it goes", () => {
-  it("names Meet in the accessible name and opens with no opener", () => {
-    expect(MEETINGS).toContain('aria-label="Join on Meet — opens Google Meet in a new tab"');
+  it("names Meet in the accessible name, says nothing joins for you, and opens with no opener", () => {
+    // 19 Sep 2026: "If I push Join on Meet what happens?" The name says it opens a tab and that
+    // nothing joins; the tooltip and the line under it are the one sentence from howTheRoomHears.
+    expect(MEETINGS).toContain('aria-label="Join on Meet — opens Google Meet in a new tab; nothing joins for you"');
+    expect(MEETINGS).toContain("title={JOIN_ON_MEET_LINE}");
+    expect(MEETINGS).toContain("data-testid={`join-line-${meeting.id}`}");
     expect(MEETINGS).toContain('"_blank", "noopener,noreferrer"');
     expect(MEETINGS).toContain("m.meet_link && <JoinOnMeet");
+    // On the record's head it carries the explanation under it; on the row it is the button alone.
+    expect(MEETINGS).toContain("row.meet_link && <JoinOnMeet meeting={row} explain />");
   });
 });
 

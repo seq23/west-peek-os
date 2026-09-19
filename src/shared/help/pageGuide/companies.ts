@@ -31,4 +31,15 @@ export const companiesGuide: PageGuide = {
     { page: "dealflow", why: "adding a company, moving it, passing on it — every change to a deal." },
     { page: "portfolio", why: "how the companies the fund owns are actually doing." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Finding a company and what happened to it",
+      steps: [
+        { do: "Type a name or pick a sector under **Find and Sector**", then: "**The cards** narrow to it — what they do, where the deal stands, how much of the fund is in it." },
+        { do: "Press **The deal** on a card", then: "Dealflow opens on it.", not: "nothing is created here; **Add one on Dealflow →** is the only door in." },
+        { do: "Press **Edit** to correct the sector, what they do, or the website", then: "Save writes it and **History** shows who changed what." },
+        { do: "Under **Who did we turn down, and why?**, press **Add the reason** where one is missing", then: "Dealflow opens to record it." },
+      ],
+    },
+  ],
 };

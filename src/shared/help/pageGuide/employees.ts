@@ -43,4 +43,17 @@ export const employeesGuide: PageGuide = {
     { page: "ai-controls", why: "the duty roster itself, and the providers." },
     { page: "work", why: "every card an employee is carrying." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Employing someone and reviewing them",
+      steps: [
+        { do: "Under **Find someone**, find the seat and press **Employ**", then: "the employee is on duty; **Request activation** is the long way round through an approval card." },
+        { do: "Press **Open** on an employee under **The teams**", then: "their card opens below: what they are doing and costing." },
+        { do: "Press **Compute scorecard (last 30 days)**, then **Record review**", then: "the scorecard is worked out and a manager review recorded with a finding and a disposition." },
+        { do: "Under **Handoffs**, press **Accept** on a card an employee asked for", then: "the card moves to them; Reject leaves it where it is." },
+        { do: "Under **Department rooms**, press **Post announcement**", then: "it posts to the open department room." },
+        { do: "Under **Former employees**, press **Bring back**", then: "a retired employee returns; Should we? asks first." },
+      ],
+    },
+  ],
 };

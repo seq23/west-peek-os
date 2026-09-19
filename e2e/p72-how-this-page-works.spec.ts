@@ -1,6 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import { gotoSurface } from "./support/nav";
 import { signIn } from "./support/measure";
+import { provisionLocalD1 } from "./support/provision";
 
 /**
  * "HOW DOES THIS PAGE WORK" — the answer is the page as it is, in a shape a person can read.
@@ -13,7 +14,33 @@ import { signIn } from "./support/measure";
  * NEGATIVE PROOF IS THE POINT OF THIS SPEC. The retired trio is asserted absent from Walter's
  * answer and from the Help tab's Meetings section, and the current controls are asserted present
  * as a rendered ordered list and bulleted acts — not as text inside one <p>.
+ *
+ * SAME DAY, THE SECOND HALF. She asked Walter to walk her through a fake meeting and "he skipped
+ * over the screen I get to when I open the room and can seat AI employees … If I push Join on Meet
+ * what happens? … Is it recording? Are my AI employees there from Join on Meet alone?" So: "walk me
+ * through a real meeting" is the guide's walkthrough verbatim — numbered, naming Seat, Join on Meet
+ * and what it does NOT do, the transcript arriving after the call, Draft, Approve; "explain what all
+ * of the buttons do" is every act grouped by face; and the During face carries a "How this room
+ * hears" line whose state is read off the row — one for a calendar Meet call, one for a meeting
+ * recorded here.
  */
+
+const MP = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
+
+async function ask(page: import("@playwright/test").Page, message: string): Promise<import("@playwright/test").Locator> {
+  const before = await page.getByTestId("page-chat-thread-meetings").locator('[data-role="HOST"]').count();
+  await page.getByTestId("page-chat-input-meetings").fill(message);
+  await page.getByTestId("page-chat-send-meetings").click();
+  const answers = page.getByTestId("page-chat-thread-meetings").locator('[data-role="HOST"]');
+  await expect(answers).toHaveCount(before + 1);
+  return answers.nth(before);
+}
+
+async function createMeeting(request: APIRequestContext, title: string): Promise<string> {
+  const res = await request.post("/api/meetings", { headers: MP, data: { title, meeting_type: "FOUNDER", scheduled_at: new Date(Date.now() + 3_600_000).toISOString() } });
+  expect(res.status(), await res.text()).toBe(201);
+  return ((await res.json()) as { id: string }).id;
+}
 
 const RETIRED_MEETINGS_TRIO = ["Prepare for a meeting", "Confer with an AI employee", "Run a close-out"];
 const CURRENT_MEETINGS_CONTROLS = ["Open the room", "They said yes — record", "Approve — make these the record", "Move it", "Google Meet"];
@@ -53,6 +80,104 @@ test("ask Walter on Meetings how the page works: an ordered list of the current 
   expect(text.trim().endsWith("?")).toBe(false);
 });
 
+test("ask Walter to walk you through a real meeting: a numbered scenario from the guide — Seat, Join on Meet and what it does not do, the transcript after the call, Draft, Approve", async ({ page }) => {
+  await signIn(page);
+  await gotoSurface(page, "Meetings");
+  await page.getByTestId("page-chat-toggle-meetings").click();
+
+  const answer = await ask(page, "walk me through a real meeting");
+  // Two scenarios — the calendar Meet call and the in-person one — each a real <ol>.
+  const ordered = answer.locator("ol.md-lite-list");
+  await expect(ordered).toHaveCount(2);
+  expect(await ordered.first().locator("li").count()).toBeGreaterThanOrEqual(10);
+  const text = (await answer.innerText()).replace(/\s+/g, " ");
+  expect(text).toMatch(/^Here is how you would use Meetings, start to finish/);
+  for (const control of ["Seat", "Join on Meet", "Done — open the record", "Draft what came out of it", "Approve — make these the record", "Move it", "They said yes — record"]) expect(text, control).toContain(control);
+  // What does not happen, and when the transcript lands — the two things she could not find out.
+  expect(text).toContain("What does not happen: nothing joins for you");
+  expect(text).toContain("No employee is in the call");
+  expect(text).toContain("Within the hour Google's transcript");
+  expect(text).toContain("laptop microphone");
+  for (const phrase of RETIRED_MEETINGS_TRIO) expect(text, phrase).not.toContain(phrase);
+  expect(text.trim().endsWith("?")).toBe(false);
+
+  // The buttons, grouped by face: a heading per band and every act under one.
+  const buttons = await ask(page, "explain what all of the buttons do");
+  const heads = await buttons.locator("h2, h3, h4, .md-lite-head").allInnerTexts();
+  for (const face of ["Before", "During", "After", "Coming up", "Google Meet"]) expect(heads.map((h) => h.trim()), face).toContain(face);
+  expect(await buttons.locator("ul.md-lite-list").count()).toBeGreaterThanOrEqual(5);
+  const btext = (await buttons.innerText()).replace(/\s+/g, " ");
+  expect(btext).toMatch(/^Every control on Meetings, band by band/);
+  for (const control of CURRENT_MEETINGS_CONTROLS) expect(btext, control).toContain(control);
+  expect(btext).toContain("Seat");
+});
+
+test("the During face says how this room hears — a calendar Meet call, then a meeting recorded here — from named states off the row", async ({ page, request }) => {
+  const marker = `E2E-HEARS-${Date.now()}`;
+  const meetId = await createMeeting(request, `${marker} Deana Oliver, Psyflo — founder call`);
+  const manualId = await createMeeting(request, `${marker} coffee with a founder`);
+  // The calendar sync's own columns (migration 0202), written as the sync writes them.
+  provisionLocalD1(`UPDATE meeting SET source = 'google_calendar', meet_link = 'https://meet.google.com/svf-nzzr-pax', meet_conference_id = 'svf-nzzr-pax', calendar_key = 'westpeek' WHERE id = '${meetId}'`);
+
+  await signIn(page);
+  await gotoSurface(page, "Meetings");
+
+  // ── The Meet call ──
+  await page.getByTestId(`start-${meetId}`).click();
+  await expect(page.getByTestId("face-during")).toHaveAttribute("aria-selected", "true");
+  const hears = page.getByTestId(`hears-${meetId}`);
+  await expect(hears).toBeVisible();
+  // The firm default is off in a fresh firm, so the state is MEET_DEFAULT_OFF — read, not guessed.
+  await expect(hears).toHaveAttribute("data-state", "MEET_DEFAULT_OFF");
+  await expect(hears).toContainText("How this room hears · Google Meet call");
+  await expect(hears.getByTestId("hears-sentence")).toContainText("Join on Meet only opens the call");
+  await expect(hears.getByTestId("hears-sentence")).toContainText("firm default is off");
+  await expect(hears.getByTestId("hears-live-path")).toBeVisible();
+  // Join on Meet says what it does and does not do, on the button and under it.
+  const join = page.getByTestId(`join-${meetId}`).first();
+  await expect(join).toHaveAttribute("title", /new tab.*no employee is in the call.*does not hear it live/);
+  await expect(page.getByTestId(`join-line-${meetId}`)).toContainText("Nothing joins for you");
+  // Beside Seat, what a seated employee can and cannot do; the standalone link says what it is.
+  await expect(page.getByTestId("seat-line")).toContainText("never in the Meet call");
+  await expect(page.getByTestId(`room-standalone-line-${meetId}`)).toContainText("same room, without the app shell");
+  await expect(page.getByTestId(`room-standalone-link-${meetId}`)).toHaveAttribute("href", `#/room/${meetId}`);
+
+  // Turn the firm default on through its own route (the receipt path is proven in p-meet); the
+  // line moves to MEET_PENDING and names the cadence from the job row — the real number, 60.
+  provisionLocalD1("INSERT INTO meet_recording_policy (firm_scope, active, receipt_id) VALUES ('west-peek', 1, 'apr_e2e_hears') ON CONFLICT (firm_scope) DO UPDATE SET active = 1");
+  await page.getByTestId("face-before").click();
+  await page.getByTestId("face-during").click();
+  await expect(hears).toHaveAttribute("data-state", "MEET_PENDING");
+  await expect(hears.getByTestId("hears-sentence")).toContainText("within ~60 min of the call ending");
+  await expect(hears.getByTestId("hears-sentence")).toContainText("this room does not hear it live");
+  provisionLocalD1("UPDATE meet_recording_policy SET active = 0 WHERE firm_scope = 'west-peek'");
+
+  // After says where its material came from — nothing yet, and says so.
+  await page.getByTestId("face-after").click();
+  await expect(page.getByTestId("after-sources")).toHaveAttribute("data-state", "empty");
+  await expect(page.getByTestId("after-sources-empty")).toContainText("no Meet transcript, no laptop capture");
+
+  // ── The meeting recorded here ──
+  await page.getByTestId("record-back").click();
+  await page.getByTestId(`start-${manualId}`).click();
+  const manualHears = page.getByTestId(`hears-${manualId}`);
+  await expect(manualHears).toBeVisible();
+  await expect(manualHears).toContainText("How this room hears · In person or by phone");
+  // `wrangler dev --local` binds no transcription service, so the first shut gate is the service;
+  // the state is read off the same readiness the recording switch is disabled by.
+  await expect(manualHears).toHaveAttribute("data-state", /^MANUAL_(NO_SERVICE|POLICY_OFF)$/);
+  await expect(manualHears.getByTestId("hears-sentence")).toContainText("Notes");
+  await expect(manualHears.getByTestId("hears-sentence")).not.toContainText("Google");
+  await expect(page.getByTestId(`join-${manualId}`)).toHaveCount(0);
+
+  // Phone width: the line, the Join explanation and the seat sentence stay on the page with no
+  // horizontal overflow.
+  await page.setViewportSize({ width: 375, height: 800 });
+  await expect(manualHears).toBeVisible();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow, "no horizontal overflow at 375px").toBeLessThanOrEqual(0);
+});
+
 test("the Help tab's Meetings section is the same guide, and 'How everything works' from Meetings lands on it", async ({ page }) => {
   await signIn(page);
   await gotoSurface(page, "Meetings");
@@ -69,7 +194,14 @@ test("the Help tab's Meetings section is the same guide, and 'How everything wor
   });
   expect(inView, "the Meetings section is scrolled into view on arrival").toBe(true);
 
-  await expect(section.locator("ol.md-lite-list")).toHaveCount(1);
+  // The guide's one numbered band list, plus one numbered list per walkthrough scenario — the
+  // walkthrough is on the Help tab under the guide, the same text Walter speaks.
+  await expect(section.locator("ol.md-lite-list")).toHaveCount(3);
+  const walkthrough = section.getByTestId("help-walkthrough-meetings");
+  await expect(walkthrough).toContainText("How you would use it");
+  await expect(walkthrough).toContainText("A founder call that arrived from the calendar, on Google Meet");
+  await expect(walkthrough).toContainText("In person or by phone");
+  await expect(walkthrough).toContainText("Join on Meet");
   await expect(section).toContainText("Hosted by Walter");
   const text = (await section.innerText()).replace(/\s+/g, " ");
   for (const control of CURRENT_MEETINGS_CONTROLS) expect(text, control).toContain(control);

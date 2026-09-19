@@ -51,6 +51,36 @@ export interface GuideAct {
   who?: string;
   /** The page's human act — the orange button, or the one that raises the approval card. */
   primary?: boolean;
+  /**
+   * The band this control sits in, by the band's `name`. "Explain the buttons" groups the acts by
+   * band (on Meetings, by face); a control that is on several bands names the one a reader meets
+   * first. Checked against `bands` by the validator. Omitted, the act is listed under the page.
+   */
+  band?: string;
+}
+
+/**
+ * One step of a walkthrough. `do` is what the reader does, with the control's label in **bold**
+ * exactly as the page renders it; `then` is what happens next; `not` is what does NOT happen —
+ * the half the owner was missing on 19 Sep 2026 ("If I push Join on Meet what happens? … Are my
+ * AI employees there from Join on Meet alone?"). Every bold span must be an act's label or a
+ * band's name, and the validator holds it there.
+ */
+export interface GuideStep {
+  do: string;
+  then?: string;
+  not?: string;
+}
+
+/**
+ * A scenario, step by step, in the page's own terms — what Walter is asked for when the owner says
+ * "walk me through a real meeting". Written for every page; short for a simple one. Served
+ * verbatim, never paraphrased by a model.
+ */
+export interface GuideWalkthrough {
+  /** The scenario in one line: "A founder call that arrived from the calendar, with Google Meet". */
+  scenario: string;
+  steps: GuideStep[];
 }
 
 export interface GuideAuto {
@@ -88,6 +118,8 @@ export interface PageGuide {
   auto: GuideAuto[];
   /** Where the rest lives. */
   elsewhere: GuideLink[];
+  /** How you would use it, start to finish — one scenario at least; Meetings has two. */
+  walkthroughs: GuideWalkthrough[];
   /**
    * Primary controls in `sources` that are deliberately not acts of THIS page, keyed by testid,
    * with the reason — a shared component's button that belongs to another page, or a control the

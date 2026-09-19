@@ -21,4 +21,15 @@ export const universityGuide: PageGuide = {
   ],
   auto: [{ what: "Nothing runs on a clock; every reply is a governed AI run under the firm's spend and privacy settings", when: "as you talk" }],
   elsewhere: [{ page: "research", why: "when the question is about a real market or company rather than a lesson." }],
+  walkthroughs: [
+    {
+      scenario: "Learning a topic with Whitney",
+      steps: [
+        { do: "Under **What do you want to learn?**, name a topic, choose how Whitney teaches it, and press **Start session**", then: "the session opens in that mode — explaining, testing you, a scenario, or you teaching it back." },
+        { do: "Reply and press **Send**", then: "Whitney answers in **The session**." },
+        { do: "Press **Keep this** on a turn worth remembering", then: "it goes to your diary." },
+        { do: "Press **New topic**", then: "back to the start form; the session is kept under **Past sessions**." },
+      ],
+    },
+  ],
 };

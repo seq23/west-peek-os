@@ -175,7 +175,7 @@ export function checkEmitted(sources) {
 
 function readComponents() {
   const out = {};
-  for (const p of COMPONENTS) if (existsSync(p)) out[path.basename(p)] = readFileSync(p, "utf8");
+  for (const p of COMPONENTS) if (existsSync(p)) out[path.basename(p)] = stripTsComments(readFileSync(p, "utf8"));
   return out;
 }
 
@@ -189,7 +189,7 @@ async function runAll(mod, { moduleSource, serviceSource, testSource, components
 
 async function main() {
   const mod = await loadTs(MODULE);
-  const r = await runAll(mod, { moduleSource: readFileSync(MODULE, "utf8"), serviceSource: readFileSync(SERVICE, "utf8"), testSource: readFileSync(TEST, "utf8"), components: readComponents() });
+  const r = await runAll(mod, { moduleSource: stripTsComments(readFileSync(MODULE, "utf8")), serviceSource: stripTsComments(readFileSync(SERVICE, "utf8")), testSource: stripTsComments(readFileSync(TEST, "utf8")), components: readComponents() });
   if (r.states === 0 || r.paths === 0 || r.named === 0 || r.components === 0) {
     console.error(`validate:room-hears — examined ${r.states} states, ${r.paths} paths, ${r.named} test literals, ${r.components} components. Rule 0: an empty loop is a failure.`);
     process.exit(1);
@@ -204,9 +204,9 @@ async function main() {
 
 async function selfTest() {
   const mod = await loadTs(MODULE);
-  const moduleSource = readFileSync(MODULE, "utf8");
-  const serviceSource = readFileSync(SERVICE, "utf8");
-  const testSource = readFileSync(TEST, "utf8");
+  const moduleSource = stripTsComments(readFileSync(MODULE, "utf8"));
+  const serviceSource = stripTsComments(readFileSync(SERVICE, "utf8"));
+  const testSource = stripTsComments(readFileSync(TEST, "utf8"));
   const components = readComponents();
   let failed = 0;
   const say = (ok, what) => {

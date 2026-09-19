@@ -50,4 +50,18 @@ export const lpGuide: PageGuide = {
     { page: "fund-strategy", why: "the fund itself — create it there before recording commitments, and record first close." },
     { page: "documents", why: "the deck and every filed version of what has gone out." },
   ],
+  walkthroughs: [
+    {
+      scenario: "An investor commits, and the quarter's letter goes out",
+      steps: [
+        { do: "Under **Add an investor**, press **Add**", then: "the investor is on the record." },
+        { do: "Under **Record what somebody committed**, press **Record it**", then: "who, which fund, how much, and where it stands — **Where the raise stands** moves against the target a partner set with **Save**." },
+        { do: "Under **Where the fund stands**, press **Ask Wesley for the report**", then: "Wesley drafts the fund's standing in words.", not: "nothing is sent." },
+        { do: "Under **What we have told them**, press **Start this period's letter**, then **Start it**, then **Put it in front of its reviewers**", then: "finance, compliance and a Managing Partner each read it and press I have read it." },
+        { do: "Press **Send it to the investors**", then: "a partner signs the sending and it goes.", not: "it cannot go before all three have read it." },
+        { do: "Under **Do the administrator's numbers agree with ours**, press **Compare**", then: "every exception between their NAV and ours is listed." },
+        { do: "Under **Who can see our material**, press **Close it** on an access that should end", then: "the access is revoked with a reason." },
+      ],
+    },
+  ],
 };

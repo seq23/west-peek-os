@@ -27,4 +27,15 @@ export const secondariesGuide: PageGuide = {
     { page: "portfolio", why: "where a sale begins — Sell on the holding's row." },
     { page: "fund-strategy", why: "the sleeve policy that sets the budget." },
   ],
+  walkthroughs: [
+    {
+      scenario: "A purchase from an existing holder",
+      steps: [
+        { do: "Press **Add a secondary on Dealflow**", then: "it enters on Dealflow marked as a purchase or a sale and walks the same stages as any deal." },
+        { do: "Read **What have we bought from existing holders?** and **What have we sold out of the portfolio?**", then: "the sleeve, kept apart on purpose; a node on the rail filters a stage and **show every stage** clears it." },
+        { do: "Press **Open on Dealflow** on a row", then: "the deal opens where it is worked." },
+        { do: "Press **Model a secondary scenario in VentureDeals →**", then: "the dashboards open in a new tab.", not: "nothing entered there comes back." },
+      ],
+    },
+  ],
 };

@@ -56,4 +56,17 @@ export const portfolioGuide: PageGuide = {
     { page: "dealflow", why: "the deal behind a holding, and a sale once it is open." },
     { page: "work", why: "the update cards Winter is reading." },
   ],
+  walkthroughs: [
+    {
+      scenario: "A holding, from booking to a mark",
+      steps: [
+        { do: "Under **What we own**, press **Book it** on a holding, then **Send for approval**", then: "a partner approves the booking; until then the position is not open." },
+        { do: "Press **Mark it** when a new value comes in", then: "the value is recorded with its source and date; the old figure is kept." },
+        { do: "Press **Reserve for it** for a company pulling ahead, or **Open the review**", then: "part of the reserve is earmarked, or a follow-on review opens against a scenario on Fund strategy." },
+        { do: "Under **What is going wrong right now**, press **I have seen it** on an alert", then: "it is acknowledged; Get the firm behind it opens a support request." },
+        { do: "Under **Where a company has asked for help**, press **Record the ask**, then **Suggest them**", then: "somebody is suggested; Take it to a partner asks before introducing." },
+        { do: "Under **Record what a company reported**, press **Record it**, or **File it** for an update that came another way; press **Ask** for the write-up", then: "Winter writes up what they reported; it goes to nobody." },
+      ],
+    },
+  ],
 };

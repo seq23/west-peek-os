@@ -25,4 +25,14 @@ export const recordGuide: PageGuide = {
     { page: "contradictions", why: "where two claims disagree and a person settles it." },
     { page: "work", why: "to act on a card in a queue." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Checking why a decision was made",
+      steps: [
+        { do: "Press **Decision journal**", then: "every decision the firm has made, and why.", not: "nothing changes here — the page that owns the record is where changes happen." },
+        { do: "Press **Evidence ledger**", then: "every claim the firm treats as true, and what backs it." },
+        { do: "Press **Work queues**", then: "who is carrying which open work." },
+      ],
+    },
+  ],
 };

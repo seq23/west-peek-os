@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PAGE_GUIDES, pageGuide } from "../src/shared/help/pageGuide";
-import { NAV_TITLES, asksHowThePageWorks, renderGuideAnswer, renderGuideMarkdown } from "../src/shared/help/pageGuide/render";
+import { NAV_TITLES, actsByBand, asksHowThePageWorks, boldSpans, guideIntent, renderButtonsAnswer, renderGuideAnswer, renderGuideMarkdown, renderWalkthroughAnswer } from "../src/shared/help/pageGuide/render";
 import { parseInlines, parseMarkdown, plainText } from "../src/shared/help/markdownLite";
 import { HOSTED_NAV_GROUPS, PAGE_HOSTS } from "../src/shared/help/pageHosts";
 import { pagePurpose } from "../src/shared/help/pagePurpose";
@@ -160,12 +160,49 @@ describe("recognising the question", () => {
       "what is this page for",
       "what can I do here?",
       "explain this page to me",
-      "walk me through the page",
-      "what do all the buttons do",
       "Walter, how does this tab work?",
       "I think you still have the old page instructions",
     ]) {
       expect(asksHowThePageWorks(q), q).toBe(true);
+      expect(guideIntent(q), q).toBe("how");
+    }
+  });
+
+  /*
+   * 19 Sep 2026, her words: "walk me through a fake meeting", "explain what all of the buttons do".
+   * Until tonight both fell into "how does this page work" and got the guide top to bottom — the
+   * right page, the wrong shape. Each is its own shape now, and "walk me through the page" is a
+   * walkthrough, not a guide: she asked for a scenario, not a description.
+   */
+  it("hears a request for a walkthrough, in the owner's words and others", () => {
+    for (const q of [
+      "walk me through a real meeting",
+      "walk me through the page",
+      "can you walk me through a fake meeting",
+      "show me how I'd use this",
+      "show me how you would run a meeting on this page",
+      "take me through it step by step",
+      "give me a scenario",
+      "what would I actually do here, first?",
+      "pretend I have a founder call tomorrow",
+    ]) {
+      expect(guideIntent(q), q).toBe("walkthrough");
+      expect(asksHowThePageWorks(q), q).toBe(false);
+    }
+  });
+
+  it("hears a request to explain the buttons, in the owner's words and others", () => {
+    for (const q of [
+      "explain what all of the buttons do",
+      "what does each button do",
+      "what do all the buttons do",
+      "explain the buttons",
+      "explain the buttons on this page",
+      "what are all these controls for?",
+      "list the controls",
+    ]) {
+      expect(guideIntent(q), q).toBe("buttons");
+      expect(asksHowThePageWorks(q), q).toBe(false);
     }
   });
 
@@ -176,9 +213,84 @@ describe("recognising the question", () => {
       "why is this deal stalled",
       "how long has Psyflo been in diligence",
       "what does a soft commitment mean here?",
+      "If I push Join on Meet what happens?",
+      "is it recording?",
     ]) {
+      expect(guideIntent(q), q).toBeNull();
       expect(asksHowThePageWorks(q), q).toBe(false);
     }
+  });
+});
+
+describe("the walkthrough and the buttons, for every guide", () => {
+  it("every guide has a walkthrough whose bold controls are the page's own, and Meetings has both scenarios", () => {
+    for (const g of Object.values(PAGE_GUIDES)) {
+      expect(g.walkthroughs.length, g.navKey).toBeGreaterThanOrEqual(1);
+      const labels = new Set(g.acts.map((a) => a.label));
+      const bands = new Set(g.bands.map((b) => b.name));
+      for (const w of g.walkthroughs) {
+        expect(w.steps.length, `${g.navKey}: ${w.scenario}`).toBeGreaterThanOrEqual(2);
+        let acts = 0;
+        for (const st of w.steps) {
+          for (const span of boldSpans(`${st.do} ${st.then ?? ""} ${st.not ?? ""}`)) {
+            expect(labels.has(span) || bands.has(span), `${g.navKey}: **${span}**`).toBe(true);
+            if (labels.has(span)) acts += 1;
+          }
+        }
+        expect(acts, `${g.navKey}: ${w.scenario} presses nothing`).toBeGreaterThan(0);
+      }
+    }
+    const m = pageGuide("meetings")!;
+    expect(m.walkthroughs.map((w) => w.scenario)).toEqual([
+      "A founder call that arrived from the calendar, on Google Meet",
+      "In person or by phone — no calendar, the laptop microphone",
+    ]);
+    const meet = m.walkthroughs[0]!;
+    const order = ["**Open the room**", "**Seat**", "**Join on Meet**", "**Ask**", "**Done — open the record**", "**Draft what came out of it**", "**Approve — make these the record**", "**Move it**"];
+    let last = -1;
+    for (const control of order) {
+      const at = meet.steps.findIndex((st, i) => i > last && st.do.includes(control));
+      expect(at, `${control} in order`).toBeGreaterThan(last);
+      last = at;
+    }
+    const join = meet.steps.find((st) => st.do.includes("**Join on Meet**"))!;
+    expect(join.not).toMatch(/nothing joins for you/);
+    expect(join.not).toMatch(/No employee is in the call/);
+    expect(join.not).toMatch(/does not hear it live/);
+    const seat = meet.steps.find((st) => st.do.includes("**Seat**"))!;
+    expect(seat.not).toMatch(/not in the Google Meet call/);
+    const person = m.walkthroughs[1]!;
+    expect(person.steps.some((st) => st.do.includes("**They said yes — record**"))).toBe(true);
+    expect(person.steps.some((st) => (st.then ?? "").includes("laptop microphone"))).toBe(true);
+  });
+
+  it("renders as a heading per scenario and numbered steps, with what does not happen said on the step", () => {
+    for (const g of Object.values(PAGE_GUIDES)) {
+      const md = renderWalkthroughAnswer(g);
+      const blocks = parseMarkdown(md);
+      expect(plainText([blocks[0]!]), g.navKey).toMatch(/^Here is how you would use .+, start to finish/);
+      expect(blocks.filter((b) => b.kind === "heading").length, g.navKey).toBe(g.walkthroughs.length);
+      const ordered = blocks.filter((b) => b.kind === "ordered");
+      expect(ordered.length, g.navKey).toBe(g.walkthroughs.length);
+      g.walkthroughs.forEach((w, i) => expect(ordered[i]!.kind === "ordered" && ordered[i]!.items.length, `${g.navKey}: ${w.scenario}`).toBe(w.steps.length));
+      expect(md.trimEnd().endsWith("?")).toBe(false);
+    }
+    expect(renderWalkthroughAnswer(pageGuide("meetings")!)).toContain("What does not happen: nothing joins for you");
+  });
+
+  it("the buttons answer carries every act once, under the band it sits in, human act first", () => {
+    for (const g of Object.values(PAGE_GUIDES)) {
+      const groups = actsByBand(g);
+      expect(groups.flatMap((x) => x.acts).length, g.navKey).toBe(g.acts.length);
+      const md = renderButtonsAnswer(g);
+      for (const a of g.acts) expect(md.split(`**${a.label}**`).length - 1, `${g.navKey}: ${a.label}`).toBe(g.acts.filter((b) => b.label === a.label).length);
+      const blocks = parseMarkdown(md);
+      expect(blocks.filter((b) => b.kind === "heading").length, g.navKey).toBe(groups.length);
+    }
+    const groups = actsByBand(pageGuide("meetings")!);
+    expect(groups.map((x) => x.band)).toEqual(["Coming up", "On the record", "Start a meeting now", "Google Meet", "Before", "During", "After"]);
+    expect(groups.find((x) => x.band === "During")!.acts.map((a) => a.label)).toContain("Seat");
+    expect(groups.find((x) => x.band === "After")!.acts[0]!.primary).toBe(true);
   });
 });
 

@@ -48,4 +48,17 @@ export const roomsGuide: PageGuide = {
     { page: "work", why: "Parker's card while he is building a packet." },
     { page: "community", why: "the people a Room is for." },
   ],
+  walkthroughs: [
+    {
+      scenario: "Parker proposes a Room and you keep it",
+      steps: [
+        { do: "Under **Ask Parker for a Room**, press **Ask Parker for this** with a topic, or **Or let Parker think of one**", then: "the steer waits for its month; **Take it back** withdraws it before then." },
+        { do: "A packet appears under **Rooms waiting on you** — press **Download the packet (PDF)** and read it" },
+        { do: "Press **Keep this** or **Dismiss it**", then: "the Room moves to **Approved Rooms**, or is turned down with a note it keeps; **Propose again with changes** refills the door from a dismissed one.", not: "an employee can never press Keep this." },
+        { do: "Press **I called — confirmed** once you have rung the venue", then: "the venue check is on the record." },
+        { do: "Press **Put it on the calendar** as it moves along, then **Close it out** when it is over", then: "with notes, Parker extracts what West Peek committed to and opens the cards." },
+        { do: "Under **Put a gathering on the record**, press **Put it on the record** for one that happened another way; under **Who is paying for it**, press **Add prospect**", then: "the gathering and the sponsor prospect are on the record." },
+      ],
+    },
+  ],
 };

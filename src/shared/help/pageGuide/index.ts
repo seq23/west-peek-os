@@ -21,7 +21,7 @@ import { researchGuide } from "./research";
 import { universityGuide } from "./university";
 import { documentsGuide } from "./documents";
 
-export type { GuideAct, GuideAuto, GuideBand, GuideLink, PageGuide } from "./types";
+export type { GuideAct, GuideAuto, GuideBand, GuideLink, GuideStep, GuideWalkthrough, PageGuide } from "./types";
 
 /**
  * Every page that has a guide, keyed by nav key.

@@ -23,4 +23,14 @@ export const captureGuide: PageGuide = {
     { page: "intent", why: "for something you want done rather than remembered." },
     { page: "work", why: "the card a routed capture opens." },
   ],
+  walkthroughs: [
+    {
+      scenario: "A thought between meetings",
+      steps: [
+        { do: "Type it in **The box** and press **Keep this**", then: "it is saved; offline it is held on this device and says so.", not: "it is not sorted yet — nothing is routed until you say where." },
+        { do: "Under **Kept**, press **Resolve** and say whether it is a company or a person", then: "companies are matched against the register, people against Network OS." },
+        { do: "Press **Send it on and open a work card**", then: "it goes to a department and a card opens so somebody owns it." },
+      ],
+    },
+  ],
 };

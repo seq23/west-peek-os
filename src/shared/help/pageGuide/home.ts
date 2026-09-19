@@ -89,4 +89,17 @@ export const homeGuide: PageGuide = {
   notActs: {
     "home-settings-save": "Save inside Choose what Home shows keeps the module choice; the act named is the door that opens it.",
   },
+  walkthroughs: [
+    {
+      scenario: "A morning: what is waiting, what arrived, today's brief",
+      steps: [
+        { do: "Open Home", then: "the answer line says the one thing that matters — how many cards wait on you, or that nothing does — and the rail under it narrows to one band." },
+        { do: "Press **Approve** or **Reject** on a card under **Waiting on you**", then: "the decision is recorded here; **Open** takes you to the card on Approvals when you want the evidence first." },
+        { do: "Press **Send it** on a previewed email", then: "it goes as it is; Send it back returns it with a note." },
+        { do: "Under **Arrived**, press **Mark as read** on a delivered item, or **Mark all read**", then: "the item is read; **Send it to** passes your verdict back to whoever wrote it." },
+        { do: "Press **Build today's brief**", then: "the brief is written now, on demand, from what is on the record — it goes to nobody but you." },
+        { do: "Press **I know — quiet for a week** on a blocker you have seen", then: "it stops asking for a week; **Bring them back** unsilences it.", not: "nothing is fixed by quieting it; it is still true and returns." },
+      ],
+    },
+  ],
 };
