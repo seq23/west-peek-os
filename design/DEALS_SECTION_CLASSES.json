@@ -6,8 +6,8 @@
     "dealflow": { "landed": false, "spec": "§4 — the rail is the page; the committee lives here" },
     "companies": { "landed": false, "spec": "§5 — the register" },
     "portfolio": { "landed": false, "spec": "§6 — holdings, the deployment ring, Book it" },
-    "thesis": { "landed": false, "spec": "§7 — one sentence and its numbers" },
-    "secondaries": { "landed": false, "spec": "§8 — the sleeve, on the same rail" }
+    "thesis": { "landed": true, "spec": "§7 — one sentence and its numbers" },
+    "secondaries": { "landed": true, "spec": "§8 — the sleeve, on the same rail" }
   },
   "classes": {
     "masthead": ["meetings", "dealflow", "companies", "portfolio", "thesis", "secondaries"],
@@ -21,7 +21,7 @@
     "stage-rail": ["dealflow", "thesis", "secondaries"],
     "stage-rail-line": ["dealflow", "thesis", "secondaries"],
     "stage-node": ["dealflow", "thesis", "secondaries"],
-    "stage-node-filled": ["dealflow", "secondaries"],
+    "stage-node-filled": ["dealflow", "thesis", "secondaries"],
     "stage-node-current": ["dealflow", "thesis", "secondaries"],
     "stage-node-done": ["dealflow", "secondaries"],
     "stage-label": ["dealflow", "thesis", "secondaries"],
@@ -92,7 +92,6 @@
     "version-rail": ["thesis"],
     "v": ["thesis"],
     "v-current": ["thesis"],
-    "thesis-statement": ["thesis"],
     "eyebrow": ["thesis"],
 
     "stack": ["meetings", "dealflow", "companies", "portfolio", "thesis", "secondaries"],
