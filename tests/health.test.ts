@@ -58,7 +58,8 @@ import { afterAll, beforeAll } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
-import { runHealthChecks } from "../src/worker/services/health";
+import { BRIEF_FAULT_WINDOW_HOURS, runHealthChecks } from "../src/worker/services/health";
+import { STALE_AFTER_MINUTES } from "../src/worker/services/dailyIntelligence";
 
 let t: TestDb;
 let env: Env;
@@ -290,5 +291,131 @@ describe("the deck lane reports whether it can receive a deck, not whether one c
     const c = await deckCheck();
     expect(c.state).toBe("OK");
     expect(c.reading).toContain("1 waiting");
+  });
+});
+
+/**
+ * A BRIEF NOBODY ASKED FOR CANNOT BE DOWN.
+ *
+ * Willow, 20 Sep 2026: "Scooter's brief is down." Production: his latest row was 18 Sep, FAILED,
+ * written by the schedule retired on the 19th, `requested_at` NULL. Nothing had been asked for
+ * and nothing had run since; the board read the latest row of any date and carried a
+ * pre-retirement failure forward as today's fault — and would have until someone pressed for him.
+ *
+ * THE CONTRACT, PINNED FROM THE PRODUCTION SHAPE. Only a REQUESTED brief can be a fault, and only
+ * while the request is current; every real way a press can fail is still red. `BRIEF_FAULT_WINDOW_HOURS`
+ * is read from the module so a change there changes the pin rather than dodging it.
+ */
+describe("a partner's brief is judged by what was asked for, not by the last row on file", () => {
+  let lane: TestDb;
+  let laneEnv: Env;
+  const SCOOTER = "fu_scooter_taylor";
+  const H = 3_600_000;
+
+  beforeAll(async () => {
+    lane = await createTestDb();
+    laneEnv = makeTestEnv(lane.db);
+  });
+  afterAll(async () => {
+    await disposeTestDb(lane);
+  });
+
+  const scootersBrief = async () => {
+    const checks = await runHealthChecks(laneEnv);
+    const found = checks.find((c) => c.key === `daily_brief_${SCOOTER}`);
+    // Hard-fails when the check is absent, rather than skipping and passing.
+    expect(found, "there is no per-partner brief check, so nothing watches the brief").toBeTruthy();
+    return found!;
+  };
+
+  async function reset(): Promise<void> {
+    await laneEnv.WP_OS_DB.prepare("DELETE FROM intelligence_report_section").run();
+    await laneEnv.WP_OS_DB.prepare("DELETE FROM intelligence_report").run();
+  }
+
+  async function row(opts: {
+    id: string; date: string; status: string; startedAt: string; requestedAt: string | null; error?: string | null; completedAt?: string | null;
+  }): Promise<void> {
+    await laneEnv.WP_OS_DB.prepare(
+      `INSERT INTO intelligence_report (id, firm_user_id, report_date, status, prompt_version, firm_scope, started_at, stage_at, requested_at, requested_by, error_code, error_message, completed_at, attempts)
+       VALUES (?1, ?2, ?3, ?4, 'daily-intelligence-v6', 'west-peek', ?5, ?5, ?6, CASE WHEN ?6 IS NULL THEN NULL ELSE ?2 END, CASE WHEN ?7 IS NULL THEN NULL ELSE 'incomplete' END, ?7, ?8, 3)`,
+    ).bind(opts.id, SCOOTER, opts.date, opts.status, opts.startedAt, opts.requestedAt, opts.error ?? null, opts.completedAt ?? null).run();
+  }
+
+  it("reads a never-requested failure from the retired schedule as history, not a fault", async () => {
+    await reset();
+    // Scooter's production shape on 20 Sep: last READY 17 Sep, 18 Sep FAILED by the schedule, no request ever.
+    const ready = new Date(Date.now() - 3 * 24 * H).toISOString();
+    await row({ id: "dir_ready", date: "2026-09-17", status: "READY", startedAt: ready, requestedAt: null, completedAt: ready });
+    await row({ id: "dir_sched_fail", date: "2026-09-18", status: "FAILED", startedAt: new Date(Date.now() - 2 * 24 * H).toISOString(), requestedAt: null, error: "the brief was rejected twice: executive_summary carries no [n] citation" });
+    const c = await scootersBrief();
+    expect(c.state).toBe("OK");
+    expect(c.reading).toMatch(/last brief 3 days ago/);
+    expect(c.reading).toMatch(/on demand/);
+    expect(c.remedy).toBeUndefined();
+  });
+
+  it("a requested brief that failed today is DOWN, with the row's own reason as the remedy", async () => {
+    await reset();
+    const at = new Date(Date.now() - 2 * H).toISOString();
+    await row({ id: "dir_fail_now", date: new Date().toISOString().slice(0, 10), status: "FAILED", startedAt: at, requestedAt: at, error: "the brief was rejected twice: markets_macro is missing" });
+    const c = await scootersBrief();
+    expect(c.state).toBe("DOWN");
+    expect(c.remedy).toContain("markets_macro is missing");
+    expect(c.reading).toMatch(/requested by Scooter/);
+  });
+
+  it("a requested brief that failed and recorded no reason is DOWN and says so", async () => {
+    await reset();
+    const at = new Date(Date.now() - H).toISOString();
+    await row({ id: "dir_fail_mute", date: new Date().toISOString().slice(0, 10), status: "FAILED", startedAt: at, requestedAt: at, error: null });
+    const c = await scootersBrief();
+    expect(c.state).toBe("DOWN");
+    expect(c.remedy).toMatch(/did not record why/);
+  });
+
+  it("a requested brief that stopped moving past the sweeper's threshold is DOWN", async () => {
+    await reset();
+    const at = new Date(Date.now() - (STALE_AFTER_MINUTES + 5) * 60_000).toISOString();
+    await row({ id: "dir_stuck", date: new Date().toISOString().slice(0, 10), status: "GENERATING", startedAt: at, requestedAt: at });
+    const c = await scootersBrief();
+    expect(c.state).toBe("DOWN");
+    expect(c.reading).toMatch(/stopped part-way/);
+  });
+
+  it("a requested brief still moving inside the threshold is DEGRADED, never DOWN", async () => {
+    await reset();
+    const at = new Date(Date.now() - 2 * 60_000).toISOString();
+    await row({ id: "dir_moving", date: new Date().toISOString().slice(0, 10), status: "GENERATING", startedAt: at, requestedAt: at });
+    const c = await scootersBrief();
+    expect(c.state).toBe("DEGRADED");
+  });
+
+  it("a requested failure older than the window is history in the reading and OK in the state", async () => {
+    await reset();
+    const at = new Date(Date.now() - (BRIEF_FAULT_WINDOW_HOURS + 1) * H).toISOString();
+    await row({ id: "dir_fail_old", date: at.slice(0, 10), status: "FAILED", startedAt: at, requestedAt: at, error: "the model timed out" });
+    const c = await scootersBrief();
+    expect(c.state).toBe("OK");
+    expect(c.reading).toMatch(/last request \(\d{4}-\d{2}-\d{2}\) failed/);
+    expect(c.remedy).toBeUndefined();
+  });
+
+  it("a requested failure just inside the window is still DOWN — the window is a line, not a slope", async () => {
+    await reset();
+    const at = new Date(Date.now() - (BRIEF_FAULT_WINDOW_HOURS - 1) * H).toISOString();
+    await row({ id: "dir_fail_edge", date: at.slice(0, 10), status: "FAILED", startedAt: at, requestedAt: at, error: "the model timed out" });
+    const c = await scootersBrief();
+    expect(c.state).toBe("DOWN");
+  });
+
+  it("a requested brief that arrived is OK and says delivered", async () => {
+    await reset();
+    const at = new Date(Date.now() - H).toISOString();
+    await row({ id: "dir_ok", date: new Date().toISOString().slice(0, 10), status: "READY", startedAt: at, requestedAt: at, completedAt: at });
+    const c = await scootersBrief();
+    expect(c.state).toBe("OK");
+    expect(c.reading).toMatch(/delivered/);
+    expect(c.reading).toMatch(/last brief today/);
   });
 });
