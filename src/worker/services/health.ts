@@ -10,6 +10,12 @@ import { dailySpendUsd, workersAiConfigured } from "../ai/runAi";
 import { actionName } from "../../shared/help/actionNames";
 
 /**
+ * How long a requested brief's failure counts as today's fault on the board. On demand, the press is
+ * the unit of work; past this window a failed press is history in the reading, not the state.
+ */
+export const BRIEF_FAULT_WINDOW_HOURS = 24;
+
+/**
  * GET /api/diagnostics/health — is anything broken, and what do I do about it.
  *
  * WHAT THIS REPLACED. The page listed four bindings as "bound" and counted approvals. That answers
@@ -81,25 +87,39 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
    * her at HH:MM", which is what the board can truthfully say. What IS a fault: a requested brief
    * that FAILED (the reason is on the row and shown here), a requested brief that stopped moving
    * past the sweeper's threshold, or a FAILED row that recorded no reason at all.
+   *
+   * WHAT WILLOW REPORTED ON 20 Sep 2026, AND WHY IT WAS WRONG. "Scooter's brief is down." The
+   * check read each partner's LATEST row of any date, and Scooter's was 18 Sep — FAILED, written
+   * by the retired schedule on the free lane the day before on-demand + Sonnet replaced it. He had
+   * never pressed for one (`requested_at` NULL), nothing had run for him since, and nothing was
+   * broken; the board had simply carried a pre-retirement failure forward as today's fault, and
+   * would have until somebody happened to press for him. The comment above already said only a
+   * REQUESTED brief can be a fault; the query did not.
+   *
+   * NOW the judgement reads only requested rows, and a failure is a fault only while it is
+   * CURRENT — requested within `BRIEF_FAULT_WINDOW_HOURS`. On demand, the press is the unit of
+   * work: a failed press from days ago was reported to her when it failed (`noticeOfFailure`),
+   * and the next press opens a fresh row. It stays on the board as history in the reading, never
+   * as the state. Rows the schedule opened before 19 Sep are never judged at all.
    */
   const briefs = ((await env.WP_OS_DB.prepare(
     `SELECT u.id, u.full_name,
             (SELECT status FROM intelligence_report r
-              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS status,
+              WHERE r.firm_user_id = u.id AND r.requested_at IS NOT NULL ORDER BY r.requested_at DESC, r.started_at DESC LIMIT 1) AS status,
             (SELECT report_date FROM intelligence_report r
-              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS report_date,
+              WHERE r.firm_user_id = u.id AND r.requested_at IS NOT NULL ORDER BY r.requested_at DESC, r.started_at DESC LIMIT 1) AS report_date,
             (SELECT error_message FROM intelligence_report r
-              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS error_message,
+              WHERE r.firm_user_id = u.id AND r.requested_at IS NOT NULL ORDER BY r.requested_at DESC, r.started_at DESC LIMIT 1) AS error_message,
             (SELECT started_at FROM intelligence_report r
-              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS started_at,
+              WHERE r.firm_user_id = u.id AND r.requested_at IS NOT NULL ORDER BY r.requested_at DESC, r.started_at DESC LIMIT 1) AS started_at,
             (SELECT requested_at FROM intelligence_report r
-              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS requested_at,
+              WHERE r.firm_user_id = u.id AND r.requested_at IS NOT NULL ORDER BY r.requested_at DESC, r.started_at DESC LIMIT 1) AS requested_at,
             (SELECT requested_by FROM intelligence_report r
-              WHERE r.firm_user_id = u.id ORDER BY r.report_date DESC, r.started_at DESC LIMIT 1) AS requested_by,
+              WHERE r.firm_user_id = u.id AND r.requested_at IS NOT NULL ORDER BY r.requested_at DESC, r.started_at DESC LIMIT 1) AS requested_by,
             (SELECT completed_at FROM intelligence_report r
               WHERE r.firm_user_id = u.id AND r.status = 'READY' ORDER BY r.completed_at DESC LIMIT 1) AS last_ready_at,
             (SELECT COUNT(*) FROM intelligence_report r
-              WHERE r.firm_user_id = u.id AND r.status = 'FAILED' AND r.report_date >= date('now','-7 day')) AS fails
+              WHERE r.firm_user_id = u.id AND r.requested_at IS NOT NULL AND r.status = 'FAILED' AND r.report_date >= date('now','-7 day')) AS fails
        FROM firm_user u
        JOIN firm_user_role fr ON fr.firm_user_id = u.id AND fr.role_id = 'role_managing_partner'
       WHERE u.status = 'ACTIVE'
@@ -120,34 +140,42 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
      */
     const ageMinutes = b.started_at ? (Date.now() - new Date(b.started_at).getTime()) / 60_000 : 0;
     const stuck = b.status !== null && !TERMINAL.has(b.status) && ageMinutes > STALE_AFTER_MINUTES;
-    const unstated = b.status === "FAILED" && !(b.error_message ?? "").trim();
+    // The press is the unit: only a request still inside the window can be today's fault.
+    const requestAgeHours = b.requested_at ? (Date.now() - new Date(b.requested_at).getTime()) / 3_600_000 : Infinity;
+    const current = requestAgeHours <= BRIEF_FAULT_WINDOW_HOURS;
+    const failed = b.status === "FAILED";
+    const unstated = failed && current && !(b.error_message ?? "").trim();
     const daysSince = b.last_ready_at ? Math.floor((Date.now() - new Date(b.last_ready_at).getTime()) / 86_400_000) : null;
     const lastLine = b.last_ready_at
       ? `last brief ${daysSince === 0 ? "today" : daysSince === 1 ? "yesterday" : `${daysSince} days ago`}`
       : "no brief has been built yet";
     const who = b.requested_by ? (b.requested_by === b.id ? `requested by ${firstName}` : "requested by a partner") : "not requested";
     const when = b.requested_at ? ` at ${new Date(b.requested_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : "";
+    const stale = b.status !== null && !current && (failed || stuck);
     checks.push({
       key: `daily_brief_${b.id}`,
       label: `${firstName}'s brief`,
       state:
         !b.status ? "OK"
         : b.status === "READY" ? "OK"
-        : b.status === "FAILED" || stuck ? "DOWN"
+        : stale ? "OK"
+        : failed || stuck ? "DOWN"
         : "DEGRADED",
       reading: !b.status
         ? `${lastLine} · on demand — press Build on Home`
-        : `${b.report_date} · ${
-            b.status === "READY" ? "delivered"
-            : stuck ? `stopped part-way, ${ago(b.started_at)}`
-            : b.status.toLowerCase()
-          } · ${who}${when} · ${lastLine}${b.fails > 0 ? ` · ${b.fails} failed this week` : ""}`,
+        : stale
+          ? `${lastLine} · last request (${b.report_date}) ${failed ? "failed" : "stopped part-way"} · on demand — press Build on Home`
+          : `${b.report_date} · ${
+              b.status === "READY" ? "delivered"
+              : stuck ? `stopped part-way, ${ago(b.started_at)}`
+              : b.status.toLowerCase()
+            } · ${who}${when} · ${lastLine}${b.fails > 0 ? ` · ${b.fails} failed this week` : ""}`,
       remedy:
         unstated
           ? "It failed and the run did not record why. Build it again from Home; if it fails the same way, the lane that wrote it is the thing to look at."
-          : b.status === "FAILED"
+          : failed && current
             ? (b.error_message ?? "It failed. Build it again from Home.")
-            : stuck
+            : stuck && current
               ? "It stopped part-way through and never finished. Build it again from Home."
               : undefined,
       page: "home",
