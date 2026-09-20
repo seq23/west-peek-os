@@ -342,6 +342,13 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // money moving. Booking a holding needs no new key — it is `transaction.create` and the existing
   // `investment.approve` card, whose approval now executes (design §6, decision Q1).
   { key: "position.reserve", name: "Reserve for a holding", description: "Earmark follow-on capital for one company, as of a date, with a note. Append-only; a reserve is superseded, never edited. The fund-level reserve stays the plan.", isExternalEffect: false },
+  // Artifacts on demand
+  // ONE key for the one producer (services/artifacts.ts), asked through two doors: the live room's
+  // `build` intent and an ARTIFACT work card. Read-only on the record — N plans against the room's
+  // allowlist, run in code, every figure cited — and the result is a proposal she opens. It writes
+  // `artifact` and `artifact_version` and nothing else; a card build files its deliverable under
+  // the existing kinds, and the room's link block is under meeting.note.add as every block is.
+  { key: "artifact.build", name: "Build an artifact on demand", description: "Build a dashboard, a deck or a document from the firm's record, asked for in the live room or on a work card. Read-only on the record: every panel is a plan against the room's allowlist, every figure cites its rows, and the result is a proposal she opens — it changes no record and sends nothing.", isExternalEffect: false },
 ] as const;
 
 /**

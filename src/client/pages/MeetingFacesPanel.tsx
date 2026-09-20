@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
 import type { MaterialSource } from "@shared/meetings/howTheRoomHears";
 import { CallDoors, ONE_ROOM_LINE } from "./CallDoors";
+import { ArtifactShelf } from "./ArtifactShelf";
 
 /**
  * The BEFORE and AFTER faces of a meeting on its record (Phase B data, Phase D shape — §3, C1/C3).
@@ -606,6 +607,10 @@ export function AfterPanel({ meetingId, onChanged, closeout }: { meetingId: stri
           ))}
           {a && a.artifacts.length === 0 && <li className="state-empty" data-testid="no-artifacts">Nothing was saved from the room. The live room writes these.</li>}
         </ul>
+        {/* What the room BUILT — dashboards, decks, documents — lives on the company or LP this
+            meeting is about and under Documents; these are the link rows. */}
+        <h4>Built from this meeting</h4>
+        <ArtifactShelf about={meetingId} showObject emptyNote="Nothing was built from this meeting. In the room, say “make this a dashboard” over a table, or ask for a deck or a one-pager." testId="after-built-rows" />
       </section>
 
       {closeout}

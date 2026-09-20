@@ -344,7 +344,7 @@ export function deliverableKindForCard(card: { kind?: string | null }): Delivera
  * registry recognises; otherwise the preview owner; otherwise the firm's managing partner, which is
  * today's behaviour and never nobody. A deliverable with no reader is the bug one step along.
  */
-async function recipientFirmUserId(env: Env, card: CardRow): Promise<string> {
+export async function recipientFirmUserId(env: Env, card: Pick<CardRow, "requested_by_email" | "preview_owner_id">): Promise<string> {
   const asked = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
   if (asked) return asked.firmUserId;
   if (card.preview_owner_id) return card.preview_owner_id;
@@ -367,9 +367,9 @@ async function recipientFirmUserId(env: Env, card: CardRow): Promise<string> {
  * NEVER THROWS. The work is already filed by the time this runs. A send that fails must leave a
  * readable deliverable and a recorded reason, not lose the work a second time.
  */
-async function handOver(
+export async function handOver(
   env: Env,
-  card: CardRow,
+  card: Pick<CardRow, "id" | "title" | "kind" | "firm_scope" | "result_recipient" | "preview_first" | "preview_owner_id" | "requested_by_email">,
   input: { employee: string; finding: string; deliverableId: string | null },
 ): Promise<void> {
   const to = (card.result_recipient ?? "").trim();
@@ -461,6 +461,21 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
     // An employee who is switched off should not quietly start working. Saying so is the point.
     return { card, steps, finished: false, blocked: false, detail: `${employee.name} is not employed right now — switch them on first.` };
   }
+
+  /*
+   * AN ARTIFACT CARD IS WORKED BY THE ONE PRODUCER, whichever door starts the run (19 Sep 2026).
+   * The sweep dispatches on `card.kind`; the button on the card lands here. Handing the card to
+   * the general loop from here would have an employee "search and write a finding" about a
+   * dashboard she asked to be BUILT — the wrong chain, quietly. Dynamic import: artifacts.ts
+   * imports this file for the handover, and a static import would close that cycle at load time.
+   */
+  if (card.kind === "ARTIFACT") {
+    const { runArtifactCard } = await import("./artifacts");
+    const out = await runArtifactCard(env, { id: card.id });
+    const fresh = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<CardRow>();
+    return { card: fresh ?? card, steps: [{ step: 1, action: out.finished ? "done" : out.blocked ? "blocked" : "failed", detail: out.detail }], finished: out.finished, blocked: out.blocked, detail: out.detail };
+  }
+
 
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS' WHERE id = ?1 AND state = 'OPEN'")
     .bind(card.id)

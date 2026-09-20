@@ -42,7 +42,8 @@ interface CaptureReadiness {
 
 interface Artifact {
   id: string;
-  kind: "answer" | "table" | "chart" | "packet" | "summary";
+  /** `artifact` is a LINK BLOCK to something built on demand; its state is read from `builds`. */
+  kind: "answer" | "table" | "chart" | "packet" | "summary" | "artifact";
   title: string;
   body_json: string;
   asked_text: string | null;
@@ -69,12 +70,25 @@ interface Draft {
   created_at: string;
 }
 
+/** The live state of a build the room asked for — one line the block prints, read on every poll. */
+interface Build {
+  id: string;
+  kind: "dashboard" | "deck" | "document";
+  title: string;
+  state: "REQUESTED" | "BUILDING" | "READY" | "FAILED";
+  words: string;
+  error_message: string | null;
+  cites_count: number;
+  version_no: number;
+}
+
 interface RoomState {
   meeting: { id: string; title: string; meeting_type: string; status: string; ai_access_state: string; confidential: boolean };
   host: { name: string; role: string } | null;
   capture: CaptureReadiness;
   summary: Draft | null;
   artifacts: Artifact[];
+  builds: Record<string, Build>;
   seated: Array<{ ai_employee_id: string; name: string; role: string }>;
   tasks: Task[];
   roll_every_ms: number;
@@ -149,7 +163,7 @@ export function RoomPanel({ meetingId, standalone = false, aside, armLaptopMic =
 
   const summary = <SummaryBlock meetingId={meetingId} summary={state?.summary ?? null} turns={state?.capture.turns ?? 0} rollEveryMs={state?.roll_every_ms ?? 300_000} onRolled={reload} compact={standalone} />;
   const ask = <AskBox meetingId={meetingId} hostName={state?.host?.name ?? "Walter"} revoked={state?.meeting.ai_access_state === "REVOKED"} onAsked={reload} onMessage={setMessage} compact={standalone} />;
-  const stream = <ArtifactStream artifacts={state?.artifacts ?? []} tasks={state?.tasks ?? []} loading={room.loading} />;
+  const stream = <ArtifactStream artifacts={state?.artifacts ?? []} tasks={state?.tasks ?? []} builds={state?.builds ?? {}} loading={room.loading} />;
   const recording = <RecordingLine meetingId={meetingId} capture={state?.capture ?? null} onChange={reload} onLive={setLive} armed={armed} onDisarm={() => setArmed(false)} />;
 
   if (standalone) {
@@ -779,7 +793,7 @@ function AskBox({ meetingId, hostName, revoked, onAsked, onMessage, compact }: {
 
 // ── 4 · The artifacts stream ──────────────────────────────────────────────────────────────────
 
-function ArtifactStream({ artifacts, tasks, loading }: { artifacts: Artifact[]; tasks: Task[]; loading: boolean }): JSX.Element {
+function ArtifactStream({ artifacts, tasks, builds, loading }: { artifacts: Artifact[]; tasks: Task[]; builds: Record<string, Build>; loading: boolean }): JSX.Element {
   const taskById = new Map(tasks.map((t) => [t.work_card_id, t]));
   return (
     <section>
@@ -802,7 +816,7 @@ function ArtifactStream({ artifacts, tasks, loading }: { artifacts: Artifact[]; 
                 {a.asked_text ? ` · ${a.asked_text}` : ""}
               </span>
             </div>
-            <ArtifactBody artifact={a} task={a.work_card_id ? taskById.get(a.work_card_id) ?? null : null} />
+            <ArtifactBody artifact={a} task={a.work_card_id ? taskById.get(a.work_card_id) ?? null : null} builds={builds} />
           </li>
         ))}
       </ul>
@@ -817,6 +831,7 @@ function kindInWords(kind: Artifact["kind"]): string {
     case "chart": return "Chart";
     case "packet": return "Packet";
     case "summary": return "Summary";
+    case "artifact": return "Built";
   }
 }
 
@@ -825,10 +840,35 @@ function timeOfDay(iso: string): string {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-function ArtifactBody({ artifact, task }: { artifact: Artifact; task: Task | null }): JSX.Element {
+function ArtifactBody({ artifact, task, builds }: { artifact: Artifact; task: Task | null; builds: Record<string, Build> }): JSX.Element {
   const body = parseBody(artifact.body_json);
   const state = String(body.state ?? "OK");
   const who = typeof body.answered_by === "string" ? body.answered_by : null;
+
+  if (artifact.kind === "artifact") {
+    // THE LINK BLOCK. The artifact itself lives on the company or LP this meeting is about (and
+    // under Documents); the room keeps this pointer and prints the build's live state from the
+    // artifact row — requested, building (stage in words), ready, failed with the reason.
+    const id = typeof body.artifact_id === "string" ? body.artifact_id : null;
+    const build = id ? builds[id] ?? null : null;
+    const chip: Task["chip"] = build?.state === "READY" ? "done" : build?.state === "FAILED" ? "needs you" : "working";
+    return (
+      <div data-testid={`room-build-${artifact.id}`} data-state={build?.state ?? "UNKNOWN"}>
+        <div className="row">
+          <span className="grow"><strong>{who ?? "The room"}</strong> · {artifact.title}</span>
+          <TaskChip chip={chip} />
+        </div>
+        <p className={build?.state === "FAILED" ? "field-help err" : "muted small"} data-testid={`room-build-state-${artifact.id}`}>
+          {build ? build.words : "Reading the build's state…"}
+        </p>
+        {id && (
+          <a className="link-button" href={`#/documents/a/${id}`} data-testid={`room-build-open-${artifact.id}`}>
+            {build?.state === "READY" ? "Open it" : build?.state === "FAILED" ? "Open it to try again" : "Open it (fills in when ready)"} · kept under Documents
+          </a>
+        )}
+      </div>
+    );
+  }
 
   if (state === "REFUSED" || state === "FAILED") {
     return (

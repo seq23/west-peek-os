@@ -6507,3 +6507,22 @@ body {
 @media (max-width: 899px) {
   .surface-body button.band-act { min-height: var(--touch-min); }
 }
+
+/* ── Artifacts on demand (19 Sep 2026): the page, the dashboard grid, the slides, the shelf rows.
+   Token-only; the grid collapses to one column under a phone width by its own minmax. ── */
+.artifact-page { display: flex; flex-direction: column; gap: var(--space-md); }
+.artifact-page .artifact-kind { flex-wrap: wrap; }
+.artifact-actions { flex-wrap: wrap; gap: var(--space-xs) var(--space-sm); }
+.artifact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
+  gap: var(--space-md);
+}
+.artifact-panel { min-width: 0; }
+.artifact-panel h4 { margin-bottom: var(--space-xs); }
+.artifact-slides { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-md); }
+.artifact-slide { min-width: 0; }
+.artifact-slide[data-slide="title"] { border-left: var(--space-3xs) solid var(--wp-ink); }
+.artifact-row-title { text-align: left; }
+.artifact-row .task-chip { margin-left: var(--space-xs); }
+.artifact-versions { margin-top: var(--space-sm); }

@@ -215,6 +215,7 @@ import {
   handleSaveMeetingArtifact,
 } from "./services/meetingAfter";
 import { handleRoomAsk, handleRoomRoll, handleRoomState } from "./services/meetingRoom";
+import { handleRequestArtifactBuild, handleExportArtifact, handleGetBuiltArtifact, handleListBuiltArtifacts, handleRebuildArtifact } from "./services/artifacts";
 import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/deck";
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
@@ -1183,6 +1184,19 @@ const router = new Router()
   // meeting is in progress from that moment (0214). Idempotent; the first start wins.
   .post("/api/meetings/:id/started", handleMeetingStarted)
   // === end How the room hears ===
+  // === Artifacts on demand ===
+  // A dashboard, a deck or a document built from the record by the ONE producer (services/artifacts.ts)
+  // and kept on the object it is about. The room's `build` intent and an ARTIFACT work card are the
+  // two doors; this block is the shelf's own: ask directly, list and search, read one with its
+  // versions, build again, export the same derivation the page shows as .pptx or .docx.
+  .post("/api/artifacts", handleRequestArtifactBuild)
+  .get("/api/artifacts", handleListBuiltArtifacts)
+  .get("/api/artifacts/:id", handleGetBuiltArtifact)
+  .post("/api/artifacts/:id/refresh", handleRebuildArtifact)
+  .post("/api/artifacts/:id/retry", handleRebuildArtifact)
+  .get("/api/artifacts/:id/export.pptx", handleExportArtifact)
+  .get("/api/artifacts/:id/export.docx", handleExportArtifact)
+  // === end Artifacts on demand ===
   // P8 — portfolio monitoring: dated metrics, deterministic alerts, support.
   .post("/api/portfolio/metric-definitions", handleCreateMetricDefinition)
   .get("/api/portfolio/metric-definitions", handleListMetricDefinitions)

@@ -396,6 +396,12 @@ jobs:
       - name: Home answers with one count
         run: npm run validate:home
 
+      # Artifacts on demand (19 Sep 2026): one producer behind the room's build intent and the
+      # ARTIFACT card, the plan compiler the only query surface, every figure cited, every kind
+      # rendered in-app and exported as the same text and figures, every state named.
+      - name: A build has one producer, cites its rows and exports what it shows
+        run: npm run validate:artifacts
+
       - name: Build client
         run: npm run build
 

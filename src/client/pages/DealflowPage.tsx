@@ -6,6 +6,7 @@ import { RecordInvestment } from "./RecordInvestment";
 import { DealProvenance } from "./DealProvenance";
 import { DealPacket } from "./DealPacket";
 import { FacePanel, Faces, type Face } from "./Faces";
+import { ArtifactShelf } from "./ArtifactShelf";
 // Read from the intake registry rather than retyped: the tags and the mailbox are enforced by the
 // email handler, and a page that names them from its own string literal drifts the first time one
 // changes and then quietly tells partners the wrong address.
@@ -2559,6 +2560,14 @@ function CompanyDealRecord({
               </li>
             )}
           </ul>
+        </section>
+
+        {/* BUILT ABOUT THIS COMPANY (19 Sep 2026): the dashboards, decks and documents asked for in
+            a room or on a card, kept here because this is where they would be reused. Link rows;
+            the artifact opens under Documents. */}
+        <section className="card" data-testid="deal-built">
+          <h4>Built about {companyName}</h4>
+          <ArtifactShelf about={companyId} showObject={false} emptyNote={`Nothing has been built about ${companyName} yet. Ask the room for a dashboard, a deck or a document, or give an employee a card that asks for one.`} testId="deal-built-rows" />
         </section>
       </FacePanel>
 

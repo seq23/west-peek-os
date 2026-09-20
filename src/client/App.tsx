@@ -51,6 +51,8 @@ import { HelpCenterPage, type HelpGroup } from "./pages/HelpCenterPage";
 import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
 import { SetupPage } from "./pages/SetupPage";
+import { ArtifactPage } from "./pages/ArtifactPage";
+import { BuiltOnDemand } from "./pages/ArtifactShelf";
 import { enqueueCapture, flushCaptures, isOnline, queuedCaptures } from "./lib/offlineQueue";
 
 /**
@@ -2101,6 +2103,8 @@ function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
         </button>
       </form>
 
+      <BuiltOnDemand />
+
       <div className="home-section-head">
         <h3>The shelf</h3>
         {others.length > 0 && (
@@ -2656,10 +2660,18 @@ const MERGED_ROUTES: Readonly<Record<string, string>> = {
 
 function keyFromHash(known: (key: string) => boolean): string {
   // `#/meetings?open=<id>&face=after` is Meetings with a record to open (the way back from the
-  // standalone room, `shared/meetings/meetJoin.ts`); the page reads the query, the shell the key.
-  const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0]!.trim();
+  // standalone room, `shared/meetings/meetJoin.ts`) and `#/documents/a/<artifact id>` opens an
+  // artifact inside Documents: the page is the first segment before any `?` or `/`, and the rest —
+  // query or sub-address — is the page's own to read.
+  const raw = window.location.hash.replace(/^#\/?/, "").split("?")[0]!.trim().split("/")[0] ?? "";
   const resolved = MERGED_ROUTES[raw] ?? raw;
   return resolved && known(resolved) ? resolved : "home";
+}
+
+/** `#/documents/a/<id>` — the artifact open inside Documents, or null when the shelf itself is showing. */
+function artifactIdFromHash(): string | null {
+  const m = window.location.hash.match(/^#\/documents\/a\/([A-Za-z0-9_-]+)$/);
+  return m ? m[1]! : null;
 }
 
 /**
@@ -2731,10 +2743,12 @@ function Shell() {
    * left the page where it was — which is worse than no routing, because the address then lies
    * about what is on screen.
    */
+  const [artifactId, setArtifactId] = useState<string | null>(() => (typeof window === "undefined" ? null : artifactIdFromHash()));
   useEffect(() => {
     const onHash = () => {
       const key = keyFromHash((k) => ALL_NAV_KEYS.has(k));
       setActive(key);
+      setArtifactId(artifactIdFromHash());
       if (SECONDARY_KEYS.has(key)) setSystemOpen(true);
     };
     window.addEventListener("hashchange", onHash);
@@ -3106,7 +3120,10 @@ function Shell() {
               answering "what has Cedar been told?" required knowing packets lived elsewhere.
               The route still resolves so an old link lands on the page that now holds it. */}
           {authed && active === "reporting" && <LpPage me={me.data!} />}
-          {authed && active === "documents" && <DocumentsPage onNavigate={navigate} />}
+          {/* AN ARTIFACT OPENS INSIDE DOCUMENTS (19 Sep 2026): `#/documents/a/<id>` renders the
+              artifact's own page — the in-app dashboard, deck or document with its exports and
+              versions — in the shelf's place; "Back to Documents" is the shelf's own address. */}
+          {authed && active === "documents" && (artifactId ? <ArtifactPage artifactId={artifactId} onNavigate={navigate} onBack={() => { window.location.hash = "#/documents"; }} /> : <DocumentsPage onNavigate={navigate} />)}
           {authed && active === "contradictions" && <ContradictionsPage />}
           {authed && active === "activity" && <ActivityPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "governance" && <GovernancePage me={me.data!} />}

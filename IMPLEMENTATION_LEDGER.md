@@ -6192,3 +6192,87 @@ REST: both 200, the sentence verbatim, 61.5 neurons / 7.9 s → **$0.31 per hour
 **Labels.** The Worker path, the listener's loop, reconciliation, the panel, the guard: PROVEN
 (local D1, fake Meet, fake Nova-3, browser). Nova-3 on the peer's real audio: PROVEN (REST). The
 live join into a running Meet: UNPROVEN — Google's `v2beta` refusal above is the exact reason.
+
+## Artifacts on demand — a dashboard, a deck, a document, kept where it is reused (19 Sep 2026)
+
+**The owner's words.** "Build me a dashboard / deck / doc on demand — yes I still want this; they
+need to live where we would reuse them. Outside a meeting, isn't this just a work card? Work cards
+solve this." Voice stays in the room only.
+
+**One producer, two doors.** `src/worker/services/artifacts.ts` is the only code that builds one.
+`requestArtifactBuild` is the door; `advanceArtifact` moves a row through four named stages —
+planning (a model proposes panels from the brief, unless the door brought them), reading (every
+panel compiled by `roomQuery.ts`'s plan compiler and run in code with the REQUESTER's visibility
+clause; a plan outside the allowlist is dropped by name; every row cited), writing (a deck or a
+document gets one finding per panel from a model; every number it wrote that the panel's rows do not
+hold is replaced by "[figure not in the record]" and counted), rendering (`checkCitations` refuses
+anything uncited; a version is written; the row is READY). Door A is the live room: `askRoom`'s
+reply set gains `build` (kind + brief), and "make this a dashboard" / "turn these into a deck" over
+the room's own table and chart blocks needs NO model — their plans (now kept on the block body) are
+run again through the producer and the artifact is READY before the ask returns. The room keeps a
+LINK BLOCK (`meeting_artifact.kind = 'artifact'`, 0218) whose state is read from the artifact row on
+every poll. Door B is a work card: a card whose words ask to build one (`artifactAskFromWords`, read
+at `createWorkCardInternal`, the one place every card passes) becomes `kind = 'ARTIFACT'`; the sweep
+and the card's own button hand it to `runArtifactCard`, which calls `steerFor` first (her words
+reach a reasoning model; a CANNOT stops it), attaches it to the company / deal / meeting her words
+name, builds it, files an `employee_finding` deliverable pointing at it (the document rendering in
+full), hands it over by her rule (`handOver`), returns it to the room if the card came from one, and
+closes the card DONE — #116's road, reused unchanged.
+
+**The storage decision.** Migration 0217: its own tables `artifact` (kind, brief, the five "about"
+columns with a CHECK that at least one is set, door, work card, requester, built-by, state, stage,
+lease, attempts, error, plans, confidential, current version) and `artifact_version` (the whole
+spec, cites count, build seconds — so "usually about N min" is measured). Not a new
+`deliverable.kind`: D1 cannot widen that CHECK in place (0189 and 0196 each rebuilt the table for
+one word, rebuilding the two tables whose foreign keys the rename dragged onto the rollback copy),
+and a deliverable is a title and a Markdown body where an artifact is a structured, versioned spec
+with a moving state. 0218 widens `meeting_artifact.kind` on 0196's proven rename path (nothing
+carries a foreign key to it; `validate:deliverable-kinds` asserts no rollback copy is referenced)
+and seeds `artifact.build`.
+
+**The library decision.** None. `package.json` had no .pptx or .docx library, and AGENTS.md says
+prefer built-ins. `src/shared/artifacts/render.ts` derives slides and a document from one spec and
+writes both as Office Open XML in a stored ZIP (CRC-32 and three record shapes, ~60 lines), reads
+them back, and refuses uncited figures — no `pptxgenjs`/`docx`/`jszip` (~1 MB, Node-shaped) for a
+Worker to carry. macOS QuickLook renders both exports; the round trip (render → export → parse →
+same text, same figures) runs in `validate:artifacts`, in `tests/artifacts.test.ts` and in the
+Playwright journey.
+
+**Where it lives.** The Documents page's "Built on demand" band, grouped by what each is about,
+searchable by title; link rows on the company's deal record (the "known" face), on Fund strategy,
+on the meeting's After face and on the work card; the artifact's own page at `#/documents/a/<id>`
+(in-app render per kind, Export .pptx / .docx, Refresh, Try again, Open the object, versions —
+a refresh is a new version and the old ones stay). States are on the row and printed in words:
+requested → building (stage, elapsed, the measured usual, "running long") → ready → failed (reason,
+Try again). The page, the room block, the shelf rows and the card row all poll the row while it
+moves.
+
+**Guards.** `validate:artifacts` (`scripts/validate/a-build-has-one-producer.mjs`, in CI): one
+producer (the only file writing `artifact`), both doors call it and the tick serves it, the compiler
+is the only query surface (the only non-literal `prepare()` in artifacts.ts is `compiled.sql`;
+`compileRecordQuery` called exactly once; `checkCitations` before the version write), the real
+citation check refuses four fixtures and passes a cited one, every kind renders → exports → reads
+back with the same text and figures, every state has words, the page renders every kind and both
+export routes exist. Hard-fails on zero; ten planted defects caught in `--self-test`.
+`validate:voice-is-read-only` extended: the room imports only the request door and the status reads
+from the producer, `buildFromRoom` asks the producer exactly once and keeps a link block and calls
+nothing else (four new planted defects caught). `validate:instructions` reads the new ARTIFACT
+dispatch arm and finds `steerFor` acted on. Every other validator green; `validate:page-guides`
+holds because the artifact page is routed by the Shell, not inside `DocumentsPage`.
+
+**Proof.** `tests/artifacts.test.ts` (18): the migrations; the words; door A — "make this a
+dashboard" with an answerer that THROWS if consulted, READY inline, attached to meeting AND company,
+nothing on the After face, the page's derivation and both exports carry the same lines and figures,
+the shelf under the company and the meeting and by search, refresh → v2 with v1 kept, an empty room
+refuses with what to do, the model's `build` intent waits at "planning" for the clock and is then
+planned / read / written with the invented figure stripped, no lane → FAILED with the lane's kind
+of refusal and Try again, an LP meeting confidential from the request; door B — the card is
+ARTIFACT, built to READY, filed as `employee_finding` with the artifact link, on her Home, DONE;
+the sweep dispatches it; no object → BLOCKED "say which company…"; a CANNOT stops it before a row
+exists; a lane refusal blocks with `no_lane_could_take_the_work`; the guards — a plan outside the
+allowlist dropped by name, all refused → FAILED by name, `checkCitations` refusals, 401 to nobody.
+`e2e/p73-artifacts-on-demand.spec.ts`: room → "make this a dashboard" → link block → READY →
+Open it → the dashboard under Documents with cites → .pptx and .docx parse back to the page's
+figures → Refresh → v2 with v1 kept → Documents band under the company, search → nothing became a
+record → no sideways scroll at 375px; card → ARTIFACT → worked with no model → BLOCKED with the
+reason, the card's build row, no artifact invented.
