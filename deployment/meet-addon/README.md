@@ -36,3 +36,10 @@ add-on is only a manifest pointing at os.joinwestpeek.com, so nothing else moves
 Firm-wide: the Google Workspace Marketplace SDK is enabled on `west-peek-os`; a PRIVATE listing there, then
 Admin console › Apps › Google Workspace Marketplace apps › install for everyone, puts the panel in every
 partner's Meet without gcloud.
+
+**Firm-wide, done 19 Sep 2026 (evening).** Marketplace SDK on `west-peek-os`: App Configuration PRIVATE (locked
+once saved), Individual + Admin install, Google Workspace add-on → HTTP deployment `west-peek-os-meet`, developer
+West Peek Ventures / info@westpeek.ventures. Store listing published (private listings need no review):
+https://workspace.google.com/marketplace/app/west_peek_os/239608247651 — then **Admin install** for the whole
+organisation, accepted as info@westpeek.ventures. Nobody runs gcloud again; a new partner sees Activities › West
+Peek OS in every Meet. To change the listing: the same SDK page, Store Listing, Save Draft, Publish.
