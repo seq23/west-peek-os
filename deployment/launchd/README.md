@@ -17,10 +17,15 @@ dashboard, create a service token, give it access to the West Peek OS applicatio
 halves in the vault and the **client id** into the Worker:
 
 ```sh
-npm run vault:set CF_ACCESS_CLIENT_ID
-npm run vault:set CF_ACCESS_CLIENT_SECRET
-npx wrangler secret put WP_OS_CLAIMER_CLIENT_ID --env production   # the client id, again
+npm run vault:set WP_OS_MAC_ACCESS_CLIENT_ID       # the Mac's OWN token — not the employee browser's
+npm run vault:set WP_OS_MAC_ACCESS_CLIENT_SECRET
+npm run vault:sync:cloudflare                        # ships the id to the Worker as WP_OS_CLAIMER_CLIENT_ID
 ```
+
+Done 19 Sep 2026: service token `west-peek-os-mac`, admitted by its own policy on the Worker's Access
+application, both halves in the vault, id synced. The employee browser's token (`CF_ACCESS_CLIENT_ID`)
+resolves to the browser agent in the Worker, so presenting it here answered 403 — one token cannot
+be two identities, which is why the Mac has its own.
 
 `WP_OS_CLAIMER_CLIENT_ID` is a **name, not a secret** — Access verifies both halves at its edge and
 forwards only a signed assertion, so the Worker never sees the secret half. Until that name is set,

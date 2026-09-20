@@ -196,15 +196,15 @@ const DEVICE_ID = process.env.WP_OS_CLAIMER_DEVICE_ID ?? `mac-${hostname()}`;
  * or in the plist.
  */
 function accessHeaders() {
-  const id = process.env.CF_ACCESS_CLIENT_ID;
-  const secret = process.env.CF_ACCESS_CLIENT_SECRET;
+  const id = process.env.WP_OS_MAC_ACCESS_CLIENT_ID ?? process.env.CF_ACCESS_CLIENT_ID;
+  const secret = process.env.WP_OS_MAC_ACCESS_CLIENT_SECRET ?? process.env.CF_ACCESS_CLIENT_SECRET;
   if (!id || !secret) return null;
   return { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret, "content-type": "application/json" };
 }
 
 async function call(pathname, body, method = "POST") {
   const headers = accessHeaders();
-  if (!headers) throw new Error("CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET are not in the environment");
+  if (!headers) throw new Error("WP_OS_MAC_ACCESS_CLIENT_ID / WP_OS_MAC_ACCESS_CLIENT_SECRET are not in the environment");
   const res = await fetch(`${BASE_URL}${pathname}`, {
     method,
     headers,

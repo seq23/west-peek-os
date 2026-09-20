@@ -44,8 +44,12 @@
  *
  * Read from the environment the vault injects, never written, echoed or logged: the service-account
  * JSON (GSC_SERVICE_ACCOUNT_JSON, aliased WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON) and the two halves of
- * the Access service token (CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET — the same token the seat
- * claimer presents, so the Worker sees the same Mac identity). The private key is used by the
+ * the Mac's own Access service token (WP_OS_MAC_ACCESS_CLIENT_ID / _SECRET — the token the seat
+ * claimer presents too, so the Worker sees ONE Mac identity, `subscription-claimer@`). It is NOT the
+ * employee browser's token: the Worker resolves that id to the browser agent first, so a listener
+ * presenting it answered 403 on 19 Sep 2026 — one token cannot be two identities. Cloudflare Access
+ * admits the Mac token through its own policy on the Worker app; the Worker knows the id as
+ * WP_OS_CLAIMER_CLIENT_ID (vault alias in scripts/vault/cloudflare-mapping.json). The private key is used by the
  * Worker's own client, bundled from TypeScript, and never enters the browser page.
  */
 
@@ -78,15 +82,15 @@ function workerHeaders() {
   // A LOCAL Worker (WP_OS_ENV=local) reads the dev identity header and ignores Access headers; a
   // production URL is reached only with the service token, never with a header.
   if (u.hostname === "127.0.0.1" || u.hostname === "localhost") return { "x-wpos-dev-user": "subscription-claimer@joinwestpeek.com", "content-type": "application/json" };
-  const id = process.env.CF_ACCESS_CLIENT_ID;
-  const secret = process.env.CF_ACCESS_CLIENT_SECRET;
+  const id = process.env.WP_OS_MAC_ACCESS_CLIENT_ID ?? process.env.CF_ACCESS_CLIENT_ID;
+  const secret = process.env.WP_OS_MAC_ACCESS_CLIENT_SECRET ?? process.env.CF_ACCESS_CLIENT_SECRET;
   if (id && secret) return { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret, "content-type": "application/json" };
   return null;
 }
 
 async function workerCall(pathname, body, method = "POST") {
   const headers = workerHeaders();
-  if (!headers) throw new Error("CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET are not in the environment (run under `npm run vault:run --`)");
+  if (!headers) throw new Error("WP_OS_MAC_ACCESS_CLIENT_ID / WP_OS_MAC_ACCESS_CLIENT_SECRET are not in the environment (run under `npm run vault:run --`)");
   const res = await fetch(`${BASE_URL}${pathname}`, { method, headers, ...(method === "POST" ? { body: JSON.stringify(body ?? {}) } : {}), signal: AbortSignal.timeout(60_000) });
   const text = await res.text();
   let parsed = null;
@@ -155,7 +159,7 @@ async function doctor() {
   const rows = [];
   const row = (what, ok, detail) => { rows.push(ok); console.log(`${ok ? "OK     " : "MISSING"} ${what}${detail ? ` — ${detail}` : ""}`); };
   row("service account in the environment", Boolean(process.env.WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON ?? process.env.GSC_SERVICE_ACCOUNT_JSON), "GSC_SERVICE_ACCOUNT_JSON via vault:run");
-  row("Access service token in the environment", Boolean(process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET), "CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET via vault:run");
+  row("the Mac's Access service token in the environment", Boolean(process.env.WP_OS_MAC_ACCESS_CLIENT_ID && process.env.WP_OS_MAC_ACCESS_CLIENT_SECRET), process.env.WP_OS_MAC_ACCESS_CLIENT_ID ? "WP_OS_MAC_ACCESS_CLIENT_ID / _SECRET via vault:run" : "absent — the employee browser's token is not the Mac's identity (the Worker answers 403)");
   try { const b = await getBrowser(); row("headless Chromium (Playwright)", true, b.version()); await b.close(); browser = null; } catch (err) { row("headless Chromium (Playwright)", false, `${err.message} — npx playwright install chromium`); }
   try {
     const g = await googleClient();
