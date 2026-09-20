@@ -109,7 +109,7 @@ describe("how a guide is written", () => {
   it("Meetings describes the three faces, the room, the Meet band and the one approval", () => {
     const m = pageGuide("meetings")!;
     const bands = m.bands.map((b) => b.name);
-    for (const face of ["Coming up", "On the record", "Start a meeting now", "Google Meet", "Before", "During", "After"]) expect(bands).toContain(face);
+    for (const face of ["Coming up", "On the record", "Start a meeting now", "Google Meet", "Before", "During", "Beside the call", "After"]) expect(bands).toContain(face);
     const acts = m.acts.map((a) => a.label);
     for (const label of ["Open the room", "They said yes — record", "Ask", "Seat", "Approve — make these the record", "Move it"]) expect(acts).toContain(label);
     expect(m.elsewhere.map((l) => l.page)).toContain("dealflow");
@@ -254,10 +254,19 @@ describe("the walkthrough and the buttons, for every guide", () => {
       last = at;
     }
     const join = meet.steps.find((st) => st.do.includes("**Join on Meet**"))!;
-    expect(join.not).toMatch(/nothing joins for you/);
-    expect(join.not).toMatch(/no employee is in the call/);
+    // Tier 4 (19 Sep 2026) made "nothing joins for you" false: Join on Meet alone still puts no
+    // employee in the call, and the NEXT step — the call starting — is where the OS joins, with
+    // the two limits said on it (firm-hosted under the firm default; never LP or Broker).
+    expect(join.not).toMatch(/Join on Meet alone puts no employee in the call/);
+    expect(join.not).not.toMatch(/nothing joins for you/);
     expect(join.then).toMatch(/Beside the call/);
     expect(join.then).toMatch(/Inside the call/);
+    const joins = meet.steps[meet.steps.indexOf(join) + 1]!;
+    expect(joins.do).toMatch(/the OS joins it from the Mac/);
+    expect(joins.then).toMatch(/in the call · live/);
+    expect(joins.then).toMatch(/the Mac is not listening|preview not yet granted|the join refused/);
+    expect(joins.not).toMatch(/never for LP or Broker/);
+    expect(joins.not).toMatch(/firm-hosted Meet under the firm default/);
     // One room, several doors — said in those words, first step of the walk.
     expect(m.purpose).toMatch(/One room per meeting, several doors/);
     expect(meet.steps.find((st) => st.do.includes("**Go to this meeting**"))!.do).toMatch(/one room, several doors/);
@@ -270,7 +279,8 @@ describe("the walkthrough and the buttons, for every guide", () => {
     expect(JSON.stringify(m)).not.toContain("It is happening now");
     expect(JSON.stringify(m)).not.toContain("Bring it in");
     const seat = meet.steps.find((st) => st.do.includes("**Seat**"))!;
-    expect(seat.not).toMatch(/not in the Google Meet call/);
+    expect(seat.not).toMatch(/not a participant in the Google Meet call himself/);
+    expect(seat.not).toMatch(/the call itself once the OS is in it/);
     const person = m.walkthroughs[1]!;
     expect(person.steps.some((st) => st.do.includes("**They said yes — record**"))).toBe(true);
     expect(person.steps.some((st) => (st.then ?? "").includes("laptop microphone"))).toBe(true);
@@ -287,7 +297,8 @@ describe("the walkthrough and the buttons, for every guide", () => {
       g.walkthroughs.forEach((w, i) => expect(ordered[i]!.kind === "ordered" && ordered[i]!.items.length, `${g.navKey}: ${w.scenario}`).toBe(w.steps.length));
       expect(md.trimEnd().endsWith("?")).toBe(false);
     }
-    expect(renderWalkthroughAnswer(pageGuide("meetings")!)).toContain("What does not happen: nothing joins for you");
+    expect(renderWalkthroughAnswer(pageGuide("meetings")!)).toContain("What does not happen: Join on Meet alone puts no employee in the call");
+    expect(renderWalkthroughAnswer(pageGuide("meetings")!)).toContain("What does not happen: only a firm-hosted Meet under the firm default is joined");
   });
 
   it("the buttons answer carries every act once, under the band it sits in, human act first", () => {
@@ -300,7 +311,7 @@ describe("the walkthrough and the buttons, for every guide", () => {
       expect(blocks.filter((b) => b.kind === "heading").length, g.navKey).toBe(groups.length);
     }
     const groups = actsByBand(pageGuide("meetings")!);
-    expect(groups.map((x) => x.band)).toEqual(["Coming up", "On the record", "Start a meeting now", "Google Meet", "Before", "During", "After"]);
+    expect(groups.map((x) => x.band)).toEqual(["Coming up", "On the record", "Start a meeting now", "Google Meet", "Before", "During", "Beside the call", "After"]);
     expect(groups.find((x) => x.band === "During")!.acts.map((a) => a.label)).toContain("Seat");
     expect(groups.find((x) => x.band === "After")!.acts[0]!.primary).toBe(true);
   });

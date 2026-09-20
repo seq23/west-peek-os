@@ -47,6 +47,8 @@ import {
 export interface CallDoorsMeeting {
   id: string;
   meet_link: string | null;
+  /** `meeting.meet_live_state` (tier 4) when the caller has it: joining/listening makes the laptop mic yield. */
+  meet_live_state?: string | null;
 }
 
 function rememberedMode(): JoinMode {

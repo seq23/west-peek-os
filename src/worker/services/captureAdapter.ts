@@ -63,10 +63,11 @@ const ingestSchema = z.object({
 /**
  * What the scheduled Meet ingest passes and the HTTP route cannot: the platform that generated the
  * transcript. Deliberately NOT in `ingestSchema` — a request body must never be able to claim a
- * platform announced consent on its behalf. Only `meetIngest.ts` constructs this.
+ * platform announced consent on its behalf. Only `meetIngest.ts` (the official transcript) and
+ * `meetLive.ts` (what the listener heard during the call) construct this.
  */
 export interface PlatformNativeIngest {
-  platform: "GOOGLE_MEET";
+  platform: "GOOGLE_MEET" | "GOOGLE_MEET_LIVE";
 }
 
 export interface IngestResult {
@@ -87,7 +88,7 @@ export async function ingestTranscript(
   actor: Actor,
   meetingId: string,
   input: z.infer<typeof ingestSchema> & Partial<PlatformNativeIngest>,
-  importTranscript: (env: Env, actor: Actor, meetingId: string, i: { source: string; document_id?: string; platform?: "GOOGLE_MEET" }) => Promise<{ id: string }>,
+  importTranscript: (env: Env, actor: Actor, meetingId: string, i: { source: string; document_id?: string; platform?: PlatformNativeIngest["platform"] }) => Promise<{ id: string }>,
 ): Promise<IngestResult> {
   const meeting = await env.WP_OS_DB.prepare(
     "SELECT id, firm_scope, privacy_label FROM meeting WHERE id = ?1",

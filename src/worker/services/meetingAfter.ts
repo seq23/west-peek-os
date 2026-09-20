@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NOT_SUPERSEDED_NOTE_CLAUSE } from "./meetLiveNotes";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -724,7 +725,8 @@ async function sha256(text: string): Promise<string> {
 /** The words the drafter reads: on-the-record notes and transcript lines, never off-record ones. */
 export async function draftInputFor(env: Env, meetingId: string): Promise<{ text: string; notes: number }> {
   const res = await env.WP_OS_DB.prepare(
-    "SELECT body FROM meeting_note WHERE meeting_id = ?1 AND note_type IN ('MANUAL','TRANSCRIPT_DERIVED') ORDER BY created_at, id LIMIT 400",
+    // A live import the official Meet transcript has superseded (tier 4) is not read twice.
+    `SELECT body FROM meeting_note WHERE meeting_id = ?1 AND note_type IN ('MANUAL','TRANSCRIPT_DERIVED') AND ${NOT_SUPERSEDED_NOTE_CLAUSE} ORDER BY created_at, id LIMIT 400`,
   )
     .bind(meetingId)
     .all<{ body: string }>();

@@ -38,6 +38,7 @@ const SOURCES = {
   ingest: "src/worker/services/meetIngest.ts",
   adapter: "src/worker/services/captureAdapter.ts",
   meetings: "src/worker/services/meetings.ts",
+  live: "src/worker/services/meetLive.ts",
 };
 
 function stripComments(src) {
@@ -160,7 +161,13 @@ export function checkGovernedPath(sources) {
   if (!schema) violations.push("captureAdapter.ts: could not find ingestSchema");
   else if (/platform/.test(schema[1])) violations.push("captureAdapter.ts: the HTTP ingest schema accepts a platform, so a request could claim platform-announced consent");
   const meetings = stripComments(sources.meetings);
-  if (!/PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS\s*=\s*\[\s*"GOOGLE_MEET"\s*\]/.test(meetings)) violations.push("meetings.ts: the platform-native exception is not exactly [\"GOOGLE_MEET\"]");
+  // Tier 4 (19 Sep 2026) added the live listener's provider. EXACTLY these two, in this order:
+  // the official transcript and what was heard live — both SYSTEM-actor imports under the
+  // platform-announced consent, and nothing a request can name.
+  if (!/PLATFORM_NATIVE_TRANSCRIPT_PROVIDERS\s*=\s*\[\s*"GOOGLE_MEET",\s*"GOOGLE_MEET_LIVE"\s*\]/.test(meetings)) violations.push("meetings.ts: the platform-native exception is not exactly [\"GOOGLE_MEET\", \"GOOGLE_MEET_LIVE\"]");
+  const live = stripComments(sources.live);
+  if (!/platform:\s*LIVE_PROVIDER/.test(live)) violations.push("meetLive.ts: the live slice does not enter the import as the platform-native provider (platform: LIVE_PROVIDER)");
+  if (!/actor\.type !== "HUMAN" && !platformNative/.test(meetings)) violations.push("meetings.ts: a non-human import is no longer refused unless platform-native");
   if (!/recording_enabled !== 1/.test(meetings) || !/consent\.state !== "GRANTED"/.test(meetings)) violations.push("meetings.ts: importTranscript no longer checks both gates");
   return { checked: Object.keys(sources).length, violations };
 }
@@ -212,9 +219,14 @@ async function selfTest() {
   if (!checkGovernedPath(around).violations.some((v) => /writes meeting_note directly/.test(v))) throw new Error("self-test: a direct note write was not caught");
   const claiming = { ...sources, adapter: sources.adapter.replace("document_id: z.string().max(80).nullish(),", 'document_id: z.string().max(80).nullish(),\n  platform: z.literal("GOOGLE_MEET").optional(),') };
   if (!checkGovernedPath(claiming).violations.some((v) => /accepts a platform/.test(v))) throw new Error("self-test: a platform-claiming schema was not caught");
+  // A third platform-native provider nobody argued for, and a live slice imported as an ordinary one.
+  const widened = { ...sources, meetings: sources.meetings.replace('["GOOGLE_MEET", "GOOGLE_MEET_LIVE"]', '["GOOGLE_MEET", "GOOGLE_MEET_LIVE", "ZOOM"]') };
+  if (!checkGovernedPath(widened).violations.some((v) => /not exactly/.test(v))) throw new Error("self-test: a widened platform-native list was not caught");
+  const plain = { ...sources, live: sources.live.replace("platform: LIVE_PROVIDER", "platform: undefined") };
+  if (!checkGovernedPath(plain).violations.some((v) => /live slice does not enter/.test(v))) throw new Error("self-test: a live slice imported without its provider was not caught");
 
   if (checkAttribution(mod, []).fixtures !== 0) throw new Error("self-test: zero fixtures miscounted");
-  console.log("MEET INGEST SELF-TEST PASSED: 8 fixtures — clean, a guessing join, a bare renderer, a per-resource identity, an LP-blind inference, a flat-label note writer, a direct note write, a platform-claiming schema.");
+  console.log("MEET INGEST SELF-TEST PASSED: 10 fixtures — clean, a guessing join, a bare renderer, a per-resource identity, an LP-blind inference, a flat-label note writer, a direct note write, a platform-claiming schema, a widened platform-native list, a live slice without its provider.");
 }
 
 async function main() {

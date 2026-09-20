@@ -11,9 +11,9 @@ import type { Env } from "../env";
  *
  * WHAT IT DOES NOT DO. It stores nothing, decides nothing, and never sees a meeting row. Callers
  * hold the policy; this turns a request into an HTTP call and a response into data. Everything
- * here is a GET except three named writes, each of which is a write to GOOGLE'S bookkeeping and
+ * here is a GET except four named writes, each of which is a write to GOOGLE'S bookkeeping and
  * not to a person's diary: minting a token, creating/renewing a Workspace Events subscription,
- * and acknowledging a Pub/Sub message. There is no calendar write, no Meet space write, and no
+ * acknowledging a Pub/Sub message, and (tier 4) handing Google an SDP offer for the Media API. There is no calendar write, no Meet space write, and no
  * Drive write in this file — `validate:authority` reads it as an allowlisted egress module with
  * that reason attached.
  *
@@ -44,7 +44,22 @@ export const SCOPE = {
   meetCreated: "https://www.googleapis.com/auth/meetings.space.created",
   meetSettings: "https://www.googleapis.com/auth/meetings.space.settings",
   pubsub: "https://www.googleapis.com/auth/pubsub",
+  /**
+   * The Meet Media API (tier 4). Restricted; not in the delegation grant as of 19 Sep 2026 —
+   * `serviceAccountToken` names it `scope_missing`, and the live listener records that as the
+   * meeting state `meet_live_unavailable_scope` until the owner adds it.
+   */
+  meetMedia: "https://www.googleapis.com/auth/meetings.conference.media.readonly",
 } as const;
+
+/**
+ * The Media API lives on `v2beta`, which Google serves only to a project enrolled in the Workspace
+ * Developer Preview Program. Probed 19 Sep 2026: `GET v2beta/spaces/{code}` answered
+ * `404 "Method not found."` under every identity while `v2` answered 200 — the version is
+ * invisible to the project, not the space. `connectActiveConference` surfaces that as
+ * `preview_missing` so the state can be named.
+ */
+const MEET_BETA_BASE = "https://meet.googleapis.com/v2beta";
 
 /** The Meet event types the firm subscribes to. Named here so the subscription and the inbox agree. */
 export const MEET_EVENT_TYPES = [
@@ -55,7 +70,7 @@ export const MEET_EVENT_TYPES = [
 
 export class GoogleWorkspaceError extends Error {
   constructor(
-    public code: "not_configured" | "scope_missing" | "unauthorised" | "forbidden" | "not_found" | "http" | "timeout",
+    public code: "not_configured" | "scope_missing" | "preview_missing" | "unauthorised" | "forbidden" | "not_found" | "http" | "timeout",
     public status: number,
     detail?: string,
   ) {
@@ -227,8 +242,60 @@ export async function getConferenceRecord(token: string, name: string, fetchImpl
   return getJson<ConferenceRecordRaw>(fetchImpl, token, `${MEET_BASE}/${name}`);
 }
 
-export async function getSpace(token: string, spaceName: string, fetchImpl: typeof fetch = fetch): Promise<{ name: string; meetingCode?: string; meetingUri?: string; config?: Record<string, unknown> }> {
+export interface SpaceRaw {
+  name: string;
+  meetingCode?: string;
+  meetingUri?: string;
+  config?: Record<string, unknown>;
+  /** Present only while a conference is running in the space — the live path's trigger. */
+  activeConference?: { conferenceRecord?: string };
+}
+
+export async function getSpace(token: string, spaceName: string, fetchImpl: typeof fetch = fetch): Promise<SpaceRaw> {
   return getJson(fetchImpl, token, `${MEET_BASE}/${spaceName}`);
+}
+
+/**
+ * Broker a WebRTC session into the ACTIVE conference of a space (tier 4, Meet Media API).
+ *
+ * The one write to Google this tier adds, and it is a write to Google's bookkeeping in the same
+ * sense a subscription is: it hands Google an SDP offer and receives an SDP answer; the media
+ * itself flows over WebRTC afterwards, held by the listener on the owner's Mac — never by this
+ * Worker, which cannot hold a peer connection. "A success response does not indicate the meeting
+ * is fully joined; further communication must occur across WebRTC" (Google's reference).
+ *
+ * THREE REFUSALS, EACH NAMED so the meeting row can say which: `scope_missing` never reaches here
+ * (the token mint refuses first); `preview_missing` is Google's `404 Method not found` on v2beta —
+ * the project is not enrolled in the Developer Preview; `forbidden` is Google refusing THIS join
+ * (edition, admin setting, or the identity not being allowed in the call) and carries Google's
+ * own message, because "403" tells nobody what to change.
+ */
+export async function connectActiveConference(
+  token: string,
+  spaceName: string,
+  sdpOffer: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ answer: string; traceId: string | null }> {
+  const url = `${MEET_BETA_BASE}/${spaceName}:connectActiveConference`;
+  const res = await fetchWithTimeout(fetchImpl, url, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ offer: sdpOffer }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string; status?: string } };
+    const message = body.error?.message ?? "";
+    if (res.status === 404 && /method not found/i.test(message)) {
+      throw new GoogleWorkspaceError("preview_missing", 404, "Google answers \"Method not found\" on meet.googleapis.com/v2beta: the project is not enrolled in the Workspace Developer Preview Program, which is where the Media API lives");
+    }
+    if (res.status === 401) throw new GoogleWorkspaceError("unauthorised", 401, `google_unauthorised for connectActiveConference${message ? `: ${message}` : ""}`);
+    if (res.status === 403) throw new GoogleWorkspaceError("forbidden", 403, `Google refused the join: ${message || "PERMISSION_DENIED"}`);
+    if (res.status === 404) throw new GoogleWorkspaceError("not_found", 404, `Google finds no active conference in ${spaceName}${message ? `: ${message}` : ""}`);
+    throw new GoogleWorkspaceError("http", res.status, `google responded ${res.status} for connectActiveConference${message ? `: ${message}` : ""}`);
+  }
+  const body = (await res.json()) as { answer?: string; traceId?: string };
+  if (typeof body.answer !== "string" || body.answer.length === 0) throw new GoogleWorkspaceError("http", res.status, "connectActiveConference answered without an SDP answer");
+  return { answer: body.answer, traceId: body.traceId ?? null };
 }
 
 async function listAll<T>(fetchImpl: typeof fetch, token: string, url: string, field: string): Promise<T[]> {

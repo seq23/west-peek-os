@@ -189,8 +189,9 @@ describe("how does this page work", () => {
       expect(reply, control).toContain(control);
     }
     // What Join on Meet does NOT do is said, and the transcript's arrival after the call is said.
-    expect(reply).toMatch(/What does not happen: nothing joins for you/);
-    expect(reply).toMatch(/no employee is in the call/);
+    expect(reply).toMatch(/What does not happen: Join on Meet alone puts no employee in the call/);
+    expect(reply).toMatch(/the OS joins it from the Mac/);
+    expect(reply).toMatch(/never for LP or Broker/);
     expect(reply).toMatch(/one room, several doors/);
     expect(reply).toMatch(/Within the hour Google's transcript/);
     expect(reply).toMatch(/laptop microphone/);

@@ -1,0 +1,19 @@
+{
+  "addOns": {
+    "common": {
+      "name": "West Peek OS",
+      "logoUrl": "https://os.joinwestpeek.com/wp-mark.svg"
+    },
+    "meet": {
+      "web": {
+        "sidePanelUrl": "https://os.joinwestpeek.com/#/meet-panel",
+        "supportsScreenSharing": false,
+        "addOnOrigins": [
+          "https://os.joinwestpeek.com"
+        ],
+        "logoUrl": "https://os.joinwestpeek.com/wp-mark.svg",
+        "darkModeLogoUrl": "https://os.joinwestpeek.com/wp-mark.svg"
+      }
+    }
+  }
+}

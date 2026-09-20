@@ -82,3 +82,21 @@ Different repository, different script, different launchd label
 (`ventures.westpeek.os.seat-claimer`), different log paths, different endpoint. Neither reads,
 writes, imports or supervises the other, so a stall in one cannot take the other down. If a label
 ever collides, **this** is the one that changes.
+
+## The Meet live listener (tier 4, 19 Sep 2026)
+
+A second job, `ventures.westpeek.os.meet-listener.plist`, same shape, same vault, same Access
+token. It is the OS's ears in a firm-hosted Google Meet — see `scripts/meet/live-listener.mjs` for
+what it may and may not do, and `docs/GOOGLE_MEET.md` for the two Google-side stops it waits on
+(the Media API scope, granted 19 Sep 2026; Developer Preview enrolment of the project, applied for).
+
+```sh
+npm run vault:run -- node scripts/meet/live-listener.mjs --doctor    # the machine, the grant, the Worker
+cp deployment/launchd/ventures.westpeek.os.meet-listener.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/ventures.westpeek.os.meet-listener.plist
+tail -f /tmp/westpeek-os-meet-listener.log
+```
+
+Until the job runs, every firm-hosted Meet in its window reads `meet_not_started` with "no
+listener has ever checked in from the Mac" on the row — the honest state, not a silent one. While
+her Mac sleeps, a live call reads `meet_live_no_listener`.

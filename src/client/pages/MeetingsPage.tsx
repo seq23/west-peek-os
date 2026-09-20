@@ -62,6 +62,8 @@ interface MeetingRow {
   started_via?: string | null;
   /** Phase Meet (migration 0202). Present on a meeting the calendar sync created. */
   meet_link?: string | null;
+  /** Tier 4: the live listener's state on the row (`GET /api/meetings` selects the row whole). */
+  meet_live_state?: string | null;
   source?: "manual" | "google_calendar";
   type_inference?: "FIRM_ONLY" | "LP_CONTACT" | "COMPANY_DOMAIN" | "UNKNOWN_CHECK_IT" | null;
   /**
@@ -576,7 +578,7 @@ function MeetingRecord({ row, me, face, onFace, onBack, onChanged, onNavigate }:
       {row.meet_link && (
         <div className="stack" data-testid={`record-doors-${meetingId}`}>
           <p className="field-help" data-testid={`one-room-line-${meetingId}`}>{ONE_ROOM_LINE}</p>
-          <CallDoors meeting={{ id: meetingId, meet_link: row.meet_link }} />
+          <CallDoors meeting={{ id: meetingId, meet_link: row.meet_link, meet_live_state: row.meet_live_state ?? null }} />
         </div>
       )}
 
@@ -823,7 +825,7 @@ export function MeetingsPage({ me, onNavigate }: { me: MeResponse; onNavigate: (
                   Go to this meeting
                 </button>
                 <span className="field-help" id={`one-room-line-${m.id}`} data-testid={`one-room-line-${m.id}`}>{ONE_ROOM_LINE}</span>
-                {m.meet_link && <CallDoors meeting={{ id: m.id, meet_link: m.meet_link }} compact />}
+                {m.meet_link && <CallDoors meeting={{ id: m.id, meet_link: m.meet_link, meet_live_state: m.meet_live_state ?? null }} compact />}
               </div>
             </li>
           ))}

@@ -593,6 +593,7 @@ import {
 } from "./services/firmSkills";
 import { handleCalendarLedger, handleRunCalendarSync } from "./services/calendarSync";
 import { handleFirmRecordingPolicy, handleMeetInbox, handleMeetStatus, handleRunMeetIngest } from "./services/meetIngest";
+import { handleAdoptMeetCode, handleLiveChunk, handleLiveHeartbeat, handleLiveStatus, handleOpenLiveSession, handleReportLiveSession, handleResolveMeetCode } from "./services/meetLive";
 import {
   handleCreatePersonalEntry,
   handleGetPersonalProfile,
@@ -1001,6 +1002,22 @@ const router = new Router()
   .post("/api/meet/ingest", handleRunMeetIngest)
   .post("/api/meet/recording-policy", handleFirmRecordingPolicy)
   // === end Phase Meet ===
+  // === Meet live ===
+  // Tier 4: the room hears the Meet LIVE. The WebRTC peer is the listener on the owner's Mac
+  // (scripts/meet/live-listener.mjs); these routes are everything it may do — say it is awake and
+  // ask what is due, open a session THROUGH THE GATES (calendar-synced meeting with a conference,
+  // firm recording default on, platform-announced consent, meet.live.join authorised), post a slice
+  // of audio that goes only to Workers AI and then through the governed import, and report how the
+  // join ended. The four listener routes accept the Mac's service-token identity and nobody else;
+  // status and resolve are for partners (and tier 3's side panel). Literal paths before :id.
+  .post("/api/meet/live/heartbeat", handleLiveHeartbeat)
+  .post("/api/meet/live/sessions", handleOpenLiveSession)
+  .post("/api/meet/live/sessions/:id/report", handleReportLiveSession)
+  .post("/api/meet/live/sessions/:id/chunk", handleLiveChunk)
+  .get("/api/meet/live/status", handleLiveStatus)
+  .get("/api/meet/live/resolve", handleResolveMeetCode)
+  .post("/api/meet/live/adopt", handleAdoptMeetCode)
+  // === end Meet live ===
   // P33 — Event OS / Community OS scaffolding.
   .get("/api/events", handleListEvents)
   .post("/api/events", handleCreateEvent)
@@ -1450,6 +1467,24 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       return json({ error: "assets binding unavailable" }, { status: 503 });
     }
     return env.ASSETS.fetch(request);
+  }
+
+  /*
+   * CROSS-SITE WRITES ARE REFUSED (tier 3, 19 Sep 2026). The Meet add-on side panel is this app
+   * in an iframe inside meet.google.com, authenticated by the partner's own Access session cookie
+   * — which only reaches an iframe if the Access application sends it with SameSite=None. That
+   * attribute also means a form on any other site could POST here carrying her cookie. So every
+   * state-changing /api call must come from THIS origin: the browser says where a request came
+   * from in `Sec-Fetch-Site` (the iframe's own fetches are `same-origin`), and a request that
+   * says `cross-site` or `same-site` is refused before any handler runs. A request with no such
+   * header — the Mac listener, the seat claimer, tests — is not a browser and is authenticated by
+   * its service token instead. Pinned in tests/meetLive.test.ts.
+   */
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const site = request.headers.get("sec-fetch-site");
+    if (site && site !== "same-origin" && site !== "none") {
+      return json({ error: "cross_site_refused", detail: `a ${request.method} to this system must come from its own origin (Sec-Fetch-Site: ${site})` }, { status: 403 });
+    }
   }
 
   const matched = router.match(request.method, url.pathname);

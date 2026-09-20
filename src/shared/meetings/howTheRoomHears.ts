@@ -30,6 +30,12 @@
 
 export type MeetInboxState = "RECEIVED" | "INGESTED" | "REFUSED" | "NO_TRANSCRIPT" | "NO_MEETING" | "FAILED";
 
+/** `meeting.meet_live_state` (migration 0215) — repeated here as a type so the shared module imports nothing from the Worker. */
+export type MeetLiveRowState =
+  | "meet_not_started" | "meet_live_joining" | "meet_live_listening" | "meet_live_ended" | "meet_live_no_listener"
+  | "meet_live_unavailable_scope" | "meet_live_unavailable_preview" | "meet_live_unavailable_edition"
+  | "meet_live_unavailable_policy" | "meet_live_off_lp_policy" | "meet_live_failed";
+
 /** What the Worker knows about how this meeting's words reach the record. */
 export interface HearingFacts {
   /** Where the meeting came from: the firm calendar (a Meet call) or recorded here by hand. */
@@ -47,6 +53,13 @@ export interface HearingFacts {
    * is null here and Google's end time on the inbox row (`meet.conference_ended_at`) stands in.
    */
   call_ended_at: string | null;
+  /**
+   * THE LIVE PATH (tier 4, #131): the state the live listener wrote on the row
+   * (`meeting.meet_live_state`, migration 0215), its detail, and the turns heard live so far.
+   * `state` is null when the live path does not apply — a manual meeting, or one without a Meet
+   * conference. The names are `MEET_LIVE_STATES` in `services/meetLiveView.ts`.
+   */
+  meet_live: { state: MeetLiveRowState | null; detail: string | null; turns: number };
   /** The Meet inbox row for this meeting, once the ended call has been heard about. */
   meet: {
     state: MeetInboxState;
@@ -86,6 +99,16 @@ export interface HearingNow {
 }
 
 export const HEARING_STATES = [
+  // The live path (tier 4): the OS itself in the call, from the Mac.
+  "MEET_LIVE_LISTENING",
+  "MEET_LIVE_JOINING",
+  "MEET_LIVE_ENDED",
+  "MEET_LIVE_NO_LISTENER",
+  "MEET_LIVE_NO_SCOPE",
+  "MEET_LIVE_NO_PREVIEW",
+  "MEET_LIVE_REFUSED",
+  "MEET_LIVE_OFF_LP",
+  "MEET_LIVE_FAILED",
   "MEET_LIVE_HERE",
   "MEET_INGESTED",
   "MEET_WAITING_FOR_TRANSCRIPT",
@@ -139,6 +162,24 @@ function n(count: number, one: string, many: string): string {
  * numbers — the ingest cadence from the job row, the turns Meet read, the time it landed.
  */
 export const HEARING_SENTENCES: Readonly<Record<HearingState, (f: HearingFacts) => string>> = {
+  MEET_LIVE_LISTENING: (f) =>
+    `Google Meet call · the OS is in the call and listening — Meet announced it to everyone · ${n(f.meet_live.turns, "turn", "turns")} heard so far, a minute at a time · the draft rolls every five minutes and a seated employee reads what is written down here · Google's transcript is read in after the call and becomes After's source`,
+  MEET_LIVE_JOINING: () =>
+    "Google Meet call · the OS is joining the call now from the Mac — Meet announces it to everyone in the room · the first minute is written down once it is in",
+  MEET_LIVE_ENDED: (f) =>
+    `Google Meet call · the call ended · ${n(f.meet_live.turns, "turn", "turns")} heard live are on this record · Google's transcript is read in within ${minutes(f.ingest_every_minutes)} and becomes After's source; the live turns stay as corroboration`,
+  MEET_LIVE_NO_LISTENER: (f) =>
+    `Google Meet call · the call is live but the Mac has not been heard from${f.meet_live.detail ? ` — ${f.meet_live.detail}` : ""} · is it awake? · Google's transcript is still read in after the call`,
+  MEET_LIVE_NO_SCOPE: (f) =>
+    `Google Meet call · the OS cannot join live: the Google grant does not cover the Media API scope · Google's transcript is read in within ${minutes(f.ingest_every_minutes)} of the call ending`,
+  MEET_LIVE_NO_PREVIEW: (f) =>
+    `Google Meet call · the OS cannot join live yet: Google serves the Media API only to a project in its Developer Preview, which the firm has applied for · it tries again every five minutes while the call runs · Google's transcript is read in within ${minutes(f.ingest_every_minutes)} of the call ending`,
+  MEET_LIVE_REFUSED: (f) =>
+    `Google Meet call · Google refused the live join${f.meet_live.detail ? ` — ${f.meet_live.detail}` : ""} · Google's transcript is read in within ${minutes(f.ingest_every_minutes)} of the call ending`,
+  MEET_LIVE_OFF_LP: (f) =>
+    `Google Meet call · live listening is off for LP and Broker meetings by policy: the Media API is Pre-GA and its terms let Google use what passes through it · Google's transcript is read in within ${minutes(f.ingest_every_minutes)} of the call ending, as usual`,
+  MEET_LIVE_FAILED: (f) =>
+    `Google Meet call · the live join failed${f.meet_live.detail ? ` — ${f.meet_live.detail}` : ""} · it is tried again every five minutes while the call runs · Google's transcript is read in within ${minutes(f.ingest_every_minutes)} of the call ending`,
   MEET_LIVE_HERE: (f) =>
     `Google Meet call · laptop mic · live — this room hears you directly and them through your speakers · Google's transcript arrives after the call as the authoritative record, within ${minutes(f.ingest_every_minutes)} of it ending`,
   MEET_INGESTED: (f) =>
@@ -154,7 +195,9 @@ export const HEARING_SENTENCES: Readonly<Record<HearingState, (f: HearingFacts) 
   MEET_DEFAULT_OFF: () =>
     "Google Meet call · the firm default is off, so Google's transcript of this call will not be read into this record · Join on Meet only opens the call; turn the firm default on in the Google Meet band first",
   MEET_PENDING: (f) =>
-    `Google Meet call · transcribed by Google · read into this record within ${minutes(f.ingest_every_minutes)} of the call ending · Join on Meet only opens the call in a new tab — no employee is in it and this room does not hear it live`,
+    f.meet_live.state === "meet_not_started"
+      ? `Google Meet call · the call has not started · when it does, the OS joins it from the Mac and this room hears it live if Google admits the join — this line says which · Google transcribes it either way and it is read into this record within ${minutes(f.ingest_every_minutes)} of the call ending`
+      : `Google Meet call · transcribed by Google · read into this record within ${minutes(f.ingest_every_minutes)} of the call ending · Join on Meet opens the call; the OS joins it live from the Mac only once it is in its window and Google admits the join — until then no employee is in it and this room does not hear it live`,
   MANUAL_LIVE: (f) =>
     `In person or by phone · recording through the laptop microphone, a minute at a time, with their yes on the file · ${n(f.turns_captured, "turn", "turns")} written down so far · a seated employee reads what is written down here`,
   MANUAL_NO_SERVICE: () =>
@@ -171,6 +214,15 @@ export const HEARING_SENTENCES: Readonly<Record<HearingState, (f: HearingFacts) 
 
 /** The chip the narrow room shows at the top — one or three words per state, the sentence behind it. */
 export const HEARING_CHIP_WORDS: Readonly<Record<HearingState, string>> = {
+  MEET_LIVE_LISTENING: "in the call · live",
+  MEET_LIVE_JOINING: "joining the call",
+  MEET_LIVE_ENDED: "call ended · heard live",
+  MEET_LIVE_NO_LISTENER: "live · the Mac is not listening",
+  MEET_LIVE_NO_SCOPE: "live path · grant missing",
+  MEET_LIVE_NO_PREVIEW: "live path · waiting for Google's preview",
+  MEET_LIVE_REFUSED: "live join refused by Google",
+  MEET_LIVE_OFF_LP: "not joined live · LP policy",
+  MEET_LIVE_FAILED: "live join failed",
   MEET_LIVE_HERE: "laptop mic · live",
   MEET_INGESTED: "Meet transcript read in",
   MEET_WAITING_FOR_TRANSCRIPT: "waiting for Google's transcript",
@@ -211,9 +263,31 @@ export function livePath(f: HearingFacts): LivePath {
 }
 
 /** The one state this meeting is in. Order matters: what is happening now beats what will. */
+/** The live path's row state → the hearing state it is, or null when the inbox row should decide. */
+function liveStateOf(f: HearingFacts): HearingState | null {
+  switch (f.meet_live.state) {
+    case "meet_live_listening": return "MEET_LIVE_LISTENING";
+    case "meet_live_joining": return "MEET_LIVE_JOINING";
+    case "meet_live_no_listener": return "MEET_LIVE_NO_LISTENER";
+    case "meet_live_off_lp_policy": return "MEET_LIVE_OFF_LP";
+    // The call ended and was heard live: until Google's transcript is read in, the live turns are
+    // what the record has; once it is INGESTED the official transcript speaks (superseding them).
+    case "meet_live_ended": return f.meet?.state === "INGESTED" ? null : "MEET_LIVE_ENDED";
+    // A join that could not happen is said while the call has not been read; a read call is a read call.
+    case "meet_live_unavailable_scope": return f.meet ? null : "MEET_LIVE_NO_SCOPE";
+    case "meet_live_unavailable_preview": return f.meet ? null : "MEET_LIVE_NO_PREVIEW";
+    case "meet_live_unavailable_edition": return f.meet ? null : "MEET_LIVE_REFUSED";
+    case "meet_live_failed": return f.meet ? null : "MEET_LIVE_FAILED";
+    // Not started, or the firm default off: the existing states already say it.
+    default: return null;
+  }
+}
+
 export function hearingStateOf(f: HearingFacts, now: HearingNow): HearingState {
   if (isMeetCall(f)) {
     if (now.live) return "MEET_LIVE_HERE";
+    const live = liveStateOf(f);
+    if (live) return live;
     switch (f.meet?.state) {
       case "INGESTED": return "MEET_INGESTED";
       case "RECEIVED": return "MEET_WAITING_FOR_TRANSCRIPT";
@@ -234,7 +308,11 @@ export function hearingStateOf(f: HearingFacts, now: HearingNow): HearingState {
 }
 
 /** States in which the live tail is spoken: the room is not following live and could, or cannot. */
-const TAIL_STATES: ReadonlySet<HearingState> = new Set<HearingState>(["MEET_PENDING", "MEET_WAITING_FOR_TRANSCRIPT", "MEET_DEFAULT_OFF", "MEET_REFUSED_DEFAULT_OFF"]);
+const TAIL_STATES: ReadonlySet<HearingState> = new Set<HearingState>([
+  "MEET_PENDING", "MEET_WAITING_FOR_TRANSCRIPT", "MEET_DEFAULT_OFF", "MEET_REFUSED_DEFAULT_OFF",
+  // The live path could not join: the laptop mic is still the way to follow live.
+  "MEET_LIVE_NO_LISTENER", "MEET_LIVE_NO_SCOPE", "MEET_LIVE_NO_PREVIEW", "MEET_LIVE_REFUSED", "MEET_LIVE_OFF_LP", "MEET_LIVE_FAILED",
+]);
 
 export function hearing(f: HearingFacts, now: HearingNow): Hearing {
   const state = hearingStateOf(f, now);
@@ -255,10 +333,10 @@ export function callIsOver(f: Pick<HearingFacts, "call_ended_at" | "meet">): boo
 }
 
 /** What `Join on Meet` does and does not do — one line, said beside the button and in its tooltip. */
-export const JOIN_ON_MEET_LINE = "Opens the Google Meet call in a new tab. Nothing joins for you: no employee is in the call and this room does not hear it live. Google transcribes it, and the transcript is read into this record after the call.";
+export const JOIN_ON_MEET_LINE = "Opens the Google Meet call. When the listener on the Mac is running and Google admits the join, the OS joins the call as a participant and this room hears it live (never for LP or Broker meetings); the line above says which. Google transcribes it either way, and the transcript is read into this record after the call.";
 
 /** What a seated employee can and cannot do — one sentence beside Seat. */
-export const SEATED_EMPLOYEE_LINE = "A seated employee answers in Ask the room by name and can take a task that returns here. They read what is written down — typed notes, and the recording when it is on — and are never in the Meet call itself.";
+export const SEATED_EMPLOYEE_LINE = "A seated employee answers in Ask the room by name and can take a task that returns here. They read what is written down — typed notes, the recording when it is on, and the call itself when the OS is in it live — and are never in the Meet call as a participant themselves; the OS is.";
 
 /** The standalone room, said where its link is. */
 export const STANDALONE_ROOM_LINE = "The same room, in its own window — no app shell, for a second window beside your call, and a way back when it is over.";

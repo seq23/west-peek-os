@@ -31,6 +31,15 @@ export interface FakeGoogle {
   grantedScopes: Set<string>;
   /** Make the Calendar API fail (to prove the iCal door). */
   calendarApiDown: boolean;
+  /**
+   * Tier 4 — the fake Meet media server. `activeConferences` maps a meeting code to the running
+   * conference record (`spaces.get` reports it); `mediaApi` is what `v2beta …:connectActiveConference`
+   * answers: an SDP answer, Google's "Method not found" (the project is not in the Developer
+   * Preview), or a refusal with a message. `offers` records every SDP offer received.
+   */
+  activeConferences: Map<string, string>;
+  mediaApi: "ok" | "preview_missing" | "forbidden";
+  offers: string[];
   requests: Array<{ method: string; url: string }>;
   acked: string[];
   fetch: typeof fetch;
@@ -53,6 +62,9 @@ export function makeFakeGoogle(): FakeGoogle {
       "https://www.googleapis.com/auth/pubsub",
     ]),
     calendarApiDown: false,
+    activeConferences: new Map(),
+    mediaApi: "ok",
+    offers: [],
     requests: [],
     acked: [],
     fetch: null as unknown as typeof fetch,
@@ -82,6 +94,22 @@ export function makeFakeGoogle(): FakeGoogle {
     if (u.hostname === "calendar.google.com") {
       return g.ics ? new Response(g.ics, { status: 200, headers: { "content-type": "text/calendar" } }) : new Response("nope", { status: 404 });
     }
+    if (u.hostname === "meet.googleapis.com" && u.pathname.startsWith("/v2beta/")) {
+      // The Media API surface. Without Developer Preview enrolment Google serves no v2beta at all.
+      if (g.mediaApi === "preview_missing") return json({ error: { code: 404, message: "Method not found.", status: "NOT_FOUND" } }, 404);
+      const m = /^\/v2beta\/(spaces\/[^/:]+):connectActiveConference$/.exec(u.pathname);
+      if (m && method === "POST") {
+        if (g.mediaApi === "forbidden") return json({ error: { code: 403, message: "The Meet Media API is not enabled for this organization's edition.", status: "PERMISSION_DENIED" } }, 403);
+        const c = g.conferences.find((x) => x.space === m[1]) ?? null;
+        const code = c?.meetingCode ?? [...g.activeConferences.keys()].find((k) => `spaces/sp_${k}` === m[1] || `spaces/${k}` === m[1]);
+        if (!code || !g.activeConferences.has(code)) return json({ error: { code: 404, message: "No active conference in the space.", status: "NOT_FOUND" } }, 404);
+        const body = JSON.parse(String(init?.body ?? "{}")) as { offer?: string };
+        if (!body.offer) return json({ error: { code: 400, message: "offer is required", status: "INVALID_ARGUMENT" } }, 400);
+        g.offers.push(body.offer);
+        return json({ answer: `v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=fake-meet\r\nt=0 0\r\na=group:BUNDLE 0 1 2\r\n`, traceId: `trace_${g.offers.length}` });
+      }
+      return json({ error: { code: 404, message: "Method not found.", status: "NOT_FOUND" } }, 404);
+    }
     if (u.hostname === "meet.googleapis.com") {
       const p = u.pathname.replace(/^\/v2\//, "");
       if (p === "conferenceRecords") {
@@ -108,10 +136,11 @@ export function makeFakeGoogle(): FakeGoogle {
       const sp = /^spaces\/(.+)$/.exec(p);
       if (sp) {
         const c = g.conferences.find((x) => x.space === `spaces/${sp[1]}` || x.meetingCode === sp[1]);
-        if (c) return json({ name: c.space, meetingCode: c.meetingCode, meetingUri: `https://meet.google.com/${c.meetingCode}` });
+        const live = (code: string) => (g.activeConferences.has(code) ? { activeConference: { conferenceRecord: g.activeConferences.get(code) } } : {});
+        if (c) return json({ name: c.space, meetingCode: c.meetingCode, meetingUri: `https://meet.google.com/${c.meetingCode}`, ...live(c.meetingCode) });
         // A space the calendar knows but no conference has used yet resolves by its code, as Google's does.
         const fromCalendar = g.calendarItems.find((i) => (i as { conferenceData?: { conferenceId?: string } }).conferenceData?.conferenceId === sp[1]);
-        if (fromCalendar) return json({ name: `spaces/sp_${sp[1]}`, meetingCode: sp[1], meetingUri: `https://meet.google.com/${sp[1]}` });
+        if (fromCalendar) return json({ name: `spaces/sp_${sp[1]}`, meetingCode: sp[1], meetingUri: `https://meet.google.com/${sp[1]}`, ...live(sp[1]!) });
         return json({ error: { code: 403, status: "PERMISSION_DENIED", message: "Permission denied on resource Space (or it might not exist)" } }, 403);
       }
     }

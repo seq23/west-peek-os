@@ -6124,3 +6124,71 @@ Meetings section, deep link lands in view, every room's section attached, search
 and act testids are the page as it renders today, because the validator holds the file to the
 page. When `design/home-overhaul` lands, the validator fails until that branch updates
 `pageGuide/home.ts` — the contract working, said in the file's header.
+
+## The room hears the Meet LIVE, and the room beside the call (19 Sep 2026)
+
+**The owner's question:** "If I push Join on Meet what happens? Is it recording? Are my AI
+employees there from Join on Meet alone?" Before: no — Join opened a tab, and the room heard
+nothing until the call ended and tier 2 read the transcript. Now, tier 4: when a firm-hosted Meet
+on the calendar is running, the OS joins it as a participant through the Meet Media API and what
+it hears goes down Phase C's own path — a slice a minute → Nova-3 → the governed import → notes —
+so the rolling draft, ask-the-room and the seated employees hear the call with no new UI. And
+tier 3: `#/meet-panel`, the same During face inside Meet's side panel.
+
+**Where the peer lives** (`ARCHITECTURAL_DECISIONS.md`, 19 Sep 2026): a WebRTC session cannot be
+held by a Worker or a Durable Object, and a Container is a new paid product; the peer is headless
+Chromium on her Mac (`scripts/meet/live-listener.mjs`, `lib/listener-core.mjs` the loop with every
+side effect injected, `lib/meet-media-page.js` the peer; launchd job
+`ventures.westpeek.os.meet-listener`, the same vault and Access token as the seat claimer). The
+Worker (`services/meetLive.ts`, `meetLiveView.ts`, `meetLiveNotes.ts`) holds every decision.
+
+**Migrations 0215, 0216.** `meeting.meet_live_state / _detail / _updated_at` (eleven named states
+and NULL), `meet_live_session` (UNIQUE per conference; the cost ledger: chunks, turns,
+seconds_heard, neurons, drafts_rolled), `meet_live_listener` (heartbeats), `transcript_import.
+superseded_by`, `action_type meet.live.join`; then `meeting.call_ended_at` — THE END-OF-CALL SIGNAL,
+one column both faces read, written by the listener or the ingest, first writer wins.
+
+**The gates, in order, each a state on the row:** a calendar-synced meeting with a conference (a
+manual meeting has no live path — NULL); the meeting-type rule; the firm recording default (0203);
+platform-announced consent (tier 2's function, recorded once per conference); `meet.live.join`.
+**LP and Broker meetings never join live** — the owner's rule the same day, because the Media API
+is Pre-GA and term (vi) of the Developer Preview terms lets Google use what passes through it;
+enforced in code at the join decision (`liveAllowedForType`), `meet_live_off_lp_policy` on the
+row, the GA post-call path unchanged. **Two sources of one call:** the official transcript is
+authoritative for After; when it lands the live imports are superseded and the note readers skip
+them; the live notes stay as corroboration.
+
+**Routes, one block `// === Meet live ===`:** heartbeat, sessions, sessions/:id/report,
+sessions/:id/chunk (the Mac's identity only); live/status, live/resolve, live/adopt (partners).
+The Worker refuses any state-changing `/api` request whose `Sec-Fetch-Site` is cross-site, so the
+side panel can ride her Access cookie with SameSite=None (the one console step, hers).
+
+**Proof.** `tests/meetLive.test.ts` (24): the states are one vocabulary with the migration; the
+heartbeat's door; every gate by name; an LP and a Broker meeting refused with the default on; a
+slice through a fake Nova-3 into labelled notes, the room's state and context pack, the draft's
+cadence, staleness, cost from the ledger; ended → HELD + the signal; the three named failures with
+Google's words; the official transcript superseding three live imports and consent recorded once;
+the LISTENER'S REAL LOOP end to end against the fake Meet media server — not started, scope
+missing, retry, preview missing, join → slices → end — with every host on the request log Google's
+or the Worker's and audio only to `/chunk`; resolve, adopt, the cross-site guard.
+`validate:meet-live` (+ 15-fixture self-test + the listener's `--self-test`): five gates before the
+INSERT, the type rule against the REAL function with six planted meetings, the network boundary of
+the core/page/CLI, both speech adapters on the binding with `mip_opt_out`, state parity, the add-on
+deployment's origin. Negative proof on the real file: LP let in → `✗ a planted LP meeting … would
+JOIN` exit 1; restored → passes. `validate:meet-ingest` strengthened to the new provider list.
+`e2e/p73-meet-panel.spec.ts`: the panel beside an unknown call → Record this meeting now → the room
+at 360 px, no shell, no overflow → not firm-hosted, so no live session → the deep link lands on
+After.
+
+**Live, 19 Sep 2026 (read-only, the vault):** the Media API scope now MINTS under impersonation
+(the owner granted it); the service account's own identity is refused on the space (403); every
+`v2beta` call — where the Media API lives — answers `404 Method not found` for every identity:
+the project is not in the Developer Preview (applied for; `meet_live_unavailable_preview` until it
+lands, retried every five minutes, no redeploy). The listener's real loop against the real Google
+and a local Worker: heartbeat, `media_scope: GRANTED`, `spaces.get svf-nzzr-pax`, not started.
+The peer page's own `audio/webm;codecs=opus` slices from a spoken fixture, played to Nova-3 over
+REST: both 200, the sentence verbatim, 61.5 neurons / 7.9 s → **$0.31 per hour of call**.
+
+**Labels.** The Worker path, the listener's loop, reconciliation, the panel, the guard: PROVEN
+(local D1, fake Meet, fake Nova-3, browser). Nova-3 on the peer's real audio: PROVEN (REST). The
+live join into a running Meet: UNPROVEN — Google's `v2beta` refusal above is the exact reason.
