@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { calendarItem, makeFakeGoogle, type FakeConference, type FakeGoogle } from "./helpers/fakeGoogle";
 import { handleRequest } from "../src/worker/index";
@@ -501,12 +501,18 @@ describe("7. end to end: the listener's loop against a fake Meet media server", 
     g.mediaApi = "ok";
     clock += 5 * 60_000 + 1;
     await listener.cycle();
-    await new Promise((r) => setTimeout(r, 80));
-    expect(peers).toHaveLength(2);
+    // The join finishes after cycle() returns (the peer answers, the Worker records LISTENING). A
+    // fixed 80ms sleep here was a guess about the machine: on a loaded CI runner it read the row
+    // before the join had landed (19 Sep 2026, meet_live_unavailable_preview — the previous
+    // test's state — instead of meet_live_listening). Wait for the condition, not the clock.
+    await vi.waitFor(() => expect(peers).toHaveLength(2), { timeout: 5_000, interval: 20 });
     const peer = peers[1];
     expect(peer.answer).toContain("fake-meet");
     expect(g.offers).toHaveLength(1);
-    expect((await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(meeting.id).first<any>()).meet_live_state).toBe("meet_live_listening");
+    await vi.waitFor(
+      async () => expect((await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(meeting.id).first<any>()).meet_live_state).toBe("meet_live_listening"),
+      { timeout: 5_000, interval: 20 },
+    );
 
     peer.sliceCb({ audio_base64: Buffer.from("Good morning everyone let us start with the pipeline").toString("base64"), content_type: "audio/webm;codecs=opus", seconds: 60 });
     peer.sliceCb({ audio_base64: Buffer.from("The founder said their runway is fourteen months").toString("base64"), content_type: "audio/webm;codecs=opus", seconds: 60 });
