@@ -321,12 +321,20 @@ export function SetupPage({ me }: { me: MeResponse }): JSX.Element {
             starts running on its own — switching a job on is a separate, deliberate act on{" "}
             <strong>Work → Scheduled Work</strong>.
           </p>
-          {!jobPlanLoaded && (
-            <p className="muted small" data-testid="setup-jobs-loading">
-              Reading the roster, the AI providers and the existing jobs…
-            </p>
-          )}
+          {/*
+            * THE LOADING ROW LIVES IN THE LIST'S OWN SLOT (20 Sep 2026). It used to be a paragraph
+            * beside an empty <ul>, so while the three fetches were in flight a reader saw a blank
+            * list — and the design-state sweep said so on main, where the journeys run twice on
+            * one runner and the second pass outlasted its settle budget. Loading and empty share
+            * one slot, told apart by tone, never a blank: the same shape the Employees lists took
+            * on 18 Sep for the same reason.
+            */}
           <ul className="card-list" data-testid="setup-jobs" data-loaded={jobPlanLoaded ? "true" : "false"}>
+            {!jobPlanLoaded && (
+              <li className="state-message" data-testid="setup-jobs-loading">
+                Reading the roster, the AI providers and the existing jobs…
+              </li>
+            )}
             {jobPlanLoaded && jobPlan.map((j) => (
               <li key={j.job_key} className="card" data-testid={`setup-job-${j.job_key}`}>
                 <p>
