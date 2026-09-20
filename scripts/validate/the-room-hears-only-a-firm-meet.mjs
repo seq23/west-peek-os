@@ -210,6 +210,9 @@ export function checkAddonDeployment(addonSource, deploymentJson) {
   if (!origin || !path || !name) return { violations: ["meetAddon.ts no longer names origin, sidePanelPath and name"], checked: 0 };
   let dep;
   try { dep = JSON.parse(deploymentJson); } catch { return { violations: ["deployment.json is not JSON"], checked: 0 }; }
+  // A pure manifest: gcloud rejects any key it does not know ("Unknown name _README", 19 Sep 2026),
+  // so notes go in the sibling README.md, never in the file the register command consumes.
+  for (const k of Object.keys(dep)) if (k !== "addOns") violations.push(`deployment.json carries a key gcloud will reject: ${JSON.stringify(k)} — notes belong in deployment/meet-addon/README.md`);
   const web = dep?.addOns?.meet?.web ?? {};
   if (web.sidePanelUrl !== `${origin}${path}`) violations.push(`deployment.json sidePanelUrl is ${web.sidePanelUrl}, not ${origin}${path}`);
   if (!Array.isArray(web.addOnOrigins) || web.addOnOrigins.length !== 1 || web.addOnOrigins[0] !== origin) violations.push(`deployment.json addOnOrigins is ${JSON.stringify(web.addOnOrigins)}, not [${origin}]`);
