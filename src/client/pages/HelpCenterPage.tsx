@@ -435,7 +435,7 @@ const TOPICS: Topic[] = [
             <strong>Providers</strong> are turned on and off on Cockpit; which of them may see which data class is fixed at the router, not in a prompt.
           </li>
           <li>
-            <strong>Google</strong> — each partner connects their own mailbox and calendar; the firm's Meet calls are read by the calendar and Meet jobs once the firm default is on.
+            <strong>Google</strong> — each partner connects their own mailbox and calendar; the firm's Meet calls are read by the calendar and Meet jobs once the firm default is on. On a firm-hosted Meet the OS joins the call itself from the listener on the owner's Mac and the room hears it live — never an LP or Broker meeting; the same room opens inside Meet's side panel once the add-on is installed for your account.
           </li>
           <li>
             <strong>Credentials</strong> live only in the vault. A missing or conflicting one is shown to you as a choice, never resolved on your behalf.
