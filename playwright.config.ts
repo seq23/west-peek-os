@@ -21,6 +21,11 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: `http://localhost:${PORT}`,
+    // NO KEEP-ALIVE AGAINST THE DEV SERVER. `wrangler dev` closes idle sockets on its own clock, and
+    // a request reusing one it had just closed died as "socket hang up" (p14 on main, 19 Sep 2026,
+    // 189 others green) — a race in the transport, not a verdict from the Worker. One connection per
+    // request costs nothing here and makes that race impossible.
+    extraHTTPHeaders: { connection: "close" },
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],
   webServer: {
