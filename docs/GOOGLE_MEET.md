@@ -17,6 +17,16 @@ Every row was run against Google with the firm's service account
 impersonating `sequoia@westpeek.ventures` under domain-wide delegation. "The exact call" is what
 proved it; `scripts/meet/probe-google.mjs` re-runs the whole table through the Worker's own client.
 
+**Who reads a conference record (found 20 Sep 2026).** Meet releases a record only to the room's
+owner or someone who was in the call — `conferenceRecords.list` omits the rest, `get` answers 403.
+Both firm rooms (`svf-nzzr-pax`, `okf-vjho-uqc`) are Scooter's events, so as `sequoia@` the job
+listed **0 records in either room** for a day and failed hourly on the first Pub/Sub event
+(`google_forbidden`, 10 attempts); as `scooter@` the same record read and four records were visible.
+The ingest now tries every partner in turn (`meetReaders` in `meetIngest.ts`, from the partner
+registry), refuses a record no partner may read, and refuses any row at `MEET_READ_ATTEMPTS_CAP`
+attempts. Pinned in `tests/meetIngest.test.ts`; `scripts/meet/probe-record.mjs <record>` asks Google
+the same question live, as each partner.
+
 | Question | Finding | The exact call that proved it |
 |---|---|---|
 | Can the firm read the partner calendar as the firm? | **CONFIRMED.** 10 events ±30d, all with a Meet link; `conferenceData.conferenceId` is the meeting code | `GET calendar/v3/calendars/primary/events?conferenceDataVersion=1&singleEvents=true` → 200 |

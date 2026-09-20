@@ -18,6 +18,11 @@ export interface FakeConference {
   participants: Array<{ name: string; displayName: string; kind: "SIGNED_IN" | "ANONYMOUS" | "PHONE" }>;
   transcript: null | { name: string; state: "STARTED" | "ENDED" | "FILE_GENERATED"; document: string | null; entries: Array<{ participant: string | null; text: string; startTime: string }> };
   recording: null | { state: "FILE_GENERATED" | "ENDED"; file: string | null };
+  /**
+   * Who Google will answer for, as Meet does: the space owner and the people who were in the call.
+   * Absent = everybody. `list` omits what the caller may not see; `get` and the sub-resources 403.
+   */
+  visibleTo?: string[];
 }
 
 export interface FakeGoogle {
@@ -112,16 +117,20 @@ export function makeFakeGoogle(): FakeGoogle {
     }
     if (u.hostname === "meet.googleapis.com") {
       const p = u.pathname.replace(/^\/v2\//, "");
+      // The token names who is asking (`tok_<subject>_<n>`); visibility is judged against it.
+      const asking = /^Bearer tok_(.+)_\d+$/.exec(String(new Headers(init?.headers).get("authorization") ?? ""))?.[1] ?? "sa";
+      const canSee = (c: FakeConference) => !c.visibleTo || c.visibleTo.includes(asking);
       if (p === "conferenceRecords") {
         const filter = u.searchParams.get("filter") ?? "";
         const code = /space\.meeting_code = "([^"]+)"/.exec(filter)?.[1];
-        const list = g.conferences.filter((c) => !code || c.meetingCode === code);
+        const list = g.conferences.filter((c) => (!code || c.meetingCode === code) && canSee(c));
         return json({ conferenceRecords: list.map((c) => ({ name: c.name, space: c.space, startTime: c.startTime, endTime: c.endTime ?? undefined })) });
       }
       const m = /^(conferenceRecords\/[^/]+)(?:\/(participants|transcripts|recordings))?(?:\/([^/]+)\/entries)?$/.exec(p);
       if (m) {
         const c = g.conferences.find((x) => x.name === m[1]);
         if (!c) return json({ error: { code: 404, status: "NOT_FOUND", message: "no such conference" } }, 404);
+        if (!canSee(c)) return json({ error: { code: 403, status: "PERMISSION_DENIED", message: "The caller does not have permission" } }, 403);
         if (!m[2]) return json({ name: c.name, space: c.space, startTime: c.startTime, endTime: c.endTime ?? undefined });
         if (m[2] === "participants") {
           return json({ participants: c.participants.map((x) => ({ name: x.name, ...(x.kind === "SIGNED_IN" ? { signedinUser: { user: `users/${x.name.split("/").pop()}`, displayName: x.displayName } } : x.kind === "PHONE" ? { phoneUser: { displayName: x.displayName } } : { anonymousUser: { displayName: x.displayName } }) })) });

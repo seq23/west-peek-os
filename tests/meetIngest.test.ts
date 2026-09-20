@@ -4,7 +4,8 @@ import { calendarItem, makeFakeGoogle, type FakeConference, type FakeGoogle } fr
 import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
 import { runCalendarSync } from "../src/worker/services/calendarSync";
-import { runMeetIngest, PLATFORM_CONSENT_BASIS } from "../src/worker/services/meetIngest";
+import { runMeetIngest, meetReaders, MEET_READ_ATTEMPTS_CAP, PLATFORM_CONSENT_BASIS } from "../src/worker/services/meetIngest";
+import { CALENDAR_SOURCES } from "../src/shared/meetings/calendarSources";
 import { turnsFromMeet, meetTranscriptText } from "../src/shared/meetings/meetTranscript";
 import { classifyContent } from "../src/shared/ai/contentClass";
 
@@ -17,6 +18,12 @@ import { classifyContent } from "../src/shared/ai/contentClass";
  * platform's announcement, pointers to Drive, meeting HELD; an LP meeting's notes carry LP_PRIVATE
  * and are refused a training lane; running again reads nothing twice; a conference heard about by
  * Pub/Sub and by polling is one inbox row; a missing delegation grant is a named ledger state.
+ *
+ * Who reads (20 Sep 2026): Meet releases a record only to the room's owner or a participant, and the
+ * firm's rooms are Scooter's. Every read tries each partner in turn — the calendar subject first —
+ * and the poll is the union of what each may see. A record no partner may read is REFUSED (a fact
+ * about the call), and a row that keeps failing is REFUSED at the attempts cap rather than reddening
+ * every hourly run for ever.
  */
 
 let t: TestDb;
@@ -295,6 +302,83 @@ describe("reading an ended call", () => {
     expect(status.body.recording_policy.active).toBe(1);
     expect(status.body.inbox).toEqual({ INGESTED: 3 });
     expect(status.body.calendars[0].subscription_state).toBe("ACTIVE");
+  });
+
+  it("reads as whichever partner Google will answer for — the calendar subject first, then the others", () => {
+    expect(meetReaders(CALENDAR_SOURCES[0]!)).toEqual(["sequoia@westpeek.ventures", "scooter@westpeek.ventures"]);
+  });
+
+  it("finds and reads a call only the other partner's identity may see — the room is Scooter's, the calendar is Sequoia's", async () => {
+    // Production, 19–20 Sep 2026: both firm rooms belong to Scooter's events; as Sequoia, Google listed
+    // nothing and answered 403 on the record the Pub/Sub event named.
+    g.calendarItems.push(calendarItem({ id: "ev_scooter_room", summary: "Scooter's room", start: "2026-09-17T18:00:00.000Z", code: "ggg-hhhh-iii", attendees: [{ email: "sequoia@westpeek.ventures", self: true }, { email: "scooter@westpeek.ventures" }] }));
+    await runCalendarSync(env, { fetchImpl: g.fetch, now: NOW });
+    g.conferences.push({
+      name: "conferenceRecords/sc1", space: "spaces/sp_sc", meetingCode: "ggg-hhhh-iii",
+      startTime: "2026-09-17T18:00:00.000Z", endTime: "2026-09-17T18:20:00.000Z", visibleTo: ["scooter@westpeek.ventures"],
+      participants: [{ name: "conferenceRecords/sc1/participants/p1", displayName: "Scooter Taylor", kind: "SIGNED_IN" }],
+      transcript: { name: "conferenceRecords/sc1/transcripts/t1", state: "FILE_GENERATED", document: "doc_sc1", entries: [{ participant: "conferenceRecords/sc1/participants/p1", text: "Notes to self.", startTime: "2026-09-17T18:00:02.000Z" }] },
+      recording: null,
+    });
+    const out = await runMeetIngest(env, { fetchImpl: g.fetch, now: NOW });
+    // The poll found it (as Scooter) and the read went through (as Scooter): one INGESTED row, run green.
+    expect(out.heard.poll.inserted).toBe(1);
+    expect(out.read).toEqual([{ conference_record: "conferenceRecords/sc1", state: "INGESTED", detail: expect.any(String) }]);
+    expect(out.ok).toBe(true);
+    // Sequoia was asked first and refused; Scooter answered. Both identities minted a Meet token.
+    const subjects = g.requests.filter((r) => r.url.includes("oauth2.googleapis.com")).length;
+    expect(subjects).toBeGreaterThan(0);
+    const forbidden = g.requests.filter((r) => r.url.endsWith("/v2/conferenceRecords/sc1")).length;
+    expect(forbidden).toBe(2); // 403 as Sequoia, 200 as Scooter
+  });
+
+  it("refuses — terminally, in one attempt — a record no partner may read, and the run stays green", async () => {
+    g.conferences.push({
+      name: "conferenceRecords/outsider", space: "spaces/sp_out", meetingCode: "ggg-hhhh-iii",
+      startTime: "2026-09-17T19:00:00.000Z", endTime: "2026-09-17T19:05:00.000Z", visibleTo: ["stranger@elsewhere.com"],
+      participants: [], transcript: null, recording: null,
+    });
+    // Heard about by Pub/Sub — the poll cannot list it as either partner.
+    g.pubsubMessages.push({ ackId: "ack3", messageId: "m3", attributes: { "ce-type": "google.workspace.meet.conference.v2.ended", "ce-subject": "//meet.googleapis.com/conferenceRecords/outsider" }, data: { conferenceRecord: { name: "conferenceRecords/outsider" } } });
+    const out = await runMeetIngest(env, { fetchImpl: g.fetch, now: NOW });
+    const row = (await env.WP_OS_DB.prepare("SELECT state, detail, attempts FROM meet_event_inbox WHERE conference_record = 'conferenceRecords/outsider'").first<any>())!;
+    expect(row.state).toBe("REFUSED");
+    expect(row.attempts).toBe(1);
+    expect(row.detail).toContain("google_forbidden for every partner identity (sequoia@westpeek.ventures, scooter@westpeek.ventures)");
+    expect(out.read).toEqual([{ conference_record: "conferenceRecords/outsider", state: "REFUSED", detail: row.detail }]);
+    expect(out.ok).toBe(true);
+    expect(out.summary).toContain("1 refused");
+    // Terminal: the next tick does not pick it up again.
+    const again = await runMeetIngest(env, { fetchImpl: g.fetch, now: NOW });
+    expect(again.read).toEqual([]);
+    expect((await env.WP_OS_DB.prepare("SELECT attempts FROM meet_event_inbox WHERE conference_record = 'conferenceRecords/outsider'").first<any>())!.attempts).toBe(1);
+  });
+
+  it("gives up at the attempts cap: a fault that keeps recurring becomes REFUSED with its last reason, not a FAILED run for ever", async () => {
+    expect(MEET_READ_ATTEMPTS_CAP).toBe(12);
+    // A conference Google keeps answering 500 for — a fault, retried, until the cap.
+    g.conferences.push({ name: "conferenceRecords/flaky", space: "spaces/sp_flaky", meetingCode: "ggg-hhhh-iii", startTime: "2026-09-17T20:00:00.000Z", endTime: "2026-09-17T20:05:00.000Z", participants: [], transcript: null, recording: null });
+    const realFetch = g.fetch;
+    const faulting: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/v2/conferenceRecords/flaky/participants")) return new Response(JSON.stringify({ error: { code: 500, status: "INTERNAL" } }), { status: 500, headers: { "content-type": "application/json" } });
+      return realFetch(input, init);
+    };
+    g.pubsubMessages.push({ ackId: "ack4", messageId: "m4", attributes: { "ce-type": "google.workspace.meet.conference.v2.ended", "ce-subject": "//meet.googleapis.com/conferenceRecords/flaky" }, data: { conferenceRecord: { name: "conferenceRecords/flaky" } } });
+    for (let i = 1; i < MEET_READ_ATTEMPTS_CAP; i += 1) {
+      const out = await runMeetIngest(env, { fetchImpl: faulting, now: NOW });
+      expect(out.read).toEqual([{ conference_record: "conferenceRecords/flaky", state: "FAILED", detail: expect.stringContaining("google responded 500") }]);
+      expect(out.ok).toBe(false); // something DID fail in this run
+      expect((await env.WP_OS_DB.prepare("SELECT attempts FROM meet_event_inbox WHERE conference_record = 'conferenceRecords/flaky'").first<any>())!.attempts).toBe(i);
+    }
+    const last = await runMeetIngest(env, { fetchImpl: faulting, now: NOW });
+    const row = (await env.WP_OS_DB.prepare("SELECT state, detail, attempts FROM meet_event_inbox WHERE conference_record = 'conferenceRecords/flaky'").first<any>())!;
+    expect(row.attempts).toBe(MEET_READ_ATTEMPTS_CAP);
+    expect(row.state).toBe("REFUSED");
+    expect(row.detail).toMatch(/^gave up after 12 attempts — google responded 500/);
+    expect(last.read[0]!.state).toBe("REFUSED");
+    expect(last.ok).toBe(true);
+    expect((await runMeetIngest(env, { fetchImpl: faulting, now: NOW })).read).toEqual([]);
   });
 
   it("never records platform consent for a meeting that was typed in by hand", async () => {

@@ -8,6 +8,7 @@ import { consumeApprovalCard } from "./approvals";
 import { addParticipant, importTranscript, transitionMeeting, type MeetingRow } from "./meetings";
 import { ingestTranscript } from "./captureAdapter";
 import { CALENDAR_SOURCES, calendarSource, type CalendarSource } from "../../shared/meetings/calendarSources";
+import { PARTNER_EMAILS } from "../../shared/registry/partners";
 import {
   conferenceRecordOf,
   entryFromApi,
@@ -267,6 +268,31 @@ async function setInbox(env: Env, id: string, patch: Partial<InboxRow>): Promise
 }
 
 /** The calendar meeting a conference belongs to: same meeting code, nearest scheduled time before the conference started. */
+// ── Who Google will answer for ───────────────────────────────────────────────
+
+/**
+ * MEET READS RUN AS THE ROOM'S OWNER, WHOEVER THAT IS. Meet REST releases a conference record only
+ * to the space owner or to someone who was in the call; `conferenceRecords.list` simply omits what
+ * the caller may not see, and `get` answers 403. The firm's two rooms belong to Scooter's calendar
+ * events, so impersonating Sequoia (the calendar source) saw nothing at all on 19–20 Sep 2026 — the
+ * poll read "nothing to read" for a day while four records sat unread, and the first Pub/Sub event
+ * failed hourly on the same 403. Domain-wide delegation lets the service account read as any
+ * partner, so every read tries the calendar subject first and then each other partner; the
+ * registry, not a typed list, says who the partners are.
+ */
+export function meetReaders(source: CalendarSource): string[] {
+  return [source.subjectEmail, ...PARTNER_EMAILS.filter((e) => e !== source.subjectEmail)];
+}
+
+/**
+ * A ROW THAT FAILS THIS MANY TIMES IS REFUSED, NOT RETRIED FOREVER. Hourly, twelve attempts is half a
+ * day: long enough for a transcript to land or a transient fault to clear, short enough that a
+ * record Google will never release stops reddening every run. The refusal keeps the last reason.
+ */
+export const MEET_READ_ATTEMPTS_CAP = 12;
+
+const isForbidden = (err: unknown): boolean => err instanceof GoogleWorkspaceError && err.code === "forbidden";
+
 async function meetingForConference(env: Env, meetingCode: string, startedAt: string | null): Promise<MeetingRow | null> {
   const rows = await env.WP_OS_DB.prepare(
     "SELECT * FROM meeting WHERE meet_conference_id = ?1 AND source = 'google_calendar' AND archived_at IS NULL ORDER BY scheduled_at DESC",
@@ -336,25 +362,33 @@ async function pollEnded(env: Env, source: CalendarSource, now: Date, fetchImpl:
     .all<MeetingRow>();
   const meetings = candidates.results ?? [];
   if (meetings.length === 0) return { meetingsChecked: 0, inserted: 0, detail: "no calendar meeting has ended in the last 7 days without being read" };
-  let token: string;
-  try {
-    token = await serviceAccountToken(env, [SCOPE.meetRead], source.subjectEmail, fetchImpl);
-  } catch (err) {
-    return { meetingsChecked: 0, inserted: 0, detail: err instanceof Error ? err.message : String(err) };
+  // One token per partner; the poll is the union of what each of them may see (see `meetReaders`).
+  const tokens: string[] = [];
+  let mintFault: string | null = null;
+  for (const reader of meetReaders(source)) {
+    try {
+      tokens.push(await serviceAccountToken(env, [SCOPE.meetRead], reader, fetchImpl));
+    } catch (err) {
+      mintFault ??= err instanceof Error ? err.message : String(err);
+    }
   }
+  if (tokens.length === 0) return { meetingsChecked: 0, inserted: 0, detail: mintFault ?? "no partner identity could be minted" };
   let inserted = 0;
   const codes = new Set<string>();
   for (const m of meetings) {
     const code = m.meet_conference_id!;
     if (codes.has(code)) continue;
     codes.add(code);
-    let records;
-    try {
-      records = await listConferenceRecords(token, { meetingCode: code, startedAfter: new Date(now.getTime() - 8 * 86_400_000) }, fetchImpl);
-    } catch (err) {
-      return { meetingsChecked: codes.size, inserted, detail: err instanceof Error ? err.message : String(err) };
+    const records = new Map<string, Awaited<ReturnType<typeof listConferenceRecords>>[number]>();
+    for (const token of tokens) {
+      try {
+        for (const rec of await listConferenceRecords(token, { meetingCode: code, startedAfter: new Date(now.getTime() - 8 * 86_400_000) }, fetchImpl)) records.set(rec.name, rec);
+      } catch (err) {
+        if (isForbidden(err)) continue; // not this partner's room
+        return { meetingsChecked: codes.size, inserted, detail: err instanceof Error ? err.message : String(err) };
+      }
     }
-    for (const rec of records) {
+    for (const rec of records.values()) {
       if (!rec.endTime) continue; // still live
       const meeting = await meetingForConference(env, code, rec.startTime ?? null);
       const r = await upsertInbox(env, {
@@ -469,23 +503,55 @@ export async function readConference(env: Env, row: InboxRow, deps: MeetIngestDe
   const fetchImpl = deps.fetchImpl ?? fetch;
   const now = deps.now ?? new Date();
   if (row.state === "INGESTED") return { state: "INGESTED", detail: "already read" };
-  await setInbox(env, row.id, { attempts: row.attempts + 1 });
+  const attempt = row.attempts + 1;
+  await setInbox(env, row.id, { attempts: attempt });
 
   const source = calendarSource(row.calendar_key ?? CALENDAR_SOURCES[0]!.key) ?? CALENDAR_SOURCES[0]!;
   const actor: Actor = { type: "SYSTEM", roles: [], firmScopes: [source.firmScope] };
 
-  let token: string;
-  try {
-    token = await serviceAccountToken(env, [SCOPE.meetRead], source.subjectEmail, fetchImpl);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+  // A fault is FAILED and retried next tick — until the cap, when it is REFUSED with its last reason.
+  const failed = async (detail: string): Promise<ReadOutcome> => {
+    if (attempt >= MEET_READ_ATTEMPTS_CAP) {
+      const refusal = `gave up after ${attempt} attempts — ${detail}`;
+      await setInbox(env, row.id, { state: "REFUSED", detail: refusal });
+      return { state: "REFUSED", detail: refusal };
+    }
     await setInbox(env, row.id, { state: "FAILED", detail });
     return { state: "FAILED", detail };
+  };
+
+  // 1. The conference itself, read as the first partner Google will answer for.
+  let token: string | null = null;
+  let readAs: string | null = null;
+  let record: Awaited<ReturnType<typeof getConferenceRecord>> | null = null;
+  const forbidden: string[] = [];
+  for (const reader of meetReaders(source)) {
+    let t: string;
+    try {
+      t = await serviceAccountToken(env, [SCOPE.meetRead], reader, fetchImpl);
+    } catch (err) {
+      return failed(err instanceof Error ? err.message : String(err));
+    }
+    try {
+      record = await getConferenceRecord(t, row.conference_record, fetchImpl);
+      token = t;
+      readAs = reader;
+      break;
+    } catch (err) {
+      if (!isForbidden(err)) return failed(err instanceof Error ? err.message : String(err));
+      forbidden.push(reader);
+    }
+  }
+  if (!token || !record || !readAs) {
+    // Every partner refused: nobody at the firm owned or joined this call, and Google will never
+    // release it. A fact about the call, so REFUSED — not a fault to retry.
+    const detail = `google_forbidden for every partner identity (${forbidden.join(", ")}) — no partner owned or joined this call, so Google will not release it`;
+    await setInbox(env, row.id, { state: "REFUSED", detail });
+    return { state: "REFUSED", detail };
   }
 
   try {
-    // 1. The conference itself, and the meeting it belongs to.
-    const record = await getConferenceRecord(token, row.conference_record, fetchImpl);
+    // The meeting the conference belongs to.
     let meetingCode = row.meeting_code;
     if (!meetingCode && record.space) meetingCode = (await getSpace(token, record.space, fetchImpl)).meetingCode ?? null;
     const meeting = row.meeting_id
@@ -595,9 +661,7 @@ export async function readConference(env: Env, row: InboxRow, deps: MeetIngestDe
     });
     return { state: "INGESTED", detail };
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    await setInbox(env, row.id, { state: "FAILED", detail });
-    return { state: "FAILED", detail };
+    return failed(err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -634,7 +698,7 @@ export async function runMeetIngest(env: Env, deps: MeetIngestDeps = {}): Promis
    */
   const due = (await env.WP_OS_DB.prepare(
     `SELECT i.* FROM meet_event_inbox i
-      WHERE i.attempts < 48
+      WHERE i.attempts < ${MEET_READ_ATTEMPTS_CAP}
         AND (
           i.state IN ('RECEIVED','FAILED')
           OR (i.state = 'REFUSED' AND i.detail LIKE 'refused: the firm%'
