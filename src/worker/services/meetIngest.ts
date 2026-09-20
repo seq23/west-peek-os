@@ -285,9 +285,13 @@ export function meetReaders(source: CalendarSource): string[] {
 }
 
 /**
- * A ROW THAT FAILS THIS MANY TIMES IS REFUSED, NOT RETRIED FOREVER. Hourly, twelve attempts is half a
- * day: long enough for a transcript to land or a transient fault to clear, short enough that a
- * record Google will never release stops reddening every run. The refusal keeps the last reason.
+ * A ROW THAT FAULTS THIS MANY TIMES IN A ROW IS REFUSED, NOT RETRIED FOREVER. `attempts` counts
+ * CONSECUTIVE faulted reads — a read that gets through (waiting for a transcript, still in
+ * progress) resets it, because waiting on Google is not a fault and the 24-hour NO_TRANSCRIPT rule
+ * is what ends a wait. Hourly, twelve is half a day: long enough for a transient fault to clear,
+ * short enough that a record Google will never release stops reddening every run. The refusal
+ * keeps the last reason. (20 Sep 2026: the first version counted every read, and a row that had
+ * faulted ten times and then read fine sat FAILED at 11, one tick from being excluded for ever.)
  */
 export const MEET_READ_ATTEMPTS_CAP = 12;
 
@@ -564,7 +568,7 @@ export async function readConference(env: Env, row: InboxRow, deps: MeetIngestDe
     }
     if (!record.endTime) {
       const detail = "the conference is still in progress";
-      await setInbox(env, row.id, { detail, meeting_id: meeting.id, meeting_code: meetingCode });
+      await setInbox(env, row.id, { state: "RECEIVED", attempts: 0, detail, meeting_id: meeting.id, meeting_code: meetingCode });
       return { state: "RECEIVED", detail };
     }
     // THE END-OF-CALL SIGNAL (migration 0216): the one column the During face and the side panel
@@ -600,7 +604,8 @@ export async function readConference(env: Env, row: InboxRow, deps: MeetIngestDe
         return { state: "NO_TRANSCRIPT", detail };
       }
       const detail = transcripts.length === 0 ? "no transcript yet; Meet generates it a few minutes after the call ends" : `transcript ${transcripts[0]!.state ?? "pending"}; not yet a file`;
-      await setInbox(env, row.id, { ...patch, detail });
+      // The read got through: a row that had faulted before is waiting again, not failed.
+      await setInbox(env, row.id, { ...patch, state: "RECEIVED", attempts: 0, detail });
       return { state: "RECEIVED", detail };
     }
     const entries = (await listTranscriptEntries(token, ready.name, fetchImpl)).map(entryFromApi);

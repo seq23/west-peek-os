@@ -354,6 +354,27 @@ describe("reading an ended call", () => {
     expect((await env.WP_OS_DB.prepare("SELECT attempts FROM meet_event_inbox WHERE conference_record = 'conferenceRecords/outsider'").first<any>())!.attempts).toBe(1);
   });
 
+  it("a row that faulted and then reads through is RECEIVED again with attempts reset — waiting on Google is not a fault", async () => {
+    // Production, 20 Sep 2026: the 403 row read fine once the reader was right, but stayed FAILED at
+    // attempts 11 because the waiting path never wrote the state back — one tick from the cap.
+    g.conferences.push({
+      name: "conferenceRecords/waited", space: "spaces/sp_waited", meetingCode: "ggg-hhhh-iii",
+      startTime: "2026-09-18T11:00:00.000Z", endTime: "2026-09-18T11:10:00.000Z", visibleTo: ["scooter@westpeek.ventures"],
+      participants: [], transcript: null, recording: null,
+    });
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO meet_event_inbox (id, conference_record, calendar_key, delivered_via, event_type, state, detail, attempts, firm_scope) VALUES ('mei_waited','conferenceRecords/waited','westpeek','pubsub','google.workspace.meet.conference.v2.ended','FAILED','google_forbidden for /v2/conferenceRecords/waited', ?1, 'west-peek')",
+    ).bind(MEET_READ_ATTEMPTS_CAP - 1).run();
+    const out = await runMeetIngest(env, { fetchImpl: g.fetch, now: NOW });
+    expect(out.read).toEqual([{ conference_record: "conferenceRecords/waited", state: "RECEIVED", detail: expect.stringContaining("no transcript yet") }]);
+    expect(out.ok).toBe(true);
+    const row = (await env.WP_OS_DB.prepare("SELECT state, attempts, meeting_code FROM meet_event_inbox WHERE id = 'mei_waited'").first<any>())!;
+    expect(row).toEqual({ state: "RECEIVED", attempts: 0, meeting_code: "ggg-hhhh-iii" });
+    // Still due next tick (not excluded by the cap), and the day-old rule ends the wait on its own.
+    const later = await runMeetIngest(env, { fetchImpl: g.fetch, now: new Date("2026-09-19T12:00:00.000Z") });
+    expect(later.read.find((r) => r.conference_record === "conferenceRecords/waited")?.state).toBe("NO_TRANSCRIPT");
+  });
+
   it("gives up at the attempts cap: a fault that keeps recurring becomes REFUSED with its last reason, not a FAILED run for ever", async () => {
     expect(MEET_READ_ATTEMPTS_CAP).toBe(12);
     // A conference Google keeps answering 500 for — a fault, retried, until the cap.
