@@ -48,7 +48,11 @@ test("door A: 'make this a dashboard' in the room → link block → ready → o
   await page.getByTestId("dev-login-submit").click();
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
-  await page.getByTestId(`start-${meetingId}`).click();
+  // One room, several doors (19 Sep 2026): Go to this meeting, then Open the room from Before.
+  await page.getByTestId(`upcoming-open-${meetingId}`).click();
+  await expect(page.getByTestId("face-before")).toHaveAttribute("aria-selected", "true");
+  await page.getByTestId("brief-open-room").click();
+  await expect(page.getByTestId("face-during")).toHaveAttribute("aria-selected", "true");
   const room = page.getByTestId(`room-${meetingId}`);
   await expect(room).toBeVisible();
 
