@@ -24,23 +24,31 @@
  *       `merge_sha` are all present.
  *   4 · The `land_on_green` rule row exists in the migration and defaults to `on`.
  *   5 · `applyBuild` in the Worker only queues LAND when `isOn(rules.land_on_green)`, otherwise blocks.
+ *   6 · "NO" NEVER APPROVES (owner, 21 Sep 2026). `runWebPropertyChangeCard` reads the partner's
+ *       answer through `readApprovalReply`, the REFUSED branch returns before `plan_approved_at`
+ *       is written, and the answer is checked against the requesting partner first. And the real
+ *       reader, loaded from `shared/work/approvalReply.ts`, reads "no" as REFUSED, "approved" as
+ *       APPROVED, and a paragraph as ANSWERS.
  *
  * HARD-FAILS ON ZERO: zero gates examined exits 1.
  *
  * `--self-test` plants: the Worker's LAND branch with the approval check removed; with the green
  * check removed; the script's gate with the green test removed; `run()` landing before the gate;
- * the trigger without `check_green_at`; the rule seeded `off`; `applyBuild` landing regardless —
- * and requires each to be caught. The shipped source must pass.
+ * the trigger without `check_green_at`; the rule seeded `off`; `applyBuild` landing regardless;
+ * the runner approving without reading the reply; the REFUSED branch that no longer returns; a
+ * reader that lets "no" through — and requires each to be caught. The shipped source must pass.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripTsComments } from "./lib/strip-comments.mjs";
+import { loadTs } from "./lib/load-ts.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const WORKER = path.join(ROOT, "src", "worker", "services", "webPropertyChange.ts");
 const SCRIPT = path.join(ROOT, "scripts", "duties", "web-property-change.mjs");
 const MIGRATION = path.join(ROOT, "migrations", "0219_porter_changes_a_web_property_from_her_mac.sql");
+const READER = path.join(ROOT, "src", "shared", "work", "approvalReply.ts");
 const read = (p) => stripTsComments(readFileSync(p, "utf8"));
 /** SQL: `--` line comments blanked, so a comment naming a column cannot satisfy or fail the trigger check. */
 function stripSqlComments(sql) {
@@ -82,6 +90,21 @@ export function checkWorker(src) {
       const parkAt = park.indexOf("parkRun(");
       if (parkAt >= 0 && gateAt > parkAt) violations.push("parkPhase() calls parkRun() before the LAND gate");
     }
+  }
+  const runner = body(src, "export async function runWebPropertyChangeCard(");
+  if (!runner) violations.push("runWebPropertyChangeCard() is gone");
+  else {
+    examined += 1;
+    const readAt = runner.indexOf("readApprovalReply(answer)");
+    const approveAt = runner.indexOf("plan_approved_at: now");
+    if (readAt < 0) violations.push("the runner approves a plan without reading the reply through readApprovalReply — \"no\" would build");
+    if (approveAt < 0) violations.push("the runner never records plan_approved_at — nothing could ever build");
+    if (readAt >= 0 && approveAt >= 0 && readAt > approveAt) violations.push("the runner records plan_approved_at before it reads the reply");
+    const refused = runner.match(/if\s*\(reading\.kind\s*===\s*"REFUSED"\)\s*\{([\s\S]*?)\n\s{4}\}/)?.[1] ?? "";
+    if (!refused) violations.push("the runner has no REFUSED branch — a reply starting with \"no\" would be treated as answers and build");
+    else if (!/return\s*\{/.test(refused) || !/blockCard\(/.test(refused)) violations.push("the runner's REFUSED branch does not block the card and return — \"no\" would fall through to plan_approved_at");
+    const requesterAt = runner.indexOf("block_answered_by !== requester.firmUserId");
+    if (requesterAt < 0 || requesterAt > readAt) violations.push("the runner does not check the answer came from the requesting partner before reading it as an approval");
   }
   const build = body(src, "async function applyBuild(");
   if (!build) violations.push("applyBuild() is gone");
@@ -138,7 +161,24 @@ export function checkMigration(sql) {
   return { violations, examined };
 }
 
-function selfTest() {
+export async function checkReader(mod) {
+  const violations = [];
+  let examined = 0;
+  const cases = [
+    ["no", "REFUSED"], ["No.", "REFUSED"], ["not approved", "REFUSED"], ["stop", "REFUSED"], ["changes: use blue", "REFUSED"], ["No, keep the old logo", "REFUSED"],
+    ["approved", "APPROVED"], ["Approved!", "APPROVED"], ["approve", "APPROVED"], ["yes", "APPROVED"], ["go", "APPROVED"], ["land it", "APPROVED"],
+    ["1. keep black and white. 2. yes remove it.", "ANSWERS"], ["nothing on 1, and drop the second logo", "ANSWERS"],
+  ];
+  for (const [text, want] of cases) {
+    examined += 1;
+    const got = mod.readApprovalReply(text)?.kind;
+    if (got !== want) violations.push(`readApprovalReply(${JSON.stringify(text)}) reads ${got}, expected ${want}`);
+  }
+  if (mod.approvedAnswers([{ question: "q", recommended: "r" }])[0]?.includes("r") !== true) violations.push("approvedAnswers does not take the recommended default");
+  return { violations, examined };
+}
+
+async function selfTest() {
   let failed = 0;
   const say = (ok, what) => {
     if (!ok) failed += 1;
@@ -147,8 +187,18 @@ function selfTest() {
   const worker = read(WORKER);
   const script = read(SCRIPT);
   const sql = readSql(MIGRATION);
-  const real = [checkWorker(worker), checkScript(script), checkMigration(sql)];
-  say(real.every((r) => r.violations.length === 0) && real.reduce((n, r) => n + r.examined, 0) >= 6, `shipped source passes (${real.reduce((n, r) => n + r.examined, 0)} gates): ${real.flatMap((r) => r.violations).join("; ")}`);
+  const reader = await loadTs(READER);
+  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), await checkReader(reader)];
+  say(real.every((r) => r.violations.length === 0) && real.reduce((n, r) => n + r.examined, 0) >= 7, `shipped source passes (${real.reduce((n, r) => n + r.examined, 0)} gates): ${real.flatMap((r) => r.violations).join("; ")}`);
+
+  const noReading = worker.replace("const reading = readApprovalReply(answer);", "const reading = { kind: \"APPROVED\" };");
+  say(checkWorker(noReading).violations.some((v) => /without reading the reply/.test(v)), "a runner that approves without reading the reply is caught");
+  const noRefusal = worker.replace(/if \(reading\.kind === "REFUSED"\) \{[\s\S]*?\n    \}\n/, "");
+  say(checkWorker(noRefusal).violations.some((v) => /no REFUSED branch/.test(v)), "a runner whose REFUSED branch is gone is caught");
+  const noRequester = worker.replace("card.block_answered_by !== requester.firmUserId", "false");
+  say(checkWorker(noRequester).violations.some((v) => /requesting partner/.test(v)), "a runner that lets the other partner approve is caught");
+  const leakyReader = { ...reader, readApprovalReply: (t) => (String(t).trim().toLowerCase() === "no" ? { kind: "ANSWERS", text: t } : reader.readApprovalReply(t)) };
+  say((await checkReader(leakyReader)).violations.some((v) => /"no"\) reads ANSWERS/.test(v)), "a reader that lets \"no\" through as answers is caught");
 
   const noApproval = worker.replace(/if \(!row\.plan_approved_at\) return \{ parked: false[^\n]*\n/, "");
   say(checkWorker(noApproval).violations.some((v) => /plan_approved_at/.test(v)), "Worker LAND branch without the approval check is caught");
@@ -168,13 +218,13 @@ function selfTest() {
   say(checkMigration(ruleOff).violations.some((v) => /seeded ON/.test(v)), "land_on_green seeded OFF is caught");
 
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: seven planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: eleven planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {
-  selfTest();
+  await selfTest();
 } else {
-  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION))];
+  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), await checkReader(await loadTs(READER))];
   const examined = results.reduce((n, r) => n + r.examined, 0);
   const violations = results.flatMap((r) => r.violations);
   if (examined === 0) {
@@ -186,5 +236,5 @@ if (process.argv.includes("--self-test")) {
     for (const v of violations) console.error(`  ✗ ${v}`);
     process.exit(1);
   }
-  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON.`);
+  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, and only the requesting partner does.`);
 }

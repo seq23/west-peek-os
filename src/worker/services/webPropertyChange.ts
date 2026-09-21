@@ -9,6 +9,7 @@ import { parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
 import { PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import type { SweepCard } from "./workSweep";
 import { readWebPropertyAsk, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { approvedAnswers, askLines, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
 import {
   CLAUDE_MODEL_ALIASES,
   LOCAL_JOB_RUN_KIND,
@@ -176,6 +177,14 @@ export async function readWebPropertyChange(env: Env, cardId: string): Promise<W
   return env.WP_OS_DB.prepare("SELECT * FROM web_property_change WHERE work_card_id = ?1").bind(cardId).first<WebPropertyChangeRow>();
 }
 
+function asksOf(row: WebPropertyChangeRow): Ask[] {
+  try {
+    return readAsks(JSON.parse(row.asks_json || "[]"));
+  } catch {
+    return [];
+  }
+}
+
 function list(json: string | null | undefined): string[] {
   try {
     const v = JSON.parse(json ?? "[]");
@@ -267,7 +276,7 @@ export async function parkPhase(
             ? ((await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(row.plan_deliverable_id).first<{ body: string }>())?.body ?? null)
             : null,
           decided: list(row.decided_json),
-          asks: list(row.asks_json),
+          asks: asksOf(row),
           answers: list(row.answers_json),
           approved_at: row.plan_approved_at,
         }
@@ -322,23 +331,47 @@ export interface RunOutcome {
   detail: string;
 }
 
-async function blockWithAsks(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, asks: string[]): Promise<string> {
-  const who = whoFor(card);
+/**
+ * THE QUESTION ON THE CARD, SHORT; THE PLAN IN THE MAIL, WHOLE (owner, 21 Sep 2026: "the approval
+ * step must have zero friction"). The card's `block_needed` is capped at 900 characters by the
+ * catalogue, so it carries the numbered asks with Porter's recommended default and the one word
+ * that approves. The EMAIL carries the whole plan above them — `blockedEmailDetail` assembles it
+ * where the partner email is composed, from the filed Document's text.
+ */
+export function askBlockText(asks: readonly Ask[], planRef: string | null): string {
   const lines = asks.length
-    ? asks.map((a, i) => `${i + 1}. ${a}`)
-    : ["Nothing to decide — the plan is all structure and wiring. Reply \"go\" to approve it as written."];
-  const needed = [
-    `The plan is on the card as a Document${row.plan_document_id ? ` (${row.plan_document_id})` : ""}. ${asks.length ? `${asks.length} decision${asks.length === 1 ? "" : "s"} for you:` : ""}`,
+    ? askLines(asks)
+    : ["Nothing to decide — the plan is all structure and wiring."];
+  return [
+    `The plan is in this email and on the card as a Document${planRef ? ` (${planRef})` : ""}.${asks.length ? ` ${asks.length} decision${asks.length === 1 ? "" : "s"}, each with a recommendation:` : ""}`,
     ...lines,
-    "Reply to this email with your answers, or answer on the card. \"go\" approves the plan as written.",
+    `Reply "approved" to take every recommendation and build. Reply "no" or "changes: …" to hold it. Anything else is read as your answers.`,
   ].join("\n");
+}
+
+async function blockWithAsks(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, asks: readonly Ask[]): Promise<string> {
   return blockCard(env, card, {
     reason: "a_question_for_you",
     trying: card.title,
     employee: PORTER_NAME,
-    who,
-    detail: needed.slice(0, 900),
+    who: whoFor(card),
+    detail: askBlockText(asks, row.plan_document_id).slice(0, 900),
   });
+}
+
+/**
+ * WHAT THE BLOCKED EMAIL SAYS: the asks with their defaults, then the WHOLE PLAN, readable in the
+ * mail. Read from the filed Document's text (`deliverable.body`), never from the card's capped
+ * column. The sweep calls this for a BLOCKED card of this kind before it emails the requester.
+ */
+export async function blockedEmailDetail(env: Env, cardId: string): Promise<string | null> {
+  const row = await readWebPropertyChange(env, cardId);
+  if (!row || !row.plan_filed_at) return null;
+  const plan = row.plan_deliverable_id
+    ? (await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(row.plan_deliverable_id).first<{ body: string }>())?.body ?? null
+    : null;
+  const asks = asksOf(row);
+  return [askBlockText(asks, row.plan_document_id), "", "THE PLAN, in full:", "", plan ?? "(the plan document could not be read back — open it on the card)"].join("\n");
 }
 
 /** What the DONE email says: the proof, not the process. */
@@ -471,21 +504,22 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
     },
   );
   const now = new Date().toISOString();
+  const asks = report.asks ?? [];
   await update(env, card.id, {
     plan_deliverable_id: filed.id,
     plan_document_id: filed.document_id ?? null,
     plan_filed_at: now,
     decided_json: JSON.stringify(report.decided ?? []),
-    asks_json: JSON.stringify(report.asks ?? []),
+    asks_json: JSON.stringify(asks),
   });
   const decided = report.decided ?? [];
   await appendFinding(
     env,
     card.id,
-    `Plan filed as Document ${filed.document_id ?? filed.id}. Decided (${decided.length}): ${decided.join("; ") || "nothing"}. Asking (${(report.asks ?? []).length}): ${(report.asks ?? []).join("; ") || "nothing"}.`,
+    `Plan filed as Document ${filed.document_id ?? filed.id}. Decided (${decided.length}): ${decided.join("; ") || "nothing"}. Asking (${asks.length}): ${askLines(asks).join("; ") || "nothing"}.`,
   );
   const fresh = { ...row, plan_document_id: filed.document_id ?? null, plan_filed_at: now };
-  const why = await blockWithAsks(env, card, fresh, report.asks ?? []);
+  const why = await blockWithAsks(env, card, fresh, asks);
   return { finished: false, blocked: true, progressed: false, detail: why };
 }
 
@@ -605,16 +639,42 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
     }
     // The plan is filed. Was it approved?
     const answer = answerSince(card, row.plan_approved_at ?? row.plan_filed_at);
+    const asks = asksOf(row);
     if (!answer) {
       // Back here without an answer — reopened by a person by another door, or the block was
       // cleared some other way. Ask again rather than build on nothing.
-      const why = await blockWithAsks(env, card, row, list(row.asks_json));
+      const why = await blockWithAsks(env, card, row, asks);
       return { finished: false, blocked: true, progressed: false, detail: why };
     }
-    const answers = [...list(row.answers_json), answer];
+    /*
+     * ONLY THE PARTNER WHO ASKED APPROVES THEIR OWN CARD. The email door already refuses the other
+     * partner; the card door lets any Managing Partner type an answer, so the same rule is applied
+     * here: an answer from anyone but the requester is kept as a finding and the question stands.
+     */
+    const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+    if (requester && card.block_answered_by && card.block_answered_by !== requester.firmUserId) {
+      await appendFinding(env, card.id, `An answer from ${card.block_answered_by} was recorded but not acted on — only ${requester.fullName} can approve this plan: "${answer.slice(0, 300)}"`);
+      const why = await blockWithAsks(env, card, row, asks);
+      return { finished: false, blocked: true, progressed: false, detail: why };
+    }
+    const reading = readApprovalReply(answer);
+    if (reading.kind === "REFUSED") {
+      // "no" HOLDS THE CARD. The text is on the record; the plan stands; nothing is built.
+      await appendFinding(env, card.id, `Not approved by ${card.requested_by_email ?? "the partner"}: "${answer.slice(0, 600)}". The plan stands as written until they say what changes, or drop it.`);
+      const why = await blockCard(env, card, {
+        reason: "a_question_for_you",
+        trying: card.title,
+        employee: PORTER_NAME,
+        who: whoFor(card),
+        detail: `You said: "${answer.slice(0, 300)}". Nothing is built. Reply "changes: …" with what to change and Porter re-plans, or "drop it" on the card.`.slice(0, 900),
+      });
+      return { finished: false, blocked: true, progressed: false, detail: why };
+    }
+    const newAnswers = reading.kind === "APPROVED" ? approvedAnswers(asks) : [reading.text];
+    const answers = [...list(row.answers_json), ...newAnswers];
     const now = new Date().toISOString();
     await update(env, card.id, { answers_json: JSON.stringify(answers), plan_approved_at: now, plan_approved_by: card.block_answered_by ?? card.requested_by_email ?? null, phase: "BUILD" });
-    await appendFinding(env, card.id, `Plan approved by ${card.requested_by_email ?? "a partner"}: "${answer.slice(0, 400)}"`);
+    await appendFinding(env, card.id, reading.kind === "APPROVED" ? `Plan approved by ${card.requested_by_email ?? "a partner"} with one word ("${answer.slice(0, 40)}"): every recommendation taken.` : `Plan approved by ${card.requested_by_email ?? "a partner"} with answers: "${answer.slice(0, 400)}"`);
     await appendEvent(env, {
       eventType: "web_property_change.plan_approved",
       actorType: "firm_user",
@@ -622,7 +682,7 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
       objectType: "work_card",
       objectId: card.id,
       firmScope: card.firm_scope,
-      payload: { answer: answer.slice(0, 400) },
+      payload: { reading: reading.kind, answer: answer.slice(0, 400) },
     });
     const fresh: WebPropertyChangeRow = { ...row, answers_json: JSON.stringify(answers), plan_approved_at: now, phase: "BUILD" };
     const parked = await parkPhase(env, card, fresh, "BUILD", rules);
@@ -725,7 +785,7 @@ export async function handleGetWebPropertyChange(ctx: RouteContext): Promise<Res
   return json({
     ...row,
     decided: list(row.decided_json),
-    asks: list(row.asks_json),
+    asks: askLines(asksOf(row)),
     answers: list(row.answers_json),
     current_run: run ? { id: run.id, status: run.status, claimed_by: run.claimed_by, claimed_at: run.claimed_at, progressed_at: run.progressed_at, progress_note: run.progress_note } : null,
   });

@@ -86,6 +86,10 @@ export function readResult(text, phase) {
   if (!["ok", "blocked", "failed"].includes(parsed.status)) return { result: null, problem: `the result has no status (got "${parsed.status}")` };
   if (parsed.status !== "ok" && !(typeof parsed.reason === "string" && parsed.reason.trim())) return { result: null, problem: `a ${parsed.status} result must say why` };
   if (parsed.status === "ok" && phase === "PLAN" && !(typeof parsed.document === "string" && parsed.document.trim().length > 40)) return { result: null, problem: "an ok PLAN must carry a plan document" };
+  // Every ask carries a recommended default — "approved" takes them all, so a bare question is not an ask.
+  if (parsed.status === "ok" && phase === "PLAN" && Array.isArray(parsed.asks) && parsed.asks.some((a) => !(a && typeof a === "object" && String(a.question ?? "").trim() && String(a.recommended ?? "").trim()))) {
+    return { result: null, problem: "every ask must be { question, recommended } — an ask without a recommended default cannot be approved with one word" };
+  }
   if (parsed.status === "ok" && phase === "BUILD" && !(typeof parsed.pr_url === "string" && /^https?:\/\//.test(parsed.pr_url))) return { result: null, problem: "an ok BUILD must carry the PR url" };
   if (parsed.status === "ok" && phase === "LAND" && !(typeof parsed.live_proof === "string" && parsed.live_proof.trim())) return { result: null, problem: "an ok LAND must carry the live proof" };
   return { result: parsed, problem: null };
@@ -129,7 +133,8 @@ export function renderContext(job, paths) {
   if (job.plan) {
     lines.push("", "THE PLAN (already filed as a Document on the card):", "");
     if (paths.planText) lines.push("```markdown", paths.planText, "```");
-    lines.push("", `DECIDED: ${JSON.stringify(job.plan.decided ?? [])}`, `ASKED: ${JSON.stringify(job.plan.asks ?? [])}`);
+    lines.push("", `DECIDED: ${JSON.stringify(job.plan.decided ?? [])}`);
+    lines.push(`ASKED (each with the recommended default): ${JSON.stringify(job.plan.asks ?? [])}`);
     lines.push(`THE PARTNER'S ANSWERS (these win over the plan): ${JSON.stringify(job.plan.answers ?? [])}`);
     lines.push(`PLAN APPROVED AT: ${job.plan.approved_at ?? "(not yet)"}`);
   }
@@ -398,7 +403,8 @@ function selfTest() {
     ["an ok PLAN needs a document", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok" }), "PLAN").result === null],
     ["an ok BUILD needs a PR url", () => readResult(JSON.stringify({ phase: "BUILD", status: "ok" }), "BUILD").result === null],
     ["a blocked result needs a reason", () => readResult(JSON.stringify({ phase: "PLAN", status: "blocked" }), "PLAN").result === null],
-    ["a good PLAN result reads", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: ["colour?"] }), "PLAN").result?.asks?.[0] === "colour?"],
+    ["a good PLAN result reads", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: [{ question: "colour?", recommended: "black and white" }] }), "PLAN").result?.asks?.[0]?.recommended === "black and white"],
+    ["an ask without a recommended default is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: ["colour?"] }), "PLAN").result === null],
     ["all-success checks are GREEN", () => checkStateOf([{ state: "SUCCESS" }, { state: "SKIPPED" }]) === "GREEN"],
     ["one failure makes RED", () => checkStateOf([{ state: "SUCCESS" }, { state: "FAILURE" }]) === "RED"],
     ["a pending check is PENDING", () => checkStateOf([{ state: "SUCCESS" }, { state: "PENDING" }]) === "PENDING"],

@@ -6357,3 +6357,24 @@ a safe fallback; the reaper closes a silent job, leaves a pinging one, lets a qu
 ten minutes and closes it past its ceiling, keeps 0187's answer rule, and refuses a stray pulse.
 UNPROVEN until the first real run on her Mac: `claude -p` under launchd against a real repo, the
 Drive pull with the live service account, `gh pr checks` and `~/bin/land` from a worktree.
+
+## One word approves the plan (21 Sep 2026)
+
+**Her words.** "The approval step must have zero friction." **What changed.** The PLAN's blocked
+email carries THE WHOLE PLAN (the filed Document's text, assembled where the partner email is
+composed — `blockedEmailDetail`, called from the sweep's BLOCKED branch — so the card's 900-char
+column stays short) above every ask as a numbered question with Porter's recommended default
+(`asks` are `{question, recommended}`; the duty script refuses a PLAN result whose ask has no
+default). `shared/work/approvalReply.ts` reads the reply: `approved` / `approve` / `yes` / `go` /
+`land it` → APPROVED, every ask takes its recommendation and BUILD is parked; a reply starting
+`no` / `not approved` / `stop` / `changes:` → REFUSED, the card STAYS BLOCKED with the text on the
+record (the defect fixed: any text used to flip the card to BUILD); anything else → ANSWERS. Only
+the requesting partner's answer is read as an approval — the email door already refused the other
+partner; the runner now refuses the card door too. **Guard.** `validate:no-land-without-approval`
+grew four pins: the runner reads the reply before it writes `plan_approved_at`, its REFUSED branch
+blocks and returns, the requester check precedes the reading, and the real reader (loaded from
+the shared module) reads "no" as REFUSED and "approved" as APPROVED — each proven by planting the
+defect. **Proof.** `tests/webPropertyChange.test.ts` (20): the mail contains the plan text and
+"Porter recommends"; Sequoia's `approved` on Scooter's card is a note and `plan_approved_at` stays
+null; Scooter's "No — hold on" holds the card BLOCKED with nothing parked; Scooter's exact
+`approved` advances to BUILD with both asks answered by their recommendations.

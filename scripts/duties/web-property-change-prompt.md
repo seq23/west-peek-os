@@ -42,12 +42,16 @@ Goal: a plan a partner can approve by replying "go", with the decisions that are
    change, and how the repo's standing rules bear on it.
 3. Write the plan as markdown: what changes (page by page), what stays, which validators will
    prove it, which URLs the live proof will curl, and the two lists — **Decided** and **Ask**.
-   Asks are numbered questions the partner can answer in one line each.
+   Every ask is a question the partner can answer in one line AND carries your **recommended
+   default** — the partner will read the plan in an email and reply with the single word
+   "approved", which takes every recommendation. Write the plan so that one word is enough.
 4. Do NOT edit the repo in this phase.
 5. Write `RESULT_PATH`:
    ```json
    { "phase": "PLAN", "status": "ok", "document": "<the plan, markdown>",
-     "decided": ["…"], "asks": ["…"], "notes": "<one line>" }
+     "decided": ["…"],
+     "asks": [{ "question": "…?", "recommended": "<your default, one line>" }],
+     "notes": "<one line>" }
    ```
    If the package or the ask is unusable, `{ "phase": "PLAN", "status": "blocked", "reason": "<what you need, for a partner>" }`.
 
