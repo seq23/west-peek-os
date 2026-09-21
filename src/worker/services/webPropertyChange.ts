@@ -6,7 +6,7 @@ import { blockCard } from "./blocks";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
 import { parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
-import { partnerByEmail } from "../../shared/registry/partners";
+import { PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import type { SweepCard } from "./workSweep";
 import { readWebPropertyAsk, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import {
@@ -366,7 +366,7 @@ async function finishCard(env: Env, card: WebPropertyChangeCard, row: WebPropert
         title: card.title,
         body: finding,
         preparedBy: PORTER_NAME,
-        preparedFor: (card.requested_by_email ? partnerByEmail(card.requested_by_email)?.firmUserId : null) ?? "fu_sequoia_taylor",
+        preparedFor: (card.requested_by_email ? partnerByEmail(card.requested_by_email)?.firmUserId : null) ?? PREVIEW_PARTNER.firmUserId,
         sourceType: "work_card",
         sourceId: card.id,
       },
@@ -465,7 +465,7 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
       title: `Plan: ${card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 120)}`,
       body: report.document,
       preparedBy: PORTER_NAME,
-      preparedFor: (card.requested_by_email ? partnerByEmail(card.requested_by_email)?.firmUserId : null) ?? "fu_sequoia_taylor",
+      preparedFor: (card.requested_by_email ? partnerByEmail(card.requested_by_email)?.firmUserId : null) ?? PREVIEW_PARTNER.firmUserId,
       sourceType: "work_card_plan",
       sourceId: card.id,
     },

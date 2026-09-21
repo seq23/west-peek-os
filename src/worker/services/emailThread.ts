@@ -233,7 +233,7 @@ export async function steerFromReply(
   if (thread.object_type === "work_card") {
     const partner = partnerByEmail(authority.partnerAddress);
     const blocked = await env.WP_OS_DB.prepare(
-      "SELECT id, requested_by_email FROM work_card WHERE id = ?1 AND state = 'BLOCKED'",
+      "SELECT id, requested_by_email FROM work_card WHERE id = ?1 AND state IN ('BLOCKED')",
     )
       .bind(thread.object_id)
       .first<{ id: string; requested_by_email: string | null }>();
