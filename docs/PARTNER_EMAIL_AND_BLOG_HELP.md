@@ -61,3 +61,36 @@ means the card is BLOCKED with the reason and nothing is emailed but the sweep's
 Proof: `tests/blogHelp.test.ts` (routing of the three phrasings, each mode with stubbed
 search/judge/writer, the deliverable filed, the email sent once) and `e2e/p68-blog-help.spec.ts`
 (the real email door, and the deliverable rendering on Home).
+
+## A web property change is a routed request worked on her Mac (Plan A, 20 Sep 2026)
+
+A partner emails `os@joinwestpeek.com` a **Google Drive folder link** and names one of the firm's
+web properties — `westpeek.ventures`, `westpeekproductions.com` or `joinwestpeek.com` (or "the
+ventures site", "the productions site", "the community site"). Porter reads it at the door
+(`src/shared/intake/webPropertyChange.ts`, called from `openAssignmentCard`): every Drive folder
+link on a partner's email is recorded on the card (`work_card.request_json`), and with a property
+named the chief of staff hands the card to **Porter** at once, `kind = 'WEB_PROPERTY_CHANGE'`,
+with the folder, the property and the repo on `web_property_change`. A folder with no property
+named stays an ordinary assignment with the link kept.
+
+The email to try it, from scooter@ or sequoia@:
+
+> **Subject:** ventures site update
+> Please update the westpeek.ventures site with the package here:
+> https://drive.google.com/drive/folders/&lt;folder-id&gt;
+> New team page, the portfolio logos in the folder, and the thesis copy in the doc.
+
+What happens, phase by phase — each a fresh Claude Code context on her Mac, claimed by the
+local-job claimer (`deployment/launchd/README.md`):
+
+| Phase | Model | What comes back to the partner |
+|---|---|---|
+| **PLAN** | opus | the plan as a Document on the card; the card goes BLOCKED with the decisions that are theirs (brand or colourway, copy meaning, legal or regulatory wording, removing a public claim, image rights, money) emailed to the partner who asked. Structure, CSS, validators, redirects, assets and build wiring are decided and recorded. **Reply to the email** with the answers, or answer on the card; "go" approves the plan as written. |
+| **BUILD** | sonnet | the change in a git worktree of the target repo, its validators green, screenshots at desktop and 390px, every new link curled, a PR opened. The script — not the model — reads `gh pr checks`. Nothing is emailed. |
+| **LAND** | haiku | with **land on green** ON (her rule), the PR is landed with `~/bin/land` as soon as its checks are green, proven live with curl, and ONE email says done with the PR and the proof. With it OFF, the card asks "land it?" first. |
+
+The rules of the kind are rows on the Work page (land on green, the model per phase, one live run
+per card, never iterate in production when a pass emails the partners); a Managing Partner flips
+the editable ones there. Nothing lands without a recorded plan approval and a recorded green check
+(`validate:no-land-without-approval`), and a card of this kind cannot go DONE without a PR link, a
+green check and a merge (migration 0219).
