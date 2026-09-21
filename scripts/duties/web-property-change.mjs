@@ -404,7 +404,8 @@ export async function run(job, ctx) {
     rmSync(path.join(packageDir, "drive"), { recursive: true, force: true });
     progress(`pulling Drive folder ${folder}`);
     try {
-      const { stdout } = await sh("node", [PULL_SCRIPT, folder, path.join(packageDir, "drive")], { env: ctx.env });
+      // Abortable: the ceiling must be able to stop a 200-file pull, not only the model.
+      const { stdout } = await sh("node", [PULL_SCRIPT, folder, path.join(packageDir, "drive")], { env: ctx.env, signal: ctx.signal });
       writeFileSync(path.join(jobDir, "pull.log"), stdout);
       progress(stdout.trim().split("\n").pop() ?? "pulled");
     } catch (err) {
@@ -422,7 +423,7 @@ export async function run(job, ctx) {
     if (!existsSync(land)) return { phase, status: "failed", reason: `${land} is not on this Mac` };
     progress(`landing #${job.pr.number}`);
     try {
-      const { stdout, stderr } = await sh(land, [String(job.pr.number ?? "")], { cwd: names.worktree, env: process.env, timeout: 30 * 60_000 });
+      const { stdout, stderr } = await sh(land, [String(job.pr.number ?? "")], { cwd: names.worktree, env: process.env, timeout: 30 * 60_000, signal: ctx.signal });
       landOutput = `${stdout}\n${stderr}`;
     } catch (err) {
       landOutput = `${err?.stdout ?? ""}\n${err?.stderr ?? ""}`;
