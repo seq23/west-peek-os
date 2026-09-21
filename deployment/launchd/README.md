@@ -105,3 +105,30 @@ tail -f /tmp/westpeek-os-meet-listener.log
 Until the job runs, every firm-hosted Meet in its window reads `meet_not_started` with "no
 listener has ever checked in from the Mac" on the row — the honest state, not a silent one. While
 her Mac sleeps, a live call reads `meet_live_no_listener`.
+
+## The local-job claimer (Plan A, 20 Sep 2026) — Porter's hands for a web property change
+
+A third launchd job, separate from the seat claimer and the Meet listener: it claims `LOCAL_JOB`
+runs (migration 0219) and runs the duty script for the card's kind — today
+`scripts/duties/web-property-change.mjs` — in a git worktree of the target repo, with `claude -p`,
+tools, caffeinate and a hard ceiling. It never creates work and never lands without the recorded
+approval and green check the job carries (`validate:no-land-without-approval`).
+
+What it needs on this Mac, all of which `--doctor` checks: `claude`, `gh` (signed in), `git`,
+`caffeinate`, `~/bin/land`, the target repo checked out under `~/GitHub/<repo>` (with a
+`RUNBOOK.md`), and in the vault `WP_OS_MAC_ACCESS_CLIENT_ID`, `WP_OS_MAC_ACCESS_CLIENT_SECRET`
+and `GSC_SERVICE_ACCOUNT_JSON` (the Drive service account, drive.readonly, impersonating
+sequoia@westpeek.ventures — the Drive folder must be shared with that account or its domain).
+
+```sh
+node scripts/vault/vault.mjs run -- node scripts/claimer/local-job-claimer.mjs --doctor
+node scripts/vault/vault.mjs run -- node scripts/claimer/local-job-claimer.mjs --once     # one cycle, foreground
+cp deployment/launchd/ventures.westpeek.os.local-jobs.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/ventures.westpeek.os.local-jobs.plist
+launchctl list | grep westpeek.os.local-jobs
+tail -f /tmp/westpeek-os-local-jobs.log
+```
+
+Job working directories live under `~/GitHub/wpos-jobs/` (one worktree `wt-<card>` and one package
+directory `pkg-<card>` per card, one run directory per run with the prompt, the CLI output and the
+result file). A landed card removes its worktree and branch.
