@@ -344,7 +344,32 @@ export interface SeatRunRow {
   resolution: string | null;
   created_at: string;
   reported_at: string | null;
+  /**
+   * 0219. ANSWER is 0187's shape — a prompt answered with no tools. LOCAL_JOB is a duty script run
+   * on the Mac with tools and a worktree (shared/work/localJobs.ts); `job_json` says what to do.
+   * A claimer names the kinds it can run, and is never handed the other.
+   */
+  run_kind: "ANSWER" | "LOCAL_JOB";
+  job_json: string | null;
+  /** A long job says it is alive every minute; the reaper reads this, not the claim time. */
+  progressed_at: string | null;
+  progress_note: string | null;
 }
+
+export const RUN_KINDS = ["ANSWER", "LOCAL_JOB"] as const;
+export type RunKind = (typeof RUN_KINDS)[number];
+export function isRunKind(value: string): value is RunKind {
+  return (RUN_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * How long a LOCAL_JOB may go without a progress ping before it is returned to the pool.
+ *
+ * Longer than an answer's five minutes: the claimer pings every minute while the child runs, but a
+ * Mac that sleeps mid-build wakes with the child still alive, and the next ping arrives a moment
+ * later. Ten minutes of silence from a process that speaks every minute is a machine that is gone.
+ */
+export const JOB_SILENCE_MS = 10 * 60_000;
 
 /** Park a run for the lane to claim. Returns the queue row's id. */
 export async function parkRun(
@@ -360,13 +385,16 @@ export async function parkRun(
     taskClass?: string | null;
     firmScope?: string;
     maxSeconds?: number;
+    /** 0219. Defaults to ANSWER, which is every caller that existed before local jobs. */
+    runKind?: RunKind;
+    jobJson?: string | null;
   },
 ): Promise<string> {
   const id = `ccr_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
     `INSERT INTO subscription_seat_run
-       (id, seat, ai_run_id, purpose, prompt, model_access, work_card_id, ai_employee_id, task_class, firm_scope, status, max_seconds)
-     VALUES (?1, ?11, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'QUEUED', ?10)`,
+       (id, seat, ai_run_id, purpose, prompt, model_access, work_card_id, ai_employee_id, task_class, firm_scope, status, max_seconds, run_kind, job_json)
+     VALUES (?1, ?11, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'QUEUED', ?10, ?12, ?13)`,
   )
     .bind(
       id,
@@ -380,6 +408,8 @@ export async function parkRun(
       input.firmScope ?? "west-peek",
       Math.max(30, Math.round(input.maxSeconds ?? CLAIM_TTL_MS / 1000)),
       input.seat,
+      input.runKind ?? "ANSWER",
+      input.jobJson ?? null,
     )
     .run();
   return id;
@@ -392,20 +422,32 @@ export async function parkRun(
  * second must not both get the same row, and `WHERE status = 'QUEUED'` inside the UPDATE is what
  * makes that true without a transaction — the loser updates zero rows and takes the next one.
  */
-export async function claimRun(env: Env, deviceId: string, seats: Seat[], now: Date = new Date()): Promise<SeatRunRow | null> {
+export async function claimRun(
+  env: Env,
+  deviceId: string,
+  seats: Seat[],
+  now: Date = new Date(),
+  /**
+   * WHICH KINDS THIS MACHINE CAN RUN. Defaults to ANSWER, so the claimer that shipped with 0187 —
+   * which runs `claude -p` with no tools — is never handed a job that needs a worktree, and a
+   * job claimer is never handed a question it would try to answer by editing a repository.
+   */
+  kinds: readonly RunKind[] = ["ANSWER"],
+): Promise<SeatRunRow | null> {
   /*
    * ONLY THE SEATS THIS MACHINE CAN ACTUALLY SERVE. A laptop with Claude Code installed and Codex
    * not must never be handed a Codex run: it would take it, fail, and the reaper would spend two
    * attempts discovering what the claimer already knew. The claimer declares its seats; the queue
    * believes it, because being wrong here costs a failed run rather than any authority.
    */
-  if (seats.length === 0) return null;
+  if (seats.length === 0 || kinds.length === 0) return null;
   const placeholders = seats.map((_, i) => `?${i + 1}`).join(", ");
+  const kindPlaceholders = kinds.map((_, i) => `?${seats.length + i + 1}`).join(", ");
   for (let attempt = 0; attempt < 5; attempt++) {
     const next = await env.WP_OS_DB.prepare(
-      `SELECT id FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) ORDER BY created_at ASC LIMIT 1`,
+      `SELECT id FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders}) ORDER BY created_at ASC LIMIT 1`,
     )
-      .bind(...seats)
+      .bind(...seats, ...kinds)
       .first<{ id: string }>();
     if (!next) return null;
     const res = await env.WP_OS_DB.prepare(
@@ -462,6 +504,30 @@ export async function reportRun(
     };
   }
   return { accepted: true, detail: ok ? "recorded" : "recorded as a failure" };
+}
+
+/**
+ * "STILL HERE." A long job's claimer pings while the child runs; the reaper reads the last ping.
+ *
+ * Scoped to the claiming device and to CLAIMED rows, like `reportRun`: a machine pinging for a run
+ * it no longer holds is told so and stops. Never raises the row's status — a ping cannot revive an
+ * abandoned run.
+ */
+export async function progressRun(
+  env: Env,
+  input: { runId: string; deviceId: string; note?: string | null },
+  now: Date = new Date(),
+): Promise<{ accepted: boolean; detail: string }> {
+  const res = await env.WP_OS_DB.prepare(
+    `UPDATE subscription_seat_run SET progressed_at = ?3, progress_note = ?4, updated_at = ?3
+      WHERE id = ?1 AND status = 'CLAIMED' AND claimed_by = ?2`,
+  )
+    .bind(input.runId, input.deviceId, now.toISOString(), (input.note ?? "").slice(0, 400) || null)
+    .run();
+  if ((res.meta?.changes ?? 0) === 0) {
+    return { accepted: false, detail: "this run is no longer claimed by you — stop working on it; it was returned to the pool or closed" };
+  }
+  return { accepted: true, detail: "noted" };
 }
 
 /**
@@ -535,6 +601,25 @@ export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<Re
     const nowMs = now.getTime();
     if (row.status === "CLAIMED") {
       const claimedMs = Date.parse(row.claimed_at ?? row.created_at);
+      /*
+       * A LOCAL JOB IS JUDGED BY ITS LAST PING AND ITS OWN CEILING, not by 0187's five minutes.
+       * A build takes thirty; the claimer pings every minute while the child runs. Silence past
+       * `JOB_SILENCE_MS` from the last ping, or the row's `max_seconds` from the claim whatever it
+       * says, and it is returned or closed exactly like an answer.
+       */
+      if (row.run_kind === "LOCAL_JOB") {
+        const lastMs = Date.parse(row.progressed_at ?? row.claimed_at ?? row.created_at);
+        const silentFor = nowMs - (Number.isFinite(lastMs) ? lastMs : claimedMs);
+        const overCeiling = Number.isFinite(claimedMs) && nowMs - claimedMs > row.max_seconds * 1000;
+        if (!overCeiling && silentFor <= JOB_SILENCE_MS) continue;
+        const why = overCeiling
+          ? `${row.claimed_by ?? "a machine"} has held this job for ${describeAge(nowMs - claimedMs)}, past its ${describeAge(row.max_seconds * 1000)} ceiling`
+          : `${row.claimed_by ?? "a machine"} took this job and went quiet for ${describeAge(silentFor)}`;
+        // A job is not re-offered: half a build on a second machine is worse than none. One attempt, then the card decides.
+        await abandonRun(env, row.id, `${why}. It is closed; the card records the failed attempt and decides what happens next.`, now);
+        out.abandoned.push(row.id);
+        continue;
+      }
       if (!Number.isFinite(claimedMs) || nowMs - claimedMs <= CLAIM_TTL_MS) continue;
       const silent = describeAge(nowMs - claimedMs);
       if (row.attempt_count >= MAX_CLAIM_ATTEMPTS) {
@@ -568,6 +653,20 @@ export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<Re
 
     // QUEUED, and nobody has taken it.
     const createdMs = Date.parse(row.created_at);
+    if (row.run_kind === "LOCAL_JOB") {
+      // A card is not a run: a job waits for the Mac to wake, up to the ceiling the kind set on
+      // the row (`job_json.queue_max_seconds`), and the card's own runner blocks it after that.
+      const ceiling = queueCeilingSeconds(row.job_json);
+      if (!Number.isFinite(createdMs) || nowMs - createdMs <= ceiling * 1000) continue;
+      await abandonRun(
+        env,
+        row.id,
+        `No machine claimed this job in ${describeAge(nowMs - createdMs)}. The card it belongs to says so and waits for a person.`,
+        now,
+      );
+      out.abandoned.push(row.id);
+      continue;
+    }
     if (!Number.isFinite(createdMs) || nowMs - createdMs <= QUEUE_TTL_MS) continue;
     await abandonRun(
       env,
@@ -579,4 +678,15 @@ export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<Re
     out.abandoned.push(row.id);
   }
   return out;
+}
+
+/** The queue ceiling a LOCAL_JOB carries on its own payload; the answer queue's ten minutes otherwise. */
+export function queueCeilingSeconds(jobJson: string | null): number {
+  try {
+    const n = (JSON.parse(jobJson ?? "{}") as { queue_max_seconds?: unknown }).queue_max_seconds;
+    if (typeof n === "number" && Number.isFinite(n) && n > 0) return n;
+  } catch {
+    /* fall through */
+  }
+  return QUEUE_TTL_MS / 1000;
 }

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The local-job claimer for West Peek OS (Plan A, 20 Sep 2026).
+
+  WHAT IT IS. Porter's hands on her Mac: claims LOCAL_JOB runs the Worker parks for a card kind
+  registered in src/shared/work/localJobs.ts (today: WEB_PROPERTY_CHANGE), runs the duty script for
+  that kind in a git worktree of the target repo with `claude -p`, keeps the Mac awake while it does,
+  pings every minute, stops the job at its ceiling, and reports what came back. It never creates
+  work, never chooses a model or a phase, and never lands anything without the recorded approval and
+  the recorded green check the job carries. See scripts/claimer/local-job-claimer.mjs.
+
+  SEPARATE FROM THE SEAT CLAIMER AND THE MEET LISTENER, on purpose: its own label, its own log, its
+  own process, so a hung build can never stall an answer or the room's ears, and `launchctl unload`
+  on one never touches the others. It presents the SAME Access service token (the Mac's own).
+
+  NO SECRET IS IN THIS FILE: the two Access token halves and the Drive service account come out of
+  the encrypted vault at launch through `vault.mjs run --` and exist only in the child's environment.
+
+  KeepAlive: the claimer's own loop waits; launchd only restarts it if it dies. ThrottleInterval so a
+  machine without the vault unlocked, or without `claude`/`gh` on PATH, is one quiet line every five
+  minutes, not a spin.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ventures.westpeek.os.local-jobs</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-lc</string>
+    <!-- REPLACE ONLY THE REPO PATH if the checkout lives elsewhere. `exec` so launchd supervises node itself. -->
+    <string>cd "$HOME/GitHub/west-peek-os" &amp;&amp; exec node scripts/vault/vault.mjs run -- node scripts/claimer/local-job-claimer.mjs</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/westpeek-os-local-jobs.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/westpeek-os-local-jobs.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Homebrew's bin must be on PATH or `claude` and `gh` are not found; `-lc` loads the login shell too. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

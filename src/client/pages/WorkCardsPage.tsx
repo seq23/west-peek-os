@@ -10,6 +10,7 @@ import { PARTNERS, partnerFor } from "@shared/registry/partners";
 import { portraitFor } from "../lib/employeePortraits";
 import { WorkRecordView } from "./WorkRecordView";
 import { ArtifactShelf } from "./ArtifactShelf";
+import { WebPropertyChangePanel, WorkKindRules } from "./WebPropertyChangePanel";
 
 /**
  * Work cards — what the firm is actually doing, who owns it, and what happens next.
@@ -1046,6 +1047,16 @@ export function WorkCardsPage({
                       <p className="lbl">What it builds</p>
                       <ArtifactShelf card={c.id} showObject emptyNote="Nothing has been built yet — the next run opens the build; the row fills in from there." testId={`work-card-artifact-rows-${c.id}`} />
                     </div>
+                  )}
+
+                  {/* PORTER'S WEB PROPERTY CHANGE (20 Sep 2026, Plan A): where it is — phase, folder,
+                      the plan as a Document, decided and asked, the PR and its checks, the merge and
+                      the live proof — and the standing rules of the kind, flippable by a partner. */}
+                  {c.kind === "WEB_PROPERTY_CHANGE" && (
+                    <>
+                      <WebPropertyChangePanel cardId={c.id} onNavigate={onNavigate} />
+                      <WorkKindRules kind="WEB_PROPERTY_CHANGE" canEdit={me.roles.includes("MANAGING_PARTNER")} />
+                    </>
                   )}
 
                   {c.block && (

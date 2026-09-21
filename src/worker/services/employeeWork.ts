@@ -58,7 +58,7 @@ import {
  * rather than by hope.
  */
 
-interface CardRow {
+export interface CardRow {
   id: string;
   title: string;
   description: string | null;
@@ -284,6 +284,22 @@ export async function assignCard(
   await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2, assigned_from_card_id = ?3 WHERE id = ?1")
     .bind(created.id, card.requested_by_email ?? null, card.id)
     .run();
+  /*
+   * A ROUTED REQUEST STAYS ROUTED (20 Sep 2026). A card the door read as a kind with its own
+   * runner — a web property change with its Drive folder — keeps that reading when a chief of
+   * staff hands it on, or the new card would land in the general loop and "search and write a
+   * finding" about a site it was asked to change.
+   */
+  const routed = await env.WP_OS_DB.prepare("SELECT kind, request_json FROM work_card WHERE id = ?1").bind(card.id).first<{ kind: string | null; request_json: string | null }>();
+  if (routed?.kind && routed.request_json) {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2, request_json = ?3 WHERE id = ?1").bind(created.id, routed.kind, routed.request_json).run();
+    if (routed.kind === "WEB_PROPERTY_CHANGE") {
+      const { openWebPropertyChange } = await import("./webPropertyChange");
+      const { readWebPropertyAsk } = await import("../../shared/intake/webPropertyChange");
+      const ask = readWebPropertyAsk(routed.request_json);
+      if (ask?.target_repo) await openWebPropertyChange(env, { cardId: created.id, ask, firmScope: card.firm_scope });
+    }
+  }
   await appendEvent(env, {
     eventType: "work_card.assigned",
     actorType: "ai_employee",

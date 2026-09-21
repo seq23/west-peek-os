@@ -117,9 +117,11 @@ import {
   handleListQuarantinedOutputs,
   handleRunAi,
 } from "./services/aiRuns";
+import { handleGetWebPropertyChange, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
 import {
   handleSubscriptionSeatClaim,
   handleSubscriptionSeatHeartbeat,
+  handleSubscriptionSeatProgress,
   handleSubscriptionSeatReport,
   handleSubscriptionSeatStatus,
 } from "./services/subscriptionSeats";
@@ -1113,6 +1115,10 @@ const router = new Router()
   // 0173 — the four doors on a blocked card: answer it, change it, drop it, send it to an engineer.
   // An answer reopens the card and reaches the employee's next run; it is not a comment box.
   .post("/api/work-cards/:id/unblock", handleUnblockWorkCard)
+  // Plan A (20 Sep 2026): the state of a web property change, and the standing rules of a card kind.
+  .get("/api/work-cards/:id/web-property-change", handleGetWebPropertyChange)
+  .get("/api/work-kinds/:kind/rules", handleWorkKindRules)
+  .patch("/api/work-kinds/:kind/rules/:key", handleSetWorkKindRule)
   .post("/api/work-cards/:id/look", handleCardLook)
   .post("/api/work-cards/:id/browser-permission", handleSetCardBrowserPermission)
   .post("/api/browser-tasks/:id/approve", handleApproveBrowserTask)
@@ -1397,6 +1403,7 @@ const router = new Router()
   .post("/api/subscription-seats/heartbeat", handleSubscriptionSeatHeartbeat)
   .post("/api/subscription-seats/claim", handleSubscriptionSeatClaim)
   .post("/api/subscription-seats/report", handleSubscriptionSeatReport)
+  .post("/api/subscription-seats/progress", handleSubscriptionSeatProgress)
   .get("/api/subscription-seats/status", handleSubscriptionSeatStatus)
   .get("/api/jobs/runs/:id", handleGetJobRun)
   .post("/api/jobs/runs/:id/cancel", handleCancelJobRun)

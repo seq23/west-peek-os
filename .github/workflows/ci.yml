@@ -401,6 +401,13 @@ jobs:
       # rendered in-app and exported as the same text and figures, every state named.
       - name: A build has one producer, cites its rows and exports what it shows
         run: npm run validate:artifacts
+      # Plan A (20 Sep 2026): a card kind worked on her Mac names a script that exists, declares the kind, is in
+      # the claimer's allowlist and is dispatched by the sweep — three lists held to one, plus the Mac scripts' own self-tests.
+      - name: Every local duty has an executor, and every executor a duty
+        run: npm run validate:duty-executor
+      # Nothing lands a web property change without a recorded plan approval AND a recorded green check — Worker, Mac script, row.
+      - name: No land without approval and green
+        run: npm run validate:no-land-without-approval
 
       - name: Build client
         run: npm run build

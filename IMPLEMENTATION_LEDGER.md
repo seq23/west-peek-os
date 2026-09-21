@@ -6276,3 +6276,84 @@ Open it → the dashboard under Documents with cites → .pptx and .docx parse b
 figures → Refresh → v2 with v1 kept → Documents band under the company, search → nothing became a
 record → no sideways scroll at 375px; card → ARTIFACT → worked with no model → BLOCKED with the
 reason, the card's build row, no artifact invented.
+
+## Porter changes a web property from her Mac — Plan A (20 Sep 2026)
+
+**The owner's ask.** Scooter or Sequoia emails os@joinwestpeek.com a Google Drive folder and
+instructions (a westpeek.ventures site-update package). The card lands on their chief of staff's
+desk, is handed to Porter, and Porter does on her Mac what a Claude Code session did by hand that
+day: pulls the package, reads the target repo's `RUNBOOK.md`, writes a plan as a Document on the
+card with decisions split into DECIDED and ASK, goes BLOCKED with the asks emailed to the partner
+who asked, resumes on the reply, builds in a git worktree, proves with the repo's validators and
+screenshots and link checks, opens a PR, lands on green with `~/bin/land`, proves it live, and the
+DONE email carries the proof. Landing rule, her decision: LAND ON GREEN.
+
+**One claim mechanism, a second kind of run (migration 0219).** `subscription_seat_run.run_kind`
+is `ANSWER` (0187's rows, no tools) or `LOCAL_JOB` (a duty script with a worktree). The claim
+route takes `kinds`; the seat claimer never says it and is never handed a job; the new
+`scripts/claimer/local-job-claimer.mjs` says `LOCAL_JOB` only. A job pings
+`/api/subscription-seats/progress` every minute and the reaper judges it by its last ping and its
+own ceiling, not by the answer queue's five minutes; a queued job waits for the Mac up to twelve
+hours before the card blocks naming the lane. **One live run per card** is a partial unique index
+on the queue, not a promise. Cost posture: a job runs `claude -p` on her Max seat — `prov_claude_code`
+at $0 in the ledger; nothing here dials a metered lane.
+
+**The kind, the runner, the door.** `src/shared/work/localJobs.ts` is the registry (kind → script,
+prompt file, model per phase — plan opus, build sonnet, land haiku — and ceilings).
+`src/shared/intake/webPropertyChange.ts` reads any Drive folder link and one of the three
+properties at the door; `dealIntake.openAssignmentCard` records the link on every partner card
+and, with a property named, hands the card to Porter through the loop's own `assignCard` and opens
+the `web_property_change` row. `services/webPropertyChange.ts` is the runner the sweep dispatches:
+no model call in the Worker; it parks one phase, holds the card while the Mac has it (PROGRESSED,
+no attempt spent), reads the report strictly (an unreadable report is a failed attempt, never a
+silent success), files the PLAN as a Document through `deliver`, blocks with the asks addressed to
+the requesting partner (`block_who`), records the approval from `block_answered_at` against the
+plan's filing time, parks BUILD with the plan text and the answers on the job, records the PR and
+the check state the SCRIPT observed, queues LAND at once when `land_on_green` is on (blocks with a
+question when off), and finishes only from a LAND report carrying the merge — the 0219 trigger
+refuses DONE for the kind without `pr_url`, `check_green_at` and `merge_sha`.
+
+**A reply that answers.** `emailThread.steerFromReply` now clears a BLOCKED card through
+`answerBlock(ANSWER)` when the authenticated reply is from the partner the block was addressed to
+(`requested_by_email`); the other partner's reply is kept as a note and clears nothing. The same
+door the button on the card uses, so email and card resume the same way.
+
+**The Mac side.** `scripts/duties/web-property-change.mjs` (`card kind: WEB_PROPERTY_CHANGE`):
+worktree `~/GitHub/wpos-jobs/wt-<card>` on `work/wpc-<card>` off origin/main; BLOCK if the repo has
+no `RUNBOOK.md`; PLAN pulls the folder with `scripts/drive/pull.mjs` (service account from the vault;
+zero files BLOCKS naming the folder); one `claude -p --model <phase model>` with the prompt file
+`scripts/duties/web-property-change-prompt.md` plus the job context, result read from a result file
+the model must write; BUILD's PR and check state come from `gh`, watched to a terminal state, never
+from the model; LAND is refused by `landGate` without approval and green, then `~/bin/land <pr>`,
+the merge SHA from `gh`, a cheap model writes the curl proof, the worktree is removed. The claimer
+keeps the Mac awake (`caffeinate`), enforces the ceiling, and reports a phase that wrote nothing as
+failed (Rule 0). launchd: `deployment/launchd/ventures.westpeek.os.local-jobs.plist` (its own label
+and log). NOT installed by the repo — the owner loads it.
+
+**Standing rules as rows.** `work_kind_rule`: land_on_green (ON, editable), model per phase
+(editable, aliases only), one live run and no-production-iteration (facts, changed in a commit).
+`GET/PATCH /api/work-kinds/:kind/rules[/:key]`, Managing Partner only. The Work page shows a
+WEB_PROPERTY_CHANGE card's phase strip, folder, plan Document, decided/asked/answered, PR and
+checks, merge and proofs (`GET /api/work-cards/:id/web-property-change`) and the rules with a
+switch and selects (`src/client/pages/WebPropertyChangePanel.tsx`).
+
+**Guards.** `validate:duty-executor` (`scripts/validate/a-duty-has-an-executor.mjs`, in CI): the
+registry, the claimer allowlist, the duty headers, the prompt phases and the sweep dispatch held to
+one list; six planted defects caught. `validate:no-land-without-approval`
+(`scripts/validate/no-land-without-approval.mjs`, in CI): the Worker gate, the script gate and its
+order before `~/bin/land`, the DONE trigger and the seeded rule; seven planted defects caught.
+Migration 0219's partial unique index and trigger are the row-level halves.
+
+**Proof.** `tests/webPropertyChange.test.ts` (19): the door reads Drive and hands to Porter; a
+folder without a property stays ordinary with the link kept; one PLAN run parked on opus, a held
+card is PROGRESSED with no second run, the row refuses a duplicate; the answer claimer is never
+handed a job; the PLAN files a Document and blocks to Scooter with the asks emailed; Sequoia's reply
+to Scooter's question is a note; Scooter's reply clears it and BUILD is parked with the plan and the
+answers; LAND cannot be parked without PR, green and approval and the row refuses DONE; a RED build
+is a failed attempt re-queued on the branch; GREEN queues LAND at once on haiku with no second
+email; the LAND report finishes the card and the DONE email to Scooter carries the PR and the live
+proof; land-on-green OFF blocks with the PR and "land it" queues it; the model rule overrides with
+a safe fallback; the reaper closes a silent job, leaves a pinging one, lets a queued job wait past
+ten minutes and closes it past its ceiling, keeps 0187's answer rule, and refuses a stray pulse.
+UNPROVEN until the first real run on her Mac: `claude -p` under launchd against a real repo, the
+Drive pull with the live service account, `gh pr checks` and `~/bin/land` from a worktree.

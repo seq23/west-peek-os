@@ -15,6 +15,7 @@ function isProductionsKind(kind: string | null | undefined): boolean {
 }
 import { replyToRequester } from "./requestReply";
 import { PRODUCTIONS_PARTNER } from "../../shared/registry/partners";
+import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 
 /**
  * The sweep that works the cards employees own (14 Sep 2026).
@@ -394,6 +395,7 @@ export async function sweepOnce(
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -413,7 +415,7 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" || card.kind === WEB_PROPERTY_CHANGE_KIND ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -467,6 +469,16 @@ export async function sweepOnce(
       const out = await run(env, card);
       finished = out.finished;
       blocked = out.blocked;
+      detail = out.detail;
+    } else if (card.kind === WEB_PROPERTY_CHANGE_KIND) {
+      // Porter's web property change (20 Sep 2026, Plan A): no model call here. The runner parks
+      // ONE phase for her Mac, reads what came back, and holds the card while the Mac has it —
+      // a held card is PROGRESSED, not an attempt. See services/webPropertyChange.ts.
+      const run = runners.webPropertyChange ?? (await import("./webPropertyChange")).runWebPropertyChangeCard;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
+      progressed = out.progressed;
       detail = out.detail;
     } else if (card.kind === "PRODUCTIONS_HIRE_SEARCH") {
       // Walker's weekly hire search for West Peek Productions: search, every page checked, judged,
