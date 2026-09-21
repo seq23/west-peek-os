@@ -6,6 +6,7 @@ import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
 import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks } from "../src/shared/intake/webPropertyChange";
+import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
 import { parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
@@ -205,12 +206,11 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(payload.rules.land_on_green).toBe("on");
     expect(payload.script).toBe("scripts/duties/web-property-change.mjs");
 
-    const second = await tickFor(porterCardId);
-    expect(second.card?.id).toBe(porterCardId);
-    expect(second.outcome, "a held card is progressed, not attempted").toBe("PROGRESSED");
-    // A HELD CARD YIELDS THE SWEEP: the very next tick does not take it again.
-    const nextTick = await sweepOnce(env, nextTickTime());
-    expect(nextTick.card?.id, "a card the Mac holds is skipped so other cards get the tick").not.toBe(porterCardId);
+    // A HELD CARD IS NOT WAITING: while its job is queued or on the Mac, the sweep never takes it,
+    // so every younger card gets the tick. It is claimable again the moment the run is reported.
+    const second = await sweepOnce(env, nextTickTime());
+    expect(second.card?.id, "a card the Mac holds is skipped").not.toBe(porterCardId);
+    expect(second.outcome).toBe("NOTHING_WAITING");
     const jobs = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM subscription_seat_run WHERE work_card_id = ?1").bind(porterCardId).first<{ n: number }>();
     expect(jobs!.n, "one live run per card").toBe(1);
     expect((await card(porterCardId)).work_attempts).toBe(0);
@@ -230,9 +230,11 @@ describe("Scooter emails a package for the ventures site", () => {
     planRun = asJobs!;
     const pulse = await progressRun(env, { runId: planRun.id, deviceId: "mac-test-jobs", note: "pulling the folder" });
     expect(pulse.accepted).toBe(true);
-    const held = await tickFor(porterCardId);
-    expect(held.outcome).toBe("PROGRESSED");
-    expect(held.summary).toMatch(/pulling the folder/);
+    // The button path reads the pulse while the sweep leaves the card alone.
+    const held = await runWebPropertyChangeCard(env, { id: porterCardId, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
+    expect(held.held).toBe(true);
+    expect(held.detail).toMatch(/pulling the folder/);
+    expect((await sweepOnce(env, nextTickTime())).card?.id).not.toBe(porterCardId);
   });
 
   it("an unreadable report is a failed attempt, never a silent success", () => {
@@ -519,7 +521,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     await replyFrom(SEQUOIA, "changes: the Sengo logo is wrong, swap it", await porter.token());
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
     expect((await readWebPropertyChange(env, id))!.land_approved_at).toBeNull();
-    expect(String((await card(id)).description)).toMatch(/After the preview: "changes: the Sengo logo is wrong/);
+    expect(String((await card(id)).description)).toMatch(/Held by sequoia@westpeek.ventures: "changes: the Sengo logo is wrong/);
     const other = await replyFrom(SCOOTER, "approved", await porter.token());
     expect(other.answered).toBe(false);
     expect((await card(id)).state).toBe("BLOCKED");
@@ -656,6 +658,127 @@ describe("the named bypass: \"approved to production\" (21 Sep 2026)", () => {
     expect(toSequoia, "the other partner is told").toHaveLength(1);
     expect(toSequoia[0]!.text).toMatch(/Landed to production with 2 placeholders by Scooter Taylor's instruction/);
     expect(toSequoia[0]!.text).toMatch(/pull\/33/);
+  });
+});
+
+/** Open a pre-approved card (the phrase in the partner's own request), run PLAN, return the id. */
+async function preApproved(who: string, chief: string, subject: string, phrase: string, plan: Record<string, unknown>, extra = ""): Promise<string> {
+  const chiefId = await openAssignmentCard(env, {
+    subject,
+    partnerAddress: who,
+    chiefOfStaff: chief,
+    raw: `${subject} on westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${subject.replace(/\W/g, "").slice(0, 6)}\n\n${phrase}. ${extra}\n`,
+    limits: EMAILED_TASK_LIMITS,
+  });
+  const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+  await tickFor(id); // parks PLAN
+  await macReports(id, { phase: "PLAN", status: "ok", ...plan });
+  return id;
+}
+
+describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
+  it("the phrases are read only from what the partner wrote, never from a quoted original", () => {
+    for (const p of ["your call", "you decide", "no need to ask", "just do it", "pick everything", "no options"]) expect(preApprovalIn(`update the page — ${p}!`)).toBe(p);
+    expect(preApprovalIn("update the page, and ask me about the colours")).toBeNull();
+    const quoted = parseWebPropertyAsk("Re: site", `please look at this: https://drive.google.com/drive/folders/${FOLDER}q westpeek.ventures\n\nOn Mon, Porter wrote:\n> your call, just do it`);
+    expect(quoted?.pre_approval, "a quoted 'your call' is not the partner's").toBeNull();
+    const own = parseWebPropertyAsk("site", `https://drive.google.com/drive/folders/${FOLDER}q westpeek.ventures — your call, approved to production`);
+    expect(own?.pre_approval).toBe("your call");
+    expect(own?.force).toBe("approved to production");
+  });
+
+  it("a ready plan: approved at filing in the requester's name, the FYI email goes out, BUILD parks with no reply, GREEN lands", async () => {
+    const before = sent.length;
+    const id = await preApproved(SCOOTER, "Walker", "footer links", "your call", {
+      document: "# Plan: footer links\n\nready.",
+      decided: ["structure"],
+      asks: [{ question: "Open the links in a new tab?", recommended: "yes, with rel=noopener" }],
+      publish_ready: true,
+      placeholders: [],
+    });
+    const out = await tickFor(id);
+    expect(out.outcome, "no block: the plan is approved as filed").toBe("PROGRESSED");
+    expect(out.summary).toMatch(/pre-approved \("your call"\); BUILD queued/);
+    const row = (await readWebPropertyChange(env, id))!;
+    expect(row.pre_approved_phrase).toBe("your call");
+    expect(row.plan_approved_at).toBeTruthy();
+    expect(row.plan_approved_by).toBe("fu_scooter_taylor (pre-approved in the request)");
+    expect(JSON.parse(row.asks_json), "no options offered").toEqual([]);
+    expect(JSON.parse(row.decided_json).some((d: string) => /new tab\? → yes, with rel=noopener \(decided; pre-approved/.test(d))).toBe(true);
+    expect(row.land_approved_at, "pre-approval is never the landing approval").toBeNull();
+    expect((await card(id)).state).toBe("IN_PROGRESS");
+    expect(String((await card(id)).description)).toMatch(/Pre-approved in the request by Scooter Taylor \("your call"\)/);
+    const fyi = sent.slice(before).filter((m) => m.to === SCOOTER);
+    expect(fyi).toHaveLength(1);
+    expect(fyi[0]!.subject).toMatch(/FYI/);
+    expect(fyi[0]!.text).toMatch(/you pre-approved this \("your call"\); no reply needed\. Reply "stop" to hold it\./);
+    expect(fyi[0]!.text).toMatch(/# Plan: footer links/);
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/41", pr_number: 41, check_state: "GREEN" });
+    const green = await tickFor(id);
+    expect(green.summary, "publish-ready + land on green: no reply needed").toMatch(/landing is queued/);
+    expect((await readWebPropertyChange(env, id))!.phase).toBe("LAND");
+  });
+
+  it("a ready plan, then \"stop\" from the requester by reply: the card is held and the queued build is closed", async () => {
+    const id = await preApproved(SCOOTER, "Walker", "hero copy", "just do it", { document: "# Plan: hero copy\n\nready.", decided: [], asks: [], publish_ready: true, placeholders: [] });
+    expect((await tickFor(id)).summary).toMatch(/BUILD queued/);
+    const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(id).first<{ token: string }>())!.token;
+    const reply = await replyFrom(SCOOTER, "stop", token);
+    expect(reply.steered).toBe(true);
+    expect(reply.answered, "the card was not blocked, so the reply is a note").toBe(false);
+    const held = await tickFor(id);
+    expect(held.outcome).toBe("BLOCKED");
+    expect(String((await card(id)).description)).toMatch(/Held by scooter@westpeek.ventures: "stop"/);
+    expect(await liveJobFor(id), "the queued BUILD is closed").toBeNull();
+    // The other partner's "stop" would be a note, not a hold — proven by the requester check inside heldByRequester.
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "approved" });
+    expect((await tickFor(id)).summary).toMatch(/BUILD queued/);
+  });
+
+  it("a NOT-ready plan, pre-approved: still stops at the preview and asks once", async () => {
+    const id = await preApproved(SEQUOIA, "Wren", "events page", "you decide", {
+      document: "# Plan: events page\n\nthe episode records are placeholders.",
+      decided: [],
+      asks: [],
+      publish_ready: false,
+      placeholders: ["episode records"],
+    });
+    const out = await tickFor(id);
+    expect(out.summary).toMatch(/BUILD queued/);
+    const fyi = sent.filter((m) => m.to === SEQUOIA && /FYI/.test(m.subject)).pop()!;
+    expect(fyi.text).toMatch(/I build to a preview link and ask you once before it lands/);
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/42", pr_number: 42, check_state: "GREEN", preview_url: "https://p42.pages.dev" });
+    expect((await tickFor(id)).outcome, "not ready stops at the preview even when pre-approved").toBe("BLOCKED");
+    const row = (await readWebPropertyChange(env, id))!;
+    expect(row.phase).toBe("BUILD");
+    expect(row.forced_by).toBeNull();
+    expect(row.land_approved_at).toBeNull();
+    const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
+    const c = await card(id);
+    const gate = await parkPhase(env, { id, title: String(c.title), kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SEQUOIA }, row, "LAND", rules);
+    expect(gate.parked).toBe(false);
+    expect((gate as { reason: string }).reason).toMatch(/previews first/);
+  });
+
+  it("a NOT-ready plan, pre-approved AND forced in the same request: lands on green, named as forced", async () => {
+    const id = await preApproved(SCOOTER, "Walker", "press page", "no need to ask", {
+      document: "# Plan: press page\n\nthe logo pack is a placeholder.",
+      decided: [],
+      asks: [],
+      publish_ready: false,
+      placeholders: ["logo pack"],
+    }, "approved to production.");
+    const out = await tickFor(id);
+    expect(out.summary).toMatch(/BUILD queued/);
+    const row = (await readWebPropertyChange(env, id))!;
+    expect(row.force_phrase).toBe("approved to production");
+    expect(row.forced_by).toBe("fu_scooter_taylor");
+    expect(JSON.parse(row.forced_placeholders_json!)).toEqual(["logo pack"]);
+    expect(String((await card(id)).description)).toMatch(/said "approved to production": a plan that is not publish-ready lands anyway, named as forced by Scooter Taylor/);
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/43", pr_number: 43, check_state: "GREEN", preview_url: "https://p43.pages.dev" });
+    const green = await tickFor(id);
+    expect(green.summary, "no preview stop: forced").toMatch(/landing is queued/);
+    expect((await readWebPropertyChange(env, id))!.phase).toBe("LAND");
   });
 });
 

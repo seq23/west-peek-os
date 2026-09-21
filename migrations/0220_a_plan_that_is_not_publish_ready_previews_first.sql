@@ -28,6 +28,13 @@ ALTER TABLE web_property_change ADD COLUMN land_approved_by TEXT;
 ALTER TABLE web_property_change ADD COLUMN forced_by TEXT REFERENCES firm_user (id);
 ALTER TABLE web_property_change ADD COLUMN forced_at TEXT;
 ALTER TABLE web_property_change ADD COLUMN forced_placeholders_json TEXT;
+-- PRE-APPROVAL IN THE REQUEST. "your call" / "you decide" / "no need to ask" / "just do it" /
+-- "pick everything" / "no options" in the partner's OWN authenticated request text: Porter decides
+-- everything, the plan is approved at filing, the email is an FYI. Written ONLY at the door from
+-- the verified request, never from a later message. A force phrase in the same request is kept
+-- beside it, so a not-ready plan lands named rather than stopping at the preview.
+ALTER TABLE web_property_change ADD COLUMN pre_approved_phrase TEXT;
+ALTER TABLE web_property_change ADD COLUMN force_phrase TEXT;
 
 DROP TRIGGER IF EXISTS trg_web_property_change_preview_needs_second_approval;
 CREATE TRIGGER trg_web_property_change_preview_needs_second_approval

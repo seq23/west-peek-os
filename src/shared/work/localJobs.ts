@@ -101,6 +101,8 @@ export interface LocalJobPayload {
   ask: string;
   /** From the PLAN phase onward, so BUILD and LAND work from the plan and the partner's answers. */
   plan: { document_id: string | null; text: string | null; decided: string[]; asks: Ask[]; answers: string[]; approved_at: string | null; publish_ready: boolean; placeholders: string[]; preview_only: boolean } | null;
+  /** 21 Sep 2026: the partner pre-approved in the request — PLAN decides everything, offers no asks. */
+  pre_approved: string | null;
   /** From BUILD onward. */
   pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null; preview_url: string | null; land_approved_at: string | null; forced_by: string | null } | null;
   rules: Record<string, string>;

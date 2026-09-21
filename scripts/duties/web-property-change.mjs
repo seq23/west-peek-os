@@ -144,6 +144,7 @@ export function renderContext(job, paths) {
     `JOB_DIR: ${paths.jobDir}`,
     `RESULT_PATH: ${paths.resultPath}`,
     `DRIVE_FOLDER: ${job.drive?.folder_url ?? job.drive?.folder_id ?? "(none)"}`,
+    ...(job.pre_approved ? [`PRE-APPROVED: the partner wrote "${job.pre_approved}" — decide everything yourself, asks: []`] : []),
     "",
     "STANDING RULES OF THIS KIND:",
     ...Object.entries(job.rules ?? {}).map(([k, v]) => `- ${k}: ${v}`),
@@ -472,6 +473,7 @@ function selfTest() {
     ["a pending check is PENDING", () => checkStateOf([{ state: "SUCCESS" }, { state: "PENDING" }]) === "PENDING"],
     ["no checks is PENDING, not green", () => checkStateOf([]) === "PENDING"],
     ["names are stable and safe", () => namesFor("wc_ABC-123_def").branch === "work/wpc-abc123de" && !namesFor("../x").worktree.includes("..")],
+    ["a pre-approved job tells the model to decide everything", () => renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, ask: "x", pre_approved: "your call" }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/r.json" }).includes('PRE-APPROVED: the partner wrote "your call"')],
     ["the context names the result path and the ask", () => {
       const t = renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, ask: "add a page", rules: { land_on_green: "on" } }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/result-PLAN.json" });
       return t.includes("RESULT_PATH: /j/result-PLAN.json") && t.includes("add a page") && t.includes("land_on_green: on");

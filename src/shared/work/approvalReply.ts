@@ -87,3 +87,32 @@ export function askLines(asks: readonly Ask[]): string[] {
 export function approvedAnswers(asks: readonly Ask[]): string[] {
   return asks.length === 0 ? ["approved as written"] : asks.map((a, i) => `${i + 1}. ${a.recommended} (approved as recommended)`);
 }
+
+/**
+ * PRE-APPROVAL IN THE REQUEST (owner, 21 Sep 2026). A partner may say up front that they do not
+ * care about the decisions: Porter picks everything, offers no options, the plan is approved at
+ * filing and the email is an FYI. Read from the partner's OWN authenticated request text at the
+ * door — never from a later message, never from the other partner.
+ */
+export const PRE_APPROVAL_PHRASES = ["your call", "you decide", "no need to ask", "just do it", "pick everything", "no options"] as const;
+
+function phraseIn(text: string | null | undefined, phrases: readonly string[]): string | null {
+  const lower = ` ${(text ?? "").replace(/\s+/g, " ").toLowerCase()} `;
+  for (const p of phrases) if (new RegExp(`(^|[^a-z])${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`).test(lower)) return p;
+  return null;
+}
+
+/** The pre-approval phrase the request carries, or null. */
+export function preApprovalIn(requestText: string | null | undefined): string | null {
+  return phraseIn(requestText, PRE_APPROVAL_PHRASES);
+}
+
+/** The force phrase the request carries ("approved to production", "ship it anyway", …), or null. */
+export function forcePhraseIn(requestText: string | null | undefined): string | null {
+  return phraseIn(requestText, FORCE_WORDS);
+}
+
+/** Every ask becomes a decision: the recommended default IS the decision. */
+export function decidedFromAsks(asks: readonly Ask[]): string[] {
+  return asks.map((a) => `${a.question} → ${a.recommended} (decided; pre-approved in the request)`);
+}

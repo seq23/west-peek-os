@@ -101,6 +101,15 @@ records who forced it and which placeholders shipped, and the DONE email says so
 BOTH partners. Plain `approved` never forces. Only the partner who asked can approve, preview or
 force their own card.
 
+**Pre-approval in the request.** Write **`your call`** (also `you decide`, `no need to ask`,
+`just do it`, `pick everything`, `no options`) in the request itself and Porter decides everything
+— every recommendation becomes the decision, no options are offered; the plan is approved as filed
+in your name, the email is an FYI ("no reply needed; reply `stop` to hold it"), and BUILD starts at
+once. A plan that is not publish-ready still stops at the preview unless the same request also says
+`approved to production`, in which case it lands, named as forced by you. `stop`, `no` or
+`changes: …` from you at any point before landing holds the card. The phrase counts only in your
+own authenticated request text — never a quoted line, never a later message, never the other partner.
+
 The rules of the kind are rows on the Work page (land on green, the model per phase, one live run
 per card, never iterate in production when a pass emails the partners); a Managing Partner flips
 the editable ones there. Nothing lands without a recorded plan approval and a recorded green check

@@ -485,6 +485,13 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
    * dashboard she asked to be BUILT — the wrong chain, quietly. Dynamic import: artifacts.ts
    * imports this file for the handover, and a static import would close that cycle at load time.
    */
+  if (card.kind === "WEB_PROPERTY_CHANGE") {
+    // Porter's web property change (Plan A): the button runs the same runner the sweep does.
+    const { runWebPropertyChangeCard } = await import("./webPropertyChange");
+    const out = await runWebPropertyChangeCard(env, { id: card.id, title: card.title, kind: card.kind, owner_id: card.owner_id, state: card.state, work_attempts: 0, firm_scope: card.firm_scope, requested_by_email: card.requested_by_email ?? null });
+    const fresh = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<CardRow>();
+    return { card: fresh ?? card, steps: [{ step: 1, action: out.finished ? "done" : out.blocked ? "blocked" : "noted", detail: out.detail }], finished: out.finished, blocked: out.blocked, detail: out.detail };
+  }
   if (card.kind === "ARTIFACT") {
     const { runArtifactCard } = await import("./artifacts");
     const out = await runArtifactCard(env, { id: card.id });

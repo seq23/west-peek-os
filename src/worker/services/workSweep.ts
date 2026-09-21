@@ -126,6 +126,17 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
         AND state IN ('OPEN', 'IN_PROGRESS')
         AND (lease_until IS NULL OR lease_until < ?1)
         AND COALESCE(work_attempts, 0) < ?2
+        -- A CARD THE MAC HOLDS IS NOT WAITING (21 Sep 2026). Its LOCAL_JOB is queued or running;
+        -- claiming it would spend a tick saying so while every younger card waits. It becomes
+        -- claimable the moment the run is reported, failed or abandoned.
+        -- …unless a partner has said something nobody has read: "stop" must reach a held card.
+        AND (
+          NOT EXISTS (
+            SELECT 1 FROM subscription_seat_run r
+             WHERE r.work_card_id = work_card.id AND r.run_kind = 'LOCAL_JOB' AND r.status IN ('QUEUED', 'CLAIMED')
+          )
+          OR EXISTS (SELECT 1 FROM work_card_note n WHERE n.work_card_id = work_card.id AND n.acknowledged_at IS NULL)
+        )
       ORDER BY created_at ASC
       LIMIT 1`,
   )
@@ -568,8 +579,8 @@ export async function sweepOnce(
     // attempt is given back, because an invocation that did what it was asked is not a failure.
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
     if (held) {
-      // HELD BY THE MAC: not this card again for a few minutes, so the oldest held card cannot be
-      // the only card the sweep ever looks at. The Mac's report is read on the first tick after.
+      // HELD BY THE MAC (reached only from the button, never the sweep — `claimNextCard` skips a
+      // card with a live job). Leased so a stray claim cannot spin on it.
       const until = new Date(now.getTime() + HELD_MINUTES * 60_000).toISOString();
       await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = ?2 WHERE id = ?1").bind(card.id, until).run();
     }

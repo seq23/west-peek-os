@@ -38,6 +38,14 @@
  *       production" as FORCED and plain "approved" as APPROVED (never FORCED); 0220's merge trigger
  *       admits `forced_by` beside `land_approved_at`, and its second trigger refuses a `forced_by`
  *       whose address is not the card's `requested_by_email`; the Mac gate admits `forced_by`.
+ *   9 · PRE-APPROVAL COMES FROM THE VERIFIED REQUEST ONLY (owner, 21 Sep 2026). `pre_approved_phrase`
+ *       and `force_phrase` are written in exactly one place — `openWebPropertyChange`, from the ask
+ *       the door parsed out of the partner's authenticated request — and nowhere in the runner; the
+ *       door parses `parseWebPropertyAsk(input.subject, input.raw)` (the raw request, not a reply);
+ *       the parser reads only the WRITTEN part above a quote; `approveAtFiling` names the phrase in
+ *       its finding, writes `plan_approved_by` as "<partner> (pre-approved in the request)", never
+ *       writes `land_approved_at`, and calls `recordForce` only under `row.force_phrase`; the
+ *       reader finds each phrase and none in a quoted original.
  *   6 · "NO" NEVER APPROVES (owner, 21 Sep 2026). `runWebPropertyChangeCard` reads the partner's
  *       answer through `readApprovalReply`, the REFUSED branch returns before `plan_approved_at`
  *       is written, and the answer is checked against the requesting partner first. And the real
@@ -63,6 +71,8 @@ const WORKER = path.join(ROOT, "src", "worker", "services", "webPropertyChange.t
 const SCRIPT = path.join(ROOT, "scripts", "duties", "web-property-change.mjs");
 const MIGRATION = path.join(ROOT, "migrations", "0219_porter_changes_a_web_property_from_her_mac.sql");
 const READER = path.join(ROOT, "src", "shared", "work", "approvalReply.ts");
+const DOOR = path.join(ROOT, "src", "worker", "services", "dealIntake.ts");
+const PARSER = path.join(ROOT, "src", "shared", "intake", "webPropertyChange.ts");
 const MIGRATION_0220 = path.join(ROOT, "migrations", "0220_a_plan_that_is_not_publish_ready_previews_first.sql");
 const read = (p) => stripTsComments(readFileSync(p, "utf8"));
 /** SQL: `--` line comments blanked, so a comment naming a column cannot satisfy or fail the trigger check. */
@@ -139,6 +149,24 @@ export function checkWorker(src) {
       if (!/fromRequester/.test(before)) violations.push("the second approval is not checked against the requesting partner");
     }
   }
+  // PRE-APPROVAL: written only at the door's open, from the verified request.
+  const opener = body(src, "export async function openWebPropertyChange(");
+  // A WRITE: SQL `pre_approved_phrase = …` or an object literal `pre_approved_phrase: <value>` — not the row type's `: string | null`.
+  const WRITE = /pre_approved_phrase\s*(?:=(?!=)|:\s*(?![\s]*string\b))/g;
+  const writes = [...src.matchAll(WRITE)].length;
+  const inOpener = opener ? [...opener.matchAll(WRITE)].length : 0;
+  if (!opener || inOpener === 0) violations.push("openWebPropertyChange() no longer writes pre_approved_phrase — pre-approval has no source");
+  if (writes > inOpener) violations.push(`pre_approved_phrase is written in ${writes - inOpener} place(s) outside openWebPropertyChange() — a later message or the other partner could pre-approve`);
+  const filing = body(src, "async function approveAtFiling(");
+  if (!filing) violations.push("approveAtFiling() is gone — a pre-approved plan would block for an answer that never comes, or worse, not");
+  else {
+    examined += 1;
+    if (!/\(pre-approved in the request\)/.test(filing)) violations.push("approveAtFiling() does not record plan_approved_by as '(pre-approved in the request)'");
+    if (!/appendFinding\([^;]*row\.pre_approved_phrase/.test(filing)) violations.push("approveAtFiling()'s finding does not name the pre-approval phrase");
+    if (/land_approved_at/.test(filing)) violations.push("approveAtFiling() touches land_approved_at — a pre-approval would count as the preview's second approval");
+    const forceAt = filing.indexOf("recordForce(");
+    if (forceAt >= 0 && !/row\.force_phrase/.test(filing.slice(Math.max(0, forceAt - 400), forceAt))) violations.push("approveAtFiling() forces without the request's own force phrase");
+  }
   const build = body(src, "async function applyBuild(");
   if (!build) violations.push("applyBuild() is gone");
   else {
@@ -200,6 +228,23 @@ export function checkMigration(sql) {
   return { violations, examined };
 }
 
+export function checkDoor(door, parser) {
+  const violations = [];
+  let examined = 0;
+  if (!/export async function openAssignmentCard\(/.test(door)) violations.push("openAssignmentCard() is gone");
+  else {
+    examined += 1;
+    if (!/parseWebPropertyAsk\(input\.subject,\s*input\.raw\)/.test(door)) violations.push("the door does not parse the web ask from the partner's own raw request — pre-approval could come from elsewhere");
+  }
+  const parse = body(parser, "export function parseWebPropertyAsk(");
+  if (!parse) violations.push("parseWebPropertyAsk() is gone");
+  else {
+    examined += 1;
+    if (!/preApprovalIn\(written\)/.test(parse) || !/forcePhraseIn\(written\)/.test(parse)) violations.push("parseWebPropertyAsk() reads the pre-approval or force phrase from the whole text, not only what the partner wrote above a quote");
+  }
+  return { violations, examined };
+}
+
 export function checkMigration0220(sql) {
   const violations = [];
   let examined = 0;
@@ -241,6 +286,12 @@ export async function checkReader(mod) {
   if (mod.approvedAnswers([{ question: "q", recommended: "r" }])[0]?.includes("r") !== true) violations.push("approvedAnswers does not take the recommended default");
   if (mod.readApprovalReply("preview")?.kind === "APPROVED") violations.push("readApprovalReply reads \"preview\" as APPROVED — a preview request would land");
   if (mod.readApprovalReply("approved")?.kind === "FORCED") violations.push("readApprovalReply reads plain \"approved\" as FORCED — a plain approval would skip the preview");
+  for (const phrase of ["your call", "you decide", "no need to ask", "just do it", "pick everything", "no options"]) {
+    examined += 1;
+    if (mod.preApprovalIn(`Update the site with the package. ${phrase}, thanks.`) !== phrase) violations.push(`preApprovalIn does not find "${phrase}"`);
+  }
+  if (mod.preApprovalIn("please update the team page") !== null) violations.push("preApprovalIn pre-approves a request that said nothing of the kind");
+  if (mod.forcePhraseIn("your call, and approved to production please") !== "approved to production") violations.push("forcePhraseIn does not find the force phrase in a request");
   return { violations, examined };
 }
 
@@ -255,8 +306,21 @@ async function selfTest() {
   const sql = readSql(MIGRATION);
   const reader = await loadTs(READER);
   const sql0220 = readSql(MIGRATION_0220);
-  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader)];
+  const door = read(DOOR);
+  const parser = read(PARSER);
+  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser)];
   say(real.every((r) => r.violations.length === 0) && real.reduce((n, r) => n + r.examined, 0) >= 8, `shipped source passes (${real.reduce((n, r) => n + r.examined, 0)} gates): ${real.flatMap((r) => r.violations).join("; ")}`);
+
+  const laterPreApproval = worker.replace("await update(env, card.id, { land_approved_at: now, land_approved_by:", "await update(env, card.id, { pre_approved_phrase: answer, land_approved_at: now, land_approved_by:");
+  say(checkWorker(laterPreApproval).violations.some((v) => /outside openWebPropertyChange/.test(v)), "a runner that writes pre_approved_phrase from a later message is caught");
+  const filingLands = worker.replace('plan_approved_by: approvedBy,\n    phase: "BUILD",', 'plan_approved_by: approvedBy,\n    land_approved_at: now,\n    phase: "BUILD",');
+  say(checkWorker(filingLands).violations.some((v) => /touches land_approved_at/.test(v)), "a pre-approval that also approves the landing is caught");
+  const noPhrase = worker.replace('("${row.pre_approved_phrase}"): every decision', "(pre-approved): every decision");
+  say(checkWorker(noPhrase).violations.some((v) => /does not name the pre-approval phrase/.test(v)), "a finding that hides the phrase is caught");
+  const doorFromElsewhere = door.replace("parseWebPropertyAsk(input.subject, input.raw)", "parseWebPropertyAsk(input.subject, laterReply)");
+  say(checkDoor(doorFromElsewhere, parser).violations.some((v) => /partner's own raw request/.test(v)), "a door that parses something other than the verified request is caught");
+  const quotedPreApproval = parser.replace("preApprovalIn(written)", "preApprovalIn(text)");
+  say(checkDoor(door, quotedPreApproval).violations.some((v) => /above a quote/.test(v)), "a parser that reads a quoted 'your call' is caught");
 
   const noSecondGate = worker.replace(/if \(needsPreview\(row\) && !row\.land_approved_at && !row\.forced_by\) return \{ parked: false[^\n]*\n/, "");
   say(checkWorker(noSecondGate).violations.some((v) => /previewing change without row\.land_approved_at/.test(v)), "a LAND gate that forgets the second approval is caught");
@@ -309,13 +373,13 @@ async function selfTest() {
   say(checkMigration(ruleOff).violations.some((v) => /seeded ON/.test(v)), "land_on_green seeded OFF is caught");
 
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: twenty-two planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: twenty-seven planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {
   await selfTest();
 } else {
-  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER))];
+  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER))];
   const examined = results.reduce((n, r) => n + r.examined, 0);
   const violations = results.flatMap((r) => r.violations);
   if (examined === 0) {
@@ -327,5 +391,5 @@ if (process.argv.includes("--self-test")) {
     for (const v of violations) console.error(`  ✗ ${v}`);
     process.exit(1);
   }
-  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — and only the requesting partner gives any of them.`);
+  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, and only the requesting partner gives any of them.`);
 }

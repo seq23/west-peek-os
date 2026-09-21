@@ -6409,3 +6409,24 @@ row refuses a merge; the second `approved` lands; `preview` on a ready plan take
 a repo with no preview says so; `approved to production` from the requester lands, names, tells
 both partners; from the other partner is a note and the row refuses the forcer; plain `approved`
 on a not-ready plan previews.
+
+**Pre-approval in the request (same day).** `your call` / `you decide` / `no need to ask` /
+`just do it` / `pick everything` / `no options` in the partner's own authenticated request (the
+door parses the raw request, and only what they wrote above a quote) → `pre_approved_phrase` on the
+row, written in exactly one place (`openWebPropertyChange`). The PLAN is told PRE-APPROVED and
+offers no asks; `approveAtFiling` turns every ask into a decision, records
+`plan_approved_by = "<partner> (pre-approved in the request)"`, a finding naming the phrase, sends
+the FYI email through the lane ("no reply needed; reply stop to hold it"), and parks BUILD. Never
+a landing approval: not-ready still previews unless the same request carried a force phrase
+(`force_phrase`), which forces it, named. **Stop at any point:** `heldByRequester` reads the
+requester's block answer or unread note that reads REFUSED before LAND, closes a queued run, and
+blocks the card; every unread note is acknowledged (others' notes kept, not acted on; other words
+carried as answers). **The sweep skips a card the Mac holds** (`claimNextCard`: no live LOCAL_JOB —
+unless a partner's note is unread), so one held card no longer takes every tick; the button runs the
+same runner (`workCard` dispatches the kind). Guard: five more pins in
+`validate:no-land-without-approval` (27 planted defects) — the single write site, the door parsing
+the raw request, the parser reading the written part only, `approveAtFiling` naming the phrase and
+never touching `land_approved_at`, forcing only on the request's own phrase. Proof: 5 more tests
+(33) — the phrases and a quoted "your call" ignored; ready + pre-approved lands with no reply;
+`stop` by reply holds and closes the queued build; not-ready + pre-approved stops at the preview;
+not-ready + pre-approved + `approved to production` lands named.

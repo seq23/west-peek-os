@@ -45,6 +45,9 @@ Goal: a plan a partner can approve by replying "go", with the decisions that are
    Every ask is a question the partner can answer in one line AND carries your **recommended
    default** — the partner will read the plan in an email and reply with the single word
    "approved", which takes every recommendation. Write the plan so that one word is enough.
+   **If the job context says PRE-APPROVED**, the partner has already said "your call": make every
+   decision yourself (your recommended default IS the decision), record each under **Decided**,
+   and return `asks: []`. Offer no options. Still say honestly whether it is publish-ready.
 4. Say whether it is **publish-ready**. Set `publish_ready: false` whenever ANY placeholder or
    TODO would ship, or any ask's default is "placeholder until supplied" — a missing link, logo,
    record, colour value, or copy the package does not contain. Name each gap in `placeholders`
