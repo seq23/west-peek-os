@@ -259,7 +259,18 @@ export async function parkPhase(
     drive: { folder_id: row.drive_folder_id, folder_url: row.drive_folder_url },
     ask: row.ask,
     plan: row.plan_filed_at
-      ? { document_id: row.plan_document_id, decided: list(row.decided_json), asks: list(row.asks_json), answers: list(row.answers_json), approved_at: row.plan_approved_at }
+      ? {
+          document_id: row.plan_document_id,
+          // The plan's text rides on the job: the filed Document is the source of truth and the Mac
+          // that runs BUILD may not be the one that ran PLAN.
+          text: row.plan_deliverable_id
+            ? ((await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(row.plan_deliverable_id).first<{ body: string }>())?.body ?? null)
+            : null,
+          decided: list(row.decided_json),
+          asks: list(row.asks_json),
+          answers: list(row.answers_json),
+          approved_at: row.plan_approved_at,
+        }
       : null,
     pr: row.pr_url ? { url: row.pr_url, number: row.pr_number, branch: row.branch, check_state: row.check_state, check_green_at: row.check_green_at } : null,
     rules,

@@ -98,7 +98,7 @@ export interface LocalJobPayload {
   drive: { folder_id: string | null; folder_url: string | null };
   ask: string;
   /** From the PLAN phase onward, so BUILD and LAND work from the plan and the partner's answers. */
-  plan: { document_id: string | null; decided: string[]; asks: string[]; answers: string[]; approved_at: string | null } | null;
+  plan: { document_id: string | null; text: string | null; decided: string[]; asks: string[]; answers: string[]; approved_at: string | null } | null;
   /** From BUILD onward. */
   pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null } | null;
   rules: Record<string, string>;
