@@ -5,7 +5,10 @@ import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
-import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks } from "../src/shared/intake/webPropertyChange";
+import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn } from "../src/shared/intake/webPropertyChange";
+import { parseBlogAsk } from "../src/shared/intake/blogHelp";
+import { workCard } from "../src/worker/services/employeeWork";
+import { sweepIdentity } from "../src/worker/services/workSweep";
 import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
 import { parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
@@ -842,6 +845,8 @@ const SCOOTER_MIME = (opts: { subject: string; body: string; image?: boolean; qu
     "",
   ].join("\r\n");
 
+const PHOTO_RECEIVED = "Got it — sorry this took so long. Your sister forgot to plug in her Mac so it went to sleep in the middle of my work, and she also tasked me with a bunch of back-end clean-up that took priority — I'm just now getting to your requests. I have the photo and I'm on the Sensori swap now; you'll hear from me when it's done.";
+
 const GOOD_AUTH_HEADER = "mx.cloudflare.net; spf=pass smtp.mailfrom=scooter@westpeek.ventures; dkim=pass header.d=westpeek-ventures.20251104.gappssmtp.com; dmarc=none";
 
 function inbound(raw: string, headers: Record<string, string> = {}) {
@@ -950,16 +955,23 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(kinds).toEqual(["RECEIVED", "PLAN"]);
   });
 
-  it("an oversize partner email (the 3.9 MB shape) still becomes Porter's card from the stored copy, not a Deck card", async () => {
-    const big = SCOOTER_MIME({ subject: "Sensori photo swap, big", body: "Same swap on westpeek.ventures, bigger photo attached.", image: true });
+  it("a 4 MB partner email (a real jpg attached) becomes Porter's card with request_text and one attachment row, not a Deck card", async () => {
+    // A real-sized photo: ~3 MB of bytes, base64'd inside the MIME, so the message is over MAX_BODY_BYTES for real.
+    const photo = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(3 * 1024 * 1024, 7)]);
+    const big = SCOOTER_MIME({ subject: "Sensori photo swap, big", body: "Same swap on westpeek.ventures, bigger photo attached.", image: true }).replace(
+      Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from("JFIF fake photo bytes for the test")]).toString("base64"),
+      photo.toString("base64").replace(/(.{76})/g, "$1\r\n"),
+    );
     const msg = inbound(big);
-    msg.rawSize = 300 * 1024 * 1024 + 1; // past MAX_BODY_BYTES: the oversize path
+    expect(msg.rawSize).toBeGreaterThan(4 * 1024 * 1024 * 0.9);
     await handleInboundEmail(msg, env);
     const c = (await env.WP_OS_DB.prepare("SELECT id, kind, title, description FROM work_card ORDER BY created_at DESC LIMIT 1").first<{ id: string; kind: string; title: string; description: string }>())!;
     expect(c.kind).toBe("WEB_PROPERTY_CHANGE");
     expect(c.title).not.toMatch(/^Deck:/);
-    const att = (await env.WP_OS_DB.prepare("SELECT filename FROM request_attachment WHERE work_card_id = ?1").bind(c.id).all<{ filename: string }>()).results!;
+    expect((await readWebPropertyChange(env, c.id))!.request_text).toMatch(/^Same swap on westpeek\.ventures/);
+    const att = (await env.WP_OS_DB.prepare("SELECT filename, bytes FROM request_attachment WHERE work_card_id = ?1").bind(c.id).all<{ filename: string; bytes: number }>()).results!;
     expect(att.map((a) => a.filename)).toEqual(["sensori-founders.jpg"]);
+    expect(att[0]!.bytes).toBeGreaterThan(3 * 1024 * 1024 * 0.99);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(c.id).run();
   });
 
@@ -967,19 +979,20 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     const key = `inbound-email/2026-09-21/${crypto.randomUUID()}.eml`;
     await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: Uint8Array) => Promise<unknown> }).put(key, new TextEncoder().encode(SCOOTER_MIME({ subject: "Reingest me — team page on westpeek.ventures", body: "Add the new team member on westpeek.ventures; photo attached.", image: true })));
     const res = await handleReingestStoredEmail({
-      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key, received_tldr: "Got it — sorry this took so long. I have the photo now and I'm on it." }) }),
+      // The owner's words for Scooter's photo card, verbatim (Sequoia, 21 Sep 2026 15:05 CT).
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key, received_tldr: PHOTO_RECEIVED }) }),
       env,
       identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
       params: {},
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { newest_web_property_change_card: string };
-    const row = (await readWebPropertyChange(env, body.newest_web_property_change_card))!;
+    const body = (await res.json()) as { new_card: string };
+    const row = (await readWebPropertyChange(env, body.new_card))!;
     expect(row.request_text).toMatch(/Add the new team member/);
     const received = sent.filter((m) => m.to === SCOOTER).pop()!;
-    expect(received.text, "the re-read's RECEIVED carries the given first line verbatim").toMatch(/Got it — sorry this took so long\. I have the photo now and I'm on it\./);
+    expect(received.text, "the re-read's RECEIVED carries the owner's first line verbatim").toContain(PHOTO_RECEIVED);
     expect(received.text).toMatch(/Attachments: sensori-founders\.jpg/);
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(body.newest_web_property_change_card).run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(body.new_card).run();
   });
 
   it("the prompt tells Porter the request is the spec, he has tools, and the rights/login/RUNBOOK/cannot-act policy", () => {
@@ -1003,7 +1016,140 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
   });
 });
 
+/** The firm caps an employee at 20 new cards an hour; this file opens many for Porter. Age the earlier ones. */
+async function ageEarlierCards(): Promise<void> {
+  await env.WP_OS_DB.prepare("UPDATE work_card SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '-2 hours')").run();
+}
+
+describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the site'", () => {
+  beforeAll(ageEarlierCards);
+  const NEWSLETTER = (extra = "") => SCOOTER_MIME({
+    subject: "Newsletter signup on the site",
+    body: `Hey Porter!\n\nCan we add a newsletter signup on the site? Just a spot where people can drop their email and subscribe.${extra}\n\nThanks!\nScooter`,
+  });
+
+  it("a newsletter signup form is not blog help; the addressee is read; 'the site' is a web-property change with the host unresolved", () => {
+    expect(parseBlogAsk("Newsletter signup on the site", "Can we add a newsletter signup on the site? a spot where people can drop their email")).toBeNull();
+    expect(parseBlogAsk("blog", "help me make an outline for a blog post on newsletters and do research")?.modes).toEqual(["OUTLINE"]);
+    expect(addresseeIn("Hey Porter!\n\nCan we…")).toBe("Porter");
+    expect(addresseeIn("Porter, please…")).toBe("Porter");
+    expect(addresseeIn("Hi Porter — quick one")).toBe("Porter");
+    expect(addresseeIn("Hey there, can you…")).toBeNull();
+    const ask = parseWebPropertyAsk("Newsletter signup on the site", "Hey Porter!\n\nCan we add a newsletter signup on the site?");
+    expect(ask?.addressee).toBe("Porter");
+    expect(ask?.property_unresolved).toBe(true);
+    expect(ask?.target_repo).toBeNull();
+    expect(isWebPropertyChange(ask)).toBe(true);
+    // Not addressed to Porter and no host: not a web change.
+    expect(parseWebPropertyAsk("x", "Hey Walker, can we add a signup on the site?")?.property_unresolved ?? false).toBe(false);
+  });
+
+  it("with a recent web-property card from this partner, 'the site' is inferred from it and the RECEIVED email states the assumption; the card is Porter's, kind WEB_PROPERTY_CHANGE", async () => {
+    const before = sent.length;
+    await handleInboundEmail(inbound(NEWSLETTER()), env);
+    const chief = (await env.WP_OS_DB.prepare("SELECT id, state, kind, description FROM work_card WHERE title = 'From scooter@westpeek.ventures: Newsletter signup on the site' ORDER BY created_at DESC LIMIT 1").first<{ id: string; state: string; kind: string | null; description: string }>())!;
+    expect(chief.kind, "not blog help").toBeNull();
+    expect(chief.state, "handed on at the door").toBe("DONE");
+    const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(chief.description)![1]!;
+    const c = (await env.WP_OS_DB.prepare("SELECT id, kind, owner_id, requested_by_email FROM work_card WHERE id = ?1").bind(porterId).first<{ id: string; kind: string | null; owner_id: string; requested_by_email: string }>())!;
+    expect(c.kind).toBe("WEB_PROPERTY_CHANGE");
+    expect(c.owner_id).toBe("aie_porter");
+    const row = (await readWebPropertyChange(env, c.id))!;
+    expect(row.property_host, "inferred from the photo swap earlier in this file").toBe("westpeek.ventures");
+    expect(row.property_assumed_from).toMatch(/^westpeek\.ventures — the one you had me on/);
+    expect(row.request_text).toMatch(/^Hey Porter!/);
+    const received = sent.slice(before).filter((m) => m.to === SCOOTER);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.text).toMatch(/I'm reading "the site" as westpeek\.ventures — the one you had me on/);
+    expect(received[0]!.text).toMatch(/reply if not/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(c.id).run();
+  });
+
+  it("with nothing recent to infer from, Porter asks which site — the one question only they can answer", async () => {
+    const chiefId = await openAssignmentCard(env, { subject: "Footer tweak", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Hey Porter — make the footer smaller on our site please.", limits: EMAILED_TASK_LIMITS });
+    const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    // Take the inference away: the row says the property is unresolved.
+    await env.WP_OS_DB.prepare("UPDATE web_property_change SET target_repo = 'unresolved', property_host = NULL, property_assumed_from = NULL WHERE work_card_id = ?1").bind(porterId).run();
+    const out = await tickFor(porterId);
+    expect(out.outcome).toBe("BLOCKED");
+    expect(String((await card(porterId)).block_needed)).toMatch(/^Which site\?/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(porterId).run();
+  });
+
+  it("a chief of staff's card that reads as a website change is handed to Porter by the general runner, never browsed", async () => {
+    // Simulate the hand-patched shape: kind NULL on Walker's desk with the request text.
+    const chiefId = await openAssignmentCard(env, { subject: "Spot on the site", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "please add a spot on westpeek.ventures for people to sign up", limits: EMAILED_TASK_LIMITS });
+    // The door already handed it on; undo that to reproduce the defect shape.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', kind = NULL WHERE id = ?1").bind(chiefId).run();
+    const out = await workCard(env, { request: new Request("https://os.joinwestpeek.com/internal/test"), env, identity: sweepIdentity(), params: {} }, chiefId, { maxSteps: 2 });
+    expect(out.finished).toBe(true);
+    expect(out.steps[0]!.action).toBe("assigned");
+    expect((await card(chiefId)).state).toBe("DONE");
+    const browse = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM browser_task WHERE work_card_id = ?1").bind(chiefId).first<{ n: number }>();
+    expect(browse!.n, "no browser task, no permission block").toBe(0);
+  });
+
+  it("a partner's 'Re: <our subject>' reply answers the block and creates no card, even without our token", async () => {
+    const chiefId = await openAssignmentCard(env, { subject: "Something Walker holds", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Walker, find me three podcast hosts who cover seed funds.", limits: EMAILED_TASK_LIMITS });
+    const { blockCard } = await import("../src/worker/services/blocks");
+    await blockCard(env, { id: chiefId, title: "From scooter@westpeek.ventures: Something Walker holds", firm_scope: "west-peek" }, { reason: "permission_to_open_a_page", trying: "podcast hosts", employee: "Walker", url: "https://example.org" });
+    const { replyToRequester } = await import("../src/worker/services/requestReply");
+    const c0 = await card(chiefId);
+    const reply = await replyToRequester(env, { id: chiefId, title: String(c0.title), requested_by_email: SCOOTER, firm_scope: "west-peek" }, "BLOCKED", "Walker", String(c0.block_needed));
+    expect(reply.sent).toBe(true);
+    const cardsBefore = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n;
+    const raw = SCOOTER_MIME({ subject: "Re: Walker: blocked — Something Walker holds", body: "Yes he can open.\n\nSent from my iPhone" });
+    // The wire carries the subject RFC 2047-encoded (an em-dash is not a ByteString).
+    await handleInboundEmail(inbound(raw, { subject: `=?UTF-8?B?${Buffer.from("Re: Walker: blocked — Something Walker holds").toString("base64")}?=` }), env);
+    const cardsAfter = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n;
+    expect(cardsAfter, "no new card for a reply").toBe(cardsBefore);
+    const c = await card(chiefId);
+    expect(c.state).toBe("OPEN");
+    expect(String(c.block_answer)).toMatch(/^Yes he can open/);
+    expect(c.block_answered_by).toBe("fu_scooter_taylor");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(chiefId).run();
+  });
+
+  it("a re-read supersedes the live duplicate and returns the card it created; every partner .eml is stored", async () => {
+    const key = `inbound-email/2026-09-21/${crypto.randomUUID()}.eml`;
+    const raw = SCOOTER_MIME({ subject: "Newsletter signup on the site", body: "Hey Porter!\n\nCan we add a newsletter signup on the site? Just a spot where people can drop their email." });
+    await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: string) => Promise<unknown> }).put(key, raw);
+    // The live duplicate: the mis-read chief card, still BLOCKED.
+    const dup = await openAssignmentCard(env, { subject: "Newsletter signup on the site", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Received: from x\r\nSubject: Newsletter signup on the site\r\n\r\n(garbage)", limits: EMAILED_TASK_LIMITS });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(dup).run();
+    await (await import("../src/worker/services/blocks")).blockCard(env, { id: dup, title: "From scooter@westpeek.ventures: Newsletter signup on the site", firm_scope: "west-peek" }, { reason: "the_brief_is_missing", trying: "Newsletter signup on the site", employee: "Walker" });
+    const dupTitle = String((await card(dup)).title);
+    expect(dupTitle).toBe("From scooter@westpeek.ventures: Newsletter signup on the site");
+    expect(String((await card(dup)).description), "every partner message is stored").toMatch(/Stored message: inbound-email\//);
+    const res = await handleReingestStoredEmail({
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key, received_tldr: "Got it — and ignore the 'Walker: blocked' email you just got.", reply_on_thread: "wpt_04e85ca12a124c358b220e84d893cdcb" }) }),
+      env,
+      identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: {},
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { superseded: string[]; new_card: string; new_card_kind: string };
+    expect(body.superseded).toContain(dup);
+    expect((await card(dup)).state).toBe("CANCELLED");
+    expect(String((await card(dup)).next_action)).toMatch(/Superseded by a re-read/);
+    expect(body.new_card_kind).toBe("WEB_PROPERTY_CHANGE");
+    expect(body.new_card).not.toBe(dup);
+    expect((await readWebPropertyChange(env, body.new_card))!.request_text).toMatch(/^Hey Porter!/);
+    const received = sent.filter((m) => m.to === SCOOTER).pop()!;
+    expect(received.text).toMatch(/ignore the 'Walker: blocked' email/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(body.new_card).run();
+  });
+
+  it("the prompt records the Google Sheet default for a form's destination", () => {
+    const prompt = readFileSync(new URL("../scripts/duties/web-property-change-prompt.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+    expect(prompt).toContain("the DESTINATION IS A GOOGLE SHEET");
+    expect(prompt).toContain("recorded default (Sequoia, 21 Sep 2026), not an ask");
+    expect(prompt).toContain("validate:forms");
+  });
+});
+
 describe("STUCK is sent once, only when idle past the ceiling inside the window", () => {
+  beforeAll(ageEarlierCards);
   it("a run that dies mid-plan and is not re-claimed within the ceiling → exactly one STUCK; a second tick sends nothing", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = '00-24' WHERE kind = ?1 AND rule_key = 'stuck_window_ct'").bind(WEB_PROPERTY_CHANGE_KIND).run();
     const before = sent.length;

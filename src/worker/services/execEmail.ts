@@ -8,6 +8,7 @@ import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { lintExecEmail, renderExecEmail, type ExecEmailInput } from "../../shared/email/execEmail";
 import { recordThreadDelivery, startThread } from "./emailThread";
+import { threadReference } from "../../shared/email/thread";
 
 /**
  * THE ONE DOOR an email to a partner leaves through (16 Sep 2026).
@@ -54,6 +55,12 @@ export interface PartnerEmailInput {
    * than a row nothing will read again. See migration 0180.
    */
   cardKind?: string | null;
+  /**
+   * 21 Sep 2026: an earlier note's thread token. The new message carries it in `References` beside
+   * its own, and `In-Reply-To` names it, so a mail client shows one conversation — the RECEIVED
+   * that retires a mistaken "blocked" note lands under that note, not beside it.
+   */
+  replyOnThread?: string | null;
 }
 
 export interface PartnerEmailOutcome {
@@ -135,7 +142,10 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
 
   let result: EmailSendResult;
   try {
-    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html, headers: thread.headers });
+    const headers = input.replyOnThread
+      ? { References: `${threadReference(input.replyOnThread)} ${thread.headers.References}`, "In-Reply-To": threadReference(input.replyOnThread) }
+      : thread.headers;
+    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html, headers });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
   }

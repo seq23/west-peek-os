@@ -73,6 +73,11 @@ attached" is a whole request; so is "change the tagline to X". Porter can fetch 
 image by URL when the request says so (source recorded; rights are an ASK unless the asset is the
 partners' own or a featured company's own; a login-only page is a BLOCK).
 
+Open the email to Porter ("Hey Porter") and say "the site": Porter reads it as the property you
+last had him on (stated in his RECEIVED email — reply if not), or asks which site if there is
+nothing recent. Reply to any of his notes with "Re:" kept and he reads it as your answer. Any AI
+employee may READ a public page without asking; paying, logging in or submitting still asks.
+
 What the partner hears, at most once each: **RECEIVED** at intake ("Got it — I'm on it", what was
 understood, what comes next), the **PLAN** only when a decision is theirs (or the **PREVIEW** on
 the not-ready path), a **QUESTION** only when something only they can supply is missing, **STUCK**

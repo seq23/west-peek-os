@@ -46,7 +46,16 @@ import { steerFromReply } from "../services/emailThread";
  */
 
 /** Beyond this the body is not parsed. Real submissions are prose and a link, not megabytes. */
+/**
+ * WHAT IS PARSED INLINE for mail from OUTSIDE the firm (founders' decks): past this the message is
+ * stored and read later. NOT a bound on whether a PARTNER'S request is read (owner, 21 Sep 2026):
+ * an authenticated partner's message of any size Cloudflare delivers (its ceiling is 25 MB) is
+ * tee'd, its text read, its attachments recorded by name, and the request opened — see the
+ * oversize branch below. "The photo is attached" is a request, not a deck.
+ */
 export const MAX_BODY_BYTES = 256 * 1024;
+/** Cloudflare Email Routing's delivery ceiling. A larger message never arrives; the RECEIVED email cannot mention it. */
+export const EMAIL_DELIVERY_CEILING_BYTES = 25 * 1024 * 1024;
 
 /**
  * Decode an RFC 2047 encoded-word subject, e.g. `=?UTF-8?Q?=23wpdealflow_Northwind?=`.
@@ -237,6 +246,8 @@ export function inboundMessageKey(headers: Headers): string | null {
 export interface InboundOptions {
   /** The RECEIVED email's first line, verbatim, when a person re-reads a stored message and has something to say first. */
   receivedTldr?: string | null;
+  /** An earlier note's thread token, so the RECEIVED threads under it in the partner's inbox. */
+  replyOnThread?: string | null;
 }
 
 export async function handleInboundEmail(
@@ -428,6 +439,7 @@ async function handleInboundEmailOnce(
         limits: EMAILED_TASK_LIMITS,
         emlKey: storedKey,
         receivedTldr: options.receivedTldr ?? null,
+        replyOnThread: options.replyOnThread ?? null,
       });
       await appendEvent(env, {
         eventType: "inbound_email.received",
@@ -730,6 +742,7 @@ async function handleInboundEmailOnce(
       raw,
       limits: EMAILED_TASK_LIMITS,
       receivedTldr: options.receivedTldr ?? null,
+      replyOnThread: options.replyOnThread ?? null,
     });
 
     /*

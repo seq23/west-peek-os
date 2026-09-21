@@ -361,6 +361,8 @@ export interface SendOrPreviewInput {
   events?: { sent: string; notSent: string };
   /** In words, for her Home and the preview email. Defaults to the email's own `what`. */
   what?: string;
+  /** 21 Sep 2026: an earlier note's thread token, so this message threads under it in the partner's inbox. */
+  replyOnThread?: string | null;
 }
 
 export interface SendOrPreviewOutcome {
@@ -400,6 +402,7 @@ export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promis
       actorId: input.actorId,
       cardKind: input.cardKind ?? null,
       events: input.events,
+      replyOnThread: input.replyOnThread ?? null,
     });
     return { sent: out.sent, previewed: false, to, reason: out.reason, subject: out.subject, threadToken: out.threadToken ?? null };
   }
