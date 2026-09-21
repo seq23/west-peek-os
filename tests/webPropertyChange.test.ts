@@ -390,7 +390,9 @@ describe("Scooter emails a package for the ventures site", () => {
   });
 
   it("BUILD reports GREEN: land on green is ON, so LAND is queued at once on the cheap model — no further reply", async () => {
-    await macReports(porterCardId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/14", pr_number: 14, branch: "work/wpc-abc12345", check_state: "GREEN", check_url: "https://github.com/seq23/join-west-peek-main/actions/runs/2", proof: "npm run validate: green · shots/team-desktop.png shots/team-390.png · curl https://example.org 200" });
+    // A DIFFERENT PR than the red attempt above (#14): the fix-up build opened #15. Pinning 15 is what
+    // catches a LAND payload built from a stale row — the row still remembered #14.
+    await macReports(porterCardId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, branch: "work/wpc-abc12345-fix", check_state: "GREEN", check_url: "https://github.com/seq23/join-west-peek-main/actions/runs/2", proof: "npm run validate: green · shots/team-desktop.png shots/team-390.png · curl https://example.org 200" });
     const out = await tickFor(porterCardId);
     expect(out.outcome).toBe("PROGRESSED");
     expect(out.summary).toMatch(/green; landing is queued/);
@@ -399,10 +401,15 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(row.check_green_at).toBeTruthy();
     expect(row.phase).toBe("LAND");
     const job = (await liveJobFor(porterCardId))!;
-    const payload = JSON.parse(job.job_json!) as { phase: string; model: string; pr: { url: string; check_green_at: string } };
+    const payload = JSON.parse(job.job_json!) as { phase: string; model: string; pr: { url: string; number: number | null; branch: string | null; check_green_at: string } };
     expect(payload.phase).toBe("LAND");
     expect(payload.model).toBe("haiku");
     expect(payload.pr.check_green_at).toBe(row.check_green_at);
+    // The LAND job must know WHICH PR: the first real newsletter job (21 Sep 2026) was queued with
+    // number null and ran `land ""` — the row in memory had the URL but not the number the report
+    // carried. Pinned on the job payload the Mac actually reads, not on the row.
+    expect(payload.pr.number, "the LAND job carries the PR number the BUILD report gave").toBe(15);
+    expect(payload.pr.branch, "and its branch").toBe("work/wpc-abc12345-fix");
     // RECEIVED at intake, then two blocked emails (the plan, then his "no"), and nothing since: green does not email.
     expect(sent.filter((m) => m.to === SCOOTER && /blocked/i.test(m.subject)).length).toBe(2);
     expect(sent.filter((m) => m.to === SCOOTER && !/blocked/i.test(m.subject) && !/got it/i.test(m.subject)).length, "no second email between green and land").toBe(0);
@@ -419,7 +426,7 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(row.merge_sha).toMatch(/^9f8e7d6c/);
     const done = sent.filter((m) => m.to === SCOOTER && /done/i.test(m.subject));
     expect(done).toHaveLength(1);
-    expect(done[0]!.text).toMatch(/pull\/14/);
+    expect(done[0]!.text).toMatch(/pull\/15/);
     expect(done[0]!.text).toMatch(/westpeek\.ventures\/team/);
     const filed = await env.WP_OS_DB.prepare("SELECT kind, prepared_for FROM deliverable WHERE source_type = 'work_card' AND source_id = ?1").bind(porterCardId).first<{ kind: string; prepared_for: string }>();
     expect(filed?.kind).toBe("employee_finding");

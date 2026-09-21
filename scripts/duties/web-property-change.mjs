@@ -68,6 +68,8 @@ export function namesFor(cardId) {
 export function landGate(job) {
   if (!job?.plan?.approved_at) return { ok: false, why: "the plan has not been approved by the partner who asked — nothing lands" };
   if (!job?.pr?.url) return { ok: false, why: "there is no PR to land" };
+  // The number is what `land` takes; a URL alone is not a PR this script can land (21 Sep 2026: `land ""`).
+  if (!Number.isInteger(job?.pr?.number) || job.pr.number <= 0) return { ok: false, why: "the LAND job carries no PR number — the Worker parked it from a row without one; nothing lands" };
   if (!job?.pr?.check_green_at || job.pr.check_state !== "GREEN") return { ok: false, why: "the PR has no recorded green check — nothing lands" };
   // A change that previews first (not publish-ready, or the partner said "preview") needs the SECOND approval.
   const needsPreview = job?.plan?.publish_ready === false || job?.plan?.preview_only === true;
@@ -501,11 +503,12 @@ export async function run(job, ctx) {
 // ── Self-test ────────────────────────────────────────────────────────────────────────────────
 
 function selfTest() {
-  const approved = { plan: { approved_at: "2026-09-20T10:00:00Z" }, pr: { url: "https://github.com/x/y/pull/1", check_state: "GREEN", check_green_at: "2026-09-20T11:00:00Z" } };
+  const approved = { plan: { approved_at: "2026-09-20T10:00:00Z" }, pr: { url: "https://github.com/x/y/pull/1", number: 1, check_state: "GREEN", check_green_at: "2026-09-20T11:00:00Z" } };
   const cases = [
     ["LAND passes with a recorded approval and a recorded green", () => landGate(approved).ok === true],
     ["LAND refuses without a plan approval", () => landGate({ ...approved, plan: { approved_at: null } }).ok === false],
     ["LAND refuses without a green check", () => landGate({ ...approved, pr: { ...approved.pr, check_green_at: null } }).ok === false],
+    ["LAND refuses a job whose PR has no number — `land \"\"` is never run", () => landGate({ ...approved, pr: { ...approved.pr, number: null } }).ok === false],
     ["LAND refuses a RED check even with a green time", () => landGate({ ...approved, pr: { ...approved.pr, check_state: "RED" } }).ok === false],
     ["LAND refuses without a PR", () => landGate({ ...approved, pr: null }).ok === false],
     ["LAND refuses a not-ready plan without the second approval", () => landGate({ ...approved, plan: { ...approved.plan, publish_ready: false } }).ok === false],

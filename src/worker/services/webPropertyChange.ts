@@ -978,7 +978,14 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     // BUILD run resumes the same branch and fixes it. Never landed, never asked to be.
     return { finished: false, blocked: false, progressed: false, detail: `the PR's checks are ${state}: ${report.reason ?? "the build must fix them before anything lands"}` };
   }
-  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, check_state: "GREEN", check_green_at: now, preview_url: report.preview_url ?? null, build_proof: (report.proof ?? "").slice(0, 8000) || null };
+  /*
+   * THE ROW THE NEXT PHASE IS PARKED FROM CARRIES EVERYTHING THE REPORT WROTE (21 Sep 2026). The
+   * first real newsletter job built PR #14 green and then landed "#null": `fresh` copied the URL
+   * and the check state from the report but not the number or the branch, so the LAND job ran
+   * `land ""` and `gh pr view null`. What the update wrote to the row and what the next phase read
+   * from memory were two different rows. One object, every field the report carries.
+   */
+  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, pr_number: report.pr_number ?? row.pr_number ?? null, branch: report.branch ?? row.branch ?? null, check_state: "GREEN", check_green_at: now, check_url: report.check_url ?? row.check_url ?? null, preview_url: report.preview_url ?? null, build_proof: (report.proof ?? "").slice(0, 8000) || null };
   /*
    * A CHANGE THAT PREVIEWS FIRST STOPS HERE (21 Sep 2026). Not publish-ready, or the partner said
    * "preview": the second email carries the preview link, the PR, the placeholders and the proof,
