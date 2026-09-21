@@ -43,3 +43,12 @@ violations) on breach and proves its own detection with a self-test fixture run.
   text as a guide against the real Meetings sources and proves it is caught, plus a missing
   primary act, a ghost testid, a link to no page, a job no migration writes, a missing file, and a
   paragraph-shaped answer.
+- `a-duty-has-an-executor.mjs` (`npm run validate:duty-executor`, 20 Sep 2026) — reads the local-job
+  registry, the Mac claimer's allowlist, every `scripts/duties/*.mjs` header and the sweep's
+  dispatch, and holds them to one list in both directions; hard-fails on zero kinds or scripts;
+  `--self-test` plants a missing script, an unregistered duty, a claimer without the kind, a sweep
+  without the dispatch, a prompt file without a phase and a script without `run()`.
+- `no-land-without-approval.mjs` (`npm run validate:no-land-without-approval`, 20 Sep 2026) — reads the
+  Worker's `parkPhase`, the Mac script's `landGate` and `run()`, and migration 0219's trigger and
+  rule seed, and requires each to refuse a landing without a recorded plan approval and a recorded
+  green check; `--self-test` removes each check in turn and requires the removal to be caught.
