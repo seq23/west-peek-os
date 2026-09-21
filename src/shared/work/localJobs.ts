@@ -103,6 +103,10 @@ export interface LocalJobPayload {
   plan: { document_id: string | null; text: string | null; decided: string[]; asks: Ask[]; answers: string[]; approved_at: string | null; publish_ready: boolean; placeholders: string[]; preview_only: boolean } | null;
   /** 21 Sep 2026: the partner pre-approved in the request — PLAN decides everything, offers no asks. */
   pre_approved: string | null;
+  /** 21 Sep 2026: THE SPECIFICATION — the partner's own words, quoted replies stripped. Handed to Porter verbatim under REQUEST:. */
+  request: string;
+  /** 21 Sep 2026: the files they attached, fetched by the Mac by name through `path` (a Worker route) into the package's attachments dir. */
+  attachments: Array<{ id: string; filename: string; media_type: string; bytes: number; path: string }>;
   /** From BUILD onward. */
   pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null; preview_url: string | null; land_approved_at: string | null; forced_by: string | null } | null;
   rules: Record<string, string>;

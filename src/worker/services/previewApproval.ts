@@ -371,6 +371,8 @@ export interface SendOrPreviewOutcome {
   to: string;
   reason: string;
   subject: string;
+  /** The conversation token a reply carries back — the message id a person can find (21 Sep 2026). */
+  threadToken?: string | null;
   approvalId?: string;
   /** The partner it is waiting on, when it went into the lane. */
   owner?: string;
@@ -399,7 +401,7 @@ export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promis
       cardKind: input.cardKind ?? null,
       events: input.events,
     });
-    return { sent: out.sent, previewed: false, to, reason: out.reason, subject: out.subject };
+    return { sent: out.sent, previewed: false, to, reason: out.reason, subject: out.subject, threadToken: out.threadToken ?? null };
   }
 
   const rendered = renderExecEmail(input.email);

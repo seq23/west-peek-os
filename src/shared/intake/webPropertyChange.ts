@@ -90,17 +90,18 @@ export function propertyIn(text: string): WebProperty | null {
 }
 
 /**
- * Null when there is no Drive link at all. Otherwise what was found — the caller decides the
- * kind from `target_repo` being set.
+ * Null when neither a property nor a Drive link is named. Otherwise what was found — the caller
+ * decides the kind from `target_repo` being set. EVERYTHING is read from what the partner WROTE:
+ * a Drive folder in a quoted earlier thread or a signature is not this request's package (21 Sep
+ * 2026: the Community package folder rode in on a quote and Porter pulled 200 files for a photo).
  */
 export function parseWebPropertyAsk(subject: string, body: string): WebPropertyAsk | null {
   const text = `${subject}\n${body}`.replace(/\r/g, "");
-  // Only what the partner WROTE: a quoted original or a signature must not pre-approve anything.
   const written = writtenPart(text);
-  const folder = FOLDER_LINK.exec(text);
-  const file = FILE_LINK.exec(text);
-  if (!folder && !file) return null;
-  const property = propertyIn(text);
+  const folder = FOLDER_LINK.exec(written);
+  const file = FILE_LINK.exec(written);
+  const property = propertyIn(written);
+  if (!folder && !file && !property) return null;
   return {
     drive_folder_id: folder?.[1] ?? null,
     drive_folder_url: folder ? folder[0]!.replace(/[.,;:]+$/, "") : null,
@@ -121,9 +122,13 @@ function writtenPart(text: string): string {
   return (cut === -1 ? lines : lines.slice(0, cut)).join("\n");
 }
 
-/** Is this a change Porter runs on the Mac? A folder and a property, both. */
-export function isWebPropertyChange(ask: WebPropertyAsk | null): ask is WebPropertyAsk & { drive_folder_id: string; target_repo: string } {
-  return Boolean(ask && ask.drive_folder_id && ask.target_repo);
+/**
+ * Is this a change Porter runs on the Mac? A PROPERTY NAMED, that is all (21 Sep 2026). The
+ * request is the specification; a Drive folder, an attachment or a link are assets it may or may
+ * not reference. "Change the tagline to X" is a whole request.
+ */
+export function isWebPropertyChange(ask: WebPropertyAsk | null): ask is WebPropertyAsk & { target_repo: string } {
+  return Boolean(ask && ask.target_repo);
 }
 
 /** Read the stored `request_json` back. Null when it is not one of ours. */

@@ -12,6 +12,10 @@ import { parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyC
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { answerBlock } from "../src/worker/services/blocks";
+import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
+import { requestAttachments, textBodyOf } from "../src/worker/effects/mimeAttachments";
+import { handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
+import { readFileSync } from "node:fs";
 
 /**
  * PORTER CHANGES A WEB PROPERTY FROM HER MAC (20 Sep 2026, Plan A).
@@ -46,13 +50,13 @@ const EMAIL = `Hi — please update the westpeek.ventures site with the package 
 function fakeBucket() {
   const store = new Map<string, Uint8Array>();
   return {
-    put: async (key: string, body: ArrayBuffer | Uint8Array) => {
-      store.set(key, body instanceof Uint8Array ? body : new Uint8Array(body));
+    put: async (key: string, body: ArrayBuffer | Uint8Array | string) => {
+      store.set(key, typeof body === "string" ? new TextEncoder().encode(body) : body instanceof Uint8Array ? body : new Uint8Array(body));
       return { key };
     },
     get: async (key: string) => {
       const b = store.get(key);
-      return b ? { arrayBuffer: async () => b.buffer } : null;
+      return b ? { arrayBuffer: async () => b.buffer, text: async () => new TextDecoder().decode(b) } : null;
     },
   };
 }
@@ -152,8 +156,9 @@ describe("the door reads a Drive folder and a property", () => {
     const fileOnly = parseWebPropertyAsk("x", "see https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view for the productions site");
     expect(fileOnly?.drive_folder_id).toBeNull();
     expect(fileOnly?.drive_file_url).toContain("/file/d/");
-    expect(isWebPropertyChange(fileOnly)).toBe(false);
+    expect(isWebPropertyChange(fileOnly), "a property named is a change; the file link is an asset").toBe(true);
     expect(parseWebPropertyAsk("hello", "no links here")).toBeNull();
+    expect(isWebPropertyChange(parseWebPropertyAsk("hello", "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOp with no property named")), "a folder with no property is not a change").toBe(false);
     expect(driveFolderLinks("a https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjKlMnOp. and https://drive.google.com/open?id=1ZyXwVuTsRqPoNmLk").map((l) => l.id)).toEqual(["1AbCdEfGhIjKlMnOp", "1ZyXwVuTsRqPoNmLk"]);
   });
 
@@ -395,9 +400,9 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(payload.phase).toBe("LAND");
     expect(payload.model).toBe("haiku");
     expect(payload.pr.check_green_at).toBe(row.check_green_at);
-    // Two blocked emails so far (the plan, then his "no"), and nothing since: green does not email.
+    // RECEIVED at intake, then two blocked emails (the plan, then his "no"), and nothing since: green does not email.
     expect(sent.filter((m) => m.to === SCOOTER && /blocked/i.test(m.subject)).length).toBe(2);
-    expect(sent.filter((m) => m.to === SCOOTER && !/blocked/i.test(m.subject)).length, "no second email between green and land").toBe(0);
+    expect(sent.filter((m) => m.to === SCOOTER && !/blocked/i.test(m.subject) && !/got it/i.test(m.subject)).length, "no second email between green and land").toBe(0);
   });
 
   it("LAND reports the merge: the card is DONE, the row carries the proof, and the DONE email to Scooter carries it too", async () => {
@@ -422,27 +427,32 @@ describe("Scooter emails a package for the ventures site", () => {
 describe("land on green OFF asks first", () => {
   it("a green BUILD blocks with the PR and a question when the rule is off; the answer lands it", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = 'off' WHERE kind = ?1 AND rule_key = 'land_on_green'").bind(WEB_PROPERTY_CHANGE_KIND).run();
-    const id = await openAssignmentCard(env, { subject: "productions site", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `westpeekproductions.com refresh — package: https://drive.google.com/drive/folders/${FOLDER}zz`, limits: EMAILED_TASK_LIMITS });
-    const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(id)).description))![1]!;
-    // Skip the plan ceremony: approve directly through the card's own door.
-    await tickFor(porterId); // parks PLAN
-    await macReports(porterId, { phase: "PLAN", status: "ok", document: "# Plan: productions refresh\n\nnothing to ask", decided: ["all structure"], asks: [], publish_ready: true });
-    await tickFor(porterId); // blocks: "go" to approve
-    expect((await card(porterId)).state).toBe("BLOCKED");
-    await answerBlock(env, porterId, "fu_sequoia_taylor", { action: "ANSWER", text: "go" });
-    await tickFor(porterId); // approval → BUILD parked
-    await macReports(porterId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, check_state: "GREEN" });
-    const out = await tickFor(porterId);
-    expect(out.outcome).toBe("BLOCKED");
-    const c = await card(porterId);
-    expect(c.block_who).toBe("SEQUOIA");
-    expect(String(c.block_needed)).toMatch(/Land on green is OFF/);
-    expect(await liveJobFor(porterId), "nothing queued for the Mac while she decides").toBeNull();
-    await answerBlock(env, porterId, "fu_sequoia_taylor", { action: "ANSWER", text: "land it" });
-    const landing = await tickFor(porterId);
-    expect(landing.outcome).toBe("PROGRESSED");
-    expect(landing.summary).toMatch(/LAND queued/);
-    await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = 'on' WHERE kind = ?1 AND rule_key = 'land_on_green'").bind(WEB_PROPERTY_CHANGE_KIND).run();
+    try {
+      const id = await openAssignmentCard(env, { subject: "productions site", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `westpeekproductions.com refresh — package: https://drive.google.com/drive/folders/${FOLDER}zz`, limits: EMAILED_TASK_LIMITS });
+      const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(id)).description))![1]!;
+      await tickFor(porterId); // parks PLAN
+      // Nothing to ask and publish-ready: no plan email, BUILD parks at once.
+      await macReports(porterId, { phase: "PLAN", status: "ok", document: "# Plan: productions refresh\n\nnothing to ask", decided: ["all structure"], asks: [], publish_ready: true });
+      expect((await tickFor(porterId)).summary).toMatch(/nothing to ask; BUILD queued/);
+      await macReports(porterId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, check_state: "GREEN" });
+      const out = await tickFor(porterId);
+      expect(out.outcome).toBe("BLOCKED");
+      const c = await card(porterId);
+      expect(c.block_who).toBe("SEQUOIA");
+      expect(String(c.block_needed)).toMatch(/Land on green is OFF/);
+      expect(await liveJobFor(porterId), "nothing queued for the Mac while she decides").toBeNull();
+      const question = sent.filter((m) => m.to === SEQUOIA && /blocked/i.test(m.subject)).pop()!;
+      expect(question.text, "the question email carries the question, not the plan").toMatch(/Land on green is OFF/);
+      expect(question.text).not.toMatch(/THE PLAN, in full/);
+      await answerBlock(env, porterId, "fu_sequoia_taylor", { action: "ANSWER", text: "land it" });
+      const landing = await tickFor(porterId);
+      expect(landing.outcome).toBe("PROGRESSED");
+      expect(landing.summary).toMatch(/LAND queued/);
+      await macReports(porterId, { phase: "LAND", status: "ok", merge_sha: "aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd", live_proof: "https://westpeekproductions.com → 200" });
+      expect((await tickFor(porterId)).outcome).toBe("DONE");
+    } finally {
+      await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = 'on' WHERE kind = ?1 AND rule_key = 'land_on_green'").bind(WEB_PROPERTY_CHANGE_KIND).run();
+    }
   });
 
   it("a rule row overrides the model per phase; a bad value falls back to the registry default", () => {
@@ -550,7 +560,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
 });
 
 describe("\"preview\" on a publish-ready plan takes the same road", () => {
-  it("builds, stops at the preview, and lands only on the second \"approved\"; a repo with no preview says so", async () => {
+  it("with nothing to ask the build starts unasked; \"preview first\" by reply makes it stop at the preview and land only on the second \"approved\"; a repo with no preview says so", async () => {
     const porter = await planned(SCOOTER, "Walker", "team page tweak", {
       document: "# Plan: team page tweak\n\nready to ship.",
       decided: ["structure only"],
@@ -558,13 +568,18 @@ describe("\"preview\" on a publish-ready plan takes the same road", () => {
       publish_ready: true,
       placeholders: [],
     });
+    // planned() already ticked: with nothing to ask, BUILD is parked and no plan email went.
+    const row0 = (await readWebPropertyChange(env, porter.id))!;
+    expect(row0.phase).toBe("BUILD");
+    expect(row0.plan_approved_by).toMatch(/built without asking/);
+    // He replies "preview first" to the RECEIVED email: a note on the card, read before the build.
     const out = await replyFrom(SCOOTER, "preview first", await porter.token());
-    expect(out.answered).toBe(true);
-    expect((await tickFor(porter.id)).summary).toMatch(/BUILD queued/);
+    expect(out.steered).toBe(true);
+    const held = await tickFor(porter.id);
+    expect(held.outcome).toBe("PROGRESSED");
     const row1 = (await readWebPropertyChange(env, porter.id))!;
     expect(row1.preview_only).toBe(1);
-    expect(row1.plan_approved_at).toBeTruthy();
-    expect(String((await card(porter.id)).description)).toMatch(/for a PREVIEW first/);
+    expect(String((await card(porter.id)).description)).toMatch(/asked for a preview first/);
     await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/22", pr_number: 22, check_state: "GREEN", proof: "shots/team-desktop.png" });
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
     const c = await card(porter.id);
@@ -708,11 +723,11 @@ describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
     expect(row.land_approved_at, "pre-approval is never the landing approval").toBeNull();
     expect((await card(id)).state).toBe("IN_PROGRESS");
     expect(String((await card(id)).description)).toMatch(/Pre-approved in the request by Scooter Taylor \("your call"\)/);
-    const fyi = sent.slice(before).filter((m) => m.to === SCOOTER);
-    expect(fyi).toHaveLength(1);
-    expect(fyi[0]!.subject).toMatch(/FYI/);
-    expect(fyi[0]!.text).toMatch(/you pre-approved this \("your call"\); no reply needed\. Reply "stop" to hold it\./);
-    expect(fyi[0]!.text).toMatch(/# Plan: footer links/);
+    // No FYI, no plan email: under a pre-approval the partner hears RECEIVED then DONE only.
+    const mail = sent.slice(before).filter((m) => m.to === SCOOTER);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]!.subject).toMatch(/got it/i);
+    expect(mail[0]!.text).toMatch(/You pre-approved this \("your call"\), so the next thing you'll get is the finished result/);
     await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/41", pr_number: 41, check_state: "GREEN" });
     const green = await tickFor(id);
     expect(green.summary, "publish-ready + land on green: no reply needed").toMatch(/landing is queued/);
@@ -745,8 +760,6 @@ describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
     });
     const out = await tickFor(id);
     expect(out.summary).toMatch(/BUILD queued/);
-    const fyi = sent.filter((m) => m.to === SEQUOIA && /FYI/.test(m.subject)).pop()!;
-    expect(fyi.text).toMatch(/I build to a preview link and ask you once before it lands/);
     await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/42", pr_number: 42, check_state: "GREEN", preview_url: "https://p42.pages.dev" });
     expect((await tickFor(id)).outcome, "not ready stops at the preview even when pre-approved").toBe("BLOCKED");
     const row = (await readWebPropertyChange(env, id))!;
@@ -779,6 +792,251 @@ describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
     const green = await tickFor(id);
     expect(green.summary, "no preview stop: forced").toMatch(/landing is queued/);
     expect((await readWebPropertyChange(env, id))!.phase).toBe("LAND");
+  });
+});
+
+const SCOOTER_MIME = (opts: { subject: string; body: string; image?: boolean; quoted?: string }) =>
+  [
+    "Received: from mail-yw1-x112b.google.com (2607:f8b0:4864:20::112b)",
+    "        by cloudflare-email.net (cloudflare) id AVO4JGYRhCSD",
+    "        for <os@joinwestpeek.com>; Mon, 21 Sep 2026 16:00:12 +0000",
+    "DKIM-Signature: v=1; a=rsa-sha256; d=westpeek-ventures.20251104.gappssmtp.com; s=20251104;",
+    "        bh=55bbj7y7UvA7lR/N/NoivXmDt5Iwz8DCR5icYSy9kNQ=;",
+    "Authentication-Results: mx.cloudflare.net;",
+    "\tdkim=pass header.d=westpeek-ventures.20251104.gappssmtp.com header.s=20251104 header.b=dOhiTg8n;",
+    "\tdmarc=none header.from=westpeek.ventures policy.dmarc=none;",
+    "\tspf=pass (mx.cloudflare.net: domain of scooter@westpeek.ventures designates 2607:f8b0:4864:20::112b as permitted sender) smtp.mailfrom=scooter@westpeek.ventures;",
+    "From: Scooter Taylor <scooter@westpeek.ventures>",
+    "To: os@joinwestpeek.com",
+    `Subject: ${opts.subject}`,
+    "Message-ID: <sensori-photo-1@mail.gmail.com>",
+    "MIME-Version: 1.0",
+    'Content-Type: multipart/mixed; boundary="000000000000abc"',
+    "",
+    "--000000000000abc",
+    'Content-Type: multipart/alternative; boundary="000000000000def"',
+    "",
+    "--000000000000def",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    `${opts.body.replace(/—/g, "=E2=80=94")}`,
+    ...(opts.quoted ? ["", "On Mon, 21 Sep 2026 at 09:00, Porter <os@westpeek.ventures> wrote:", `> ${opts.quoted}`] : []),
+    "",
+    "--000000000000def",
+    'Content-Type: text/html; charset="UTF-8"',
+    "",
+    `<div dir="ltr">${opts.body}</div>`,
+    "--000000000000def--",
+    ...(opts.image
+      ? [
+          "--000000000000abc",
+          'Content-Type: image/jpeg; name="sensori-founders.jpg"',
+          'Content-Disposition: attachment; filename="sensori-founders.jpg"',
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from("JFIF fake photo bytes for the test")]).toString("base64"),
+        ]
+      : []),
+    "--000000000000abc--",
+    "",
+  ].join("\r\n");
+
+const GOOD_AUTH_HEADER = "mx.cloudflare.net; spf=pass smtp.mailfrom=scooter@westpeek.ventures; dkim=pass header.d=westpeek-ventures.20251104.gappssmtp.com; dmarc=none";
+
+function inbound(raw: string, headers: Record<string, string> = {}) {
+  const bytes = new TextEncoder().encode(raw);
+  const h = new Headers({ from: "Scooter Taylor <scooter@westpeek.ventures>", to: "os@joinwestpeek.com", subject: /^Subject: (.*)$/m.exec(raw)?.[1] ?? "", "message-id": `<${crypto.randomUUID()}@mail.gmail.com>`, "authentication-results": GOOD_AUTH_HEADER, ...headers });
+  return { from: "scooter@westpeek.ventures", to: "os@joinwestpeek.com", headers: h, raw: new Blob([bytes]).stream(), rawSize: bytes.byteLength };
+}
+
+describe("Porter reads the email (21 Sep 2026): the request is the specification", () => {
+  const PHOTO_EMAIL = SCOOTER_MIME({ subject: "Sensori photo swap on westpeek.ventures", body: "Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.", image: true });
+  let porterId = "";
+
+  it("the text body is the partner's words, not the headers; the image is an attachment; a quoted folder link is not the request's", () => {
+    expect(textBodyOf(PHOTO_EMAIL)).toBe("Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.");
+    const { attachments } = requestAttachments(PHOTO_EMAIL);
+    expect(attachments.map((a) => [a.filename, a.mediaType])).toEqual([["sensori-founders.jpg", "image/jpeg"]]);
+    const quoted = SCOOTER_MIME({ subject: "Re: West Peek Community rebuild", body: "Change the tagline on westpeek.ventures to 'Good people meet good people'.", quoted: "package: https://drive.google.com/drive/folders/1jdhn1qHJW0vurKBU4QYttJIv0ut6-p8d" });
+    const ask = parseWebPropertyAsk("Re: West Peek Community rebuild", textBodyOf(quoted));
+    expect(ask?.target_repo).toBe("join-west-peek-main");
+    expect(ask?.drive_folder_id, "a folder in a quoted earlier thread is not this request's package").toBeNull();
+    expect(isWebPropertyChange(ask), "a request with no folder and no attachment is still a change").toBe(true);
+  });
+
+  it("Scooter's exact shape — one sentence + an attached image + no Drive link → Porter's card, the attachment kept and listed, RECEIVED sent once", async () => {
+    const before = sent.length;
+    await handleInboundEmail(inbound(PHOTO_EMAIL), env);
+    const c = (await env.WP_OS_DB.prepare("SELECT id, description, requested_by_email FROM work_card WHERE kind = 'WEB_PROPERTY_CHANGE' ORDER BY created_at DESC LIMIT 1").first<{ id: string; description: string; requested_by_email: string }>())!;
+    porterId = c.id;
+    expect(c.requested_by_email).toBe(SCOOTER);
+    expect(c.description, "the card carries his words, not Received: headers").toMatch(/Swap the Sensori founders photo/);
+    expect(c.description).not.toMatch(/Received: from/);
+    const row = (await readWebPropertyChange(env, porterId))!;
+    expect(row.request_text).toMatch(/^Swap the Sensori founders photo/);
+    expect(row.drive_folder_id).toBeNull();
+    const att = (await env.WP_OS_DB.prepare("SELECT id, filename, media_type, eml_key FROM request_attachment WHERE work_card_id = ?1").bind(porterId).all<{ id: string; filename: string; media_type: string; eml_key: string }>()).results!;
+    expect(att.map((a) => a.filename)).toEqual(["sensori-founders.jpg"]);
+    expect(att[0]!.eml_key).toMatch(/^inbound-email\//);
+    const received = sent.slice(before).filter((m) => m.to === SCOOTER);
+    expect(received, "exactly one RECEIVED").toHaveLength(1);
+    expect(received[0]!.text).toMatch(/Got it — I'm on it/);
+    expect(received[0]!.text).toMatch(/Attachments: sensori-founders\.jpg/);
+    expect(received[0]!.text).toMatch(/Drive folder: no/);
+    const notices = (await env.WP_OS_DB.prepare("SELECT kind, cause, message_id FROM work_card_notice WHERE work_card_id = ?1").bind(porterId).all<{ kind: string; cause: string; message_id: string | null }>()).results!;
+    expect(notices.map((n) => n.kind)).toEqual(["RECEIVED"]);
+    expect(notices[0]!.message_id, "recorded with a message id").toBeTruthy();
+    const again = await sendReceived(env, porterId);
+    expect(again.sent, "the same cause never emails twice").toBe(false);
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER)).toHaveLength(1);
+  });
+
+  it("the PLAN job carries REQUEST and the attachment; the Mac fetches it by name through the Worker", async () => {
+    const out = await tickFor(porterId);
+    expect(out.summary).toMatch(/PLAN queued/);
+    const job = (await liveJobFor(porterId))!;
+    const payload = JSON.parse(job.job_json!) as { request: string; attachments: Array<{ id: string; filename: string; path: string }>; drive: { folder_id: string | null } };
+    expect(payload.request).toMatch(/^Swap the Sensori founders photo/);
+    expect(payload.attachments).toHaveLength(1);
+    expect(payload.attachments[0]!.filename).toBe("sensori-founders.jpg");
+    expect(payload.drive.folder_id).toBeNull();
+    const res = await handleGetRequestAttachment({
+      request: new Request(`https://os.joinwestpeek.com${payload.attachments[0]!.path}`),
+      env,
+      identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: { id: porterId, attId: payload.attachments[0]!.id },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes[0]).toBe(0xff);
+    expect(new TextDecoder().decode(bytes)).toMatch(/fake photo bytes/);
+  });
+
+  it("nothing to ask + publish-ready → built without asking: no plan email, BUILD parked, the card says why; then DONE only", async () => {
+    const before = sent.length;
+    await macReports(porterId, { phase: "PLAN", status: "ok", document: "# Plan: Sensori photo swap\n\nReplace sites/ventures/assets/img/portfolio/sensori-founders.jpg with the attachment; same dimensions.", decided: ["same file name and dimensions, so no markup change"], asks: [], publish_ready: true, placeholders: [] });
+    const out = await tickFor(porterId);
+    expect(out.outcome, "no block").toBe("PROGRESSED");
+    expect(out.summary).toMatch(/nothing to ask; BUILD queued/);
+    const row = (await readWebPropertyChange(env, porterId))!;
+    expect(row.plan_approved_by).toMatch(/no partner decisions in this change; built without asking/);
+    expect(String((await card(porterId)).description)).toMatch(/No partner decisions in this change; built without asking/);
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER), "no plan email").toHaveLength(0);
+    await macReports(porterId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/51", pr_number: 51, check_state: "GREEN", proof: "validate green · shots" });
+    expect((await tickFor(porterId)).summary).toMatch(/landing is queued/);
+    await macReports(porterId, { phase: "LAND", status: "ok", merge_sha: "1111111111222222222233333333334444444444", live_proof: "https://westpeek.ventures/#portfolio → 200, new photo hash" });
+    expect((await tickFor(porterId)).outcome).toBe("DONE");
+    const done = sent.slice(before).filter((m) => m.to === SCOOTER);
+    expect(done, "RECEIVED earlier, then DONE only").toHaveLength(1);
+    expect(done[0]!.subject).toMatch(/done/i);
+    const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(porterId).all<{ kind: string }>()).results!.map((n) => n.kind);
+    expect(kinds).toEqual(["RECEIVED", "DONE"]);
+  });
+
+  it("a single ask still sends the plan email — a non-empty asks list never reaches BUILD without an approval", async () => {
+    const id = (await planned(SEQUOIA, "Wren", "hero photo rights", {
+      document: "# Plan: hero photo\n\nthe photo is from a news site.",
+      decided: [],
+      asks: [{ question: "Use the photo from https://news.example.com/x? Rights unclear.", recommended: "ask the photographer; use the founders' own photo meanwhile" }],
+      publish_ready: true,
+      placeholders: [],
+    })).id;
+    const c = await card(id);
+    expect(c.state).toBe("BLOCKED");
+    expect((await readWebPropertyChange(env, id))!.plan_approved_at).toBeNull();
+    const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string }>()).results!.map((n) => n.kind);
+    expect(kinds).toEqual(["RECEIVED", "PLAN"]);
+  });
+
+  it("an oversize partner email (the 3.9 MB shape) still becomes Porter's card from the stored copy, not a Deck card", async () => {
+    const big = SCOOTER_MIME({ subject: "Sensori photo swap, big", body: "Same swap on westpeek.ventures, bigger photo attached.", image: true });
+    const msg = inbound(big);
+    msg.rawSize = 300 * 1024 * 1024 + 1; // past MAX_BODY_BYTES: the oversize path
+    await handleInboundEmail(msg, env);
+    const c = (await env.WP_OS_DB.prepare("SELECT id, kind, title, description FROM work_card ORDER BY created_at DESC LIMIT 1").first<{ id: string; kind: string; title: string; description: string }>())!;
+    expect(c.kind).toBe("WEB_PROPERTY_CHANGE");
+    expect(c.title).not.toMatch(/^Deck:/);
+    const att = (await env.WP_OS_DB.prepare("SELECT filename FROM request_attachment WHERE work_card_id = ?1").bind(c.id).all<{ filename: string }>()).results!;
+    expect(att.map((a) => a.filename)).toEqual(["sensori-founders.jpg"]);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(c.id).run();
+  });
+
+  it("a stored message can be read through the door again", async () => {
+    const key = `inbound-email/2026-09-21/${crypto.randomUUID()}.eml`;
+    await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: Uint8Array) => Promise<unknown> }).put(key, new TextEncoder().encode(SCOOTER_MIME({ subject: "Reingest me — team page on westpeek.ventures", body: "Add the new team member on westpeek.ventures; photo attached.", image: true })));
+    const res = await handleReingestStoredEmail({
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key, received_tldr: "Got it — sorry this took so long. I have the photo now and I'm on it." }) }),
+      env,
+      identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: {},
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { newest_web_property_change_card: string };
+    const row = (await readWebPropertyChange(env, body.newest_web_property_change_card))!;
+    expect(row.request_text).toMatch(/Add the new team member/);
+    const received = sent.filter((m) => m.to === SCOOTER).pop()!;
+    expect(received.text, "the re-read's RECEIVED carries the given first line verbatim").toMatch(/Got it — sorry this took so long\. I have the photo now and I'm on it\./);
+    expect(received.text).toMatch(/Attachments: sensori-founders\.jpg/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(body.newest_web_property_change_card).run();
+  });
+
+  it("the prompt tells Porter the request is the spec, he has tools, and the rights/login/RUNBOOK/cannot-act policy", () => {
+    const prompt = readFileSync(new URL("../scripts/duties/web-property-change-prompt.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+    for (const line of [
+      "The REQUEST is the specification",
+      "You have tools; use them for whatever the request needs",
+      "Fetch a public page or image by URL",
+      "record the source URL",
+      "a portfolio company's logo or founder photo from that company's website",
+      "a picture from a news site — is an **ASK** naming the source URL",
+      'A pre-approval phrase ("your call") does NOT waive a rights ask',
+      "Anything needing a login, a payment, an account, a CAPTCHA, or a private page: do NOT attempt it. BLOCK",
+      "RUNBOOK_FORBIDS",
+      "A request you cannot act on at all",
+      "you said the photo is attached; nothing arrived",
+      "A change with no partner decision returns `asks: []`",
+    ]) {
+      expect(prompt, `the prompt must say: ${line.slice(0, 50)}`).toContain(line);
+    }
+  });
+});
+
+describe("STUCK is sent once, only when idle past the ceiling inside the window", () => {
+  it("a run that dies mid-plan and is not re-claimed within the ceiling → exactly one STUCK; a second tick sends nothing", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = '00-24' WHERE kind = ?1 AND rule_key = 'stuck_window_ct'").bind(WEB_PROPERTY_CHANGE_KIND).run();
+    const before = sent.length;
+    const chiefId = await openAssignmentCard(env, { subject: "stuck test", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Change the footer on westpeek.ventures.", limits: EMAILED_TASK_LIMITS });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id); // PLAN parked
+    // The Mac claimed it and died mid-plan: the reaper closes the run.
+    const run = (await liveJobFor(id))!;
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED', claimed_by = 'mac', resolution = 'went quiet' WHERE id = ?1").bind(run.id).run();
+    const retry = await tickFor(id);
+    expect(retry.outcome, "a failed attempt, re-parked next tick").toBe("FAILED");
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /stuck/i.test(m.subject)), "a re-claim inside the ceiling says nothing").toHaveLength(0);
+    await tickFor(id); // re-parked
+    const queued = (await liveJobFor(id))!;
+    expect(queued.status).toBe("QUEUED");
+    // Nobody claims it; 46 minutes pass.
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(queued.id, new Date(Date.now() - 46 * 60_000).toISOString()).run();
+    const held = await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
+    expect(held.held).toBe(true);
+    const stuck = sent.slice(before).filter((m) => m.to === SCOOTER && /stuck/i.test(m.subject));
+    expect(stuck).toHaveLength(1);
+    expect(stuck[0]!.text).toMatch(/I'm stuck: the plan has been waiting \*{0,2}46\*{0,2} minutes for the Mac/);
+    await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /stuck/i.test(m.subject)), "the same cause never emails twice").toHaveLength(1);
+    const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string }>()).results!.map((n) => n.kind);
+    expect(kinds).toEqual(["RECEIVED", "STUCK"]);
+    await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = '06-22' WHERE kind = ?1 AND rule_key = 'stuck_window_ct'").bind(WEB_PROPERTY_CHANGE_KIND).run();
+  });
+
+  it("the window is Central hours", () => {
+    expect(stuckWindowOpen("06-22", new Date("2026-09-21T17:00:00Z"))).toBe(true); // 12:00 CDT
+    expect(stuckWindowOpen("06-22", new Date("2026-09-21T08:00:00Z"))).toBe(false); // 03:00 CDT
+    expect(stuckWindowOpen("00-24", new Date("2026-09-21T08:00:00Z"))).toBe(true);
   });
 });
 

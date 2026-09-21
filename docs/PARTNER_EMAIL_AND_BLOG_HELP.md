@@ -64,6 +64,21 @@ search/judge/writer, the deliverable filed, the email sent once) and `e2e/p68-bl
 
 ## A web property change is a routed request worked on her Mac (Plan A, 20 Sep 2026)
 
+A partner emails `os@joinwestpeek.com` naming one of the firm's web properties — **the email is
+the specification** (Porter reads the partner's own words; quoted replies and signatures are
+stripped) and everything else is an asset it may reference: files attached to the email (kept by
+name, listed under ATTACHMENTS: on the Mac), a **Google Drive folder link** written in the partner's
+own text (never one in a quoted thread), links to pages. "Swap the founders photo for the one
+attached" is a whole request; so is "change the tagline to X". Porter can fetch a public page or
+image by URL when the request says so (source recorded; rights are an ASK unless the asset is the
+partners' own or a featured company's own; a login-only page is a BLOCK).
+
+What the partner hears, at most once each: **RECEIVED** at intake ("Got it — I'm on it", what was
+understood, what comes next), the **PLAN** only when a decision is theirs (or the **PREVIEW** on
+the not-ready path), a **QUESTION** only when something only they can supply is missing, **STUCK**
+only when the work cannot proceed or has sat idle past the ceiling (45 min inside 06–22 Central),
+and **DONE** with the proof. A change with nothing to ask is built without asking.
+
 A partner emails `os@joinwestpeek.com` a **Google Drive folder link** and names one of the firm's
 web properties — `westpeek.ventures`, `westpeekproductions.com` or `joinwestpeek.com` (or "the
 ventures site", "the productions site", "the community site"). Porter reads it at the door

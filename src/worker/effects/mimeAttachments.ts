@@ -129,6 +129,96 @@ function filenameIn(part: string): string {
  * SAY so on the work card. Silence about a dropped attachment is how the Sensori deck went missing.
  */
 export function pdfAttachments(raw: string): { attachments: Attachment[]; unread: string[] } {
+  return attachmentsOf(raw, (type) => type.includes("application/pdf"));
+}
+
+/**
+ * THE FILES A PARTNER ATTACHED TO A REQUEST (21 Sep 2026). Images and PDFs — "the photo is
+ * attached" is a specification, and the photo is an asset the plan needs. Same parser as the
+ * decks, a wider net. Inline images (`Content-ID`, no disposition) count too: a photo dragged
+ * into Gmail arrives that way.
+ */
+export function requestAttachments(raw: string): { attachments: Attachment[]; unread: string[] } {
+  return attachmentsOf(raw, (type) => type.startsWith("image/") || type.includes("application/pdf"), 10);
+}
+
+/**
+ * THE TEXT A PERSON WROTE, out of a MIME message: the `text/plain` leaf (decoded), else the
+ * `text/html` leaf with its tags stripped, else the body after the headers. A message that is not
+ * MIME at all (a test fixture, a plain body) is returned as it is. This is what a card's
+ * "WHAT WAS ASKED" must carry — on 21 Sep 2026 the first real request reached Porter as 6,000
+ * characters of `Received:` and DKIM headers, and the words themselves were lost.
+ */
+export function textBodyOf(raw: string): string {
+  const text = raw ?? "";
+  const headerEnd = text.search(/\r?\n\r?\n/);
+  const looksMime = /^[A-Za-z-]+:\s/.test(text) && headerEnd > 0 && /^(?:received|from|to|subject|content-type|mime-version|date|message-id|dkim-signature|return-path|x-[a-z-]+):/im.test(text.slice(0, headerEnd));
+  if (!looksMime) return text;
+  const boundary = boundaryOf(text);
+  const parts = boundary ? leafParts(text, boundary) : [text];
+  const decoded = (part: string): string => {
+    const split = part.search(/\r?\n\r?\n/);
+    const body = split === -1 ? "" : part.slice(split).replace(/^\r?\n\r?\n/, "");
+    const encoding = (headerIn(part, "content-transfer-encoding") ?? "").toLowerCase();
+    if (encoding.includes("base64")) {
+      try {
+        const bin = atob(body.replace(/[\r\n\s]/g, ""));
+        const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+        return new TextDecoder("utf-8").decode(bytes);
+      } catch {
+        return body;
+      }
+    }
+    if (encoding.includes("quoted-printable")) {
+      return body
+        .replace(/=\r?\n/g, "")
+        .replace(/=([0-9A-Fa-f]{2})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+        .replace(/[\x80-\xff]+/g, (m) => {
+          try {
+            return new TextDecoder("utf-8").decode(Uint8Array.from(m, (c) => c.charCodeAt(0)));
+          } catch {
+            return m;
+          }
+        });
+    }
+    return body;
+  };
+  const plain = parts.find((p) => (headerIn(p, "content-type") ?? "").toLowerCase().startsWith("text/plain") && !/attachment/i.test(headerIn(p, "content-disposition") ?? ""));
+  if (plain) return decoded(plain).replace(/\r\n/g, "\n").trim();
+  const html = parts.find((p) => (headerIn(p, "content-type") ?? "").toLowerCase().startsWith("text/html"));
+  if (html) {
+    return decoded(html)
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|li|h\d|tr)>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\r\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  return boundary ? "" : decoded(text).replace(/\r\n/g, "\n").trim();
+}
+
+/** The bytes of one named attachment, decoded. Null when the message carries no such file. */
+export function attachmentBytes(raw: string, filename: string): { bytes: Uint8Array; mediaType: string } | null {
+  const { attachments } = attachmentsOf(raw, () => true, 50);
+  const hit = attachments.find((a) => a.filename === filename);
+  if (!hit) return null;
+  try {
+    const bin = atob(hit.dataBase64);
+    return { bytes: Uint8Array.from(bin, (c) => c.charCodeAt(0)), mediaType: hit.mediaType };
+  } catch {
+    return null;
+  }
+}
+
+function attachmentsOf(raw: string, accept: (type: string) => boolean, max = MAX_ATTACHMENTS): { attachments: Attachment[]; unread: string[] } {
   const attachments: Attachment[] = [];
   const unread: string[] = [];
 
@@ -156,11 +246,13 @@ export function pdfAttachments(raw: string): { attachments: Attachment[]; unread
 
   for (const part of parts) {
     const type = (headerIn(part, "content-type") ?? "").toLowerCase();
-    if (!type.includes("application/pdf")) continue;
+    if (!accept(type)) continue;
+    // A text/html leaf is never a file; an unnamed image with no disposition is a body decoration.
+    if (type.startsWith("text/")) continue;
 
     const filename = filenameIn(part);
-    if (attachments.length >= MAX_ATTACHMENTS) {
-      unread.push(`${filename} (only the first ${MAX_ATTACHMENTS} were taken)`);
+    if (attachments.length >= max) {
+      unread.push(`${filename} (only the first ${max} were taken)`);
       continue;
     }
 
@@ -192,7 +284,7 @@ export function pdfAttachments(raw: string): { attachments: Attachment[]; unread
       continue;
     }
 
-    attachments.push({ filename, mediaType: "application/pdf", dataBase64, bytes });
+    attachments.push({ filename, mediaType: type.split(";")[0]!.trim() || "application/octet-stream", dataBase64, bytes });
   }
 
   return { attachments, unread };

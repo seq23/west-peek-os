@@ -223,7 +223,14 @@ export async function announceOutcome(
   // A REQUEST THAT CAME BY EMAIL IS ANSWERED BY EMAIL — at the end, not at the hand-off. The
   // partner asked for a thing, not for a tour of who holds the card.
   if (outcome === "HANDED_ON") return { emailed: null };
-  const reply = await replyToRequester(env, card, outcome, who, detail);
+  // Porter's web property change tells the partner PLAN, PREVIEW, QUESTION or DONE — each once
+  // per cause (her rule, 21 Sep 2026). Every other kind keeps its own two emails.
+  let notice: { kind: "RECEIVED" | "PLAN" | "PREVIEW" | "QUESTION" | "STUCK" | "DONE"; cause: string } | undefined;
+  if (card.kind === WEB_PROPERTY_CHANGE_KIND) {
+    const { noticeFor } = await import("./webPropertyChange");
+    notice = await noticeFor(env, card.id, outcome);
+  }
+  const reply = await replyToRequester(env, card, outcome, who, detail, notice);
   return { emailed: reply.sent ? reply.to : null };
 }
 

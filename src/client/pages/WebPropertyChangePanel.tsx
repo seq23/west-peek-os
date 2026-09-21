@@ -51,6 +51,11 @@ interface ChangeRow {
   forced_by_name: string | null;
   forced_at: string | null;
   forced_placeholders: string[];
+  /** 0221: the request is the specification; the files are its assets; what the partner has been told. */
+  request_text: string | null;
+  pre_approved_phrase: string | null;
+  attachments: Array<{ id: string; filename: string; media_type: string; bytes: number }>;
+  notices: Array<{ kind: string; cause: string; sent: number; sent_at: string }>;
 }
 
 const PHASES: Array<{ key: ChangeRow["phase"]; label: string }> = [
@@ -105,6 +110,26 @@ export function WebPropertyChangePanel({ cardId, onNavigate }: { cardId: string;
         </p>
       )}
       <dl className="wpc-facts">
+        {r.request_text && (
+          <div>
+            <dt>The request</dt>
+            <dd><pre className="wpc-proof" data-testid={`wpc-request-${cardId}`}>{r.request_text}</pre>{r.pre_approved_phrase && <span className="badge">pre-approved: "{r.pre_approved_phrase}"</span>}</dd>
+          </div>
+        )}
+        {r.attachments.length > 0 && (
+          <div>
+            <dt>Attached</dt>
+            <dd>
+              <ul className="wpc-list" data-testid={`wpc-attachments-${cardId}`}>
+                {r.attachments.map((a) => (
+                  <li key={a.id}>
+                    <a href={`/api/work-cards/${cardId}/attachments/${a.id}`} target="_blank" rel="noopener noreferrer">{a.filename}</a> <span className="small">({a.media_type}, {Math.round(a.bytes / 1024)} KB)</span>
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Package</dt>
           <dd>
@@ -208,6 +233,12 @@ export function WebPropertyChangePanel({ cardId, onNavigate }: { cardId: string;
           <dt>Landed</dt>
           <dd data-testid={`wpc-landed-${cardId}`}>{r.merge_sha ? `${r.merge_sha.slice(0, 10)} · ${r.landed_at ? readableDate(r.landed_at) : ""}` : "not yet"}</dd>
         </div>
+        {r.notices.length > 0 && (
+          <div>
+            <dt>Told the partner</dt>
+            <dd data-testid={`wpc-notices-${cardId}`}>{r.notices.map((n) => `${n.kind}${n.sent ? "" : " (not sent)"} · ${readableDate(n.sent_at)}`).join(" · ")}</dd>
+          </div>
+        )}
         {r.live_proof && (
           <div>
             <dt>Live proof</dt>

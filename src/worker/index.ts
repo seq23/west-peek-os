@@ -117,7 +117,7 @@ import {
   handleListQuarantinedOutputs,
   handleRunAi,
 } from "./services/aiRuns";
-import { handleGetWebPropertyChange, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
+import { handleGetRequestAttachment, handleGetWebPropertyChange, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
 import {
   handleSubscriptionSeatClaim,
   handleSubscriptionSeatHeartbeat,
@@ -1117,6 +1117,8 @@ const router = new Router()
   .post("/api/work-cards/:id/unblock", handleUnblockWorkCard)
   // Plan A (20 Sep 2026): the state of a web property change, and the standing rules of a card kind.
   .get("/api/work-cards/:id/web-property-change", handleGetWebPropertyChange)
+  .get("/api/work-cards/:id/attachments/:attId", handleGetRequestAttachment)
+  .post("/api/inbound-email/reingest", handleReingestStoredEmail)
   .get("/api/work-kinds/:kind/rules", handleWorkKindRules)
   .patch("/api/work-kinds/:kind/rules/:key", handleSetWorkKindRule)
   .post("/api/work-cards/:id/look", handleCardLook)

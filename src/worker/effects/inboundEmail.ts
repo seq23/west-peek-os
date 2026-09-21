@@ -234,9 +234,15 @@ export function inboundMessageKey(headers: Headers): string | null {
   return raw.replace(/^<|>$/g, "").trim().slice(0, 998) || null;
 }
 
+export interface InboundOptions {
+  /** The RECEIVED email's first line, verbatim, when a person re-reads a stored message and has something to say first. */
+  receivedTldr?: string | null;
+}
+
 export async function handleInboundEmail(
   message: { from: string; to: string; headers: Headers; raw: ReadableStream; rawSize: number },
   env: Env,
+  options: InboundOptions = {},
 ): Promise<void> {
   const key = inboundMessageKey(message.headers);
   const firmScope = "west-peek";
@@ -249,7 +255,7 @@ export async function handleInboundEmail(
       return;
     }
   }
-  await handleInboundEmailOnce(message, env);
+  await handleInboundEmailOnce(message, env, options);
   if (key) {
     await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO inbound_email_seen (message_id, firm_scope) VALUES (?1, ?2)")
       .bind(key, firmScope)
@@ -260,6 +266,7 @@ export async function handleInboundEmail(
 async function handleInboundEmailOnce(
   message: { from: string; to: string; headers: Headers; raw: ReadableStream; rawSize: number },
   env: Env,
+  options: InboundOptions = {},
 ): Promise<void> {
   /*
    * DECODED HERE, at the one place the raw header is read.
@@ -339,6 +346,21 @@ async function handleInboundEmailOnce(
      * loses the deal rather than the attachment.
      */
     let storedKey: string | null = null;
+    /*
+     * A PARTNER'S OVERSIZE MESSAGE IS STILL THEIR REQUEST (21 Sep 2026). "The photo is attached"
+     * came in at 3.9 MB, took this path, became "Deck: Sensori …", failed to read as a deck, and
+     * never reached Porter. So the stream is TEE'D: one branch to R2 as before, the other read as
+     * text when the sender authenticated as a partner, and the assignment card opens from the
+     * stored copy with the attachment kept by name. Founders' oversize decks are unchanged.
+     */
+    const partnerAuthority = mailAuthority({ fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results") });
+    let partnerText: Promise<string> | null = null;
+    let rawForStore: ReadableStream = message.raw;
+    if (partnerAuthority.isAssignment) {
+      const [a, b] = message.raw.tee();
+      rawForStore = a;
+      partnerText = new Response(b).text();
+    }
     if (env.WP_OS_DOCUMENTS) {
       storedKey = `inbound-email/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.eml`;
       try {
@@ -361,7 +383,7 @@ async function handleInboundEmailOnce(
          * is draining yet, and the two run against each other.
          */
         const sized = new FixedLengthStream(message.rawSize);
-        const pumped = message.raw.pipeTo(sized.writable);
+        const pumped = rawForStore.pipeTo(sized.writable);
         await env.WP_OS_DOCUMENTS.put(storedKey, sized.readable, {
           httpMetadata: { contentType: "message/rfc822" },
           customMetadata: { from: sender.slice(0, 200), subject: subject.slice(0, 200) },
@@ -396,6 +418,29 @@ async function handleInboundEmailOnce(
      * the card in from its own CPU budget before the sweep lets the analyst start. Size is not a
      * fact the analyst is ever told about.
      */
+    if (partnerAuthority.isAssignment && partnerText) {
+      const rawText = await partnerText.catch(() => "");
+      const cardId = await openAssignmentCard(env, {
+        subject,
+        partnerAddress: partnerAuthority.partnerAddress!,
+        chiefOfStaff: partnerAuthority.chiefOfStaff!,
+        raw: rawText,
+        limits: EMAILED_TASK_LIMITS,
+        emlKey: storedKey,
+        receivedTldr: options.receivedTldr ?? null,
+      });
+      await appendEvent(env, {
+        eventType: "inbound_email.received",
+        actorType: "system",
+        actorId: "inbound_email",
+        objectType: "inbound_email",
+        objectId: `${message.from}:${subject}`.slice(0, 200),
+        firmScope,
+        payload: { from: sender, to: message.to, subject, bytes: message.rawSize, mailbox: INTAKE_MAILBOX, assignment_card_id: cardId, stored: storedKey, oversize_partner_request: true },
+      });
+      return;
+    }
+
     const oversizeName = oversizeMatch?.canonical_name ?? dealFromMessage(subject, "", sender, true)?.company ?? null;
     let oversizeCard: string;
     if (oversizeName) {
@@ -684,6 +729,7 @@ async function handleInboundEmailOnce(
       chiefOfStaff: authority.chiefOfStaff!,
       raw,
       limits: EMAILED_TASK_LIMITS,
+      receivedTldr: options.receivedTldr ?? null,
     });
 
     /*
