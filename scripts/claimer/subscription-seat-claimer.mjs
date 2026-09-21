@@ -132,6 +132,16 @@ export function extractAnswer(stdout) {
   return blocks[blocks.length - 1];
 }
 
+/** The environment a seat runs in: every ANTHROPIC_* / CLAUDE_* auth variable removed. */
+export function seatEnv(base) {
+  const out = {};
+  for (const [k, v] of Object.entries(base ?? {})) {
+    if (/^ANTHROPIC_/i.test(k) || /^CLAUDE_(API|AUTH|CODE_OAUTH|OAUTH|TOKEN)/i.test(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 /** Is a seat's CLI actually on this machine? A seat we cannot run must never be claimed for. */
 async function seatInstalled(seat) {
   try {
@@ -229,7 +239,9 @@ async function runOnSeat(seat, prompt) {
       // stdin closed. Both CLIs block for ever on an open stdin with no terminal, which under
       // launchd looks exactly like a hang and is the second of the two traps.
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      // HER SEAT, NEVER A KEY (21 Sep 2026): the vault injects ANTHROPIC_API_KEY for the Worker's
+      // paid lane, and `claude -p` would prefer it over the subscription login and bill the API.
+      env: seatEnv(process.env),
     });
     let out = "";
     let err = "";
@@ -379,6 +391,7 @@ function selfTest() {
     ["chatgpt auth mode is on the subscription", () => codexOnSubscription('{"auth_mode":"chatgpt","OPENAI_API_KEY":null}')],
     ["apikey auth mode is refused — it would bill per token", () => !codexOnSubscription('{"auth_mode":"apikey"}')],
     ["unparseable auth.json is refused, not assumed", () => !codexOnSubscription("{{{")],
+    ["the seat never sees the vault's API key", () => { const e = seatEnv({ PATH: "/bin", ANTHROPIC_API_KEY: "sk", CLAUDE_CODE_OAUTH_TOKEN: "o" }); return e.PATH === "/bin" && !("ANTHROPIC_API_KEY" in e) && !("CLAUDE_CODE_OAUTH_TOKEN" in e); }],
   ];
   let failed = 0;
   for (const [name, fn] of cases) {

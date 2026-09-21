@@ -12,6 +12,10 @@ import type { SweepCard } from "./workSweep";
 import { readWebPropertyAsk, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { approvedAnswers, askLines, decidedFromAsks, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
 import { abandonRun } from "../ai/subscriptionSeats";
+import { alreadyTold, recordNotice, type NoticeKind } from "./requestReply";
+import { attachmentBytes } from "../effects/mimeAttachments";
+import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
+import { isTechnicalBlock } from "../../shared/work/blocks";
 import {
   CLAUDE_MODEL_ALIASES,
   LOCAL_JOB_RUN_KIND,
@@ -115,6 +119,127 @@ export interface WebPropertyChangeRow {
   /** 0220. The pre-approval phrase in the partner's own request, written at the door only. */
   pre_approved_phrase: string | null;
   force_phrase: string | null;
+  /** 0221. The partner's own words, readable — the specification. */
+  request_text: string | null;
+}
+
+export interface RequestAttachment {
+  id: string;
+  filename: string;
+  media_type: string;
+  bytes: number;
+  eml_key: string;
+}
+
+export async function attachmentsFor(env: Env, cardId: string): Promise<RequestAttachment[]> {
+  return (
+    (await env.WP_OS_DB.prepare("SELECT id, filename, media_type, bytes, eml_key FROM request_attachment WHERE work_card_id = ?1 ORDER BY created_at ASC").bind(cardId).all<RequestAttachment>()).results ?? []
+  );
+}
+
+/**
+ * WHICH EMAIL THIS IS, so it is sent at most once per cause (her rule, 21 Sep 2026). PLAN when the
+ * plan is filed and waits for approval (cause: its filing time); PREVIEW when the preview waits
+ * for the second approval (cause: the green time); QUESTION for any other block (cause: the
+ * question's words); DONE once.
+ */
+export async function noticeFor(env: Env, cardId: string, outcome: "DONE" | "BLOCKED"): Promise<{ kind: NoticeKind; cause: string }> {
+  if (outcome === "DONE") return { kind: "DONE", cause: "" };
+  const row = await readWebPropertyChange(env, cardId);
+  const card = await env.WP_OS_DB.prepare("SELECT block_needed, block_reason FROM work_card WHERE id = ?1").bind(cardId).first<{ block_needed: string | null; block_reason: string | null }>();
+  // A FAULT is "I'm stuck", not a question: a lane refused, three attempts spent, stopped part way.
+  if (isTechnicalBlock(card?.block_reason) || ["tried_and_could_not_finish", "stopped_part_way"].includes(card?.block_reason ?? "")) {
+    return { kind: "STUCK", cause: `block:${card?.block_reason}` };
+  }
+  const isPlanBlock = /The plan is in this email|NOT PUBLISH-READY/.test(card?.block_needed ?? "");
+  if (row?.plan_filed_at && !row.plan_approved_at && isPlanBlock) return { kind: "PLAN", cause: row.plan_filed_at };
+  if (row?.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by) return { kind: "PREVIEW", cause: row.check_green_at ?? "green" };
+  return { kind: "QUESTION", cause: (card?.block_needed ?? "").slice(0, 400) };
+}
+
+/** One short email through the lane, recorded as a notice; never twice for the same cause. */
+async function tellRequester(
+  env: Env,
+  card: Pick<WebPropertyChangeCard, "id" | "title" | "firm_scope" | "requested_by_email" | "preview_first" | "preview_owner_id">,
+  notice: { kind: NoticeKind; cause: string },
+  email: { what: string; tldr: string; sections: Array<{ label: string; bullets: string[] }>; details?: string | null },
+): Promise<{ sent: boolean; reason: string }> {
+  const to = (card.requested_by_email ?? "").trim().toLowerCase();
+  const partner = to ? partnerByEmail(to) : null;
+  if (!partner) return { sent: false, reason: "the card was not asked for by a partner's email" };
+  if (await alreadyTold(env, card.id, notice.kind, notice.cause)) return { sent: false, reason: `${notice.kind} already sent for this cause` };
+  let out: { sent: boolean; reason: string; threadToken?: string | null };
+  try {
+    out = await sendOrPreview(env, {
+      to,
+      email: { employee: PORTER_NAME, ...email, details: email.details ?? null },
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      cardKind: WEB_PROPERTY_CHANGE_KIND,
+      workCardId: card.id,
+      cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
+      tickedByFirmUserId: card.preview_owner_id ?? null,
+      requestedByEmail: to,
+      what: card.title,
+    });
+  } catch (err) {
+    out = { sent: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  await recordNotice(env, { cardId: card.id, kind: notice.kind, cause: notice.cause, to, messageId: out.threadToken ?? null, sent: out.sent, detail: out.reason, firmScope: card.firm_scope });
+  return { sent: out.sent, reason: out.reason };
+}
+
+/**
+ * RECEIVED — "Got it — I'm on it." Once per card, at intake (or when a card is re-opened by hand,
+ * with an apology folded in). Says what was understood and what comes next.
+ */
+export async function sendReceived(env: Env, cardId: string, input: { tldr?: string | null } = {}): Promise<{ sent: boolean; reason: string }> {
+  const card = await env.WP_OS_DB.prepare("SELECT id, title, firm_scope, requested_by_email, preview_first, preview_owner_id FROM work_card WHERE id = ?1").bind(cardId).first<WebPropertyChangeCard>();
+  const row = await readWebPropertyChange(env, cardId);
+  if (!card || !row) return { sent: false, reason: "no such web property change" };
+  const attachments = await attachmentsFor(env, cardId);
+  const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
+  const next = row.pre_approved_phrase
+    ? `You pre-approved this ("${row.pre_approved_phrase}"), so the next thing you'll get is the finished result${row.publish_ready === 0 ? " — or the preview link first if the package is not publish-ready" : ""}.`
+    : "If any decision is yours to make — brand, copy meaning, legal wording, a public claim, image rights, money — I'll send you the plan with those questions; one word back is enough. If none is, the next thing you'll get is the finished result.";
+  return tellRequester(env, card, { kind: "RECEIVED", cause: "" }, {
+    what: `got it — ${asked.slice(0, 60)}`,
+    tldr: input.tldr?.trim() || `Got it — I'm on it. ${next}`,
+    sections: [
+      {
+        label: "What I understood",
+        bullets: [
+          `Property: ${row.property_host ?? row.target_repo}`,
+          `Attachments: ${attachments.length === 0 ? "none" : attachments.map((a) => a.filename).join(", ")}`,
+          `Drive folder: ${row.drive_folder_url ? "yes" : "no"}`,
+          `Your words: "${(row.request_text ?? row.ask).replace(/\s+/g, " ").slice(0, 200)}"`,
+        ],
+      },
+      { label: "What comes next", bullets: [next, `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`] },
+    ],
+  });
+}
+
+/** STUCK — only when the work cannot proceed without a person, or has sat idle past the ceiling. Once per cause. */
+export async function sendStuck(env: Env, card: WebPropertyChangeCard, cause: string, reason: string, next: string): Promise<{ sent: boolean; reason: string }> {
+  return tellRequester(env, card, { kind: "STUCK", cause }, {
+    what: `stuck — ${card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60)}`,
+    tldr: `I'm stuck: ${reason} — ${next}`,
+    sections: [
+      { label: "Why", bullets: [reason] },
+      { label: "What happens next", bullets: [next, `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`] },
+    ],
+  });
+}
+
+/** Is the "stuck" window open? `06-22` means 06:00–22:00 Central. Pure. */
+export function stuckWindowOpen(window: string | undefined, now: Date): boolean {
+  const m = /^(\d{1,2})-(\d{1,2})$/.exec((window ?? "06-22").trim());
+  const from = m ? Number(m[1]) : 6;
+  const to = m ? Number(m[2]) : 22;
+  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false }).format(now));
+  return from <= to ? hour >= from && hour < to : hour >= from || hour < to;
 }
 
 /** Does this change stop at a preview before landing? Not ready, or the partner asked. */
@@ -194,12 +319,14 @@ export async function openWebPropertyChange(
   )
     .bind(input.cardId, input.ask.target_repo, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope, input.ask.pre_approval ?? null, input.ask.force ?? null)
     .run();
+  // The readable request, the specification Porter reads first (0221).
+  await env.WP_OS_DB.prepare("UPDATE web_property_change SET request_text = ?2 WHERE work_card_id = ?1").bind(input.cardId, input.ask.ask.slice(0, 12000)).run();
   await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2, request_json = ?3, next_action = ?4 WHERE id = ?1")
     .bind(
       input.cardId,
       WEB_PROPERTY_CHANGE_KIND,
       JSON.stringify(input.ask),
-      `Web property change on ${input.ask.property_host ?? input.ask.target_repo}: plan on the Mac first, then ask, build, land on green.`,
+      `Web property change on ${input.ask.property_host ?? input.ask.target_repo}: plan on the Mac first, then ask only what is missing, build, land on green.`,
     )
     .run();
 }
@@ -286,7 +413,6 @@ export async function parkPhase(
     if (needsPreview(row) && !row.land_approved_at && !row.forced_by) return { parked: false, reason: "this change previews first and the partner has not approved the landing after the preview, nor forced it to production" };
   }
   if (phase === "BUILD" && !row.plan_approved_at) return { parked: false, reason: "the plan has not been approved yet" };
-  if (phase === "PLAN" && !row.drive_folder_id) return { parked: false, reason: "no Drive folder is on the card" };
 
   const payload: LocalJobPayload & { queue_max_seconds: number } = {
     card_kind: WEB_PROPERTY_CHANGE_KIND,
@@ -318,6 +444,8 @@ export async function parkPhase(
         }
       : null,
     pre_approved: row.pre_approved_phrase,
+    request: row.request_text ?? row.ask,
+    attachments: (await attachmentsFor(env, card.id)).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` })),
     pr: row.pr_url ? { url: row.pr_url, number: row.pr_number, branch: row.branch, check_state: row.check_state, check_green_at: row.check_green_at, preview_url: row.preview_url, land_approved_at: row.land_approved_at, forced_by: row.forced_by } : null,
     rules,
     queue_max_seconds: spec.queueMaxSeconds,
@@ -482,6 +610,10 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
       row.build_proof ?? "(no proof text came back with the build)",
     ].join("\n");
   }
+  // Only the PLAN email carries the plan; any other question (land it? stop? "you said no") is
+  // the card's own words, which the sweep already holds.
+  const blocked = await env.WP_OS_DB.prepare("SELECT block_needed FROM work_card WHERE id = ?1").bind(cardId).first<{ block_needed: string | null }>();
+  if (row.plan_approved_at || !/The plan is in this email|NOT PUBLISH-READY/.test(blocked?.block_needed ?? "")) return null;
   const asks = asksOf(row);
   return [
     askBlockText(asks, row.plan_document_id, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) }),
@@ -680,8 +812,29 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
   );
   const fresh: WebPropertyChangeRow = { ...row, plan_document_id: filed.document_id ?? null, plan_filed_at: now, publish_ready: report.publish_ready === false ? 0 : 1, placeholders_json: JSON.stringify(report.placeholders ?? []) };
   if (row.pre_approved_phrase) return approveAtFiling(env, card, fresh, asks, report.document);
+  /*
+   * NO PARTNER DECISIONS IN THIS CHANGE → BUILT WITHOUT ASKING (owner, 21 Sep 2026: "why does
+   * scooter need to pre-approve anything?"). The plan email exists to carry the decisions that
+   * are the partner's under the policy. When there are none and the plan is publish-ready, there
+   * is nothing to ask; the card proceeds to BUILD and lands on green, and the partner hears
+   * RECEIVED then DONE. A single ask, or a plan that is not ready, still sends the email.
+   * `validate:no-land-without-approval` pins that this branch is entered only on both facts.
+   */
+  if (asks.length === 0 && fresh.publish_ready === 1) return proceedWithoutAsking(env, card, fresh);
   const why = await blockWithAsks(env, card, fresh, asks);
   return { finished: false, blocked: true, progressed: false, detail: why };
+}
+
+async function proceedWithoutAsking(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow): Promise<RunOutcome> {
+  const now = new Date().toISOString();
+  const approvedBy = `${PORTER_ID} (no partner decisions in this change; built without asking)`;
+  await update(env, card.id, { plan_approved_at: now, plan_approved_by: approvedBy, phase: "BUILD" });
+  await appendFinding(env, card.id, "No partner decisions in this change; built without asking. The plan is publish-ready and every decision was structure, CSS, validators, redirects, assets or build wiring — Porter's to make. It lands on green; the partner hears when it is done.");
+  const fresh: WebPropertyChangeRow = { ...row, plan_approved_at: now, plan_approved_by: approvedBy, phase: "BUILD" };
+  const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
+  const parked = await parkPhase(env, card, fresh, "BUILD", rules);
+  if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
+  return { finished: false, blocked: false, progressed: true, detail: `Plan filed with nothing to ask; BUILD queued for the Mac (${phaseModel(rules, "BUILD")}).` };
 }
 
 /**
@@ -710,43 +863,9 @@ async function approveAtFiling(env: Env, card: WebPropertyChangeCard, row: WebPr
     await appendFinding(env, card.id, `The same request said "${row.force_phrase}": a plan that is not publish-ready lands anyway, named as forced by ${requester.fullName}.`);
     if (needsPreview(fresh)) fresh = await recordForce(env, card, fresh, requester.firmUserId);
   }
-  // THE FYI EMAIL — to the requesting partner, through the lane. No reply needed; "stop" holds it.
-  const placeholders = list(fresh.placeholders_json);
-  const to = requester?.email ?? null;
-  if (to) {
-    try {
-      await sendOrPreview(env, {
-        to,
-        email: {
-          employee: PORTER_NAME,
-          what: `FYI — plan for ${card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60)}`,
-          tldr: `FYI — you pre-approved this ("${row.pre_approved_phrase}"); no reply needed. Reply "stop" to hold it.`,
-          sections: [
-            { label: "What happens next", bullets: [
-              fresh.publish_ready === 0 && !fresh.forced_by
-                ? `Not publish-ready (${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}) — I build to a preview link and ask you once before it lands.`
-                : fresh.forced_by
-                  ? `Not publish-ready (${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}) but your request said "${row.force_phrase}" — it lands on green, named as forced by you.`
-                  : "Publish-ready — it builds, opens a PR and lands on green. The DONE email carries the proof.",
-            ] },
-            { label: "Decided for you", bullets: decidedFromAsks(asks).length ? decidedFromAsks(asks).slice(0, 6) : ["Nothing needed deciding — structure and wiring only."] },
-          ],
-          details: `THE PLAN, in full:\n\n${planText}`,
-        },
-        objectType: "work_card",
-        objectId: card.id,
-        firmScope: card.firm_scope,
-        cardKind: WEB_PROPERTY_CHANGE_KIND,
-        workCardId: card.id,
-        cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
-        tickedByFirmUserId: card.preview_owner_id ?? null,
-        requestedByEmail: card.requested_by_email ?? null,
-        what: card.title,
-      });
-    } catch (err) {
-      await appendEvent(env, { eventType: "work_card.handover_failed", actorType: "system", actorId: "web_property_change", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { to, detail: String(err).slice(0, 300) } });
-    }
-  }
+  // NO EMAIL (her rule, 21 Sep 2026: "I don't see why Scooter should get an email at all until
+  // it's done"). The plan is on the card for anyone who looks; the partner hears DONE, or a
+  // question if something only they can supply is missing.
   const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
   const parked = await parkPhase(env, card, fresh, "BUILD", rules);
   if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
@@ -793,6 +912,13 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
     if (!held && readApprovalReply(n.body).kind === "REFUSED") {
       await ack("Held: nothing is built or landed until you say otherwise.");
       held = n.body;
+      continue;
+    }
+    if (readApprovalReply(n.body).kind === "PREVIEW" && !row.land_approved_at) {
+      // "preview" at any point before landing: see it on a preview link first.
+      await ack("Noted: it will stop at a preview link and ask you before it lands.");
+      await update(env, card.id, { preview_only: 1 });
+      await appendFinding(env, card.id, `${card.requested_by_email ?? "The partner"} asked for a preview first ("${n.body.slice(0, 40)}").`);
       continue;
     }
     await ack("Carried into the next phase as your answer.");
@@ -895,7 +1021,7 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
   if (!row) {
     // A card marked with the kind but never opened at the door: try the stored request.
     const ask = readWebPropertyAsk((card as WebPropertyChangeCard).request_json);
-    if (ask?.target_repo && ask.drive_folder_id) {
+    if (ask?.target_repo) {
       await openWebPropertyChange(env, { cardId: card.id, ask, firmScope: card.firm_scope });
       row = await readWebPropertyChange(env, card.id);
     }
@@ -924,6 +1050,24 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
     const run = await readRun(env, row.current_run_id);
     if (run && (run.status === "QUEUED" || run.status === "CLAIMED")) {
       const where = run.status === "CLAIMED" ? `on ${run.claimed_by ?? "the Mac"}${run.progress_note ? ` — ${run.progress_note}` : ""}` : "queued, waiting for the Mac to claim it";
+      /*
+       * IDLE PAST THE CEILING, INSIDE THE WINDOW → "I'm stuck", once (her decision, 21 Sep 2026).
+       * A job nobody has claimed for `stuck_after_minutes` during `stuck_window_ct` is a Mac that
+       * is asleep or a launchd job that is not running; the partner hears it once, with what
+       * happens next. A run returned and re-claimed inside the ceiling says nothing.
+       */
+      const now = new Date();
+      const idleMs = now.getTime() - Date.parse(run.status === "QUEUED" ? run.created_at : (run.progressed_at ?? run.claimed_at ?? run.created_at));
+      const ceilingMs = Math.max(5, Number(rules.stuck_after_minutes ?? "45") || 45) * 60_000;
+      if (run.status === "QUEUED" && idleMs > ceilingMs && stuckWindowOpen(rules.stuck_window_ct, now)) {
+        await sendStuck(
+          env,
+          card,
+          `unclaimed:${run.id}`,
+          `the ${row.phase.toLowerCase()} has been waiting ${Math.round(idleMs / 60_000)} minutes for the Mac to pick it up, and it has not`,
+          "it runs the moment the Mac is awake and the local-jobs job is running; nothing is lost. If you want it sooner, wake the Mac.",
+        );
+      }
       return { finished: false, blocked: false, progressed: true, held: true, detail: `${row.phase} is ${where}.` };
     }
     if (run) {
@@ -936,16 +1080,8 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
   // 2 · No live run. Decide the next phase from the row.
   if (row.phase === "PLAN") {
     if (!row.plan_filed_at) {
-      if (!row.drive_folder_id) {
-        const why = await blockCard(env, card, {
-          reason: "the_brief_is_missing",
-          trying: card.title,
-          employee: PORTER_NAME,
-          who: whoFor(card),
-          detail: `Send the Google Drive FOLDER link with the package${row.drive_folder_url ? "" : " (a file link was sent, not a folder)"}.`,
-        });
-        return { finished: false, blocked: true, progressed: false, detail: why };
-      }
+      // A Drive folder is OPTIONAL (21 Sep 2026): the request is the specification; Porter reads it
+      // and asks only when something it references did not arrive.
       const parked = await parkPhase(env, card, row, "PLAN", rules);
       if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
       return { finished: false, blocked: false, progressed: true, detail: `PLAN queued for the Mac (${phaseModel(rules, "PLAN")}).` };
@@ -1153,6 +1289,86 @@ export async function handleGetWebPropertyChange(ctx: RouteContext): Promise<Res
     needs_preview: needsPreview(row),
     forced_by_name: row.forced_by ? (PARTNERS.find((p) => p.firmUserId === row.forced_by)?.fullName ?? row.forced_by) : null,
     forced_placeholders: list(row.forced_placeholders_json),
+    attachments: (await attachmentsFor(ctx.env, id)).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes })),
+    notices: ((await ctx.env.WP_OS_DB.prepare("SELECT kind, cause, sent, sent_at FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string; cause: string; sent: number; sent_at: string }>()).results ?? []),
     current_run: run ? { id: run.id, status: run.status, claimed_by: run.claimed_by, claimed_at: run.claimed_at, progressed_at: run.progressed_at, progress_note: run.progress_note } : null,
   });
+}
+
+/** The Mac's claimer, or a Managing Partner — the two who may fetch a request's files. */
+function mayFetch(ctx: RouteContext): boolean {
+  const identity = ctx.identity;
+  if (!identity) return false;
+  if (identity.email.toLowerCase() === SUBSCRIPTION_CLAIMER_EMAIL) return true;
+  return identity.roles.includes("MANAGING_PARTNER");
+}
+
+/**
+ * GET /api/work-cards/:id/attachments/:attId — one attached file, by name, extracted from the
+ * stored message on demand (0221). The bytes never sit in D1; the Mac fetches them into the
+ * package's attachments directory before the PLAN runs.
+ */
+export async function handleGetRequestAttachment(ctx: RouteContext): Promise<Response> {
+  if (!mayFetch(ctx)) return json({ error: "forbidden", detail: "A request's files are fetched by the Mac's claimer or a Managing Partner." }, { status: 403 });
+  const cardId = ctx.params.id ?? "";
+  const attId = ctx.params.attId ?? "";
+  const row = await ctx.env.WP_OS_DB.prepare("SELECT id, filename, media_type, bytes, eml_key FROM request_attachment WHERE id = ?1 AND work_card_id = ?2")
+    .bind(attId, cardId)
+    .first<RequestAttachment>();
+  if (!row) return json({ error: "not_found" }, { status: 404 });
+  const bucket = ctx.env.WP_OS_DOCUMENTS;
+  if (!bucket) return json({ error: "no_store", detail: "the document store is not bound" }, { status: 503 });
+  const obj = await bucket.get(row.eml_key);
+  if (!obj) return json({ error: "not_found", detail: `the stored message ${row.eml_key} is gone` }, { status: 404 });
+  const extracted = attachmentBytes(await obj.text(), row.filename);
+  if (!extracted) return json({ error: "not_found", detail: `${row.filename} is not in the stored message` }, { status: 404 });
+  return new Response(new Blob([extracted.bytes as BlobPart]), {
+    headers: {
+      "content-type": row.media_type || extracted.mediaType || "application/octet-stream",
+      "content-disposition": `attachment; filename="${row.filename.replace(/"/g, "")}"`,
+      "cache-control": "private, no-store",
+    },
+  });
+}
+
+/**
+ * POST /api/inbound-email/reingest { object_key } — read a stored message through the door again
+ * (21 Sep 2026: the photo email that became a "Deck" card before the door could read a partner's
+ * request). Managing Partner or the Mac's claimer. The message's own dedupe key is bypassed on
+ * purpose — that is what "again" means — and the event says so.
+ */
+export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Response> {
+  if (!mayFetch(ctx)) return json({ error: "forbidden" }, { status: 403 });
+  const body = (await ctx.request.json().catch(() => null)) as { object_key?: unknown; received_tldr?: unknown } | null;
+  const key = typeof body?.object_key === "string" ? body.object_key.trim() : "";
+  const receivedTldr = typeof body?.received_tldr === "string" ? body.received_tldr.trim().slice(0, 600) : null;
+  if (!/^inbound-email\/[\w./-]+\.eml$/.test(key)) return json({ error: "invalid_input", detail: "object_key must be a stored inbound-email/….eml" }, { status: 400 });
+  const bucket = ctx.env.WP_OS_DOCUMENTS;
+  if (!bucket) return json({ error: "no_store" }, { status: 503 });
+  const obj = await bucket.get(key);
+  if (!obj) return json({ error: "not_found" }, { status: 404 });
+  const raw = await obj.text();
+  const headerEnd = raw.search(/\r?\n\r?\n/);
+  const headText = (headerEnd === -1 ? raw : raw.slice(0, headerEnd)).replace(/\r?\n[ \t]+/g, " ");
+  const headers = new Headers();
+  for (const line of headText.split(/\r?\n/)) {
+    const m = /^([A-Za-z-]+):\s*(.*)$/.exec(line);
+    if (m) {
+      try {
+        headers.append(m[1]!, m[2]!);
+      } catch {
+        /* an unrepresentable header is skipped */
+      }
+    }
+  }
+  // "Again": the seen-key is removed so the door runs.
+  const msgId = (headers.get("message-id") ?? "").replace(/^<|>$/g, "").trim();
+  if (msgId) await ctx.env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(msgId).run();
+  const from = (headers.get("from") ?? "").match(/<([^>]+)>/)?.[1] ?? headers.get("from") ?? "";
+  const { handleInboundEmail } = await import("../effects/inboundEmail");
+  const bytes = new TextEncoder().encode(raw);
+  await handleInboundEmail({ from, to: headers.get("to") ?? "os@joinwestpeek.com", headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, ctx.env, { receivedTldr });
+  const card = await ctx.env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE kind = 'WEB_PROPERTY_CHANGE' ORDER BY created_at DESC LIMIT 1").first<{ id: string }>();
+  await appendEvent(ctx.env, { eventType: "inbound_email.reingested", actorType: "firm_user", actorId: ctx.identity!.id, objectType: "inbound_email", objectId: key, firmScope: "west-peek", payload: { message_id: msgId, newest_card: card?.id ?? null } });
+  return json({ ok: true, object_key: key, newest_web_property_change_card: card?.id ?? null });
 }

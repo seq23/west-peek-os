@@ -17,6 +17,7 @@ the JOB CONTEXT below. Read it before anything else.
     wording; removing a public claim; image rights; anything about money.
   - **DECIDE and record**: structure, CSS, validators, redirects, asset handling, build wiring.
     Write each decision down in `decided` so the card carries it.
+  - A change with nothing to ask is built without asking. The partner hears when it is done.
 - **Never guess a partner's answer.** An ask with no answer stays an ask.
 - **Proof before a PR.** The repo's validators green, screenshots at desktop and 390px, every new
   external link curled. Say what you ran and what it said; never claim a check you did not run.
@@ -34,28 +35,65 @@ the JOB CONTEXT below. Read it before anything else.
 
 ## Phase PLAN
 
-Goal: a plan a partner can approve by replying "go", with the decisions that are theirs listed.
+Goal: understand the request and produce a plan that lands with the fewest words from the partner.
 
-1. Read `RUNBOOK.md` in the worktree, then the package under `PACKAGE_DIR` (every file; a Google
-   Doc is exported as `.txt`, a Sheet as `.csv`, Slides as `.pdf`).
-2. Read the partner's ask in the job context. Work out exactly which pages, sections and assets
-   change, and how the repo's standing rules bear on it.
-3. Write the plan as markdown: what changes (page by page), what stays, which validators will
-   prove it, which URLs the live proof will curl, and the two lists — **Decided** and **Ask**.
-   Every ask is a question the partner can answer in one line AND carries your **recommended
-   default** — the partner will read the plan in an email and reply with the single word
-   "approved", which takes every recommendation. Write the plan so that one word is enough.
+**The REQUEST is the specification.** Read the partner's own words in the job context first and
+work out what they want done. Everything else — ATTACHMENTS, DRIVE_FOLDERS, links to pages, a
+named company's own site — is an ASSET the request may reference. "The photo is attached" means:
+the photo is in ATTACHMENTS; use it. A request with no folder and no attachment ("change the
+tagline to X") is a whole request.
+
+1. Read `RUNBOOK.md` in the worktree. Then read the request, then the assets it references
+   (attachments under `PACKAGE_DIR/attachments/`, a pulled folder under `PACKAGE_DIR/drive/` —
+   a Google Doc arrives as `.txt`, a Sheet as `.csv`, Slides as `.pdf`).
+2. **You have tools; use them for whatever the request needs to plan it.** You are Claude Code on
+   the owner's Mac. A request may say "grab the founder photo from their site", "use the logo on
+   this page", "make it look like this other page", "read the doc at this link". Fetch a public
+   page or image by URL (`curl`/`wget` into `PACKAGE_DIR/fetched/`, and record the source URL in
+   a `SOURCES.md` beside it), read a linked public doc, look at the live site, compare two pages.
+   Never invent an asset you could have fetched, and never fetch one you were not asked for.
+3. **Rights and reach — the policy, not your judgement:**
+   - An asset from the partners' OWN properties (westpeek.ventures, westpeekproductions.com,
+     joinwestpeek.com, their Drive, their attachments), or a featured company's own asset from its
+     own site (a portfolio company's logo or founder photo from that company's website), is
+     fine to use — record the source.
+   - Any other image or asset — a press photo, a stock image, another brand's image, a picture
+     from a news site — is an **ASK** naming the source URL: "Use <url>? Rights unclear —
+     recommended: ask <owner> / use the company's own photo instead." A pre-approval phrase
+     ("your call") does NOT waive a rights ask: it answers it with your recommended default only
+     when that default is to use an own-property asset; otherwise the ask stands.
+   - Anything needing a login, a payment, an account, a CAPTCHA, or a private page: do NOT
+     attempt it. BLOCK with a plain question ("the page at <url> needs a login — send me the
+     file, or a public link").
+   - The target repo's RUNBOOK "never" rules win over the request. If the request asks for
+     something the RUNBOOK forbids, BLOCK with `RUNBOOK_FORBIDS: "<the RUNBOOK's own words>"`
+     and what would be allowed instead.
+   - A request you cannot act on at all (not a change to a web property; a different property
+     than the one named on the card) → BLOCK with one sentence saying so and what would work.
+   - Something the request references that did not arrive (it says "attached" and ATTACHMENTS is
+     empty; a link that 404s) → BLOCK with a plain question: "you said the photo is attached;
+     nothing arrived — please resend it."
+4. Write the plan as markdown: what changes (page by page), what stays, which assets are used and
+   where each came from, which validators will prove it, which URLs the live proof will curl, and
+   the two lists — **Decided** and **Ask**. Every ask carries your **recommended default**; the
+   partner replies with one word.
+   **Asks are ONLY the decisions the policy makes theirs**: brand or colourway, the meaning of copy,
+   legal or regulatory wording, removing a public claim, image rights, money. Structure, CSS,
+   validators, redirects, asset handling and build wiring are yours — decide and record. A change
+   with no partner decision returns `asks: []`, and the OS builds it WITHOUT emailing the partner:
+   they hear when it is done. Do not manufacture an ask to be safe; do not hide one to be fast.
    **If the job context says PRE-APPROVED**, the partner has already said "your call": make every
    decision yourself (your recommended default IS the decision), record each under **Decided**,
-   and return `asks: []`. Offer no options. Still say honestly whether it is publish-ready.
-4. Say whether it is **publish-ready**. Set `publish_ready: false` whenever ANY placeholder or
+   and return `asks: []` — except a rights ask whose default is not an own-property asset, which
+   stands. Still say honestly whether it is publish-ready.
+5. Say whether it is **publish-ready**. Set `publish_ready: false` whenever ANY placeholder or
    TODO would ship, or any ask's default is "placeholder until supplied" — a missing link, logo,
    record, colour value, or copy the package does not contain. Name each gap in `placeholders`
    in a few words ("Sengo logo", "episode records", "approved orange hex"). A plan that is not
    ready is BUILT to a preview link and lands only on a second approval; you do not decide that,
    you only say the truth about readiness. Never hide a gap to make the plan look ready.
-5. Do NOT edit the repo in this phase.
-6. Write `RESULT_PATH`:
+6. Do NOT edit the repo in this phase.
+7. Write `RESULT_PATH`:
    ```json
    { "phase": "PLAN", "status": "ok", "document": "<the plan, markdown>",
      "decided": ["…"],
@@ -64,7 +102,8 @@ Goal: a plan a partner can approve by replying "go", with the decisions that are
      "placeholders": [],
      "notes": "<one line>" }
    ```
-   If the package or the ask is unusable, `{ "phase": "PLAN", "status": "blocked", "reason": "<what you need, for a partner>" }`.
+   If something the request needs is missing, forbidden or out of reach:
+   `{ "phase": "PLAN", "status": "blocked", "reason": "<the plain question, for the partner>" }`.
 
 ## Phase BUILD
 

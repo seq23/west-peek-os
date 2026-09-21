@@ -46,6 +46,15 @@
  *       its finding, writes `plan_approved_by` as "<partner> (pre-approved in the request)", never
  *       writes `land_approved_at`, and calls `recordForce` only under `row.force_phrase`; the
  *       reader finds each phrase and none in a quoted original.
+ *  10 · BUILT WITHOUT ASKING ONLY WHEN THERE IS NOTHING TO ASK (owner, 21 Sep 2026: "why does
+ *       scooter need to pre-approve anything?"). `applyPlan` enters `proceedWithoutAsking` only
+ *       under `asks.length === 0 && fresh.publish_ready === 1`; that path's finding says "built
+ *       without asking"; and no other path writes `plan_approved_at` without a reading of the
+ *       partner's reply or a pre-approval phrase — so a non-empty asks list can never reach BUILD
+ *       without an approval.
+ *  11 · THE PARTNER HEARS AT MOST ONCE PER CAUSE. `replyToRequester` checks `alreadyTold` before
+ *       it sends and records the notice after; the kinds are exactly RECEIVED | PLAN | PREVIEW |
+ *       QUESTION | STUCK | DONE (the 0221 CHECK and `NOTICE_KINDS` agree).
  *   6 · "NO" NEVER APPROVES (owner, 21 Sep 2026). `runWebPropertyChangeCard` reads the partner's
  *       answer through `readApprovalReply`, the REFUSED branch returns before `plan_approved_at`
  *       is written, and the answer is checked against the requesting partner first. And the real
@@ -73,6 +82,8 @@ const MIGRATION = path.join(ROOT, "migrations", "0219_porter_changes_a_web_prope
 const READER = path.join(ROOT, "src", "shared", "work", "approvalReply.ts");
 const DOOR = path.join(ROOT, "src", "worker", "services", "dealIntake.ts");
 const PARSER = path.join(ROOT, "src", "shared", "intake", "webPropertyChange.ts");
+const REPLY = path.join(ROOT, "src", "worker", "services", "requestReply.ts");
+const MIGRATION_0221 = path.join(ROOT, "migrations", "0221_porter_reads_the_email.sql");
 const MIGRATION_0220 = path.join(ROOT, "migrations", "0220_a_plan_that_is_not_publish_ready_previews_first.sql");
 const read = (p) => stripTsComments(readFileSync(p, "utf8"));
 /** SQL: `--` line comments blanked, so a comment naming a column cannot satisfy or fail the trigger check. */
@@ -167,6 +178,27 @@ export function checkWorker(src) {
     const forceAt = filing.indexOf("recordForce(");
     if (forceAt >= 0 && !/row\.force_phrase/.test(filing.slice(Math.max(0, forceAt - 400), forceAt))) violations.push("approveAtFiling() forces without the request's own force phrase");
   }
+  // BUILT WITHOUT ASKING: only on asks=[] AND publish-ready, and said so.
+  const plan = body(src, "async function applyPlan(");
+  if (!plan) violations.push("applyPlan() is gone");
+  else {
+    examined += 1;
+    const at = plan.indexOf("proceedWithoutAsking(");
+    if (at < 0) violations.push("applyPlan() never proceeds without asking — a change with nothing to ask would still email the partner for approval");
+    else if (!/if\s*\(asks\.length\s*===\s*0\s*&&\s*fresh\.publish_ready\s*===\s*1\)\s*return proceedWithoutAsking\(/.test(plan)) {
+      violations.push("applyPlan() proceeds without asking on a condition other than asks=[] AND publish_ready — a card with a partner's decision, or placeholders, could build unasked");
+    }
+  }
+  const proceed = body(src, "async function proceedWithoutAsking(");
+  if (!proceed) violations.push("proceedWithoutAsking() is gone");
+  else {
+    examined += 1;
+    if (!/built without asking/.test(proceed)) violations.push("proceedWithoutAsking() does not record 'built without asking' on the card");
+    if (/land_approved_at|recordForce\(/.test(proceed)) violations.push("proceedWithoutAsking() touches the landing approval or the force — it may only approve the plan");
+  }
+  // Every plan_approved_at write is one of: the partner's reading, the pre-approval at filing, or nothing-to-ask.
+  const approvalWrites = [...src.matchAll(/update\(env, card\.id, \{[^}]*plan_approved_at:\s*now/g)].length;
+  if (approvalWrites !== 3) violations.push(`plan_approved_at is written in ${approvalWrites} place(s); exactly three are allowed (the partner's reply, pre-approval at filing, nothing to ask) — a fourth is an approval nobody gave`);
   const build = body(src, "async function applyBuild(");
   if (!build) violations.push("applyBuild() is gone");
   else {
@@ -234,7 +266,9 @@ export function checkDoor(door, parser) {
   if (!/export async function openAssignmentCard\(/.test(door)) violations.push("openAssignmentCard() is gone");
   else {
     examined += 1;
-    if (!/parseWebPropertyAsk\(input\.subject,\s*input\.raw\)/.test(door)) violations.push("the door does not parse the web ask from the partner's own raw request — pre-approval could come from elsewhere");
+    // The ask is parsed from the WRITTEN part of the request's own text body — never a later message.
+    const chain = /const text = textBodyOf\(input\.raw\)[\s\S]*?const written = splitQuoted\(text\)\.written[\s\S]*?parseWebPropertyAsk\(input\.subject,\s*written\)/.test(door);
+    if (!chain) violations.push("the door does not parse the web ask from the partner's own raw request (textBodyOf(input.raw) → splitQuoted().written → parseWebPropertyAsk) — pre-approval could come from elsewhere");
   }
   const parse = body(parser, "export function parseWebPropertyAsk(");
   if (!parse) violations.push("parseWebPropertyAsk() is gone");
@@ -242,6 +276,30 @@ export function checkDoor(door, parser) {
     examined += 1;
     if (!/preApprovalIn\(written\)/.test(parse) || !/forcePhraseIn\(written\)/.test(parse)) violations.push("parseWebPropertyAsk() reads the pre-approval or force phrase from the whole text, not only what the partner wrote above a quote");
   }
+  return { violations, examined };
+}
+
+export function checkNotices(reply, sql0221) {
+  const violations = [];
+  let examined = 0;
+  const start = reply.indexOf("export async function replyToRequester(");
+  const fn = start < 0 ? null : reply.slice(start, reply.indexOf("\nexport ", start + 10) < 0 ? undefined : reply.indexOf("\nexport ", start + 10));
+  if (!fn) violations.push("replyToRequester() is gone");
+  else {
+    examined += 1;
+    const told = fn.indexOf("alreadyTold(");
+    const send = fn.indexOf("sendOrPreview(");
+    const rec = fn.indexOf("recordNotice(");
+    if (told < 0 || send < 0 || told > send) violations.push("replyToRequester() does not check alreadyTold before it sends — the same cause could email twice");
+    if (rec < 0 || rec < send) violations.push("replyToRequester() does not record the notice after sending");
+  }
+  const kindsTs = reply.match(/export type NoticeKind = ([^;]+);/)?.[1]?.match(/"([A-Z]+)"/g)?.map((k) => k.replace(/"/g, "")) ?? [];
+  const kindsSql = sql0221.match(/kind\s+TEXT NOT NULL CHECK \(kind IN \(([^)]+)\)\)/)?.[1]?.match(/'([A-Z]+)'/g)?.map((k) => k.replace(/'/g, "")) ?? [];
+  examined += 1;
+  const want = ["RECEIVED", "PLAN", "PREVIEW", "QUESTION", "STUCK", "DONE"];
+  if (kindsTs.join(",") !== want.join(",")) violations.push(`NoticeKind is ${kindsTs.join("|") || "(none)"}; the reply kinds are exactly ${want.join("|")}`);
+  if (kindsSql.join(",") !== want.join(",")) violations.push(`0221's work_card_notice CHECK admits ${kindsSql.join("|") || "(none)"}; it must be exactly ${want.join("|")}`);
+  if (!/UNIQUE \(work_card_id, kind, cause\)/.test(sql0221)) violations.push("0221 has no UNIQUE (work_card_id, kind, cause) — the row would allow a second email for the same cause");
   return { violations, examined };
 }
 
@@ -308,16 +366,28 @@ async function selfTest() {
   const sql0220 = readSql(MIGRATION_0220);
   const door = read(DOOR);
   const parser = read(PARSER);
-  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser)];
+  const reply = read(REPLY);
+  const sql0221 = readSql(MIGRATION_0221);
+  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser), checkNotices(reply, sql0221)];
   say(real.every((r) => r.violations.length === 0) && real.reduce((n, r) => n + r.examined, 0) >= 8, `shipped source passes (${real.reduce((n, r) => n + r.examined, 0)} gates): ${real.flatMap((r) => r.violations).join("; ")}`);
 
+  const unaskedWithAsks = worker.replace("if (asks.length === 0 && fresh.publish_ready === 1) return proceedWithoutAsking(", "if (fresh.publish_ready === 1) return proceedWithoutAsking(");
+  say(checkWorker(unaskedWithAsks).violations.some((v) => /condition other than asks=\[\]/.test(v)), "a plan that builds unasked with a partner's decision on it is caught");
+  const unaskedNotReady = worker.replace("if (asks.length === 0 && fresh.publish_ready === 1) return proceedWithoutAsking(", "if (asks.length === 0) return proceedWithoutAsking(");
+  say(checkWorker(unaskedNotReady).violations.some((v) => /condition other than asks=\[\]/.test(v)), "a plan that builds unasked while not publish-ready is caught");
+  const fourthApproval = worker.replace("await update(env, card.id, { merge_sha: report.merge_sha,", "await update(env, card.id, { plan_approved_at: now, merge_sha: report.merge_sha,");
+  say(checkWorker(fourthApproval).violations.some((v) => /exactly three are allowed/.test(v)), "a fourth plan_approved_at write (an approval nobody gave) is caught");
+  const twiceReply = reply.replace("if (notice && (await alreadyTold(env, card.id, notice.kind, notice.cause))) {", "if (false) {");
+  say(checkNotices(twiceReply, sql0221).violations.some((v) => /email twice/.test(v)), "a reply path that no longer checks alreadyTold is caught");
+  const extraKind = sql0221.replace("'STUCK', 'DONE'", "'STUCK', 'NUDGE', 'DONE'");
+  say(checkNotices(reply, extraKind).violations.some((v) => /must be exactly/.test(v)), "a notice kind outside the six is caught");
   const laterPreApproval = worker.replace("await update(env, card.id, { land_approved_at: now, land_approved_by:", "await update(env, card.id, { pre_approved_phrase: answer, land_approved_at: now, land_approved_by:");
   say(checkWorker(laterPreApproval).violations.some((v) => /outside openWebPropertyChange/.test(v)), "a runner that writes pre_approved_phrase from a later message is caught");
   const filingLands = worker.replace('plan_approved_by: approvedBy,\n    phase: "BUILD",', 'plan_approved_by: approvedBy,\n    land_approved_at: now,\n    phase: "BUILD",');
   say(checkWorker(filingLands).violations.some((v) => /touches land_approved_at/.test(v)), "a pre-approval that also approves the landing is caught");
   const noPhrase = worker.replace('("${row.pre_approved_phrase}"): every decision', "(pre-approved): every decision");
   say(checkWorker(noPhrase).violations.some((v) => /does not name the pre-approval phrase/.test(v)), "a finding that hides the phrase is caught");
-  const doorFromElsewhere = door.replace("parseWebPropertyAsk(input.subject, input.raw)", "parseWebPropertyAsk(input.subject, laterReply)");
+  const doorFromElsewhere = door.replace("parseWebPropertyAsk(input.subject, written)", "parseWebPropertyAsk(input.subject, laterReply)");
   say(checkDoor(doorFromElsewhere, parser).violations.some((v) => /partner's own raw request/.test(v)), "a door that parses something other than the verified request is caught");
   const quotedPreApproval = parser.replace("preApprovalIn(written)", "preApprovalIn(text)");
   say(checkDoor(door, quotedPreApproval).violations.some((v) => /above a quote/.test(v)), "a parser that reads a quoted 'your call' is caught");
@@ -373,13 +443,13 @@ async function selfTest() {
   say(checkMigration(ruleOff).violations.some((v) => /seeded ON/.test(v)), "land_on_green seeded OFF is caught");
 
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: twenty-seven planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: thirty-two planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {
   await selfTest();
 } else {
-  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER))];
+  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221))];
   const examined = results.reduce((n, r) => n + r.examined, 0);
   const violations = results.flatMap((r) => r.violations);
   if (examined === 0) {

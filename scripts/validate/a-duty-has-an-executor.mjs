@@ -99,6 +99,25 @@ export function check(files) {
         if (!files.promptFiles[e.promptFile].includes(`## Phase ${phase}`)) violations.push(`${e.promptFile} has no "## Phase ${phase}" section, but the registry declares that phase for ${e.kind}`);
       }
     }
+    // THE ASSETS REACH THE MODEL (21 Sep 2026): the payload type declares `attachments` and `request`, the
+    // script renders ATTACHMENTS: and REQUEST, and the prompt tells Porter what they are.
+    if (script) {
+      for (const field of ["ATTACHMENTS:", "DRIVE_FOLDERS:", "REQUEST ("]) {
+        if (!script.stripped.includes(field)) violations.push(`${e.script} does not render ${field} in the job context — an asset the partner sent would never reach Porter`);
+      }
+    }
+    if (!/attachments:\s*Array</.test(files.registry) || !/request:\s*string/.test(files.registry)) violations.push("the registry's LocalJobPayload no longer declares `request` and `attachments` — the Worker could park a job without the specification or its assets");
+    if (e.promptFile && files.promptFiles[e.promptFile] && !/ATTACHMENTS/.test(files.promptFiles[e.promptFile])) violations.push(`${e.promptFile} never mentions ATTACHMENTS — Porter is not told the files are assets of the request`);
+    // HER SEAT, NEVER A KEY (21 Sep 2026): the claude spawn never passes process.env straight through.
+    if (script) {
+      const spawns = [...script.stripped.matchAll(/spawn\(\s*"claude"[\s\S]*?\}\s*\)/g)].map((m) => m[0]);
+      if (spawns.length === 0) violations.push(`${e.script} never spawns claude — the phase could not run`);
+      for (const sp of spawns) {
+        if (/env:\s*process\.env\b/.test(sp)) violations.push(`${e.script} spawns claude with env: process.env — the vault's ANTHROPIC_API_KEY would take precedence over her seat and bill the API`);
+        if (!/env:\s*claudeChildEnv\(/.test(sp)) violations.push(`${e.script} spawns claude without claudeChildEnv() — the ANTHROPIC_*/CLAUDE_* strip is missing`);
+      }
+      if (!/ANTHROPIC_API_KEY/.test(script.stripped) || !/ANTHROPIC_BASE_URL/.test(script.stripped)) violations.push(`${e.script}'s env strip no longer names ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL`);
+    }
     if (duties[e.kind] !== e.script) violations.push(`the Mac claimer's DUTIES maps ${e.kind} → ${duties[e.kind] ?? "(nothing)"}, but the registry says ${e.script}`);
     const dispatched = new RegExp(`card\\.kind\\s*===\\s*(?:"${e.kind}"|${e.kind}_KIND)`).test(files.sweep);
     if (!dispatched) violations.push(`services/workSweep.ts never dispatches card.kind === ${e.kind} — a card of that kind would fall to the general loop or sit OPEN forever`);
@@ -158,11 +177,19 @@ function selfTest() {
   const noPhase = check({ ...files, promptFiles: { ...files.promptFiles, [promptRel]: files.promptFiles[promptRel].replace("## Phase LAND", "## Landing") } });
   say(noPhase.violations.some((v) => /no "## Phase LAND" section/.test(v)), "a prompt file missing a declared phase is caught");
 
+  const noAttachments = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace(/ATTACHMENTS:/g, "FILES:") } } });
+  say(noAttachments.violations.some((v) => /does not render ATTACHMENTS:/.test(v)), "a duty script that drops ATTACHMENTS: from the context is caught");
+  const noPayloadField = check({ ...files, registry: files.registry.replace(/attachments:\s*Array</, "files: Array<") });
+  say(noPayloadField.violations.some((v) => /no longer declares/.test(v)), "a payload without `attachments` is caught");
+  const rawEnv = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace("env: claudeChildEnv(process.env)", "env: process.env") } } });
+  say(rawEnv.violations.some((v) => /env: process\.env/.test(v)), "a claude spawn that passes process.env straight through (the vault's API key) is caught");
+  const noStrip = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace(/ANTHROPIC_BASE_URL/g, "OTHER_URL") } } });
+  say(noStrip.violations.some((v) => /no longer names ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL/.test(v)), "a strip that forgets the base url is caught");
   const noRun = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace("export async function run(", "async function run(") } } });
   say(noRun.violations.some((v) => /exports no run\(job, ctx\)/.test(v)), "a duty script that no longer exports run() is caught");
 
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: six planted defects are each caught; the shipped tree passes.");
+  console.log("SELF-TEST PASSED: ten planted defects are each caught; the shipped tree passes.");
 }
 
 if (process.argv.includes("--self-test")) {

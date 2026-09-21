@@ -6430,3 +6430,53 @@ never touching `land_approved_at`, forcing only on the request's own phrase. Pro
 (33) — the phrases and a quoted "your call" ignored; ready + pre-approved lands with no reply;
 `stop` by reply holds and closes the queued build; not-ready + pre-approved stops at the preview;
 not-ready + pre-approved + `approved to production` lands named.
+
+## Porter reads the email (21 Sep 2026 — the first real run)
+
+**What the first run found.** Scooter's 14:22 request reached Porter as 6,000 characters of
+`Received:`/DKIM headers (the door stored raw MIME as "what was asked"); his 16:00 email ("the
+photo is attached", 3.9 MB) took the oversize path, became "Deck: Sensori …", failed as a deck
+and never reached Porter; the Community package folder rode in on a quoted thread and Porter pulled
+200 files for a photo; and nobody told Scooter anything. Her words: "porter should be able to read
+an email and understand what he needs to do from the email."
+
+**Migration 0221.** `request_attachment` (every image/PDF a partner attached, by name, against the
+stored `.eml`), `web_property_change.request_text`, `work_card_notice` (RECEIVED | PLAN | PREVIEW |
+QUESTION | STUCK | DONE, UNIQUE per card/kind/cause), rules `stuck_after_minutes` and
+`stuck_window_ct`.
+
+**The door.** `textBodyOf` decodes the text part (QP/base64, HTML fallback); `splitQuoted` keeps
+what the partner wrote; `parseWebPropertyAsk` reads property, folder and pre-approval from the
+WRITTEN text only; a property alone is a change (folder optional); `requestAttachments` keeps
+images/PDFs (a small message with a file is stored as `.eml` too); an oversize partner email is
+tee'd and opens the assignment card from the stored copy. `GET /api/work-cards/:id/attachments/:attId`
+extracts a file on demand; `POST /api/inbound-email/reingest {object_key, received_tldr?}` reads a
+stored message through the door again.
+
+**The Mac.** The job carries REQUEST (verbatim), ATTACHMENTS (fetched by name through the Worker
+into `pkg-<card>/attachments/`) and DRIVE_FOLDERS; the prompt: the request is the spec, tools for
+whatever it needs (fetch by URL, source recorded), rights policy (own-property / featured company
+fine; others an ASK naming the source, not waived by "your call"), login/payment/CAPTCHA → BLOCK,
+RUNBOOK "never" rules win (`RUNBOOK_FORBIDS`), cannot-act → BLOCK, missing referenced asset → a
+plain question. **Her seat, never a key:** the claude child env strips every ANTHROPIC_*/CLAUDE_*
+auth variable the vault injects (the sibling lane's jobs died on "Credit balance is too low");
+same for the seat claimer.
+
+**Nothing to ask → built without asking** ("why does scooter need to pre-approve anything?"):
+asks=[] and publish-ready proceeds to BUILD with the finding "no partner decisions in this change;
+built without asking"; a single ask or a not-ready plan still sends the email. Under a pre-approval
+phrase no FYI is sent. **Notices:** RECEIVED at intake with what was understood; STUCK once when a
+queued phase sits unclaimed past the ceiling inside the window, or a fault blocks the card;
+PLAN/PREVIEW/QUESTION/DONE as before — each once per cause (`replyToRequester` checks
+`alreadyTold`, records after).
+
+**Guards.** `validate:no-land-without-approval` (32 planted defects): built-without-asking only
+on asks=[] AND publish-ready, exactly three `plan_approved_at` writes, notices checked before
+send and recorded after, kinds exactly the six. `validate:duty-executor` (10): ATTACHMENTS:/
+DRIVE_FOLDERS:/REQUEST rendered, payload declares `request` and `attachments`, the claude spawn
+never passes `process.env` and the strip names the key and base url. **Proof.**
+`tests/webPropertyChange.test.ts` (43): Scooter's exact shape (one sentence + attached image + no
+link → card, attachment kept and served, RECEIVED once, PLAN sees REQUEST and the file, built
+without asking, DONE only); a quoted folder ignored; a single ask still emails; the oversize shape;
+re-read of a stored message with a verbatim first line; the prompt's policy sentences; STUCK once
+after a dead run and 46 idle minutes, never twice; the window in Central hours.

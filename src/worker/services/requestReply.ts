@@ -29,6 +29,36 @@ import { sendOrPreview } from "./previewApproval";
  *
  * Nothing here can reach a founder, an LP, or anyone outside the firm.
  */
+export type NoticeKind = "RECEIVED" | "PLAN" | "PREVIEW" | "QUESTION" | "STUCK" | "DONE";
+
+/**
+ * AT MOST ONE OF EACH KIND PER CARD PER CAUSE (owner, 21 Sep 2026: "I don't see why Scooter should
+ * get an email at all until it's done"). `work_card_notice` is UNIQUE on (card, kind, cause); a
+ * second sweep over the same block, a re-tick, a re-claim — none of them can ring twice. The
+ * cause is the fact the email is about (the plan's filing time, the green time, the question's
+ * words), so a genuinely new question or a re-filed plan IS sent.
+ */
+export const NOTICE_KINDS: readonly NoticeKind[] = ["RECEIVED", "PLAN", "PREVIEW", "QUESTION", "STUCK", "DONE"];
+
+export async function alreadyTold(env: Env, cardId: string, kind: NoticeKind, cause: string): Promise<boolean> {
+  const row = await env.WP_OS_DB.prepare("SELECT 1 AS one FROM work_card_notice WHERE work_card_id = ?1 AND kind = ?2 AND cause = ?3")
+    .bind(cardId, kind, cause.slice(0, 400))
+    .first<{ one: number }>();
+  return Boolean(row);
+}
+
+export async function recordNotice(
+  env: Env,
+  input: { cardId: string; kind: NoticeKind; cause: string; to: string; messageId: string | null; sent: boolean; detail?: string; firmScope: string },
+): Promise<void> {
+  await env.WP_OS_DB.prepare(
+    `INSERT OR IGNORE INTO work_card_notice (id, work_card_id, kind, cause, sent_to, message_id, sent, detail, firm_scope)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+  )
+    .bind(`wcn_${crypto.randomUUID()}`, input.cardId, input.kind, input.cause.slice(0, 400), input.to, input.messageId, input.sent ? 1 : 0, (input.detail ?? "").slice(0, 400) || null, input.firmScope)
+    .run();
+}
+
 export async function replyToRequester(
   env: Env,
   card: {
@@ -42,11 +72,16 @@ export async function replyToRequester(
   outcome: "DONE" | "BLOCKED",
   who: string,
   detail: string,
+  /** The kind and cause this email is; when given, it is sent at most once per card per cause. */
+  notice?: { kind: NoticeKind; cause: string },
 ): Promise<{ sent: boolean; to: string | null; reason: string }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   if (!to) return { sent: false, to: null, reason: "the card was not asked for by email" };
   if (!ASSIGNING_PARTNERS.includes(to)) {
     return { sent: false, to, reason: `${to} is not one of the two partner addresses; a reply goes nowhere else` };
+  }
+  if (notice && (await alreadyTold(env, card.id, notice.kind, notice.cause))) {
+    return { sent: false, to, reason: `${notice.kind} was already sent for this cause; not ringing twice` };
   }
 
   // The card's title is "From sequoia@…: <subject>" at the door; the partner knows who they are.
@@ -100,5 +135,8 @@ export async function replyToRequester(
     actorId: "work_sweep",
     events: { sent: "work_card.replied_by_email", notSent: "work_card.reply_not_sent" },
   });
+  if (notice) {
+    await recordNotice(env, { cardId: card.id, kind: notice.kind, cause: notice.cause, to, messageId: out.threadToken ?? null, sent: out.sent, detail: out.reason, firmScope: card.firm_scope });
+  }
   return { sent: out.sent, to, reason: out.reason };
 }

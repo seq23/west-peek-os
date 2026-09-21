@@ -1,5 +1,7 @@
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { isWebPropertyChange, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { requestAttachments, textBodyOf } from "../effects/mimeAttachments";
+import { splitQuoted } from "../../shared/intake/replyBody";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { FirmUserIdentity } from "../auth";
@@ -876,8 +878,19 @@ export async function openAssignmentCard(
     chiefOfStaff: string;
     raw: string;
     limits: readonly string[];
+    /** 21 Sep 2026: the stored `.eml` this message lives in, when the intake kept one (oversize). */
+    emlKey?: string | null;
+    /** The RECEIVED email's first line, verbatim, when a person re-reads a stored message. */
+    receivedTldr?: string | null;
   },
 ): Promise<string> {
+  /*
+   * THE PARTNER'S OWN WORDS, READABLE (21 Sep 2026). `raw` is the MIME message; the first real
+   * request reached Porter as 6,000 characters of Received: and DKIM headers. What the card
+   * carries is the text the partner typed — decoded, and with any quoted reply stripped.
+   */
+  const text = textBodyOf(input.raw);
+  const written = splitQuoted(text).written.trim() || text.trim();
   const card = await createWorkCardInternal(env, systemIdentity(), {
     title: `From ${input.partnerAddress}: ${strippedSubject(input.subject) || "(no subject)"}`,
     description: [
@@ -885,7 +898,7 @@ export async function openAssignmentCard(
       `That makes it an assignment rather than a capture, and it is yours because you are their chief of staff.`,
       "",
       "WHAT WAS ASKED, in their own words:",
-      input.raw.slice(0, 4000),
+      written.slice(0, 4000),
       "",
       "WHAT THIS DOES NOT GRANT:",
       ...input.limits.map((l) => `· ${l}`),
@@ -917,7 +930,45 @@ export async function openAssignmentCard(
    * and only to choose a runner: authority came from the authenticated address above and nothing
    * in the text can widen it.
    */
-  const blog = parseBlogAsk(input.subject, input.raw);
+  /*
+   * THE FILES THEY ATTACHED ARE ASSETS OF THE REQUEST. Kept by name against the card with the
+   * stored message they live in; a small message with a file is stored now, the way an oversize
+   * one already was. Extracted on demand by `GET /api/work-cards/:id/attachments/:attId`.
+   */
+  const { attachments, unread } = requestAttachments(input.raw);
+  let emlKey = input.emlKey ?? null;
+  if (attachments.length > 0 && !emlKey && env.WP_OS_DOCUMENTS) {
+    emlKey = `inbound-email/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.eml`;
+    try {
+      await env.WP_OS_DOCUMENTS.put(emlKey, input.raw, { httpMetadata: { contentType: "message/rfc822" } });
+    } catch {
+      emlKey = null;
+    }
+  }
+  const attachedNames: string[] = [];
+  if (emlKey) {
+    for (const a of attachments) {
+      await env.WP_OS_DB.prepare(
+        "INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+      )
+        .bind(`ratt_${crypto.randomUUID()}`, card.id, a.filename, a.mediaType, a.bytes, emlKey, FIRM_SCOPE)
+        .run();
+      attachedNames.push(a.filename);
+    }
+  }
+  if (attachments.length > 0 || unread.length > 0) {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
+      .bind(
+        card.id,
+        [
+          ...(attachedNames.length ? [`ATTACHED: ${attachedNames.join(", ")}${emlKey ? "" : " (could NOT be kept — the store is off)"}`] : []),
+          ...unread.map((u) => `Could NOT keep an attachment: ${u}.`),
+        ].join("\n"),
+      )
+      .run();
+  }
+
+  const blog = parseBlogAsk(input.subject, written);
   if (blog) {
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'BLOG_HELP', request_json = ?2, next_action = ?3 WHERE id = ?1")
       .bind(card.id, JSON.stringify(blog), `Blog help — ${describeModes(blog.modes)} on: ${blog.topic}. Research live and judged, write in the partner's voice, file it, email them once.`)
@@ -934,7 +985,7 @@ export async function openAssignmentCard(
    * (services/webPropertyChange.ts). A folder with no property named stays an ordinary
    * assignment with the link on it, so nothing is lost; it is simply not sped up.
    */
-  const web = parseWebPropertyAsk(input.subject, input.raw);
+  const web = parseWebPropertyAsk(input.subject, written);
   if (web) {
     await env.WP_OS_DB.prepare("UPDATE work_card SET request_json = ?2 WHERE id = ?1").bind(card.id, JSON.stringify(web)).run();
     if (isWebPropertyChange(web)) {
@@ -942,8 +993,9 @@ export async function openAssignmentCard(
       const { assignCard } = await import("./employeeWork");
       const { openWebPropertyChange, PORTER_NAME } = await import("./webPropertyChange");
       const brief =
-        `Change ${web.property_host} from the package in ${web.drive_folder_url}: plan it on the Mac against the repo's RUNBOOK, ` +
-        `ask ${input.partnerAddress} the decisions that are theirs, build it in a worktree, prove it, open a PR, land on green.`;
+        `Change ${web.property_host}: "${written.replace(/\s+/g, " ").slice(0, 120)}"` +
+        `${web.drive_folder_url ? ` (package: ${web.drive_folder_url})` : ""}${attachedNames.length ? ` (attached: ${attachedNames.join(", ")})` : ""}. ` +
+        `Plan it on the Mac against the repo's RUNBOOK, ask ${input.partnerAddress} the decisions that are theirs, build it in a worktree, prove it, open a PR, land on green.`;
       const handed = await assignCard(
         env,
         {
@@ -966,6 +1018,11 @@ export async function openAssignmentCard(
       );
       if (handed.ok) {
         await openWebPropertyChange(env, { cardId: handed.cardId, ask: web, firmScope: FIRM_SCOPE });
+        // The attachments follow the request to Porter's card, and the partner hears RECEIVED —
+        // "got it, I'm on it", what was understood, what comes next — once (her decision, 21 Sep).
+        await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?2 WHERE work_card_id = ?1").bind(card.id, handed.cardId).run();
+        const { sendReceived } = await import("./webPropertyChange");
+        await sendReceived(env, handed.cardId, { tldr: input.receivedTldr ?? null });
         await env.WP_OS_DB.prepare(
           "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to Porter as work card ' || ?2 || ': a web property change, worked on the Mac.', 1, 16000) WHERE id = ?1",
         )

@@ -143,16 +143,19 @@ export function renderContext(job, paths) {
     `PACKAGE_DIR: ${paths.packageDir}`,
     `JOB_DIR: ${paths.jobDir}`,
     `RESULT_PATH: ${paths.resultPath}`,
-    `DRIVE_FOLDER: ${job.drive?.folder_url ?? job.drive?.folder_id ?? "(none)"}`,
     ...(job.pre_approved ? [`PRE-APPROVED: the partner wrote "${job.pre_approved}" — decide everything yourself, asks: []`] : []),
+    "",
+    "REQUEST (the partner's own words — THE SPECIFICATION; read this first):",
+    "```",
+    String(job.request ?? job.ask ?? "").trim() || "(the request text is empty — BLOCK and ask what they want)",
+    "```",
+    "",
+    "ASSETS the request may reference:",
+    `ATTACHMENTS: ${paths.attachments?.length ? paths.attachments.map((a) => `${a.filename} (${a.media_type}, ${a.bytes} bytes) → ${a.path}`).join("; ") : "none arrived"}`,
+    `DRIVE_FOLDERS: ${job.drive?.folder_id ? `${job.drive.folder_url ?? job.drive.folder_id} → pulled into ${paths.packageDir}` : "none in the request"}`,
     "",
     "STANDING RULES OF THIS KIND:",
     ...Object.entries(job.rules ?? {}).map(([k, v]) => `- ${k}: ${v}`),
-    "",
-    "THE PARTNER'S ASK, verbatim:",
-    "```",
-    String(job.ask ?? "").trim(),
-    "```",
   ];
   if (job.plan) {
     lines.push("", "THE PLAN (already filed as a Document on the card):", "");
@@ -180,6 +183,28 @@ async function git(cwd, ...args) {
   return sh("git", args, { cwd });
 }
 
+/**
+ * THE ENVIRONMENT `claude` RUNS IN — HER SEAT, NEVER A KEY (21 Sep 2026).
+ *
+ * The claimer runs under `vault.mjs run --`, which injects the whole West Peek vault into the
+ * process — and the vault holds ANTHROPIC_API_KEY for the Worker's paid lane. `claude -p` prefers
+ * an API key in its environment over the subscription login, so with the key present every job
+ * would bill the API and die with "Credit balance is too low" ("claude.ai connectors are disabled
+ * because ANTHROPIC_API_KEY … takes precedence"), which is exactly how a sibling lane's two jobs
+ * died at 13:00 CT. Reserved env names are never used (her rule); Claude Code runs on her seat.
+ * So the child gets a COPY of the environment with every ANTHROPIC_* and CLAUDE_* auth variable
+ * removed. `validate:duty-executor` holds this to the spawn and proves the strip negatively.
+ */
+export function claudeChildEnv(base) {
+  const out = {};
+  for (const [k, v] of Object.entries(base ?? {})) {
+    if (/^(ANTHROPIC_|CLAUDE_(API|AUTH|CODE_OAUTH|CODE_USE|OAUTH|TOKEN)|CLAUDE_CODE_API)/i.test(k)) continue;
+    if (k === "ANTHROPIC_API_KEY" || k === "ANTHROPIC_BASE_URL" || k === "ANTHROPIC_AUTH_TOKEN") continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 /** Run `claude -p` in the worktree with the prompt, killable by the job's signal. */
 function runClaude({ prompt, model, cwd, addDirs, signal, onLine }) {
   return new Promise((resolve) => {
@@ -191,7 +216,7 @@ function runClaude({ prompt, model, cwd, addDirs, signal, onLine }) {
       "--output-format", "json",
       ...addDirs.flatMap((d) => ["--add-dir", d]),
     ];
-    const child = spawn("claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: process.env });
+    const child = spawn("claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: claudeChildEnv(process.env) });
     let out = "";
     let err = "";
     child.stdout.on("data", (d) => {
@@ -217,6 +242,20 @@ function costFrom(claudeJsonOut) {
   } catch {
     return null;
   }
+}
+
+/** Fetch one attached file from the Worker with the Mac's own Access token. Returns the byte count. */
+async function fetchAttachment(routePath, target, env) {
+  const base = env?.WP_OS_BASE_URL ?? "https://os.joinwestpeek.com";
+  const id = env?.WP_OS_MAC_ACCESS_CLIENT_ID;
+  const secret = env?.WP_OS_MAC_ACCESS_CLIENT_SECRET;
+  if (!id || !secret) throw new Error("WP_OS_MAC_ACCESS_CLIENT_ID / _SECRET are not in the environment");
+  const res = await fetch(`${base}${routePath}`, { headers: { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret }, signal: AbortSignal.timeout(120_000) });
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length === 0) throw new Error("the file came back empty");
+  writeFileSync(target, buf);
+  return buf.length;
 }
 
 async function ensureWorktree(repoPath, names, phase, progress) {
@@ -340,15 +379,33 @@ export async function run(job, ctx) {
     };
   }
 
-  // PLAN pulls the package. Zero files blocks the card naming the folder.
-  if (phase === "PLAN") {
-    const folder = job.drive?.folder_id;
-    if (!folder) return { phase, status: "blocked", reason: "no Drive FOLDER is on the card — send the folder link (a file link is not enough)" };
+  // THE ASSETS. The attachments the partner sent, fetched by name from the Worker into the
+  // package's attachments dir (every phase — BUILD needs the photo too); the Drive folder, when
+  // the request named one, pulled in PLAN. A folder is OPTIONAL: "the photo is attached" is a
+  // whole request. Zero files from a named folder blocks the card naming it.
+  const attachments = [];
+  if (Array.isArray(job.attachments) && job.attachments.length > 0) {
+    const attDir = path.join(packageDir, "attachments");
+    mkdirSync(attDir, { recursive: true });
+    for (const a of job.attachments) {
+      const target = path.join(attDir, String(a.filename).replace(/[\\/]/g, "_"));
+      try {
+        const got = await fetchAttachment(a.path, target, ctx.env);
+        attachments.push({ ...a, path: target, bytes: got });
+        progress(`attachment ${a.filename} (${got} bytes)`);
+      } catch (err) {
+        return { phase, status: "failed", reason: `could not fetch the attachment ${a.filename} from the OS: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}` };
+      }
+    }
+  }
+  if (phase === "PLAN" && job.drive?.folder_id) {
+    const folder = job.drive.folder_id;
     if (!ctx.env?.GSC_SERVICE_ACCOUNT_JSON) return { phase, status: "failed", reason: "GSC_SERVICE_ACCOUNT_JSON is not in the environment — the claimer must run under vault.mjs run" };
-    rmSync(packageDir, { recursive: true, force: true });
+    rmSync(path.join(packageDir, "drive"), { recursive: true, force: true });
     progress(`pulling Drive folder ${folder}`);
     try {
-      const { stdout } = await sh("node", [PULL_SCRIPT, folder, packageDir], { env: ctx.env });
+      // Abortable: the ceiling must be able to stop a 200-file pull, not only the model.
+      const { stdout } = await sh("node", [PULL_SCRIPT, folder, path.join(packageDir, "drive")], { env: ctx.env, signal: ctx.signal });
       writeFileSync(path.join(jobDir, "pull.log"), stdout);
       progress(stdout.trim().split("\n").pop() ?? "pulled");
     } catch (err) {
@@ -366,7 +423,7 @@ export async function run(job, ctx) {
     if (!existsSync(land)) return { phase, status: "failed", reason: `${land} is not on this Mac` };
     progress(`landing #${job.pr.number}`);
     try {
-      const { stdout, stderr } = await sh(land, [String(job.pr.number ?? "")], { cwd: names.worktree, env: process.env, timeout: 30 * 60_000 });
+      const { stdout, stderr } = await sh(land, [String(job.pr.number ?? "")], { cwd: names.worktree, env: process.env, timeout: 30 * 60_000, signal: ctx.signal });
       landOutput = `${stdout}\n${stderr}`;
     } catch (err) {
       landOutput = `${err?.stdout ?? ""}\n${err?.stderr ?? ""}`;
@@ -387,7 +444,7 @@ export async function run(job, ctx) {
   // The plan's text rides on the job from the Worker (the filed Document is the source of truth),
   // so a BUILD on a machine that never ran the PLAN still has it.
   const planText = job.plan?.text ?? null;
-  const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha })}`;
+  const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
   progress(`claude -p (${job.model}) for ${phase}`);
   const claude = await runClaude({ prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
@@ -473,10 +530,18 @@ function selfTest() {
     ["a pending check is PENDING", () => checkStateOf([{ state: "SUCCESS" }, { state: "PENDING" }]) === "PENDING"],
     ["no checks is PENDING, not green", () => checkStateOf([]) === "PENDING"],
     ["names are stable and safe", () => namesFor("wc_ABC-123_def").branch === "work/wpc-abc123de" && !namesFor("../x").worktree.includes("..")],
+    ["the claude child never sees an API key or base url from the vault", () => {
+      const e = claudeChildEnv({ PATH: "/bin", ANTHROPIC_API_KEY: "sk-x", ANTHROPIC_BASE_URL: "https://x", ANTHROPIC_AUTH_TOKEN: "t", CLAUDE_CODE_OAUTH_TOKEN: "o", HOME: "/h" });
+      return e.PATH === "/bin" && e.HOME === "/h" && !("ANTHROPIC_API_KEY" in e) && !("ANTHROPIC_BASE_URL" in e) && !("ANTHROPIC_AUTH_TOKEN" in e) && !("CLAUDE_CODE_OAUTH_TOKEN" in e);
+    }],
     ["a pre-approved job tells the model to decide everything", () => renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, ask: "x", pre_approved: "your call" }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/r.json" }).includes('PRE-APPROVED: the partner wrote "your call"')],
     ["the context names the result path and the ask", () => {
-      const t = renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, ask: "add a page", rules: { land_on_green: "on" } }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/result-PLAN.json" });
-      return t.includes("RESULT_PATH: /j/result-PLAN.json") && t.includes("add a page") && t.includes("land_on_green: on");
+      const t = renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, request: "add a page", rules: { land_on_green: "on" } }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/result-PLAN.json" });
+      return t.includes("RESULT_PATH: /j/result-PLAN.json") && t.includes("REQUEST (the partner's own words") && t.includes("add a page") && t.includes("land_on_green: on");
+    }],
+    ["the context lists attachments and says when no folder came", () => {
+      const t = renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, request: "the photo is attached", rules: {} }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/r.json", attachments: [{ filename: "sensori.jpg", media_type: "image/jpeg", bytes: 1234, path: "/p/attachments/sensori.jpg" }] });
+      return t.includes("ATTACHMENTS: sensori.jpg (image/jpeg, 1234 bytes) → /p/attachments/sensori.jpg") && t.includes("DRIVE_FOLDERS: none in the request");
     }],
     ["the prompt file exists and names the three phases", () => {
       const p = readFileSync(PROMPT_FILE, "utf8");
