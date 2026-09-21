@@ -121,10 +121,16 @@ export function checkDoor(files) {
   if (!/const plainRead = isPlainRead\(/.test(reqTask) || !/if \(plainRead\) preApproved = true;/.test(reqTask)) violations.push("requestTask() no longer pre-approves a plain read — every AI look at a public page would block and email the partner");
   if (!/payment_mode !== "NONE"\) return false;/.test(files.policy)) violations.push("isPlainRead() no longer refuses a paid task — a purchase could run unapproved");
   if (!/log \?in/.test(files.policy) || !/submit/.test(files.policy) || !/purchase/.test(files.policy)) violations.push("isPlainRead()'s NOT_A_READ no longer names login, submit and purchase");
-  // A PARTNER'S REQUEST IS READ AT ANY SIZE: the oversize branch tees the stream for an authenticated partner.
+  // A PARTNER'S REQUEST IS READ AT ANY SIZE — and read ONCE. The first version tee'd the raw stream
+  // (one branch to R2, one to text) and hung production for 110 s at 14 ms of CPU on 21 Sep 2026:
+  // workerd's tee lets the unread branch's backpressure stall the source. So the pin is the shape
+  // that cannot deadlock: the bytes are buffered with arrayBuffer(), the text is decoded from that
+  // buffer, the assignment card opens from it, and no tee() exists in the branch at all.
   examined += 1;
-  const oversize = files.inbound.slice(files.inbound.indexOf("if (message.rawSize > MAX_BODY_BYTES)"));
-  if (!/message\.raw\.tee\(\)/.test(oversize) || !/partnerAuthority\.isAssignment && partnerText/.test(oversize) || oversize.indexOf("openAssignmentCard(") < 0) violations.push("the oversize branch no longer reads an authenticated partner's request — a photo attached makes the request 'too large to read' again");
+  const oversizeStart = files.inbound.indexOf("if (message.rawSize > MAX_BODY_BYTES) {");
+  const oversize = oversizeStart < 0 ? "" : files.inbound.slice(oversizeStart, oversizeStart + 9000);
+  if (!/new Response\(message\.raw\)\.arrayBuffer\(\)/.test(oversize) || !/new TextDecoder\(\)\.decode\(bytes\)/.test(oversize) || !/partnerAuthority\.isAssignment && partnerText !== null/.test(oversize) || oversize.indexOf("openAssignmentCard(") < 0) violations.push("the oversize branch no longer reads an authenticated partner's request from one buffered copy — a photo attached makes the request 'too large to read' again");
+  if (/\.tee\(\)/.test(oversize)) violations.push("the oversize branch tees the raw stream again — that is the deadlock that hung the Worker on 21 Sep 2026 (R2 branch waits on an unread text branch)");
   const re = files.reingest.slice(files.reingest.indexOf("export async function handleReingestStoredEmail("));
   examined += 1;
   const cancel = re.indexOf("state = 'CANCELLED'");
