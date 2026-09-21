@@ -22,6 +22,8 @@
  * rows were seeded from, and `phaseModel()` in services/webPropertyChange.ts is the only reader.
  */
 
+import { readAsks, type Ask } from "./approvalReply";
+
 export const LOCAL_JOB_RUN_KIND = "LOCAL_JOB" as const;
 
 /** The phases of a web property change, in order. */
@@ -98,7 +100,7 @@ export interface LocalJobPayload {
   drive: { folder_id: string | null; folder_url: string | null };
   ask: string;
   /** From the PLAN phase onward, so BUILD and LAND work from the plan and the partner's answers. */
-  plan: { document_id: string | null; text: string | null; decided: string[]; asks: string[]; answers: string[]; approved_at: string | null } | null;
+  plan: { document_id: string | null; text: string | null; decided: string[]; asks: Ask[]; answers: string[]; approved_at: string | null } | null;
   /** From BUILD onward. */
   pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null } | null;
   rules: Record<string, string>;
@@ -117,7 +119,8 @@ export interface LocalJobReport {
   /** PLAN: the plan document, markdown. */
   document?: string;
   decided?: string[];
-  asks?: string[];
+  /** Each a numbered question WITH Porter's recommended default — "approved" takes every default. */
+  asks?: Ask[];
   /** BUILD: the PR, and what the script observed on it. */
   pr_url?: string;
   pr_number?: number;
@@ -168,7 +171,7 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     reason: str(r.reason),
     document: str(r.document),
     decided: strs(r.decided),
-    asks: strs(r.asks),
+    asks: readAsks(r.asks),
     pr_url: str(r.pr_url),
     pr_number: typeof r.pr_number === "number" && Number.isFinite(r.pr_number) ? r.pr_number : undefined,
     branch: str(r.branch),

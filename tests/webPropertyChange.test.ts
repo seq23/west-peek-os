@@ -226,7 +226,10 @@ describe("Scooter emails a package for the ventures site", () => {
         status: "ok",
         document: "# Plan: ventures site update\n\n## Changes\n- team page\n- portfolio logos\n\n## Live proof\n- https://westpeek.ventures/team\n",
         decided: ["new /team route with a redirect from /people", "logos on cream tiles per the RUNBOOK"],
-        asks: ["Use the orange accent on the team page headings, or keep black/white?", "The thesis doc drops the 'first cheque' claim — remove it from the site too?"],
+        asks: [
+          { question: "Use the orange accent on the team page headings, or keep black/white?", recommended: "keep black/white — the ventures visual system is frozen" },
+          { question: "The thesis doc drops the 'first cheque' claim — remove it from the site too?", recommended: "remove it; the doc is the source of truth" },
+        ],
       }),
     });
     const out = await tick();
@@ -249,27 +252,52 @@ describe("Scooter emails a package for the ventures site", () => {
     const email = sent.find((m) => m.to === SCOOTER && /blocked/i.test(m.subject));
     expect(email, "the asks are emailed to the requesting partner").toBeDefined();
     expect(email!.text).toMatch(/orange accent/);
+    expect(email!.text, "each ask carries Porter's recommended default").toMatch(/Porter recommends: keep black\/white/);
+    expect(email!.text, "THE PLAN ITSELF is in the mail, not only a link").toMatch(/# Plan: ventures site update/);
+    expect(email!.text).toMatch(/portfolio logos/);
+    expect(email!.text).toMatch(/Reply "approved"/);
+    expect(String(c.block_needed).length, "the card's column stays short").toBeLessThanOrEqual(900);
     const thread = await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porterCardId).first<{ token: string }>();
     blockThreadToken = thread!.token;
     expect(blockThreadToken).toBeTruthy();
   });
 
-  it("Sequoia's reply to Scooter's question is kept as a note and clears nothing", async () => {
-    const out = await replyFrom(SEQUOIA, "go with black and white", blockThreadToken);
+  it("Sequoia's \"approved\" on Scooter's question is kept as a note and advances nothing", async () => {
+    const out = await replyFrom(SEQUOIA, "approved", blockThreadToken);
     expect(out.steered).toBe(true);
     expect(out.answered).toBe(false);
     expect((await card(porterCardId)).state).toBe("BLOCKED");
     const note = await env.WP_OS_DB.prepare("SELECT body FROM work_card_note WHERE work_card_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porterCardId).first<{ body: string }>();
     expect(note?.body).toMatch(/Not the partner this question was addressed to/);
+    expect((await readWebPropertyChange(env, porterCardId))!.plan_approved_at).toBeNull();
   });
 
-  it("Scooter's reply clears the block; the next tick records the approval and parks BUILD with the plan and the answers on the job", async () => {
-    const out = await replyFrom(SCOOTER, "1. keep black and white. 2. yes remove it. go.", blockThreadToken);
+  it("Scooter's \"no\" HOLDS the card: recorded as a finding, still BLOCKED, nothing approved, nothing parked", async () => {
+    const out = await replyFrom(SCOOTER, "No — hold on, I want to look at the logos first", blockThreadToken);
+    expect(out.steered).toBe(true);
+    expect(out.answered, "the reply reaches the card through the answer door").toBe(true);
+    const held = await tick();
+    expect(held.outcome).toBe("BLOCKED");
+    const c = await card(porterCardId);
+    expect(c.state).toBe("BLOCKED");
+    expect(String(c.description)).toMatch(/Not approved by scooter@westpeek.ventures: "No — hold on/);
+    expect(String(c.block_needed)).toMatch(/Nothing is built/);
+    const row = (await readWebPropertyChange(env, porterCardId))!;
+    expect(row.plan_approved_at, "\"no\" never sets plan_approved_at").toBeNull();
+    expect(row.phase).toBe("PLAN");
+    expect(await liveJobFor(porterCardId)).toBeNull();
+    // The re-block emailed him again with the plan; the next reply lands on the newest thread.
+    const thread = await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porterCardId).first<{ token: string }>();
+    blockThreadToken = thread!.token;
+  });
+
+  it("Scooter replies exactly \"approved\": the block clears, every ask takes its recommended default, BUILD is parked with the plan and the answers on the job", async () => {
+    const out = await replyFrom(SCOOTER, "approved", blockThreadToken);
     expect(out.steered).toBe(true);
     expect(out.answered, "the reply IS the answer, through the same door as the button").toBe(true);
     const reopened = await card(porterCardId);
     expect(reopened.state).toBe("OPEN");
-    expect(String(reopened.block_answer)).toMatch(/keep black and white/);
+    expect(String(reopened.block_answer)).toBe("approved");
 
     const next = await tick();
     expect(next.outcome).toBe("PROGRESSED");
@@ -278,13 +306,17 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(row.phase).toBe("BUILD");
     expect(row.plan_approved_at).toBeTruthy();
     expect(row.plan_approved_by).toBe("fu_scooter_taylor");
-    expect(JSON.parse(row.answers_json)[0]).toMatch(/remove it/);
+    const answers = JSON.parse(row.answers_json) as string[];
+    expect(answers, "one word answered every ask with its recommendation").toHaveLength(2);
+    expect(answers[0]).toMatch(/keep black\/white .*approved as recommended/);
+    expect(answers[1]).toMatch(/remove it; the doc is the source of truth/);
     const job = (await liveJobFor(porterCardId))!;
     const payload = JSON.parse(job.job_json!) as { phase: string; model: string; plan: { text: string; answers: string[]; approved_at: string } };
     expect(payload.phase).toBe("BUILD");
     expect(payload.model).toBe("sonnet");
     expect(payload.plan.text).toMatch(/^# Plan: ventures site update/);
-    expect(payload.plan.answers[0]).toMatch(/keep black and white/);
+    expect(payload.plan.answers[0]).toMatch(/keep black\/white/);
+    expect((payload.plan as unknown as { asks: Array<{ recommended: string }> }).asks[0]!.recommended).toMatch(/keep black\/white/);
     expect(payload.plan.approved_at).toBe(row.plan_approved_at);
   });
 
@@ -334,7 +366,9 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(payload.phase).toBe("LAND");
     expect(payload.model).toBe("haiku");
     expect(payload.pr.check_green_at).toBe(row.check_green_at);
-    expect(sent.filter((m) => m.to === SCOOTER).length, "no second email between green and land").toBe(1);
+    // Two blocked emails so far (the plan, then his "no"), and nothing since: green does not email.
+    expect(sent.filter((m) => m.to === SCOOTER && /blocked/i.test(m.subject)).length).toBe(2);
+    expect(sent.filter((m) => m.to === SCOOTER && !/blocked/i.test(m.subject)).length, "no second email between green and land").toBe(0);
   });
 
   it("LAND reports the merge: the card is DONE, the row carries the proof, and the DONE email to Scooter carries it too", async () => {

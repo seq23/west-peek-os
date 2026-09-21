@@ -543,7 +543,13 @@ export async function sweepOnce(
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" finished (attempt ${card.work_attempts})${emailed ? `, ${emailed} emailed` : ""}: ${detail.slice(0, 160)}`, card, outcome: "DONE" };
   }
   if (state === "BLOCKED" || blocked) {
-    const question = fresh?.next_action ?? detail;
+    let question = fresh?.next_action ?? detail;
+    // A WEB PROPERTY CHANGE's blocked email carries THE WHOLE PLAN above the numbered asks (owner,
+    // 21 Sep 2026: zero-friction approval — one word back). The card's column stays short.
+    if (card.kind === WEB_PROPERTY_CHANGE_KIND) {
+      const { blockedEmailDetail } = await import("./webPropertyChange");
+      question = (await blockedEmailDetail(env, card.id)) ?? question;
+    }
     await announceOutcome(env, card, "BLOCKED", question);
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" is blocked: ${question.slice(0, 160)}`, card, outcome: "BLOCKED" };
   }
