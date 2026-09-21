@@ -143,3 +143,5 @@ INSERT OR IGNORE INTO work_kind_rule (kind, rule_key, label, value, editable, no
    'A card has at most one run queued or on the Mac at a time — a unique index on the queue, not a promise.', NULL),
   ('WEB_PROPERTY_CHANGE', 'no_production_iteration', 'Never iterate in production when a pass emails the partners', 'on', 0,
    'Each phase runs once per attempt and emails at most once. Iteration happens against the repo''s validators in the worktree, never by re-running a live pass.', NULL);
+
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0219_porter_changes_a_web_property_from_her_mac');
