@@ -5,6 +5,7 @@ import { writtenAndQuoted } from "../../shared/intake/replyBody";
 import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { partnerByEmail } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
+import { answerBlock } from "./blocks";
 
 /**
  * A REPLY, MATCHED TO ITS CONVERSATION AND TURNED INTO A STEER (17 Sep 2026).
@@ -84,6 +85,12 @@ export async function recordThreadDelivery(
 export interface SteerFromReply {
   /** True when the message was matched to one of our threads AND accepted as a partner's. */
   steered: boolean;
+  /**
+   * 20 Sep 2026. True when the reply CLEARED A BLOCK: the card was BLOCKED with a question for the
+   * partner who asked, and their reply is the answer. The card is OPEN again with the answer on
+   * it, and the next sweep resumes the work with it.
+   */
+  answered?: boolean;
   thread: EmailThreadRow | null;
   /** What the partner WROTE. Never the quoted original. Empty when they wrote nothing above it. */
   written: string;
@@ -208,12 +215,50 @@ export async function steerFromReply(
   }
 
   /*
+   * ── APPROVAL THAT RESUMES (20 Sep 2026, Plan A) ────────────────────────────────────────────
+   *
+   * A BLOCKED card emailed its question to the partner who asked for the work. Their reply IS the
+   * answer, and it goes through the SAME door the button on the card uses — `answerBlock` with
+   * ANSWER — so the card is OPEN again with `block_answer` on it, a note for the loop, and the
+   * attempts reset; the next sweep resumes the run with the answer in front of it. Nothing here
+   * interprets the words: "go", "yes to 1, no to 2, use the orange" and a paragraph are all
+   * answers, and the runner reads them.
+   *
+   * SCOOTER ANSWERS SCOOTER'S QUESTIONS. The block is addressed to the partner who asked
+   * (`requested_by_email`); a reply from the other partner is kept as a note on the card — it is
+   * still a Managing Partner's word — but it does not clear a question that was not theirs. A
+   * card with no requester on it (raised by hand) is cleared by either partner.
+   */
+  let answered = false;
+  if (thread.object_type === "work_card") {
+    const partner = partnerByEmail(authority.partnerAddress);
+    const blocked = await env.WP_OS_DB.prepare(
+      "SELECT id, requested_by_email FROM work_card WHERE id = ?1 AND state = 'BLOCKED'",
+    )
+      .bind(thread.object_id)
+      .first<{ id: string; requested_by_email: string | null }>();
+    if (blocked && partner) {
+      const asked = (blocked.requested_by_email ?? "").trim().toLowerCase();
+      if (!asked || asked === partner.email) {
+        const out = await answerBlock(env, blocked.id, partner.firmUserId, { action: "ANSWER", text: written.slice(0, 4000) });
+        answered = out.ok;
+      } else {
+        await env.WP_OS_DB.prepare(
+          "INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+          .bind(`wcn_${crypto.randomUUID()}`, blocked.id, partner.firmUserId, `(Not the partner this question was addressed to; kept as a note.) ${written.slice(0, 3900)}`, thread.firm_scope)
+          .run();
+      }
+    }
+  }
+
+  /*
    * AND A NOTE ON THE CARD ITSELF WHEN IT IS STILL OPEN, because the card's thread is where a
    * person looks for what was said about a piece of work. `steerFor` reads unacknowledged notes, so
    * a reply that lands mid-run reaches the very next stage — which is the behaviour
    * `services/instruction.ts` already promises for a note typed in the UI.
    */
-  if (thread.object_type === "work_card") {
+  if (thread.object_type === "work_card" && !answered) {
     const partner = partnerByEmail(authority.partnerAddress);
     const open = await env.WP_OS_DB.prepare(
       "SELECT id FROM work_card WHERE id = ?1 AND state IN ('OPEN','IN_PROGRESS')",
@@ -245,10 +290,11 @@ export async function steerFromReply(
       written_chars: written.length,
       quoted_chars: split.quoted.length,
       said: written.slice(0, 400),
+      answered_block: answered,
     },
   });
 
-  return { steered: true, thread, written, reason: "", attempted: true };
+  return { steered: true, thread, written, reason: "", attempted: true, answered };
 }
 
 // ── The standing steer a recurring duty reads before it runs ──────────────────────────────────

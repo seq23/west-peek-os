@@ -5,12 +5,16 @@ import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import {
   HEARTBEAT_FRESH_MS,
   HEARTBEAT_INTERVAL_S,
+  RUN_KINDS,
   SEATS,
   allSeatAvailability,
   claimRun,
+  isRunKind,
   isSeat,
+  progressRun,
   recordHeartbeat,
   reportRun,
+  type RunKind,
   type Seat,
 } from "../ai/subscriptionSeats";
 
@@ -20,6 +24,7 @@ import {
  *   POST /api/subscription-seats/heartbeat   "These seats are awake."  → availability
  *   POST /api/subscription-seats/claim       "Give me one."            → a parked run, or nothing
  *   POST /api/subscription-seats/report      "Here is the answer."     → terminal
+ *   POST /api/subscription-seats/progress    "Still here." (0219)      → a long job's pulse
  *   GET  /api/subscription-seats/status      "Why did this cost money?"
  *
  * SEAT-SCOPED THROUGHOUT. One claimer process may serve `claude_code`, `codex`, or both, and it
@@ -113,10 +118,21 @@ export async function handleSubscriptionSeatHeartbeat(ctx: RouteContext): Promis
   });
 }
 
+const runKindSchema = z
+  .string()
+  .trim()
+  .refine(isRunKind, { message: `kind must be one of: ${RUN_KINDS.join(", ")}` });
+
 const claimSchema = z.object({
   device_id: z.string().trim().min(1).max(200),
   /** Only the seats this machine can actually run. See `claimRun`. */
   seats: z.array(seatSchema).min(1).max(SEATS.length),
+  /**
+   * 0219. Which KINDS this claimer runs. Absent means ANSWER — the claimer that shipped with 0187
+   * never says, and must never be handed a job that needs a worktree. The local-job claimer says
+   * LOCAL_JOB and nothing else.
+   */
+  kinds: z.array(runKindSchema).min(1).max(RUN_KINDS.length).optional(),
 });
 
 /**
@@ -137,13 +153,25 @@ export async function handleSubscriptionSeatClaim(ctx: RouteContext): Promise<Re
 
   const seats = parsed.data.seats as Seat[];
   for (const seat of seats) await recordHeartbeat(ctx.env, { seat, deviceId: parsed.data.device_id });
-  const run = await claimRun(ctx.env, parsed.data.device_id, seats);
+  const kinds = (parsed.data.kinds ?? ["ANSWER"]) as RunKind[];
+  const run = await claimRun(ctx.env, parsed.data.device_id, seats, new Date(), kinds);
   if (!run) return json({ run: null, detail: "nothing parked" });
+
+  let job: unknown = null;
+  if (run.run_kind === "LOCAL_JOB") {
+    try {
+      job = JSON.parse(run.job_json ?? "null");
+    } catch {
+      job = null;
+    }
+  }
 
   return json({
     run: {
       id: run.id,
       seat: run.seat,
+      run_kind: run.run_kind,
+      job,
       purpose: run.purpose,
       prompt: run.prompt,
       model_access: run.model_access,
@@ -196,6 +224,26 @@ export async function handleSubscriptionSeatReport(ctx: RouteContext): Promise<R
     outputText: parsed.data.output_text ?? null,
     error: parsed.data.error ?? null,
   });
+  if (!result.accepted) return json({ accepted: false, detail: result.detail }, { status: 409 });
+  return json({ accepted: true, detail: result.detail });
+}
+
+const progressSchema = z.object({
+  device_id: z.string().trim().min(1).max(200),
+  run_id: z.string().trim().min(1).max(200),
+  note: z.string().trim().max(400).optional(),
+});
+
+/**
+ * "STILL HERE." A long job's pulse (0219). Written every minute while the duty script's child
+ * runs, read by the reaper instead of the claim time. A rejected pulse tells the claimer to stop:
+ * its run was returned to the pool or closed while it slept.
+ */
+export async function handleSubscriptionSeatProgress(ctx: RouteContext): Promise<Response> {
+  if (!mayClaim(ctx)) return forbidden();
+  const parsed = progressSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", detail: parsed.error.issues[0]?.message }, { status: 400 });
+  const result = await progressRun(ctx.env, { runId: parsed.data.run_id, deviceId: parsed.data.device_id, note: parsed.data.note ?? null });
   if (!result.accepted) return json({ accepted: false, detail: result.detail }, { status: 409 });
   return json({ accepted: true, detail: result.detail });
 }

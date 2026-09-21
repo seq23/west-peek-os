@@ -1,4 +1,5 @@
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
+import { isWebPropertyChange, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { FirmUserIdentity } from "../auth";
@@ -921,6 +922,62 @@ export async function openAssignmentCard(
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'BLOG_HELP', request_json = ?2, next_action = ?3 WHERE id = ?1")
       .bind(card.id, JSON.stringify(blog), `Blog help — ${describeModes(blog.modes)} on: ${blog.topic}. Research live and judged, write in the partner's voice, file it, email them once.`)
       .run();
+    return card.id;
+  }
+
+  /*
+   * INTAKE LEARNS DRIVE (20 Sep 2026, Plan A). Any Google Drive folder link in a partner's email
+   * is recorded on the card. When the email also names one of the firm's web properties, this is
+   * a WEB PROPERTY CHANGE: the chief of staff hands it to Porter at once — the same `assign` move
+   * the loop would make, made deterministically at the door — and Porter's card carries the
+   * folder, the property and the repo. Porter then works it on her Mac
+   * (services/webPropertyChange.ts). A folder with no property named stays an ordinary
+   * assignment with the link on it, so nothing is lost; it is simply not sped up.
+   */
+  const web = parseWebPropertyAsk(input.subject, input.raw);
+  if (web) {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET request_json = ?2 WHERE id = ?1").bind(card.id, JSON.stringify(web)).run();
+    if (isWebPropertyChange(web)) {
+      const chief = await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1").bind(input.chiefOfStaff).first<{ id: string; name: string }>();
+      const { assignCard } = await import("./employeeWork");
+      const { openWebPropertyChange, PORTER_NAME } = await import("./webPropertyChange");
+      const brief =
+        `Change ${web.property_host} from the package in ${web.drive_folder_url}: plan it on the Mac against the repo's RUNBOOK, ` +
+        `ask ${input.partnerAddress} the decisions that are theirs, build it in a worktree, prove it, open a PR, land on green.`;
+      const handed = await assignCard(
+        env,
+        {
+          id: card.id,
+          title: card.title,
+          description: card.description ?? null,
+          next_action: card.next_action ?? null,
+          state: card.state,
+          owner_type: "AI",
+          owner_id: input.chiefOfStaff,
+          allows_browser: 0,
+          model_access: "PUBLIC_MODEL_APPROVED",
+          prompt: null,
+          firm_scope: FIRM_SCOPE,
+          requested_by_email: input.partnerAddress.toLowerCase(),
+        },
+        { id: chief?.id ?? input.chiefOfStaff, name: chief?.name ?? input.chiefOfStaff },
+        PORTER_NAME,
+        brief,
+      );
+      if (handed.ok) {
+        await openWebPropertyChange(env, { cardId: handed.cardId, ask: web, firmScope: FIRM_SCOPE });
+        await env.WP_OS_DB.prepare(
+          "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to Porter as work card ' || ?2 || ': a web property change, worked on the Mac.', 1, 16000) WHERE id = ?1",
+        )
+          .bind(card.id, handed.cardId)
+          .run();
+      } else {
+        // Porter is not employed right now: the chief keeps the card with the reading on it.
+        await env.WP_OS_DB.prepare("UPDATE work_card SET next_action = ?2 WHERE id = ?1")
+          .bind(card.id, `A web property change for ${web.property_host}, but it could not be handed to Porter: ${handed.reason}.`)
+          .run();
+      }
+    }
   }
   return card.id;
 }
