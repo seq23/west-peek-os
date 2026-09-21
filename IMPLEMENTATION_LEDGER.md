@@ -6378,3 +6378,34 @@ defect. **Proof.** `tests/webPropertyChange.test.ts` (20): the mail contains the
 "Porter recommends"; Sequoia's `approved` on Scooter's card is a note and `plan_approved_at` stays
 null; Scooter's "No — hold on" holds the card BLOCKED with nothing parked; Scooter's exact
 `approved` advances to BUILD with both asks answered by their recommendations.
+
+## A plan that is not publish-ready previews first; the named bypass (21 Sep 2026)
+
+**Her words.** Some packages are not publish-ready (the Community rebuild has ~12 open items whose
+honest default is a structured placeholder); Porter must be able to say so and NOT land — and a
+partner may decide the placeholders do not matter and force it. **What changed (migration 0220).**
+The PLAN carries `publish_ready` and named `placeholders` (the duty script refuses a PLAN that does
+not say, or is not ready without naming them; a plan naming placeholders is not ready whatever its
+flag). Not ready, or the partner replies `preview`: BUILD → PR → the Cloudflare Pages preview URL
+(read by the script from the PR's deployments and Cloudflare's PR comment; null for a repo with no
+Pages deployment, and the email says so and carries the PR and screenshots) → the preview email →
+BLOCKED; the requesting partner's second `approved`, read against `preview_emailed_at`, records
+`land_approved_at` and LAND is parked. Land-on-green applies only to a ready plan. **The bypass:**
+`approved to production` (also `force production`, `ship it anyway`, `land anyway`) on the plan or
+the preview email records `forced_by`/`forced_at`/`forced_placeholders_json`, a finding names them,
+and the DONE email opens "Landed to production with N placeholders by <partner>'s instruction: …"
+— to the requester on their thread and to the other partner through the lane. Plain `approved`
+never forces. **Row guards:** `merge_sha` refused on a previewing row without a second approval or
+a force; `forced_by` refused unless its address is the card's `requested_by_email`. **A held card
+yields the sweep** (`HELD_MINUTES`): a card the Mac holds is leased past one tick so the oldest held
+card cannot starve every other card — found by the tests, fixed at source. **Guard.**
+`validate:no-land-without-approval`: 22 planted defects (was 11) — the LAND gate names both ways
+past the preview, `recordForce` only under a FORCED reading, the second approval read against the
+preview's time and requiring APPROVED, land-on-green after the preview stop, the reader ("preview"
+never APPROVED, "approved" never FORCED), both 0220 triggers, the Mac gate. **Proof.**
+`tests/webPropertyChange.test.ts` (28): not-ready + `approved` → preview email (link, PR,
+placeholders, proof) → BLOCKED, not LAND; `changes:` and the other partner's `approved` hold; the
+row refuses a merge; the second `approved` lands; `preview` on a ready plan takes the same road and
+a repo with no preview says so; `approved to production` from the requester lands, names, tells
+both partners; from the other partner is a note and the row refuses the forcer; plain `approved`
+on a not-ready plan previews.

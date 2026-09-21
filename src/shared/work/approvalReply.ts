@@ -16,9 +16,18 @@
  * partner the question was addressed to, and the runner checks the same before it acts.
  */
 
-export type ApprovalReading = { kind: "APPROVED" } | { kind: "REFUSED"; text: string } | { kind: "ANSWERS"; text: string };
+export type ApprovalReading =
+  | { kind: "APPROVED" }
+  /** "preview" (21 Sep 2026): approve the plan, but build to a PREVIEW and ask again before landing. Never a landing approval. */
+  | { kind: "PREVIEW" }
+  /** "approved to production" (21 Sep 2026): the named bypass — land a not-ready plan, placeholders and all. Separate and explicit; never plain "approved". */
+  | { kind: "FORCED" }
+  | { kind: "REFUSED"; text: string }
+  | { kind: "ANSWERS"; text: string };
 
 export const APPROVAL_WORDS = ["approved", "approve", "yes", "go", "land it", "ok", "okay", "lgtm"] as const;
+export const PREVIEW_WORDS = ["preview", "preview only", "preview first", "preview it"] as const;
+export const FORCE_WORDS = ["approved to production", "approve to production", "force production", "ship it anyway", "land anyway", "land it anyway"] as const;
 const REFUSAL_STARTS = ["no", "not approved", "stop", "changes:", "change:", "don't", "do not"] as const;
 
 /** The first line the person wrote, without a signature, quoted text or punctuation noise. */
@@ -34,7 +43,10 @@ function firstWords(text: string): string {
 export function readApprovalReply(text: string | null | undefined): ApprovalReading {
   const trimmed = (text ?? "").trim();
   const head = firstWords(trimmed);
+  // The force phrase is read FIRST: "approved to production" must never collapse into "approved".
+  if ((FORCE_WORDS as readonly string[]).includes(head)) return { kind: "FORCED" };
   if ((APPROVAL_WORDS as readonly string[]).includes(head)) return { kind: "APPROVED" };
+  if ((PREVIEW_WORDS as readonly string[]).includes(head)) return { kind: "PREVIEW" };
   for (const start of REFUSAL_STARTS) {
     if (head === start || head.startsWith(`${start} `) || head.startsWith(`${start},`) || head.startsWith(start + (start.endsWith(":") ? "" : "."))) {
       return { kind: "REFUSED", text: trimmed };

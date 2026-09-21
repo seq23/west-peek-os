@@ -100,9 +100,9 @@ export interface LocalJobPayload {
   drive: { folder_id: string | null; folder_url: string | null };
   ask: string;
   /** From the PLAN phase onward, so BUILD and LAND work from the plan and the partner's answers. */
-  plan: { document_id: string | null; text: string | null; decided: string[]; asks: Ask[]; answers: string[]; approved_at: string | null } | null;
+  plan: { document_id: string | null; text: string | null; decided: string[]; asks: Ask[]; answers: string[]; approved_at: string | null; publish_ready: boolean; placeholders: string[]; preview_only: boolean } | null;
   /** From BUILD onward. */
-  pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null } | null;
+  pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null; preview_url: string | null; land_approved_at: string | null; forced_by: string | null } | null;
   rules: Record<string, string>;
 }
 
@@ -121,6 +121,16 @@ export interface LocalJobReport {
   decided?: string[];
   /** Each a numbered question WITH Porter's recommended default — "approved" takes every default. */
   asks?: Ask[];
+  /**
+   * PLAN (21 Sep 2026): false whenever any placeholder or TODO would ship, or an ask's default is
+   * "placeholder until supplied". A plan that is not ready previews first and lands only on a
+   * SECOND approval. Absent means true — unless placeholders are named, which means false.
+   */
+  publish_ready?: boolean;
+  /** PLAN: each open item that would ship as a structured placeholder, named in a few words. */
+  placeholders?: string[];
+  /** BUILD: the Cloudflare Pages preview URL(s) for the branch, read by the script from gh. Absent when the repo has no preview deployment. */
+  preview_url?: string;
   /** BUILD: the PR, and what the script observed on it. */
   pr_url?: string;
   pr_number?: number;
@@ -181,7 +191,12 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     merge_sha: str(r.merge_sha),
     live_proof: str(r.live_proof),
     notes: str(r.notes),
+    placeholders: strs(r.placeholders),
+    publish_ready: typeof r.publish_ready === "boolean" ? r.publish_ready : strs(r.placeholders).length === 0,
+    preview_url: str(r.preview_url),
   };
+  // A plan naming placeholders is not publish-ready whatever the flag says: the list is the fact.
+  if (report.phase === "PLAN" && (report.placeholders?.length ?? 0) > 0) report.publish_ready = false;
   if (report.status !== "ok" && !report.reason) return { report: null, problem: `a ${report.status} report must say why` };
   return { report, problem: null };
 }

@@ -6548,6 +6548,7 @@ body {
 }
 .wpc-phases li[data-state="done"] { color: var(--wp-ink-2); border-color: var(--wp-line-strong); }
 .wpc-phases li[data-state="now"] { color: var(--wp-orange-ink); background: var(--wp-orange); border-color: var(--wp-orange); }
+.wpc-readiness { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin: 0 0 var(--space-sm); }
 .wpc-facts {
   display: grid;
   gap: var(--space-sm);

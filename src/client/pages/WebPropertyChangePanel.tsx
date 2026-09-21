@@ -40,6 +40,17 @@ interface ChangeRow {
   landed_at: string | null;
   live_proof: string | null;
   current_run: { id: string; status: string; claimed_by: string | null; claimed_at: string | null; progressed_at: string | null; progress_note: string | null } | null;
+  /** 0220: readiness, the preview, and the named bypass. */
+  publish_ready: number;
+  placeholders: string[];
+  preview_only: number;
+  needs_preview: boolean;
+  preview_url: string | null;
+  preview_emailed_at: string | null;
+  land_approved_at: string | null;
+  forced_by_name: string | null;
+  forced_at: string | null;
+  forced_placeholders: string[];
 }
 
 const PHASES: Array<{ key: ChangeRow["phase"]; label: string }> = [
@@ -81,6 +92,18 @@ export function WebPropertyChangePanel({ cardId, onNavigate }: { cardId: string;
         ))}
       </ol>
       <p className="small" role="status" data-testid={`wpc-run-${cardId}`}>{runLine}</p>
+      {r.plan_filed_at && (
+        <p className="wpc-readiness" data-testid={`wpc-readiness-${cardId}`}>
+          <span className={r.publish_ready === 1 ? "badge badge-ok" : "badge badge-gate"}>{r.publish_ready === 1 ? "publish-ready" : `not publish-ready · ${r.placeholders.length} placeholder${r.placeholders.length === 1 ? "" : "s"}`}</span>
+          {r.preview_only === 1 && <span className="badge">preview first, by request</span>}
+          {r.needs_preview && !r.forced_by_name && <span className="badge">{r.land_approved_at ? "landing approved after the preview" : "lands on a second approval"}</span>}
+          {r.forced_by_name && (
+            <span className="badge badge-bad" data-testid={`wpc-forced-${cardId}`} title={r.forced_at ? readableDate(r.forced_at) : undefined}>
+              forced to production by {r.forced_by_name}
+            </span>
+          )}
+        </p>
+      )}
       <dl className="wpc-facts">
         <div>
           <dt>Package</dt>
@@ -117,6 +140,20 @@ export function WebPropertyChangePanel({ cardId, onNavigate }: { cardId: string;
             {r.plan_approved_at && <span className="small"> · approved {readableDate(r.plan_approved_at)}</span>}
           </dd>
         </div>
+        {r.placeholders.length > 0 && (
+          <div>
+            <dt>Ships as placeholders</dt>
+            <dd>
+              <ul className="wpc-list" data-testid={`wpc-placeholders-${cardId}`}>{(r.forced_placeholders.length ? r.forced_placeholders : r.placeholders).map((p, i) => <li key={i}>{p}</li>)}</ul>
+            </dd>
+          </div>
+        )}
+        {r.preview_url && (
+          <div>
+            <dt>Preview</dt>
+            <dd><a href={r.preview_url} target="_blank" rel="noopener noreferrer" data-testid={`wpc-preview-${cardId}`}>{r.preview_url}</a></dd>
+          </div>
+        )}
         {r.decided.length > 0 && (
           <div>
             <dt>Decided without asking</dt>

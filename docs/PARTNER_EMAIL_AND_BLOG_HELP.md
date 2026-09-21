@@ -89,6 +89,18 @@ local-job claimer (`deployment/launchd/README.md`):
 | **BUILD** | sonnet | the change in a git worktree of the target repo, its validators green, screenshots at desktop and 390px, every new link curled, a PR opened. The script — not the model — reads `gh pr checks`. Nothing is emailed. |
 | **LAND** | haiku | with **land on green** ON (her rule), the PR is landed with `~/bin/land` as soon as its checks are green, proven live with curl, and ONE email says done with the PR and the proof. With it OFF, the card asks "land it?" first. |
 
+**When the plan is not publish-ready** (it would ship placeholders — a missing link, logo, record
+or colour value — Porter says so at the top of the plan email and names each gap), `approved` means
+BUILD → PR → the Cloudflare Pages **preview link** → a second email with the preview, the PR, the
+placeholders and the proof → the card asks again: reply **`approved`** a second time to land, or
+`changes: …` to hold. Land-on-green applies only to a publish-ready plan. On a ready plan, reply
+**`preview`** instead of `approved` to take the same road. **The named bypass:** reply
+**`approved to production`** (also `force production`, `ship it anyway`, `land anyway`) — on the
+plan or on the preview email — and a not-ready plan lands on green with its placeholders; the card
+records who forced it and which placeholders shipped, and the DONE email says so at the top, to
+BOTH partners. Plain `approved` never forces. Only the partner who asked can approve, preview or
+force their own card.
+
 The rules of the kind are rows on the Work page (land on green, the model per phase, one live run
 per card, never iterate in production when a pass emails the partners); a Managing Partner flips
 the editable ones there. Nothing lands without a recorded plan approval and a recorded green check
