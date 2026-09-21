@@ -52,6 +52,29 @@ export function isBlockedBrowserHost(hostname: string): boolean {
 }
 
 /** Everything that must be true before a task is even recorded. */
+/**
+ * READING A PUBLIC PAGE NEVER NEEDS A HUMAN (owner, 21 Sep 2026: "scooter shouldn't have to approve
+ * walker to open a web page"). A task is a PLAIN READ when it pays nothing and its objective does
+ * not describe logging in, submitting, buying, posting or uploading — and a plain read by any AI
+ * employee on any card is pre-approved. The approval gate stays for anything that pays, logs in,
+ * submits a form, or touches a host on the partners' "never" list.
+ */
+export const NEVER_READ_HOSTS: readonly string[] = [];
+
+const NOT_A_READ = /\b(log ?in|sign ?in|sign ?up|password|credentials?|authenticate|submit|fill (?:in|out)|form|checkout|purchase|buy|pay|order|subscribe|post (?:a|the|an)|upload|comment|register|create an? account|book|reserve|cancel|delete|unsubscribe|send (?:a|an|the) message|dm|reply)\b/i;
+
+export function isPlainRead(req: Pick<TaskRequest, "objective" | "start_url" | "payment_mode">): boolean {
+  if (req.payment_mode !== "NONE") return false;
+  if (NOT_A_READ.test(req.objective)) return false;
+  try {
+    const host = new URL(req.start_url).hostname.toLowerCase();
+    if (NEVER_READ_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 export function checkRequest(req: TaskRequest): PolicyRefusal | null {
   if (!req.objective || req.objective.trim().length < 8) {
     return { code: "objective_too_thin", detail: "Say what the task should achieve. A browser session with no stated objective cannot be reviewed." };

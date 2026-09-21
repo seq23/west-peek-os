@@ -6,7 +6,7 @@ import { json } from "../router";
 import type { RouteContext } from "../router";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { browsePage, browserConfigured } from "../effects/browserClient";
-import { checkExecutable, checkRequest, searchStartUrl, type PaymentMode } from "../../shared/browser/taskPolicy";
+import { checkExecutable, checkRequest, isPlainRead, searchStartUrl, type PaymentMode } from "../../shared/browser/taskPolicy";
 
 /**
  * Browser task lifecycle (P50) — the runner the scaffold was missing.
@@ -106,6 +106,15 @@ export async function requestTask(
       .first<{ allows_browser: number }>();
     preApproved = card?.allows_browser === 1;
   }
+  /*
+   * A PLAIN READ NEVER WAITS FOR A HUMAN (owner, 21 Sep 2026). Walker asked to open
+   * westpeek.ventures to look at it, the card had no standing grant, and Scooter got an email
+   * asking whether Walker may open a web page. Reading a public page with nothing paid is
+   * pre-approved for any AI employee on any card; paying, logging in, submitting and the "never"
+   * hosts still wait. See `isPlainRead`.
+   */
+  const plainRead = isPlainRead({ objective: input.objective, start_url: startUrl, payment_mode: input.payment_mode });
+  if (plainRead) preApproved = true;
 
   const id = `bwt_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
@@ -137,7 +146,8 @@ export async function requestTask(
       payment_mode: input.payment_mode,
       work_card_id: input.work_card_id ?? null,
       // Recorded because "nobody pressed approve" is a thing an auditor must be able to explain.
-      pre_approved_by_card: preApproved,
+      pre_approved_by_card: preApproved && !plainRead,
+      pre_approved_as_plain_read: plainRead,
     },
   });
 

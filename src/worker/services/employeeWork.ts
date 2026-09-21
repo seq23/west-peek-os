@@ -485,6 +485,32 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
    * dashboard she asked to be BUILT — the wrong chain, quietly. Dynamic import: artifacts.ts
    * imports this file for the handover, and a static import would close that cycle at load time.
    */
+  /*
+   * A CHIEF OF STAFF NEVER BROWSES A WEBSITE CHANGE (21 Sep 2026). Scooter's newsletter-signup
+   * request reached Walker's general loop (a hand-patched kind), Walker tried to open
+   * westpeek.ventures, hit the browser gate, and EMAILED Scooter a permission block. A card owned
+   * by a chief of staff whose text reads as a web property change is handed to Porter here — the
+   * door's own move — and never worked by search/visit/note. `validate:duty-executor` pins this
+   * guard to the runner.
+   */
+  if (card.kind !== "WEB_PROPERTY_CHANGE" && /chief of staff/i.test(employee.role)) {
+    const { parseWebPropertyAsk, isWebPropertyChange } = await import("../../shared/intake/webPropertyChange");
+    const ask = parseWebPropertyAsk(card.title.replace(/^From [^:]+@[^:]+:\s*/i, ""), card.description ?? "");
+    if (isWebPropertyChange(ask)) {
+      const { openWebPropertyChange, PORTER_NAME } = await import("./webPropertyChange");
+      const handed = await assignCard(env, card, { id: employee.id, name: employee.name }, PORTER_NAME, `Change ${ask.property_host ?? "the site"}: "${(card.description ?? card.title).replace(/\s+/g, " ").slice(0, 120)}". Plan it on the Mac against the repo's RUNBOOK; build, prove, open a PR, land on green.`);
+      if (handed.ok) {
+        await openWebPropertyChange(env, { cardId: handed.cardId, ask, firmScope: card.firm_scope });
+        await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to Porter as work card ' || ?2 || ': a web property change is never browsed by a chief of staff.', 1, 16000) WHERE id = ?1").bind(card.id, handed.cardId).run();
+        const fresh = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<CardRow>();
+        return { card: fresh ?? card, steps: [{ step: 1, action: "assigned", detail: `Handed to Porter as work card ${handed.cardId}: a web property change.` }], finished: true, blocked: false, detail: `${employee.name} handed it to Porter.` };
+      }
+      // Porter is not employed: a named stop on the card, never a browse.
+      await blockCard(env, card, { reason: "asked_for_something_this_work_cannot_do", trying: card.title, employee: employee.name, detail: `This is a change to a web property, which Porter works on the Mac — and Porter could not take it: ${handed.reason}. Switch Porter on, or hand it on.` });
+      const fresh = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<CardRow>();
+      return { card: fresh ?? card, steps: [{ step: 1, action: "blocked", detail: `a web property change cannot be worked by ${employee.name}` }], finished: false, blocked: true, detail: `${employee.name} needs you.` };
+    }
+  }
   if (card.kind === "WEB_PROPERTY_CHANGE") {
     // Porter's web property change (Plan A): the button runs the same runner the sweep does.
     const { runWebPropertyChangeCard } = await import("./webPropertyChange");

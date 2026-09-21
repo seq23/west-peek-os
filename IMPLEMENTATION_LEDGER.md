@@ -6480,3 +6480,35 @@ link → card, attachment kept and served, RECEIVED once, PLAN sees REQUEST and 
 without asking, DONE only); a quoted folder ignored; a single ask still emails; the oversize shape;
 re-read of a stored message with a verbatim first line; the prompt's policy sentences; STUCK once
 after a dead run and 46 idle minutes, never twice; the window in Central hours.
+
+## Scooter's second email: "Hey Porter! … a spot on the site" (21 Sep 2026)
+
+**Four door defects, one reply defect, two owner rulings.** (a) "Newsletter signup on the site"
+was read as BLOG HELP (the blog parser ran first and matched "newsletter") — the web-property
+parse now runs first and `parseBlogAsk` yields to a site feature (`SITE_FEATURE`). (b) The
+addressee was ignored — "Hey Porter" + "the site" with no host is now a web-property change
+whose host is inferred from the partner's most recent web-property card in 7 days
+(`property_assumed_from`, migration 0222), stated in the RECEIVED email ("I'm reading 'the site'
+as westpeek.ventures — reply if not"); with nothing to infer from, Porter asks which site. (c) A
+re-read of a stored message created nothing (`duplicateOf` joined it into the still-BLOCKED old
+card) — `handleReingestStoredEmail` now cancels the live duplicates first, runs the door, returns
+the card it created (never "the newest of the kind"), and can thread the RECEIVED under an earlier
+note (`reply_on_thread` → `In-Reply-To`/`References`). (d) Every authenticated partner message is
+stored as `.eml`, not only one with an attachment. (f) A chief of staff's card that reads as a
+website change is handed to Porter by the general runner before any loop step — never browsed,
+never a permission email. (h) Scooter's iPhone reply "Yes he can open." to Walker's blocked note
+opened a NEW blog card: a partner's "Re: <one of our rendered subjects>" is matched to the thread
+we sent them even when our token did not come back, and the reply's TEXT part (not the MIME) is
+the answer. **Rulings:** (i) `MAX_BODY_BYTES` bounds inline parsing of outside mail only; an
+authenticated partner's request is read at any size Cloudflare delivers (25 MB), tee'd, text read,
+attachments recorded by name — proven with a real 4 MB message; (ii) a PLAIN READ of a public
+page (nothing paid, no login/submit/purchase, not a "never" host) is pre-approved for any AI on
+any card (`isPlainRead`); paying, logging in and submitting still wait. The Google Sheet is the
+recorded default destination for a form's data (prompt). **Guards:** `validate:duty-executor`
+(18 planted defects): web before blog, the SITE_FEATURE yield, the .eml store ungated, the chief
+guard before the loop, the re-read cancelling first and returning its own card, the plain-read
+pre-approval and its paid/login refusals, the oversize branch reading a partner. **Proof:** 8 more
+tests (51) — the parsers, inference + RECEIVED assumption, "which site?", the chief hand-off with
+zero browser tasks, the Re: reply answering the block with no new card, the re-read superseding,
+the 4 MB message, the prompt's Sheet default; browser tests rewritten to the new rule (a read
+APPROVED with no card permission; login and submit REQUESTED).

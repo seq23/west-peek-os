@@ -39,6 +39,13 @@ const REGISTRY = path.join(ROOT, "src", "shared", "work", "localJobs.ts");
 const CLAIMER = path.join(ROOT, "scripts", "claimer", "local-job-claimer.mjs");
 const SWEEP = path.join(ROOT, "src", "worker", "services", "workSweep.ts");
 const DUTIES_DIR = path.join(ROOT, "scripts", "duties");
+const DOOR = path.join(ROOT, "src", "worker", "services", "dealIntake.ts");
+const GENERAL = path.join(ROOT, "src", "worker", "services", "employeeWork.ts");
+const BLOG = path.join(ROOT, "src", "shared", "intake", "blogHelp.ts");
+const REINGEST = path.join(ROOT, "src", "worker", "services", "webPropertyChange.ts");
+const BROWSER = path.join(ROOT, "src", "worker", "services", "browserTask.ts");
+const POLICY = path.join(ROOT, "src", "shared", "browser", "taskPolicy.ts");
+const INBOUND = path.join(ROOT, "src", "worker", "effects", "inboundEmail.ts");
 
 const read = (p) => stripTsComments(readFileSync(p, "utf8"));
 /** The duty header is prose ON PURPOSE — the declaration lives in the comment. DELIBERATELY DOES NOT STRIP COMMENTS for that one read. */
@@ -72,6 +79,59 @@ export function claimerDuties(src) {
 /** The kind a duty script declares in its header, or null. */
 export function declaredKind(rawSource) {
   return rawSource.match(/card kind:\s*([A-Z_]+)/)?.[1] ?? null;
+}
+
+/**
+ * THE DOOR AND THE GENERAL LOOP (21 Sep 2026, Scooter's second email):
+ *   a · the web-property parse runs BEFORE the blog parse in openAssignmentCard, and the blog
+ *       parser yields to a site feature (SITE_FEATURE) before it matches "newsletter";
+ *   d · every authenticated partner message is stored as .eml (the store is not gated on attachments);
+ *   f · the general runner hands a chief of staff's web-property card to Porter before any loop step;
+ *   c · the re-read door cancels live duplicates before the door runs and returns the card it created.
+ */
+export function checkDoor(files) {
+  const violations = [];
+  let examined = 0;
+  const open = files.door.slice(files.door.indexOf("export async function openAssignmentCard("));
+  if (!open.length) violations.push("openAssignmentCard() is gone");
+  else {
+    examined += 1;
+    const web = open.indexOf("parseWebPropertyAsk(input.subject, written)");
+    const blog = open.indexOf("parseBlogAsk(input.subject, written)");
+    if (web < 0 || blog < 0) violations.push("openAssignmentCard() no longer parses both the web-property ask and the blog ask from the written text");
+    else if (web > blog) violations.push("openAssignmentCard() parses blog help BEFORE the web-property ask — 'newsletter signup on the site' would become a blog outline");
+    if (!/if \(!emlKey && env\.WP_OS_DOCUMENTS && input\.raw\.trim\(\)\.length > 0\)/.test(open)) violations.push("openAssignmentCard() gates the .eml store on something other than 'a partner message with text' — 'read it again' would be impossible for a message without an attachment");
+  }
+  const blog = files.blog;
+  examined += 1;
+  const site = blog.indexOf("if (SITE_FEATURE.test(text)) return null;");
+  const ctx = blog.indexOf("if (!BLOG_CONTEXT.test(text)) return null;");
+  if (site < 0) violations.push("parseBlogAsk() has no SITE_FEATURE yield — a newsletter signup form reads as blog help");
+  else if (ctx >= 0 && site > ctx) violations.push("parseBlogAsk() tests BLOG_CONTEXT before SITE_FEATURE — 'newsletter' wins over 'signup form'");
+  const general = files.general.slice(files.general.indexOf("export async function workCard("));
+  examined += 1;
+  const guard = general.indexOf("/chief of staff/i.test(employee.role)");
+  const loop = general.indexOf("for (let step = 1; step <= runSteps; step++)");
+  if (guard < 0) violations.push("workCard() no longer hands a chief of staff's web-property card to Porter — the general loop would browse it and email the partner a permission block");
+  else if (loop >= 0 && guard > loop) violations.push("workCard()'s chief-of-staff guard sits after the general loop — too late");
+  if (guard >= 0 && !/isWebPropertyChange\(ask\)[\s\S]{0,600}assignCard\(/.test(general.slice(guard, guard + 2500))) violations.push("workCard()'s chief-of-staff guard does not hand the card on through assignCard");
+  // A PLAIN READ NEVER WAITS FOR A HUMAN (owner, 21 Sep 2026), and paying/logging in still does.
+  examined += 1;
+  const reqTask = files.browser.slice(files.browser.indexOf("export async function requestTask("));
+  if (!/const plainRead = isPlainRead\(/.test(reqTask) || !/if \(plainRead\) preApproved = true;/.test(reqTask)) violations.push("requestTask() no longer pre-approves a plain read — every AI look at a public page would block and email the partner");
+  if (!/payment_mode !== "NONE"\) return false;/.test(files.policy)) violations.push("isPlainRead() no longer refuses a paid task — a purchase could run unapproved");
+  if (!/log \?in/.test(files.policy) || !/submit/.test(files.policy) || !/purchase/.test(files.policy)) violations.push("isPlainRead()'s NOT_A_READ no longer names login, submit and purchase");
+  // A PARTNER'S REQUEST IS READ AT ANY SIZE: the oversize branch tees the stream for an authenticated partner.
+  examined += 1;
+  const oversize = files.inbound.slice(files.inbound.indexOf("if (message.rawSize > MAX_BODY_BYTES)"));
+  if (!/message\.raw\.tee\(\)/.test(oversize) || !/partnerAuthority\.isAssignment && partnerText/.test(oversize) || oversize.indexOf("openAssignmentCard(") < 0) violations.push("the oversize branch no longer reads an authenticated partner's request — a photo attached makes the request 'too large to read' again");
+  const re = files.reingest.slice(files.reingest.indexOf("export async function handleReingestStoredEmail("));
+  examined += 1;
+  const cancel = re.indexOf("state = 'CANCELLED'");
+  const door = re.indexOf("handleInboundEmail(");
+  if (cancel < 0 || door < 0 || cancel > door) violations.push("handleReingestStoredEmail() does not cancel the live duplicates BEFORE the door runs — the new assignment would be joined into the old card and nothing created");
+  if (!/created_at >= \?2/.test(re) || /ORDER BY created_at DESC LIMIT 1"\)\.first/.test(re.slice(0, re.indexOf("appendEvent")))) violations.push("handleReingestStoredEmail() returns 'the newest card of the kind' instead of the card this read created");
+  return { violations, examined };
 }
 
 export function check(files) {
@@ -133,7 +193,9 @@ export function check(files) {
     }
     if (!entries.some((e) => e.kind === declared)) violations.push(`${rel} declares card kind ${declared}, which the registry does not know`);
   }
-  return { violations, kinds: entries.length, scripts: Object.keys(dutyFiles).length };
+  const door = files.door ? checkDoor(files) : { violations: [], examined: 0 };
+  violations.push(...door.violations);
+  return { violations, kinds: entries.length, scripts: Object.keys(dutyFiles).length, doorGates: door.examined };
 }
 
 function loadFiles() {
@@ -147,7 +209,7 @@ function loadFiles() {
       else if (name.endsWith(".md")) promptFiles[rel] = readRaw(abs);
     }
   }
-  return { registry: read(REGISTRY), claimer: read(CLAIMER), sweep: read(SWEEP), dutyScripts, promptFiles };
+  return { registry: read(REGISTRY), claimer: read(CLAIMER), sweep: read(SWEEP), dutyScripts, promptFiles, door: read(DOOR), general: read(GENERAL), blog: read(BLOG), reingest: read(REINGEST), browser: read(BROWSER), policy: read(POLICY), inbound: read(INBOUND) };
 }
 
 function selfTest() {
@@ -185,18 +247,34 @@ function selfTest() {
   say(rawEnv.violations.some((v) => /env: process\.env/.test(v)), "a claude spawn that passes process.env straight through (the vault's API key) is caught");
   const noStrip = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace(/ANTHROPIC_BASE_URL/g, "OTHER_URL") } } });
   say(noStrip.violations.some((v) => /no longer names ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL/.test(v)), "a strip that forgets the base url is caught");
+  const blogFirst = check({ ...files, door: files.door.replace("const web = parseWebPropertyAsk(input.subject, written);", "const web0 = parseBlogAsk(input.subject, written); const web = parseWebPropertyAsk(input.subject, written);") });
+  say(blogFirst.violations.some((v) => /parses blog help BEFORE/.test(v)), "a door that reads blog help before the web-property ask is caught");
+  const emlGated = check({ ...files, door: files.door.replace("if (!emlKey && env.WP_OS_DOCUMENTS && input.raw.trim().length > 0)", "if (attachments.length > 0 && !emlKey && env.WP_OS_DOCUMENTS)") });
+  say(emlGated.violations.some((v) => /gates the \.eml store/.test(v)), "a door that stores the .eml only with an attachment is caught");
+  const noSiteYield = check({ ...files, blog: files.blog.replace("if (SITE_FEATURE.test(text)) return null;", "") });
+  say(noSiteYield.violations.some((v) => /no SITE_FEATURE yield/.test(v)), "a blog parser that no longer yields to a site feature is caught");
+  const noGuard = check({ ...files, general: files.general.replace("/chief of staff/i.test(employee.role)", "false && /cos/i.test(employee.role)") });
+  say(noGuard.violations.some((v) => /no longer hands a chief of staff's web-property card/.test(v)), "a general loop that would browse a chief's website change is caught");
+  const cancelAfter = check({ ...files, reingest: files.reingest.replace("state = 'CANCELLED', next_action = ?2, block_nag_at = NULL, lease_until = NULL,", "state = 'CANCELLED_LATER', next_action = ?2,") });
+  say(cancelAfter.violations.some((v) => /cancel the live duplicates BEFORE/.test(v)), "a re-read that no longer cancels the live duplicate first is caught");
+  const readsWait = check({ ...files, browser: files.browser.replace("if (plainRead) preApproved = true;", "if (plainRead && false) preApproved = true;") });
+  say(readsWait.violations.some((v) => /no longer pre-approves a plain read/.test(v)), "a browser gate that makes a plain read wait for a human is caught");
+  const paidReads = check({ ...files, policy: files.policy.replace('if (req.payment_mode !== "NONE") return false;', "") });
+  say(paidReads.violations.some((v) => /no longer refuses a paid task/.test(v)), "a plain-read rule that lets a paid task through is caught");
+  const tooLarge = check({ ...files, inbound: files.inbound.replace("partnerAuthority.isAssignment && partnerText", "false && partnerText") });
+  say(tooLarge.violations.some((v) => /too large to read/.test(v)), "an oversize branch that no longer reads a partner's request is caught");
   const noRun = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace("export async function run(", "async function run(") } } });
   say(noRun.violations.some((v) => /exports no run\(job, ctx\)/.test(v)), "a duty script that no longer exports run() is caught");
 
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: ten planted defects are each caught; the shipped tree passes.");
+  console.log("SELF-TEST PASSED: eighteen planted defects are each caught; the shipped tree passes.");
 }
 
 if (process.argv.includes("--self-test")) {
   selfTest();
 } else {
-  const { violations, kinds, scripts } = check(loadFiles());
-  if (kinds === 0 || scripts === 0) {
+  const { violations, kinds, scripts, doorGates } = check(loadFiles());
+  if (kinds === 0 || scripts === 0 || !doorGates) {
     console.error(`DUTY-EXECUTOR SCAN FAILED — examined ${kinds} registered kind(s) and ${scripts} duty script(s). An empty loop reporting success is the defect this repo calls Rule 0.`);
     process.exit(1);
   }
@@ -205,5 +283,5 @@ if (process.argv.includes("--self-test")) {
     for (const v of violations) console.error(`  ✗ ${v}`);
     process.exit(1);
   }
-  console.log(`DUTY-EXECUTOR SCAN PASSED: ${kinds} local card kind(s) each name a script that exists, declares the kind, is in the Mac claimer's allowlist, is dispatched by the sweep, and has a prompt file with every phase; ${scripts} duty script(s) are all registered.`);
+  console.log(`DUTY-EXECUTOR SCAN PASSED: ${doorGates} door gate(s) hold (web before blog, site features are not blog help, every partner .eml kept, a chief never browses a site change, a plain read never waits for a human, a partner's request is read at any size, a re-read supersedes); ${kinds} local card kind(s) each name a script that exists, declares the kind, is in the Mac claimer's allowlist, is dispatched by the sweep, and has a prompt file with every phase; ${scripts} duty script(s) are all registered.`);
 }

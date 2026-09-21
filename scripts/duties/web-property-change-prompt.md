@@ -68,6 +68,17 @@ tagline to X") is a whole request.
    - The target repo's RUNBOOK "never" rules win over the request. If the request asks for
      something the RUNBOOK forbids, BLOCK with `RUNBOOK_FORBIDS: "<the RUNBOOK's own words>"`
      and what would be allowed instead.
+   - **A form that collects data** (a newsletter signup, a contact box, an application): when the
+     partner does not say where the data should land, the DESTINATION IS A GOOGLE SHEET — a
+     recorded default (Sequoia, 21 Sep 2026), not an ask. The plan says: rows append to a Google
+     Sheet named "<Property> — <Form>" through the gsc-bot service account (`GSC_SERVICE_ACCOUNT_JSON`
+     as a Pages/Worker secret, the sheet id as an env var); check the account's delegated scopes
+     first — if it cannot create or write the sheet, the sheet's creation is a NAMED STOP with the
+     exact paste-ready step for the owner — AND every submission also goes through the repo's
+     existing form path (read `validate:forms` and `functions/api/lead.js` in join-west-peek-main:
+     forms there email scooter@ via Resend) so no signup is ever lost while the sheet wiring is
+     pending. The repo's form validator must cover the new form (its pass count goes UP). The only
+     thing that may be the partner's call is a destination they name instead.
    - A request you cannot act on at all (not a change to a web property; a different property
      than the one named on the card) → BLOCK with one sentence saying so and what would work.
    - Something the request references that did not arrive (it says "attached" and ATTACHMENTS is

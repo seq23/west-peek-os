@@ -65,8 +65,17 @@ function topicFrom(text: string, subject: string): string {
 /**
  * Null when this is not a blog-help ask. Otherwise the modes, the topic and the ask itself.
  */
+/**
+ * A SITE FEATURE ABOUT A NEWSLETTER IS NOT BLOG HELP (21 Sep 2026). "Newsletter signup on the site"
+ * matched `newsletter` and Walker was told to write an outline. A form, a signup box, a subscribe
+ * button, "drop their email", "a spot on the site" — those are changes to a web property, and the
+ * door reads them as such BEFORE it looks for blog help.
+ */
+export const SITE_FEATURE = /\b(?:newsletter|email|mailing[- ]list|subscribe|subscriber)s?\b[^.\n]{0,40}\b(?:sign[- ]?ups?|signups?|form|box|field|button|widget|section|page)\b|\b(?:sign[- ]?up|signup|subscribe)\s+(?:form|box|field|button|link|page)\b|\bdrop (?:their|your|an) email\b|\ba spot on the (?:site|website|page|homepage)\b|\bon (?:the|our) (?:site|website|homepage)\b/i;
+
 export function parseBlogAsk(subject: string, body: string): BlogAsk | null {
   const text = `${subject}\n${body}`.replace(/\r/g, "");
+  if (SITE_FEATURE.test(text)) return null;
   if (!BLOG_CONTEXT.test(text)) return null;
 
   const modes: BlogMode[] = [];

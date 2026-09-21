@@ -48,6 +48,20 @@ export const WEB_PROPERTIES: readonly WebProperty[] = [
   { host: "joinwestpeek.com", repo: "join-west-peek-main", site: "sites/community", words: ["community site", "community website", "join west peek site", "the community page"] },
 ];
 
+/** The employee an authenticated partner opened the email to ("Hey Porter", "Porter,", "Hi Porter —"), or null. */
+export function addresseeIn(written: string): string | null {
+  const first = (written ?? "").replace(/\r/g, "").split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+  const m = /^(?:hey|hi|hello|yo|dear|morning|afternoon)?[\s,!]*([A-Z][a-z]+)\b[\s,!:—–-]*/i.exec(first);
+  if (!m) return null;
+  const name = m[1]!.toLowerCase();
+  return EMPLOYEE_FIRST_NAMES.has(name) ? name.charAt(0).toUpperCase() + name.slice(1) : null;
+}
+
+const EMPLOYEE_FIRST_NAMES = new Set(["porter", "wren", "walker", "wyatt", "parker", "preston", "winter", "pax"]);
+
+/** "the site", "the website", "our site", "the page", "the homepage" — a property named without its host. */
+const THE_SITE = /\b(?:the|our|your|my) (?:site|website|web site|homepage|home page|page|landing page)\b/i;
+
 export interface WebPropertyAsk {
   drive_folder_id: string | null;
   drive_folder_url: string | null;
@@ -62,6 +76,10 @@ export interface WebPropertyAsk {
   pre_approval?: string | null;
   /** A force phrase in the same request ("approved to production", …), or null. */
   force?: string | null;
+  /** 21 Sep 2026: the employee the email was addressed to, when it opened with a name. */
+  addressee?: string | null;
+  /** 21 Sep 2026: "the site" with no host named — the property is unresolved; the door infers it or asks. */
+  property_unresolved?: boolean;
 }
 
 const FOLDER_LINK = /https?:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?(?:mobile\/)?folders\/|open\?id=)([A-Za-z0-9_-]{10,})[^\s>)"']*/i;
@@ -101,7 +119,11 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
   const folder = FOLDER_LINK.exec(written);
   const file = FILE_LINK.exec(written);
   const property = propertyIn(written);
-  if (!folder && !file && !property) return null;
+  // The greeting is the BODY's first line; the subject sits above it in `text`.
+  const addressee = addresseeIn(writtenPart(body.replace(/\r/g, "")));
+  // "Hey Porter — a spot on the site": addressed to Porter, a property named without its host.
+  const unresolved = !property && addressee === "Porter" && THE_SITE.test(written);
+  if (!folder && !file && !property && !unresolved) return null;
   return {
     drive_folder_id: folder?.[1] ?? null,
     drive_folder_url: folder ? folder[0]!.replace(/[.,;:]+$/, "") : null,
@@ -112,6 +134,8 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
     ask: body.trim().slice(0, 6000) || subject.trim(),
     pre_approval: preApprovalIn(written),
     force: forcePhraseIn(written),
+    addressee,
+    property_unresolved: unresolved,
   };
 }
 
@@ -127,8 +151,8 @@ function writtenPart(text: string): string {
  * request is the specification; a Drive folder, an attachment or a link are assets it may or may
  * not reference. "Change the tagline to X" is a whole request.
  */
-export function isWebPropertyChange(ask: WebPropertyAsk | null): ask is WebPropertyAsk & { target_repo: string } {
-  return Boolean(ask && ask.target_repo);
+export function isWebPropertyChange(ask: WebPropertyAsk | null): ask is WebPropertyAsk {
+  return Boolean(ask && (ask.target_repo || ask.property_unresolved));
 }
 
 /** Read the stored `request_json` back. Null when it is not one of ours. */
@@ -147,6 +171,8 @@ export function readWebPropertyAsk(json: string | null | undefined): WebProperty
       ask: typeof p.ask === "string" ? p.ask : "",
       pre_approval: p.pre_approval ?? null,
       force: p.force ?? null,
+      addressee: p.addressee ?? null,
+      property_unresolved: p.property_unresolved === true,
     };
   } catch {
     return null;

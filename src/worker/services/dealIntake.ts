@@ -1,5 +1,5 @@
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
-import { isWebPropertyChange, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { WEB_PROPERTIES, isWebPropertyChange, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { requestAttachments, textBodyOf } from "../effects/mimeAttachments";
 import { splitQuoted } from "../../shared/intake/replyBody";
 import type { Env } from "../env";
@@ -882,6 +882,8 @@ export async function openAssignmentCard(
     emlKey?: string | null;
     /** The RECEIVED email's first line, verbatim, when a person re-reads a stored message. */
     receivedTldr?: string | null;
+    /** A thread token an earlier note to this partner carried, so the RECEIVED lands in the same conversation. */
+    replyOnThread?: string | null;
   },
 ): Promise<string> {
   /*
@@ -937,7 +939,9 @@ export async function openAssignmentCard(
    */
   const { attachments, unread } = requestAttachments(input.raw);
   let emlKey = input.emlKey ?? null;
-  if (attachments.length > 0 && !emlKey && env.WP_OS_DOCUMENTS) {
+  // EVERY partner message is kept (21 Sep 2026): the .eml is the only thing that makes "read it
+  // again" possible, and they are small. Not only when a file is attached.
+  if (!emlKey && env.WP_OS_DOCUMENTS && input.raw.trim().length > 0) {
     emlKey = `inbound-email/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.eml`;
     try {
       await env.WP_OS_DOCUMENTS.put(emlKey, input.raw, { httpMetadata: { contentType: "message/rfc822" } });
@@ -956,24 +960,18 @@ export async function openAssignmentCard(
       attachedNames.push(a.filename);
     }
   }
-  if (attachments.length > 0 || unread.length > 0) {
+  if (attachments.length > 0 || unread.length > 0 || emlKey) {
     await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
       .bind(
         card.id,
         [
-          ...(attachedNames.length ? [`ATTACHED: ${attachedNames.join(", ")}${emlKey ? "" : " (could NOT be kept — the store is off)"}`] : []),
+          ...(attachedNames.length ? [`ATTACHED: ${attachedNames.join(", ")}`] : []),
+          ...(attachments.length > 0 && !emlKey ? ["The attachment(s) could NOT be kept — the store is off."] : []),
           ...unread.map((u) => `Could NOT keep an attachment: ${u}.`),
+          ...(emlKey ? [`Stored message: ${emlKey}`] : []),
         ].join("\n"),
       )
       .run();
-  }
-
-  const blog = parseBlogAsk(input.subject, written);
-  if (blog) {
-    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'BLOG_HELP', request_json = ?2, next_action = ?3 WHERE id = ?1")
-      .bind(card.id, JSON.stringify(blog), `Blog help — ${describeModes(blog.modes)} on: ${blog.topic}. Research live and judged, write in the partner's voice, file it, email them once.`)
-      .run();
-    return card.id;
   }
 
   /*
@@ -985,15 +983,42 @@ export async function openAssignmentCard(
    * (services/webPropertyChange.ts). A folder with no property named stays an ordinary
    * assignment with the link on it, so nothing is lost; it is simply not sped up.
    */
+  /*
+   * A WEB PROPERTY CHANGE IS READ FIRST (21 Sep 2026). "Newsletter signup on the site" was read as
+   * blog help because the blog parser ran first and matched "newsletter". The property parser
+   * runs before it, and a request addressed to Porter that says "the site" is his even without a
+   * host: the host is inferred from this partner's most recent web-property card in the last
+   * seven days, the assumption is stated in the RECEIVED email, and Porter asks only when there
+   * is nothing recent to infer from.
+   */
   const web = parseWebPropertyAsk(input.subject, written);
   if (web) {
+    let assumedFrom: string | null = null;
+    if (web.property_unresolved && !web.target_repo) {
+      const recent = await env.WP_OS_DB.prepare(
+        `SELECT w.property_host, w.target_repo, c.id, c.created_at
+           FROM web_property_change w JOIN work_card c ON c.id = w.work_card_id
+          WHERE lower(c.requested_by_email) = ?1 AND w.property_host IS NOT NULL
+            AND c.created_at > ?2
+          ORDER BY c.created_at DESC LIMIT 1`,
+      )
+        .bind(input.partnerAddress.toLowerCase(), new Date(Date.now() - 7 * 24 * 3600_000).toISOString())
+        .first<{ property_host: string; target_repo: string; id: string; created_at: string }>();
+      if (recent) {
+        const prop = WEB_PROPERTIES.find((p) => p.host === recent.property_host);
+        web.property_host = recent.property_host;
+        web.target_repo = recent.target_repo;
+        web.site = prop?.site ?? null;
+        assumedFrom = `${recent.property_host} — the one you had me on ${recent.created_at.slice(0, 10) === new Date().toISOString().slice(0, 10) ? "this morning" : `on ${recent.created_at.slice(0, 10)}`} (card ${recent.id})`;
+      }
+    }
     await env.WP_OS_DB.prepare("UPDATE work_card SET request_json = ?2 WHERE id = ?1").bind(card.id, JSON.stringify(web)).run();
     if (isWebPropertyChange(web)) {
       const chief = await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1").bind(input.chiefOfStaff).first<{ id: string; name: string }>();
       const { assignCard } = await import("./employeeWork");
       const { openWebPropertyChange, PORTER_NAME } = await import("./webPropertyChange");
       const brief =
-        `Change ${web.property_host}: "${written.replace(/\s+/g, " ").slice(0, 120)}"` +
+        `Change ${web.property_host ?? "the site (which one is unresolved)"}: "${written.replace(/\s+/g, " ").slice(0, 120)}"` +
         `${web.drive_folder_url ? ` (package: ${web.drive_folder_url})` : ""}${attachedNames.length ? ` (attached: ${attachedNames.join(", ")})` : ""}. ` +
         `Plan it on the Mac against the repo's RUNBOOK, ask ${input.partnerAddress} the decisions that are theirs, build it in a worktree, prove it, open a PR, land on green.`;
       const handed = await assignCard(
@@ -1017,12 +1042,12 @@ export async function openAssignmentCard(
         brief,
       );
       if (handed.ok) {
-        await openWebPropertyChange(env, { cardId: handed.cardId, ask: web, firmScope: FIRM_SCOPE });
+        await openWebPropertyChange(env, { cardId: handed.cardId, ask: web, firmScope: FIRM_SCOPE, assumedFrom });
         // The attachments follow the request to Porter's card, and the partner hears RECEIVED —
         // "got it, I'm on it", what was understood, what comes next — once (her decision, 21 Sep).
         await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?2 WHERE work_card_id = ?1").bind(card.id, handed.cardId).run();
         const { sendReceived } = await import("./webPropertyChange");
-        await sendReceived(env, handed.cardId, { tldr: input.receivedTldr ?? null });
+        await sendReceived(env, handed.cardId, { tldr: input.receivedTldr ?? null, replyOnThread: input.replyOnThread ?? null });
         await env.WP_OS_DB.prepare(
           "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to Porter as work card ' || ?2 || ': a web property change, worked on the Mac.', 1, 16000) WHERE id = ?1",
         )
@@ -1031,10 +1056,18 @@ export async function openAssignmentCard(
       } else {
         // Porter is not employed right now: the chief keeps the card with the reading on it.
         await env.WP_OS_DB.prepare("UPDATE work_card SET next_action = ?2 WHERE id = ?1")
-          .bind(card.id, `A web property change for ${web.property_host}, but it could not be handed to Porter: ${handed.reason}.`)
+          .bind(card.id, `A web property change for ${web.property_host ?? "the site"}, but it could not be handed to Porter: ${handed.reason}.`)
           .run();
       }
+      return card.id;
     }
+  }
+
+  const blog = parseBlogAsk(input.subject, written);
+  if (blog) {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'BLOG_HELP', request_json = ?2, next_action = ?3 WHERE id = ?1")
+      .bind(card.id, JSON.stringify(blog), `Blog help — ${describeModes(blog.modes)} on: ${blog.topic}. Research live and judged, write in the partner's voice, file it, email them once.`)
+      .run();
   }
   return card.id;
 }

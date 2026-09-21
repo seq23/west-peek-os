@@ -15,6 +15,8 @@ import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, type NoticeKind } from "./requestReply";
 import { attachmentBytes } from "../effects/mimeAttachments";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
+import { strippedSubject } from "../../shared/intake/emailTriggers";
+import { decodeMimeHeader } from "../effects/inboundEmail";
 import { isTechnicalBlock } from "../../shared/work/blocks";
 import {
   CLAUDE_MODEL_ALIASES,
@@ -121,6 +123,8 @@ export interface WebPropertyChangeRow {
   force_phrase: string | null;
   /** 0221. The partner's own words, readable — the specification. */
   request_text: string | null;
+  /** 0222. When "the site" was inferred: which card it came from, in a sentence for the RECEIVED email. */
+  property_assumed_from: string | null;
 }
 
 export interface RequestAttachment {
@@ -163,6 +167,8 @@ async function tellRequester(
   card: Pick<WebPropertyChangeCard, "id" | "title" | "firm_scope" | "requested_by_email" | "preview_first" | "preview_owner_id">,
   notice: { kind: NoticeKind; cause: string },
   email: { what: string; tldr: string; sections: Array<{ label: string; bullets: string[] }>; details?: string | null },
+  /** An earlier note's thread token, so this lands in the partner's same conversation. */
+  replyOnThread: string | null = null,
 ): Promise<{ sent: boolean; reason: string }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   const partner = to ? partnerByEmail(to) : null;
@@ -182,6 +188,7 @@ async function tellRequester(
       tickedByFirmUserId: card.preview_owner_id ?? null,
       requestedByEmail: to,
       what: card.title,
+      replyOnThread,
     });
   } catch (err) {
     out = { sent: false, reason: err instanceof Error ? err.message : String(err) };
@@ -194,7 +201,7 @@ async function tellRequester(
  * RECEIVED — "Got it — I'm on it." Once per card, at intake (or when a card is re-opened by hand,
  * with an apology folded in). Says what was understood and what comes next.
  */
-export async function sendReceived(env: Env, cardId: string, input: { tldr?: string | null } = {}): Promise<{ sent: boolean; reason: string }> {
+export async function sendReceived(env: Env, cardId: string, input: { tldr?: string | null; replyOnThread?: string | null } = {}): Promise<{ sent: boolean; reason: string }> {
   const card = await env.WP_OS_DB.prepare("SELECT id, title, firm_scope, requested_by_email, preview_first, preview_owner_id FROM work_card WHERE id = ?1").bind(cardId).first<WebPropertyChangeCard>();
   const row = await readWebPropertyChange(env, cardId);
   if (!card || !row) return { sent: false, reason: "no such web property change" };
@@ -203,14 +210,16 @@ export async function sendReceived(env: Env, cardId: string, input: { tldr?: str
   const next = row.pre_approved_phrase
     ? `You pre-approved this ("${row.pre_approved_phrase}"), so the next thing you'll get is the finished result${row.publish_ready === 0 ? " — or the preview link first if the package is not publish-ready" : ""}.`
     : "If any decision is yours to make — brand, copy meaning, legal wording, a public claim, image rights, money — I'll send you the plan with those questions; one word back is enough. If none is, the next thing you'll get is the finished result.";
+  const assumption = row.property_assumed_from ? `I'm reading "the site" as ${row.property_assumed_from} — reply if not.` : null;
+  const unresolved = row.target_repo === UNRESOLVED_REPO ? "You said \"the site\" and I have nothing recent to go on — I'll ask you which one." : null;
   return tellRequester(env, card, { kind: "RECEIVED", cause: "" }, {
     what: `got it — ${asked.slice(0, 60)}`,
-    tldr: input.tldr?.trim() || `Got it — I'm on it. ${next}`,
+    tldr: input.tldr?.trim() || `Got it — I'm on it. ${assumption ? `${assumption} ` : ""}${unresolved ? `${unresolved} ` : ""}${next}`,
     sections: [
       {
         label: "What I understood",
         bullets: [
-          `Property: ${row.property_host ?? row.target_repo}`,
+          `Property: ${row.target_repo === UNRESOLVED_REPO ? "unresolved — I'll ask" : row.property_host ?? row.target_repo}${assumption ? ` (${assumption})` : ""}`,
           `Attachments: ${attachments.length === 0 ? "none" : attachments.map((a) => a.filename).join(", ")}`,
           `Drive folder: ${row.drive_folder_url ? "yes" : "no"}`,
           `Your words: "${(row.request_text ?? row.ask).replace(/\s+/g, " ").slice(0, 200)}"`,
@@ -218,7 +227,7 @@ export async function sendReceived(env: Env, cardId: string, input: { tldr?: str
       },
       { label: "What comes next", bullets: [next, `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`] },
     ],
-  });
+  }, input.replyOnThread ?? null);
 }
 
 /** STUCK — only when the work cannot proceed without a person, or has sat idle past the ceiling. Once per cause. */
@@ -297,11 +306,13 @@ export function phaseModel(rules: Record<string, string>, phase: WebPropertyChan
 // ── Opening ───────────────────────────────────────────────────────────────────────────────────
 
 /** Open the row for a card the door has just handed to Porter. Idempotent on the card. */
+export const UNRESOLVED_REPO = "unresolved";
+
 export async function openWebPropertyChange(
   env: Env,
-  input: { cardId: string; ask: WebPropertyAsk; firmScope: string },
+  input: { cardId: string; ask: WebPropertyAsk; firmScope: string; assumedFrom?: string | null },
 ): Promise<void> {
-  if (!input.ask.target_repo) throw new Error("a web property change needs a target repo — the door names it from the property, never from the email");
+  if (!input.ask.target_repo && !input.ask.property_unresolved) throw new Error("a web property change needs a target repo — the door names it from the property, never from the email");
   /*
    * THE PRE-APPROVAL AND THE FORCE PHRASE COME FROM THE DOOR'S PARSE OF THE VERIFIED REQUEST — the
    * partner's own authenticated text (`parseWebPropertyAsk(subject, raw)` in openAssignmentCard),
@@ -317,10 +328,11 @@ export async function openWebPropertyChange(
        ask = excluded.ask, pre_approved_phrase = excluded.pre_approved_phrase, force_phrase = excluded.force_phrase,
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   )
-    .bind(input.cardId, input.ask.target_repo, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope, input.ask.pre_approval ?? null, input.ask.force ?? null)
+    .bind(input.cardId, input.ask.target_repo ?? UNRESOLVED_REPO, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope, input.ask.pre_approval ?? null, input.ask.force ?? null)
     .run();
-  // The readable request, the specification Porter reads first (0221).
-  await env.WP_OS_DB.prepare("UPDATE web_property_change SET request_text = ?2 WHERE work_card_id = ?1").bind(input.cardId, input.ask.ask.slice(0, 12000)).run();
+  // The readable request, the specification Porter reads first (0221); and, when "the site" was
+  // inferred from a recent card, where the assumption came from (0222).
+  await env.WP_OS_DB.prepare("UPDATE web_property_change SET request_text = ?2, property_assumed_from = ?3 WHERE work_card_id = ?1").bind(input.cardId, input.ask.ask.slice(0, 12000), input.assumedFrom ?? null).run();
   await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2, request_json = ?3, next_action = ?4 WHERE id = ?1")
     .bind(
       input.cardId,
@@ -1037,6 +1049,17 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
   if (row.phase === "DONE") return { finished: true, blocked: false, progressed: false, detail: doneSummary(row) };
+  if (row.target_repo === UNRESOLVED_REPO) {
+    // "the site", and nothing recent to infer it from: the one question only they can answer.
+    const why = await blockCard(env, card, {
+      reason: "a_question_for_you",
+      trying: card.title,
+      employee: PORTER_NAME,
+      who: whoFor(card),
+      detail: "Which site? westpeek.ventures, westpeekproductions.com or joinwestpeek.com — reply with the one, and I'm on it.",
+    });
+    return { finished: false, blocked: true, progressed: false, detail: why };
+  }
   const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
 
   // 0 · "STOP" FROM THE PARTNER WHO ASKED, at any point after the plan was approved and before LAND.
@@ -1339,9 +1362,10 @@ export async function handleGetRequestAttachment(ctx: RouteContext): Promise<Res
  */
 export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Response> {
   if (!mayFetch(ctx)) return json({ error: "forbidden" }, { status: 403 });
-  const body = (await ctx.request.json().catch(() => null)) as { object_key?: unknown; received_tldr?: unknown } | null;
+  const body = (await ctx.request.json().catch(() => null)) as { object_key?: unknown; received_tldr?: unknown; reply_on_thread?: unknown } | null;
   const key = typeof body?.object_key === "string" ? body.object_key.trim() : "";
   const receivedTldr = typeof body?.received_tldr === "string" ? body.received_tldr.trim().slice(0, 600) : null;
+  const replyOnThread = typeof body?.reply_on_thread === "string" && /^wpt_[a-f0-9]{32}$/.test(body.reply_on_thread) ? body.reply_on_thread : null;
   if (!/^inbound-email\/[\w./-]+\.eml$/.test(key)) return json({ error: "invalid_input", detail: "object_key must be a stored inbound-email/….eml" }, { status: 400 });
   const bucket = ctx.env.WP_OS_DOCUMENTS;
   if (!bucket) return json({ error: "no_store" }, { status: 503 });
@@ -1361,14 +1385,63 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
       }
     }
   }
-  // "Again": the seen-key is removed so the door runs.
   const msgId = (headers.get("message-id") ?? "").replace(/^<|>$/g, "").trim();
+  const from = ((headers.get("from") ?? "").match(/<([^>]+)>/)?.[1] ?? headers.get("from") ?? "").trim().toLowerCase();
+  const subject = decodeMimeHeader(headers.get("subject") ?? "");
+
+  /*
+   * "AGAIN" SUPERSEDES (21 Sep 2026). The first re-read of Scooter's newsletter email created
+   * NOTHING: `createWorkCardInternal` joined the new assignment into the still-BLOCKED old card
+   * with the same owner and title ("runs but inert"). So every live card this message produced
+   * before — the chief's assignment card by its title, and any web-property card carrying this
+   * message's subject for this partner — is CANCELLED first, with the superseding key on it.
+   */
+  const assignmentTitle = `From ${from}: ${strippedSubject(subject) || "(no subject)"}`;
+  const live = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT c.id FROM work_card c
+        WHERE c.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')
+          AND lower(c.requested_by_email) = ?1
+          AND (lower(trim(c.title)) = lower(trim(?2))
+               OR (c.kind = 'WEB_PROPERTY_CHANGE' AND c.description LIKE ?3))`,
+    )
+      .bind(from, assignmentTitle, `%${strippedSubject(subject).slice(0, 80)}%`)
+      .all<{ id: string }>()
+  ).results ?? [];
+  const superseded: string[] = [];
+  for (const c of live) {
+    await ctx.env.WP_OS_DB.prepare(
+      `UPDATE work_card SET state = 'CANCELLED', next_action = ?2, block_nag_at = NULL, lease_until = NULL,
+              description = substr(COALESCE(description, '') || char(10) || '• Superseded: this message was read through the door again from ' || ?3 || ' (21 Sep 2026 door fix); the new card carries the request.', 1, 16000)
+        WHERE id = ?1`,
+    )
+      .bind(c.id, `Superseded by a re-read of the stored message ${key}.`, key)
+      .run();
+    superseded.push(c.id);
+  }
   if (msgId) await ctx.env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(msgId).run();
-  const from = (headers.get("from") ?? "").match(/<([^>]+)>/)?.[1] ?? headers.get("from") ?? "";
+  const startedAt = new Date().toISOString();
   const { handleInboundEmail } = await import("../effects/inboundEmail");
   const bytes = new TextEncoder().encode(raw);
-  await handleInboundEmail({ from, to: headers.get("to") ?? "os@joinwestpeek.com", headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, ctx.env, { receivedTldr });
-  const card = await ctx.env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE kind = 'WEB_PROPERTY_CHANGE' ORDER BY created_at DESC LIMIT 1").first<{ id: string }>();
-  await appendEvent(ctx.env, { eventType: "inbound_email.reingested", actorType: "firm_user", actorId: ctx.identity!.id, objectType: "inbound_email", objectId: key, firmScope: "west-peek", payload: { message_id: msgId, newest_card: card?.id ?? null } });
-  return json({ ok: true, object_key: key, newest_web_property_change_card: card?.id ?? null });
+  await handleInboundEmail({ from, to: headers.get("to") ?? "os@joinwestpeek.com", headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, ctx.env, { receivedTldr, replyOnThread });
+  // THE NEW CARD, not "the newest card of the kind": created by this read, for this partner.
+  const created = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT id, kind, owner_id, title FROM work_card WHERE lower(requested_by_email) = ?1 AND created_at >= ?2 ORDER BY (kind = 'WEB_PROPERTY_CHANGE') DESC, created_at DESC`,
+    )
+      .bind(from, startedAt)
+      .all<{ id: string; kind: string | null; owner_id: string | null; title: string }>()
+  ).results ?? [];
+  const card = created[0] ?? null;
+  await appendEvent(ctx.env, {
+    eventType: "inbound_email.reingested",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "inbound_email",
+    objectId: key,
+    firmScope: "west-peek",
+    payload: { message_id: msgId, superseded, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null },
+  });
+  if (!card) return json({ ok: false, object_key: key, superseded, detail: "the door produced no card for this partner from this message — see inbound_email events" }, { status: 409 });
+  return json({ ok: true, object_key: key, superseded, new_card: card.id, new_card_kind: card.kind, owner_id: card.owner_id, title: card.title });
 }

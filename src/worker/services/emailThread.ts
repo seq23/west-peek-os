@@ -2,10 +2,11 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { mintThreadToken, threadHeaders, threadTokensIn, type EmailThreadRow } from "../../shared/email/thread";
 import { writtenAndQuoted } from "../../shared/intake/replyBody";
-import { mailAuthority } from "../../shared/intake/partnerAuthority";
+import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
 import { partnerByEmail } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
+import { textBodyOf } from "../effects/mimeAttachments";
 
 /**
  * A REPLY, MATCHED TO ITS CONVERSATION AND TURNED INTO A STEER (17 Sep 2026).
@@ -135,7 +136,6 @@ export async function steerFromReply(
   },
 ): Promise<SteerFromReply> {
   const tokens = threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references });
-  if (tokens.length === 0) return NOT_A_REPLY;
 
   let thread: EmailThreadRow | null = null;
   for (const token of tokens) {
@@ -149,6 +149,28 @@ export async function steerFromReply(
       break;
     }
   }
+
+  /*
+   * "RE: <ONE OF OUR SUBJECTS>" IS A REPLY EVEN WHEN THE TOKEN DID NOT COME BACK (21 Sep 2026).
+   * Scooter answered Walker's blocked note from his iPhone — "Yes he can open." — and the
+   * References header did not carry our token, so the door opened a NEW assignment card (kind
+   * BLOG_HELP, because the subject said "newsletter") and would have written a blog outline on
+   * "Yes he can open". A message from an authenticated partner whose subject is Re:/Fwd: of a note
+   * we sent THEM is that note's reply: matched on the subject we rendered and the address we sent
+   * it to, newest first. Only for the partners (the authority check below still decides), and
+   * only for subjects that are ours.
+   */
+  if (!thread && tokens.length === 0 && /^\s*(?:re|fwd?|aw|sv)\s*:/i.test(message.subject)) {
+    const from = (addressIn(message.fromHeader) ?? "").toLowerCase();
+    const bare = message.subject.replace(/^\s*(?:(?:re|fwd?|aw|sv)\s*:\s*)+/i, "").trim();
+    if (from && bare) {
+      thread =
+        (await env.WP_OS_DB.prepare("SELECT * FROM email_thread WHERE to_address = ?1 AND lower(trim(subject)) = lower(?2) ORDER BY created_at DESC LIMIT 1")
+          .bind(from, bare)
+          .first<EmailThreadRow>()) ?? null;
+    }
+  }
+  if (!thread && tokens.length === 0) return NOT_A_REPLY;
   if (!thread) {
     return {
       steered: false,
@@ -173,7 +195,9 @@ export async function steerFromReply(
     };
   }
 
-  const split = writtenAndQuoted(message.raw, {
+  // THE WORDS, NOT THE MIME (21 Sep 2026): a Gmail or iPhone reply is multipart; the answer is its
+  // text part, decoded, and only what sits above the quote.
+  const split = writtenAndQuoted(`\r\n\r\n${textBodyOf(message.raw)}`, {
     inReplyTo: message.inReplyTo,
     references: message.references,
     subject: message.subject,

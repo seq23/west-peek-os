@@ -28,12 +28,27 @@ beforeAll(async () => {
 });
 afterAll(async () => { await disposeTestDb(t); });
 
-const req = { objective: "Find the published pricing tiers.", start_url: "https://example.test/pricing", payment_mode: "NONE" as const, max_price_usd: 0 };
+/**
+ * TWO SHAPES (owner, 21 Sep 2026: "scooter shouldn't have to approve walker to open a web page").
+ * A PLAIN READ — a public page, nothing paid, nothing logged in, submitted or bought — is
+ * pre-approved for any AI on any card. Anything more still waits for a human. The gate tests below
+ * therefore use the task that still needs the gate.
+ */
+const req = { objective: "Log in to the vendor portal and download the invoice.", start_url: "https://example.test/portal", payment_mode: "NONE" as const, max_price_usd: 0 };
+const read = { objective: "Find the published pricing tiers.", start_url: "https://example.test/pricing", payment_mode: "NONE" as const, max_price_usd: 0 };
 
 describe("requesting", () => {
-  it("records a task an employee raised", async () => {
+  it("a plain read by an employee is APPROVED with no card permission — a human never has to say yes to a web page", async () => {
+    const task = await requestTask(env, BOT, read);
+    expect(task.status).toBe("APPROVED");
+    expect(task.approval_card_id, "no approval card was needed").toBeNull();
+  });
+
+  it("a task that logs in still waits for a human; so does one that pays", async () => {
     const task = await requestTask(env, BOT, req);
     expect(task.status).toBe("REQUESTED");
+    const submit = await requestTask(env, BOT, { ...read, objective: "Fill in the contact form and submit it." });
+    expect(submit.status).toBe("REQUESTED");
   });
 
   it("refuses an internal address before it is even recorded", async () => {
