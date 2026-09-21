@@ -964,8 +964,23 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     );
     const msg = inbound(big);
     expect(msg.rawSize).toBeGreaterThan(4 * 1024 * 1024 * 0.9);
+    /*
+     * BOUNDED, AND THE STORED COPY IS BYTE-EXACT (21 Sep 2026). The first real re-read of Scooter's
+     * 3.9 MB photo email hung the production Worker: the raw stream was tee'd for R2 and for text,
+     * and workerd's tee applies the unread branch's backpressure to the source, so the R2 branch
+     * waited on a reader that was only going to start after the put. 14 ms of CPU, 110 s of wall
+     * time, then the client gave up. Miniflare does not deadlock the same way, so the pin here is
+     * the two things a deadlock cannot produce: a finish inside a hard ceiling far below the
+     * per-test timeout, and a stored .eml whose bytes equal what arrived.
+     */
+    const t0 = Date.now();
     await handleInboundEmail(msg, env);
+    expect(Date.now() - t0, "an oversize partner message must be stored and read in one pass, never two consumers of one stream").toBeLessThan(15_000);
     const c = (await env.WP_OS_DB.prepare("SELECT id, kind, title, description FROM work_card ORDER BY created_at DESC LIMIT 1").first<{ id: string; kind: string; title: string; description: string }>())!;
+    const stored = (await env.WP_OS_DB.prepare("SELECT eml_key FROM request_attachment WHERE work_card_id = ?1").bind(c.id).first<{ eml_key: string }>())!;
+    const obj = await (env.WP_OS_DOCUMENTS as unknown as { get: (k: string) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> } | null> }).get(stored.eml_key);
+    expect(obj, "the stored .eml exists").not.toBeNull();
+    expect((await obj!.arrayBuffer()).byteLength, "the stored copy is the whole message, byte for byte").toBe(msg.rawSize);
     expect(c.kind).toBe("WEB_PROPERTY_CHANGE");
     expect(c.title).not.toMatch(/^Deck:/);
     expect((await readWebPropertyChange(env, c.id))!.request_text).toMatch(/^Same swap on westpeek\.ventures/);

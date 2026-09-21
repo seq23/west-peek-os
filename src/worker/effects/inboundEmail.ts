@@ -360,17 +360,26 @@ async function handleInboundEmailOnce(
     /*
      * A PARTNER'S OVERSIZE MESSAGE IS STILL THEIR REQUEST (21 Sep 2026). "The photo is attached"
      * came in at 3.9 MB, took this path, became "Deck: Sensori …", failed to read as a deck, and
-     * never reached Porter. So the stream is TEE'D: one branch to R2 as before, the other read as
-     * text when the sender authenticated as a partner, and the assignment card opens from the
-     * stored copy with the attachment kept by name. Founders' oversize decks are unchanged.
+     * never reached Porter. So when the sender authenticated as a partner the message is read as
+     * text as well as stored, and the assignment card opens from the stored copy with the
+     * attachment kept by name. Founders' oversize decks are unchanged.
+     *
+     * NOT A `tee()`. The first version tee'd the stream — one branch to R2, one to `.text()` — and
+     * the first real re-read (21 Sep 2026, 21:27Z) hung the Worker at 14ms of CPU until the client
+     * gave up at 110s: in workerd a tee'd branch that nobody reads yet applies BACKPRESSURE to the
+     * source once its buffer fills, so the R2 branch stalled waiting on the text branch, which was
+     * only going to be read after the put. Two consumers of one stream with an ordering between
+     * them is a deadlock, not a design. The bytes are read ONCE into memory (a partner's message is
+     * bounded by Email Routing's 25 MB; the isolate has 128 MB) and both the store and the text
+     * come from that buffer. `wallTime`-with-no-CPU is the signature if this ever recurs.
      */
     const partnerAuthority = mailAuthority({ fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results") });
-    let partnerText: Promise<string> | null = null;
+    let partnerText: string | null = null;
     let rawForStore: ReadableStream = message.raw;
     if (partnerAuthority.isAssignment) {
-      const [a, b] = message.raw.tee();
-      rawForStore = a;
-      partnerText = new Response(b).text();
+      const bytes = new Uint8Array(await new Response(message.raw).arrayBuffer());
+      partnerText = new TextDecoder().decode(bytes);
+      rawForStore = new Blob([bytes as BlobPart]).stream();
     }
     if (env.WP_OS_DOCUMENTS) {
       storedKey = `inbound-email/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.eml`;
@@ -429,8 +438,8 @@ async function handleInboundEmailOnce(
      * the card in from its own CPU budget before the sweep lets the analyst start. Size is not a
      * fact the analyst is ever told about.
      */
-    if (partnerAuthority.isAssignment && partnerText) {
-      const rawText = await partnerText.catch(() => "");
+    if (partnerAuthority.isAssignment && partnerText !== null) {
+      const rawText = partnerText;
       const cardId = await openAssignmentCard(env, {
         subject,
         partnerAddress: partnerAuthority.partnerAddress!,
