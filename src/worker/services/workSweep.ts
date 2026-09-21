@@ -126,6 +126,17 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
         AND state IN ('OPEN', 'IN_PROGRESS')
         AND (lease_until IS NULL OR lease_until < ?1)
         AND COALESCE(work_attempts, 0) < ?2
+        -- A CARD THE MAC HOLDS IS NOT WAITING (21 Sep 2026). Its LOCAL_JOB is queued or running;
+        -- claiming it would spend a tick saying so while every younger card waits. It becomes
+        -- claimable the moment the run is reported, failed or abandoned.
+        -- …unless a partner has said something nobody has read: "stop" must reach a held card.
+        AND (
+          NOT EXISTS (
+            SELECT 1 FROM subscription_seat_run r
+             WHERE r.work_card_id = work_card.id AND r.run_kind = 'LOCAL_JOB' AND r.status IN ('QUEUED', 'CLAIMED')
+          )
+          OR EXISTS (SELECT 1 FROM work_card_note n WHERE n.work_card_id = work_card.id AND n.acknowledged_at IS NULL)
+        )
       ORDER BY created_at ASC
       LIMIT 1`,
   )
@@ -225,6 +236,12 @@ export interface SweepResult {
 
 /** How long a card waits for its deck to be read before the sweep looks at it again. */
 export const DECK_WAIT_MINUTES = 15;
+/**
+ * How long the sweep leaves a card the Mac holds before looking at it again (21 Sep 2026). Longer
+ * than the sweep's five-minute cadence, so a held card is skipped for one tick and every other
+ * card gets that tick; the Mac's report is read at most one tick late.
+ */
+export const HELD_MINUTES = 6;
 
 /**
  * Work one card. `runners` is injectable so tests can prove the sweep's own logic — claim, attempt
@@ -395,7 +412,7 @@ export async function sweepOnce(
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
-    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
+    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -439,6 +456,8 @@ export async function sweepOnce(
   // continues it. Only a run that died, or an employee that chose nothing usable, costs an attempt.
   let progressed = false;
   let handedOn = false;
+  // A card the Mac holds is left alone for HELD_MINUTES so the next card gets the tick.
+  let held = false;
   try {
     if (card.kind === "DECK_REWORK") {
       const run = runners.deckRework ?? (await import("./deck")).runDeckRework;
@@ -479,6 +498,7 @@ export async function sweepOnce(
       finished = out.finished;
       blocked = out.blocked;
       progressed = out.progressed;
+      held = out.held === true;
       detail = out.detail;
     } else if (card.kind === "PRODUCTIONS_HIRE_SEARCH") {
       // Walker's weekly hire search for West Peek Productions: search, every page checked, judged,
@@ -558,6 +578,12 @@ export async function sweepOnce(
     // THIS TICK'S WORK IS DONE AND THE CARD IS NOT. Hand it back for the next tick: the claim's
     // attempt is given back, because an invocation that did what it was asked is not a failure.
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
+    if (held) {
+      // HELD BY THE MAC (reached only from the button, never the sweep — `claimNextCard` skips a
+      // card with a live job). Leased so a stray claim cannot spin on it.
+      const until = new Date(now.getTime() + HELD_MINUTES * 60_000).toISOString();
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = ?2 WHERE id = ?1").bind(card.id, until).run();
+    }
     return {
       status: "SUCCEEDED",
       summary: `"${card.title.slice(0, 60)}" progressed${card.kind === "ROOM_PACKET" ? "" : ` (${STEPS_PER_TICK} step(s) this tick)`}: ${detail.slice(0, 160)}. The next tick continues it.`,

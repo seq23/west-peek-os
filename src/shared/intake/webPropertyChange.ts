@@ -1,3 +1,5 @@
+import { forcePhraseIn, preApprovalIn } from "../work/approvalReply";
+
 /**
  * Reading a web-property change at the door (20 Sep 2026, Plan A).
  *
@@ -56,6 +58,10 @@ export interface WebPropertyAsk {
   site: string | null;
   /** The request as written, so the runner works from the partner's own words. */
   ask: string;
+  /** 21 Sep 2026: the pre-approval phrase in the partner's OWN request text, or null. Read at the door only. */
+  pre_approval?: string | null;
+  /** A force phrase in the same request ("approved to production", …), or null. */
+  force?: string | null;
 }
 
 const FOLDER_LINK = /https?:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?(?:mobile\/)?folders\/|open\?id=)([A-Za-z0-9_-]{10,})[^\s>)"']*/i;
@@ -89,6 +95,8 @@ export function propertyIn(text: string): WebProperty | null {
  */
 export function parseWebPropertyAsk(subject: string, body: string): WebPropertyAsk | null {
   const text = `${subject}\n${body}`.replace(/\r/g, "");
+  // Only what the partner WROTE: a quoted original or a signature must not pre-approve anything.
+  const written = writtenPart(text);
   const folder = FOLDER_LINK.exec(text);
   const file = FILE_LINK.exec(text);
   if (!folder && !file) return null;
@@ -101,7 +109,16 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
     target_repo: property?.repo ?? null,
     site: property?.site ?? null,
     ask: body.trim().slice(0, 6000) || subject.trim(),
+    pre_approval: preApprovalIn(written),
+    force: forcePhraseIn(written),
   };
+}
+
+/** The lines above any quoted original ("> …" or "On … wrote:"). */
+function writtenPart(text: string): string {
+  const lines = text.split("\n");
+  const cut = lines.findIndex((l) => /^\s*>/.test(l) || /^On .+wrote:\s*$/.test(l.trim()) || /^-{2,}\s*Original Message/i.test(l.trim()));
+  return (cut === -1 ? lines : lines.slice(0, cut)).join("\n");
 }
 
 /** Is this a change Porter runs on the Mac? A folder and a property, both. */
@@ -123,6 +140,8 @@ export function readWebPropertyAsk(json: string | null | undefined): WebProperty
       target_repo: p.target_repo ?? null,
       site: p.site ?? null,
       ask: typeof p.ask === "string" ? p.ask : "",
+      pre_approval: p.pre_approval ?? null,
+      force: p.force ?? null,
     };
   } catch {
     return null;

@@ -45,12 +45,23 @@ Goal: a plan a partner can approve by replying "go", with the decisions that are
    Every ask is a question the partner can answer in one line AND carries your **recommended
    default** — the partner will read the plan in an email and reply with the single word
    "approved", which takes every recommendation. Write the plan so that one word is enough.
-4. Do NOT edit the repo in this phase.
-5. Write `RESULT_PATH`:
+   **If the job context says PRE-APPROVED**, the partner has already said "your call": make every
+   decision yourself (your recommended default IS the decision), record each under **Decided**,
+   and return `asks: []`. Offer no options. Still say honestly whether it is publish-ready.
+4. Say whether it is **publish-ready**. Set `publish_ready: false` whenever ANY placeholder or
+   TODO would ship, or any ask's default is "placeholder until supplied" — a missing link, logo,
+   record, colour value, or copy the package does not contain. Name each gap in `placeholders`
+   in a few words ("Sengo logo", "episode records", "approved orange hex"). A plan that is not
+   ready is BUILT to a preview link and lands only on a second approval; you do not decide that,
+   you only say the truth about readiness. Never hide a gap to make the plan look ready.
+5. Do NOT edit the repo in this phase.
+6. Write `RESULT_PATH`:
    ```json
    { "phase": "PLAN", "status": "ok", "document": "<the plan, markdown>",
      "decided": ["…"],
      "asks": [{ "question": "…?", "recommended": "<your default, one line>" }],
+     "publish_ready": true,
+     "placeholders": [],
      "notes": "<one line>" }
    ```
    If the package or the ask is unusable, `{ "phase": "PLAN", "status": "blocked", "reason": "<what you need, for a partner>" }`.
@@ -74,6 +85,9 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
      "proof": "<validator output summary, screenshot file names, link-check results>", "notes": "<one line>" }
    ```
    The script reads `gh pr checks` itself and records the check state — you do not report green.
+   The script also reads the Cloudflare Pages preview URL from the PR's deployment — you do not
+   report one. Where the plan named placeholders, build them as STRUCTURED placeholders (a clearly
+   marked block, never invented content) and list them in `proof`.
    If you cannot finish, `{ "phase": "BUILD", "status": "failed", "reason": "<why, for an engineer>" }`;
    if a decision you were not given is needed, `"status": "blocked"` with the question.
 

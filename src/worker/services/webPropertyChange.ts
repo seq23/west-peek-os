@@ -6,10 +6,12 @@ import { blockCard } from "./blocks";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
 import { parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
-import { PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
+import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
+import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
 import { readWebPropertyAsk, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
-import { approvedAnswers, askLines, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
+import { approvedAnswers, askLines, decidedFromAsks, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
+import { abandonRun } from "../ai/subscriptionSeats";
 import {
   CLAUDE_MODEL_ALIASES,
   LOCAL_JOB_RUN_KIND,
@@ -96,6 +98,28 @@ export interface WebPropertyChangeRow {
   firm_scope: string;
   created_at: string;
   updated_at: string;
+  /** 0220. 0 when the plan would ship placeholders; the change previews first and lands on a second approval. */
+  publish_ready: number;
+  placeholders_json: string;
+  /** 0220. The partner replied "preview" to a ready plan. */
+  preview_only: number;
+  preview_url: string | null;
+  preview_emailed_at: string | null;
+  /** 0220. The SECOND approval, after the preview email. Only the requesting partner's "approved". */
+  land_approved_at: string | null;
+  land_approved_by: string | null;
+  /** 0220. The named bypass: the requesting partner's "approved to production" on a not-ready plan. */
+  forced_by: string | null;
+  forced_at: string | null;
+  forced_placeholders_json: string | null;
+  /** 0220. The pre-approval phrase in the partner's own request, written at the door only. */
+  pre_approved_phrase: string | null;
+  force_phrase: string | null;
+}
+
+/** Does this change stop at a preview before landing? Not ready, or the partner asked. */
+export function needsPreview(row: Pick<WebPropertyChangeRow, "publish_ready" | "preview_only">): boolean {
+  return row.publish_ready === 0 || row.preview_only === 1;
 }
 
 export interface WebPropertyChangeCard extends SweepCard {
@@ -153,15 +177,22 @@ export async function openWebPropertyChange(
   input: { cardId: string; ask: WebPropertyAsk; firmScope: string },
 ): Promise<void> {
   if (!input.ask.target_repo) throw new Error("a web property change needs a target repo — the door names it from the property, never from the email");
+  /*
+   * THE PRE-APPROVAL AND THE FORCE PHRASE COME FROM THE DOOR'S PARSE OF THE VERIFIED REQUEST — the
+   * partner's own authenticated text (`parseWebPropertyAsk(subject, raw)` in openAssignmentCard),
+   * never a later message, never the other partner. This is the ONLY write of either column;
+   * `validate:no-land-without-approval` holds it to that.
+   */
   await env.WP_OS_DB.prepare(
-    `INSERT INTO web_property_change (work_card_id, target_repo, property_host, drive_folder_id, drive_folder_url, ask, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `INSERT INTO web_property_change (work_card_id, target_repo, property_host, drive_folder_id, drive_folder_url, ask, firm_scope, pre_approved_phrase, force_phrase)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
      ON CONFLICT (work_card_id) DO UPDATE SET
        target_repo = excluded.target_repo, property_host = excluded.property_host,
        drive_folder_id = excluded.drive_folder_id, drive_folder_url = excluded.drive_folder_url,
-       ask = excluded.ask, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+       ask = excluded.ask, pre_approved_phrase = excluded.pre_approved_phrase, force_phrase = excluded.force_phrase,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   )
-    .bind(input.cardId, input.ask.target_repo, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope)
+    .bind(input.cardId, input.ask.target_repo, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope, input.ask.pre_approval ?? null, input.ask.force ?? null)
     .run();
   await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2, request_json = ?3, next_action = ?4 WHERE id = ?1")
     .bind(
@@ -251,6 +282,8 @@ export async function parkPhase(
     if (!row.plan_approved_at) return { parked: false, reason: "the plan has not been approved by the partner who asked" };
     if (!row.pr_url) return { parked: false, reason: "there is no PR to land" };
     if (!row.check_green_at || row.check_state !== "GREEN") return { parked: false, reason: "the PR has no recorded green check" };
+    // A CHANGE THAT PREVIEWS FIRST NEEDS THE SECOND APPROVAL (0220). Land-on-green does not reach here.
+    if (needsPreview(row) && !row.land_approved_at && !row.forced_by) return { parked: false, reason: "this change previews first and the partner has not approved the landing after the preview, nor forced it to production" };
   }
   if (phase === "BUILD" && !row.plan_approved_at) return { parked: false, reason: "the plan has not been approved yet" };
   if (phase === "PLAN" && !row.drive_folder_id) return { parked: false, reason: "no Drive folder is on the card" };
@@ -279,9 +312,13 @@ export async function parkPhase(
           asks: asksOf(row),
           answers: list(row.answers_json),
           approved_at: row.plan_approved_at,
+          publish_ready: row.publish_ready !== 0,
+          placeholders: list(row.placeholders_json),
+          preview_only: row.preview_only === 1,
         }
       : null,
-    pr: row.pr_url ? { url: row.pr_url, number: row.pr_number, branch: row.branch, check_state: row.check_state, check_green_at: row.check_green_at } : null,
+    pre_approved: row.pre_approved_phrase,
+    pr: row.pr_url ? { url: row.pr_url, number: row.pr_number, branch: row.branch, check_state: row.check_state, check_green_at: row.check_green_at, preview_url: row.preview_url, land_approved_at: row.land_approved_at, forced_by: row.forced_by } : null,
     rules,
     queue_max_seconds: spec.queueMaxSeconds,
   };
@@ -328,6 +365,12 @@ export interface RunOutcome {
   blocked: boolean;
   /** This tick did its job and the card is not done: hand it back without spending an attempt. */
   progressed: boolean;
+  /**
+   * THE MAC HOLDS THIS CARD (21 Sep 2026). The sweep works ONE card per tick, oldest first, and a
+   * card the Mac holds for an hour would be that card every tick — every other card starves. So a
+   * held card asks the sweep to leave it alone for a while (`lease_until`) and take the next one.
+   */
+  held?: boolean;
   detail: string;
 }
 
@@ -338,15 +381,61 @@ export interface RunOutcome {
  * that approves. The EMAIL carries the whole plan above them — `blockedEmailDetail` assembles it
  * where the partner email is composed, from the filed Document's text.
  */
-export function askBlockText(asks: readonly Ask[], planRef: string | null): string {
+export function askBlockText(asks: readonly Ask[], planRef: string | null, readiness?: { publishReady: boolean; placeholders: string[] }): string {
   const lines = asks.length
     ? askLines(asks)
     : ["Nothing to decide — the plan is all structure and wiring."];
+  const notReady = readiness && !readiness.publishReady;
   return [
+    ...(notReady
+      ? [
+          `NOT PUBLISH-READY. This will ship with ${readiness.placeholders.length} placeholder${readiness.placeholders.length === 1 ? "" : "s"}: ${readiness.placeholders.join("; ") || "(unnamed)"}. ` +
+            `I will open the PR and send you the preview link; landing needs a second approval.`,
+        ]
+      : []),
     `The plan is in this email and on the card as a Document${planRef ? ` (${planRef})` : ""}.${asks.length ? ` ${asks.length} decision${asks.length === 1 ? "" : "s"}, each with a recommendation:` : ""}`,
     ...lines,
-    `Reply "approved" to take every recommendation and build. Reply "no" or "changes: …" to hold it. Anything else is read as your answers.`,
+    notReady
+      ? `Reply "approved" to take every recommendation and build the preview. Reply "approved to production" to skip the preview and land on green with the placeholders as they are — the DONE email will name them and you. Reply "no" or "changes: …" to hold it. Anything else is read as your answers.`
+      : `Reply "approved" to take every recommendation and build. Reply "preview" to see it on a preview link before it lands. Reply "no" or "changes: …" to hold it. Anything else is read as your answers.`,
   ].join("\n");
+}
+
+/** The second question: the preview is up, land it? */
+export function previewBlockText(row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready">): string {
+  const placeholders = list(row.placeholders_json);
+  return [
+    `PREVIEW READY. ${row.preview_url ? `Look at it here: ${row.preview_url}` : "No preview deployment exists for this repo — the PR link and the screenshots stand in for it"}. The PR: ${row.pr_url ?? "(none)"}.`,
+    ...(placeholders.length ? [`Ships with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}.`] : []),
+    `Reply "approved" to land it, or "changes: …" to hold it. Nothing lands without that word.${placeholders.length ? ` ("approved to production" also lands it and names the placeholders and you in the DONE email.)` : ""}`,
+  ].join("\n");
+}
+
+/** Record the named bypass on the row. The 0220 trigger refuses anyone but the requesting partner. */
+async function recordForce(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, byFirmUserId: string): Promise<WebPropertyChangeRow> {
+  const now = new Date().toISOString();
+  const placeholders = list(row.placeholders_json);
+  await update(env, card.id, { forced_by: byFirmUserId, forced_at: now, forced_placeholders_json: JSON.stringify(placeholders) });
+  const who = PARTNERS.find((p) => p.firmUserId === byFirmUserId)?.fullName ?? byFirmUserId;
+  await appendFinding(env, card.id, `FORCED TO PRODUCTION by ${who} at ${now}: the preview gate is skipped and it lands on green with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"} — ${placeholders.join("; ") || "(none named)"}.`);
+  await appendEvent(env, {
+    eventType: "web_property_change.forced_to_production",
+    actorType: "firm_user",
+    actorId: byFirmUserId,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { placeholders },
+  });
+  return { ...row, forced_by: byFirmUserId, forced_at: now, forced_placeholders_json: JSON.stringify(placeholders) };
+}
+
+/** The line at the top of a forced landing's DONE email. */
+export function forcedLine(row: Pick<WebPropertyChangeRow, "forced_by" | "forced_placeholders_json">): string | null {
+  if (!row.forced_by) return null;
+  const placeholders = list(row.forced_placeholders_json);
+  const who = PARTNERS.find((p) => p.firmUserId === row.forced_by)?.fullName ?? row.forced_by;
+  return `Landed to production with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"} by ${who}'s instruction: ${placeholders.join("; ") || "(none named)"}.`;
 }
 
 async function blockWithAsks(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, asks: readonly Ask[]): Promise<string> {
@@ -355,8 +444,21 @@ async function blockWithAsks(env: Env, card: WebPropertyChangeCard, row: WebProp
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: askBlockText(asks, row.plan_document_id).slice(0, 900),
+    detail: askBlockText(asks, row.plan_document_id, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) }).slice(0, 900),
   });
+}
+
+/** BLOCK on the preview: the second question. Records when it was asked so the second approval is read against it. */
+async function blockOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow): Promise<string> {
+  const why = await blockCard(env, card, {
+    reason: "a_question_for_you",
+    trying: card.title,
+    employee: PORTER_NAME,
+    who: whoFor(card),
+    detail: previewBlockText(row).slice(0, 900),
+  });
+  await update(env, card.id, { preview_emailed_at: new Date().toISOString() });
+  return why;
 }
 
 /**
@@ -370,13 +472,30 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
   const plan = row.plan_deliverable_id
     ? (await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(row.plan_deliverable_id).first<{ body: string }>())?.body ?? null
     : null;
+  // THE PREVIEW EMAIL: the link, the PR, the placeholders and the proof — the second question.
+  if (row.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by) {
+    return [
+      previewBlockText(row),
+      "",
+      "WHAT WAS PROVEN BEFORE THE PR:",
+      "",
+      row.build_proof ?? "(no proof text came back with the build)",
+    ].join("\n");
+  }
   const asks = asksOf(row);
-  return [askBlockText(asks, row.plan_document_id), "", "THE PLAN, in full:", "", plan ?? "(the plan document could not be read back — open it on the card)"].join("\n");
+  return [
+    askBlockText(asks, row.plan_document_id, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) }),
+    "",
+    "THE PLAN, in full:",
+    "",
+    plan ?? "(the plan document could not be read back — open it on the card)",
+  ].join("\n");
 }
 
 /** What the DONE email says: the proof, not the process. */
 export function doneSummary(row: WebPropertyChangeRow): string {
   return [
+    forcedLine(row) ?? "",
     `Landed ${row.pr_url ?? "the PR"}${row.merge_sha ? ` as ${row.merge_sha.slice(0, 10)}` : ""} on ${row.property_host ?? row.target_repo}.`,
     row.live_proof ? `Live proof:\n${row.live_proof}` : "",
     row.build_proof ? `Build proof:\n${row.build_proof}` : "",
@@ -417,6 +536,42 @@ async function finishCard(env: Env, card: WebPropertyChangeCard, row: WebPropert
     });
   }
   await handOver(env, { ...card, kind: WEB_PROPERTY_CHANGE_KIND, preview_first: card.preview_first ?? null, preview_owner_id: card.preview_owner_id ?? null, result_recipient: card.result_recipient ?? null, requested_by_email: card.requested_by_email ?? null }, { employee: PORTER_NAME, finding, deliverableId });
+  /*
+   * A FORCED LANDING IS TOLD TO BOTH PARTNERS. The requester gets the DONE reply on their thread
+   * (the sweep's `announceOutcome`); the OTHER partner gets the same top line through the lane,
+   * so the one who did not force it knows what shipped with placeholders and on whose word.
+   */
+  if (row.forced_by) {
+    const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+    for (const other of PARTNERS.filter((p) => p.firmUserId !== (requester?.firmUserId ?? row.forced_by))) {
+      try {
+        await sendOrPreview(env, {
+          to: other.email,
+          email: {
+            employee: PORTER_NAME,
+            what: `landed to production with placeholders — ${card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60)}`,
+            tldr: forcedLine(row)!,
+            sections: [
+              { label: "What shipped", bullets: [`${row.pr_url ?? "the PR"}${row.merge_sha ? ` as ${row.merge_sha.slice(0, 10)}` : ""} on ${row.property_host ?? row.target_repo}`] },
+              { label: "Your call", bullets: ["Nothing — this is so you know. The card carries the placeholder list and the proof."] },
+            ],
+            details: finding,
+          },
+          objectType: "work_card",
+          objectId: card.id,
+          firmScope: card.firm_scope,
+          cardKind: WEB_PROPERTY_CHANGE_KIND,
+          workCardId: card.id,
+          cardAsked: null,
+          tickedByFirmUserId: null,
+          requestedByEmail: other.email,
+          what: card.title,
+        });
+      } catch (err) {
+        await appendEvent(env, { eventType: "work_card.handover_failed", actorType: "system", actorId: "web_property_change", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { to: other.email, detail: String(err).slice(0, 300) } });
+      }
+    }
+  }
   await update(env, card.id, { phase: "DONE" });
   // The 0219 trigger checks pr_url, check_green_at and merge_sha on the row before this succeeds.
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1").bind(card.id).run();
@@ -511,15 +666,157 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
     plan_filed_at: now,
     decided_json: JSON.stringify(report.decided ?? []),
     asks_json: JSON.stringify(asks),
+    publish_ready: report.publish_ready === false ? 0 : 1,
+    placeholders_json: JSON.stringify(report.placeholders ?? []),
   });
   const decided = report.decided ?? [];
+  if (report.publish_ready === false) {
+    await appendFinding(env, card.id, `NOT publish-ready: would ship ${(report.placeholders ?? []).length} placeholder(s) — ${(report.placeholders ?? []).join("; ")}. It will preview first; landing needs a second approval.`);
+  }
   await appendFinding(
     env,
     card.id,
     `Plan filed as Document ${filed.document_id ?? filed.id}. Decided (${decided.length}): ${decided.join("; ") || "nothing"}. Asking (${asks.length}): ${askLines(asks).join("; ") || "nothing"}.`,
   );
-  const fresh = { ...row, plan_document_id: filed.document_id ?? null, plan_filed_at: now };
+  const fresh: WebPropertyChangeRow = { ...row, plan_document_id: filed.document_id ?? null, plan_filed_at: now, publish_ready: report.publish_ready === false ? 0 : 1, placeholders_json: JSON.stringify(report.placeholders ?? []) };
+  if (row.pre_approved_phrase) return approveAtFiling(env, card, fresh, asks, report.document);
   const why = await blockWithAsks(env, card, fresh, asks);
+  return { finished: false, blocked: true, progressed: false, detail: why };
+}
+
+/**
+ * PRE-APPROVED IN THE REQUEST (21 Sep 2026). The partner said "your call": every ask becomes the
+ * decision Porter recommended, the plan is approved AT FILING in the requesting partner's name,
+ * the email is an FYI, and BUILD parks at once. NOT a landing approval: a plan that is not
+ * publish-ready still stops at the preview — unless the same request carried a force phrase, in
+ * which case it is forced, named, exactly as a reply would have.
+ */
+async function approveAtFiling(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, asks: readonly Ask[], planText: string): Promise<RunOutcome> {
+  const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+  const now = new Date().toISOString();
+  const decided = [...list(row.decided_json), ...decidedFromAsks(asks)];
+  const approvedBy = `${requester?.firmUserId ?? card.requested_by_email ?? "the requesting partner"} (pre-approved in the request)`;
+  await update(env, card.id, {
+    decided_json: JSON.stringify(decided),
+    asks_json: "[]",
+    answers_json: JSON.stringify(approvedAnswers(asks)),
+    plan_approved_at: now,
+    plan_approved_by: approvedBy,
+    phase: "BUILD",
+  });
+  await appendFinding(env, card.id, `Pre-approved in the request by ${requester?.fullName ?? card.requested_by_email ?? "the partner"} ("${row.pre_approved_phrase}"): every decision is Porter's recommendation, no options offered; the plan is approved as filed.`);
+  let fresh: WebPropertyChangeRow = { ...row, decided_json: JSON.stringify(decided), asks_json: "[]", plan_approved_at: now, plan_approved_by: approvedBy, phase: "BUILD" };
+  if (row.force_phrase && requester) {
+    await appendFinding(env, card.id, `The same request said "${row.force_phrase}": a plan that is not publish-ready lands anyway, named as forced by ${requester.fullName}.`);
+    if (needsPreview(fresh)) fresh = await recordForce(env, card, fresh, requester.firmUserId);
+  }
+  // THE FYI EMAIL — to the requesting partner, through the lane. No reply needed; "stop" holds it.
+  const placeholders = list(fresh.placeholders_json);
+  const to = requester?.email ?? null;
+  if (to) {
+    try {
+      await sendOrPreview(env, {
+        to,
+        email: {
+          employee: PORTER_NAME,
+          what: `FYI — plan for ${card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60)}`,
+          tldr: `FYI — you pre-approved this ("${row.pre_approved_phrase}"); no reply needed. Reply "stop" to hold it.`,
+          sections: [
+            { label: "What happens next", bullets: [
+              fresh.publish_ready === 0 && !fresh.forced_by
+                ? `Not publish-ready (${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}) — I build to a preview link and ask you once before it lands.`
+                : fresh.forced_by
+                  ? `Not publish-ready (${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}) but your request said "${row.force_phrase}" — it lands on green, named as forced by you.`
+                  : "Publish-ready — it builds, opens a PR and lands on green. The DONE email carries the proof.",
+            ] },
+            { label: "Decided for you", bullets: decidedFromAsks(asks).length ? decidedFromAsks(asks).slice(0, 6) : ["Nothing needed deciding — structure and wiring only."] },
+          ],
+          details: `THE PLAN, in full:\n\n${planText}`,
+        },
+        objectType: "work_card",
+        objectId: card.id,
+        firmScope: card.firm_scope,
+        cardKind: WEB_PROPERTY_CHANGE_KIND,
+        workCardId: card.id,
+        cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
+        tickedByFirmUserId: card.preview_owner_id ?? null,
+        requestedByEmail: card.requested_by_email ?? null,
+        what: card.title,
+      });
+    } catch (err) {
+      await appendEvent(env, { eventType: "work_card.handover_failed", actorType: "system", actorId: "web_property_change", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { to, detail: String(err).slice(0, 300) } });
+    }
+  }
+  const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
+  const parked = await parkPhase(env, card, fresh, "BUILD", rules);
+  if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
+  return { finished: false, blocked: false, progressed: true, detail: `Plan filed and pre-approved ("${row.pre_approved_phrase}"); BUILD queued for the Mac (${phaseModel(rules, "BUILD")}).` };
+}
+
+/**
+ * "STOP" FROM THE PARTNER WHO ASKED HOLDS THE CARD AT ANY POINT BEFORE LAND (21 Sep 2026). A reply
+ * to the FYI email lands as a note (the card is not blocked, so `steerFromReply` files it there);
+ * an answer to a block lands on `block_answer`. Both are read here, only from the requester, only
+ * words that read REFUSED. A queued run is closed so the Mac does not build what she stopped; a run
+ * already on the Mac finishes and its report waits on the held card.
+ */
+async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow): Promise<string | null> {
+  const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+  const since = [row.plan_approved_at, row.preview_emailed_at, row.forced_at].filter((x): x is string => Boolean(x)).sort().pop() ?? null;
+  // 1 · An answer to a block, from the requester, that reads REFUSED.
+  const answer = answerSince(card, since);
+  if (answer && (!requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId) && readApprovalReply(answer).kind === "REFUSED") {
+    return answer;
+  }
+  // 2 · Notes nobody has read yet. EVERY unread note is acknowledged here (the sweep takes a held
+  //     card only while one is unread, so an unread note left behind would spin it): the
+  //     requester's "stop" holds the card; any other word of theirs is carried to the next phase
+  //     as an answer; the other partner's note is kept and named, not acted on.
+  const notes = (
+    await env.WP_OS_DB.prepare("SELECT id, author_id, body FROM work_card_note WHERE work_card_id = ?1 AND acknowledged_at IS NULL ORDER BY created_at ASC")
+      .bind(card.id)
+      .all<{ id: string; author_id: string; body: string }>()
+  ).results ?? [];
+  let held: string | null = null;
+  for (const n of notes) {
+    const ack = async (response: string) =>
+      env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), response = ?2 WHERE id = ?1").bind(n.id, response).run();
+    if (n.body.startsWith("You asked what to do.")) {
+      await ack("Read as the answer to the block.");
+      continue;
+    }
+    const fromRequester = !requester || n.author_id === requester.firmUserId;
+    if (!fromRequester) {
+      await ack(`Kept, not acted on: only ${requester?.fullName ?? "the partner who asked"} steers this card.`);
+      continue;
+    }
+    if (!held && readApprovalReply(n.body).kind === "REFUSED") {
+      await ack("Held: nothing is built or landed until you say otherwise.");
+      held = n.body;
+      continue;
+    }
+    await ack("Carried into the next phase as your answer.");
+    await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), n.body.slice(0, 2000)]) });
+  }
+  return held;
+}
+
+async function holdCard(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, said: string): Promise<RunOutcome> {
+  if (row.current_run_id) {
+    const run = await readRun(env, row.current_run_id);
+    if (run?.status === "QUEUED") {
+      await abandonRun(env, run.id, `${card.requested_by_email ?? "the partner"} said "${said.slice(0, 60)}" — the card is held and this phase will not run.`);
+      await update(env, card.id, { current_run_id: null });
+    }
+  }
+  await appendFinding(env, card.id, `Held by ${card.requested_by_email ?? "the partner"}: "${said.slice(0, 400)}". Nothing is built or landed until they say otherwise.`);
+  const why = await blockCard(env, card, {
+    reason: "a_question_for_you",
+    trying: card.title,
+    employee: PORTER_NAME,
+    who: whoFor(card),
+    detail: `You said: "${said.slice(0, 300)}". Nothing is built or landed. Reply "approved" to carry on, "changes: …" to re-plan, or "drop it" on the card.`.slice(0, 900),
+  });
   return { finished: false, blocked: true, progressed: false, detail: why };
 }
 
@@ -535,6 +832,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     check_url: report.check_url ?? null,
     check_green_at: state === "GREEN" ? now : null,
     build_proof: (report.proof ?? "").slice(0, 8000) || null,
+    preview_url: report.preview_url ?? null,
   });
   await appendFinding(env, card.id, `PR opened: ${report.pr_url} — checks ${state}${report.check_url ? ` (${report.check_url})` : ""}.${report.proof ? `\n${report.proof.slice(0, 1500)}` : ""}`);
   if (state !== "GREEN") {
@@ -542,7 +840,16 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     // BUILD run resumes the same branch and fixes it. Never landed, never asked to be.
     return { finished: false, blocked: false, progressed: false, detail: `the PR's checks are ${state}: ${report.reason ?? "the build must fix them before anything lands"}` };
   }
-  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, check_state: "GREEN", check_green_at: now };
+  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, check_state: "GREEN", check_green_at: now, preview_url: report.preview_url ?? null, build_proof: (report.proof ?? "").slice(0, 8000) || null };
+  /*
+   * A CHANGE THAT PREVIEWS FIRST STOPS HERE (21 Sep 2026). Not publish-ready, or the partner said
+   * "preview": the second email carries the preview link, the PR, the placeholders and the proof,
+   * and the card waits for the second "approved". Land-on-green does not apply to this row.
+   */
+  if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
+    const why = await blockOnPreview(env, card, fresh);
+    return { finished: false, blocked: true, progressed: false, detail: why };
+  }
   if (isOn(rules.land_on_green)) {
     const parked = await parkPhase(env, card, fresh, "LAND", rules);
     if (!parked.parked) return { finished: false, blocked: false, progressed: false, detail: `green, but LAND could not be queued: ${parked.reason}` };
@@ -606,12 +913,18 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
   if (row.phase === "DONE") return { finished: true, blocked: false, progressed: false, detail: doneSummary(row) };
   const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
 
+  // 0 · "STOP" FROM THE PARTNER WHO ASKED, at any point after the plan was approved and before LAND.
+  if (row.plan_approved_at && row.phase !== "LAND") {
+    const said = await heldByRequester(env, card, row);
+    if (said) return holdCard(env, card, row, said);
+  }
+
   // 1 · The lease. A run the Mac holds is the whole answer for this tick.
   if (row.current_run_id) {
     const run = await readRun(env, row.current_run_id);
     if (run && (run.status === "QUEUED" || run.status === "CLAIMED")) {
       const where = run.status === "CLAIMED" ? `on ${run.claimed_by ?? "the Mac"}${run.progress_note ? ` — ${run.progress_note}` : ""}` : "queued, waiting for the Mac to claim it";
-      return { finished: false, blocked: false, progressed: true, detail: `${row.phase} is ${where}.` };
+      return { finished: false, blocked: false, progressed: true, held: true, detail: `${row.phase} is ${where}.` };
     }
     if (run) {
       const out = await applyReport(env, card, row, run, rules);
@@ -670,11 +983,32 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
       });
       return { finished: false, blocked: true, progressed: false, detail: why };
     }
-    const newAnswers = reading.kind === "APPROVED" ? approvedAnswers(asks) : [reading.text];
+    const oneWord = reading.kind === "APPROVED" || reading.kind === "PREVIEW" || reading.kind === "FORCED";
+    const newAnswers = oneWord ? approvedAnswers(asks) : [reading.text];
     const answers = [...list(row.answers_json), ...newAnswers];
     const now = new Date().toISOString();
-    await update(env, card.id, { answers_json: JSON.stringify(answers), plan_approved_at: now, plan_approved_by: card.block_answered_by ?? card.requested_by_email ?? null, phase: "BUILD" });
-    await appendFinding(env, card.id, reading.kind === "APPROVED" ? `Plan approved by ${card.requested_by_email ?? "a partner"} with one word ("${answer.slice(0, 40)}"): every recommendation taken.` : `Plan approved by ${card.requested_by_email ?? "a partner"} with answers: "${answer.slice(0, 400)}"`);
+    await update(env, card.id, {
+      answers_json: JSON.stringify(answers),
+      plan_approved_at: now,
+      plan_approved_by: card.block_answered_by ?? card.requested_by_email ?? null,
+      phase: "BUILD",
+      // "preview" approves the plan AND asks to see it before it lands. Never a landing approval.
+      ...(reading.kind === "PREVIEW" ? { preview_only: 1 } : {}),
+    });
+    let forcedRow: WebPropertyChangeRow = row;
+    if (reading.kind === "FORCED") {
+      // THE NAMED BYPASS. Recorded now, so BUILD → green lands without the preview stop.
+      forcedRow = await recordForce(env, card, row, card.block_answered_by ?? requester?.firmUserId ?? "");
+    }
+    await appendFinding(
+      env,
+      card.id,
+      reading.kind === "PREVIEW"
+        ? `Plan approved by ${card.requested_by_email ?? "a partner"} for a PREVIEW first: every recommendation taken; the card will ask again with the preview link before anything lands.`
+        : reading.kind === "APPROVED"
+          ? `Plan approved by ${card.requested_by_email ?? "a partner"} with one word ("${answer.slice(0, 40)}"): every recommendation taken.`
+          : `Plan approved by ${card.requested_by_email ?? "a partner"} with answers: "${answer.slice(0, 400)}"`,
+    );
     await appendEvent(env, {
       eventType: "web_property_change.plan_approved",
       actorType: "firm_user",
@@ -684,7 +1018,7 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
       firmScope: card.firm_scope,
       payload: { reading: reading.kind, answer: answer.slice(0, 400) },
     });
-    const fresh: WebPropertyChangeRow = { ...row, answers_json: JSON.stringify(answers), plan_approved_at: now, phase: "BUILD" };
+    const fresh: WebPropertyChangeRow = { ...forcedRow, answers_json: JSON.stringify(answers), plan_approved_at: now, phase: "BUILD", preview_only: reading.kind === "PREVIEW" ? 1 : row.preview_only };
     const parked = await parkPhase(env, card, fresh, "BUILD", rules);
     if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
     return { finished: false, blocked: false, progressed: true, detail: `Plan approved; BUILD queued for the Mac (${phaseModel(rules, "BUILD")}).` };
@@ -696,7 +1030,35 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
       if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
       return { finished: false, blocked: false, progressed: true, detail: `BUILD queued for the Mac (${phaseModel(rules, "BUILD")})${row.pr_url ? ` to fix ${row.pr_url}` : ""}.` };
     }
-    // Green, and back here: land on green, or wait for the word.
+    // Green, and back here. A change that previews first needs the SECOND "approved" from the
+    // requesting partner, read against the time the preview email went out.
+    if (needsPreview(row) && !row.land_approved_at && !row.forced_by) {
+      const answer = answerSince(card, row.preview_emailed_at);
+      const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+      const fromRequester = !requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId;
+      const landReading = answer && fromRequester ? readApprovalReply(answer) : null;
+      if (landReading?.kind === "FORCED") {
+        const forced = await recordForce(env, card, row, card.block_answered_by ?? requester?.firmUserId ?? "");
+        const parked = await parkPhase(env, card, forced, "LAND", rules);
+        if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
+        return { finished: false, blocked: false, progressed: true, detail: `Forced to production after the preview; LAND queued for the Mac (${phaseModel(rules, "LAND")}).` };
+      }
+      if (landReading?.kind !== "APPROVED") {
+        if (answer) {
+          await appendFinding(env, card.id, `${fromRequester ? "After the preview" : `An answer from ${card.block_answered_by} (not the partner who asked)`}: "${answer.slice(0, 400)}" — not a landing approval; nothing lands.`);
+        }
+        const why = await blockOnPreview(env, card, row);
+        return { finished: false, blocked: true, progressed: false, detail: why };
+      }
+      const now = new Date().toISOString();
+      await update(env, card.id, { land_approved_at: now, land_approved_by: card.block_answered_by ?? card.requested_by_email ?? null });
+      await appendFinding(env, card.id, `Landing approved after the preview by ${card.requested_by_email ?? "a partner"} ("${answer!.slice(0, 40)}").`);
+      const fresh: WebPropertyChangeRow = { ...row, land_approved_at: now };
+      const parked = await parkPhase(env, card, fresh, "LAND", rules);
+      if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
+      return { finished: false, blocked: false, progressed: true, detail: `Landing approved after the preview; LAND queued for the Mac (${phaseModel(rules, "LAND")}).` };
+    }
+    // Land on green, or wait for the word.
     if (!isOn(rules.land_on_green)) {
       const answer = answerSince(card, row.check_green_at);
       if (!answer) {
@@ -787,6 +1149,10 @@ export async function handleGetWebPropertyChange(ctx: RouteContext): Promise<Res
     decided: list(row.decided_json),
     asks: askLines(asksOf(row)),
     answers: list(row.answers_json),
+    placeholders: list(row.placeholders_json),
+    needs_preview: needsPreview(row),
+    forced_by_name: row.forced_by ? (PARTNERS.find((p) => p.firmUserId === row.forced_by)?.fullName ?? row.forced_by) : null,
+    forced_placeholders: list(row.forced_placeholders_json),
     current_run: run ? { id: run.id, status: run.status, claimed_by: run.claimed_by, claimed_at: run.claimed_at, progressed_at: run.progressed_at, progress_note: run.progress_note } : null,
   });
 }

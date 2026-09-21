@@ -16,9 +16,18 @@
  * partner the question was addressed to, and the runner checks the same before it acts.
  */
 
-export type ApprovalReading = { kind: "APPROVED" } | { kind: "REFUSED"; text: string } | { kind: "ANSWERS"; text: string };
+export type ApprovalReading =
+  | { kind: "APPROVED" }
+  /** "preview" (21 Sep 2026): approve the plan, but build to a PREVIEW and ask again before landing. Never a landing approval. */
+  | { kind: "PREVIEW" }
+  /** "approved to production" (21 Sep 2026): the named bypass — land a not-ready plan, placeholders and all. Separate and explicit; never plain "approved". */
+  | { kind: "FORCED" }
+  | { kind: "REFUSED"; text: string }
+  | { kind: "ANSWERS"; text: string };
 
 export const APPROVAL_WORDS = ["approved", "approve", "yes", "go", "land it", "ok", "okay", "lgtm"] as const;
+export const PREVIEW_WORDS = ["preview", "preview only", "preview first", "preview it"] as const;
+export const FORCE_WORDS = ["approved to production", "approve to production", "force production", "ship it anyway", "land anyway", "land it anyway"] as const;
 const REFUSAL_STARTS = ["no", "not approved", "stop", "changes:", "change:", "don't", "do not"] as const;
 
 /** The first line the person wrote, without a signature, quoted text or punctuation noise. */
@@ -34,7 +43,10 @@ function firstWords(text: string): string {
 export function readApprovalReply(text: string | null | undefined): ApprovalReading {
   const trimmed = (text ?? "").trim();
   const head = firstWords(trimmed);
+  // The force phrase is read FIRST: "approved to production" must never collapse into "approved".
+  if ((FORCE_WORDS as readonly string[]).includes(head)) return { kind: "FORCED" };
   if ((APPROVAL_WORDS as readonly string[]).includes(head)) return { kind: "APPROVED" };
+  if ((PREVIEW_WORDS as readonly string[]).includes(head)) return { kind: "PREVIEW" };
   for (const start of REFUSAL_STARTS) {
     if (head === start || head.startsWith(`${start} `) || head.startsWith(`${start},`) || head.startsWith(start + (start.endsWith(":") ? "" : "."))) {
       return { kind: "REFUSED", text: trimmed };
@@ -74,4 +86,33 @@ export function askLines(asks: readonly Ask[]): string[] {
 /** What "approved" means: every ask answered with its recommendation. */
 export function approvedAnswers(asks: readonly Ask[]): string[] {
   return asks.length === 0 ? ["approved as written"] : asks.map((a, i) => `${i + 1}. ${a.recommended} (approved as recommended)`);
+}
+
+/**
+ * PRE-APPROVAL IN THE REQUEST (owner, 21 Sep 2026). A partner may say up front that they do not
+ * care about the decisions: Porter picks everything, offers no options, the plan is approved at
+ * filing and the email is an FYI. Read from the partner's OWN authenticated request text at the
+ * door — never from a later message, never from the other partner.
+ */
+export const PRE_APPROVAL_PHRASES = ["your call", "you decide", "no need to ask", "just do it", "pick everything", "no options"] as const;
+
+function phraseIn(text: string | null | undefined, phrases: readonly string[]): string | null {
+  const lower = ` ${(text ?? "").replace(/\s+/g, " ").toLowerCase()} `;
+  for (const p of phrases) if (new RegExp(`(^|[^a-z])${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`).test(lower)) return p;
+  return null;
+}
+
+/** The pre-approval phrase the request carries, or null. */
+export function preApprovalIn(requestText: string | null | undefined): string | null {
+  return phraseIn(requestText, PRE_APPROVAL_PHRASES);
+}
+
+/** The force phrase the request carries ("approved to production", "ship it anyway", …), or null. */
+export function forcePhraseIn(requestText: string | null | undefined): string | null {
+  return phraseIn(requestText, FORCE_WORDS);
+}
+
+/** Every ask becomes a decision: the recommended default IS the decision. */
+export function decidedFromAsks(asks: readonly Ask[]): string[] {
+  return asks.map((a) => `${a.question} → ${a.recommended} (decided; pre-approved in the request)`);
 }

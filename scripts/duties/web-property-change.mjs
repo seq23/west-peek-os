@@ -69,6 +69,9 @@ export function landGate(job) {
   if (!job?.plan?.approved_at) return { ok: false, why: "the plan has not been approved by the partner who asked — nothing lands" };
   if (!job?.pr?.url) return { ok: false, why: "there is no PR to land" };
   if (!job?.pr?.check_green_at || job.pr.check_state !== "GREEN") return { ok: false, why: "the PR has no recorded green check — nothing lands" };
+  // A change that previews first (not publish-ready, or the partner said "preview") needs the SECOND approval.
+  const needsPreview = job?.plan?.publish_ready === false || job?.plan?.preview_only === true;
+  if (needsPreview && !job?.pr?.land_approved_at && !job?.pr?.forced_by) return { ok: false, why: "this change previews first and the partner has not approved the landing after the preview, nor forced it to production — nothing lands" };
   return { ok: true, why: "approved and green" };
 }
 
@@ -87,12 +90,32 @@ export function readResult(text, phase) {
   if (parsed.status !== "ok" && !(typeof parsed.reason === "string" && parsed.reason.trim())) return { result: null, problem: `a ${parsed.status} result must say why` };
   if (parsed.status === "ok" && phase === "PLAN" && !(typeof parsed.document === "string" && parsed.document.trim().length > 40)) return { result: null, problem: "an ok PLAN must carry a plan document" };
   // Every ask carries a recommended default — "approved" takes them all, so a bare question is not an ask.
+  if (parsed.status === "ok" && phase === "PLAN" && typeof parsed.publish_ready !== "boolean") return { result: null, problem: "an ok PLAN must say publish_ready: true or false" };
+  if (parsed.status === "ok" && phase === "PLAN" && parsed.publish_ready === false && !(Array.isArray(parsed.placeholders) && parsed.placeholders.length > 0)) return { result: null, problem: "a PLAN that is not publish-ready must name its placeholders" };
   if (parsed.status === "ok" && phase === "PLAN" && Array.isArray(parsed.asks) && parsed.asks.some((a) => !(a && typeof a === "object" && String(a.question ?? "").trim() && String(a.recommended ?? "").trim()))) {
     return { result: null, problem: "every ask must be { question, recommended } — an ask without a recommended default cannot be approved with one word" };
   }
   if (parsed.status === "ok" && phase === "BUILD" && !(typeof parsed.pr_url === "string" && /^https?:\/\//.test(parsed.pr_url))) return { result: null, problem: "an ok BUILD must carry the PR url" };
   if (parsed.status === "ok" && phase === "LAND" && !(typeof parsed.live_proof === "string" && parsed.live_proof.trim())) return { result: null, problem: "an ok LAND must carry the live proof" };
   return { result: parsed, problem: null };
+}
+
+/**
+ * THE PREVIEW URL(S) FOR A BRANCH, out of what GitHub holds (21 Sep 2026). Cloudflare Pages posts a
+ * Deployment per project with `environment_url` on its status, and a PR comment naming the
+ * `*.pages.dev` link. Both are read; a repo with neither (a Worker, not Pages) yields null, and the
+ * preview email says so and carries the PR and screenshots instead. Pure, so it is self-tested.
+ */
+export function previewUrlsFrom(deploymentStatuses, commentBodies) {
+  const urls = new Set();
+  for (const st of Array.isArray(deploymentStatuses) ? deploymentStatuses : []) {
+    const u = String(st?.environment_url ?? "").trim();
+    if (/^https?:\/\//.test(u) && /pages\.dev|preview/i.test(u)) urls.add(u.replace(/\/$/, ""));
+  }
+  for (const body of Array.isArray(commentBodies) ? commentBodies : []) {
+    for (const m of String(body ?? "").matchAll(/https?:\/\/[a-z0-9.-]+\.pages\.dev[^\s)>\]]*/gi)) urls.add(m[0].replace(/\/$/, ""));
+  }
+  return urls.size === 0 ? null : [...urls].join(" · ");
 }
 
 /** GREEN when every check passed, RED when any failed, PENDING otherwise. From `gh pr checks --json`. */
@@ -121,6 +144,7 @@ export function renderContext(job, paths) {
     `JOB_DIR: ${paths.jobDir}`,
     `RESULT_PATH: ${paths.resultPath}`,
     `DRIVE_FOLDER: ${job.drive?.folder_url ?? job.drive?.folder_id ?? "(none)"}`,
+    ...(job.pre_approved ? [`PRE-APPROVED: the partner wrote "${job.pre_approved}" — decide everything yourself, asks: []`] : []),
     "",
     "STANDING RULES OF THIS KIND:",
     ...Object.entries(job.rules ?? {}).map(([k, v]) => `- ${k}: ${v}`),
@@ -225,6 +249,32 @@ async function ensureWorktree(repoPath, names, phase, progress) {
 async function prFor(worktree, branch) {
   const { stdout } = await sh("gh", ["pr", "view", branch, "--json", "url,number,state,headRefName"], { cwd: worktree });
   return JSON.parse(stdout);
+}
+
+async function previewUrlFor(worktree, number, progress) {
+  const statuses = [];
+  const comments = [];
+  try {
+    const { stdout } = await sh("gh", ["pr", "view", String(number), "--json", "headRefOid,comments"], { cwd: worktree });
+    const pr = JSON.parse(stdout);
+    for (const c of pr.comments ?? []) comments.push(c.body);
+    const repo = (await sh("gh", ["repo", "view", "--json", "nameWithOwner"], { cwd: worktree })).stdout;
+    const { nameWithOwner } = JSON.parse(repo);
+    const deps = JSON.parse((await sh("gh", ["api", `repos/${nameWithOwner}/deployments?sha=${pr.headRefOid}&per_page=20`], { cwd: worktree })).stdout);
+    for (const d of Array.isArray(deps) ? deps : []) {
+      try {
+        const sts = JSON.parse((await sh("gh", ["api", `repos/${nameWithOwner}/deployments/${d.id}/statuses?per_page=5`], { cwd: worktree })).stdout);
+        for (const st of Array.isArray(sts) ? sts : []) statuses.push(st);
+      } catch {
+        /* a deployment with no statuses yet */
+      }
+    }
+  } catch (err) {
+    progress(`preview url: could not read deployments (${err instanceof Error ? err.message.slice(0, 120) : String(err)})`);
+  }
+  const url = previewUrlsFrom(statuses, comments);
+  progress(url ? `preview: ${url}` : "preview: none (no Pages deployment on this PR)");
+  return url;
 }
 
 async function watchChecks(worktree, number, signal, progress) {
@@ -352,7 +402,7 @@ export async function run(job, ctx) {
 
   if (phase === "PLAN") {
     writeFileSync(path.join(jobDir, "plan.md"), result.document);
-    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
+    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
   }
 
   if (phase === "BUILD") {
@@ -364,6 +414,8 @@ export async function run(job, ctx) {
       return { phase, status: "failed", reason: `the model reported a PR but gh finds none on ${names.branch}: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}` };
     }
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);
+    // The preview link is read AFTER the checks settle: Pages posts its deployment beside them.
+    const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress) : null;
     return {
       phase,
       status: "ok",
@@ -372,6 +424,7 @@ export async function run(job, ctx) {
       branch: names.branch,
       check_state: checks.state,
       check_url: checks.url ?? undefined,
+      preview_url: previewUrl ?? undefined,
       proof: String(result.proof ?? "").slice(0, 8000),
       reason: checks.state === "GREEN" ? undefined : `checks are ${checks.state} on ${pr.url}`,
       notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim(),
@@ -398,18 +451,29 @@ function selfTest() {
     ["LAND refuses without a green check", () => landGate({ ...approved, pr: { ...approved.pr, check_green_at: null } }).ok === false],
     ["LAND refuses a RED check even with a green time", () => landGate({ ...approved, pr: { ...approved.pr, check_state: "RED" } }).ok === false],
     ["LAND refuses without a PR", () => landGate({ ...approved, pr: null }).ok === false],
+    ["LAND refuses a not-ready plan without the second approval", () => landGate({ ...approved, plan: { ...approved.plan, publish_ready: false } }).ok === false],
+    ["LAND refuses a preview-only plan without the second approval", () => landGate({ ...approved, plan: { ...approved.plan, preview_only: true } }).ok === false],
+    ["LAND passes a not-ready plan that was FORCED to production by name", () => landGate({ ...approved, plan: { ...approved.plan, publish_ready: false }, pr: { ...approved.pr, forced_by: "fu_scooter_taylor" } }).ok === true],
+    ["LAND passes a not-ready plan WITH the second approval", () => landGate({ ...approved, plan: { ...approved.plan, publish_ready: false }, pr: { ...approved.pr, land_approved_at: "2026-09-21T12:00:00Z" } }).ok === true],
     ["a missing result file is a failure, never ok", () => readResult("", "PLAN").result === null],
     ["a result for the wrong phase is refused", () => readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "https://x" }), "PLAN").result === null],
     ["an ok PLAN needs a document", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok" }), "PLAN").result === null],
     ["an ok BUILD needs a PR url", () => readResult(JSON.stringify({ phase: "BUILD", status: "ok" }), "BUILD").result === null],
     ["a blocked result needs a reason", () => readResult(JSON.stringify({ phase: "PLAN", status: "blocked" }), "PLAN").result === null],
-    ["a good PLAN result reads", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: [{ question: "colour?", recommended: "black and white" }] }), "PLAN").result?.asks?.[0]?.recommended === "black and white"],
-    ["an ask without a recommended default is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: ["colour?"] }), "PLAN").result === null],
+    ["a good PLAN result reads", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: [{ question: "colour?", recommended: "black and white" }], publish_ready: true }), "PLAN").result?.asks?.[0]?.recommended === "black and white"],
+    ["a PLAN that does not say publish_ready is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x") }), "PLAN").result === null],
+    ["a not-ready PLAN without named placeholders is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: false }), "PLAN").result === null],
+    ["a not-ready PLAN with placeholders reads", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: false, placeholders: ["Sengo logo"] }), "PLAN").result?.placeholders?.[0] === "Sengo logo"],
+    ["a Pages deployment status yields the preview url", () => previewUrlsFrom([{ environment_url: "https://abc123.join-west-peek.pages.dev/" }], []) === "https://abc123.join-west-peek.pages.dev"],
+    ["a Cloudflare PR comment yields the preview url", () => previewUrlsFrom([], ["Deploying with Cloudflare Pages\n| Preview URL | https://def456.ventures.pages.dev |"]) === "https://def456.ventures.pages.dev"],
+    ["a repo with no Pages deployment yields null, never a guess", () => previewUrlsFrom([{ environment_url: "" }], ["LGTM"]) === null],
+    ["an ask without a recommended default is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: ["colour?"], publish_ready: true }), "PLAN").result === null],
     ["all-success checks are GREEN", () => checkStateOf([{ state: "SUCCESS" }, { state: "SKIPPED" }]) === "GREEN"],
     ["one failure makes RED", () => checkStateOf([{ state: "SUCCESS" }, { state: "FAILURE" }]) === "RED"],
     ["a pending check is PENDING", () => checkStateOf([{ state: "SUCCESS" }, { state: "PENDING" }]) === "PENDING"],
     ["no checks is PENDING, not green", () => checkStateOf([]) === "PENDING"],
     ["names are stable and safe", () => namesFor("wc_ABC-123_def").branch === "work/wpc-abc123de" && !namesFor("../x").worktree.includes("..")],
+    ["a pre-approved job tells the model to decide everything", () => renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, ask: "x", pre_approved: "your call" }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/r.json" }).includes('PRE-APPROVED: the partner wrote "your call"')],
     ["the context names the result path and the ask", () => {
       const t = renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, ask: "add a page", rules: { land_on_green: "on" } }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/result-PLAN.json" });
       return t.includes("RESULT_PATH: /j/result-PLAN.json") && t.includes("add a page") && t.includes("land_on_green: on");
