@@ -37,12 +37,31 @@
  * sitting in a queue nobody claims.
  */
 
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { hostname, homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+
+/**
+ * THE DUTY MODULE IS RELOADED WHEN THE REPO MOVES. This claimer is a launchd daemon that lives for
+ * days, and ESM caches a module for the life of the process — so on 21 Sep 2026 a claimer started
+ * before #149 and #150 landed ran Porter's first real job with the duty code of #144: it blocked
+ * Scooter's photo card with "no Drive FOLDER is on the card", a stop that had been deleted from the
+ * repo eight hours earlier. A deploy that the Mac never picks up is a deploy that did not happen
+ * here. The import URL carries the repo's HEAD, so a new commit is a new module and a fresh load;
+ * the same commit keeps the cached one. `land` need not restart anything.
+ */
+export function dutyModuleUrl(script, repoRoot = REPO_ROOT) {
+  let head = "unknown";
+  try {
+    head = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  } catch {
+    /* no git here: the module loads once, as before */
+  }
+  return `${pathToFileURL(path.join(repoRoot, script)).href}?head=${head}`;
+}
 
 const execFileAsync = promisify(execFile);
 const ARGS = new Set(process.argv.slice(2));
@@ -160,7 +179,7 @@ async function runJob(run) {
   const timer = setTimeout(() => controller.abort(new Error(`the ${job.phase} phase did not finish within ${Math.round(ceilingMs / 1000)}s and was stopped`)), ceilingMs);
 
   try {
-    const mod = await import(pathToFileURL(path.join(REPO_ROOT, duty.script)).href);
+    const mod = await import(dutyModuleUrl(duty.script));
     if (typeof mod.run !== "function") return { ok: false, error: `${duty.script} exports no run()` };
     const report = await mod.run(job, {
       repoRoot: REPO_ROOT,
@@ -258,6 +277,11 @@ async function main() {
 function selfTest() {
   const good = { card_kind: "WEB_PROPERTY_CHANGE", script: DUTIES.WEB_PROPERTY_CHANGE, phase: "PLAN", model: "opus", max_seconds: 600 };
   const cases = [
+    ["the duty module URL carries the repo's HEAD, so a landed change is a fresh load", () => {
+      const u = dutyModuleUrl("scripts/duties/web-property-change.mjs");
+      return /\?head=[0-9a-f]{40}$/.test(u) && u.includes("scripts/duties/web-property-change.mjs");
+    }],
+    ["a repo with no git still yields a loadable URL", () => dutyModuleUrl("scripts/duties/web-property-change.mjs", "/nonexistent-repo").endsWith("?head=unknown")],
     ["a registered kind with its own script is accepted", () => dutyFor(good).ok === true],
     ["a kind this claimer does not run is refused", () => dutyFor({ ...good, card_kind: "ROOM_PACKET" }).ok === false],
     ["a job naming a different script is refused", () => dutyFor({ ...good, script: "scripts/duties/other.mjs" }).ok === false],
