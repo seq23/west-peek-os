@@ -845,6 +845,8 @@ const SCOOTER_MIME = (opts: { subject: string; body: string; image?: boolean; qu
     "",
   ].join("\r\n");
 
+const PHOTO_RECEIVED = "Got it — sorry this took so long. Your sister forgot to plug in her Mac so it went to sleep in the middle of my work, and she also tasked me with a bunch of back-end clean-up that took priority — I'm just now getting to your requests. I have the photo and I'm on the Sensori swap now; you'll hear from me when it's done.";
+
 const GOOD_AUTH_HEADER = "mx.cloudflare.net; spf=pass smtp.mailfrom=scooter@westpeek.ventures; dkim=pass header.d=westpeek-ventures.20251104.gappssmtp.com; dmarc=none";
 
 function inbound(raw: string, headers: Record<string, string> = {}) {
@@ -977,7 +979,8 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     const key = `inbound-email/2026-09-21/${crypto.randomUUID()}.eml`;
     await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: Uint8Array) => Promise<unknown> }).put(key, new TextEncoder().encode(SCOOTER_MIME({ subject: "Reingest me — team page on westpeek.ventures", body: "Add the new team member on westpeek.ventures; photo attached.", image: true })));
     const res = await handleReingestStoredEmail({
-      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key, received_tldr: "Got it — sorry this took so long. I have the photo now and I'm on it." }) }),
+      // The owner's words for Scooter's photo card, verbatim (Sequoia, 21 Sep 2026 15:05 CT).
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key, received_tldr: PHOTO_RECEIVED }) }),
       env,
       identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
       params: {},
@@ -987,7 +990,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     const row = (await readWebPropertyChange(env, body.new_card))!;
     expect(row.request_text).toMatch(/Add the new team member/);
     const received = sent.filter((m) => m.to === SCOOTER).pop()!;
-    expect(received.text, "the re-read's RECEIVED carries the given first line verbatim").toMatch(/Got it — sorry this took so long\. I have the photo now and I'm on it\./);
+    expect(received.text, "the re-read's RECEIVED carries the owner's first line verbatim").toContain(PHOTO_RECEIVED);
     expect(received.text).toMatch(/Attachments: sensori-founders\.jpg/);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(body.new_card).run();
   });
