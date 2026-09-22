@@ -5866,28 +5866,35 @@ body {
    pushing the row sideways — Hallmark responsive rule 63. The measurer flags a SQUEEZED title, never
    an unavoidable one. */
 .deal-name, .room-head h3, .masthead-answer { overflow-wrap: anywhere; min-width: 0; }
-/* THE WAITING ROW'S TITLE, BOUNDED TO ONE LINE — root-caused 22 Sep 2026, the third time the
-   390×844 fold assertion (`e2e/home-overhaul.spec.ts:76`) failed on the "first waiting row" after
-   two prior fixes (#172, #176) each trimmed masthead/band spacing and both re-broke: the number
-   that recurred each time (bottom=861) was never actually about spacing margin. `approval_card`
-   titles carry no max length (`createApprovalSchema` in `approvals.ts`) and the home feed is
-   sorted oldest-first across the WHOLE firm (`mpHome.ts`'s `approvalsModule`, `ORDER BY
-   created_at`), so "the first row" is whichever pending card is oldest — not necessarily the row
-   a given journey just created. `e2e/d1-design-states.spec.ts` deliberately raises one MP-role
-   card it never decides ("Design-state probe: a card this reader may not decide", 57 characters)
-   to test a disabled-approve state; because that spec sorts before `home-overhaul.spec.ts`
-   alphabetically, its card is often the oldest by the time the fold is measured. At the single
-   phone-width column (`@media (max-width: 60rem)` above) a title that long wraps to two lines,
-   and two lines of a title is ~24px taller than one — comfortably the entire "margin" the last two
-   fixes were chasing. A title's line count was never something CSS spacing could fix, because it
-   was never spacing: the row's height was a function of WHICH card the shared e2e database
-   happened to hand it, which font-substitution then nudged over or under the line. Bounding the
-   title to one line makes the row's height constant regardless of which card is first, how long
-   its title runs, or what CI's font stack does with it — the fold no longer depends on content it
-   does not control. `text-overflow: ellipsis`, not `.work-card-title`'s multi-line `max-height`
-   clamp (see that rule's own comment): a compact list row reads as one line by design here, not a
-   card that can afford three. */
-.home-waiting-title {
+/* EVERY TEXT LINE IN A WAITING/ATTENTION ROW, BOUNDED TO ONE LINE — root-caused 22 Sep 2026, the
+   FOURTH time the 390×844 fold assertion (`e2e/home-overhaul.spec.ts:76`) failed on "the first
+   waiting row". Three prior fixes (#172, #176, and a first pass of this PR) each targeted a
+   specific piece of content and each re-broke or landed incomplete — the clearest evidence was two
+   CI runs on two different commits (one WITHOUT this class, one WITH it on the title only)
+   producing the exact same `Received: 861.40625` to five decimal places. That bit-for-bit repeat
+   across a real code change proves the overflow was never really about which card sorts first, or
+   about any ONE field's length: `approval_card.title` carries no max length
+   (`createApprovalSchema` in `approvals.ts`), the home feed is sorted oldest-first across the WHOLE
+   firm with no per-journey scoping (`mpHome.ts`'s `approvalsModule`, `ORDER BY created_at`), AND
+   the row prints two more free-text lines below the title (the action name + `impact_note`, and
+   the requester + timestamp + expiry) — any ONE of title, action/impact line or requester line can
+   independently run long enough to wrap at the single phone-width column, and which one wraps
+   depends on the exact card AND on the runtime's font metrics (CI's font stack has already been
+   observed, on this exact assertion, to wrap where a local Mac's does not). Clamping only the
+   title (this rule's first pass) fixed the case reproduced locally — a 57-character orphaned probe
+   title from `e2e/d1-design-states.spec.ts` — but left the OTHER two lines free to wrap on CI's
+   font stack, which is exactly what kept the number unchanged.
+   The fix that actually holds is structural, not another guess at which field is long this time:
+   EVERY free-text line in these rows — the title, and both `.muted.small` lines beneath it — is
+   independently bounded to exactly one line. That makes the row's total height a FIXED count of
+   lines (badge line is a fixed short enum value, never a risk) regardless of which card sorts
+   first, how long any one of its three text fields is, or what any given environment's font
+   substitution does with them — the fold no longer depends on content, or on a runtime's fonts,
+   that this layout does not control. `text-overflow: ellipsis`, not `.work-card-title`'s
+   multi-line `max-height` clamp (see that rule's own comment on why not `-webkit-line-clamp`): a
+   compact list row reads as one line per field by design here, not a card that can afford three. */
+.home-waiting-title,
+.home-waiting-line {
   display: block;
   min-width: 0;
   max-width: 100%;
