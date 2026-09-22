@@ -172,9 +172,9 @@ const OTHER_FIRM: FirmUserIdentity = {
   authorityScopes: [{ scopeKey: "firm_scope", scopeValue: "other-firm" }],
 };
 
-function ask(handler: (ctx: never) => Promise<Response>, cardId: string, identity: FirmUserIdentity, suffix = ""): Promise<Response> {
+function ask(handler: (ctx: never) => Promise<Response>, cardId: string, identity: FirmUserIdentity, path: "request-message" | "raw" = "request-message"): Promise<Response> {
   return (handler as unknown as (ctx: unknown) => Promise<Response>)({
-    request: new Request(`https://os.joinwestpeek.com/api/work-cards/${cardId}/request-message${suffix}`),
+    request: new Request(`https://os.joinwestpeek.com/api/work-cards/${cardId}/${path}`),
     env,
     identity,
     params: { id: cardId },
@@ -431,7 +431,7 @@ describe("the request-message routes", () => {
   });
 
   it("serves the raw message to a Managing Partner, and records the read", async () => {
-    const res = await ask(handleGetRequestMessageRaw, cardId, MP, "/raw");
+    const res = await ask(handleGetRequestMessageRaw, cardId, MP, "raw");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/text\/plain/);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
@@ -443,7 +443,7 @@ describe("the request-message routes", () => {
   });
 
   it("refuses the raw message to anyone who is not a Managing Partner", async () => {
-    const res = await ask(handleGetRequestMessageRaw, cardId, ANALYST, "/raw");
+    const res = await ask(handleGetRequestMessageRaw, cardId, ANALYST, "raw");
     expect(res.status).toBe(403);
     expect(String(((await res.json()) as { detail: string }).detail)).toMatch(/Managing Partner/);
   });
@@ -457,7 +457,7 @@ describe("the request-message routes", () => {
    */
   it("404s outside the caller's firm scope, on both routes", async () => {
     expect((await ask(handleGetRequestMessage, cardId, OTHER_FIRM)).status).toBe(404);
-    expect((await ask(handleGetRequestMessageRaw, cardId, OTHER_FIRM, "/raw")).status).toBe(404);
+    expect((await ask(handleGetRequestMessageRaw, cardId, OTHER_FIRM, "raw")).status).toBe(404);
   });
 
   it("404s for a card that has no inbound message indexed against it", async () => {

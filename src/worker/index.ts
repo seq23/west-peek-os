@@ -1122,7 +1122,7 @@ const router = new Router()
   // 0226 — the email this card came from. The decoded body for anyone who may see the card; the
   // raw `.eml` for a Managing Partner only (`inbound_message.read_raw`, restricted).
   .get("/api/work-cards/:id/request-message", handleGetRequestMessage)
-  .get("/api/work-cards/:id/request-message/raw", handleGetRequestMessageRaw)
+  .get("/api/work-cards/:id/raw", handleGetRequestMessageRaw)
   .post("/api/inbound-email/reingest", handleReingestStoredEmail)
   .get("/api/work-kinds/:kind/rules", handleWorkKindRules)
   .patch("/api/work-kinds/:kind/rules/:key", handleSetWorkKindRule)

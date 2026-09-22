@@ -20,7 +20,7 @@ import { readableMessage } from "./dealIntake";
  *   `GET /api/work-cards/:id/request-message`      what the person WROTE — decoded, quote-stripped,
  *                                                  the same text the card's description carries,
  *                                                  served as data so a panel can show it whole.
- *   `GET /api/work-cards/:id/request-message/raw`  the message EXACTLY as it arrived, headers,
+ *   `GET /api/work-cards/:id/raw`                   the message EXACTLY as it arrived, headers,
  *                                                  routing, signatures and all.
  *
  * WHY THE RAW ONE IS NARROWER. The decoded body is the request; the raw message is the envelope
@@ -131,7 +131,7 @@ export async function handleGetRequestMessage(ctx: RouteContext): Promise<Respon
 }
 
 /**
- * GET /api/work-cards/:id/request-message/raw — the `.eml` exactly as it arrived.
+ * GET /api/work-cards/:id/raw — the `.eml` exactly as it arrived.
  *
  * `text/plain` rather than `message/rfc822`, so it opens in a browser tab instead of downloading as
  * a file the reader then has to find. `private, no-store`: a partner's mail is not something an

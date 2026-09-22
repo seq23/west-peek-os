@@ -368,12 +368,18 @@ async function keepTheMessage(
     return { key: null, rowId: null, failure: "", text, refusedAsSpoof: true };
   }
 
+  /*
+   * KEPT AS BYTES, NEVER RE-WRAPPED INTO A STREAM. `buffered` used to be `new Blob([bytes]).stream()`
+   * — a stream R2 cannot see the length of, which is exactly the shape the comment below this one
+   * warns against for the OTHER branch (`Provided readable stream must have a known length`). The
+   * bytes are already in memory; handing R2 the `Uint8Array` itself is both the fix and the simpler
+   * code, because an `ArrayBufferView`'s length is never in question.
+   */
   let text: string | null = null;
-  let buffered: ReadableStream | null = null;
+  let buffered: Uint8Array | null = null;
   if (readable) {
-    const bytes = new Uint8Array(await new Response(message.raw).arrayBuffer());
-    text = new TextDecoder().decode(bytes);
-    buffered = new Blob([bytes as BlobPart]).stream();
+    buffered = new Uint8Array(await new Response(message.raw).arrayBuffer());
+    text = new TextDecoder().decode(buffered);
   }
 
   /*

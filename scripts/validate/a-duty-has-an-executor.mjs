@@ -82,10 +82,12 @@ export function declaredKind(rawSource) {
 }
 
 /**
- * THE DOOR AND THE GENERAL LOOP (21 Sep 2026, Scooter's second email):
+ * THE DOOR AND THE GENERAL LOOP (21 Sep 2026, Scooter's second email; d · updated 22 Sep 2026, 0226):
  *   a · the web-property parse runs BEFORE the blog parse in openAssignmentCard, and the blog
  *       parser yields to a site feature (SITE_FEATURE) before it matches "newsletter";
- *   d · every authenticated partner message is stored as .eml (the store is not gated on attachments);
+ *   d · every message is stored as .eml ONCE, unconditionally, at the entry (`keepTheMessage` in
+ *       `inboundEmail.ts`) — not gated on attachments, and not minted a second time by
+ *       `openAssignmentCard`, which only ever reads the key it is handed;
  *   f · the general runner hands a chief of staff's web-property card to Porter before any loop step;
  *   c · the re-read door cancels live duplicates before the door runs and returns the card it created.
  */
@@ -100,7 +102,21 @@ export function checkDoor(files) {
     const blog = open.indexOf("parseBlogAsk(input.subject, written)");
     if (web < 0 || blog < 0) violations.push("openAssignmentCard() no longer parses both the web-property ask and the blog ask from the written text");
     else if (web > blog) violations.push("openAssignmentCard() parses blog help BEFORE the web-property ask — 'newsletter signup on the site' would become a blog outline");
-    if (!/if \(!emlKey && env\.WP_OS_DOCUMENTS && input\.raw\.trim\(\)\.length > 0\)/.test(open)) violations.push("openAssignmentCard() gates the .eml store on something other than 'a partner message with text' — 'read it again' would be impossible for a message without an attachment");
+    /*
+     * EVERY MESSAGE IS STORED ONCE, AT THE ENTRY (22 Sep 2026, 0226). `openAssignmentCard` used to
+     * gate its own `.eml` store on `input.raw.trim().length > 0` — a second, per-door copy of the
+     * "keep the message" job, and the shape that took a month to fix everywhere it existed. The job
+     * moved to `keepTheMessage()` in `inboundEmail.ts`, which runs before any door and keeps every
+     * message unconditionally; a door that goes back to minting its own key is the same defect
+     * again, one door at a time.
+     */
+    if (/env\.WP_OS_DOCUMENTS\s*\.\s*put\s*\(/.test(open)) {
+      violations.push("openAssignmentCard() stores its own .eml — the store is keepTheMessage()'s job now, at the entry, before any door; a second minting site is the 'two components each keeping their own list' shape this repo names");
+    }
+    const emlKeyParamAt = open.indexOf("limits: readonly string[];");
+    if (emlKeyParamAt < 0 || !/emlKey:\s*string\s*\|\s*null;/.test(open.slice(emlKeyParamAt, emlKeyParamAt + 1000))) {
+      violations.push("openAssignmentCard() no longer requires emlKey from its caller (a required, non-optional param) — a call that forgot to pass one would silently carry no stored copy");
+    }
   }
   const blog = files.blog;
   examined += 1;
@@ -121,16 +137,29 @@ export function checkDoor(files) {
   if (!/const plainRead = isPlainRead\(/.test(reqTask) || !/if \(plainRead\) preApproved = true;/.test(reqTask)) violations.push("requestTask() no longer pre-approves a plain read — every AI look at a public page would block and email the partner");
   if (!/payment_mode !== "NONE"\) return false;/.test(files.policy)) violations.push("isPlainRead() no longer refuses a paid task — a purchase could run unapproved");
   if (!/log \?in/.test(files.policy) || !/submit/.test(files.policy) || !/purchase/.test(files.policy)) violations.push("isPlainRead()'s NOT_A_READ no longer names login, submit and purchase");
-  // A PARTNER'S REQUEST IS READ AT ANY SIZE — and read ONCE. The first version tee'd the raw stream
-  // (one branch to R2, one to text) and hung production for 110 s at 14 ms of CPU on 21 Sep 2026:
-  // workerd's tee lets the unread branch's backpressure stall the source. So the pin is the shape
-  // that cannot deadlock: the bytes are buffered with arrayBuffer(), the text is decoded from that
-  // buffer, the assignment card opens from it, and no tee() exists in the branch at all.
+  /*
+   * A PARTNER'S REQUEST IS READ AT ANY SIZE — and read ONCE. The first version tee'd the raw stream
+   * (one branch to R2, one to text) and hung production for 110 s at 14 ms of CPU on 21 Sep 2026:
+   * workerd's tee lets the unread branch's backpressure stall the source. So the pin is the shape
+   * that cannot deadlock: the bytes are buffered with arrayBuffer(), the text is decoded from that
+   * buffer, and no tee() exists anywhere in the file.
+   *
+   * HOISTED 22 Sep 2026 (0226): the buffer-once read used to live INSIDE the oversize branch, behind
+   * its own locally-computed `partnerAuthority`; both are now `keepTheMessage()`'s, called once
+   * before any branch, so the check follows the read to where it actually happens rather than
+   * pinning to a branch it moved out of.
+   */
   examined += 1;
+  const keeperStart = files.inbound.indexOf("async function keepTheMessage(");
+  const keeperEnd = keeperStart < 0 ? -1 : files.inbound.indexOf("\nasync function handleInboundEmailOnce(", keeperStart);
+  const keeper = keeperStart < 0 ? "" : files.inbound.slice(keeperStart, keeperEnd < 0 ? keeperStart + 6000 : keeperEnd);
+  if (!/new Response\(message\.raw\)\.arrayBuffer\(\)/.test(keeper) || !/new TextDecoder\(\)\.decode\(buffered\)/.test(keeper)) {
+    violations.push("keepTheMessage() no longer buffers the message once with arrayBuffer() and decodes THAT SAME buffer — a second read of message.raw is how the 21 Sep deadlock happened");
+  }
+  if (/\.tee\(\)/.test(files.inbound)) violations.push("inboundEmail.ts tees the raw stream — that is the deadlock that hung the Worker on 21 Sep 2026 (R2 branch waits on an unread text branch)");
   const oversizeStart = files.inbound.indexOf("if (message.rawSize > MAX_BODY_BYTES) {");
   const oversize = oversizeStart < 0 ? "" : files.inbound.slice(oversizeStart, oversizeStart + 9000);
-  if (!/new Response\(message\.raw\)\.arrayBuffer\(\)/.test(oversize) || !/new TextDecoder\(\)\.decode\(bytes\)/.test(oversize) || !/partnerAuthority\.isAssignment && partnerText !== null/.test(oversize) || oversize.indexOf("openAssignmentCard(") < 0) violations.push("the oversize branch no longer reads an authenticated partner's request from one buffered copy — a photo attached makes the request 'too large to read' again");
-  if (/\.tee\(\)/.test(oversize)) violations.push("the oversize branch tees the raw stream again — that is the deadlock that hung the Worker on 21 Sep 2026 (R2 branch waits on an unread text branch)");
+  if (!/authority\.isAssignment && partnerText !== null/.test(oversize) || oversize.indexOf("openAssignmentCard(") < 0) violations.push("the oversize branch no longer opens an authenticated partner's request as an assignment from the buffered text — a photo attached makes the request 'too large to read' again");
   const re = files.reingest.slice(files.reingest.indexOf("export async function handleReingestStoredEmail("));
   examined += 1;
   const cancel = re.indexOf("state = 'CANCELLED'");
@@ -255,8 +284,11 @@ function selfTest() {
   say(noStrip.violations.some((v) => /no longer names ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL/.test(v)), "a strip that forgets the base url is caught");
   const blogFirst = check({ ...files, door: files.door.replace("const web = parseWebPropertyAsk(input.subject, written);", "const web0 = parseBlogAsk(input.subject, written); const web = parseWebPropertyAsk(input.subject, written);") });
   say(blogFirst.violations.some((v) => /parses blog help BEFORE/.test(v)), "a door that reads blog help before the web-property ask is caught");
-  const emlGated = check({ ...files, door: files.door.replace("if (!emlKey && env.WP_OS_DOCUMENTS && input.raw.trim().length > 0)", "if (attachments.length > 0 && !emlKey && env.WP_OS_DOCUMENTS)") });
-  say(emlGated.violations.some((v) => /gates the \.eml store/.test(v)), "a door that stores the .eml only with an attachment is caught");
+  const emlMinted = check({ ...files, door: files.door.replace("const emlKey = input.emlKey;", "let emlKey = input.emlKey;\n  if (!emlKey && env.WP_OS_DOCUMENTS) { emlKey = `inbound-email/${crypto.randomUUID()}.eml`; env.WP_OS_DOCUMENTS.put(emlKey, input.raw); }") });
+  say(emlMinted.violations.some((v) => /stores its own \.eml/.test(v)), "a door that mints and stores its own copy of the message again is caught");
+  const emlOptionalAt = files.door.indexOf("limits: readonly string[];");
+  const emlOptional = check({ ...files, door: files.door.slice(0, emlOptionalAt) + files.door.slice(emlOptionalAt).replace("emlKey: string | null;", "emlKey?: string | null;") });
+  say(emlOptional.violations.some((v) => /no longer requires emlKey/.test(v)), "a door whose emlKey becomes optional again is caught");
   const noSiteYield = check({ ...files, blog: files.blog.replace("if (SITE_FEATURE.test(text)) return null;", "") });
   say(noSiteYield.violations.some((v) => /no SITE_FEATURE yield/.test(v)), "a blog parser that no longer yields to a site feature is caught");
   const noGuard = check({ ...files, general: files.general.replace("/chief of staff/i.test(employee.role)", "false && /cos/i.test(employee.role)") });
@@ -267,13 +299,15 @@ function selfTest() {
   say(readsWait.violations.some((v) => /no longer pre-approves a plain read/.test(v)), "a browser gate that makes a plain read wait for a human is caught");
   const paidReads = check({ ...files, policy: files.policy.replace('if (req.payment_mode !== "NONE") return false;', "") });
   say(paidReads.violations.some((v) => /no longer refuses a paid task/.test(v)), "a plain-read rule that lets a paid task through is caught");
-  const tooLarge = check({ ...files, inbound: files.inbound.replace("partnerAuthority.isAssignment && partnerText", "false && partnerText") });
+  const tooLarge = check({ ...files, inbound: files.inbound.replace("authority.isAssignment && partnerText", "false && partnerText") });
   say(tooLarge.violations.some((v) => /too large to read/.test(v)), "an oversize branch that no longer reads a partner's request is caught");
+  const rebuffered = check({ ...files, inbound: files.inbound.replace("text = new TextDecoder().decode(buffered);", "text = new TextDecoder().decode(new Uint8Array(await new Response(message.raw).arrayBuffer()));") });
+  say(rebuffered.violations.some((v) => /decodes THAT SAME buffer/.test(v)), "keepTheMessage() reading message.raw a second time to decode text is caught");
   const noRun = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace("export async function run(", "async function run(") } } });
   say(noRun.violations.some((v) => /exports no run\(job, ctx\)/.test(v)), "a duty script that no longer exports run() is caught");
 
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: eighteen planted defects are each caught; the shipped tree passes.");
+  console.log("SELF-TEST PASSED: twenty planted defects are each caught; the shipped tree passes.");
 }
 
 if (process.argv.includes("--self-test")) {

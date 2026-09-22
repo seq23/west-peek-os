@@ -41,7 +41,8 @@
  *   9 · PRE-APPROVAL COMES FROM THE VERIFIED REQUEST ONLY (owner, 21 Sep 2026). `pre_approved_phrase`
  *       and `force_phrase` are written in exactly one place — `openWebPropertyChange`, from the ask
  *       the door parsed out of the partner's authenticated request — and nowhere in the runner; the
- *       door parses `parseWebPropertyAsk(input.subject, input.raw)` (the raw request, not a reply);
+ *       door parses `parseWebPropertyAsk(input.subject, written)`, where `written` is
+ *       `readableMessage(input.raw, …)` (the raw request, decoded, quote-stripped — never a reply);
  *       the parser reads only the WRITTEN part above a quote; `approveAtFiling` names the phrase in
  *       its finding, writes `plan_approved_by` as "<partner> (pre-approved in the request)", never
  *       writes `land_approved_at`, and calls `recordForce` only under `row.force_phrase`; the
@@ -266,9 +267,19 @@ export function checkDoor(door, parser) {
   if (!/export async function openAssignmentCard\(/.test(door)) violations.push("openAssignmentCard() is gone");
   else {
     examined += 1;
-    // The ask is parsed from the WRITTEN part of the request's own text body — never a later message.
-    const chain = /const text = textBodyOf\(input\.raw\)[\s\S]*?const written = splitQuoted\(text\)\.written[\s\S]*?parseWebPropertyAsk\(input\.subject,\s*written\)/.test(door);
-    if (!chain) violations.push("the door does not parse the web ask from the partner's own raw request (textBodyOf(input.raw) → splitQuoted().written → parseWebPropertyAsk) — pre-approval could come from elsewhere");
+    /*
+     * THE ASK IS PARSED FROM THE WRITTEN PART OF THE REQUEST'S OWN TEXT BODY — never a later
+     * message. Until 0226 (22 Sep 2026) `openAssignmentCard` decoded `input.raw` inline
+     * (`textBodyOf` then `splitQuoted().written`); it now calls the shared `readableMessage()`
+     * (also `dealIntake.ts`, so a single door cannot drift from its own decode), which does the
+     * identical two steps under one name — `raw.slice(0, 4000)` used to be typed out separately in
+     * three doors, and one shared reader is the fix. Checked in two parts so a `readableMessage`
+     * that quietly stopped decoding, or a door that stopped calling it, is caught either way.
+     */
+    const doorChain = /const written = readableMessage\(input\.raw[\s\S]*?parseWebPropertyAsk\(input\.subject,\s*written\)/.test(door);
+    if (!doorChain) violations.push("the door does not parse the web ask from the partner's own raw request (readableMessage(input.raw) → parseWebPropertyAsk) — pre-approval could come from elsewhere");
+    const readerChain = /function readableMessage\([^)]*\)[\s\S]{0,200}?textBodyOf\(raw[\s\S]*?splitQuoted\(text\)\.written/.test(door);
+    if (!readerChain) violations.push("readableMessage() no longer decodes via textBodyOf() → splitQuoted().written — the door's request text would be undecoded or would include the quoted original");
   }
   const parse = body(parser, "export function parseWebPropertyAsk(");
   if (!parse) violations.push("parseWebPropertyAsk() is gone");
