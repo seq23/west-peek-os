@@ -614,6 +614,18 @@ hr {
 
 .surface-identity p { margin: 0; max-width: none; }
 
+/* `RefreshControl` (Wave F, 22 Sep 2026) reuses `.form-row` for its button + "as of" stamp, which
+   is right for a real field row and wrong here: `.form-row`'s own `margin-bottom` and
+   `align-items: flex-end` are built for a label stacked over an input, not two inline items in the
+   masthead's horizontal identity cluster. Left in place they added an unclaimed ~30px under the
+   masthead on every page — enough on their own to push Home's first Waiting row (and any other
+   fold-measured content) past the 844px 7 AM screen (design/HOME_DESIGN.md §3). Zeroed the same way
+   `.surface-identity p` already zeroes `IdentityPanel`'s own margin. */
+.surface-identity > [data-testid="global-refresh-control"] {
+  margin: 0;
+  align-items: center;
+}
+
 .surface-body {
   flex: 1;
   padding: var(--space-lg) var(--space-xl) var(--space-3xl);
@@ -6219,15 +6231,27 @@ body {
      Waiting and its first row, and the Arrived head above the fold. */
   .identity-email,
   .identity-role { display: none; }
+  /* The exact minute the last read landed is chrome a phone can do without, same reasoning as the
+     e-mail and the role above; Refresh itself stays reachable. Wave F's own control, added after
+     this budget was last measured — see the `.surface-identity > [data-testid="global-refresh-
+     control"]` margin fix above for the rest of what it cost. */
+  [data-testid="global-refresh-asof"] { display: none; }
   .page-purpose-can { display: none; }
-  .surface-identity { margin-top: var(--space-2xs); gap: var(--space-2xs) var(--space-sm); }
-  .masthead { margin-bottom: var(--space-md); }
+  /* RE-MEASURED 22 Sep 2026, after Wave F's Refresh control landed: even with the margin fix above
+     and the "as of" stamp hidden, the identity cluster plus this masthead and band spacing put the
+     first Waiting row's bottom at 845px — one pixel over 844, and CI's font stack has already been
+     observed to wrap a line earlier than a local run (see the retired 862px note this replaces), so
+     a one-pixel pass here is not a pass on CI. Three more on-scale trims (2px + 4px + 4px) instead
+     of loosening the fold: `--space-3xs` here (was `--space-2xs`), `.masthead`'s own margin down one
+     step, `.band-head`'s own padding down one step — none of them touch anything measured elsewhere
+     (heading scale, contrast, tap targets). */
+  .surface-identity { margin-top: var(--space-3xs); gap: var(--space-2xs) var(--space-sm); }
+  .masthead { margin-bottom: var(--space-sm); }
   /* A band-head line that echoes the masthead's detail is hidden on the phone; bands sit one step
-     closer. Measured on the CI runner's font stack, where text wraps a line earlier than here:
-     the first waiting row's bottom was 862px at 390×844 with these in place. */
+     closer. */
   .band-when-echo { display: none; }
   .band { margin-top: var(--space-xl); }
-  .band-head { padding-top: var(--space-md); }
+  .band-head { padding-top: var(--space-sm); }
   .rail { margin-bottom: var(--space-md); }
   .stage-rail { position: relative; flex-direction: column; gap: 0; }
   /* The edge runs through the node's centre — half a 40px node less half the 2px line — drawn
