@@ -49,7 +49,27 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const ADAPTER_DIR = path.join(ROOT, "src", "worker", "ai", "providers");
 const WORKER_DIR = path.join(ROOT, "src", "worker");
+/*
+ * THE WORK SURFACE IS A DIRECTORY NOW (22 Sep 2026). `WorkCardsPage.tsx` was split into a shell
+ * plus `pages/work/`; the failure line and the "queued" reassurance both moved to `work/WorkDesk.tsx`
+ * and the provider's own text to `work/BlockPanel.tsx`. Reading only the shell would have left this
+ * scan examining a file that no longer contains a single thing it checks — and `checkPageTellsThemApart`
+ * would have said so, which is what a Rule-0 guard is for. So it reads the shell AND every file
+ * under `pages/work/`, and fails if that directory is empty.
+ */
 const PAGE = path.join(ROOT, "src", "client", "pages", "WorkCardsPage.tsx");
+const WORK_DIR = path.join(ROOT, "src", "client", "pages", "work");
+
+/** The Work surface as one source string: the shell plus every component split out of it. */
+export function workSurfaceSource() {
+  const parts = [readFileSync(PAGE, "utf8")];
+  const names = readdirSync(WORK_DIR).filter((n) => n.endsWith(".tsx") || n.endsWith(".ts")).sort();
+  if (names.length === 0) {
+    throw new Error("src/client/pages/work/ is empty — the Work surface was split into it, so zero files means this scan would read a shell and pass having checked nothing.");
+  }
+  for (const n of names) parts.push(readFileSync(path.join(WORK_DIR, n), "utf8"));
+  return parts.join("\n");
+}
 const FAULT_DOORS = ["RETRY", "ANOTHER_LANE", "PAUSE_LANE", "HAND_ON"];
 
 function stripComments(src) {
@@ -347,7 +367,7 @@ if (process.argv.includes("--self-test")) {
 } else {
   const adapters = readTree(ADAPTER_DIR);
   const worker = readTree(WORKER_DIR);
-  const page = readFileSync(PAGE, "utf8");
+  const page = workSurfaceSource();
 
   const wire = checkAdaptersKeepVendorWords(adapters);
   const readable = await checkFailuresBecomeReadableBlocks();

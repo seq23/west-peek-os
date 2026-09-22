@@ -99,3 +99,26 @@ violations) on breach and proves its own detection with a self-test fixture run.
   send paths. `--self-test` plants thirteen defects including the real omitted-`from` shape, an
   optional `from`, one call of three dropping it, a sender that is named but not resolved, and both
   domains written out as literals.
+- `a-kind-has-one-registry.mjs` (`npm run validate:card-kinds`, 22 Sep 2026) — there is exactly one
+  list of the values `work_card.kind` can hold, and it is `src/shared/work/cardKinds.ts`. `kind`
+  decides which runner the sweep hands a card to; before this its nine values existed only as string
+  literals written from eight files and compared in four more, with `preview.ts` and `blocks.ts`
+  each keeping a fourth and fifth private copy. Four components, four lists, no link — this repo's
+  named defect class. The scan holds seven things: the registry is well formed (SCREAMING_SNAKE key,
+  label, a one-line sentence, a door of EMAIL/HAND/JOB, something it requires, unique keys);
+  `startableByHand` is DERIVED from the door rather than asserted beside it, so it cannot disagree —
+  a job-opened kind must be `false` and must say why in its own sentence, because `duplicateOf()` in
+  `services/workCards.ts` would silently join a hand-made one to the job's card and the person who
+  wrote it would watch nothing happen; every `INSERT INTO work_card` / `UPDATE work_card SET kind`
+  under `src/worker` is in the scan's in-file write-site register and every register entry still
+  points at a live site (a stale exemption FAILS); every kind a site can write is registered, with a
+  bound site resolved through the SYMBOL it names, read out of the real source rather than restated
+  here, and a pass-through site made to prove it really reads the kind back off `work_card`; every
+  `card.kind === "…"` comparison names a registered kind; no registry entry is dead; and every
+  job-door kind is caught by the "an internal stage or job name" pattern in `shared/work/blocks.ts`,
+  so a new recurring kind cannot be added without the guard that keeps it out of the one sentence a
+  partner is asked to act on. The write side is the complete guard: a kind cannot be in the database
+  unless something put it there. Hard-fails on zero kinds, zero write sites, zero comparisons or
+  zero job-door kinds checked; 19-fixture self-test including a job kind offered by hand, a refusal
+  with no reason, an unregistered write site, a stale register entry, a symbol whose union has
+  drifted, and a job kind the block-sentence guard does not ban.

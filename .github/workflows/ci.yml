@@ -537,6 +537,13 @@ jobs:
       - name: One employee, one address
         run: npm run validate:one-employee-one-address
 
+      # 22 Sep 2026: `work_card.kind` decides which runner the sweep uses, and its nine legal values
+      # lived only as string literals across eight files — so nothing could answer "what can I start
+      # myself?" without a grep, and a job-opened kind offered by hand is silently joined to the
+      # job's card by duplicateOf() and never worked.
+      - name: A kind has one registry
+        run: npm run validate:card-kinds
+
       # The four test shards above are a whole, disjoint partition of tests/ — or this fails.
       - name: Every test file runs in exactly one shard
         run: npm run validate:shards
