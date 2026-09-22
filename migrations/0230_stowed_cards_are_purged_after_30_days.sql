@@ -1,4 +1,4 @@
--- 0228 — Stowed (NO_ACTION_NEEDED) cards are purged after 30 days (Addendum 10, 22 Sep 2026).
+-- 0230 — Stowed (NO_ACTION_NEEDED) cards are purged after 30 days (Addendum 10, 22 Sep 2026).
 --
 -- Her decision: unlike real finished work (a decision, a shipped change — kept forever), a
 -- confirmed joke or acknowledgment carries near-zero lasting value once nobody has disputed the
@@ -30,4 +30,4 @@ SELECT
   0, 'INTERNAL', 'ACTIVE', 'system'
 WHERE NOT EXISTS (SELECT 1 FROM scheduled_job WHERE job_key = 'no_action_card_purge');
 
-INSERT OR IGNORE INTO schema_version (migration) VALUES ('0228_stowed_cards_are_purged_after_30_days');
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0230_stowed_cards_are_purged_after_30_days');

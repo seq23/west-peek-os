@@ -1,4 +1,4 @@
--- 0227 — Banter and plain questions do not reach the Mac (Addendum 10, 22 Sep 2026).
+-- 0229 — Banter and plain questions do not reach the Mac (Addendum 10, 22 Sep 2026).
 --
 -- THE INCIDENT. Scooter replied to a thread with pure banter — "'on our side' -- we're all one
 -- team :)" — a joke, not a request. `dealIntake.ts`'s capture principle is "ONLY THE ADDRESS IS
@@ -34,4 +34,4 @@ ALTER TABLE work_card ADD COLUMN auto_resolution TEXT
 
 CREATE INDEX IF NOT EXISTS idx_work_card_auto_resolution ON work_card (auto_resolution) WHERE auto_resolution IS NOT NULL;
 
-INSERT OR IGNORE INTO schema_version (migration) VALUES ('0227_banter_and_questions_do_not_reach_the_mac');
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0229_banter_and_questions_do_not_reach_the_mac');
