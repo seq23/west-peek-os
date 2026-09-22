@@ -272,7 +272,7 @@ export interface SweepResult {
   status: "SUCCEEDED" | "FAILED";
   summary: string;
   card: SweepCard | null;
-  outcome: "DONE" | "BLOCKED" | "HANDED_ON" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK" | "NO_ACTION_NEEDED";
+  outcome: "DONE" | "BLOCKED" | "HANDED_ON" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK" | "NO_ACTION_NEEDED" | "QUESTION_ANSWERED";
 }
 
 /** How long a card waits for its deck to be read before the sweep looks at it again. */
@@ -457,7 +457,7 @@ export async function sweepOnce(
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
-    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; autoResolved?: boolean; detail: string }>;
+    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; autoResolved?: boolean; questionAnswered?: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -505,6 +505,9 @@ export async function sweepOnce(
   let held = false;
   // Caught as banter and auto-resolved before it ever reached the Mac (Addendum 10, 22 Sep 2026).
   let autoResolved = false;
+  // A question was answered confidently by whoever owns the card's kind, before it ever reached
+  // her (Addendum 12, 22 Sep 2026).
+  let questionAnswered = false;
   try {
     if (card.kind === "DECK_REWORK") {
       const run = runners.deckRework ?? (await import("./deck")).runDeckRework;
@@ -547,6 +550,7 @@ export async function sweepOnce(
       progressed = out.progressed;
       held = out.held === true;
       autoResolved = out.autoResolved === true;
+      questionAnswered = out.questionAnswered === true;
       detail = out.detail;
     } else if (card.kind === "PRODUCTIONS_HIRE_SEARCH") {
       // Walker's weekly hire search for West Peek Productions: search, every page checked, judged,
@@ -599,6 +603,23 @@ export async function sweepOnce(
       payload: { outcome: "NO_ACTION_NEEDED", attempt: card.work_attempts },
     });
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" needed no action: ${detail.slice(0, 160)}`, card, outcome: "NO_ACTION_NEEDED" };
+  }
+
+  if (questionAnswered) {
+    // Same shape as `autoResolved`: the runner already wrote state = 'CANCELLED' and
+    // `question_auto_answered_at`, sent the confident answer to the partner, and its own
+    // `work_card.question_auto_answered` event with who answered and why. This is the generic
+    // outcome every other path gets, so a scan of `work_card.swept` events sees this one too.
+    await appendEvent(env, {
+      eventType: "work_card.swept",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { outcome: "QUESTION_ANSWERED", attempt: card.work_attempts },
+    });
+    return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" was answered directly: ${detail.slice(0, 160)}`, card, outcome: "QUESTION_ANSWERED" };
   }
 
   if (handedOn) {

@@ -14,7 +14,7 @@ import { readWebPropertyAsk, type WebPropertyAsk } from "../../shared/intake/web
 import { approvedAnswers, askLines, decidedFromAsks, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
 import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, routedByFor, threadRootFor, type NoticeKind } from "./requestReply";
-import { doneReplyLaneFor, isOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
+import { doneReplyLaneFor, isOn, previewAllPartnerEmailsIsOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
 import { attachmentBytes } from "../effects/mimeAttachments";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { strippedSubject } from "../../shared/intake/emailTriggers";
@@ -22,6 +22,7 @@ import { decodeMimeHeader } from "../effects/inboundEmail";
 import { isTechnicalBlock } from "../../shared/work/blocks";
 import { INTAKE_JUDGMENT_STANDARD } from "../../shared/registry/aiEmployeePersonas";
 import { defaultGenerateBanterReply, replyToBanter, type BanterReplyGenerator } from "./banterReply";
+import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
 import {
   CLAUDE_MODEL_ALIASES,
   LOCAL_JOB_RUN_KIND,
@@ -540,6 +541,13 @@ export interface RunOutcome {
    * comes back; the sweep reads it to skip the DONE/BLOCKED bookkeeping and record its own outcome.
    */
   autoResolved?: boolean;
+  /**
+   * A QUESTION WAS ANSWERED BY WHOEVER OWNS THE KIND, CONFIDENTLY, WITHOUT EVER REACHING HER
+   * (Addendum 12, 22 Sep 2026). The card is already terminal — `state = 'CANCELLED'`,
+   * `question_auto_answered_at` set — by the time this comes back; the sweep reads it to skip the
+   * DONE/BLOCKED bookkeeping and record its own outcome, the same shape `autoResolved` already is.
+   */
+  questionAnswered?: boolean;
   detail: string;
 }
 
@@ -1155,8 +1163,10 @@ const defaultClassifyActionability: ActionabilityClassifier = async (env, input)
     ],
     sensitivity: "INTERNAL" as never,
     // Mechanical and cheap on purpose (see the note above `defaultClassifyActionability`); a few
-    // words back is all this call needs.
-    budgetContext: { expectedOutputTokens: 60 },
+    // words back is all this call needs. Said explicitly (found unclassified by
+    // `validate:call-classification`, 22 Sep 2026, and fixed here rather than left — Rule 0):
+    // "mechanical" was always the intent, it just was not written down for the scan to read.
+    budgetContext: { mechanical: true, expectedOutputTokens: 60 },
     routing: { category: "OPERATIONS", taskClass: "intake-actionability-classification", workCardId: input.cardId },
   });
   if (run.status !== "COMPLETED" || !run.output_text) {
@@ -1216,13 +1226,17 @@ async function autoResolveNoAction(
  * way a partner clears any other question on this card kind — see `blockWithAsks` above for the
  * same reason used for a plan's own asks.
  */
-async function blockAsQuestion(env: Env, card: WebPropertyChangeCard, classification: ActionabilityClassification): Promise<RunOutcome> {
+async function blockAsQuestion(env: Env, card: WebPropertyChangeCard, classification: ActionabilityClassification, routed?: QuestionAnswerResult | null): Promise<RunOutcome> {
+  // A TRIED-AND-DECLINED ROUTING ATTEMPT GETS A HONEST LINE, NOT SILENCE (Addendum 12). She still
+  // sees the question, but she also sees that it was tried first and why nobody could answer it
+  // with real confidence — the same transparency the escalation event carries for the audit trail.
+  const triedNote = routed?.employeeName ? ` ${routed.employeeName} looked at it first and did not have a confident answer (${routed.reason}).` : "";
   const why = await blockCard(env, card, {
     reason: "a_question_for_you",
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: `This reads like a question rather than something to build (${classification.reason}). Reply here with what you'd like done, or just answer — nothing has been started.`.slice(0, 900),
+    detail: `This reads like a question rather than something to build (${classification.reason}).${triedNote} Reply here with what you'd like done, or just answer — nothing has been started.`.slice(0, 900),
   });
   await appendEvent(env, {
     eventType: "work_card.classified_as_question",
@@ -1234,6 +1248,150 @@ async function blockAsQuestion(env: Env, card: WebPropertyChangeCard, classifica
     payload: { reason: classification.reason, ai_run_id: classification.aiRunId },
   });
   return { finished: false, blocked: true, progressed: false, detail: why };
+}
+
+/**
+ * BEFORE ESCALATING TO HER, TRY WHOEVER OWNS THIS CARD'S KIND (Addendum 12, 22 Sep 2026).
+ *
+ * `QUESTION_NEEDS_REPLY` used to route straight to `blockAsQuestion` — a plain question landing on
+ * her, every time, even when the answer is one the owning employee already knows. This is the step
+ * in front of that: `answerQuestionForCard` looks up the kind's registered host
+ * (`shared/work/kindHosts.ts`), asks them in their own grounded voice
+ * (`services/questionRouting.ts`, the `askRoom`/`askLiveHelp` shape lifted out of the meeting
+ * room), and only when they answer with real, self-reported confidence does the partner ever hear
+ * from anyone but her.
+ *
+ * ESCALATION IS THE DEFAULT, NOT THE EXCEPTION. No kind host, an inactive employee, or a
+ * not-confident answer all fall through to the EXACT SAME `blockAsQuestion` this file always
+ * called — nothing about that path changes. The only new thing a partner can experience is a
+ * confident, grounded answer arriving instead of a wait for her; nothing about the safety net
+ * changes shape.
+ */
+async function handleQuestionNeedsReply(
+  env: Env,
+  card: WebPropertyChangeCard,
+  classification: ActionabilityClassification,
+  senderMessage: string,
+  answerQuestion: QuestionAnswerer | undefined,
+): Promise<RunOutcome> {
+  const routed = await answerQuestionForCard(
+    env,
+    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question: senderMessage },
+    answerQuestion,
+  );
+
+  if (!routed.confident || !routed.answer) {
+    await appendEvent(env, {
+      eventType: "work_card.question_answer_escalated",
+      actorType: "system",
+      actorId: routed.employeeId ?? "work_sweep",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { tried_employee: routed.employeeName, reason: routed.reason, ai_run_id: routed.aiRunId },
+    });
+    return blockAsQuestion(env, card, classification, routed);
+  }
+
+  const sent = await sendQuestionAnswer(env, card, senderMessage, routed);
+  await appendFinding(env, card.id, `${routed.employeeName} answered your question directly, without reaching the Mac: "${routed.answer.slice(0, 300)}"`);
+  await env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET state = 'CANCELLED', next_action = NULL, lease_until = NULL,
+            question_auto_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?1`,
+  )
+    .bind(card.id)
+    .run();
+  await appendEvent(env, {
+    eventType: "work_card.question_auto_answered",
+    actorType: "ai_employee",
+    actorId: routed.employeeId ?? PORTER_ID,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { employee: routed.employeeName, reason: routed.reason, ai_run_id: routed.aiRunId, sent: sent.sent, sent_reason: sent.reason },
+  });
+  return {
+    finished: false,
+    blocked: false,
+    progressed: false,
+    questionAnswered: true,
+    detail: `${routed.employeeName} answered directly, with real confidence: ${routed.reason}`.slice(0, 900),
+  };
+}
+
+/**
+ * THE ANSWER REACHES THE PARTNER THE SAME WAY ANY FINISHED WORK DOES (Addendum 12/8, 22 Sep 2026).
+ * No exception was carved out for this the way banter's reply got one (Addendum 11.1) — this is a
+ * partner-facing email with real content, so it goes through `sendOrPreview`
+ * (`scripts/validate/every-employee-takes-the-lane.mjs`'s one door) exactly like every other notice
+ * this file sends, gated by the card's own "show me first?" tick and Addendum 8's firm-wide
+ * "preview every partner-facing email" dial (0228) — the two her decision named. Deliberately NOT
+ * chained through this kind's own `done_reply_preview_first` override (`doneReplyLaneFor`'s other
+ * input): that rule is Porter's for a real finished DONE reply specifically, a different kind of
+ * email than a question he answered directly, and Addendum 12 names only "Addendum 8's firm-wide
+ * dial" as the gate this owes — not whatever per-kind override a DONE reply happens to carry.
+ *
+ * Never recorded as a `work_card_notice` row: those six kinds (`requestReply.ts`'s `NoticeKind`)
+ * are the lifecycle of a card that is still being WORKED; an auto-answered question never enters
+ * that lifecycle at all, so it is not one of them.
+ */
+async function sendQuestionAnswer(
+  env: Env,
+  card: WebPropertyChangeCard,
+  senderMessage: string,
+  routed: QuestionAnswerResult,
+): Promise<{ sent: boolean; reason: string }> {
+  const to = (card.requested_by_email ?? "").trim().toLowerCase();
+  const partner = to ? partnerByEmail(to) : null;
+  if (!partner || !routed.employeeName || !routed.answer) {
+    return { sent: false, reason: "no authenticated partner address to answer, or nothing to send" };
+  }
+
+  const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
+  const routedBy = await routedByFor(env, card.assigned_from_card_id, routed.employeeName);
+  const replyOnThread = await threadRootFor(env, card.id);
+  // The card's own tick, OR'd with the firm-wide dial — the same asymmetry `doneReplyLaneFor` uses:
+  // either one can ADD a preview, neither can remove one the other already asked for.
+  const cardOwnTick = card.preview_first === 1 ? true : card.preview_first === 0 ? false : null;
+  const cardAsked = (await previewAllPartnerEmailsIsOn(env)) ? true : cardOwnTick;
+  /*
+   * WHO APPROVES IT, NOT DERIVED FROM THE REQUESTER (the same fix `doneReplyLaneFor` already made
+   * for a real DONE reply). The requester here IS the recipient — the partner whose question this
+   * answers — so falling back to `previewOwnerFor`'s `requestedByEmail` tier would have the
+   * partner approve sending mail to themselves. Whoever explicitly ticked the card's own box still
+   * owns their preview; anyone else defaults to her, exactly like every other rule-forced preview.
+   */
+  const tickedByFirmUserId = card.preview_owner_id ?? PREVIEW_PARTNER.firmUserId;
+
+  const out = await sendOrPreview(env, {
+    to,
+    email: {
+      employee: routed.employeeName,
+      what: `answered — ${asked.slice(0, 60)}`,
+      tldr: routed.answer.slice(0, 300),
+      sections: [
+        { label: "What you asked", bullets: [senderMessage.replace(/\s+/g, " ").trim().slice(0, 300) || asked] },
+        { label: "Where things stand", bullets: ["Nothing is being built for this — it was a question, not a job. Reply if you'd like something done."] },
+      ],
+      details: routed.answer,
+      routedBy,
+    },
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    actorId: routed.employeeId ?? undefined,
+    cardKind: card.kind ?? WEB_PROPERTY_CHANGE_KIND,
+    workCardId: card.id,
+    cardAsked: cardAsked,
+    tickedByFirmUserId: tickedByFirmUserId,
+    requestedByEmail: to,
+    what: `answered — ${asked.slice(0, 60)}`,
+    replyOnThread,
+  });
+  return { sent: out.sent, reason: out.reason };
 }
 
 // ── The runner ────────────────────────────────────────────────────────────────────────────────
@@ -1251,6 +1409,7 @@ export async function runWebPropertyChangeCard(
   sweepCard: SweepCard,
   classify: ActionabilityClassifier = defaultClassifyActionability,
   generateBanterReply: BanterReplyGenerator = defaultGenerateBanterReply,
+  answerQuestion?: QuestionAnswerer,
 ): Promise<RunOutcome> {
   const card: WebPropertyChangeCard =
     (await env.WP_OS_DB.prepare(
@@ -1342,7 +1501,7 @@ export async function runWebPropertyChangeCard(
       const senderMessage = row.request_text ?? row.ask;
       const classification = await classify(env, { cardId: card.id, firmScope: card.firm_scope, text: senderMessage });
       if (classification.verdict === "BANTER_NO_ACTION") return autoResolveNoAction(env, card, classification, senderMessage, generateBanterReply);
-      if (classification.verdict === "QUESTION_NEEDS_REPLY") return blockAsQuestion(env, card, classification);
+      if (classification.verdict === "QUESTION_NEEDS_REPLY") return handleQuestionNeedsReply(env, card, classification, senderMessage, answerQuestion);
       // A Drive folder is OPTIONAL (21 Sep 2026): the request is the specification; Porter reads it
       // and asks only when something it references did not arrive.
       const parked = await parkPhase(env, card, row, "PLAN", rules);

@@ -180,6 +180,13 @@ jobs:
       - name: AI boundary
         run: npm run validate:ai-boundary
 
+      # Found wired to nothing in CI (22 Sep 2026) while catching two real unclassified calls —
+      # exactly the "exists but nothing invokes it" defect: the scan was correct and green locally,
+      # and would have stayed silent forever without a gate actually running it. `validate:*`
+      # existing in package.json is not the same fact as it running on every PR.
+      - name: Every runAi call says what kind it is
+        run: npm run validate:call-classification
+
       - name: Network boundary
         run: npm run validate:network-boundary
 

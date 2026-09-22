@@ -16,6 +16,7 @@ import { recentBanterContext, type BanterReplyGenerator } from "../src/worker/se
 import { EMPLOYEE_PERSONAS } from "../src/shared/registry/aiEmployeePersonas";
 import { purgeNoActionCards } from "../src/worker/services/noActionPurge";
 import type { SweepCard } from "../src/worker/services/workSweep";
+import { parseQuestionAnswer, type QuestionAnswerer } from "../src/worker/services/questionRouting";
 
 /**
  * ADDENDUM 10/11/11.1 (22 Sep 2026): banter and plain questions do not reach the Mac, and the
@@ -99,6 +100,13 @@ function fixedClassifier(verdict: "ACTIONABLE_WORK" | "QUESTION_NEEDS_REPLY" | "
 }
 
 const neverReply: BanterReplyGenerator = async () => ({ shouldReply: false, line: null, aiRunId: null });
+
+/** Addendum 12: an explicit "nobody had a confident answer" fixture, rather than leaning on mockLocal's unparseable output. */
+const noConfidentAnswer: QuestionAnswerer = async () => ({ confident: false, answer: null, reason: "test-fixed: not confident", aiRunId: null });
+/** Addendum 12: a fixed confident answer, in Porter's own words, for exercising the auto-answer path deterministically. */
+function confidentAnswer(answer: string, reason = "test-fixed: confident"): QuestionAnswerer {
+  return async () => ({ confident: true, answer, reason, aiRunId: null });
+}
 
 beforeAll(async () => {
   t = await createTestDb();
@@ -237,9 +245,14 @@ describe("QUESTION_NEEDS_REPLY skips the Mac and reuses the existing needs-a-rep
       sweepCardFor(cardId, SCOOTER),
       fixedClassifier("QUESTION_NEEDS_REPLY", "a plain question, nothing to build"),
       neverReply,
+      // Addendum 12: routing is tried first (Porter owns WEB_PROPERTY_CHANGE) and explicitly
+      // declines here, so this test proves the escalation path on its own terms rather than
+      // leaning on mockLocal's incidentally-unparseable output.
+      noConfidentAnswer,
     );
     expect(out.blocked).toBe(true);
     expect(out.autoResolved ?? false).toBe(false);
+    expect(out.questionAnswered ?? false).toBe(false);
     // THE ASSERTION THAT MATTERS: no Mac dispatch call happens for a question either.
     expect(await liveJobFor(cardId)).toBeNull();
 
@@ -247,9 +260,196 @@ describe("QUESTION_NEEDS_REPLY skips the Mac and reuses the existing needs-a-rep
     expect(row.state).toBe("BLOCKED");
     expect(row.block_reason).toBe("a_question_for_you");
     expect(row.auto_resolution).toBeNull();
+    expect(row.question_auto_answered_at).toBeNull();
 
     const events = await eventsFor(cardId, "work_card.classified_as_question");
     expect(events.length).toBe(1);
+  });
+});
+
+// ── Addendum 12: a question tries its owner before it tries her ─────────────────────────────────
+
+describe("QUESTION_NEEDS_REPLY tries the kind's owner first, and escalates only when unsure", () => {
+  it("a not-confident answer (any reason) escalates to a_question_for_you exactly as before, with an audit event naming who was tried", async () => {
+    const cardId = await openPropertyCard("huh?", SCOOTER, "Walker", "what does 'publish ready' actually mean here?");
+    sent.length = 0;
+    const out = await runWebPropertyChangeCard(
+      env,
+      sweepCardFor(cardId, SCOOTER),
+      fixedClassifier("QUESTION_NEEDS_REPLY", "a plain question about a term"),
+      neverReply,
+      noConfidentAnswer,
+    );
+    expect(out.blocked).toBe(true);
+    expect(out.questionAnswered ?? false).toBe(false);
+    expect(await liveJobFor(cardId)).toBeNull();
+    // THE ASSERTION THAT MATTERS: nothing was sent — an unconfident answer never reaches the partner.
+    expect(sent.length).toBe(0);
+
+    const row = (await card(cardId))!;
+    expect(row.state).toBe("BLOCKED");
+    expect(row.block_reason).toBe("a_question_for_you");
+    expect(row.question_auto_answered_at).toBeNull();
+    // The block itself is honest that routing was tried and declined.
+    expect(String(row.block_needed)).toContain("Porter looked at it first");
+
+    const escalated = await eventsFor(cardId, "work_card.question_answer_escalated");
+    expect(escalated.length).toBe(1);
+    const payload = JSON.parse(escalated[0]!.payload_json) as { tried_employee: string; reason: string };
+    expect(payload.tried_employee).toBe("Porter");
+    expect(payload.reason).toBe("test-fixed: not confident");
+  });
+
+  it("a CONFIDENT answer resolves the card and never blocks or dispatches PLAN — and by default (the dial's own zero-row default is ON, 0228) it is filed for her to see first rather than sent straight out", async () => {
+    const cardId = await openPropertyCard("huh?", SCOOTER, "Walker", "does the westpeek.ventures preview link expire?");
+    sent.length = 0;
+    const out = await runWebPropertyChangeCard(
+      env,
+      sweepCardFor(cardId, SCOOTER),
+      fixedClassifier("QUESTION_NEEDS_REPLY", "a plain question about how previews work"),
+      neverReply,
+      confidentAnswer("No — a Cloudflare Pages preview link stays live for as long as the branch does."),
+    );
+    expect(out.blocked).toBe(false);
+    expect(out.finished).toBe(false);
+    expect(out.questionAnswered).toBe(true);
+    // THE ASSERTION THAT MATTERS, PART ONE: never reaches the Mac.
+    expect(await liveJobFor(cardId)).toBeNull();
+
+    const row = (await card(cardId))!;
+    // THE ASSERTION THAT MATTERS, PART TWO: resolved, not left waiting on her as a BLOCKED card.
+    expect(row.state).toBe("CANCELLED");
+    expect(row.block_reason).toBeNull();
+    expect(row.auto_resolution).toBeNull(); // never mislabelled as banter's NO_ACTION_NEEDED
+    expect(row.question_auto_answered_at).not.toBeNull();
+
+    // THE ASSERTION THAT MATTERS, PART THREE: the answer went through the normal send/preview
+    // door, and the dial's default (ON, nobody has touched it yet) filed it for HER rather than
+    // sending it to the partner — exactly the "tail every partner-facing email" default Addendum 8
+    // decided. `filePreview` itself emails the owner (her) that something is waiting; that is the
+    // one send this tick produces, and it must never go to the partner who asked the question.
+    expect(sent.filter((s) => s.to === SCOOTER)).toEqual([]);
+    expect(sent.length).toBe(1);
+    expect(sent[0]!.to).toBe(SEQUOIA);
+    const previews = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM preview_approval WHERE work_card_id = ?1").bind(cardId).first<{ n: number }>();
+    expect(previews?.n ?? 0).toBe(1);
+
+    const answered = await eventsFor(cardId, "work_card.question_auto_answered");
+    expect(answered.length).toBe(1);
+    const payload = JSON.parse(answered[0]!.payload_json) as { employee: string; sent: boolean };
+    expect(payload.employee).toBe("Porter");
+    expect(payload.sent).toBe(false); // filed, not sent — that IS the correct outcome with the dial on
+  });
+
+  it("with the firm-wide dial explicitly OFF and the card's own tick unset, a CONFIDENT answer sends straight to the partner", async () => {
+    // `email_preview_preference` is append-only/versioned (0228: UPDATE and DELETE are both
+    // rejected by trigger) — the same shape `mp_home_preference` uses. A new version is how the
+    // dial is ever moved, in tests exactly as in production; version 1 is free because nothing
+    // earlier in this file has written to this table yet.
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO email_preview_preference (id, version_no, preview_all_partner_emails, set_by, firm_scope) VALUES ('epp_test_off', 1, 0, 'fu_sequoia_taylor', 'west-peek')",
+    ).run();
+    const cardId = await openPropertyCard("huh?", SCOOTER, "Walker", "does the westpeek.ventures preview link expire?");
+    sent.length = 0;
+    const out = await runWebPropertyChangeCard(
+      env,
+      sweepCardFor(cardId, SCOOTER),
+      fixedClassifier("QUESTION_NEEDS_REPLY", "a plain question about how previews work"),
+      neverReply,
+      confidentAnswer("No — a Cloudflare Pages preview link stays live for as long as the branch does."),
+    );
+    expect(out.questionAnswered).toBe(true);
+
+    const row = (await card(cardId))!;
+    expect(row.state).toBe("CANCELLED");
+    expect(row.question_auto_answered_at).not.toBeNull();
+
+    // THE ASSERTION THAT MATTERS: once she has turned tailing off, the answer reaches the
+    // partner directly — the whole point of the dial being hers to flip (Addendum 8).
+    expect(sent.length).toBe(1);
+    expect(sent[0]!.to).toBe(SCOOTER);
+    expect(sent[0]!.subject.startsWith("Porter: ")).toBe(true);
+    expect(sent[0]!.text).toContain("Cloudflare Pages preview link stays live");
+
+    const answered = await eventsFor(cardId, "work_card.question_auto_answered");
+    expect(answered.length).toBe(1);
+    const payload = JSON.parse(answered[0]!.payload_json) as { employee: string; sent: boolean };
+    expect(payload.sent).toBe(true);
+  });
+
+  it("a wrong-answer-sent-instead-of-escalated regression would be caught: a confident answer with no answer text is treated as not confident", async () => {
+    const cardId = await openPropertyCard("huh?", SCOOTER, "Walker", "what happens if the build fails twice?");
+    sent.length = 0;
+    // Simulates a malformed model reply — CONFIDENT: yes but nothing to actually send.
+    const malformed: QuestionAnswerer = async () => ({ confident: true, answer: "", reason: "malformed", aiRunId: null });
+    const out = await runWebPropertyChangeCard(
+      env,
+      sweepCardFor(cardId, SCOOTER),
+      fixedClassifier("QUESTION_NEEDS_REPLY", "a plain question"),
+      neverReply,
+      malformed,
+    );
+    expect(out.questionAnswered ?? false).toBe(false);
+    expect(out.blocked).toBe(true);
+    expect(sent.length).toBe(0);
+    const row = (await card(cardId))!;
+    expect(row.state).toBe("BLOCKED");
+    expect(row.question_auto_answered_at).toBeNull();
+  });
+
+  it("respects the firm-wide preview dial (0228) when explicitly moved back to ON, not just its zero-row default: even a confident answer is filed for approval rather than sent straight out", async () => {
+    // Version 2 — the previous test in this file already wrote version 1 (OFF), and the table
+    // rejects UPDATE/DELETE, so moving the dial back to ON is a new version, exactly as production
+    // does it.
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO email_preview_preference (id, version_no, preview_all_partner_emails, set_by, firm_scope) VALUES ('epp_test_on', 2, 1, 'fu_sequoia_taylor', 'west-peek')",
+    ).run();
+    const cardId = await openPropertyCard("huh?", SCOOTER, "Walker", "is the tagline change already live?");
+    sent.length = 0;
+    const out = await runWebPropertyChangeCard(
+      env,
+      sweepCardFor(cardId, SCOOTER),
+      fixedClassifier("QUESTION_NEEDS_REPLY", "a plain question about status"),
+      neverReply,
+      confidentAnswer("Not yet — it ships with the next build."),
+    );
+    expect(out.questionAnswered).toBe(true);
+    // THE ASSERTION THAT MATTERS: the dial gated it — nothing sent straight to the partner. (The
+    // one send this tick produces is `filePreview`'s own notice to her that something is waiting.)
+    expect(sent.filter((s) => s.to === SCOOTER)).toEqual([]);
+    const previews = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM preview_approval WHERE work_card_id = ?1").bind(cardId).first<{ n: number }>();
+    expect(previews?.n ?? 0).toBe(1);
+    const row = (await card(cardId))!;
+    expect(row.state).toBe("CANCELLED");
+    expect(row.question_auto_answered_at).not.toBeNull();
+  });
+});
+
+describe("parseQuestionAnswer — the bias toward not confident", () => {
+  it("reads a clean CONFIDENT: yes answer", () => {
+    const out = parseQuestionAnswer("CONFIDENT: yes\nANSWER: The preview link stays live indefinitely.\nREASON: Documented in the build script.");
+    expect(out.confident).toBe(true);
+    expect(out.answer).toBe("The preview link stays live indefinitely.");
+  });
+
+  it("reads CONFIDENT: no as not confident, with the reason kept", () => {
+    const out = parseQuestionAnswer("CONFIDENT: no\nREASON: I don't actually know this one.");
+    expect(out.confident).toBe(false);
+    expect(out.answer).toBeNull();
+    expect(out.reason).toContain("don't actually know");
+  });
+
+  it("defaults to not confident on garbled, empty or unparseable output — the ambiguous case", () => {
+    expect(parseQuestionAnswer("").confident).toBe(false);
+    expect(parseQuestionAnswer(null).confident).toBe(false);
+    expect(parseQuestionAnswer("I'm honestly not sure how to answer this one.").confident).toBe(false);
+    expect(parseQuestionAnswer('[mock-local abc123] Deterministic local draft for purpose "x". No data left this system.').confident).toBe(false);
+  });
+
+  it("treats a confident answer with no answer text as not confident", () => {
+    const out = parseQuestionAnswer("CONFIDENT: yes\nANSWER: \nREASON: forgot to write one");
+    expect(out.confident).toBe(false);
+    expect(out.answer).toBeNull();
   });
 });
 
